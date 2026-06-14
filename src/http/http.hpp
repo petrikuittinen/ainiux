@@ -1,0 +1,35 @@
+#pragma once
+
+#include <string>
+#include <vector>
+
+#include "common.hpp"
+
+namespace pkchat::http {
+
+struct Request {
+    std::string method = "GET";
+    std::string url;
+    std::vector<std::string> headers;
+    std::string body;
+    long connect_timeout_seconds = 10;
+    long timeout_seconds = 0;
+    std::string proxy;
+    bool insecure_tls = false;
+    bool trace = false;
+};
+
+struct Response {
+    long status = 0;
+    std::string body;
+    std::string stderr_text;
+};
+
+struct Result {
+    Response response;
+    Error error;
+};
+
+Result perform(const Request& request, const std::vector<std::string>& secrets);
+
+}  // namespace pkchat::http
