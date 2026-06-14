@@ -37,4 +37,9 @@ ndjson=$("$ROOT/pkchat" "$BASE" --quiet --stream -m "$MODEL" -p "hello" --format
 printf '%s\n' "$ndjson" | grep '"event":"delta"' >/dev/null
 printf '%s\n' "$ndjson" | grep '"event":"done"' >/dev/null
 
+verbose_err="$ROOT/build/verbose.err"
+verbose_out=$("$ROOT/pkchat" "$BASE" -v --stream -m "$MODEL" -p "hello" 2>"$verbose_err")
+test "$verbose_out" = "Hello"
+grep 'TTFT: [0-9][0-9]* ms, Token/s: [0-9][0-9]*[.][0-9]' "$verbose_err" >/dev/null
+
 echo "integration tests passed"

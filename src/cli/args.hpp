@@ -17,6 +17,7 @@ struct Options {
     bool stream = true;
     bool stream_explicit = false;
     bool quiet = false;
+    bool verbose = false;
     bool debug = false;
     bool trace_http = false;
     bool insecure_tls = false;

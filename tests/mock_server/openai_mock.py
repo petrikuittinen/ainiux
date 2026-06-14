@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
 import argparse
 import json
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 
 class Handler(BaseHTTPRequestHandler):
     model = "mock-model"
+    stream_delay = 0.0
 
     def log_message(self, fmt, *args):
         return
@@ -36,13 +38,20 @@ class Handler(BaseHTTPRequestHandler):
             self._send(404, json.dumps({"error": {"message": "not found"}}))
             return
         if request.get("stream"):
-            payload = (
-                'data: {"choices":[{"delta":{"content":"Hel"}}]}\n\n'
-                ': comment\n\n'
-                'data: {"choices":[{"delta":{"content":"lo"}}]}\n\n'
-                'data: [DONE]\n\n'
-            )
-            self._send(200, payload, "text/event-stream")
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream")
+            self.end_headers()
+            chunks = [
+                'data: {"choices":[{"delta":{"content":"Hel"}}]}\n\n',
+                ': comment\n\n',
+                'data: {"choices":[{"delta":{"content":"lo"}}]}\n\n',
+                'data: [DONE]\n\n',
+            ]
+            for chunk in chunks:
+                if self.stream_delay:
+                    time.sleep(self.stream_delay)
+                self.wfile.write(chunk.encode("utf-8"))
+                self.wfile.flush()
             return
         self._send(
             200,
@@ -52,7 +61,7 @@ class Handler(BaseHTTPRequestHandler):
                     "object": "chat.completion",
                     "model": self.model,
                     "choices": [{"index": 0, "message": {"role": "assistant", "content": "Hello"}}],
-                    "usage": None,
+                    "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
                 }
             ),
         )
@@ -63,8 +72,10 @@ def main():
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, required=True)
     parser.add_argument("--model", default="mock-model")
+    parser.add_argument("--stream-delay", type=float, default=0.0)
     args = parser.parse_args()
     Handler.model = args.model
+    Handler.stream_delay = args.stream_delay
     server = ThreadingHTTPServer((args.host, args.port), Handler)
     server.serve_forever()
 

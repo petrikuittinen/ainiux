@@ -101,6 +101,8 @@ ParseResult parse_args(int argc, char** argv) {
             opts.stream_explicit = true;
         } else if (arg == "--quiet") {
             opts.quiet = true;
+        } else if (arg == "--verbose" || arg == "-v") {
+            opts.verbose = true;
         } else if (arg == "--debug") {
             opts.debug = true;
         } else if (arg == "--trace-http") {
@@ -242,6 +244,7 @@ Options:
       --proxy URL
       --insecure-tls
       --quiet
+  -v, --verbose             Print TTFT and token/s metrics to stderr.
       --debug
       --trace-http
       --version

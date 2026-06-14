@@ -19,13 +19,14 @@ void check(bool condition, const std::string& message) {
 }
 
 void test_cli_parse() {
-    const char* argv[] = {"pkchat", "http://localhost:8000", "-p", "hello", "--no-stream", "--format", "json"};
-    pkchat::cli::ParseResult parsed = pkchat::cli::parse_args(7, const_cast<char**>(argv));
+    const char* argv[] = {"pkchat", "http://localhost:8000", "-p", "hello", "--no-stream", "--format", "json", "-v"};
+    pkchat::cli::ParseResult parsed = pkchat::cli::parse_args(8, const_cast<char**>(argv));
     check(parsed.error.ok(), "CLI parse should succeed");
     check(parsed.options.positional_url == "http://localhost:8000", "positional URL parsed");
     check(parsed.options.prompt == "hello", "prompt parsed");
     check(!parsed.options.stream, "no-stream parsed");
     check(parsed.options.format == pkchat::cli::OutputFormat::Json, "json format parsed");
+    check(parsed.options.verbose, "verbose parsed");
 }
 
 void test_cli_rejects_unknown() {

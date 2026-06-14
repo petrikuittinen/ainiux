@@ -32,7 +32,10 @@ struct ChatResult {
     std::string model;
     std::string content;
     std::string usage_json = "null";
+    long long ttft_ms = -1;
     long long total_ms = 0;
+    long long completion_tokens = 0;
+    bool completion_tokens_estimated = false;
 };
 
 struct ModelsResult {

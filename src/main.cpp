@@ -1,4 +1,5 @@
 #include <fstream>
+#include <iomanip>
 #include <iostream>
 #include <memory>
 
@@ -65,8 +66,31 @@ void write_json_chat(std::ostream& out,
         << "\"provider\":" << pkchat::json::quote(context.profile.name) << ","
         << "\"content\":" << pkchat::json::quote(result.content) << ","
         << "\"usage\":" << result.usage_json << ","
-        << "\"timing\":{\"ttft_ms\":null,\"total_ms\":" << result.total_ms << "}"
+        << "\"timing\":{\"ttft_ms\":" << result.ttft_ms << ",\"total_ms\":" << result.total_ms << "}"
         << "}\n";
+}
+
+double tokens_per_second(const pkchat::provider::ChatResult& result, bool stream) {
+    long long denominator_ms = result.total_ms;
+    if (stream && result.ttft_ms >= 0 && result.total_ms > result.ttft_ms) {
+        denominator_ms = result.total_ms - result.ttft_ms;
+    }
+    if (denominator_ms <= 0) {
+        denominator_ms = 1;
+    }
+    return static_cast<double>(result.completion_tokens) * 1000.0 / static_cast<double>(denominator_ms);
+}
+
+void print_verbose_metrics(const pkchat::cli::Options& options, const pkchat::provider::ChatResult& result) {
+    if (!options.verbose || options.quiet) {
+        return;
+    }
+    std::cerr << "TTFT: " << result.ttft_ms << " ms, ";
+    std::cerr << "Token/s: " << std::fixed << std::setprecision(1) << tokens_per_second(result, options.stream);
+    if (result.completion_tokens_estimated) {
+        std::cerr << " (estimated)";
+    }
+    std::cerr << "\n";
 }
 
 }  // namespace
@@ -167,5 +191,6 @@ int main(int argc, char** argv) {
         }
         *out << "{\"event\":\"done\",\"usage\":null}\n";
     }
+    print_verbose_metrics(context.options, chat);
     return 0;
 }

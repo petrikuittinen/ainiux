@@ -1,11 +1,14 @@
 #pragma once
 
+#include <functional>
 #include <string>
 #include <vector>
 
 #include "common.hpp"
 
 namespace pkchat::http {
+
+using BodyCallback = std::function<Error(const std::string&)>;
 
 struct Request {
     std::string method = "GET";
@@ -17,6 +20,7 @@ struct Request {
     std::string proxy;
     bool insecure_tls = false;
     bool trace = false;
+    BodyCallback on_body;
 };
 
 struct Response {

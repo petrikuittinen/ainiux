@@ -58,6 +58,14 @@ Prompt and system files:
   --prompt-file prompt.txt --system-file system.txt --format json
 ```
 
+Verbose timing:
+
+```sh
+./pkchat -v http://localhost:30000 -m MODEL -p "Hello"
+```
+
+`-v`/`--verbose` prints time to first token in milliseconds and token/s to `stderr`. When provider usage is unavailable, token/s uses a lightweight local estimate.
+
 ## Output Behavior
 
 - `stdout` is model output in text mode.
@@ -100,5 +108,5 @@ If Valgrind is not installed, `make leak-check` falls back to the sanitizer test
 ## Current Limitations
 
 - HTTP is currently isolated behind `src/http/` but implemented through the installed `curl` executable because libcurl development headers were not available in the initial environment.
-- Streaming responses are parsed as SSE, but the current transport buffers the HTTP response before provider parsing. True incremental transport delivery is planned next.
+- Streaming responses are parsed incrementally as SSE, but the curl-executable transport remains a temporary implementation until libcurl development headers are available.
 - The JSON facade is intentionally small and scoped to the current CLI/provider needs.

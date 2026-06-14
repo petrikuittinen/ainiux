@@ -1,11 +1,14 @@
 #include "http/http.hpp"
 
 #include <fcntl.h>
+#include <signal.h>
 #include <sys/select.h>
 #include <sys/wait.h>
 #include <unistd.h>
 
+#include <algorithm>
 #include <cerrno>
+#include <cstdlib>
 #include <cstring>
 #include <sstream>
 #include <vector>
@@ -15,8 +18,6 @@
 namespace pkchat::http {
 
 namespace {
-
-constexpr const char* kStatusMarker = "__PKCHAT_HTTP_STATUS__:";
 
 class Fd {
    public:
@@ -95,6 +96,106 @@ Error classify_curl_error(int exit_status, const std::string& stderr_text, const
     return {ErrorCode::Internal, msg};
 }
 
+long parse_status_line(const std::string& headers) {
+    std::istringstream lines(headers);
+    std::string line;
+    if (!std::getline(lines, line)) {
+        return 0;
+    }
+    if (!line.empty() && line.back() == 13) {
+        line.pop_back();
+    }
+    if (line.rfind("HTTP/", 0) != 0) {
+        return 0;
+    }
+    const size_t first_space = line.find(" ");
+    if (first_space == std::string::npos) {
+        return 0;
+    }
+    char* end = nullptr;
+    const char* start = line.c_str() + first_space + 1;
+    const long status = std::strtol(start, &end, 10);
+    if (end == start) {
+        return 0;
+    }
+    return status;
+}
+
+bool is_proxy_connect_header(const std::string& headers) {
+    std::istringstream lines(headers);
+    std::string line;
+    if (!std::getline(lines, line)) {
+        return false;
+    }
+    if (!line.empty() && line.back() == 13) {
+        line.pop_back();
+    }
+    return line.find("Connection established") != std::string::npos;
+}
+
+class HeaderBodyParser {
+   public:
+    Error feed(const std::string& chunk, const BodyCallback& on_body) {
+        if (headers_done_) {
+            return emit_body(chunk, on_body);
+        }
+        buffer_ += chunk;
+        while (!headers_done_) {
+            size_t sep = buffer_.find("\r\n\r\n");
+            size_t sep_len = 4;
+            const size_t lf_sep = buffer_.find("\n\n");
+            if (lf_sep != std::string::npos && (sep == std::string::npos || lf_sep < sep)) {
+                sep = lf_sep;
+                sep_len = 2;
+            }
+            if (sep == std::string::npos) {
+                return ok_error();
+            }
+            const std::string headers = buffer_.substr(0, sep);
+            buffer_.erase(0, sep + sep_len);
+            const long parsed_status = parse_status_line(headers);
+            if (parsed_status == 0) {
+                return {ErrorCode::Internal, "curl response included invalid HTTP headers"};
+            }
+            status_ = parsed_status;
+            if ((status_ >= 100 && status_ < 200) || is_proxy_connect_header(headers)) {
+                continue;
+            }
+            headers_done_ = true;
+        }
+        if (!buffer_.empty()) {
+            const std::string body = buffer_;
+            buffer_.clear();
+            return emit_body(body, on_body);
+        }
+        return ok_error();
+    }
+
+    Error finish() const {
+        if (!headers_done_) {
+            return {ErrorCode::Internal, "curl response ended before HTTP headers completed"};
+        }
+        return ok_error();
+    }
+
+    long status() const { return status_; }
+    const std::string& body() const { return body_; }
+
+   private:
+    std::string buffer_;
+    std::string body_;
+    long status_ = 0;
+    bool headers_done_ = false;
+
+    Error emit_body(const std::string& data, const BodyCallback& on_body) {
+        body_ += data;
+        if (on_body && status_ >= 200 && status_ < 300 && !data.empty()) {
+            return on_body(data);
+        }
+        return ok_error();
+    }
+};
+
 }  // namespace
 
 Result perform(const Request& request, const std::vector<std::string>& secrets) {
@@ -120,6 +221,10 @@ Result perform(const Request& request, const std::vector<std::string>& secrets) 
     std::vector<std::string> args;
     args.emplace_back("curl");
     args.emplace_back("-sS");
+    args.emplace_back("--include");
+    if (request.on_body) {
+        args.emplace_back("--no-buffer");
+    }
     args.emplace_back("-X");
     args.emplace_back(request.method);
     args.emplace_back("--connect-timeout");
@@ -146,8 +251,6 @@ Result perform(const Request& request, const std::vector<std::string>& secrets) 
         args.emplace_back("--data-binary");
         args.emplace_back("@-");
     }
-    args.emplace_back("--write-out");
-    args.emplace_back(std::string("\n") + kStatusMarker + "%{http_code}\n");
     args.emplace_back(request.url);
 
     const pid_t pid = fork();
@@ -174,19 +277,41 @@ Result perform(const Request& request, const std::vector<std::string>& secrets) 
         _exit(127);
     }
 
+    std::string err_text;
+    auto wait_child = [&]() -> Error {
+        int status = 0;
+        while (waitpid(pid, &status, 0) < 0) {
+            if (errno != EINTR) {
+                return {ErrorCode::Internal, std::string("waitpid failed: ") + std::strerror(errno)};
+            }
+        }
+        if (!WIFEXITED(status)) {
+            return {ErrorCode::Internal, "curl transport terminated unexpectedly"};
+        }
+        const int exit_status = WEXITSTATUS(status);
+        if (exit_status != 0) {
+            err_text = redact_secrets(err_text, secrets);
+            return classify_curl_error(exit_status, err_text, request.url);
+        }
+        return ok_error();
+    };
     stdin_read.reset();
     stdout_write.reset();
     stderr_write.reset();
     if (request.method == "POST") {
         err = write_all(stdin_write.get(), request.body);
         if (!err.ok()) {
+            kill(pid, SIGTERM);
+            Error wait_err = wait_child();
+            if (!wait_err.ok()) {
+                return {{}, wait_err};
+            }
             return {{}, err};
         }
     }
     stdin_write.reset();
 
-    std::string out;
-    std::string err_text;
+    HeaderBodyParser parser;
     bool stdout_open = true;
     bool stderr_open = true;
     while (stdout_open || stderr_open) {
@@ -211,7 +336,18 @@ Result perform(const Request& request, const std::vector<std::string>& secrets) 
         if (stdout_open && FD_ISSET(stdout_read.get(), &readfds)) {
             const ssize_t n = read(stdout_read.get(), buf, sizeof(buf));
             if (n > 0) {
-                out.append(buf, static_cast<size_t>(n));
+                err = parser.feed(std::string(buf, static_cast<size_t>(n)), request.on_body);
+                if (!err.ok()) {
+                    kill(pid, SIGTERM);
+                    stdout_read.reset();
+                    stderr_read.reset();
+                    Error wait_err = wait_child();
+                    if (!wait_err.ok() && err.code == ErrorCode::Ok) {
+                        return {{parser.status(), parser.body(), err_text}, wait_err};
+                    }
+                    err_text = redact_secrets(err_text, secrets);
+                    return {{parser.status(), parser.body(), err_text}, err};
+                }
             } else if (n == 0) {
                 stdout_open = false;
                 stdout_read.reset();
@@ -232,38 +368,16 @@ Result perform(const Request& request, const std::vector<std::string>& secrets) 
         }
     }
 
-    int status = 0;
-    while (waitpid(pid, &status, 0) < 0) {
-        if (errno != EINTR) {
-            return {{}, {ErrorCode::Internal, std::string("waitpid failed: ") + std::strerror(errno)}};
-        }
-    }
-    int exit_status = 0;
-    if (WIFEXITED(status)) {
-        exit_status = WEXITSTATUS(status);
-    } else {
-        return {{}, {ErrorCode::Internal, "curl transport terminated unexpectedly"}};
-    }
     err_text = redact_secrets(err_text, secrets);
-    if (exit_status != 0) {
-        return {{}, classify_curl_error(exit_status, err_text, request.url)};
+    err = wait_child();
+    if (!err.ok()) {
+        return {{parser.status(), parser.body(), err_text}, err};
     }
-
-    const size_t marker = out.rfind(kStatusMarker);
-    if (marker == std::string::npos) {
-        return {{}, {ErrorCode::Internal, "curl response did not include an HTTP status marker"}};
+    err = parser.finish();
+    if (!err.ok()) {
+        return {{parser.status(), parser.body(), err_text}, err};
     }
-    std::string body = out.substr(0, marker);
-    if (!body.empty() && body.back() == '\n') {
-        body.pop_back();
-    }
-    const std::string status_text = out.substr(marker + std::strlen(kStatusMarker));
-    char* end = nullptr;
-    const long http_status = std::strtol(status_text.c_str(), &end, 10);
-    if (end == status_text.c_str()) {
-        return {{}, {ErrorCode::Internal, "curl response included an invalid HTTP status marker"}};
-    }
-    return {{http_status, body, err_text}, ok_error()};
+    return {{parser.status(), parser.body(), err_text}, ok_error()};
 }
 
 }  // namespace pkchat::http

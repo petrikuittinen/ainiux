@@ -1,6 +1,7 @@
 #include "provider/provider.hpp"
 
 #include <chrono>
+#include <cctype>
 #include <cstdlib>
 #include <fstream>
 #include <iostream>
@@ -240,7 +241,37 @@ Error parse_chat_json(const std::string& body, ChatResult& result) {
         return {ErrorCode::ProviderSchema, "chat response did not contain choices[0].message.content"};
     }
     result.content = content->string;
+    if (const json::Value* usage = parsed.value.get("usage")) {
+        if (const json::Value* completion_tokens = usage->get("completion_tokens")) {
+            if (completion_tokens->type == json::Value::Type::Number && completion_tokens->number >= 0.0) {
+                result.completion_tokens = static_cast<long long>(completion_tokens->number);
+                result.completion_tokens_estimated = false;
+            }
+        }
+    }
     return ok_error();
+}
+
+long long estimate_completion_tokens(const std::string& text) {
+    long long tokens = 0;
+    bool in_ascii_word = false;
+    for (unsigned char ch : text) {
+        if (std::isalnum(ch) || ch == 95) {
+            if (!in_ascii_word) {
+                ++tokens;
+                in_ascii_word = true;
+            }
+            continue;
+        }
+        in_ascii_word = false;
+        if (!std::isspace(ch) && ch < 128) {
+            ++tokens;
+        }
+    }
+    if (tokens == 0 && !text.empty()) {
+        tokens = 1;
+    }
+    return tokens;
 }
 
 class SseParser {
@@ -492,8 +523,26 @@ Error list_models(const RequestContext& context, ModelsResult& result) {
 
 Error send_chat(const RequestContext& context, DeltaCallback on_delta, ChatResult& result) {
     auto start = std::chrono::steady_clock::now();
+    bool saw_first_delta = false;
+    auto timed_delta = [&](const std::string& delta) -> Error {
+        if (!saw_first_delta && !delta.empty()) {
+            saw_first_delta = true;
+            const auto first = std::chrono::steady_clock::now();
+            result.ttft_ms = std::chrono::duration_cast<std::chrono::milliseconds>(first - start).count();
+        }
+        return on_delta(delta);
+    };
+
     http::Request req = base_http_request(context, "POST", context.chat_url);
     req.body = build_chat_request_json(context);
+    SseParser parser;
+    bool done = false;
+    if (context.options.stream) {
+        req.on_body = [&](const std::string& chunk) -> Error {
+            return parser.feed(chunk, timed_delta, result.content, done);
+        };
+    }
+
     const http::Result http_result = http::perform(req, {context.api_key});
     if (!http_result.error.ok()) {
         if (context.profile.local_endpoint && http_result.error.code == ErrorCode::Connect) {
@@ -508,13 +557,7 @@ Error send_chat(const RequestContext& context, DeltaCallback on_delta, ChatResul
     }
     result.model = context.options.model;
     if (context.options.stream) {
-        SseParser parser;
-        bool done = false;
-        Error err = parser.feed(http_result.response.body, on_delta, result.content, done);
-        if (!err.ok()) {
-            return err;
-        }
-        err = parser.finish(on_delta, result.content, done);
+        Error err = parser.finish(timed_delta, result.content, done);
         if (!err.ok()) {
             return err;
         }
@@ -523,9 +566,15 @@ Error send_chat(const RequestContext& context, DeltaCallback on_delta, ChatResul
         if (!err.ok()) {
             return err;
         }
+        const auto first = std::chrono::steady_clock::now();
+        result.ttft_ms = std::chrono::duration_cast<std::chrono::milliseconds>(first - start).count();
     }
     auto end = std::chrono::steady_clock::now();
     result.total_ms = std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count();
+    if (result.completion_tokens <= 0) {
+        result.completion_tokens = estimate_completion_tokens(result.content);
+        result.completion_tokens_estimated = true;
+    }
     return ok_error();
 }
 
