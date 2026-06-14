@@ -59,6 +59,11 @@ Profile profile_for(const std::string& requested) {
     return {"openai", "https://api.openai.com/v1", true, false, {"OPENAI_API_KEY", "PKCHAT_API_KEY"}};
 }
 
+bool is_provider_shortcut(const std::string& text) {
+    const std::string name = lower_alias(text);
+    return name == "openai" || name == "openrouter" || name == "lm_studio" || name == "lmstudio";
+}
+
 bool has_authorization_header(const std::vector<std::string>& headers) {
     for (const std::string& header : headers) {
         const size_t colon = header.find(':');
@@ -132,7 +137,9 @@ std::string build_chat_request_json(const RequestContext& context, const std::ve
     const cli::Options& o = context.options;
     std::ostringstream json;
     json << "{";
-    json << "\"model\":" << json::quote(o.model) << ",";
+    if (!o.model.empty()) {
+        json << "\"model\":" << json::quote(o.model) << ",";
+    }
     json << "\"messages\":[";
     for (size_t i = 0; i < messages.size(); ++i) {
         if (i != 0) {
@@ -489,7 +496,10 @@ ContextResult build_context(const cli::Options& input_options) {
 
     Profile profile = profile_for(options.provider);
     std::string base = options.base_url;
-    if (base.empty() && !options.positional_url.empty()) {
+    if (!options.positional_url.empty() && is_provider_shortcut(options.positional_url)) {
+        profile = profile_for(options.positional_url);
+        options.provider = profile.name;
+    } else if (base.empty() && !options.positional_url.empty()) {
         base = options.positional_url;
         if (input_options.provider == "openai") {
             profile = profile_for("custom_openai_chat");
@@ -527,6 +537,9 @@ ContextResult build_context(const cli::Options& input_options) {
         return {{}, {ErrorCode::Config, "provider " + profile.name + " requires an API key; set " +
                                       (profile.key_envs.empty() ? "PKCHAT_API_KEY" : profile.key_envs[0]) +
                                       " or use --key-env/--key-file/--key-stdin"}};
+    }
+    if (!options.list_models && options.model.empty() && profile.name != "lm_studio") {
+        return {{}, {ErrorCode::BadArgs, "model is required for provider " + profile.name + "; use -m/--model/-model"}};
     }
 
     RequestContext context;

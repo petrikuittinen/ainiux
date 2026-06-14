@@ -37,6 +37,9 @@ class Handler(BaseHTTPRequestHandler):
         if self.path != "/v1/chat/completions":
             self._send(404, json.dumps({"error": {"message": "not found"}}))
             return
+        if request.get("model") == "":
+            self._send(400, json.dumps({"error": {"message": "empty model field"}}))
+            return
         messages = request.get("messages", [])
         last = messages[-1].get("content", "") if messages and isinstance(messages[-1], dict) else ""
         reply = "Hello"

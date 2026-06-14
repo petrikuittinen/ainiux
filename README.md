@@ -34,9 +34,12 @@ Local OpenAI-compatible server:
 LM Studio profile:
 
 ```sh
+./pkchat lmstudio -i
 ./pkchat --provider lm_studio -m MODEL -p "Hello from LM Studio"
 ./pkchat --provider lmstudio --list-models
 ```
+
+`lmstudio -i` uses `http://localhost:1234/v1`, does not require an API key, and omits the model field when no model is provided so LM Studio can use its currently loaded model.
 
 OpenAI:
 
@@ -47,6 +50,7 @@ OPENAI_API_KEY=... ./pkchat --provider openai -m MODEL -p "Hello"
 OpenRouter:
 
 ```sh
+OPENROUTER_API_KEY=... ./pkchat openrouter -model "nvidia/nemotron-3-ultra-550b-a55b:free" -i
 OPENROUTER_API_KEY=... ./pkchat --provider openrouter -m "nvidia/nemotron-3-ultra-550b-a55b:free" -p "Hello"
 ```
 

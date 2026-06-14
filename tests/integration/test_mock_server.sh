@@ -60,4 +60,10 @@ test "$repl_out" = "repl-one-reply"
 grep 'repl-one' "$REPL_FILE" >/dev/null
 grep 'repl-one-reply' "$REPL_FILE" >/dev/null
 
+
+lmstudio_shortcut_out=$(printf 'repl-one
+/quit
+' | "$ROOT/pkchat" lmstudio --base-url "$BASE" --quiet --repl --no-stream)
+test "$lmstudio_shortcut_out" = "repl-one-reply"
+
 echo "integration tests passed"

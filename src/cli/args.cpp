@@ -9,7 +9,7 @@ namespace {
 
 bool needs_value(const std::string& opt) {
     static const char* with_values[] = {
-        "-p", "--prompt", "--prompt-file", "-s", "--system", "--system-file", "-m", "--model",
+        "-p", "--prompt", "--prompt-file", "-s", "--system", "--system-file", "-m", "--model", "-model",
         "-t", "--temperature", "--top-p", "--max-output-tokens", "--format", "--output",
         "--provider", "--profile", "--base-url", "--chat-url", "--models-url", "--responses-url",
         "--key-env", "--key-file", "-k", "--key", "--header", "--connect-timeout", "--timeout",
@@ -125,7 +125,7 @@ ParseResult parse_args(int argc, char** argv) {
                 opts.system = value;
             } else if (opt == "--system-file") {
                 opts.system_file = value;
-            } else if (opt == "-m" || opt == "--model") {
+            } else if (opt == "-m" || opt == "--model" || opt == "-model") {
                 opts.model = value;
             } else if (opt == "-t" || opt == "--temperature") {
                 Error err = parse_double(opt, value, opts.temperature);
@@ -211,9 +211,9 @@ std::string help_text() {
     return R"(pkchat - script-friendly OpenAI-compatible chat CLI
 
 Usage:
-  pkchat [BASE_URL] -p TEXT [options]
-  pkchat --list-models [BASE_URL] [options]
-  pkchat --repl [BASE_URL] [options]
+  pkchat [BASE_URL|PROFILE] -p TEXT [options]
+  pkchat --list-models [BASE_URL|PROFILE] [options]
+  pkchat --repl [BASE_URL|PROFILE] [options]
 
 Examples:
   pkchat http://localhost:8000 -p "What is the capital of Norway?"
@@ -221,6 +221,8 @@ Examples:
   pkchat --provider openai -m MODEL -p "Hello"
   pkchat --provider lm_studio -m MODEL -p "Hello from local LM Studio"
   pkchat --provider lmstudio --list-models
+  pkchat openrouter -model MODEL -i
+  pkchat lmstudio -i
   pkchat --prompt-file prompt.txt --system-file system.txt --format json
   pkchat --repl --load-chat chat.json --save-chat chat.json
 
@@ -229,7 +231,7 @@ Options:
       --prompt-file PATH        Use '-' to read the prompt from stdin.
   -s, --system TEXT
       --system-file PATH
-  -m, --model MODEL
+  -m, --model, -model MODEL
   -t, --temperature FLOAT
       --top-p FLOAT
       --max-output-tokens N

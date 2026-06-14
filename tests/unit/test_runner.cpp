@@ -32,6 +32,15 @@ void test_cli_parse() {
     check(parsed.options.save_chat_path == "chat.json", "save chat parsed");
 }
 
+void test_cli_provider_shortcut_parse() {
+    const char* argv[] = {"pkchat", "openrouter", "-model", "provider/model", "-i"};
+    pkchat::cli::ParseResult parsed = pkchat::cli::parse_args(5, const_cast<char**>(argv));
+    check(parsed.error.ok(), "provider shortcut args parse");
+    check(parsed.options.positional_url == "openrouter", "provider shortcut stored as positional");
+    check(parsed.options.model == "provider/model", "-model alias parsed");
+    check(parsed.options.repl, "-i parsed for provider shortcut");
+}
+
 void test_cli_repl_parse() {
     const char* argv[] = {"pkchat", "--repl", "--load-chat", "chat.json"};
     pkchat::cli::ParseResult parsed = pkchat::cli::parse_args(4, const_cast<char**>(argv));
@@ -110,6 +119,27 @@ void test_chat_session_rejects_corrupt_json() {
     check(err.code == pkchat::ErrorCode::JsonParse, "corrupt chat file reports JSON parse error");
 }
 
+void test_openrouter_shortcut_context() {
+    const char* argv[] = {"pkchat", "openrouter", "-model", "provider/model", "-p", "hello", "--header", "Authorization: Bearer test"};
+    pkchat::cli::ParseResult parsed = pkchat::cli::parse_args(8, const_cast<char**>(argv));
+    check(parsed.error.ok(), "openrouter shortcut args parse");
+    pkchat::provider::ContextResult ctx = pkchat::provider::build_context(parsed.options);
+    check(ctx.error.ok(), "openrouter shortcut context builds with auth header");
+    check(ctx.context.profile.name == "openrouter", "openrouter shortcut selects profile");
+    check(ctx.context.base_url == "https://openrouter.ai/api/v1", "openrouter shortcut uses standard base URL");
+}
+
+void test_lmstudio_shortcut_context() {
+    const char* argv[] = {"pkchat", "lmstudio", "-i"};
+    pkchat::cli::ParseResult parsed = pkchat::cli::parse_args(3, const_cast<char**>(argv));
+    check(parsed.error.ok(), "lmstudio shortcut args parse");
+    pkchat::provider::ContextResult ctx = pkchat::provider::build_context(parsed.options);
+    check(ctx.error.ok(), "lmstudio shortcut context builds without key or model");
+    check(ctx.context.profile.name == "lm_studio", "lmstudio shortcut selects profile");
+    check(ctx.context.base_url == "http://localhost:1234/v1", "lmstudio shortcut uses default base URL");
+    check(ctx.context.options.model.empty(), "lmstudio shortcut does not require model");
+}
+
 void test_lmstudio_context() {
     const char* argv[] = {"pkchat", "--provider", "lmstudio", "--list-models"};
     pkchat::cli::ParseResult parsed = pkchat::cli::parse_args(4, const_cast<char**>(argv));
@@ -125,10 +155,13 @@ void test_lmstudio_context() {
 int main() {
     test_cli_parse();
     test_cli_rejects_unknown();
+    test_cli_provider_shortcut_parse();
     test_cli_repl_parse();
     test_url_normalization();
     test_json_parse();
     test_lmstudio_context();
+    test_openrouter_shortcut_context();
+    test_lmstudio_shortcut_context();
     test_chat_session_json_round_trip();
     test_chat_session_rejects_corrupt_json();
     if (failures != 0) {
