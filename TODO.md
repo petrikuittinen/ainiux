@@ -4,4 +4,4 @@
 - Expand JSON handling behind the existing facade or vendor a reviewed JSON library.
 - Add broader error-path and credential-redaction tests.
 - Add true incremental stream delivery from the HTTP layer.
-- Add v0.2 REPL and JSON chat persistence.
+- Expand REPL persistence into XDG chat IDs, `/chat` listing, `/new`, and schema migrations.

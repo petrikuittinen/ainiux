@@ -11,3 +11,8 @@ The initial implementation uses C++17 and a plain Makefile to keep the binary po
 ## JSON Facade
 
 `src/json/` is a small internal JSON facade used for request escaping and provider response parsing. The project should replace or expand it with a reviewed JSON library when dependency installation is available.
+
+
+## JSON Chat Persistence
+
+v0.2 stores explicit chat files via `--save-chat PATH` and `--load-chat PATH` before adding automatic XDG chat IDs. This keeps the early REPL scriptable and reviewable while still using the target schema fields: `schema_version`, timestamps, provider, base URL, model, settings, messages, attachments, usage, and compaction events. Saves use a temporary file, fsync, rename, and restrictive file permissions.

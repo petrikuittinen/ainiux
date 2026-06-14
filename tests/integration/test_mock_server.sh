@@ -42,4 +42,22 @@ verbose_out=$("$ROOT/pkchat" "$BASE" -v --stream -m "$MODEL" -p "hello" 2>"$verb
 test "$verbose_out" = "Hello"
 grep 'TTFT: [0-9][0-9]* ms, Token/s: [0-9][0-9]*[.][0-9]' "$verbose_err" >/dev/null
 
+
+CHAT_FILE="$ROOT/build/chat.json"
+reply=$("$ROOT/pkchat" "$BASE" --quiet --no-stream -m "$MODEL" -p "hello" --save-chat "$CHAT_FILE")
+test "$reply" = "Hello"
+grep '"schema_version"' "$CHAT_FILE" >/dev/null
+grep '"role": "assistant"' "$CHAT_FILE" >/dev/null
+
+loaded_reply=$("$ROOT/pkchat" "$BASE" --quiet --no-stream -m "$MODEL" --load-chat "$CHAT_FILE" -p "count-messages")
+test "$loaded_reply" = "messages:3"
+
+REPL_FILE="$ROOT/build/repl-chat.json"
+repl_out=$(printf 'repl-one
+/quit
+' | "$ROOT/pkchat" "$BASE" --quiet --repl --no-stream -m "$MODEL" --save-chat "$REPL_FILE")
+test "$repl_out" = "repl-one-reply"
+grep 'repl-one' "$REPL_FILE" >/dev/null
+grep 'repl-one-reply' "$REPL_FILE" >/dev/null
+
 echo "integration tests passed"

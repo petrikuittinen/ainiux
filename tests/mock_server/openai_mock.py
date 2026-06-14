@@ -37,15 +37,24 @@ class Handler(BaseHTTPRequestHandler):
         if self.path != "/v1/chat/completions":
             self._send(404, json.dumps({"error": {"message": "not found"}}))
             return
+        messages = request.get("messages", [])
+        last = messages[-1].get("content", "") if messages and isinstance(messages[-1], dict) else ""
+        reply = "Hello"
+        if last == "count-messages":
+            reply = f"messages:{len(messages)}"
+        elif last == "repl-one":
+            reply = "repl-one-reply"
+
         if request.get("stream"):
             self.send_response(200)
             self.send_header("Content-Type", "text/event-stream")
             self.end_headers()
+            midpoint = max(1, len(reply) // 2)
             chunks = [
-                'data: {"choices":[{"delta":{"content":"Hel"}}]}\n\n',
-                ': comment\n\n',
-                'data: {"choices":[{"delta":{"content":"lo"}}]}\n\n',
-                'data: [DONE]\n\n',
+                "data: " + json.dumps({"choices": [{"delta": {"content": reply[:midpoint]}}]}) + "\n\n",
+                ": comment\n\n",
+                "data: " + json.dumps({"choices": [{"delta": {"content": reply[midpoint:]}}]}) + "\n\n",
+                "data: [DONE]\n\n",
             ]
             for chunk in chunks:
                 if self.stream_delay:
@@ -60,8 +69,8 @@ class Handler(BaseHTTPRequestHandler):
                     "id": "chatcmpl_mock",
                     "object": "chat.completion",
                     "model": self.model,
-                    "choices": [{"index": 0, "message": {"role": "assistant", "content": "Hello"}}],
-                    "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+                    "choices": [{"index": 0, "message": {"role": "assistant", "content": reply}}],
+                    "usage": {"prompt_tokens": len(messages), "completion_tokens": 1, "total_tokens": len(messages) + 1},
                 }
             ),
         )

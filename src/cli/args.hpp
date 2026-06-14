@@ -22,6 +22,7 @@ struct Options {
     bool trace_http = false;
     bool insecure_tls = false;
     bool key_stdin = false;
+    bool repl = false;
 
     std::string positional_url;
     std::string prompt;
@@ -39,6 +40,8 @@ struct Options {
     std::string key_file;
     std::string key;
     std::string output_path;
+    std::string save_chat_path;
+    std::string load_chat_path;
     std::string proxy;
     OutputFormat format = OutputFormat::Text;
 

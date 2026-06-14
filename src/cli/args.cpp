@@ -13,7 +13,7 @@ bool needs_value(const std::string& opt) {
         "-t", "--temperature", "--top-p", "--max-output-tokens", "--format", "--output",
         "--provider", "--profile", "--base-url", "--chat-url", "--models-url", "--responses-url",
         "--key-env", "--key-file", "-k", "--key", "--header", "--connect-timeout", "--timeout",
-        "--proxy"};
+        "--proxy", "--save-chat", "--load-chat"};
     for (const char* item : with_values) {
         if (opt == item) {
             return true;
@@ -111,6 +111,8 @@ ParseResult parse_args(int argc, char** argv) {
             opts.insecure_tls = true;
         } else if (arg == "--key-stdin") {
             opts.key_stdin = true;
+        } else if (arg == "--repl" || arg == "-i") {
+            opts.repl = true;
         } else if (needs_value(opt)) {
             if (auto err = take_value()) {
                 return {opts, *err};
@@ -155,6 +157,10 @@ ParseResult parse_args(int argc, char** argv) {
                 }
             } else if (opt == "--output") {
                 opts.output_path = value;
+            } else if (opt == "--save-chat") {
+                opts.save_chat_path = value;
+            } else if (opt == "--load-chat") {
+                opts.load_chat_path = value;
             } else if (opt == "--provider") {
                 opts.provider = value;
             } else if (opt == "--profile") {
@@ -207,6 +213,7 @@ std::string help_text() {
 Usage:
   pkchat [BASE_URL] -p TEXT [options]
   pkchat --list-models [BASE_URL] [options]
+  pkchat --repl [BASE_URL] [options]
 
 Examples:
   pkchat http://localhost:8000 -p "What is the capital of Norway?"
@@ -215,6 +222,7 @@ Examples:
   pkchat --provider lm_studio -m MODEL -p "Hello from local LM Studio"
   pkchat --provider lmstudio --list-models
   pkchat --prompt-file prompt.txt --system-file system.txt --format json
+  pkchat --repl --load-chat chat.json --save-chat chat.json
 
 Options:
   -p, --prompt TEXT
@@ -228,6 +236,9 @@ Options:
       --stream | --no-stream
       --format text|json|ndjson
       --output PATH
+      --repl, -i                Start a simple line-oriented interactive chat.
+      --save-chat PATH          Save JSON chat history after a successful reply.
+      --load-chat PATH          Load JSON chat history before sending.
       --provider NAME           openai, openrouter, custom_openai_chat, lm_studio
       --profile NAME            Alias for --provider.
       --base-url URL

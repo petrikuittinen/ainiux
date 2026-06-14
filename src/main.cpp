@@ -2,7 +2,9 @@
 #include <iomanip>
 #include <iostream>
 #include <memory>
+#include <sstream>
 
+#include "chat/session.hpp"
 #include "cli/args.hpp"
 #include "common.hpp"
 #include "json/json.hpp"
@@ -58,6 +60,17 @@ std::ostream* output_stream(const pkchat::cli::Options& options, std::ofstream& 
     return &file;
 }
 
+std::string trim_ascii(std::string text) {
+    auto is_ws = [](unsigned char ch) { return ch == ' ' || ch == '\n' || ch == '\r' || ch == '\t'; };
+    while (!text.empty() && is_ws(static_cast<unsigned char>(text.front()))) {
+        text.erase(text.begin());
+    }
+    while (!text.empty() && is_ws(static_cast<unsigned char>(text.back()))) {
+        text.pop_back();
+    }
+    return text;
+}
+
 void write_json_chat(std::ostream& out,
                      const pkchat::provider::RequestContext& context,
                      const pkchat::provider::ChatResult& result) {
@@ -93,6 +106,236 @@ void print_verbose_metrics(const pkchat::cli::Options& options, const pkchat::pr
     std::cerr << "\n";
 }
 
+void refresh_session_metadata(pkchat::chat::Session& session, const pkchat::provider::RequestContext& context) {
+    session.provider = context.profile.name;
+    session.base_url = context.base_url;
+    session.model = context.options.model;
+}
+
+bool has_system_message(const pkchat::chat::Session& session) {
+    for (const pkchat::provider::Message& message : session.messages) {
+        if (message.role == "system") {
+            return true;
+        }
+    }
+    return false;
+}
+
+void apply_system_prompt(pkchat::chat::Session& session, const std::string& system) {
+    if (trim_ascii(system).empty() || has_system_message(session)) {
+        return;
+    }
+    session.messages.insert(session.messages.begin(), {"system", system});
+}
+
+void replace_system_prompt(pkchat::chat::Session& session, const std::string& system) {
+    for (auto it = session.messages.begin(); it != session.messages.end();) {
+        if (it->role == "system") {
+            it = session.messages.erase(it);
+        } else {
+            ++it;
+        }
+    }
+    if (!trim_ascii(system).empty()) {
+        session.messages.insert(session.messages.begin(), {"system", system});
+    }
+}
+
+pkchat::Error save_if_requested(const pkchat::cli::Options& options, const pkchat::chat::Session& session) {
+    if (options.save_chat_path.empty()) {
+        return pkchat::ok_error();
+    }
+    return pkchat::chat::save_session_atomic(options.save_chat_path, session);
+}
+
+pkchat::Error send_session_turn(pkchat::provider::RequestContext& context,
+                                pkchat::chat::Session& session,
+                                const std::string& prompt,
+                                std::ostream& out,
+                                pkchat::provider::ChatResult& chat) {
+    session.messages.push_back({"user", prompt});
+    bool started_ndjson = false;
+    auto on_delta = [&](const std::string& delta) -> pkchat::Error {
+        if (context.options.format == pkchat::cli::OutputFormat::Text) {
+            out << delta;
+            out.flush();
+        } else if (context.options.format == pkchat::cli::OutputFormat::Ndjson) {
+            if (!started_ndjson) {
+                out << "{\"event\":\"start\",\"model\":" << pkchat::json::quote(context.options.model) << "}\n";
+                started_ndjson = true;
+            }
+            out << "{\"event\":\"delta\",\"text\":" << pkchat::json::quote(delta) << "}\n";
+            out.flush();
+        }
+        return pkchat::ok_error();
+    };
+
+    pkchat::Error err = pkchat::provider::send_chat_messages(context, session.messages, on_delta, chat);
+    if (!err.ok()) {
+        session.messages.pop_back();
+        return err;
+    }
+    session.messages.push_back({"assistant", chat.content});
+    if (!chat.model.empty()) {
+        session.model = chat.model;
+    }
+    if (!chat.usage_json.empty() && chat.usage_json != "null") {
+        session.usage_json = chat.usage_json;
+    }
+
+    if (context.options.format == pkchat::cli::OutputFormat::Text) {
+        if (!context.options.stream) {
+            out << chat.content;
+        }
+        out << "\n";
+    } else if (context.options.format == pkchat::cli::OutputFormat::Json) {
+        write_json_chat(out, context, chat);
+    } else {
+        if (!started_ndjson) {
+            out << "{\"event\":\"start\",\"model\":" << pkchat::json::quote(context.options.model) << "}\n";
+        }
+        if (!context.options.stream && !chat.content.empty()) {
+            out << "{\"event\":\"delta\",\"text\":" << pkchat::json::quote(chat.content) << "}\n";
+        }
+        out << "{\"event\":\"done\",\"usage\":null}\n";
+    }
+    return pkchat::ok_error();
+}
+
+void print_repl_help() {
+    std::cerr << "Commands: /help, /quit, /exit, /save [PATH], /load PATH, /clear, /system TEXT, /model MODEL\n";
+}
+
+int run_repl(pkchat::provider::RequestContext context, pkchat::chat::Session session, std::ostream& out) {
+    refresh_session_metadata(session, context);
+    apply_system_prompt(session, context.options.system);
+    if (!context.options.quiet) {
+        std::cerr << "pkchat REPL. Type /help for commands, /quit to exit.\n";
+    }
+
+    auto send_prompt = [&](const std::string& text) -> int {
+        pkchat::provider::ChatResult chat;
+        pkchat::Error err = send_session_turn(context, session, text, out, chat);
+        if (!err.ok()) {
+            print_error(err);
+            return exit_code_for(err.code);
+        }
+        err = save_if_requested(context.options, session);
+        if (!err.ok()) {
+            print_error(err);
+            return exit_code_for(err.code);
+        }
+        print_verbose_metrics(context.options, chat);
+        return 0;
+    };
+
+    if (!trim_ascii(context.options.prompt).empty()) {
+        const int rc = send_prompt(context.options.prompt);
+        if (rc != 0) {
+            return rc;
+        }
+    }
+
+    std::string line;
+    while (true) {
+        if (!context.options.quiet) {
+            std::cerr << "> ";
+        }
+        if (!std::getline(std::cin, line)) {
+            if (!context.options.quiet) {
+                std::cerr << "\n";
+            }
+            break;
+        }
+        const std::string text = trim_ascii(line);
+        if (text.empty()) {
+            continue;
+        }
+        if (text[0] == '/') {
+            if (text == "/quit" || text == "/exit") {
+                break;
+            }
+            if (text == "/help") {
+                print_repl_help();
+                continue;
+            }
+            if (text == "/clear") {
+                session.messages.clear();
+                apply_system_prompt(session, context.options.system);
+                if (!context.options.quiet) {
+                    std::cerr << "Chat history cleared.\n";
+                }
+                continue;
+            }
+            if (text.rfind("/system", 0) == 0) {
+                replace_system_prompt(session, trim_ascii(text.substr(7)));
+                if (!context.options.quiet) {
+                    std::cerr << "System prompt updated.\n";
+                }
+                continue;
+            }
+            if (text.rfind("/model", 0) == 0) {
+                const std::string model = trim_ascii(text.substr(6));
+                if (model.empty()) {
+                    std::cerr << "Usage: /model MODEL\n";
+                    continue;
+                }
+                context.options.model = model;
+                session.model = model;
+                if (!context.options.quiet) {
+                    std::cerr << "Model set to " << model << "\n";
+                }
+                continue;
+            }
+            if (text.rfind("/save", 0) == 0) {
+                std::string path = trim_ascii(text.substr(5));
+                if (path.empty()) {
+                    path = context.options.save_chat_path;
+                }
+                if (path.empty()) {
+                    std::cerr << "Usage: /save PATH\n";
+                    continue;
+                }
+                pkchat::Error err = pkchat::chat::save_session_atomic(path, session);
+                if (!err.ok()) {
+                    print_error(err);
+                    continue;
+                }
+                if (!context.options.quiet) {
+                    std::cerr << "Saved chat to " << path << "\n";
+                }
+                continue;
+            }
+            if (text.rfind("/load", 0) == 0) {
+                const std::string path = trim_ascii(text.substr(5));
+                if (path.empty()) {
+                    std::cerr << "Usage: /load PATH\n";
+                    continue;
+                }
+                pkchat::chat::Session loaded;
+                pkchat::Error err = pkchat::chat::load_session(path, loaded);
+                if (!err.ok()) {
+                    print_error(err);
+                    continue;
+                }
+                session = std::move(loaded);
+                refresh_session_metadata(session, context);
+                if (!context.options.quiet) {
+                    std::cerr << "Loaded chat from " << path << "\n";
+                }
+                continue;
+            }
+            std::cerr << "Unknown command: " << text << "\n";
+            continue;
+        }
+        const int rc = send_prompt(text);
+        if (rc != 0) {
+            return rc;
+        }
+    }
+    return 0;
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -110,8 +353,36 @@ int main(int argc, char** argv) {
         std::cout << "pkchat " << pkchat::kVersion << "\n";
         return 0;
     }
+    if (options.repl && options.list_models) {
+        print_error({pkchat::ErrorCode::BadArgs, "--repl cannot be combined with --list-models"});
+        return exit_code_for(pkchat::ErrorCode::BadArgs);
+    }
+    if (options.repl && options.format != pkchat::cli::OutputFormat::Text) {
+        print_error({pkchat::ErrorCode::BadArgs, "--repl currently supports --format text only"});
+        return exit_code_for(pkchat::ErrorCode::BadArgs);
+    }
     if (!options.key.empty() && !options.quiet) {
         std::cerr << "Warning: command line API keys may be visible to other local users; prefer --key-env, --key-file, or --key-stdin.\n";
+    }
+
+    pkchat::chat::Session session;
+    bool loaded_session = false;
+    if (!options.load_chat_path.empty()) {
+        pkchat::Error err = pkchat::chat::load_session(options.load_chat_path, session);
+        if (!err.ok()) {
+            print_error(err);
+            return exit_code_for(err.code);
+        }
+        loaded_session = true;
+        if (options.model.empty()) {
+            options.model = session.model;
+        }
+        if (options.base_url.empty() && options.positional_url.empty() && options.chat_url.empty()) {
+            options.base_url = session.base_url;
+        }
+        if (options.provider == "openai" && options.positional_url.empty() && options.base_url == session.base_url) {
+            options.provider = session.provider;
+        }
     }
 
     pkchat::provider::ContextResult context_result = pkchat::provider::build_context(options);
@@ -119,7 +390,7 @@ int main(int argc, char** argv) {
         print_error(context_result.error);
         return exit_code_for(context_result.error.code);
     }
-    const pkchat::provider::RequestContext& context = context_result.context;
+    pkchat::provider::RequestContext context = context_result.context;
 
     std::ofstream out_file;
     pkchat::Error output_error;
@@ -153,43 +424,26 @@ int main(int argc, char** argv) {
         return 0;
     }
 
-    pkchat::provider::ChatResult chat;
-    bool started_ndjson = false;
-    auto on_delta = [&](const std::string& delta) -> pkchat::Error {
-        if (context.options.format == pkchat::cli::OutputFormat::Text) {
-            *out << delta;
-            out->flush();
-        } else if (context.options.format == pkchat::cli::OutputFormat::Ndjson) {
-            if (!started_ndjson) {
-                *out << "{\"event\":\"start\",\"model\":" << pkchat::json::quote(context.options.model) << "}\n";
-                started_ndjson = true;
-            }
-            *out << "{\"event\":\"delta\",\"text\":" << pkchat::json::quote(delta) << "}\n";
-            out->flush();
-        }
-        return pkchat::ok_error();
-    };
+    if (!loaded_session) {
+        session = pkchat::chat::new_session(context);
+    }
+    refresh_session_metadata(session, context);
+    apply_system_prompt(session, context.options.system);
 
-    pkchat::Error err = pkchat::provider::send_chat(context, on_delta, chat);
+    if (context.options.repl) {
+        return run_repl(context, std::move(session), *out);
+    }
+
+    pkchat::provider::ChatResult chat;
+    pkchat::Error err = send_session_turn(context, session, context.options.prompt, *out, chat);
     if (!err.ok()) {
         print_error(err);
         return exit_code_for(err.code);
     }
-    if (context.options.format == pkchat::cli::OutputFormat::Text) {
-        if (!context.options.stream) {
-            *out << chat.content;
-        }
-        *out << "\n";
-    } else if (context.options.format == pkchat::cli::OutputFormat::Json) {
-        write_json_chat(*out, context, chat);
-    } else {
-        if (!started_ndjson) {
-            *out << "{\"event\":\"start\",\"model\":" << pkchat::json::quote(context.options.model) << "}\n";
-        }
-        if (!context.options.stream && !chat.content.empty()) {
-            *out << "{\"event\":\"delta\",\"text\":" << pkchat::json::quote(chat.content) << "}\n";
-        }
-        *out << "{\"event\":\"done\",\"usage\":null}\n";
+    err = save_if_requested(context.options, session);
+    if (!err.ok()) {
+        print_error(err);
+        return exit_code_for(err.code);
     }
     print_verbose_metrics(context.options, chat);
     return 0;

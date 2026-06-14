@@ -2,7 +2,7 @@
 
 `pkchat` is a fast, script-friendly command-line chat client for OpenAI and OpenAI-compatible APIs.
 
-Current status: v0.1 CLI for `/v1/models` and `/v1/chat/completions`.
+Current status: v0.2 CLI with `/v1/models`, `/v1/chat/completions`, a simple REPL, and JSON chat save/load.
 
 ## Build
 
@@ -58,6 +58,17 @@ Prompt and system files:
   --prompt-file prompt.txt --system-file system.txt --format json
 ```
 
+
+Interactive REPL and chat files:
+
+```sh
+./pkchat --repl http://localhost:30000 -m MODEL --save-chat chat.json
+./pkchat http://localhost:30000 -m MODEL -p "Hello" --save-chat chat.json
+./pkchat --load-chat chat.json -p "Continue from the saved chat"
+```
+
+In REPL mode, commands include `/help`, `/quit`, `/save PATH`, `/load PATH`, `/clear`, `/system TEXT`, and `/model MODEL`. Prompts and status are written to `stderr`; assistant replies remain on `stdout`.
+
 Verbose timing:
 
 ```sh
@@ -72,6 +83,8 @@ Verbose timing:
 - `stderr` is used for warnings, status, and errors.
 - `--format json` returns one JSON object.
 - `--format ndjson` returns streaming-style events.
+- `--save-chat PATH` writes a JSON chat file atomically with restrictive permissions.
+- `--load-chat PATH` loads prior messages before sending the next prompt.
 
 ## Credentials
 
@@ -94,7 +107,7 @@ Run the full local suite:
 make test
 ```
 
-The integration test starts a local mock OpenAI-compatible server and verifies model listing, non-streaming chat, streaming chat, JSON output, and NDJSON output.
+The integration test starts a local mock OpenAI-compatible server and verifies model listing, non-streaming chat, streaming chat, JSON output, NDJSON output, chat save/load, and REPL mode.
 
 For leak and sanitizer checks:
 

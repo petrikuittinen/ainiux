@@ -28,6 +28,11 @@ struct RequestContext {
     std::vector<std::string> headers;
 };
 
+struct Message {
+    std::string role;
+    std::string content;
+};
+
 struct ChatResult {
     std::string model;
     std::string content;
@@ -52,6 +57,10 @@ struct ContextResult {
 ContextResult build_context(const cli::Options& options);
 Error list_models(const RequestContext& context, ModelsResult& result);
 Error send_chat(const RequestContext& context, DeltaCallback on_delta, ChatResult& result);
+Error send_chat_messages(const RequestContext& context,
+                         const std::vector<Message>& messages,
+                         DeltaCallback on_delta,
+                         ChatResult& result);
 std::string normalize_base_url(const std::string& url, bool* changed, Error& error);
 
 }  // namespace pkchat::provider

@@ -4,6 +4,7 @@
 #include <cctype>
 #include <cstdlib>
 #include <fstream>
+#include <iomanip>
 #include <iostream>
 #include <sstream>
 
@@ -127,21 +128,19 @@ Error validate_header(const std::string& header) {
     return ok_error();
 }
 
-std::string build_chat_request_json(const RequestContext& context) {
+std::string build_chat_request_json(const RequestContext& context, const std::vector<Message>& messages) {
     const cli::Options& o = context.options;
     std::ostringstream json;
     json << "{";
     json << "\"model\":" << json::quote(o.model) << ",";
     json << "\"messages\":[";
-    bool first = true;
-    if (!o.system.empty()) {
-        json << "{\"role\":\"system\",\"content\":" << json::quote(o.system) << "}";
-        first = false;
+    for (size_t i = 0; i < messages.size(); ++i) {
+        if (i != 0) {
+            json << ",";
+        }
+        json << "{\"role\":" << json::quote(messages[i].role)
+             << ",\"content\":" << json::quote(messages[i].content) << "}";
     }
-    if (!first) {
-        json << ",";
-    }
-    json << "{\"role\":\"user\",\"content\":" << json::quote(o.prompt) << "}";
     json << "],";
     json << "\"stream\":" << (o.stream ? "true" : "false");
     if (o.has_temperature) {
@@ -176,6 +175,42 @@ Error http_status_error(const RequestContext& context, const http::Response& res
     }
     return {code,
             "HTTP " + std::to_string(response.status) + " from " + url + ": " + body + suggestion};
+}
+
+std::string json_value_to_string(const json::Value& value) {
+    std::ostringstream out;
+    switch (value.type) {
+        case json::Value::Type::Null:
+            return "null";
+        case json::Value::Type::Bool:
+            return value.boolean ? "true" : "false";
+        case json::Value::Type::Number:
+            out << std::setprecision(17) << value.number;
+            return out.str();
+        case json::Value::Type::String:
+            return json::quote(value.string);
+        case json::Value::Type::Array:
+            out << "[";
+            for (size_t i = 0; i < value.array.size(); ++i) {
+                if (i != 0) {
+                    out << ",";
+                }
+                out << json_value_to_string(value.array[i]);
+            }
+            out << "]";
+            return out.str();
+        case json::Value::Type::Object:
+            out << "{";
+            for (auto it = value.object.begin(); it != value.object.end(); ++it) {
+                if (it != value.object.begin()) {
+                    out << ",";
+                }
+                out << json::quote(it->first) << ":" << json_value_to_string(it->second);
+            }
+            out << "}";
+            return out.str();
+    }
+    return "null";
 }
 
 std::string provider_error_message(const json::Value& root) {
@@ -242,6 +277,7 @@ Error parse_chat_json(const std::string& body, ChatResult& result) {
     }
     result.content = content->string;
     if (const json::Value* usage = parsed.value.get("usage")) {
+        result.usage_json = json_value_to_string(*usage);
         if (const json::Value* completion_tokens = usage->get("completion_tokens")) {
             if (completion_tokens->type == json::Value::Type::Number && completion_tokens->number >= 0.0) {
                 result.completion_tokens = static_cast<long long>(completion_tokens->number);
@@ -447,8 +483,8 @@ ContextResult build_context(const cli::Options& input_options) {
         }
         options.key = trim_ascii(options.key);
     }
-    if (!options.list_models && trim_ascii(options.prompt).empty()) {
-        return {{}, {ErrorCode::BadArgs, "prompt is empty; use -p/--prompt or --prompt-file"}};
+    if (!options.list_models && !options.repl && trim_ascii(options.prompt).empty()) {
+        return {{}, {ErrorCode::BadArgs, "prompt is empty; use -p/--prompt, --prompt-file, or --repl"}};
     }
 
     Profile profile = profile_for(options.provider);
@@ -521,7 +557,10 @@ Error list_models(const RequestContext& context, ModelsResult& result) {
     return parse_models_json(http_result.response.body, result);
 }
 
-Error send_chat(const RequestContext& context, DeltaCallback on_delta, ChatResult& result) {
+Error send_chat_messages(const RequestContext& context,
+                         const std::vector<Message>& messages,
+                         DeltaCallback on_delta,
+                         ChatResult& result) {
     auto start = std::chrono::steady_clock::now();
     bool saw_first_delta = false;
     auto timed_delta = [&](const std::string& delta) -> Error {
@@ -534,7 +573,7 @@ Error send_chat(const RequestContext& context, DeltaCallback on_delta, ChatResul
     };
 
     http::Request req = base_http_request(context, "POST", context.chat_url);
-    req.body = build_chat_request_json(context);
+    req.body = build_chat_request_json(context, messages);
     SseParser parser;
     bool done = false;
     if (context.options.stream) {
@@ -576,6 +615,15 @@ Error send_chat(const RequestContext& context, DeltaCallback on_delta, ChatResul
         result.completion_tokens_estimated = true;
     }
     return ok_error();
+}
+
+Error send_chat(const RequestContext& context, DeltaCallback on_delta, ChatResult& result) {
+    std::vector<Message> messages;
+    if (!context.options.system.empty()) {
+        messages.push_back({"system", context.options.system});
+    }
+    messages.push_back({"user", context.options.prompt});
+    return send_chat_messages(context, messages, on_delta, result);
 }
 
 }  // namespace pkchat::provider

@@ -379,6 +379,8 @@ All output modes must avoid leaking credentials.
 
 ## Goal
 
+Implementation note (2026-06-14): a first v0.2 slice is implemented. `--repl`/`-i` starts a line-oriented REPL, `--save-chat PATH` and `--load-chat PATH` persist explicit JSON chat files, one-shot mode can continue a saved chat, and the mock integration test covers save/load plus REPL stdout behavior. Remaining v0.2 work is tracked in TODO.md: XDG chat IDs, `/chat` listing, `/new`, fuller config/profile support, and schema migration mechanics.
+
 Add a simple line-oriented interactive mode and durable chat save/load without yet building the full-screen TUI.
 
 ## Commands
@@ -409,17 +411,17 @@ pkchat --new
 
 ## Tasks
 
-- [ ] Add internal message model independent from provider JSON.
-- [ ] Add conversation state object.
-- [ ] Add line-oriented REPL.
-- [ ] Add prompt history for the session.
-- [ ] Add `/save` and `/load`.
+- [x] Add internal message model independent from provider JSON.
+- [x] Add conversation state object.
+- [x] Add line-oriented REPL.
+- [x] Add prompt history for the session.
+- [x] Add `/save` and `/load`.
 - [ ] Add `/chat` listing.
-- [ ] Add atomic save.
-- [ ] Add corrupted chat-file handling.
+- [x] Add atomic save.
+- [x] Add corrupted chat-file handling.
 - [ ] Add config/profile support.
 - [ ] Add schema migration mechanism, even if only v1 exists.
-- [ ] Ensure every loaded JSON document, temporary string, file handle, and conversation allocation is released.
+- [x] Ensure every loaded JSON document, temporary string, file handle, and conversation allocation is released.
 
 ## Chat file schema
 
@@ -479,12 +481,12 @@ data:   $XDG_DATA_HOME/pkchat/ or ~/.local/share/pkchat/
 
 ## Acceptance criteria
 
-- [ ] A chat can be saved and loaded.
-- [ ] Corrupted chat files produce a specific error without crashing.
+- [x] A chat can be saved and loaded.
+- [x] Corrupted chat files produce a specific error without crashing.
 - [ ] Permission-denied writes produce a specific error.
 - [ ] Disk-full or short-write cases are handled where testable.
 - [ ] Old chats can be listed.
-- [ ] API keys are not saved.
+- [x] API keys are not saved.
 - [ ] Leak-check tooling reports no leaks for save/load success, corrupted file, and failed write paths where supported.
 
 ---
