@@ -2,7 +2,7 @@
 
 `pkchat` is a fast, script-friendly command-line chat client for OpenAI and OpenAI-compatible APIs.
 
-Current status: v0.2 CLI with `/v1/models`, `/v1/chat/completions`, a simple REPL, and JSON chat save/load.
+Current status: v0.21 CLI with libcurl transport, `/v1/models`, `/v1/chat/completions`, a simple REPL, and JSON chat save/load.
 
 ## Build
 
@@ -20,7 +20,7 @@ make leak-check
 make clean
 ```
 
-The current transport uses the installed `curl` executable behind `src/http/` because this environment does not provide libcurl development headers. The transport boundary is isolated for a later libcurl RAII implementation.
+The HTTP transport uses libcurl through RAII wrappers in `src/http/`. Build flags are discovered with `pkg-config libcurl`, falling back to `curl-config` when needed.
 
 ## Examples
 
@@ -124,6 +124,5 @@ If Valgrind is not installed, `make leak-check` falls back to the sanitizer test
 
 ## Current Limitations
 
-- HTTP is currently isolated behind `src/http/` but implemented through the installed `curl` executable because libcurl development headers were not available in the initial environment.
-- Streaming responses are parsed incrementally as SSE, but the curl-executable transport remains a temporary implementation until libcurl development headers are available.
+- Streaming responses are parsed incrementally as SSE through libcurl write callbacks.
 - The JSON facade is intentionally small and scoped to the current CLI/provider needs.

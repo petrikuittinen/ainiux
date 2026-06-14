@@ -4,9 +4,9 @@
 
 The initial implementation uses C++17 and a plain Makefile to keep the binary portable across POSIX-like systems.
 
-## HTTP Transport Fallback
+## HTTP Transport
 
-`src/http/` owns HTTP transport. The desired implementation is libcurl with RAII wrappers, but this environment does not currently provide libcurl development headers or `curl-config`. To keep v0.1 testable, the first transport executes the installed `curl` binary via `fork`/`execvp` with pipes, avoiding shell interpolation. The module boundary is intentionally small so it can be replaced by libcurl without changing provider or CLI code.
+`src/http/` owns HTTP transport and uses libcurl through RAII wrappers for the easy handle and header list. The Makefile discovers build flags with `pkg-config libcurl`, falling back to `curl-config`. Streaming response bodies are delivered through libcurl write callbacks so provider code can parse SSE incrementally without spawning the `curl` executable.
 
 ## JSON Facade
 

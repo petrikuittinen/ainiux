@@ -1,16 +1,11 @@
 #include "http/http.hpp"
 
-#include <fcntl.h>
-#include <signal.h>
-#include <sys/select.h>
-#include <sys/wait.h>
-#include <unistd.h>
+#include <curl/curl.h>
 
-#include <algorithm>
-#include <cerrno>
 #include <cstdlib>
 #include <cstring>
 #include <sstream>
+#include <string>
 #include <vector>
 
 #include "security/redact.hpp"
@@ -19,96 +14,76 @@ namespace pkchat::http {
 
 namespace {
 
-class Fd {
+class CurlGlobal {
    public:
-    Fd() = default;
-    explicit Fd(int fd) : fd_(fd) {}
-    ~Fd() { reset(); }
-    Fd(const Fd&) = delete;
-    Fd& operator=(const Fd&) = delete;
-    Fd(Fd&& other) noexcept : fd_(other.fd_) { other.fd_ = -1; }
-    Fd& operator=(Fd&& other) noexcept {
-        if (this != &other) {
-            reset();
-            fd_ = other.fd_;
-            other.fd_ = -1;
+    CurlGlobal() : code_(curl_global_init(CURL_GLOBAL_DEFAULT)) {}
+    ~CurlGlobal() {
+        if (code_ == CURLE_OK) {
+            curl_global_cleanup();
         }
-        return *this;
     }
-    int get() const { return fd_; }
-    int release() {
-        int tmp = fd_;
-        fd_ = -1;
-        return tmp;
-    }
-    void reset(int fd = -1) {
-        if (fd_ >= 0) {
-            close(fd_);
-        }
-        fd_ = fd;
-    }
+    CurlGlobal(const CurlGlobal&) = delete;
+    CurlGlobal& operator=(const CurlGlobal&) = delete;
+    CURLcode code() const { return code_; }
 
    private:
-    int fd_ = -1;
+    CURLcode code_;
 };
 
-Error pipe_pair(Fd& read_end, Fd& write_end) {
-    int fds[2];
-    if (pipe(fds) != 0) {
-        return {ErrorCode::Internal, std::string("pipe failed: ") + std::strerror(errno)};
-    }
-    read_end.reset(fds[0]);
-    write_end.reset(fds[1]);
-    return ok_error();
-}
-
-Error write_all(int fd, const std::string& data) {
-    size_t written = 0;
-    while (written < data.size()) {
-        const ssize_t n = write(fd, data.data() + written, data.size() - written);
-        if (n < 0) {
-            if (errno == EINTR) {
-                continue;
-            }
-            return {ErrorCode::Internal, std::string("write to curl stdin failed: ") + std::strerror(errno)};
+class CurlHandle {
+   public:
+    CurlHandle() : handle_(curl_easy_init()) {}
+    ~CurlHandle() {
+        if (handle_ != nullptr) {
+            curl_easy_cleanup(handle_);
         }
-        written += static_cast<size_t>(n);
     }
-    return ok_error();
-}
+    CurlHandle(const CurlHandle&) = delete;
+    CurlHandle& operator=(const CurlHandle&) = delete;
+    CURL* get() const { return handle_; }
 
-Error classify_curl_error(int exit_status, const std::string& stderr_text, const std::string& url) {
-    std::string msg = "curl transport failed for " + url + ": " + stderr_text;
-    if (exit_status == 6 || stderr_text.find("Could not resolve host") != std::string::npos) {
-        return {ErrorCode::Dns, msg};
-    }
-    if (exit_status == 7 || stderr_text.find("Failed to connect") != std::string::npos ||
-        stderr_text.find("Couldn't connect") != std::string::npos) {
-        return {ErrorCode::Connect, msg};
-    }
-    if (exit_status == 28 || stderr_text.find("timed out") != std::string::npos) {
-        return {ErrorCode::Timeout, msg};
-    }
-    if (exit_status == 35 || exit_status == 60 || stderr_text.find("SSL") != std::string::npos ||
-        stderr_text.find("TLS") != std::string::npos) {
-        return {ErrorCode::Tls, msg};
-    }
-    return {ErrorCode::Internal, msg};
-}
+   private:
+    CURL* handle_ = nullptr;
+};
 
-long parse_status_line(const std::string& headers) {
-    std::istringstream lines(headers);
-    std::string line;
-    if (!std::getline(lines, line)) {
-        return 0;
+class CurlHeaders {
+   public:
+    CurlHeaders() = default;
+    ~CurlHeaders() {
+        if (list_ != nullptr) {
+            curl_slist_free_all(list_);
+        }
     }
-    if (!line.empty() && line.back() == 13) {
+    CurlHeaders(const CurlHeaders&) = delete;
+    CurlHeaders& operator=(const CurlHeaders&) = delete;
+
+    Error append(const std::string& header) {
+        curl_slist* next = curl_slist_append(list_, header.c_str());
+        if (next == nullptr) {
+            return {ErrorCode::Internal, "could not allocate HTTP request header list"};
+        }
+        list_ = next;
+        return ok_error();
+    }
+
+    curl_slist* get() const { return list_; }
+
+   private:
+    curl_slist* list_ = nullptr;
+};
+
+std::string trim_line_end(std::string line) {
+    while (!line.empty() && (line.back() == '\r' || line.back() == '\n')) {
         line.pop_back();
     }
+    return line;
+}
+
+long parse_status_line(const std::string& line) {
     if (line.rfind("HTTP/", 0) != 0) {
         return 0;
     }
-    const size_t first_space = line.find(" ");
+    const size_t first_space = line.find(' ');
     if (first_space == std::string::npos) {
         return 0;
     }
@@ -121,263 +96,223 @@ long parse_status_line(const std::string& headers) {
     return status;
 }
 
-bool is_proxy_connect_header(const std::string& headers) {
-    std::istringstream lines(headers);
-    std::string line;
-    if (!std::getline(lines, line)) {
-        return false;
-    }
-    if (!line.empty() && line.back() == 13) {
-        line.pop_back();
-    }
+bool is_proxy_connect_line(const std::string& line) {
     return line.find("Connection established") != std::string::npos;
 }
 
-class HeaderBodyParser {
-   public:
-    Error feed(const std::string& chunk, const BodyCallback& on_body) {
-        if (headers_done_) {
-            return emit_body(chunk, on_body);
-        }
-        buffer_ += chunk;
-        while (!headers_done_) {
-            size_t sep = buffer_.find("\r\n\r\n");
-            size_t sep_len = 4;
-            const size_t lf_sep = buffer_.find("\n\n");
-            if (lf_sep != std::string::npos && (sep == std::string::npos || lf_sep < sep)) {
-                sep = lf_sep;
-                sep_len = 2;
-            }
-            if (sep == std::string::npos) {
-                return ok_error();
-            }
-            const std::string headers = buffer_.substr(0, sep);
-            buffer_.erase(0, sep + sep_len);
-            const long parsed_status = parse_status_line(headers);
-            if (parsed_status == 0) {
-                return {ErrorCode::Internal, "curl response included invalid HTTP headers"};
-            }
-            status_ = parsed_status;
-            if ((status_ >= 100 && status_ < 200) || is_proxy_connect_header(headers)) {
-                continue;
-            }
-            headers_done_ = true;
-        }
-        if (!buffer_.empty()) {
-            const std::string body = buffer_;
-            buffer_.clear();
-            return emit_body(body, on_body);
-        }
-        return ok_error();
+Error classify_curl_error(CURLcode code, const std::string& detail, const std::string& url) {
+    const std::string msg = "libcurl transport failed for " + url + ": " + detail;
+    switch (code) {
+        case CURLE_COULDNT_RESOLVE_HOST:
+        case CURLE_COULDNT_RESOLVE_PROXY:
+            return {ErrorCode::Dns, msg};
+        case CURLE_COULDNT_CONNECT:
+            return {ErrorCode::Connect, msg};
+        case CURLE_OPERATION_TIMEDOUT:
+            return {ErrorCode::Timeout, msg};
+        case CURLE_SSL_CONNECT_ERROR:
+        case CURLE_PEER_FAILED_VERIFICATION:
+        case CURLE_SSL_CACERT_BADFILE:
+        case CURLE_USE_SSL_FAILED:
+            return {ErrorCode::Tls, msg};
+        case CURLE_OUT_OF_MEMORY:
+            return {ErrorCode::Internal, msg};
+        default:
+            return {ErrorCode::Internal, msg};
     }
+}
 
-    Error finish() const {
-        if (!headers_done_) {
-            return {ErrorCode::Internal, "curl response ended before HTTP headers completed"};
-        }
-        return ok_error();
-    }
-
-    long status() const { return status_; }
-    const std::string& body() const { return body_; }
-
-   private:
-    std::string buffer_;
-    std::string body_;
-    long status_ = 0;
-    bool headers_done_ = false;
-
-    Error emit_body(const std::string& data, const BodyCallback& on_body) {
-        body_ += data;
-        if (on_body && status_ >= 200 && status_ < 300 && !data.empty()) {
-            return on_body(data);
-        }
-        return ok_error();
-    }
+struct TransferState {
+    const Request* request = nullptr;
+    Response response;
+    Error callback_error;
+    std::string debug_text;
+    long current_status = 0;
+    bool current_proxy_connect = false;
+    bool final_headers_seen = false;
 };
+
+size_t header_callback(char* ptr, size_t size, size_t nmemb, void* userdata) {
+    const size_t bytes = size * nmemb;
+    TransferState* state = static_cast<TransferState*>(userdata);
+    std::string line(ptr, bytes);
+    const std::string trimmed = trim_line_end(line);
+
+    if (trimmed.rfind("HTTP/", 0) == 0) {
+        state->current_status = parse_status_line(trimmed);
+        state->current_proxy_connect = is_proxy_connect_line(trimmed);
+        state->final_headers_seen = false;
+        return bytes;
+    }
+
+    if (trimmed.empty()) {
+        if (state->current_status >= 100 && state->current_status < 200) {
+            return bytes;
+        }
+        if (state->current_proxy_connect) {
+            return bytes;
+        }
+        if (state->current_status != 0) {
+            state->response.status = state->current_status;
+            state->final_headers_seen = true;
+        }
+    }
+    return bytes;
+}
+
+size_t write_callback(char* ptr, size_t size, size_t nmemb, void* userdata) {
+    const size_t bytes = size * nmemb;
+    TransferState* state = static_cast<TransferState*>(userdata);
+    const std::string chunk(ptr, bytes);
+    state->response.body += chunk;
+    if (state->request->on_body && state->response.status >= 200 && state->response.status < 300 && !chunk.empty()) {
+        state->callback_error = state->request->on_body(chunk);
+        if (!state->callback_error.ok()) {
+            return 0;
+        }
+    }
+    return bytes;
+}
+
+int debug_callback(CURL*, curl_infotype, char* data, size_t size, void* userdata) {
+    TransferState* state = static_cast<TransferState*>(userdata);
+    state->debug_text.append(data, size);
+    return 0;
+}
+
+Error setopt(CURL* curl, CURLoption option, const char* value) {
+    CURLcode code = curl_easy_setopt(curl, option, value);
+    if (code != CURLE_OK) {
+        return {ErrorCode::Internal, std::string("curl_easy_setopt failed: ") + curl_easy_strerror(code)};
+    }
+    return ok_error();
+}
+
+Error setopt_long(CURL* curl, CURLoption option, long value) {
+    CURLcode code = curl_easy_setopt(curl, option, value);
+    if (code != CURLE_OK) {
+        return {ErrorCode::Internal, std::string("curl_easy_setopt failed: ") + curl_easy_strerror(code)};
+    }
+    return ok_error();
+}
+
+Error setopt_ptr(CURL* curl, CURLoption option, void* value) {
+    CURLcode code = curl_easy_setopt(curl, option, value);
+    if (code != CURLE_OK) {
+        return {ErrorCode::Internal, std::string("curl_easy_setopt failed: ") + curl_easy_strerror(code)};
+    }
+    return ok_error();
+}
 
 }  // namespace
 
 Result perform(const Request& request, const std::vector<std::string>& secrets) {
-    Fd stdin_read;
-    Fd stdin_write;
-    Fd stdout_read;
-    Fd stdout_write;
-    Fd stderr_read;
-    Fd stderr_write;
-    Error err = pipe_pair(stdin_read, stdin_write);
-    if (!err.ok()) {
-        return {{}, err};
-    }
-    err = pipe_pair(stdout_read, stdout_write);
-    if (!err.ok()) {
-        return {{}, err};
-    }
-    err = pipe_pair(stderr_read, stderr_write);
-    if (!err.ok()) {
-        return {{}, err};
+    static CurlGlobal global;
+    if (global.code() != CURLE_OK) {
+        return {{}, {ErrorCode::Internal, std::string("curl_global_init failed: ") + curl_easy_strerror(global.code())}};
     }
 
-    std::vector<std::string> args;
-    args.emplace_back("curl");
-    args.emplace_back("-sS");
-    args.emplace_back("--include");
-    if (request.on_body) {
-        args.emplace_back("--no-buffer");
+    CurlHandle handle;
+    if (handle.get() == nullptr) {
+        return {{}, {ErrorCode::Internal, "could not allocate libcurl easy handle"}};
     }
-    args.emplace_back("-X");
-    args.emplace_back(request.method);
-    args.emplace_back("--connect-timeout");
-    args.emplace_back(std::to_string(request.connect_timeout_seconds));
-    if (request.timeout_seconds > 0) {
-        args.emplace_back("--max-time");
-        args.emplace_back(std::to_string(request.timeout_seconds));
-    }
-    if (!request.proxy.empty()) {
-        args.emplace_back("--proxy");
-        args.emplace_back(request.proxy);
-    }
-    if (request.insecure_tls) {
-        args.emplace_back("--insecure");
-    }
-    if (request.trace) {
-        args.emplace_back("--verbose");
-    }
+    CURL* curl = handle.get();
+
+    CurlHeaders headers;
     for (const std::string& header : request.headers) {
-        args.emplace_back("-H");
-        args.emplace_back(header);
-    }
-    if (request.method == "POST") {
-        args.emplace_back("--data-binary");
-        args.emplace_back("@-");
-    }
-    args.emplace_back(request.url);
-
-    const pid_t pid = fork();
-    if (pid < 0) {
-        return {{}, {ErrorCode::Internal, std::string("fork failed: ") + std::strerror(errno)}};
-    }
-    if (pid == 0) {
-        dup2(stdin_read.get(), STDIN_FILENO);
-        dup2(stdout_write.get(), STDOUT_FILENO);
-        dup2(stderr_write.get(), STDERR_FILENO);
-        stdin_read.reset();
-        stdin_write.reset();
-        stdout_read.reset();
-        stdout_write.reset();
-        stderr_read.reset();
-        stderr_write.reset();
-        std::vector<char*> argv;
-        argv.reserve(args.size() + 1);
-        for (std::string& arg : args) {
-            argv.push_back(const_cast<char*>(arg.c_str()));
-        }
-        argv.push_back(nullptr);
-        execvp("curl", argv.data());
-        _exit(127);
-    }
-
-    std::string err_text;
-    auto wait_child = [&]() -> Error {
-        int status = 0;
-        while (waitpid(pid, &status, 0) < 0) {
-            if (errno != EINTR) {
-                return {ErrorCode::Internal, std::string("waitpid failed: ") + std::strerror(errno)};
-            }
-        }
-        if (!WIFEXITED(status)) {
-            return {ErrorCode::Internal, "curl transport terminated unexpectedly"};
-        }
-        const int exit_status = WEXITSTATUS(status);
-        if (exit_status != 0) {
-            err_text = redact_secrets(err_text, secrets);
-            return classify_curl_error(exit_status, err_text, request.url);
-        }
-        return ok_error();
-    };
-    stdin_read.reset();
-    stdout_write.reset();
-    stderr_write.reset();
-    if (request.method == "POST") {
-        err = write_all(stdin_write.get(), request.body);
+        Error err = headers.append(header);
         if (!err.ok()) {
-            kill(pid, SIGTERM);
-            Error wait_err = wait_child();
-            if (!wait_err.ok()) {
-                return {{}, wait_err};
-            }
             return {{}, err};
         }
     }
-    stdin_write.reset();
 
-    HeaderBodyParser parser;
-    bool stdout_open = true;
-    bool stderr_open = true;
-    while (stdout_open || stderr_open) {
-        fd_set readfds;
-        FD_ZERO(&readfds);
-        int maxfd = -1;
-        if (stdout_open) {
-            FD_SET(stdout_read.get(), &readfds);
-            maxfd = std::max(maxfd, stdout_read.get());
-        }
-        if (stderr_open) {
-            FD_SET(stderr_read.get(), &readfds);
-            maxfd = std::max(maxfd, stderr_read.get());
-        }
-        if (select(maxfd + 1, &readfds, nullptr, nullptr, nullptr) < 0) {
-            if (errno == EINTR) {
-                continue;
-            }
-            return {{}, {ErrorCode::Internal, std::string("select failed: ") + std::strerror(errno)}};
-        }
-        char buf[8192];
-        if (stdout_open && FD_ISSET(stdout_read.get(), &readfds)) {
-            const ssize_t n = read(stdout_read.get(), buf, sizeof(buf));
-            if (n > 0) {
-                err = parser.feed(std::string(buf, static_cast<size_t>(n)), request.on_body);
-                if (!err.ok()) {
-                    kill(pid, SIGTERM);
-                    stdout_read.reset();
-                    stderr_read.reset();
-                    Error wait_err = wait_child();
-                    if (!wait_err.ok() && err.code == ErrorCode::Ok) {
-                        return {{parser.status(), parser.body(), err_text}, wait_err};
-                    }
-                    err_text = redact_secrets(err_text, secrets);
-                    return {{parser.status(), parser.body(), err_text}, err};
-                }
-            } else if (n == 0) {
-                stdout_open = false;
-                stdout_read.reset();
-            } else if (errno != EINTR) {
-                return {{}, {ErrorCode::Internal, std::string("read curl stdout failed: ") + std::strerror(errno)}};
-            }
-        }
-        if (stderr_open && FD_ISSET(stderr_read.get(), &readfds)) {
-            const ssize_t n = read(stderr_read.get(), buf, sizeof(buf));
-            if (n > 0) {
-                err_text.append(buf, static_cast<size_t>(n));
-            } else if (n == 0) {
-                stderr_open = false;
-                stderr_read.reset();
-            } else if (errno != EINTR) {
-                return {{}, {ErrorCode::Internal, std::string("read curl stderr failed: ") + std::strerror(errno)}};
-            }
-        }
+    TransferState state;
+    state.request = &request;
+    char error_buffer[CURL_ERROR_SIZE] = {};
+
+    Error err = setopt(curl, CURLOPT_URL, request.url.c_str());
+    if (!err.ok()) return {{}, err};
+    err = setopt_long(curl, CURLOPT_NOSIGNAL, 1L);
+    if (!err.ok()) return {{}, err};
+    err = setopt_long(curl, CURLOPT_CONNECTTIMEOUT, request.connect_timeout_seconds);
+    if (!err.ok()) return {{}, err};
+    if (request.timeout_seconds > 0) {
+        err = setopt_long(curl, CURLOPT_TIMEOUT, request.timeout_seconds);
+        if (!err.ok()) return {{}, err};
+    }
+    if (!request.proxy.empty()) {
+        err = setopt(curl, CURLOPT_PROXY, request.proxy.c_str());
+        if (!err.ok()) return {{}, err};
+    }
+    if (request.insecure_tls) {
+        err = setopt_long(curl, CURLOPT_SSL_VERIFYPEER, 0L);
+        if (!err.ok()) return {{}, err};
+        err = setopt_long(curl, CURLOPT_SSL_VERIFYHOST, 0L);
+        if (!err.ok()) return {{}, err};
+    }
+    if (headers.get() != nullptr) {
+        err = setopt_ptr(curl, CURLOPT_HTTPHEADER, headers.get());
+        if (!err.ok()) return {{}, err};
     }
 
-    err_text = redact_secrets(err_text, secrets);
-    err = wait_child();
-    if (!err.ok()) {
-        return {{parser.status(), parser.body(), err_text}, err};
+    if (request.method == "POST") {
+        err = setopt_long(curl, CURLOPT_POST, 1L);
+        if (!err.ok()) return {{}, err};
+        err = setopt(curl, CURLOPT_POSTFIELDS, request.body.c_str());
+        if (!err.ok()) return {{}, err};
+        CURLcode code = curl_easy_setopt(curl, CURLOPT_POSTFIELDSIZE_LARGE,
+                                         static_cast<curl_off_t>(request.body.size()));
+        if (code != CURLE_OK) {
+            return {{}, {ErrorCode::Internal, std::string("curl_easy_setopt failed: ") + curl_easy_strerror(code)}};
+        }
+    } else if (request.method == "GET") {
+        err = setopt_long(curl, CURLOPT_HTTPGET, 1L);
+        if (!err.ok()) return {{}, err};
+    } else {
+        err = setopt(curl, CURLOPT_CUSTOMREQUEST, request.method.c_str());
+        if (!err.ok()) return {{}, err};
     }
-    err = parser.finish();
-    if (!err.ok()) {
-        return {{parser.status(), parser.body(), err_text}, err};
+
+    err = setopt_ptr(curl, CURLOPT_HEADERDATA, &state);
+    if (!err.ok()) return {{}, err};
+    CURLcode code = curl_easy_setopt(curl, CURLOPT_HEADERFUNCTION, header_callback);
+    if (code != CURLE_OK) {
+        return {{}, {ErrorCode::Internal, std::string("curl_easy_setopt failed: ") + curl_easy_strerror(code)}};
     }
-    return {{parser.status(), parser.body(), err_text}, ok_error()};
+    err = setopt_ptr(curl, CURLOPT_WRITEDATA, &state);
+    if (!err.ok()) return {{}, err};
+    code = curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, write_callback);
+    if (code != CURLE_OK) {
+        return {{}, {ErrorCode::Internal, std::string("curl_easy_setopt failed: ") + curl_easy_strerror(code)}};
+    }
+    err = setopt_ptr(curl, CURLOPT_ERRORBUFFER, error_buffer);
+    if (!err.ok()) return {{}, err};
+    if (request.trace) {
+        err = setopt_long(curl, CURLOPT_VERBOSE, 1L);
+        if (!err.ok()) return {{}, err};
+        err = setopt_ptr(curl, CURLOPT_DEBUGDATA, &state);
+        if (!err.ok()) return {{}, err};
+        code = curl_easy_setopt(curl, CURLOPT_DEBUGFUNCTION, debug_callback);
+        if (code != CURLE_OK) {
+            return {{}, {ErrorCode::Internal, std::string("curl_easy_setopt failed: ") + curl_easy_strerror(code)}};
+        }
+    }
+
+    code = curl_easy_perform(curl);
+    if (state.response.status == 0) {
+        curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &state.response.status);
+    }
+    state.response.stderr_text = redact_secrets(state.debug_text, secrets);
+
+    if (code != CURLE_OK) {
+        if (code == CURLE_WRITE_ERROR && !state.callback_error.ok()) {
+            return {state.response, state.callback_error};
+        }
+        std::string detail = error_buffer[0] == '\0' ? curl_easy_strerror(code) : error_buffer;
+        detail = redact_secrets(detail, secrets);
+        return {state.response, classify_curl_error(code, detail, request.url)};
+    }
+    return {state.response, ok_error()};
 }
 
 }  // namespace pkchat::http

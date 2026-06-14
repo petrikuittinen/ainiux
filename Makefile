@@ -1,6 +1,10 @@
 CXX ?= g++
 CXXFLAGS ?= -std=c++17 -Wall -Wextra -Wpedantic -Iinclude -Isrc
 LDFLAGS ?=
+LIBCURL_CFLAGS ?= $(shell pkg-config --cflags libcurl 2>/dev/null || curl-config --cflags 2>/dev/null)
+LIBCURL_LIBS ?= $(shell pkg-config --libs libcurl 2>/dev/null || curl-config --libs 2>/dev/null)
+CXXFLAGS += $(LIBCURL_CFLAGS)
+LDFLAGS += $(LIBCURL_LIBS)
 PREFIX ?= /usr/local
 
 BUILD_DIR := build
