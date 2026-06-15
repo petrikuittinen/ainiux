@@ -34,6 +34,16 @@ Layout layout_for_terminal(int terminal_rows, int terminal_cols) {
     return layout;
 }
 
+RegenerationPlan regeneration_plan_for_session(const chat::Session& session) {
+    for (std::size_t i = session.messages.size(); i > 0; --i) {
+        const std::size_t index = i - 1;
+        if (session.messages[index].role == "user") {
+            return {true, index, session.messages[index].content};
+        }
+    }
+    return {};
+}
+
 namespace {
 
 int exit_code_for(ErrorCode code) {
@@ -352,7 +362,7 @@ void render(const chat::Session& session,
     draw_line(layout.status_row, cols, status, true);
     draw_line(layout.input_label_row,
               cols,
-              "Input  Enter send | Alt+Enter newline | arrows edit | PageUp/PageDown scroll | Ctrl+C cancel/quit",
+              "Input  Enter send | Alt+Enter newline | Esc cancel | Ctrl+R regen | PgUp/PgDn scroll | Ctrl+C quit",
               true);
 
     for (int row = 0; row < layout.input_rect.height; ++row) {
@@ -402,15 +412,15 @@ bool is_escape_final(unsigned char ch) {
     return (ch >= 'A' && ch <= 'Z') || ch == '~';
 }
 
-void handle_escape(editor::EditorState& input, const Layout& layout, int& history_scroll, std::string& status) {
+bool handle_escape(editor::EditorState& input, const Layout& layout, int& history_scroll, std::string& status) {
     unsigned char ch = 0;
     if (!read_byte(ch, 25)) {
-        return;
+        return false;
     }
     if (ch == '\r' || ch == '\n') {
         insert_input(input, "\n", status);
         status = "Inserted newline. Enter sends; Ctrl+S also sends.";
-        return;
+        return true;
     }
 
     std::string sequence;
@@ -426,7 +436,7 @@ void handle_escape(editor::EditorState& input, const Layout& layout, int& histor
         if (ch >= 32 || ch == '\t') {
             insert_input(input, std::string(1, static_cast<char>(ch)), status);
         }
-        return;
+        return true;
     }
 
     if (sequence == "[A" || sequence == "OA") {
@@ -448,6 +458,7 @@ void handle_escape(editor::EditorState& input, const Layout& layout, int& histor
     } else if (sequence == "[6~") {
         history_scroll -= std::max(1, layout.history_rows / 2);
     }
+    return true;
 }
 
 }  // namespace
@@ -470,6 +481,8 @@ int run(provider::RequestContext context, chat::Session session) {
     size_t pending_user = static_cast<size_t>(-1);
     size_t pending_assistant = static_cast<size_t>(-1);
     int history_scroll = 0;
+    bool regenerate_after_cancel = false;
+    std::string queued_regeneration_prompt;
 
     auto rollback_pending_turn = [&]() {
         if (pending_assistant != static_cast<size_t>(-1) && pending_assistant < session.messages.size()) {
@@ -477,6 +490,15 @@ int run(provider::RequestContext context, chat::Session session) {
         }
         if (pending_user != static_cast<size_t>(-1) && pending_user < session.messages.size()) {
             session.messages.erase(session.messages.begin() + static_cast<long>(pending_user));
+        }
+        pending_user = static_cast<size_t>(-1);
+        pending_assistant = static_cast<size_t>(-1);
+    };
+
+    auto keep_cancelled_turn = [&]() {
+        if (pending_assistant != static_cast<size_t>(-1) && pending_assistant < session.messages.size() &&
+            session.messages[pending_assistant].content.empty()) {
+            session.messages.erase(session.messages.begin() + static_cast<long>(pending_assistant));
         }
         pending_user = static_cast<size_t>(-1);
         pending_assistant = static_cast<size_t>(-1);
@@ -585,13 +607,78 @@ int run(provider::RequestContext context, chat::Session session) {
         status = "Waiting for response...";
     };
 
+    auto clear_queued_regeneration = [&]() {
+        regenerate_after_cancel = false;
+        queued_regeneration_prompt.clear();
+    };
+
+    auto start_queued_regeneration = [&](size_t erase_from) {
+        const std::string prompt = queued_regeneration_prompt;
+        clear_queued_regeneration();
+        if (trim_ascii(prompt).empty()) {
+            status = "No previous user prompt to regenerate";
+            return;
+        }
+        if (erase_from != static_cast<size_t>(-1) && erase_from < session.messages.size()) {
+            session.messages.erase(session.messages.begin() + static_cast<long>(erase_from), session.messages.end());
+        }
+        start_turn(prompt);
+        status = "Regenerating...";
+    };
+
+    auto cancel_active_request = [&]() {
+        if (active_job == ActiveJob::None) {
+            return;
+        }
+        clear_queued_regeneration();
+        model_job.cancel();
+        status = "Cancelling...";
+    };
+
+    auto regenerate_last_turn = [&]() {
+        if (active_job == ActiveJob::Models) {
+            status = "Cannot regenerate while listing models";
+            return;
+        }
+        if (active_job == ActiveJob::Chat) {
+            std::string prompt;
+            if (pending_user != static_cast<size_t>(-1) && pending_user < session.messages.size() &&
+                session.messages[pending_user].role == "user") {
+                prompt = session.messages[pending_user].content;
+            } else {
+                const RegenerationPlan plan = regeneration_plan_for_session(session);
+                if (plan.available) {
+                    prompt = plan.prompt;
+                }
+            }
+            if (trim_ascii(prompt).empty()) {
+                status = "No previous user prompt to regenerate";
+                return;
+            }
+            regenerate_after_cancel = true;
+            queued_regeneration_prompt = prompt;
+            model_job.cancel();
+            status = "Cancelling before regenerate...";
+            return;
+        }
+
+        const RegenerationPlan plan = regeneration_plan_for_session(session);
+        if (!plan.available || trim_ascii(plan.prompt).empty()) {
+            status = "No previous user prompt to regenerate";
+            return;
+        }
+        session.messages.erase(session.messages.begin() + static_cast<long>(plan.erase_from), session.messages.end());
+        start_turn(plan.prompt);
+        status = "Regenerating...";
+    };
+
     auto handle_command = [&](const std::string& text) {
         if (text == "/quit" || text == "/exit") {
             quit = true;
             return;
         }
         if (text == "/help") {
-            status = "Enter sends | Alt+Enter newline | /quit /models /save /load /model /system /clear";
+            status = "Enter sends | Alt+Enter newline | Esc cancels | Ctrl+R regenerates | /quit /models /save /load";
             return;
         }
         if (text == "/clear") {
@@ -681,8 +768,10 @@ int run(provider::RequestContext context, chat::Session session) {
                     }
                     status = "Streaming...";
                     break;
-                case TuiEventType::Done:
+                case TuiEventType::Done: {
                     model_job.join();
+                    const bool should_regenerate = regenerate_after_cancel;
+                    const size_t regenerate_erase_from = pending_user;
                     if (pending_assistant != static_cast<size_t>(-1) && pending_assistant < session.messages.size()) {
                         session.messages[pending_assistant].content = event.chat.content;
                     }
@@ -696,15 +785,33 @@ int run(provider::RequestContext context, chat::Session session) {
                     pending_user = static_cast<size_t>(-1);
                     pending_assistant = static_cast<size_t>(-1);
                     active_job = ActiveJob::None;
-                    status = "Ready";
-                    start_save(context.options.save_chat_path, session);
+                    if (should_regenerate) {
+                        start_queued_regeneration(regenerate_erase_from);
+                    } else {
+                        status = "Ready";
+                        start_save(context.options.save_chat_path, session);
+                    }
                     break;
-                case TuiEventType::Error:
+                }
+                case TuiEventType::Error: {
                     model_job.join();
-                    rollback_pending_turn();
+                    const bool should_regenerate = regenerate_after_cancel && event.error.code == ErrorCode::Cancelled;
                     active_job = ActiveJob::None;
-                    status = event.error.code == ErrorCode::Cancelled ? "Cancelled" : error_line(event.error);
+                    if (should_regenerate) {
+                        rollback_pending_turn();
+                        start_queued_regeneration(static_cast<size_t>(-1));
+                    } else {
+                        clear_queued_regeneration();
+                        if (event.error.code == ErrorCode::Cancelled) {
+                            keep_cancelled_turn();
+                            status = "Cancelled";
+                        } else {
+                            rollback_pending_turn();
+                            status = error_line(event.error);
+                        }
+                    }
                     break;
+                }
                 case TuiEventType::SaveDone:
                     file_job.join();
                     status = event.error.ok() ? "Saved " + event.text : error_line(event.error);
@@ -742,19 +849,25 @@ int run(provider::RequestContext context, chat::Session session) {
             while (read(STDIN_FILENO, &ch, 1) == 1) {
                 if (ch == 27) {
                     const TuiSize terminal = terminal_size();
-                    handle_escape(input, layout_for_terminal(terminal.rows, terminal.cols), history_scroll, status);
+                    const bool handled = handle_escape(input, layout_for_terminal(terminal.rows, terminal.cols), history_scroll, status);
+                    if (!handled) {
+                        cancel_active_request();
+                    }
                     continue;
                 }
                 if (ch == 3) {
                     if (active_job != ActiveJob::None) {
-                        model_job.cancel();
-                        status = "Cancelling...";
+                        cancel_active_request();
                     } else if (file_job.running()) {
                         file_job.cancel();
                         status = "Cancelling file job...";
                     } else {
                         quit = true;
                     }
+                    continue;
+                }
+                if (ch == 18) {
+                    regenerate_last_turn();
                     continue;
                 }
                 if (ch == 19) {

@@ -1,5 +1,8 @@
 #pragma once
 
+#include <cstddef>
+#include <string>
+
 #include "chat/session.hpp"
 #include "editor/editor.hpp"
 #include "provider/provider.hpp"
@@ -18,6 +21,14 @@ struct Layout {
 };
 
 Layout layout_for_terminal(int rows, int cols);
+
+struct RegenerationPlan {
+    bool available = false;
+    std::size_t erase_from = 0;
+    std::string prompt;
+};
+
+RegenerationPlan regeneration_plan_for_session(const chat::Session& session);
 int run(provider::RequestContext context, chat::Session session);
 
 }  // namespace pkchat::tui

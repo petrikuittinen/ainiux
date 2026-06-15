@@ -192,6 +192,25 @@ void test_tui_layout_reserves_editor_input_panel() {
     check(large.history_rows > large.input_rect.height, "TUI layout keeps the editor from taking the full screen");
 }
 
+void test_tui_regeneration_plan_uses_last_user_turn() {
+    pkchat::chat::Session session;
+    session.messages.push_back({"system", "stay concise"});
+    session.messages.push_back({"user", "first"});
+    session.messages.push_back({"assistant", "one"});
+    session.messages.push_back({"user", "second"});
+    session.messages.push_back({"assistant", "two"});
+
+    pkchat::tui::RegenerationPlan plan = pkchat::tui::regeneration_plan_for_session(session);
+    check(plan.available, "TUI regeneration plan is available when a user turn exists");
+    check(plan.erase_from == 3, "TUI regeneration plan erases from the last user turn");
+    check(plan.prompt == "second", "TUI regeneration plan reuses the last user prompt");
+
+    pkchat::chat::Session no_user;
+    no_user.messages.push_back({"system", "only system"});
+    plan = pkchat::tui::regeneration_plan_for_session(no_user);
+    check(!plan.available, "TUI regeneration plan is unavailable without a user turn");
+}
+
 void test_cli_rejects_unknown() {
     const char* argv[] = {"pkchat", "--bogus"};
     pkchat::cli::ParseResult parsed = pkchat::cli::parse_args(2, const_cast<char**>(argv));
@@ -352,6 +371,7 @@ int main() {
     test_editor_vertical_navigation_modes();
     test_editor_file_round_trip();
     test_tui_layout_reserves_editor_input_panel();
+    test_tui_regeneration_plan_uses_last_user_turn();
     if (failures != 0) {
         std::cerr << failures << " unit test(s) failed\n";
         return 1;
