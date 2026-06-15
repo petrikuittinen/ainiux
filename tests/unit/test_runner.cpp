@@ -63,6 +63,15 @@ void test_cli_tui_parse() {
     check(parsed.options.positional_url == "lmstudio", "TUI positional profile parsed");
 }
 
+void test_cli_tui_nocolors_parse() {
+    const char* argv[] = {"pkchat", "--tui", "--nocolors", "lmstudio"};
+    pkchat::cli::ParseResult parsed = pkchat::cli::parse_args(4, const_cast<char**>(argv));
+    check(parsed.error.ok(), "TUI nocolors args parse");
+    check(parsed.options.tui, "TUI flag parsed with nocolors");
+    check(parsed.options.no_colors, "nocolors flag parsed");
+    check(parsed.options.positional_url == "lmstudio", "TUI nocolors positional profile parsed");
+}
+
 void test_cli_editor_parse() {
     const char* argv[] = {"pkchat", "--editor", "notes.txt", "--output", "saved.txt"};
     pkchat::cli::ParseResult parsed = pkchat::cli::parse_args(5, const_cast<char**>(argv));
@@ -211,6 +220,37 @@ void test_tui_regeneration_plan_uses_last_user_turn() {
     check(!plan.available, "TUI regeneration plan is unavailable without a user turn");
 }
 
+void test_tui_theme_parsing_and_contrast() {
+    pkchat::tui::ThemeName theme = pkchat::tui::ThemeName::Dark;
+    check(pkchat::tui::parse_theme_name("dark", theme), "TUI dark theme parses");
+    check(theme == pkchat::tui::ThemeName::Dark, "TUI dark theme selected");
+    check(pkchat::tui::parse_theme_name("Light", theme), "TUI light theme parses case-insensitively");
+    check(theme == pkchat::tui::ThemeName::Light, "TUI light theme selected");
+    check(!pkchat::tui::parse_theme_name("sepia", theme), "TUI rejects unknown theme");
+
+    const std::vector<pkchat::tui::ThemeName> themes = {
+        pkchat::tui::ThemeName::Dark,
+        pkchat::tui::ThemeName::Light,
+    };
+    const std::vector<pkchat::tui::StyleRole> roles = {
+        pkchat::tui::StyleRole::Text,
+        pkchat::tui::StyleRole::Muted,
+        pkchat::tui::StyleRole::UserLabel,
+        pkchat::tui::StyleRole::AssistantLabel,
+        pkchat::tui::StyleRole::Error,
+        pkchat::tui::StyleRole::Status,
+        pkchat::tui::StyleRole::InputLabel,
+    };
+
+    for (pkchat::tui::ThemeName item : themes) {
+        for (pkchat::tui::StyleRole role : roles) {
+            const pkchat::tui::StylePair pair = pkchat::tui::style_pair_for(item, role);
+            check(pkchat::tui::contrast_ratio(pair.foreground, pair.background) >= 4.5,
+                  std::string("TUI theme contrast meets WCAG AA for ") + pkchat::tui::theme_name(item));
+        }
+    }
+}
+
 void test_cli_rejects_unknown() {
     const char* argv[] = {"pkchat", "--bogus"};
     pkchat::cli::ParseResult parsed = pkchat::cli::parse_args(2, const_cast<char**>(argv));
@@ -354,6 +394,7 @@ int main() {
     test_cli_provider_shortcut_parse();
     test_cli_repl_parse();
     test_cli_tui_parse();
+    test_cli_tui_nocolors_parse();
     test_cli_editor_parse();
     test_url_normalization();
     test_json_parse();
@@ -372,6 +413,7 @@ int main() {
     test_editor_file_round_trip();
     test_tui_layout_reserves_editor_input_panel();
     test_tui_regeneration_plan_uses_last_user_turn();
+    test_tui_theme_parsing_and_contrast();
     if (failures != 0) {
         std::cerr << failures << " unit test(s) failed\n";
         return 1;

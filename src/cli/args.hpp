@@ -25,6 +25,7 @@ struct Options {
     bool repl = false;
     bool tui = false;
     bool editor = false;
+    bool no_colors = false;
 
     std::string positional_url;
     std::string prompt;

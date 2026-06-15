@@ -115,6 +115,8 @@ ParseResult parse_args(int argc, char** argv) {
             opts.repl = true;
         } else if (arg == "--tui") {
             opts.tui = true;
+        } else if (arg == "--nocolors" || arg == "--no-colors") {
+            opts.no_colors = true;
         } else if (arg == "--editor") {
             opts.editor = true;
         } else if (needs_value(opt)) {
@@ -248,6 +250,7 @@ Options:
       --output PATH
       --repl, -i                Start a simple line-oriented interactive chat.
       --tui                     Start the full-screen non-blocking terminal UI foundation.
+      --nocolors                Disable TUI color styling.
       --editor                  Start the standalone multiline editor.
       --save-chat PATH          Save JSON chat history after a successful reply.
       --load-chat PATH          Load JSON chat history before sending.

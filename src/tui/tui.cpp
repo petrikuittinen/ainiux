@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cerrno>
+#include <cmath>
 #include <cstring>
 #include <iostream>
 #include <string>
@@ -42,6 +43,85 @@ RegenerationPlan regeneration_plan_for_session(const chat::Session& session) {
         }
     }
     return {};
+}
+
+const char* theme_name(ThemeName theme) {
+    switch (theme) {
+        case ThemeName::Dark:
+            return "dark";
+        case ThemeName::Light:
+            return "light";
+    }
+    return "dark";
+}
+
+bool parse_theme_name(const std::string& text, ThemeName& out) {
+    std::string lower;
+    lower.reserve(text.size());
+    for (char ch : text) {
+        if (ch >= 'A' && ch <= 'Z') {
+            lower.push_back(static_cast<char>(ch - 'A' + 'a'));
+        } else {
+            lower.push_back(ch);
+        }
+    }
+    if (lower == "dark") {
+        out = ThemeName::Dark;
+        return true;
+    }
+    if (lower == "light") {
+        out = ThemeName::Light;
+        return true;
+    }
+    return false;
+}
+
+StylePair style_pair_for(ThemeName theme, StyleRole role) {
+    const bool dark = theme == ThemeName::Dark;
+    const Rgb background = dark ? Rgb{0x0B, 0x0F, 0x14} : Rgb{0xFA, 0xFA, 0xFA};
+    const Rgb text = dark ? Rgb{0xE6, 0xED, 0xF3} : Rgb{0x11, 0x18, 0x27};
+    const Rgb muted = dark ? Rgb{0x9B, 0xA7, 0xB4} : Rgb{0x4B, 0x55, 0x63};
+    const Rgb user = dark ? Rgb{0x7D, 0xD3, 0xFC} : Rgb{0x07, 0x59, 0x85};
+    const Rgb assistant = dark ? Rgb{0x86, 0xEF, 0xAC} : Rgb{0x16, 0x65, 0x34};
+    const Rgb error = dark ? Rgb{0xFC, 0xA5, 0xA5} : Rgb{0xB9, 0x1C, 0x1C};
+    const Rgb status_bg = dark ? Rgb{0x1F, 0x29, 0x37} : Rgb{0xE5, 0xE7, 0xEB};
+    const Rgb status_fg = dark ? Rgb{0xFF, 0xFF, 0xFF} : Rgb{0x11, 0x18, 0x27};
+
+    switch (role) {
+        case StyleRole::Text:
+            return {text, background};
+        case StyleRole::Muted:
+            return {muted, background};
+        case StyleRole::UserLabel:
+            return {user, background};
+        case StyleRole::AssistantLabel:
+            return {assistant, background};
+        case StyleRole::Error:
+            return {error, background};
+        case StyleRole::Status:
+            return {status_fg, status_bg};
+        case StyleRole::InputLabel:
+            return {status_fg, status_bg};
+    }
+    return {text, background};
+}
+
+double contrast_ratio(Rgb foreground, Rgb background) {
+    auto linear = [](int channel) {
+        const double value = static_cast<double>(channel) / 255.0;
+        if (value <= 0.03928) {
+            return value / 12.92;
+        }
+        return std::pow((value + 0.055) / 1.055, 2.4);
+    };
+    auto luminance = [&](Rgb color) {
+        return 0.2126 * linear(color.r) + 0.7152 * linear(color.g) + 0.0722 * linear(color.b);
+    };
+    const double a = luminance(foreground);
+    const double b = luminance(background);
+    const double lighter = std::max(a, b);
+    const double darker = std::min(a, b);
+    return (lighter + 0.05) / (darker + 0.05);
 }
 
 namespace {
@@ -244,24 +324,65 @@ int displayed_cells(const std::string& text) {
     return cells;
 }
 
-std::string pad_or_clip(const std::string& text, int width) {
-    std::string out = clip_cells(text, width);
-    while (displayed_cells(out) < width) {
-        out.push_back(' ');
-    }
-    return out;
+struct RenderStyle {
+    ThemeName theme = ThemeName::Dark;
+    bool colors = true;
+};
+
+struct StyledSegment {
+    std::string text;
+    StyleRole role = StyleRole::Text;
+};
+
+struct StyledLine {
+    std::vector<StyledSegment> segments;
+};
+
+std::string style_sequence(ThemeName theme, StyleRole role) {
+    const StylePair pair = style_pair_for(theme, role);
+    return "\x1b[38;2;" + std::to_string(pair.foreground.r) + ";" +
+           std::to_string(pair.foreground.g) + ";" + std::to_string(pair.foreground.b) +
+           "m\x1b[48;2;" + std::to_string(pair.background.r) + ";" +
+           std::to_string(pair.background.g) + ";" + std::to_string(pair.background.b) + "m";
 }
 
-void draw_line(int row, int cols, const std::string& text, bool inverse = false) {
-    std::cout << "\x1b[" << row << ";1H";
-    if (inverse) {
-        std::cout << "\x1b[7m";
+void write_style(const RenderStyle& style, StyleRole role) {
+    if (style.colors) {
+        std::cout << style_sequence(style.theme, role);
     }
-    std::cout << pad_or_clip(text, cols);
-    if (inverse) {
+}
+
+void reset_style(const RenderStyle& style) {
+    if (style.colors) {
         std::cout << "\x1b[0m";
     }
+}
+
+void draw_line(int row, int cols, const std::vector<StyledSegment>& segments, StyleRole fill_role, const RenderStyle& style) {
+    std::cout << "\x1b[" << row << ";1H";
+    int used = 0;
+    for (const StyledSegment& segment : segments) {
+        if (used >= cols) {
+            break;
+        }
+        const std::string clipped = clip_cells(segment.text, cols - used);
+        if (clipped.empty()) {
+            continue;
+        }
+        write_style(style, segment.role);
+        std::cout << clipped;
+        used += displayed_cells(clipped);
+    }
+    if (used < cols) {
+        write_style(style, fill_role);
+        std::cout << std::string(static_cast<size_t>(cols - used), ' ');
+    }
+    reset_style(style);
     std::cout << "\x1b[K";
+}
+
+void draw_line(int row, int cols, const std::string& text, StyleRole role, const RenderStyle& style) {
+    draw_line(row, cols, std::vector<StyledSegment>{{text, role}}, role, style);
 }
 
 void append_wrapped_line(std::vector<std::string>& lines, const std::string& logical, int width) {
@@ -293,25 +414,54 @@ void append_wrapped(std::vector<std::string>& lines, const std::string& text, in
 }
 
 std::string message_label(const std::string& role) {
-    if (role == "user") return "you";
-    if (role == "assistant") return "assistant";
+    if (role == "user") return "You";
+    if (role == "assistant") return "Assistant";
+    if (role == "system") return "System";
     return role;
+}
+
+StyleRole label_role_for_message(const std::string& role) {
+    if (role == "user") return StyleRole::UserLabel;
+    if (role == "assistant") return StyleRole::AssistantLabel;
+    return StyleRole::Muted;
 }
 
 std::string error_line(const Error& error) {
     return std::string(error_code_name(error.code)) + ": " + error.message;
 }
 
-std::vector<std::string> history_lines_for_session(const chat::Session& session, int cols) {
-    std::vector<std::string> history;
+bool starts_with(const std::string& text, const std::string& prefix) {
+    return text.rfind(prefix, 0) == 0;
+}
+
+StyleRole status_role_for_text(const std::string& status) {
+    if (starts_with(status, "PKCHAT_ERR_") || starts_with(status, "Unknown command") ||
+        starts_with(status, "Usage:") || starts_with(status, "Cannot ") ||
+        starts_with(status, "No previous") || starts_with(status, "A model job") ||
+        starts_with(status, "A file job") || starts_with(status, "terminal input error")) {
+        return StyleRole::Error;
+    }
+    return StyleRole::Status;
+}
+
+std::vector<StyledLine> history_lines_for_session(const chat::Session& session, int cols) {
+    std::vector<StyledLine> history;
     const int min_content_width = 8;
     for (const provider::Message& message : session.messages) {
         const std::string prefix = message_label(message.role) + ": ";
+        const StyleRole label_role = label_role_for_message(message.role);
         const std::string content = message.role == "assistant" && message.content.empty() ? "(waiting...)" : message.content;
         std::vector<std::string> wrapped;
         append_wrapped(wrapped, content, std::max(min_content_width, cols - static_cast<int>(prefix.size())));
         for (size_t i = 0; i < wrapped.size(); ++i) {
-            history.push_back((i == 0 ? prefix : std::string(prefix.size(), ' ')) + wrapped[i]);
+            StyledLine line;
+            if (i == 0) {
+                line.segments.push_back({prefix, label_role});
+            } else {
+                line.segments.push_back({std::string(prefix.size(), ' '), StyleRole::Muted});
+            }
+            line.segments.push_back({wrapped[i], StyleRole::Text});
+            history.push_back(std::move(line));
         }
     }
     return history;
@@ -336,14 +486,15 @@ void insert_input(editor::EditorState& input, const std::string& text, std::stri
 void render(const chat::Session& session,
             editor::EditorState& input,
             std::string& status,
-            int& history_scroll) {
+            int& history_scroll,
+            const RenderStyle& style) {
     const TuiSize terminal = terminal_size();
     const Layout layout = layout_for_terminal(terminal.rows, terminal.cols);
     const int cols = layout.cols;
 
     input.ensure_cursor_visible(layout.input_rect);
     const editor::RenderedPanel input_panel = input.render(layout.input_rect);
-    std::vector<std::string> history = history_lines_for_session(session, cols);
+    std::vector<StyledLine> history = history_lines_for_session(session, cols);
     const int max_history_scroll = std::max(0, static_cast<int>(history.size()) - layout.history_rows);
     history_scroll = std::min(std::max(0, history_scroll), max_history_scroll);
 
@@ -352,24 +503,25 @@ void render(const chat::Session& session,
     const int history_start = std::max(0, static_cast<int>(history.size()) - layout.history_rows - history_scroll);
     int printed = 0;
     for (int i = history_start; i < static_cast<int>(history.size()) && printed < layout.history_rows; ++i, ++printed) {
-        draw_line(layout.history_row + printed, cols, history[static_cast<size_t>(i)]);
+        draw_line(layout.history_row + printed, cols, history[static_cast<size_t>(i)].segments, StyleRole::Text, style);
     }
     while (printed < layout.history_rows) {
-        draw_line(layout.history_row + printed, cols, "");
+        draw_line(layout.history_row + printed, cols, "", StyleRole::Text, style);
         ++printed;
     }
 
-    draw_line(layout.status_row, cols, status, true);
+    draw_line(layout.status_row, cols, status, status_role_for_text(status), style);
     draw_line(layout.input_label_row,
               cols,
               "Input  Enter send | Alt+Enter newline | Esc cancel | Ctrl+R regen | PgUp/PgDn scroll | Ctrl+C quit",
-              true);
+              StyleRole::InputLabel,
+              style);
 
     for (int row = 0; row < layout.input_rect.height; ++row) {
         const std::string line = row < static_cast<int>(input_panel.lines.size())
                                      ? input_panel.lines[static_cast<size_t>(row)]
                                      : std::string();
-        draw_line(layout.input_rect.row + row, cols, line);
+        draw_line(layout.input_rect.row + row, cols, line, StyleRole::Text, style);
     }
 
     const int cursor_row = input_panel.cursor.visible ? layout.input_rect.row + input_panel.cursor.row : layout.input_rect.row;
@@ -477,6 +629,8 @@ int run(provider::RequestContext context, chat::Session session) {
     ActiveJob active_job = ActiveJob::None;
     editor::EditorState input = empty_input_editor();
     std::string status = "Ready";
+    ThemeName theme = ThemeName::Dark;
+    const bool use_colors = !context.options.no_colors;
     bool quit = false;
     size_t pending_user = static_cast<size_t>(-1);
     size_t pending_assistant = static_cast<size_t>(-1);
@@ -678,7 +832,28 @@ int run(provider::RequestContext context, chat::Session session) {
             return;
         }
         if (text == "/help") {
-            status = "Enter sends | Alt+Enter newline | Esc cancels | Ctrl+R regenerates | /quit /models /save /load";
+            status = "Enter sends | Alt+Enter newline | Esc cancels | Ctrl+R regenerates | /theme light|dark";
+            return;
+        }
+        if (text.rfind("/theme", 0) == 0) {
+            const std::string requested = trim_ascii(text.substr(6));
+            if (requested.empty()) {
+                status = std::string("Theme: ") + theme_name(theme) + ". Available: dark, light";
+                if (!use_colors) {
+                    status += " (colors disabled by --nocolors)";
+                }
+                return;
+            }
+            ThemeName next = theme;
+            if (!parse_theme_name(requested, next)) {
+                status = "Unknown theme: " + requested + ". Available: dark, light";
+                return;
+            }
+            theme = next;
+            status = std::string("Theme set to ") + theme_name(theme);
+            if (!use_colors) {
+                status += " (colors disabled by --nocolors)";
+            }
             return;
         }
         if (text == "/clear") {
@@ -757,7 +932,7 @@ int run(provider::RequestContext context, chat::Session session) {
         start_turn(context.options.prompt);
     }
 
-    render(session, input, status, history_scroll);
+    render(session, input, status, history_scroll, RenderStyle{theme, use_colors});
     while (!quit) {
         TuiEvent event;
         while (events.try_pop(event)) {
@@ -891,7 +1066,7 @@ int run(provider::RequestContext context, chat::Session session) {
                 }
             }
         }
-        render(session, input, status, history_scroll);
+        render(session, input, status, history_scroll, RenderStyle{theme, use_colors});
     }
 
     model_job.cancel();

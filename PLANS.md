@@ -554,49 +554,49 @@ The full-screen UI must not block while connecting to an endpoint, waiting for a
 
 Use colors by default in the full-screen TUI, but keep them strictly optional and semantic.
 
-- [ ] Add `--nocolors` to disable all color styling in the TUI.
-- [ ] Keep cursor movement, alternate-screen, clear-line, and other terminal control sequences working when `--nocolors` is set; only styling/color SGR sequences should be disabled.
-- [ ] Add built-in `dark` and `light` themes.
-- [ ] Default to the `dark` theme unless a later config layer provides a user preference.
-- [ ] Add `/theme` to show the current theme and available theme names.
-- [ ] Add `/theme dark` and `/theme light` to switch themes at runtime.
-- [ ] Use semantic style roles rather than hard-coded colors at each draw site:
-  - [ ] normal text
-  - [ ] muted text
-  - [ ] user label, for `You:`
-  - [ ] assistant label, for `Assistant:`
-  - [ ] error text
-  - [ ] status bar foreground/background
-  - [ ] input label foreground/background
-  - [ ] background fill
-- [ ] Draw full-width lines with an explicit theme background when colors are enabled so contrast is predictable.
-- [ ] Color only message labels differently from message content at first; defer rich markdown coloring.
-- [ ] Display errors in a distinct error color from ordinary status text.
-- [ ] Use 24-bit ANSI color escapes initially so contrast is controlled instead of depending on terminal palette mappings.
-- [ ] Add WCAG 2.1 contrast tests for every foreground/background pair used by the themes.
-- [ ] Require at least 4.5:1 contrast for all normal text pairs.
-- [ ] Candidate dark theme:
-  - [ ] background `#0B0F14`
-  - [ ] normal text `#E6EDF3`
-  - [ ] muted text `#9BA7B4`
-  - [ ] user label `#7DD3FC`
-  - [ ] assistant label `#86EFAC`
-  - [ ] error text `#FCA5A5`
-  - [ ] status background `#1F2937`
-  - [ ] status foreground `#FFFFFF`
-- [ ] Candidate light theme:
-  - [ ] background `#FAFAFA`
-  - [ ] normal text `#111827`
-  - [ ] muted text `#4B5563`
-  - [ ] user label `#075985`
-  - [ ] assistant label `#166534`
-  - [ ] error text `#B91C1C`
-  - [ ] status background `#E5E7EB`
-  - [ ] status foreground `#111827`
-- [ ] Add unit tests for `--nocolors` parsing.
-- [ ] Add unit tests for `/theme` argument handling if theme command parsing is factored out.
-- [ ] Document default colors, `--nocolors`, and `/theme light|dark` in `README.md`.
-- [ ] Document the color decision, truecolor ANSI choice, and contrast target in `docs/decisions.md`.
+- [x] Add `--nocolors` to disable all color styling in the TUI.
+- [x] Keep cursor movement, alternate-screen, clear-line, and other terminal control sequences working when `--nocolors` is set; only styling/color SGR sequences should be disabled.
+- [x] Add built-in `dark` and `light` themes.
+- [x] Default to the `dark` theme unless a later config layer provides a user preference.
+- [x] Add `/theme` to show the current theme and available theme names.
+- [x] Add `/theme dark` and `/theme light` to switch themes at runtime.
+- [x] Use semantic style roles rather than hard-coded colors at each draw site:
+  - [x] normal text
+  - [x] muted text
+  - [x] user label, for `You:`
+  - [x] assistant label, for `Assistant:`
+  - [x] error text
+  - [x] status bar foreground/background
+  - [x] input label foreground/background
+  - [x] background fill
+- [x] Draw full-width lines with an explicit theme background when colors are enabled so contrast is predictable.
+- [x] Color only message labels differently from message content at first; defer rich markdown coloring.
+- [x] Display errors in a distinct error color from ordinary status text.
+- [x] Use 24-bit ANSI color escapes initially so contrast is controlled instead of depending on terminal palette mappings.
+- [x] Add WCAG 2.1 contrast tests for every foreground/background pair used by the themes.
+- [x] Require at least 4.5:1 contrast for all normal text pairs.
+- [x] Candidate dark theme:
+  - [x] background `#0B0F14`
+  - [x] normal text `#E6EDF3`
+  - [x] muted text `#9BA7B4`
+  - [x] user label `#7DD3FC`
+  - [x] assistant label `#86EFAC`
+  - [x] error text `#FCA5A5`
+  - [x] status background `#1F2937`
+  - [x] status foreground `#FFFFFF`
+- [x] Candidate light theme:
+  - [x] background `#FAFAFA`
+  - [x] normal text `#111827`
+  - [x] muted text `#4B5563`
+  - [x] user label `#075985`
+  - [x] assistant label `#166534`
+  - [x] error text `#B91C1C`
+  - [x] status background `#E5E7EB`
+  - [x] status foreground `#111827`
+- [x] Add unit tests for `--nocolors` parsing.
+- [x] Add unit tests for `/theme` argument handling if theme command parsing is factored out.
+- [x] Document default colors, `--nocolors`, and `/theme light|dark` in `README.md`.
+- [x] Document the color decision, truecolor ANSI choice, and contrast target in `docs/decisions.md`.
 
 ## Initial key bindings
 

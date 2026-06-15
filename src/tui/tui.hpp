@@ -22,6 +22,37 @@ struct Layout {
 
 Layout layout_for_terminal(int rows, int cols);
 
+struct Rgb {
+    int r = 0;
+    int g = 0;
+    int b = 0;
+};
+
+enum class ThemeName {
+    Dark,
+    Light,
+};
+
+enum class StyleRole {
+    Text,
+    Muted,
+    UserLabel,
+    AssistantLabel,
+    Error,
+    Status,
+    InputLabel,
+};
+
+struct StylePair {
+    Rgb foreground;
+    Rgb background;
+};
+
+const char* theme_name(ThemeName theme);
+bool parse_theme_name(const std::string& text, ThemeName& out);
+StylePair style_pair_for(ThemeName theme, StyleRole role);
+double contrast_ratio(Rgb foreground, Rgb background);
+
 struct RegenerationPlan {
     bool available = false;
     std::size_t erase_from = 0;
