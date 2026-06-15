@@ -112,6 +112,32 @@ void test_editor_rectangular_rendering() {
           "editor cursor remains visible after scroll");
 }
 
+void test_editor_word_wrap_rendering() {
+    pkchat::editor::EditorState state = pkchat::editor::EditorState::from_text("abcdefghij");
+    pkchat::editor::Rect rect{1, 1, 3, 4};
+    pkchat::editor::RenderedPanel rendered = state.render(rect);
+    check(rendered.lines.size() == 3, "editor wrapped panel respects height");
+    check(rendered.lines[0] == "abcd", "editor hard-wraps long words first row");
+    check(rendered.lines[1] == "efgh", "editor hard-wraps long words second row");
+    check(rendered.lines[2] == "ij  ", "editor pads final wrapped row");
+
+    state.cursor = state.text.offset_for_line_column(0, 8);
+    state.ensure_cursor_visible({1, 1, 2, 4});
+    rendered = state.render({1, 1, 2, 4});
+    check(state.scroll_line == 1, "editor wrapped scroll follows cursor row");
+    check(rendered.lines[0] == "efgh", "editor render starts at wrapped scroll row");
+    check(rendered.lines[1] == "ij  ", "editor render includes next wrapped row");
+    check(rendered.cursor.visible && rendered.cursor.row == 1 && rendered.cursor.col == 0,
+          "editor cursor maps inside wrapped line");
+}
+
+void test_editor_word_wrap_breaks_on_spaces() {
+    pkchat::editor::EditorState state = pkchat::editor::EditorState::from_text("alpha beta");
+    pkchat::editor::RenderedPanel rendered = state.render({1, 1, 2, 8});
+    check(rendered.lines[0] == "alpha   ", "editor wraps at a word break when available");
+    check(rendered.lines[1] == "beta    ", "editor continues after the wrapped word break");
+}
+
 void test_editor_file_round_trip() {
     const std::string path = "build/unit-editor.txt";
     pkchat::editor::PieceTable table = pkchat::editor::PieceTable::from_string("first\nsecond");
@@ -278,6 +304,8 @@ int main() {
     test_runtime_event_queue_and_job_cancel();
     test_editor_piece_table_edits();
     test_editor_rectangular_rendering();
+    test_editor_word_wrap_rendering();
+    test_editor_word_wrap_breaks_on_spaces();
     test_editor_file_round_trip();
     if (failures != 0) {
         std::cerr << failures << " unit test(s) failed\n";

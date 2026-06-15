@@ -65,38 +65,123 @@ size_t byte_offset_for_display_column(const std::string& text, size_t target_col
     return pos;
 }
 
-std::string display_slice(const std::string& text, size_t scroll_column, size_t width) {
+struct WrapSegment {
+    size_t start = 0;
+    size_t end = 0;
+};
+
+size_t display_width_for_range(const std::string& text, size_t start, size_t end) {
+    size_t column = 0;
+    size_t pos = start;
+    const size_t limit = std::min(end, text.size());
+    while (pos < limit) {
+        const unsigned char ch = static_cast<unsigned char>(text[pos]);
+        const size_t len = utf8_len(ch, text.size() - pos);
+        column += display_width_at(text, pos, column);
+        pos += std::min(len, limit - pos);
+    }
+    return column;
+}
+
+std::vector<WrapSegment> wrap_line_segments(const std::string& text, size_t width) {
+    width = std::max<size_t>(1, width);
+    if (text.empty()) {
+        return {{0, 0}};
+    }
+
+    std::vector<WrapSegment> segments;
+    size_t start = 0;
+    while (start < text.size()) {
+        size_t pos = start;
+        size_t column = 0;
+        size_t last_break = std::string::npos;
+        size_t hard_break = start;
+
+        while (pos < text.size()) {
+            const unsigned char ch = static_cast<unsigned char>(text[pos]);
+            const size_t len = utf8_len(ch, text.size() - pos);
+            const size_t char_width = display_width_at(text, pos, column);
+            if (column + char_width > width) {
+                break;
+            }
+            column += char_width;
+            pos += len;
+            hard_break = pos;
+            if (ch == ' ' || ch == '\t') {
+                last_break = pos;
+            }
+            if (column >= width) {
+                break;
+            }
+        }
+
+        size_t end = hard_break;
+        if (pos < text.size() && last_break != std::string::npos && last_break > start) {
+            end = last_break;
+        }
+        if (end <= start) {
+            end = text.size();
+            if (start < text.size()) {
+                const size_t len = utf8_len(static_cast<unsigned char>(text[start]), text.size() - start);
+                end = std::min(text.size(), start + len);
+            }
+        }
+
+        segments.push_back({start, end});
+        start = end;
+    }
+    return segments;
+}
+
+size_t wrapped_row_count(const std::string& text, size_t width) {
+    return wrap_line_segments(text, width).size();
+}
+
+struct WrappedCursor {
+    size_t row = 0;
+    size_t col = 0;
+};
+
+WrappedCursor cursor_in_wrapped_line(const std::string& text, size_t byte_offset, size_t width) {
+    width = std::max<size_t>(1, width);
+    const std::vector<WrapSegment> segments = wrap_line_segments(text, width);
+    const size_t clamped = std::min(byte_offset, text.size());
+    for (size_t i = 0; i < segments.size(); ++i) {
+        const WrapSegment& segment = segments[i];
+        if (clamped < segment.end || i + 1 == segments.size()) {
+            const size_t col = display_width_for_range(text, segment.start, clamped);
+            return {i, std::min(col, width - 1)};
+        }
+        if (clamped == segment.end && i + 1 < segments.size()) {
+            continue;
+        }
+    }
+    return {};
+}
+
+std::string display_range(const std::string& text, size_t start, size_t end, size_t width) {
     std::string out;
     size_t column = 0;
     size_t visible = 0;
-    size_t pos = 0;
-    while (pos < text.size() && visible < width) {
+    size_t pos = start;
+    const size_t limit = std::min(end, text.size());
+    while (pos < limit && visible < width) {
         const unsigned char ch = static_cast<unsigned char>(text[pos]);
         const size_t len = utf8_len(ch, text.size() - pos);
         const size_t char_width = display_width_at(text, pos, column);
         const size_t next_column = column + char_width;
 
-        if (next_column <= scroll_column) {
-            column = next_column;
-            pos += len;
-            continue;
-        }
-
         if (ch == '\t') {
             for (size_t tab_col = column; tab_col < next_column && visible < width; ++tab_col) {
-                if (tab_col >= scroll_column) {
-                    out.push_back(' ');
-                    ++visible;
-                }
+                out.push_back(' ');
+                ++visible;
             }
         } else if (ch < 0x20U || ch == 0x7FU) {
             out.push_back('?');
             ++visible;
         } else {
-            if (column >= scroll_column) {
-                out.append(text, pos, len);
-                ++visible;
-            }
+            out.append(text, pos, len);
+            ++visible;
         }
 
         column = next_column;
@@ -618,21 +703,23 @@ void EditorState::move_end() {
 
 void EditorState::ensure_cursor_visible(const Rect& rect) {
     const size_t line = text.line_for_offset(cursor);
-    const size_t column = text.display_column_for_offset(cursor);
     const size_t height = static_cast<size_t>(std::max(1, rect.height));
     const size_t width = static_cast<size_t>(std::max(1, rect.width));
 
-    if (line < scroll_line) {
-        scroll_line = line;
-    } else if (line >= scroll_line + height) {
-        scroll_line = line - height + 1;
+    size_t cursor_row = 0;
+    for (size_t i = 0; i < line; ++i) {
+        cursor_row += wrapped_row_count(text.line_text(i), width);
     }
+    const size_t line_start_offset = text.line_start(line);
+    const std::string line_text_value = text.line_text(line);
+    cursor_row += cursor_in_wrapped_line(line_text_value, cursor - line_start_offset, width).row;
 
-    if (column < scroll_column) {
-        scroll_column = column;
-    } else if (column >= scroll_column + width) {
-        scroll_column = column - width + 1;
+    if (cursor_row < scroll_line) {
+        scroll_line = cursor_row;
+    } else if (cursor_row >= scroll_line + height) {
+        scroll_line = cursor_row - height + 1;
     }
+    scroll_column = 0;
 }
 
 RenderedPanel EditorState::render(const Rect& rect) const {
@@ -644,25 +731,61 @@ RenderedPanel render_panel(const PieceTable& text,
                            size_t cursor,
                            size_t scroll_line,
                            size_t scroll_column) {
+    (void)scroll_column;
     RenderedPanel rendered;
     const size_t height = static_cast<size_t>(std::max(0, rect.height));
     const size_t width = static_cast<size_t>(std::max(0, rect.width));
     rendered.lines.reserve(height);
+    if (width == 0) {
+        rendered.lines.resize(height);
+        return rendered;
+    }
+
+    const size_t line_count = text.line_count();
+    size_t line = 0;
+    size_t segment_index = 0;
+    size_t rows_to_skip = scroll_line;
+    while (line < line_count) {
+        const std::string line_text_value = text.line_text(line);
+        const size_t rows = wrapped_row_count(line_text_value, width);
+        if (rows_to_skip < rows) {
+            segment_index = rows_to_skip;
+            break;
+        }
+        rows_to_skip -= rows;
+        ++line;
+    }
+
     for (size_t row = 0; row < height; ++row) {
-        const size_t line = scroll_line + row;
-        if (line >= text.line_count()) {
+        if (line >= line_count) {
             rendered.lines.push_back(std::string(width, ' '));
-        } else {
-            rendered.lines.push_back(display_slice(text.line_text(line), scroll_column, width));
+            continue;
+        }
+
+        const std::string line_text_value = text.line_text(line);
+        const std::vector<WrapSegment> segments = wrap_line_segments(line_text_value, width);
+        const WrapSegment segment = segments[std::min(segment_index, segments.size() - 1)];
+        rendered.lines.push_back(display_range(line_text_value, segment.start, segment.end, width));
+
+        ++segment_index;
+        if (segment_index >= segments.size()) {
+            segment_index = 0;
+            ++line;
         }
     }
 
     const size_t cursor_line = text.line_for_offset(cursor);
-    const size_t cursor_column = text.display_column_for_offset(cursor);
-    if (cursor_line >= scroll_line && cursor_line < scroll_line + height &&
-        cursor_column >= scroll_column && cursor_column < scroll_column + width) {
-        rendered.cursor.row = static_cast<int>(cursor_line - scroll_line);
-        rendered.cursor.col = static_cast<int>(cursor_column - scroll_column);
+    size_t cursor_row = 0;
+    for (size_t i = 0; i < cursor_line; ++i) {
+        cursor_row += wrapped_row_count(text.line_text(i), width);
+    }
+    const size_t cursor_line_start = text.line_start(cursor_line);
+    const std::string cursor_line_text = text.line_text(cursor_line);
+    const WrappedCursor wrapped_cursor = cursor_in_wrapped_line(cursor_line_text, cursor - cursor_line_start, width);
+    cursor_row += wrapped_cursor.row;
+    if (cursor_row >= scroll_line && cursor_row < scroll_line + height) {
+        rendered.cursor.row = static_cast<int>(cursor_row - scroll_line);
+        rendered.cursor.col = static_cast<int>(wrapped_cursor.col);
         rendered.cursor.visible = true;
     }
     return rendered;
