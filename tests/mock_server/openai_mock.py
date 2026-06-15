@@ -7,6 +7,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 class Handler(BaseHTTPRequestHandler):
     model = "mock-model"
+    empty_models = False
     stream_delay = 0.0
 
     def log_message(self, fmt, *args):
@@ -19,9 +20,11 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(data)))
         self.end_headers()
         self.wfile.write(data)
-
     def do_GET(self):
         if self.path == "/v1/models":
+            if self.empty_models:
+                self._send(200, json.dumps({"object": "list", "data": []}))
+                return
             self._send(200, json.dumps({"object": "list", "data": [{"id": self.model, "object": "model"}]}))
         else:
             self._send(404, json.dumps({"error": {"message": "not found"}}))
@@ -45,6 +48,8 @@ class Handler(BaseHTTPRequestHandler):
         reply = "Hello"
         if last == "count-messages":
             reply = f"messages:{len(messages)}"
+        elif last == "model?":
+            reply = request.get("model", "<missing>")
         elif last == "repl-one":
             reply = "repl-one-reply"
 
@@ -84,9 +89,11 @@ def main():
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, required=True)
     parser.add_argument("--model", default="mock-model")
+    parser.add_argument("--empty-models", action="store_true")
     parser.add_argument("--stream-delay", type=float, default=0.0)
     args = parser.parse_args()
     Handler.model = args.model
+    Handler.empty_models = args.empty_models
     Handler.stream_delay = args.stream_delay
     server = ThreadingHTTPServer((args.host, args.port), Handler)
     server.serve_forever()

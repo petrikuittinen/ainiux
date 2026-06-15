@@ -128,6 +128,14 @@ void test_openrouter_shortcut_context() {
     check(ctx.context.profile.name == "openrouter", "openrouter shortcut selects profile");
     check(ctx.context.base_url == "https://openrouter.ai/api/v1", "openrouter shortcut uses standard base URL");
 }
+void test_openai_context_allows_missing_model() {
+    const char* argv[] = {"pkchat", "--provider", "openai", "-p", "hello", "--header", "Authorization: Bearer test"};
+    pkchat::cli::ParseResult parsed = pkchat::cli::parse_args(7, const_cast<char**>(argv));
+    check(parsed.error.ok(), "openai args without model parse");
+    pkchat::provider::ContextResult ctx = pkchat::provider::build_context(parsed.options);
+    check(ctx.error.ok(), "openai context builds without model so caller can discover one");
+    check(ctx.context.options.model.empty(), "openai context keeps missing model empty before discovery");
+}
 
 void test_lmstudio_shortcut_context() {
     const char* argv[] = {"pkchat", "lmstudio", "-i"};
@@ -161,6 +169,7 @@ int main() {
     test_json_parse();
     test_lmstudio_context();
     test_openrouter_shortcut_context();
+    test_openai_context_allows_missing_model();
     test_lmstudio_shortcut_context();
     test_chat_session_json_round_trip();
     test_chat_session_rejects_corrupt_json();

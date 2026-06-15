@@ -147,6 +147,27 @@ pkchat::Error save_if_requested(const pkchat::cli::Options& options, const pkcha
     }
     return pkchat::chat::save_session_atomic(options.save_chat_path, session);
 }
+pkchat::Error choose_default_model(pkchat::provider::RequestContext& context) {
+    if (!context.options.model.empty()) {
+        return pkchat::ok_error();
+    }
+    pkchat::provider::ModelsResult models;
+    pkchat::Error err = pkchat::provider::list_models(context, models);
+    if (!err.ok()) {
+        return err;
+    }
+    if (!models.model_ids.empty()) {
+        context.options.model = models.model_ids.front();
+    }
+    return pkchat::ok_error();
+}
+void print_chat_start(const pkchat::provider::RequestContext& context) {
+    if (context.options.quiet) {
+        return;
+    }
+    std::cerr << "Endpoint: " << context.chat_url << std::endl;
+    std::cerr << "Model: " << (context.options.model.empty() ? "unknown" : context.options.model) << std::endl;
+}
 
 pkchat::Error send_session_turn(pkchat::provider::RequestContext& context,
                                 pkchat::chat::Session& session,
@@ -427,8 +448,14 @@ int main(int argc, char** argv) {
     if (!loaded_session) {
         session = pkchat::chat::new_session(context);
     }
+    pkchat::Error model_err = choose_default_model(context);
+    if (!model_err.ok()) {
+        print_error(model_err);
+        return exit_code_for(model_err.code);
+    }
     refresh_session_metadata(session, context);
     apply_system_prompt(session, context.options.system);
+    print_chat_start(context);
 
     if (context.options.repl) {
         return run_repl(context, std::move(session), *out);

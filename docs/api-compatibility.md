@@ -8,6 +8,8 @@ Implemented:
 - `POST /v1/chat/completions`
 - non-streaming responses with `choices[0].message.content`
 - streaming responses with SSE `data:` events and `choices[0].delta.content`
+ 
+If the user does not provide `-m/--model`, `pkchat` calls `GET /v1/models` before chat starts and uses the first returned model id. If the response has no model ids, the chat request omits the model field and user-facing startup status reports `Model: unknown`.
 
 ## LM Studio
 

@@ -2,7 +2,7 @@
 
 `pkchat` is a fast, script-friendly command-line chat client for OpenAI and OpenAI-compatible APIs.
 
-Current status: v0.21 CLI with libcurl transport, `/v1/models`, `/v1/chat/completions`, a simple REPL, and JSON chat save/load.
+Current status: v0.22 CLI with libcurl transport, `/v1/models`, `/v1/chat/completions`, a simple REPL, and JSON chat save/load.
 
 ## Build
 
@@ -28,6 +28,7 @@ Local OpenAI-compatible server:
 
 ```sh
 ./pkchat http://localhost:30000 -m "unsloth/Qwen3.6-35B-A3B-MTP-GGUF:UD-Q4_K_XL" -p "Hello"
+./pkchat http://localhost:30000 -p "Hello"
 ./pkchat --list-models http://localhost:30000
 ```
 
@@ -39,7 +40,9 @@ LM Studio profile:
 ./pkchat --provider lmstudio --list-models
 ```
 
-`lmstudio -i` uses `http://localhost:1234/v1`, does not require an API key, and omits the model field when no model is provided so LM Studio can use its currently loaded model.
+When no model is provided, `pkchat` calls `/v1/models` and uses the first returned model id. If the models endpoint returns no ids, the request omits the model field and startup status shows `Model: unknown`.
+
+`lmstudio -i` uses `http://localhost:1234/v1` and does not require an API key.
 
 OpenAI:
 
@@ -68,6 +71,7 @@ Interactive REPL and chat files:
 ```sh
 ./pkchat --repl http://localhost:30000 -m MODEL --save-chat chat.json
 ./pkchat http://localhost:30000 -m MODEL -p "Hello" --save-chat chat.json
+./pkchat http://localhost:30000 -p "Hello"
 ./pkchat --load-chat chat.json -p "Continue from the saved chat"
 ```
 
@@ -85,6 +89,7 @@ Verbose timing:
 
 - `stdout` is model output in text mode.
 - `stderr` is used for warnings, status, and errors.
+- Chat startup status prints the chat endpoint and selected model to `stderr` unless `--quiet` is set.
 - `--format json` returns one JSON object.
 - `--format ndjson` returns streaming-style events.
 - `--save-chat PATH` writes a JSON chat file atomically with restrictive permissions.

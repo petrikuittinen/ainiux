@@ -538,10 +538,6 @@ ContextResult build_context(const cli::Options& input_options) {
                                       (profile.key_envs.empty() ? "PKCHAT_API_KEY" : profile.key_envs[0]) +
                                       " or use --key-env/--key-file/--key-stdin"}};
     }
-    if (!options.list_models && options.model.empty() && profile.name != "lm_studio") {
-        return {{}, {ErrorCode::BadArgs, "model is required for provider " + profile.name + "; use -m/--model/-model"}};
-    }
-
     RequestContext context;
     context.options = options;
     context.profile = profile;
