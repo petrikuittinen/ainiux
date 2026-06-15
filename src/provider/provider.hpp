@@ -7,6 +7,7 @@
 #include "cli/args.hpp"
 #include "common.hpp"
 #include "http/http.hpp"
+#include "runtime/runtime.hpp"
 
 namespace pkchat::provider {
 
@@ -55,12 +56,18 @@ struct ContextResult {
 };
 
 ContextResult build_context(const cli::Options& options);
-Error list_models(const RequestContext& context, ModelsResult& result);
-Error send_chat(const RequestContext& context, DeltaCallback on_delta, ChatResult& result);
+Error list_models(const RequestContext& context,
+                  ModelsResult& result,
+                  runtime::CancellationToken cancellation = runtime::CancellationToken());
+Error send_chat(const RequestContext& context,
+                DeltaCallback on_delta,
+                ChatResult& result,
+                runtime::CancellationToken cancellation = runtime::CancellationToken());
 Error send_chat_messages(const RequestContext& context,
                          const std::vector<Message>& messages,
                          DeltaCallback on_delta,
-                         ChatResult& result);
+                         ChatResult& result,
+                         runtime::CancellationToken cancellation = runtime::CancellationToken());
 std::string normalize_base_url(const std::string& url, bool* changed, Error& error);
 
 }  // namespace pkchat::provider

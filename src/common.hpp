@@ -22,6 +22,7 @@ enum class ErrorCode {
     FileRead,
     FileWrite,
     Config,
+    Cancelled,
     Internal
 };
 

@@ -1,13 +1,17 @@
+#include <atomic>
+#include <chrono>
 #include <cstdlib>
 #include <fstream>
 #include <iostream>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include "chat/session.hpp"
 #include "cli/args.hpp"
 #include "json/json.hpp"
 #include "provider/provider.hpp"
+#include "runtime/runtime.hpp"
 
 namespace {
 
@@ -47,6 +51,14 @@ void test_cli_repl_parse() {
     check(parsed.error.ok(), "REPL args parse");
     check(parsed.options.repl, "REPL flag parsed");
     check(parsed.options.load_chat_path == "chat.json", "load chat parsed");
+}
+
+void test_cli_tui_parse() {
+    const char* argv[] = {"pkchat", "--tui", "lmstudio"};
+    pkchat::cli::ParseResult parsed = pkchat::cli::parse_args(3, const_cast<char**>(argv));
+    check(parsed.error.ok(), "TUI args parse");
+    check(parsed.options.tui, "TUI flag parsed");
+    check(parsed.options.positional_url == "lmstudio", "TUI positional profile parsed");
 }
 
 void test_cli_rejects_unknown() {
@@ -119,6 +131,32 @@ void test_chat_session_rejects_corrupt_json() {
     check(err.code == pkchat::ErrorCode::JsonParse, "corrupt chat file reports JSON parse error");
 }
 
+void test_runtime_event_queue_and_job_cancel() {
+    pkchat::runtime::EventQueue<int> queue;
+    int value = 0;
+    check(!queue.try_pop(value), "empty runtime queue has no event");
+    queue.push(7);
+    check(queue.try_pop(value) && value == 7, "runtime queue preserves event value");
+
+    pkchat::runtime::JobHandle job;
+    std::atomic<bool> entered{false};
+    job.start([&](pkchat::runtime::CancellationToken token) {
+        entered.store(true, std::memory_order_release);
+        while (!token.cancelled()) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+        queue.push(42);
+    });
+    for (int i = 0; i < 100 && !entered.load(std::memory_order_acquire); ++i) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    check(job.running(), "runtime job reports running");
+    job.cancel();
+    check(queue.wait_pop_for(value, std::chrono::milliseconds(1000)) && value == 42, "runtime job observes cancellation");
+    job.join();
+    check(!job.running(), "runtime job reports stopped after join");
+}
+
 void test_openrouter_shortcut_context() {
     const char* argv[] = {"pkchat", "openrouter", "-model", "provider/model", "-p", "hello", "--header", "Authorization: Bearer test"};
     pkchat::cli::ParseResult parsed = pkchat::cli::parse_args(8, const_cast<char**>(argv));
@@ -165,6 +203,7 @@ int main() {
     test_cli_rejects_unknown();
     test_cli_provider_shortcut_parse();
     test_cli_repl_parse();
+    test_cli_tui_parse();
     test_url_normalization();
     test_json_parse();
     test_lmstudio_context();
@@ -173,6 +212,7 @@ int main() {
     test_lmstudio_shortcut_context();
     test_chat_session_json_round_trip();
     test_chat_session_rejects_corrupt_json();
+    test_runtime_event_queue_and_job_cancel();
     if (failures != 0) {
         std::cerr << failures << " unit test(s) failed\n";
         return 1;

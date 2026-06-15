@@ -418,7 +418,10 @@ std::vector<std::string> build_headers(const RequestContext& context) {
     return headers;
 }
 
-http::Request base_http_request(const RequestContext& context, const std::string& method, const std::string& url) {
+http::Request base_http_request(const RequestContext& context,
+                                const std::string& method,
+                                const std::string& url,
+                                runtime::CancellationToken cancellation) {
     http::Request req;
     req.method = method;
     req.url = url;
@@ -428,6 +431,7 @@ http::Request base_http_request(const RequestContext& context, const std::string
     req.proxy = context.options.proxy;
     req.insecure_tls = context.options.insecure_tls;
     req.trace = context.options.trace_http;
+    req.cancellation = cancellation;
     return req;
 }
 
@@ -490,7 +494,7 @@ ContextResult build_context(const cli::Options& input_options) {
         }
         options.key = trim_ascii(options.key);
     }
-    if (!options.list_models && !options.repl && trim_ascii(options.prompt).empty()) {
+    if (!options.list_models && !options.repl && !options.tui && trim_ascii(options.prompt).empty()) {
         return {{}, {ErrorCode::BadArgs, "prompt is empty; use -p/--prompt, --prompt-file, or --repl"}};
     }
 
@@ -549,8 +553,8 @@ ContextResult build_context(const cli::Options& input_options) {
     return {context, ok_error()};
 }
 
-Error list_models(const RequestContext& context, ModelsResult& result) {
-    http::Request req = base_http_request(context, "GET", context.models_url);
+Error list_models(const RequestContext& context, ModelsResult& result, runtime::CancellationToken cancellation) {
+    http::Request req = base_http_request(context, "GET", context.models_url, cancellation);
     const http::Result http_result = http::perform(req, {context.api_key});
     if (!http_result.error.ok()) {
         if (context.profile.local_endpoint && http_result.error.code == ErrorCode::Connect) {
@@ -569,10 +573,17 @@ Error list_models(const RequestContext& context, ModelsResult& result) {
 Error send_chat_messages(const RequestContext& context,
                          const std::vector<Message>& messages,
                          DeltaCallback on_delta,
-                         ChatResult& result) {
+                         ChatResult& result,
+                         runtime::CancellationToken cancellation) {
+    if (cancellation.cancelled()) {
+        return {ErrorCode::Cancelled, "chat request cancelled before it started"};
+    }
     auto start = std::chrono::steady_clock::now();
     bool saw_first_delta = false;
     auto timed_delta = [&](const std::string& delta) -> Error {
+        if (cancellation.cancelled()) {
+            return {ErrorCode::Cancelled, "chat request cancelled while streaming"};
+        }
         if (!saw_first_delta && !delta.empty()) {
             saw_first_delta = true;
             const auto first = std::chrono::steady_clock::now();
@@ -581,7 +592,7 @@ Error send_chat_messages(const RequestContext& context,
         return on_delta(delta);
     };
 
-    http::Request req = base_http_request(context, "POST", context.chat_url);
+    http::Request req = base_http_request(context, "POST", context.chat_url, cancellation);
     req.body = build_chat_request_json(context, messages);
     SseParser parser;
     bool done = false;
@@ -626,13 +637,13 @@ Error send_chat_messages(const RequestContext& context,
     return ok_error();
 }
 
-Error send_chat(const RequestContext& context, DeltaCallback on_delta, ChatResult& result) {
+Error send_chat(const RequestContext& context, DeltaCallback on_delta, ChatResult& result, runtime::CancellationToken cancellation) {
     std::vector<Message> messages;
     if (!context.options.system.empty()) {
         messages.push_back({"system", context.options.system});
     }
     messages.push_back({"user", context.options.prompt});
-    return send_chat_messages(context, messages, on_delta, result);
+    return send_chat_messages(context, messages, on_delta, result, cancellation);
 }
 
 }  // namespace pkchat::provider

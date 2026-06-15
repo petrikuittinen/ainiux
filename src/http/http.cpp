@@ -130,6 +130,7 @@ struct TransferState {
     long current_status = 0;
     bool current_proxy_connect = false;
     bool final_headers_seen = false;
+    bool cancelled = false;
 };
 
 size_t header_callback(char* ptr, size_t size, size_t nmemb, void* userdata) {
@@ -163,6 +164,11 @@ size_t header_callback(char* ptr, size_t size, size_t nmemb, void* userdata) {
 size_t write_callback(char* ptr, size_t size, size_t nmemb, void* userdata) {
     const size_t bytes = size * nmemb;
     TransferState* state = static_cast<TransferState*>(userdata);
+    if (state->request->cancellation.cancelled()) {
+        state->cancelled = true;
+        state->callback_error = {ErrorCode::Cancelled, "HTTP request cancelled: " + state->request->url};
+        return 0;
+    }
     const std::string chunk(ptr, bytes);
     state->response.body += chunk;
     if (state->request->on_body && state->response.status >= 200 && state->response.status < 300 && !chunk.empty()) {
@@ -177,6 +183,15 @@ size_t write_callback(char* ptr, size_t size, size_t nmemb, void* userdata) {
 int debug_callback(CURL*, curl_infotype, char* data, size_t size, void* userdata) {
     TransferState* state = static_cast<TransferState*>(userdata);
     state->debug_text.append(data, size);
+    return 0;
+}
+
+int progress_callback(void* userdata, curl_off_t, curl_off_t, curl_off_t, curl_off_t) {
+    TransferState* state = static_cast<TransferState*>(userdata);
+    if (state->request->cancellation.cancelled()) {
+        state->cancelled = true;
+        return 1;
+    }
     return 0;
 }
 
@@ -287,6 +302,14 @@ Result perform(const Request& request, const std::vector<std::string>& secrets) 
     }
     err = setopt_ptr(curl, CURLOPT_ERRORBUFFER, error_buffer);
     if (!err.ok()) return {{}, err};
+    err = setopt_long(curl, CURLOPT_NOPROGRESS, 0L);
+    if (!err.ok()) return {{}, err};
+    err = setopt_ptr(curl, CURLOPT_XFERINFODATA, &state);
+    if (!err.ok()) return {{}, err};
+    code = curl_easy_setopt(curl, CURLOPT_XFERINFOFUNCTION, progress_callback);
+    if (code != CURLE_OK) {
+        return {{}, {ErrorCode::Internal, std::string("curl_easy_setopt failed: ") + curl_easy_strerror(code)}};
+    }
     if (request.trace) {
         err = setopt_long(curl, CURLOPT_VERBOSE, 1L);
         if (!err.ok()) return {{}, err};
@@ -305,6 +328,9 @@ Result perform(const Request& request, const std::vector<std::string>& secrets) 
     state.response.stderr_text = redact_secrets(state.debug_text, secrets);
 
     if (code != CURLE_OK) {
+        if (state.cancelled || request.cancellation.cancelled() || code == CURLE_ABORTED_BY_CALLBACK) {
+            return {state.response, {ErrorCode::Cancelled, "HTTP request cancelled: " + request.url}};
+        }
         if (code == CURLE_WRITE_ERROR && !state.callback_error.ok()) {
             return {state.response, state.callback_error};
         }

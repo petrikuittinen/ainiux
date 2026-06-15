@@ -23,6 +23,7 @@ struct Options {
     bool insecure_tls = false;
     bool key_stdin = false;
     bool repl = false;
+    bool tui = false;
 
     std::string positional_url;
     std::string prompt;

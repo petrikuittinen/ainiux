@@ -10,6 +10,7 @@
 #include "json/json.hpp"
 #include "pkchat/version.hpp"
 #include "provider/provider.hpp"
+#include "tui/tui.hpp"
 
 namespace {
 
@@ -37,6 +38,8 @@ int exit_code_for(pkchat::ErrorCode code) {
         case ErrorCode::FileWrite:
         case ErrorCode::Config:
             return 5;
+        case ErrorCode::Cancelled:
+            return 130;
         case ErrorCode::UnsupportedFeature:
         case ErrorCode::Internal:
             return 6;
@@ -374,12 +377,28 @@ int main(int argc, char** argv) {
         std::cout << "pkchat " << pkchat::kVersion << "\n";
         return 0;
     }
+    if (options.repl && options.tui) {
+        print_error({pkchat::ErrorCode::BadArgs, "--repl cannot be combined with --tui"});
+        return exit_code_for(pkchat::ErrorCode::BadArgs);
+    }
     if (options.repl && options.list_models) {
         print_error({pkchat::ErrorCode::BadArgs, "--repl cannot be combined with --list-models"});
         return exit_code_for(pkchat::ErrorCode::BadArgs);
     }
+    if (options.tui && options.list_models) {
+        print_error({pkchat::ErrorCode::BadArgs, "--tui cannot be combined with --list-models; use /models inside the TUI"});
+        return exit_code_for(pkchat::ErrorCode::BadArgs);
+    }
     if (options.repl && options.format != pkchat::cli::OutputFormat::Text) {
         print_error({pkchat::ErrorCode::BadArgs, "--repl currently supports --format text only"});
+        return exit_code_for(pkchat::ErrorCode::BadArgs);
+    }
+    if (options.tui && options.format != pkchat::cli::OutputFormat::Text) {
+        print_error({pkchat::ErrorCode::BadArgs, "--tui currently supports --format text only"});
+        return exit_code_for(pkchat::ErrorCode::BadArgs);
+    }
+    if (options.tui && !options.output_path.empty()) {
+        print_error({pkchat::ErrorCode::BadArgs, "--tui cannot be combined with --output"});
         return exit_code_for(pkchat::ErrorCode::BadArgs);
     }
     if (!options.key.empty() && !options.quiet) {
@@ -455,6 +474,11 @@ int main(int argc, char** argv) {
     }
     refresh_session_metadata(session, context);
     apply_system_prompt(session, context.options.system);
+
+    if (context.options.tui) {
+        return pkchat::tui::run(context, std::move(session));
+    }
+
     print_chat_start(context);
 
     if (context.options.repl) {

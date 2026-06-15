@@ -2,7 +2,7 @@
 
 `pkchat` is a fast, script-friendly command-line chat client for OpenAI and OpenAI-compatible APIs.
 
-Current status: v0.22 CLI with libcurl transport, `/v1/models`, `/v1/chat/completions`, a simple REPL, and JSON chat save/load.
+Current status: v0.3 CLI with libcurl transport, cancellable runtime jobs, `/v1/models`, `/v1/chat/completions`, a simple REPL, a full-screen non-blocking TUI foundation, and JSON chat save/load.
 
 ## Build
 
@@ -36,6 +36,7 @@ LM Studio profile:
 
 ```sh
 ./pkchat lmstudio -i
+./pkchat --tui lmstudio
 ./pkchat --provider lm_studio -m MODEL -p "Hello from LM Studio"
 ./pkchat --provider lmstudio --list-models
 ```
@@ -77,6 +78,15 @@ Interactive REPL and chat files:
 
 In REPL mode, commands include `/help`, `/quit`, `/save PATH`, `/load PATH`, `/clear`, `/system TEXT`, and `/model MODEL`. Prompts and status are written to `stderr`; assistant replies remain on `stdout`.
 
+Full-screen TUI foundation:
+
+```sh
+./pkchat --tui http://localhost:30000 -m MODEL
+./pkchat --tui lmstudio
+```
+
+The TUI keeps model requests, `/models`, `/save`, and `/load` behind runtime jobs so the terminal loop stays responsive. The input area is multi-line: `Enter` sends, `Alt+Enter` or `Esc` then `Enter` inserts a newline, and `Ctrl+S` sends the current multiline draft. `Ctrl+C` cancels the active job, or exits when no job is active. The first screen shows the chat endpoint and selected model.
+
 Verbose timing:
 
 ```sh
@@ -89,7 +99,7 @@ Verbose timing:
 
 - `stdout` is model output in text mode.
 - `stderr` is used for warnings, status, and errors.
-- Chat startup status prints the chat endpoint and selected model to `stderr` unless `--quiet` is set.
+- Chat startup status prints the chat endpoint and selected model to `stderr` unless `--quiet` is set. In `--tui`, the same information is shown in the full-screen header.
 - `--format json` returns one JSON object.
 - `--format ndjson` returns streaming-style events.
 - `--save-chat PATH` writes a JSON chat file atomically with restrictive permissions.
@@ -116,7 +126,7 @@ Run the full local suite:
 make test
 ```
 
-The integration test starts a local mock OpenAI-compatible server and verifies model listing, non-streaming chat, streaming chat, JSON output, NDJSON output, chat save/load, and REPL mode.
+The integration test starts a local mock OpenAI-compatible server and verifies model listing, non-streaming chat, streaming chat, JSON output, NDJSON output, chat save/load, and REPL mode. Unit tests cover the runtime event queue/job cancellation and `--tui` parsing.
 
 For leak and sanitizer checks:
 

@@ -5,6 +5,7 @@
 #include <vector>
 
 #include "common.hpp"
+#include "runtime/runtime.hpp"
 
 namespace pkchat::http {
 
@@ -20,6 +21,7 @@ struct Request {
     std::string proxy;
     bool insecure_tls = false;
     bool trace = false;
+    runtime::CancellationToken cancellation;
     BodyCallback on_body;
 };
 

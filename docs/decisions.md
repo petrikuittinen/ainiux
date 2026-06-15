@@ -16,3 +16,13 @@ The initial implementation uses C++17 and a plain Makefile to keep the binary po
 ## JSON Chat Persistence
 
 v0.2 stores explicit chat files via `--save-chat PATH` and `--load-chat PATH` before adding automatic XDG chat IDs. This keeps the early REPL scriptable and reviewable while still using the target schema fields: `schema_version`, timestamps, provider, base URL, model, settings, messages, attachments, usage, and compaction events. Saves use a temporary file, fsync, rename, and restrictive file permissions.
+
+## Runtime Jobs
+
+v0.3 introduces `src/runtime/` with a small cancellation token, thread-safe event queue, and RAII `JobHandle`. The first users are the full-screen TUI foundation and cancellable provider requests. HTTP requests carry a cancellation token down to libcurl and abort through `CURLOPT_XFERINFOFUNCTION`, returning `PKCHAT_ERR_CANCELLED` instead of a generic transport error.
+
+The initial model is one worker thread per active job. It is intentionally small: the owning UI loop receives events and remains the only code that mutates terminal/session state. This can grow into a queue or pooled runtime when TUI/web workloads need it.
+
+## Full-Screen TUI Foundation
+
+v0.3 adds `--tui` as an alternate-screen terminal UI without adding an ncurses dependency yet. The TUI renders endpoint/model status, chat history, a status line, and an input line. Chat requests, model listing, and chat save/load run as runtime jobs so terminal input remains responsive, and `Ctrl+C` cancels the active job.
