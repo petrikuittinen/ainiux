@@ -27,6 +27,11 @@ struct RenderedPanel {
     CursorPoint cursor;
 };
 
+enum class VerticalMovementMode {
+    LogicalLine,
+    VisualRow,
+};
+
 class PieceTable {
    public:
     static PieceTable from_string(std::string original);
@@ -81,6 +86,7 @@ struct EditorState {
     size_t scroll_column = 0;
     std::string path;
     bool dirty = false;
+    VerticalMovementMode vertical_movement = VerticalMovementMode::LogicalLine;
 
     static EditorState from_text(std::string content);
 
@@ -91,6 +97,10 @@ struct EditorState {
     void move_right();
     void move_up();
     void move_down();
+    void move_up(const Rect& rect);
+    void move_down(const Rect& rect);
+    void move_up_visual(const Rect& rect);
+    void move_down_visual(const Rect& rect);
     void move_home();
     void move_end();
     void ensure_cursor_visible(const Rect& rect);

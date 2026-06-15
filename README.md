@@ -85,7 +85,7 @@ Standalone multiline editor:
 ./pkchat --editor draft.txt --output saved-draft.txt
 ```
 
-The editor is a permanent bonus mode and a test bed for the future TUI input box. It uses a piece table buffer and a rectangular panel renderer, so the same core can support large files and multiple editor panels in one terminal window. Long lines soft-wrap inside the panel. Controls: arrows move, Home/End jump within the line, Backspace/Delete remove text, `Enter` inserts a newline, `Ctrl+S` saves, and `Ctrl+Q` or `Ctrl+C` exits.
+The editor is a permanent bonus mode and a test bed for the future TUI input box. It uses a piece table buffer and a rectangular panel renderer, so the same core can support large files and multiple editor panels in one terminal window. Long lines soft-wrap inside the panel. The standalone file editor keeps logical-line up/down movement by default, while the component also exposes visual-row movement across soft-wrapped overflow rows for TUI chat input. Controls: arrows move, Home/End jump within the line, Backspace/Delete remove text, `Enter` inserts a newline, `Ctrl+S` saves, and `Ctrl+Q` or `Ctrl+C` exits.
 
 Full-screen TUI foundation:
 
@@ -135,7 +135,7 @@ Run the full local suite:
 make test
 ```
 
-The integration test starts a local mock OpenAI-compatible server and verifies model listing, non-streaming chat, streaming chat, JSON output, NDJSON output, chat save/load, and REPL mode. Unit tests cover the runtime event queue/job cancellation, `--tui` and `--editor` parsing, editor piece-table edits, rectangular panel rendering, editor word wrapping, and editor file round-trips.
+The integration test starts a local mock OpenAI-compatible server and verifies model listing, non-streaming chat, streaming chat, JSON output, NDJSON output, chat save/load, and REPL mode. Unit tests cover the runtime event queue/job cancellation, `--tui` and `--editor` parsing, editor piece-table edits, rectangular panel rendering, editor word wrapping, editor vertical navigation modes, and editor file round-trips.
 
 For leak and sanitizer checks:
 

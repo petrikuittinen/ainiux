@@ -194,6 +194,61 @@ std::string display_range(const std::string& text, size_t start, size_t end, siz
     return out;
 }
 
+
+size_t byte_offset_for_range_column(const std::string& text, size_t start, size_t end, size_t target_column) {
+    size_t column = 0;
+    size_t pos = start;
+    const size_t limit = std::min(end, text.size());
+    while (pos < limit) {
+        const unsigned char ch = static_cast<unsigned char>(text[pos]);
+        const size_t width = display_width_at(text, pos, column);
+        if (column + width > target_column) {
+            break;
+        }
+        const size_t len = utf8_len(ch, text.size() - pos);
+        column += width;
+        pos += len;
+    }
+    return pos;
+}
+
+struct WrappedLocation {
+    size_t line = 0;
+    size_t segment = 0;
+};
+
+WrappedLocation wrapped_location_for_offset(const PieceTable& text, size_t offset, size_t width) {
+    width = std::max<size_t>(1, width);
+    const size_t line = text.line_for_offset(offset);
+    const std::string line_text_value = text.line_text(line);
+    const size_t line_start = text.line_start(line);
+    const size_t local_offset = std::min(offset - line_start, line_text_value.size());
+    const std::vector<WrapSegment> segments = wrap_line_segments(line_text_value, width);
+
+    for (size_t i = 0; i < segments.size(); ++i) {
+        const WrapSegment& segment = segments[i];
+        if (local_offset < segment.end || i + 1 == segments.size()) {
+            return {line, i};
+        }
+        if (local_offset == segment.end && i + 1 < segments.size()) {
+            continue;
+        }
+    }
+    return {line, 0};
+}
+
+size_t offset_for_wrapped_location(const PieceTable& text,
+                                   size_t line,
+                                   size_t segment_index,
+                                   size_t column,
+                                   size_t width) {
+    width = std::max<size_t>(1, width);
+    const std::string line_text_value = text.line_text(line);
+    const std::vector<WrapSegment> segments = wrap_line_segments(line_text_value, width);
+    const WrapSegment& segment = segments[std::min(segment_index, segments.size() - 1)];
+    return text.line_start(line) + byte_offset_for_range_column(line_text_value, segment.start, segment.end, column);
+}
+
 std::string pad_or_clip_ascii(const std::string& text, int width) {
     if (width <= 0) {
         return "";
@@ -688,6 +743,51 @@ void EditorState::move_down() {
         return;
     }
     cursor = text.offset_for_line_column(line + 1, preferred_column);
+}
+
+void EditorState::move_up(const Rect& rect) {
+    if (vertical_movement == VerticalMovementMode::VisualRow) {
+        move_up_visual(rect);
+        return;
+    }
+    move_up();
+}
+
+void EditorState::move_down(const Rect& rect) {
+    if (vertical_movement == VerticalMovementMode::VisualRow) {
+        move_down_visual(rect);
+        return;
+    }
+    move_down();
+}
+
+void EditorState::move_up_visual(const Rect& rect) {
+    const size_t width = static_cast<size_t>(std::max(1, rect.width));
+    const WrappedLocation location = wrapped_location_for_offset(text, cursor, width);
+    if (location.segment > 0) {
+        cursor = offset_for_wrapped_location(text, location.line, location.segment - 1, preferred_column, width);
+        return;
+    }
+    if (location.line == 0) {
+        return;
+    }
+    const size_t previous_line = location.line - 1;
+    const size_t previous_rows = wrapped_row_count(text.line_text(previous_line), width);
+    cursor = offset_for_wrapped_location(text, previous_line, previous_rows - 1, preferred_column, width);
+}
+
+void EditorState::move_down_visual(const Rect& rect) {
+    const size_t width = static_cast<size_t>(std::max(1, rect.width));
+    const WrappedLocation location = wrapped_location_for_offset(text, cursor, width);
+    const size_t current_rows = wrapped_row_count(text.line_text(location.line), width);
+    if (location.segment + 1 < current_rows) {
+        cursor = offset_for_wrapped_location(text, location.line, location.segment + 1, preferred_column, width);
+        return;
+    }
+    if (location.line + 1 >= text.line_count()) {
+        return;
+    }
+    cursor = offset_for_wrapped_location(text, location.line + 1, 0, preferred_column, width);
 }
 
 void EditorState::move_home() {

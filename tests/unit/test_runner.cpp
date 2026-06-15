@@ -138,6 +138,33 @@ void test_editor_word_wrap_breaks_on_spaces() {
     check(rendered.lines[1] == "beta    ", "editor continues after the wrapped word break");
 }
 
+void test_editor_vertical_navigation_modes() {
+    pkchat::editor::Rect rect{1, 1, 3, 4};
+    pkchat::editor::EditorState logical = pkchat::editor::EditorState::from_text("abcdefghij\nXYZ");
+    logical.cursor = logical.text.offset_for_line_column(0, 2);
+    logical.preferred_column = 2;
+    logical.move_down(rect);
+    check(logical.cursor == logical.text.offset_for_line_column(1, 2),
+          "editor default vertical movement uses logical lines");
+
+    pkchat::editor::EditorState visual = pkchat::editor::EditorState::from_text("abcdefghij\nXYZ");
+    visual.vertical_movement = pkchat::editor::VerticalMovementMode::VisualRow;
+    visual.cursor = visual.text.offset_for_line_column(0, 2);
+    visual.preferred_column = 2;
+    visual.move_down(rect);
+    check(visual.cursor == visual.text.line_start(0) + 6,
+          "editor visual movement moves to wrapped row below within the same line");
+    visual.move_down(rect);
+    check(visual.cursor == visual.text.line_start(0) + 10,
+          "editor visual movement moves to final short wrapped row");
+    visual.move_down(rect);
+    check(visual.cursor == visual.text.offset_for_line_column(1, 2),
+          "editor visual movement crosses to next hard line after wrapped rows");
+    visual.move_up(rect);
+    check(visual.cursor == visual.text.line_start(0) + 10,
+          "editor visual movement moves back up into previous line wrap overflow");
+}
+
 void test_editor_file_round_trip() {
     const std::string path = "build/unit-editor.txt";
     pkchat::editor::PieceTable table = pkchat::editor::PieceTable::from_string("first\nsecond");
@@ -306,6 +333,7 @@ int main() {
     test_editor_rectangular_rendering();
     test_editor_word_wrap_rendering();
     test_editor_word_wrap_breaks_on_spaces();
+    test_editor_vertical_navigation_modes();
     test_editor_file_round_trip();
     if (failures != 0) {
         std::cerr << failures << " unit test(s) failed\n";
