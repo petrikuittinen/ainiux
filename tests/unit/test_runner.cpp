@@ -9,6 +9,7 @@
 
 #include "chat/session.hpp"
 #include "cli/args.hpp"
+#include "editor/editor.hpp"
 #include "json/json.hpp"
 #include "provider/provider.hpp"
 #include "runtime/runtime.hpp"
@@ -59,6 +60,67 @@ void test_cli_tui_parse() {
     check(parsed.error.ok(), "TUI args parse");
     check(parsed.options.tui, "TUI flag parsed");
     check(parsed.options.positional_url == "lmstudio", "TUI positional profile parsed");
+}
+
+void test_cli_editor_parse() {
+    const char* argv[] = {"pkchat", "--editor", "notes.txt", "--output", "saved.txt"};
+    pkchat::cli::ParseResult parsed = pkchat::cli::parse_args(5, const_cast<char**>(argv));
+    check(parsed.error.ok(), "editor args parse");
+    check(parsed.options.editor, "editor flag parsed");
+    check(parsed.options.positional_url == "notes.txt", "editor positional file parsed");
+    check(parsed.options.output_path == "saved.txt", "editor save-as output parsed");
+}
+
+void test_editor_piece_table_edits() {
+    pkchat::editor::PieceTable table = pkchat::editor::PieceTable::from_string("alpha\nbeta\ngamma");
+    check(table.size() == 16, "piece table initial size");
+    check(table.line_count() == 3, "piece table initial line count");
+    check(table.line_text(1) == "beta", "piece table line text");
+
+    pkchat::Error err = table.insert(6, "wide\n");
+    check(err.ok(), "piece table insert succeeds");
+    check(table.str() == "alpha\nwide\nbeta\ngamma", "piece table insert preserves text");
+    check(table.line_count() == 4, "piece table insert updates line count");
+
+    err = table.erase(6, 5);
+    check(err.ok(), "piece table erase succeeds");
+    check(table.str() == "alpha\nbeta\ngamma", "piece table erase restores text");
+
+    err = table.insert(table.size(), "\nlast");
+    check(err.ok(), "piece table append succeeds");
+    check(table.line_text(3) == "last", "piece table append line text");
+}
+
+void test_editor_rectangular_rendering() {
+    pkchat::editor::EditorState state = pkchat::editor::EditorState::from_text("one\ntwo\nthree");
+    pkchat::editor::Rect rect{4, 10, 2, 4};
+    state.cursor = state.text.offset_for_line_column(1, 1);
+    pkchat::editor::RenderedPanel rendered = state.render(rect);
+    check(rendered.lines.size() == 2, "editor panel respects height");
+    check(rendered.lines[0] == "one ", "editor panel pads first visible line");
+    check(rendered.lines[1] == "two ", "editor panel pads second visible line");
+    check(rendered.cursor.visible, "editor cursor visible in panel");
+    check(rendered.cursor.row == 1 && rendered.cursor.col == 1, "editor cursor maps to panel coordinates");
+
+    state.cursor = state.text.offset_for_line_column(2, 3);
+    state.ensure_cursor_visible(rect);
+    rendered = state.render(rect);
+    check(state.scroll_line == 1, "editor vertical scroll follows cursor");
+    check(rendered.lines[0] == "two ", "editor scrolled first line");
+    check(rendered.lines[1] == "thre", "editor clips to panel width");
+    check(rendered.cursor.visible && rendered.cursor.row == 1 && rendered.cursor.col == 3,
+          "editor cursor remains visible after scroll");
+}
+
+void test_editor_file_round_trip() {
+    const std::string path = "build/unit-editor.txt";
+    pkchat::editor::PieceTable table = pkchat::editor::PieceTable::from_string("first\nsecond");
+    pkchat::Error err = pkchat::editor::save_file(path, table);
+    check(err.ok(), "editor file saves");
+    pkchat::editor::PieceTable loaded;
+    err = pkchat::editor::load_file(path, loaded);
+    check(err.ok(), "editor file loads");
+    check(loaded.str() == "first\nsecond", "editor file round trip preserves text");
 }
 
 void test_cli_rejects_unknown() {
@@ -204,6 +266,7 @@ int main() {
     test_cli_provider_shortcut_parse();
     test_cli_repl_parse();
     test_cli_tui_parse();
+    test_cli_editor_parse();
     test_url_normalization();
     test_json_parse();
     test_lmstudio_context();
@@ -213,6 +276,9 @@ int main() {
     test_chat_session_json_round_trip();
     test_chat_session_rejects_corrupt_json();
     test_runtime_event_queue_and_job_cancel();
+    test_editor_piece_table_edits();
+    test_editor_rectangular_rendering();
+    test_editor_file_round_trip();
     if (failures != 0) {
         std::cerr << failures << " unit test(s) failed\n";
         return 1;

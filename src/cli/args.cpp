@@ -115,6 +115,8 @@ ParseResult parse_args(int argc, char** argv) {
             opts.repl = true;
         } else if (arg == "--tui") {
             opts.tui = true;
+        } else if (arg == "--editor") {
+            opts.editor = true;
         } else if (needs_value(opt)) {
             if (auto err = take_value()) {
                 return {opts, *err};
@@ -217,6 +219,7 @@ Usage:
   pkchat --list-models [BASE_URL|PROFILE] [options]
   pkchat --repl [BASE_URL|PROFILE] [options]
   pkchat --tui [BASE_URL|PROFILE] [options]
+  pkchat --editor [PATH] [--output PATH]
 
 Examples:
   pkchat http://localhost:8000 -p "What is the capital of Norway?"
@@ -227,6 +230,7 @@ Examples:
   pkchat openrouter -model MODEL -i
   pkchat lmstudio -i
   pkchat --tui lmstudio
+  pkchat --editor notes.txt
   pkchat --prompt-file prompt.txt --system-file system.txt --format json
   pkchat --repl --load-chat chat.json --save-chat chat.json
 
@@ -244,6 +248,7 @@ Options:
       --output PATH
       --repl, -i                Start a simple line-oriented interactive chat.
       --tui                     Start the full-screen non-blocking terminal UI foundation.
+      --editor                  Start the standalone multiline editor.
       --save-chat PATH          Save JSON chat history after a successful reply.
       --load-chat PATH          Load JSON chat history before sending.
       --provider NAME           openai, openrouter, custom_openai_chat, lm_studio

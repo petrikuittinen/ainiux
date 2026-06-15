@@ -2,7 +2,7 @@
 
 `pkchat` is a fast, script-friendly command-line chat client for OpenAI and OpenAI-compatible APIs.
 
-Current status: v0.3 CLI with libcurl transport, cancellable runtime jobs, `/v1/models`, `/v1/chat/completions`, a simple REPL, a full-screen non-blocking TUI foundation, and JSON chat save/load.
+Current status: v0.3 CLI with libcurl transport, cancellable runtime jobs, `/v1/models`, `/v1/chat/completions`, a simple REPL, a standalone `--editor` mode, a full-screen non-blocking TUI foundation, and JSON chat save/load.
 
 ## Build
 
@@ -78,6 +78,15 @@ Interactive REPL and chat files:
 
 In REPL mode, commands include `/help`, `/quit`, `/save PATH`, `/load PATH`, `/clear`, `/system TEXT`, and `/model MODEL`. Prompts and status are written to `stderr`; assistant replies remain on `stdout`.
 
+Standalone multiline editor:
+
+```sh
+./pkchat --editor notes.txt
+./pkchat --editor draft.txt --output saved-draft.txt
+```
+
+The editor is a permanent bonus mode and a test bed for the future TUI input box. It uses a piece table buffer and a rectangular panel renderer, so the same core can support large files and multiple editor panels in one terminal window. Controls: arrows move, Home/End jump within the line, Backspace/Delete remove text, `Enter` inserts a newline, `Ctrl+S` saves, and `Ctrl+Q` or `Ctrl+C` exits.
+
 Full-screen TUI foundation:
 
 ```sh
@@ -126,7 +135,7 @@ Run the full local suite:
 make test
 ```
 
-The integration test starts a local mock OpenAI-compatible server and verifies model listing, non-streaming chat, streaming chat, JSON output, NDJSON output, chat save/load, and REPL mode. Unit tests cover the runtime event queue/job cancellation and `--tui` parsing.
+The integration test starts a local mock OpenAI-compatible server and verifies model listing, non-streaming chat, streaming chat, JSON output, NDJSON output, chat save/load, and REPL mode. Unit tests cover the runtime event queue/job cancellation, `--tui` and `--editor` parsing, editor piece-table edits, rectangular panel rendering, and editor file round-trips.
 
 For leak and sanitizer checks:
 
@@ -141,3 +150,5 @@ If Valgrind is not installed, `make leak-check` falls back to the sanitizer test
 
 - Streaming responses are parsed incrementally as SSE through libcurl write callbacks.
 - The JSON facade is intentionally small and scoped to the current CLI/provider needs.
+- The editor preserves UTF-8 bytes and moves across UTF-8 code units safely, but full grapheme cluster and East Asian cell-width handling still belongs in the planned Unicode module.
+- The chat TUI is still a foundation; the standalone editor exists so multiline editing can be hardened before replacing the TUI input box.

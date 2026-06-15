@@ -26,3 +26,10 @@ The initial model is one worker thread per active job. It is intentionally small
 ## Full-Screen TUI Foundation
 
 v0.3 adds `--tui` as an alternate-screen terminal UI without adding an ncurses dependency yet. The TUI renders endpoint/model status, chat history, a status line, and an input line. Chat requests, model listing, and chat save/load run as runtime jobs so terminal input remains responsive, and `Ctrl+C` cancels the active job.
+
+
+## Standalone Editor Foundation
+
+`--editor` is a permanent bonus mode and a controlled test bed for the multiline editing layer needed by the chat TUI. The editor core uses a piece table: the original file and appended edit buffer are kept separately while visible text is represented by pieces. This keeps inserts and deletes local to the piece list instead of rewriting the whole buffer on every keystroke, which is a better fit for large files than a single mutable string.
+
+Rendering is split from terminal I/O. `EditorState` renders into a caller-provided `Rect`, so one terminal window can eventually host multiple editor panels or embed the editor in a partial-screen chat layout. The current terminal harness uses POSIX `termios` and ANSI escape sequences because `ncursesw` was not available in the build environment; the core renderer is independent of that choice.

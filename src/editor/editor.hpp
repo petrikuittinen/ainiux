@@ -1,0 +1,111 @@
+#pragma once
+
+#include <cstddef>
+#include <iosfwd>
+#include <string>
+#include <vector>
+
+#include "common.hpp"
+
+namespace pkchat::editor {
+
+struct Rect {
+    int row = 1;
+    int col = 1;
+    int height = 1;
+    int width = 1;
+};
+
+struct CursorPoint {
+    int row = 0;
+    int col = 0;
+    bool visible = false;
+};
+
+struct RenderedPanel {
+    std::vector<std::string> lines;
+    CursorPoint cursor;
+};
+
+class PieceTable {
+   public:
+    static PieceTable from_string(std::string original);
+
+    size_t size() const { return total_size_; }
+    bool empty() const { return total_size_ == 0; }
+    std::string str() const;
+    Error write_to(std::ostream& out) const;
+
+    char char_at(size_t pos) const;
+    Error insert(size_t pos, const std::string& text);
+    Error erase(size_t pos, size_t count);
+
+    size_t previous_char_offset(size_t pos) const;
+    size_t next_char_offset(size_t pos) const;
+
+    size_t line_count() const;
+    size_t line_start(size_t line) const;
+    size_t line_length(size_t line) const;
+    size_t line_for_offset(size_t offset) const;
+    size_t display_column_for_offset(size_t offset) const;
+    size_t offset_for_line_column(size_t line, size_t display_column) const;
+    std::string line_text(size_t line) const;
+
+   private:
+    enum class Source { Original, Add };
+
+    struct Piece {
+        Source source = Source::Original;
+        size_t start = 0;
+        size_t length = 0;
+    };
+
+    const std::string& source_for(const Piece& piece) const;
+    void append_range(std::string& out, size_t start, size_t length) const;
+    void invalidate_line_cache();
+    void rebuild_line_cache() const;
+
+    std::string original_;
+    std::string add_;
+    std::vector<Piece> pieces_;
+    size_t total_size_ = 0;
+    mutable bool line_cache_valid_ = false;
+    mutable std::vector<size_t> line_starts_;
+};
+
+struct EditorState {
+    PieceTable text;
+    size_t cursor = 0;
+    size_t preferred_column = 0;
+    size_t scroll_line = 0;
+    size_t scroll_column = 0;
+    std::string path;
+    bool dirty = false;
+
+    static EditorState from_text(std::string content);
+
+    Error insert(const std::string& value);
+    Error erase_before_cursor();
+    Error erase_at_cursor();
+    void move_left();
+    void move_right();
+    void move_up();
+    void move_down();
+    void move_home();
+    void move_end();
+    void ensure_cursor_visible(const Rect& rect);
+    RenderedPanel render(const Rect& rect) const;
+};
+
+RenderedPanel render_panel(const PieceTable& text,
+                           const Rect& rect,
+                           size_t cursor,
+                           size_t scroll_line,
+                           size_t scroll_column);
+
+Error load_file(const std::string& path, PieceTable& out);
+Error save_file(const std::string& path, const PieceTable& text);
+
+int run_editor(const std::string& path, const std::string& save_as);
+
+}  // namespace pkchat::editor

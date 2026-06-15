@@ -164,7 +164,7 @@ Create a minimal but clean project skeleton that builds a `pkchat` binary, gives
 
 ## Goal
 
-Implementation note (2026-06-15): v0.3 is now present. The CLI supports model listing, Chat Completions, LM Studio aliases, OpenRouter defaults, text/JSON/NDJSON output, credential lookup, provider shortcuts, a simple REPL, JSON chat persistence, a cancellable runtime/job layer, a non-blocking full-screen TUI foundation, a libcurl RAII transport, incremental SSE streaming, mock-server integration tests, sanitizer checks, and Valgrind leak checks. Remaining hardening is tracked in TODO.md: expand JSON handling, add broader error-path and credential-redaction tests, and continue v0.2 persistence work such as XDG chat IDs and chat listing.
+Implementation note (2026-06-15): v0.3 is now present. The CLI supports model listing, Chat Completions, LM Studio aliases, OpenRouter defaults, text/JSON/NDJSON output, credential lookup, provider shortcuts, a simple REPL, JSON chat persistence, a standalone multiline `--editor` foundation, a cancellable runtime/job layer, a non-blocking full-screen TUI foundation, a libcurl RAII transport, incremental SSE streaming, mock-server integration tests, sanitizer checks, and Valgrind leak checks. Remaining hardening is tracked in TODO.md: expand JSON handling, add broader error-path and credential-redaction tests, and continue v0.2 persistence work such as XDG chat IDs and chat listing.
 
 
 Make `pkchat` useful from scripts and shells against `/v1/chat/completions` and `/v1/models`, including local LM Studio at `http://localhost:1234/v1`.

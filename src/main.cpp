@@ -7,6 +7,7 @@
 #include "chat/session.hpp"
 #include "cli/args.hpp"
 #include "common.hpp"
+#include "editor/editor.hpp"
 #include "json/json.hpp"
 #include "pkchat/version.hpp"
 #include "provider/provider.hpp"
@@ -377,6 +378,10 @@ int main(int argc, char** argv) {
         std::cout << "pkchat " << pkchat::kVersion << "\n";
         return 0;
     }
+    if (options.editor && (options.repl || options.tui)) {
+        print_error({pkchat::ErrorCode::BadArgs, "--editor cannot be combined with --repl or --tui"});
+        return exit_code_for(pkchat::ErrorCode::BadArgs);
+    }
     if (options.repl && options.tui) {
         print_error({pkchat::ErrorCode::BadArgs, "--repl cannot be combined with --tui"});
         return exit_code_for(pkchat::ErrorCode::BadArgs);
@@ -387,6 +392,10 @@ int main(int argc, char** argv) {
     }
     if (options.tui && options.list_models) {
         print_error({pkchat::ErrorCode::BadArgs, "--tui cannot be combined with --list-models; use /models inside the TUI"});
+        return exit_code_for(pkchat::ErrorCode::BadArgs);
+    }
+    if (options.editor && options.list_models) {
+        print_error({pkchat::ErrorCode::BadArgs, "--editor cannot be combined with --list-models"});
         return exit_code_for(pkchat::ErrorCode::BadArgs);
     }
     if (options.repl && options.format != pkchat::cli::OutputFormat::Text) {
@@ -400,6 +409,22 @@ int main(int argc, char** argv) {
     if (options.tui && !options.output_path.empty()) {
         print_error({pkchat::ErrorCode::BadArgs, "--tui cannot be combined with --output"});
         return exit_code_for(pkchat::ErrorCode::BadArgs);
+    }
+    if (options.editor && options.format != pkchat::cli::OutputFormat::Text) {
+        print_error({pkchat::ErrorCode::BadArgs, "--editor does not use --format"});
+        return exit_code_for(pkchat::ErrorCode::BadArgs);
+    }
+    if (options.editor && (!options.prompt.empty() || !options.prompt_file.empty() ||
+                           !options.system.empty() || !options.system_file.empty())) {
+        print_error({pkchat::ErrorCode::BadArgs, "--editor cannot be combined with prompt or system options"});
+        return exit_code_for(pkchat::ErrorCode::BadArgs);
+    }
+    if (options.editor && (!options.load_chat_path.empty() || !options.save_chat_path.empty())) {
+        print_error({pkchat::ErrorCode::BadArgs, "--editor cannot be combined with --load-chat or --save-chat"});
+        return exit_code_for(pkchat::ErrorCode::BadArgs);
+    }
+    if (options.editor) {
+        return pkchat::editor::run_editor(options.positional_url, options.output_path);
     }
     if (!options.key.empty() && !options.quiet) {
         std::cerr << "Warning: command line API keys may be visible to other local users; prefer --key-env, --key-file, or --key-stdin.\n";

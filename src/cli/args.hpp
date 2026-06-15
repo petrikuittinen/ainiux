@@ -24,6 +24,7 @@ struct Options {
     bool key_stdin = false;
     bool repl = false;
     bool tui = false;
+    bool editor = false;
 
     std::string positional_url;
     std::string prompt;
