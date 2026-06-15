@@ -13,6 +13,7 @@
 #include "json/json.hpp"
 #include "provider/provider.hpp"
 #include "runtime/runtime.hpp"
+#include "tui/tui.hpp"
 
 namespace {
 
@@ -176,6 +177,20 @@ void test_editor_file_round_trip() {
     check(loaded.str() == "first\nsecond", "editor file round trip preserves text");
 }
 
+void test_tui_layout_reserves_editor_input_panel() {
+    pkchat::tui::Layout small = pkchat::tui::layout_for_terminal(8, 20);
+    check(small.rows == 8 && small.cols == 20, "TUI layout clamps to requested small terminal");
+    check(small.history_rows >= 1, "TUI layout leaves room for chat history");
+    check(small.input_rect.height == 3, "TUI layout keeps minimum multiline input height");
+    check(small.input_rect.row + small.input_rect.height - 1 <= small.rows,
+          "TUI input panel stays inside terminal rows");
+
+    pkchat::tui::Layout large = pkchat::tui::layout_for_terminal(40, 100);
+    check(large.input_rect.height == 8, "TUI layout uses one fifth of a large terminal for input");
+    check(large.input_rect.width == 100, "TUI input panel tracks terminal width");
+    check(large.history_rows > large.input_rect.height, "TUI layout keeps the editor from taking the full screen");
+}
+
 void test_cli_rejects_unknown() {
     const char* argv[] = {"pkchat", "--bogus"};
     pkchat::cli::ParseResult parsed = pkchat::cli::parse_args(2, const_cast<char**>(argv));
@@ -335,6 +350,7 @@ int main() {
     test_editor_word_wrap_breaks_on_spaces();
     test_editor_vertical_navigation_modes();
     test_editor_file_round_trip();
+    test_tui_layout_reserves_editor_input_panel();
     if (failures != 0) {
         std::cerr << failures << " unit test(s) failed\n";
         return 1;

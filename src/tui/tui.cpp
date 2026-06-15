@@ -14,6 +14,26 @@
 #include "runtime/runtime.hpp"
 
 namespace pkchat::tui {
+
+Layout layout_for_terminal(int terminal_rows, int terminal_cols) {
+    Layout layout;
+    layout.rows = std::max(8, terminal_rows);
+    layout.cols = std::max(20, terminal_cols);
+    layout.header_rows = 2;
+
+    const int fixed_without_input = layout.header_rows + 1 + 1 + 1;
+    const int max_input_height = std::max(1, layout.rows - fixed_without_input);
+    int input_height = std::max(3, layout.rows / 5);
+    input_height = std::min(input_height, max_input_height);
+
+    layout.history_row = layout.header_rows + 1;
+    layout.history_rows = std::max(1, layout.rows - layout.header_rows - 1 - 1 - input_height);
+    layout.status_row = layout.history_row + layout.history_rows;
+    layout.input_label_row = layout.status_row + 1;
+    layout.input_rect = editor::Rect{layout.input_label_row + 1, 1, input_height, layout.cols};
+    return layout;
+}
+
 namespace {
 
 int exit_code_for(ErrorCode code) {
@@ -125,7 +145,7 @@ class TerminalSession {
         }
         termios raw = original_;
         raw.c_lflag &= static_cast<tcflag_t>(~(ECHO | ICANON | IEXTEN | ISIG));
-        raw.c_iflag &= static_cast<tcflag_t>(~(IXON | ICRNL));
+        raw.c_iflag &= static_cast<tcflag_t>(~(IXON | ICRNL | BRKINT));
         raw.c_oflag &= static_cast<tcflag_t>(~OPOST);
         raw.c_cc[VMIN] = 0;
         raw.c_cc[VTIME] = 0;
@@ -153,22 +173,19 @@ class TerminalSession {
     bool active_ = false;
 };
 
-size_t utf8_char_start(const std::string& text, size_t pos) {
-    if (pos == 0 || pos > text.size()) {
-        return 0;
+bool read_byte(unsigned char& out, int timeout_ms) {
+    fd_set read_fds;
+    FD_ZERO(&read_fds);
+    FD_SET(STDIN_FILENO, &read_fds);
+    timeval tv{};
+    tv.tv_sec = timeout_ms / 1000;
+    tv.tv_usec = (timeout_ms % 1000) * 1000;
+    const int ready = select(STDIN_FILENO + 1, &read_fds, nullptr, nullptr, &tv);
+    if (ready <= 0 || !FD_ISSET(STDIN_FILENO, &read_fds)) {
+        return false;
     }
-    size_t out = pos - 1;
-    while (out > 0 && (static_cast<unsigned char>(text[out]) & 0xC0U) == 0x80U) {
-        --out;
-    }
-    return out;
-}
-
-void pop_utf8_char(std::string& text) {
-    if (text.empty()) {
-        return;
-    }
-    text.erase(utf8_char_start(text, text.size()));
+    const ssize_t n = read(STDIN_FILENO, &out, 1);
+    return n == 1;
 }
 
 size_t utf8_len_at(const std::string& text, size_t pos) {
@@ -204,29 +221,64 @@ std::string clip_cells(const std::string& text, int width) {
     return take_cells(text, pos, width);
 }
 
+int displayed_cells(const std::string& text) {
+    int cells = 0;
+    size_t pos = 0;
+    while (pos < text.size()) {
+        if (text[pos] == '\n') {
+            break;
+        }
+        pos += utf8_len_at(text, pos);
+        ++cells;
+    }
+    return cells;
+}
+
 std::string pad_or_clip(const std::string& text, int width) {
     std::string out = clip_cells(text, width);
-    while (static_cast<int>(out.size()) < width) {
+    while (displayed_cells(out) < width) {
         out.push_back(' ');
     }
     return out;
 }
 
-void append_wrapped(std::vector<std::string>& lines, const std::string& text, int width) {
+void draw_line(int row, int cols, const std::string& text, bool inverse = false) {
+    std::cout << "\x1b[" << row << ";1H";
+    if (inverse) {
+        std::cout << "\x1b[7m";
+    }
+    std::cout << pad_or_clip(text, cols);
+    if (inverse) {
+        std::cout << "\x1b[0m";
+    }
+    std::cout << "\x1b[K";
+}
+
+void append_wrapped_line(std::vector<std::string>& lines, const std::string& logical, int width) {
     if (width <= 0) {
         lines.push_back("");
         return;
     }
-    size_t pos = 0;
-    if (text.empty()) {
+    if (logical.empty()) {
         lines.push_back("");
         return;
     }
-    while (pos < text.size()) {
-        lines.push_back(take_cells(text, pos, width));
+    size_t pos = 0;
+    while (pos < logical.size()) {
+        lines.push_back(take_cells(logical, pos, width));
     }
-    if (!text.empty() && text.back() == '\n') {
-        lines.push_back("");
+}
+
+void append_wrapped(std::vector<std::string>& lines, const std::string& text, int width) {
+    size_t start = 0;
+    while (start <= text.size()) {
+        const size_t newline = text.find('\n', start);
+        if (newline == std::string::npos) {
+            append_wrapped_line(lines, text.substr(start), width);
+            break;
+        }
+        append_wrapped_line(lines, text.substr(start, newline - start), width);
+        start = newline + 1;
     }
 }
 
@@ -244,130 +296,83 @@ std::string model_line(const provider::RequestContext& context) {
     return context.options.model.empty() ? "unknown" : context.options.model;
 }
 
-int cell_width(const std::string& text) {
-    int cells = 0;
-    size_t pos = 0;
-    while (pos < text.size()) {
-        if (text[pos] == '\n') {
-            break;
-        }
-        pos += utf8_len_at(text, pos);
-        ++cells;
-    }
-    return cells;
-}
-
-struct InputLayout {
-    std::vector<std::string> lines;
-    int cursor_line = 0;
-    int cursor_col = 2;
-};
-
-InputLayout input_layout(const std::string& input, int cols) {
-    InputLayout layout;
-    const int first_width = std::max(1, cols - 2);
-    const int continuation_width = std::max(1, cols - 2);
-    size_t pos = 0;
-    bool first_display_line = true;
-
-    auto append_logical_line = [&](const std::string& logical) {
-        size_t part_pos = 0;
-        const std::string first_prefix = first_display_line ? "> " : "  ";
-        const std::string continuation_prefix = "  ";
-        bool emitted = false;
-        while (part_pos < logical.size()) {
-            const std::string prefix = emitted ? continuation_prefix : first_prefix;
-            const int width = emitted ? continuation_width : first_width;
-            layout.lines.push_back(prefix + take_cells(logical, part_pos, width));
-            emitted = true;
-            first_display_line = false;
-        }
-        if (!emitted) {
-            layout.lines.push_back(first_prefix);
-            first_display_line = false;
-        }
-    };
-
-    if (input.empty()) {
-        layout.lines.push_back("> ");
-    } else {
-        while (pos <= input.size()) {
-            const size_t next = input.find('\n', pos);
-            if (next == std::string::npos) {
-                append_logical_line(input.substr(pos));
-                break;
-            }
-            append_logical_line(input.substr(pos, next - pos));
-            pos = next + 1;
-            if (pos == input.size()) {
-                append_logical_line("");
-                break;
-            }
-        }
-    }
-
-    layout.cursor_line = std::max(0, static_cast<int>(layout.lines.size()) - 1);
-    layout.cursor_col = std::min(cols, std::max(1, cell_width(layout.lines.back()) + 1));
-    return layout;
-}
-
-void render(const provider::RequestContext& context,
-            const chat::Session& session,
-            const std::string& input,
-            const std::string& status) {
-    const TuiSize size = terminal_size();
-    const int cols = std::max(20, size.cols);
-    const int rows = std::max(8, size.rows);
-    const InputLayout input_view = input_layout(input, cols);
-    const int max_input_rows = std::max(3, rows / 3);
-    const int input_rows = std::min(max_input_rows, std::max(3, static_cast<int>(input_view.lines.size())));
-    const int history_rows = std::max(1, rows - 3 - input_rows);
-
+std::vector<std::string> history_lines_for_session(const chat::Session& session, int cols) {
     std::vector<std::string> history;
+    const int min_content_width = 8;
     for (const provider::Message& message : session.messages) {
         const std::string prefix = message_label(message.role) + ": ";
         const std::string content = message.role == "assistant" && message.content.empty() ? "(waiting...)" : message.content;
         std::vector<std::string> wrapped;
-        append_wrapped(wrapped, content, std::max(1, cols - static_cast<int>(prefix.size())));
+        append_wrapped(wrapped, content, std::max(min_content_width, cols - static_cast<int>(prefix.size())));
         for (size_t i = 0; i < wrapped.size(); ++i) {
             history.push_back((i == 0 ? prefix : std::string(prefix.size(), ' ')) + wrapped[i]);
         }
     }
+    return history;
+}
 
-    std::cout << "\x1b[?25h\x1b[2J\x1b[H";
-    std::cout << pad_or_clip("pkchat TUI  Endpoint: " + context.chat_url, cols) << "\n";
-    std::cout << pad_or_clip("Model: " + model_line(context) + "  Enter sends | Alt+Enter newline | Ctrl+S sends | Ctrl+C cancels", cols) << "\n";
+editor::EditorState empty_input_editor() {
+    editor::EditorState input = editor::EditorState::from_text("");
+    input.vertical_movement = editor::VerticalMovementMode::VisualRow;
+    return input;
+}
 
-    const int start = history.size() > static_cast<size_t>(history_rows)
-                          ? static_cast<int>(history.size()) - history_rows
-                          : 0;
+void set_status_from_error(const Error& err, std::string& status) {
+    if (!err.ok()) {
+        status = error_line(err);
+    }
+}
+
+void insert_input(editor::EditorState& input, const std::string& text, std::string& status) {
+    set_status_from_error(input.insert(text), status);
+}
+
+void render(const provider::RequestContext& context,
+            const chat::Session& session,
+            editor::EditorState& input,
+            std::string& status,
+            int& history_scroll) {
+    const TuiSize terminal = terminal_size();
+    const Layout layout = layout_for_terminal(terminal.rows, terminal.cols);
+    const int cols = layout.cols;
+
+    input.ensure_cursor_visible(layout.input_rect);
+    const editor::RenderedPanel input_panel = input.render(layout.input_rect);
+    std::vector<std::string> history = history_lines_for_session(session, cols);
+    const int max_history_scroll = std::max(0, static_cast<int>(history.size()) - layout.history_rows);
+    history_scroll = std::min(std::max(0, history_scroll), max_history_scroll);
+
+    std::cout << "\x1b[?25l";
+    draw_line(1, cols, "pkchat TUI  Endpoint: " + context.chat_url);
+    draw_line(2, cols, "Model: " + model_line(context));
+
+    const int history_start = std::max(0, static_cast<int>(history.size()) - layout.history_rows - history_scroll);
     int printed = 0;
-    for (size_t i = static_cast<size_t>(start); i < history.size() && printed < history_rows; ++i, ++printed) {
-        std::cout << pad_or_clip(history[i], cols) << "\n";
+    for (int i = history_start; i < static_cast<int>(history.size()) && printed < layout.history_rows; ++i, ++printed) {
+        draw_line(layout.history_row + printed, cols, history[static_cast<size_t>(i)]);
     }
-    while (printed++ < history_rows) {
-        std::cout << std::string(cols, ' ') << "\n";
-    }
-
-    std::cout << "\x1b[7m" << pad_or_clip(status, cols) << "\x1b[0m\n";
-
-    const int input_start = input_view.lines.size() > static_cast<size_t>(input_rows)
-                                ? static_cast<int>(input_view.lines.size()) - input_rows
-                                : 0;
-    int input_printed = 0;
-    for (size_t i = static_cast<size_t>(input_start);
-         i < input_view.lines.size() && input_printed < input_rows;
-         ++i, ++input_printed) {
-        std::cout << pad_or_clip(input_view.lines[i], cols) << "\n";
-    }
-    while (input_printed++ < input_rows) {
-        std::cout << std::string(cols, ' ') << "\n";
+    while (printed < layout.history_rows) {
+        draw_line(layout.history_row + printed, cols, "");
+        ++printed;
     }
 
-    const int visible_cursor_line = std::max(0, input_view.cursor_line - input_start);
-    const int cursor_row = 2 + history_rows + 1 + std::min(visible_cursor_line, input_rows - 1) + 1;
-    const int cursor_col = std::min(cols, std::max(1, input_view.cursor_col));
-    std::cout << "\x1b[" << cursor_row << ";" << cursor_col << "H";
+    draw_line(layout.status_row, cols, status, true);
+    draw_line(layout.input_label_row,
+              cols,
+              "Input  Enter send | Alt+Enter newline | arrows edit | PageUp/PageDown scroll | Ctrl+C cancel/quit",
+              true);
+
+    for (int row = 0; row < layout.input_rect.height; ++row) {
+        const std::string line = row < static_cast<int>(input_panel.lines.size())
+                                     ? input_panel.lines[static_cast<size_t>(row)]
+                                     : std::string();
+        draw_line(layout.input_rect.row + row, cols, line);
+    }
+
+    const int cursor_row = input_panel.cursor.visible ? layout.input_rect.row + input_panel.cursor.row : layout.input_rect.row;
+    const int cursor_col = input_panel.cursor.visible ? layout.input_rect.col + input_panel.cursor.col : layout.input_rect.col;
+    std::cout << "\x1b[" << std::min(layout.rows, std::max(1, cursor_row)) << ";"
+              << std::min(cols, std::max(1, cursor_col)) << "H\x1b[?25h";
     std::cout.flush();
 }
 
@@ -400,6 +405,58 @@ std::string join_models_preview(const std::vector<std::string>& models) {
     return out;
 }
 
+bool is_escape_final(unsigned char ch) {
+    return (ch >= 'A' && ch <= 'Z') || ch == '~';
+}
+
+void handle_escape(editor::EditorState& input, const Layout& layout, int& history_scroll, std::string& status) {
+    unsigned char ch = 0;
+    if (!read_byte(ch, 25)) {
+        return;
+    }
+    if (ch == '\r' || ch == '\n') {
+        insert_input(input, "\n", status);
+        status = "Inserted newline. Enter sends; Ctrl+S also sends.";
+        return;
+    }
+
+    std::string sequence;
+    if (ch == '[' || ch == 'O') {
+        sequence.push_back(static_cast<char>(ch));
+        while (sequence.size() < 16 && read_byte(ch, 25)) {
+            sequence.push_back(static_cast<char>(ch));
+            if (is_escape_final(ch)) {
+                break;
+            }
+        }
+    } else {
+        if (ch >= 32 || ch == '\t') {
+            insert_input(input, std::string(1, static_cast<char>(ch)), status);
+        }
+        return;
+    }
+
+    if (sequence == "[A" || sequence == "OA") {
+        input.move_up(layout.input_rect);
+    } else if (sequence == "[B" || sequence == "OB") {
+        input.move_down(layout.input_rect);
+    } else if (sequence == "[C" || sequence == "OC") {
+        input.move_right();
+    } else if (sequence == "[D" || sequence == "OD") {
+        input.move_left();
+    } else if (sequence == "[H" || sequence == "[1~" || sequence == "OH") {
+        input.move_home();
+    } else if (sequence == "[F" || sequence == "[4~" || sequence == "OF") {
+        input.move_end();
+    } else if (sequence == "[3~") {
+        set_status_from_error(input.erase_at_cursor(), status);
+    } else if (sequence == "[5~") {
+        history_scroll += std::max(1, layout.history_rows / 2);
+    } else if (sequence == "[6~") {
+        history_scroll -= std::max(1, layout.history_rows / 2);
+    }
+}
+
 }  // namespace
 
 int run(provider::RequestContext context, chat::Session session) {
@@ -414,13 +471,12 @@ int run(provider::RequestContext context, chat::Session session) {
     runtime::JobHandle model_job;
     runtime::JobHandle file_job;
     ActiveJob active_job = ActiveJob::None;
-    std::string input;
+    editor::EditorState input = empty_input_editor();
     std::string status = "Ready";
     bool quit = false;
-    bool escape_pending = false;
-    bool escape_sequence = false;
     size_t pending_user = static_cast<size_t>(-1);
     size_t pending_assistant = static_cast<size_t>(-1);
+    int history_scroll = 0;
 
     auto rollback_pending_turn = [&]() {
         if (pending_assistant != static_cast<size_t>(-1) && pending_assistant < session.messages.size()) {
@@ -497,6 +553,7 @@ int run(provider::RequestContext context, chat::Session session) {
             return;
         }
         active_job = ActiveJob::Chat;
+        history_scroll = 0;
         pending_user = session.messages.size();
         session.messages.push_back({"user", prompt});
         pending_assistant = session.messages.size();
@@ -541,12 +598,13 @@ int run(provider::RequestContext context, chat::Session session) {
             return;
         }
         if (text == "/help") {
-            status = "Enter sends | Alt+Enter inserts newline | Ctrl+S sends | /quit /models /save /load";
+            status = "Enter sends | Alt+Enter newline | /quit /models /save /load /model /system /clear";
             return;
         }
         if (text == "/clear") {
             session.messages.clear();
             apply_system_prompt(session, context.options.system);
+            history_scroll = 0;
             status = "Chat history cleared";
             return;
         }
@@ -596,24 +654,30 @@ int run(provider::RequestContext context, chat::Session session) {
     };
 
     auto submit_input = [&]() {
-        const std::string raw = input;
+        const std::string raw = input.text.str();
         const std::string text = trim_ascii(raw);
-        input.clear();
         if (text.empty()) {
+            input = empty_input_editor();
             return;
         }
         if (raw.find('\n') == std::string::npos && text[0] == '/') {
+            input = empty_input_editor();
             handle_command(text);
-        } else {
-            start_turn(raw);
+            return;
         }
+        if (active_job != ActiveJob::None) {
+            status = "A model job is already running";
+            return;
+        }
+        input = empty_input_editor();
+        start_turn(raw);
     };
 
     if (!trim_ascii(context.options.prompt).empty()) {
         start_turn(context.options.prompt);
     }
 
-    render(context, session, input, status);
+    render(context, session, input, status, history_scroll);
     while (!quit) {
         TuiEvent event;
         while (events.try_pop(event)) {
@@ -657,6 +721,7 @@ int run(provider::RequestContext context, chat::Session session) {
                     if (event.error.ok()) {
                         session = std::move(event.session);
                         refresh_session_metadata(session, context);
+                        history_scroll = 0;
                         status = "Loaded " + event.text;
                     } else {
                         status = error_line(event.error);
@@ -676,33 +741,15 @@ int run(provider::RequestContext context, chat::Session session) {
         timeval timeout{};
         timeout.tv_usec = 50000;
         const int ready = select(STDIN_FILENO + 1, &readfds, nullptr, nullptr, &timeout);
+        if (ready < 0 && errno != EINTR) {
+            status = std::string("terminal input error: ") + std::strerror(errno);
+        }
         if (ready > 0 && FD_ISSET(STDIN_FILENO, &readfds)) {
-            char ch = 0;
-            while (read(STDIN_FILENO, &ch, 1) > 0) {
-                if (escape_sequence) {
-                    if (ch >= '@' && ch <= '~') {
-                        escape_sequence = false;
-                    }
-                    continue;
-                }
-                if (escape_pending) {
-                    escape_pending = false;
-                    if (ch == '\r' || ch == '\n') {
-                        input.push_back('\n');
-                        status = "Inserted newline. Ctrl+S sends the multiline prompt.";
-                        continue;
-                    }
-                    if (ch == '[' || ch == 'O') {
-                        escape_sequence = true;
-                        continue;
-                    }
-                    if (static_cast<unsigned char>(ch) >= 32 || ch == '\t') {
-                        input.push_back(ch);
-                    }
-                    continue;
-                }
+            unsigned char ch = 0;
+            while (read(STDIN_FILENO, &ch, 1) == 1) {
                 if (ch == 27) {
-                    escape_pending = true;
+                    const TuiSize terminal = terminal_size();
+                    handle_escape(input, layout_for_terminal(terminal.rows, terminal.cols), history_scroll, status);
                     continue;
                 }
                 if (ch == 3) {
@@ -721,24 +768,24 @@ int run(provider::RequestContext context, chat::Session session) {
                     submit_input();
                     continue;
                 }
-                if (ch == 4 && input.empty()) {
+                if (ch == 4 && input.text.empty()) {
                     quit = true;
                     continue;
                 }
                 if (ch == 127 || ch == 8) {
-                    pop_utf8_char(input);
+                    set_status_from_error(input.erase_before_cursor(), status);
                     continue;
                 }
                 if (ch == '\r' || ch == '\n') {
                     submit_input();
                     continue;
                 }
-                if (static_cast<unsigned char>(ch) >= 32 || ch == '\t') {
-                    input.push_back(ch);
+                if (ch >= 32 || ch == '\t') {
+                    insert_input(input, std::string(1, static_cast<char>(ch)), status);
                 }
             }
         }
-        render(context, session, input, status);
+        render(context, session, input, status, history_scroll);
     }
 
     model_job.cancel();

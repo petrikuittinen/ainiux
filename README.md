@@ -85,7 +85,7 @@ Standalone multiline editor:
 ./pkchat --editor draft.txt --output saved-draft.txt
 ```
 
-The editor is a permanent bonus mode and a test bed for the future TUI input box. It uses a piece table buffer and a rectangular panel renderer, so the same core can support large files and multiple editor panels in one terminal window. Long lines soft-wrap inside the panel. The standalone file editor keeps logical-line up/down movement by default, while the component also exposes visual-row movement across soft-wrapped overflow rows for TUI chat input. Controls: arrows move, Home/End jump within the line, Backspace/Delete remove text, `Enter` inserts a newline, `Ctrl+S` saves, and `Ctrl+Q` or `Ctrl+C` exits.
+The editor is a permanent bonus mode and the same component now powers the TUI chat input panel. It uses a piece table buffer and a rectangular panel renderer, so the same core can support large files and multiple editor panels in one terminal window. Long lines soft-wrap inside the panel. The standalone file editor keeps logical-line up/down movement by default, while the TUI input uses visual-row movement across soft-wrapped overflow rows. Controls: arrows move, Home/End jump within the line, Backspace/Delete remove text, `Enter` inserts a newline, `Ctrl+S` saves, and `Ctrl+Q` or `Ctrl+C` exits.
 
 Full-screen TUI foundation:
 
@@ -94,7 +94,7 @@ Full-screen TUI foundation:
 ./pkchat --tui lmstudio
 ```
 
-The TUI keeps model requests, `/models`, `/save`, and `/load` behind runtime jobs so the terminal loop stays responsive. The input area is multi-line: `Enter` sends, `Alt+Enter` or `Esc` then `Enter` inserts a newline, and `Ctrl+S` sends the current multiline draft. `Ctrl+C` cancels the active job, or exits when no job is active. The first screen shows the chat endpoint and selected model.
+The TUI keeps model requests, `/models`, `/save`, and `/load` behind runtime jobs so the terminal loop stays responsive. The bottom input area embeds the editor component in a fixed-height panel with soft wrap and visual-row cursor movement. `Enter` sends, `Alt+Enter` or `Esc` then `Enter` inserts a newline, and `Ctrl+S` sends the current multiline draft. `PageUp` and `PageDown` scroll chat history. `Ctrl+C` cancels the active job, or exits when no job is active. The first screen shows the chat endpoint and selected model.
 
 Verbose timing:
 
@@ -135,7 +135,7 @@ Run the full local suite:
 make test
 ```
 
-The integration test starts a local mock OpenAI-compatible server and verifies model listing, non-streaming chat, streaming chat, JSON output, NDJSON output, chat save/load, and REPL mode. Unit tests cover the runtime event queue/job cancellation, `--tui` and `--editor` parsing, editor piece-table edits, rectangular panel rendering, editor word wrapping, editor vertical navigation modes, and editor file round-trips.
+The integration test starts a local mock OpenAI-compatible server and verifies model listing, non-streaming chat, streaming chat, JSON output, NDJSON output, chat save/load, and REPL mode. Unit tests cover the runtime event queue/job cancellation, `--tui` and `--editor` parsing, editor piece-table edits, rectangular panel rendering, editor word wrapping, editor vertical navigation modes, editor file round-trips, and TUI layout sizing for the embedded editor panel.
 
 For leak and sanitizer checks:
 
@@ -151,4 +151,4 @@ If Valgrind is not installed, `make leak-check` falls back to the sanitizer test
 - Streaming responses are parsed incrementally as SSE through libcurl write callbacks.
 - The JSON facade is intentionally small and scoped to the current CLI/provider needs.
 - The editor preserves UTF-8 bytes and moves across UTF-8 code units safely, but full grapheme cluster and East Asian cell-width handling still belongs in the planned Unicode module.
-- The chat TUI is still a foundation; the standalone editor exists so multiline editing can be hardened before replacing the TUI input box.
+- The chat TUI is still a foundation; it now uses the editor component for multiline input, but still needs broader interactive resize, scrollback, and terminal-key coverage.
