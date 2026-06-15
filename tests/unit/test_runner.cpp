@@ -180,6 +180,7 @@ void test_editor_file_round_trip() {
 void test_tui_layout_reserves_editor_input_panel() {
     pkchat::tui::Layout small = pkchat::tui::layout_for_terminal(8, 20);
     check(small.rows == 8 && small.cols == 20, "TUI layout clamps to requested small terminal");
+    check(small.header_rows == 0 && small.history_row == 1, "TUI layout has no persistent header rows");
     check(small.history_rows >= 1, "TUI layout leaves room for chat history");
     check(small.input_rect.height == 3, "TUI layout keeps minimum multiline input height");
     check(small.input_rect.row + small.input_rect.height - 1 <= small.rows,

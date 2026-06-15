@@ -25,7 +25,7 @@ The initial model is one worker thread per active job. It is intentionally small
 
 ## Full-Screen TUI Foundation
 
-v0.3 adds `--tui` as an alternate-screen terminal UI without adding an ncurses dependency yet. The TUI renders endpoint/model status, chat history, a status line, and a bounded bottom input panel. The input panel embeds `EditorState`, using the editor's rectangular renderer, soft wrap, and visual-row cursor movement so long multiline prompts behave like the standalone editor without taking over the whole screen. Chat requests, model listing, and chat save/load run as runtime jobs so terminal input remains responsive, and `Ctrl+C` cancels the active job.
+v0.3 adds `--tui` as an alternate-screen terminal UI without adding an ncurses dependency yet. The TUI renders chat history, a status line, and a bounded bottom input panel without reserving persistent header rows for endpoint/model details. The input panel embeds `EditorState`, using the editor's rectangular renderer, soft wrap, and visual-row cursor movement so long multiline prompts behave like the standalone editor without taking over the whole screen. Chat requests, model listing, and chat save/load run as runtime jobs so terminal input remains responsive, and `Ctrl+C` cancels the active job.
 
 
 ## Standalone Editor Foundation

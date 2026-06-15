@@ -19,7 +19,7 @@ Layout layout_for_terminal(int terminal_rows, int terminal_cols) {
     Layout layout;
     layout.rows = std::max(8, terminal_rows);
     layout.cols = std::max(20, terminal_cols);
-    layout.header_rows = 2;
+    layout.header_rows = 0;
 
     const int fixed_without_input = layout.header_rows + 1 + 1 + 1;
     const int max_input_height = std::max(1, layout.rows - fixed_without_input);
@@ -292,10 +292,6 @@ std::string error_line(const Error& error) {
     return std::string(error_code_name(error.code)) + ": " + error.message;
 }
 
-std::string model_line(const provider::RequestContext& context) {
-    return context.options.model.empty() ? "unknown" : context.options.model;
-}
-
 std::vector<std::string> history_lines_for_session(const chat::Session& session, int cols) {
     std::vector<std::string> history;
     const int min_content_width = 8;
@@ -327,8 +323,7 @@ void insert_input(editor::EditorState& input, const std::string& text, std::stri
     set_status_from_error(input.insert(text), status);
 }
 
-void render(const provider::RequestContext& context,
-            const chat::Session& session,
+void render(const chat::Session& session,
             editor::EditorState& input,
             std::string& status,
             int& history_scroll) {
@@ -343,8 +338,6 @@ void render(const provider::RequestContext& context,
     history_scroll = std::min(std::max(0, history_scroll), max_history_scroll);
 
     std::cout << "\x1b[?25l";
-    draw_line(1, cols, "pkchat TUI  Endpoint: " + context.chat_url);
-    draw_line(2, cols, "Model: " + model_line(context));
 
     const int history_start = std::max(0, static_cast<int>(history.size()) - layout.history_rows - history_scroll);
     int printed = 0;
@@ -677,7 +670,7 @@ int run(provider::RequestContext context, chat::Session session) {
         start_turn(context.options.prompt);
     }
 
-    render(context, session, input, status, history_scroll);
+    render(session, input, status, history_scroll);
     while (!quit) {
         TuiEvent event;
         while (events.try_pop(event)) {
@@ -785,7 +778,7 @@ int run(provider::RequestContext context, chat::Session session) {
                 }
             }
         }
-        render(context, session, input, status, history_scroll);
+        render(session, input, status, history_scroll);
     }
 
     model_job.cancel();

@@ -94,7 +94,7 @@ Full-screen TUI foundation:
 ./pkchat --tui lmstudio
 ```
 
-The TUI keeps model requests, `/models`, `/save`, and `/load` behind runtime jobs so the terminal loop stays responsive. The bottom input area embeds the editor component in a fixed-height panel with soft wrap and visual-row cursor movement. `Enter` sends, `Alt+Enter` or `Esc` then `Enter` inserts a newline, and `Ctrl+S` sends the current multiline draft. `PageUp` and `PageDown` scroll chat history. `Ctrl+C` cancels the active job, or exits when no job is active. The first screen shows the chat endpoint and selected model.
+The TUI keeps model requests, `/models`, `/save`, and `/load` behind runtime jobs so the terminal loop stays responsive. The bottom input area embeds the editor component in a fixed-height panel with soft wrap and visual-row cursor movement. `Enter` sends, `Alt+Enter` or `Esc` then `Enter` inserts a newline, and `Ctrl+S` sends the current multiline draft. `PageUp` and `PageDown` scroll chat history. `Ctrl+C` cancels the active job, or exits when no job is active.
 
 Verbose timing:
 
@@ -108,7 +108,7 @@ Verbose timing:
 
 - `stdout` is model output in text mode.
 - `stderr` is used for warnings, status, and errors.
-- Chat startup status prints the chat endpoint and selected model to `stderr` unless `--quiet` is set. In `--tui`, the same information is shown in the full-screen header.
+- Chat startup status prints the chat endpoint and selected model to `stderr` unless `--quiet` is set. `--tui` does not reserve persistent screen rows for endpoint/model details.
 - `--format json` returns one JSON object.
 - `--format ndjson` returns streaming-style events.
 - `--save-chat PATH` writes a JSON chat file atomically with restrictive permissions.
