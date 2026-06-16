@@ -51,6 +51,7 @@ v0.7  Benchmark mode
 v0.8  AI-assisted editor
 v0.9  Local web server mode
 v1.0  Local agent mode with sandbox/approval design
+v1.1  Image generation from CLI, REPL, TUI, and web chat
 ```
 
 Each milestone should leave the program usable. Do not create a long-lived pile of half-wired features.
@@ -1752,6 +1753,276 @@ Ctrl+C cancels current action first.
 - [ ] Pause/cancel works.
 - [ ] Sandbox behavior is documented.
 - [ ] Leak-check tooling reports no leaks for representative approved, denied, failed, and cancelled tool actions where supported.
+
+---
+
+# v1.1 - Image generation from CLI, REPL, TUI, and web chat
+
+## Goal
+
+Add first-class image generation that works from non-interactive command-line usage, REPL, full-screen TUI, and local web chat. The feature must use the same provider/profile, runtime/job, cancellation, error-handling, persistence, and credential-redaction layers as text chat where practical.
+
+At minimum, the user must be able to select:
+
+- image generation model
+- prompt
+- image dimensions
+- image output format
+- output file name/path
+
+If the user does not provide a file name, `pkchat` should automatically create a non-existing file name in the current directory, such as `image1.png`, `image2.png`, and so on.
+
+## Command shape
+
+Suggested CLI shape:
+
+```sh
+pkchat image -p "A quiet terminal workspace at night" --image-model MODEL
+pkchat image --prompt-file prompt.txt --image-model MODEL --width 1024 --height 1024
+pkchat image -p "diagram of provider adapters" --format png --output diagram.png
+pkchat image -p "small icon" --size 512x512 --format webp
+pkchat image --provider openai --image-model MODEL -p "..." --output image.png
+```
+
+Alternative flags that may be accepted for consistency:
+
+```text
+--image-model MODEL
+--image-width N
+--image-height N
+--image-size WIDTHxHEIGHT
+--image-format png|jpg|jpeg|webp
+--image-output PATH
+--image-count N
+```
+
+Rules:
+
+- [ ] `pkchat image ...` is the explicit image-generation command.
+- [ ] Text chat mode must not generate images accidentally from ordinary prompts.
+- [ ] `stdout` should remain script-friendly. Prefer printing the saved file path on success, and write status/progress to `stderr`.
+- [ ] `--output -` for binary image stdout may be considered later, but should not be the default.
+- [ ] Refuse to overwrite an existing output file unless an explicit overwrite flag is added.
+- [ ] Auto-generated names use the selected output format extension.
+
+## REPL commands
+
+Suggested REPL commands:
+
+```text
+/image prompt TEXT
+/image model MODEL
+/image size WIDTHxHEIGHT
+/image width N
+/image height N
+/image format png|jpg|jpeg|webp
+/image output PATH
+/image generate TEXT
+/image last
+```
+
+Behavior:
+
+- [ ] `/image generate TEXT` generates an image from `TEXT` and saves it.
+- [ ] `/image prompt TEXT` stores or updates the image prompt for the next generation.
+- [ ] `/image last` repeats the last image-generation prompt/settings.
+- [ ] REPL status and save path are written to `stderr`; generated file path may be written to `stdout` only for explicit command outputs where that is useful.
+- [ ] Image generation should be cancellable with the same cancellation behavior as chat requests where possible.
+
+## TUI behavior
+
+The full-screen TUI should expose image generation without blocking text editing or chat display.
+
+Suggested commands:
+
+```text
+/image prompt TEXT
+/image model MODEL
+/image size WIDTHxHEIGHT
+/image format png|jpg|jpeg|webp
+/image output PATH
+/image generate TEXT
+```
+
+Requirements:
+
+- [ ] Image generation runs as a runtime job.
+- [ ] The TUI remains responsive while waiting for the provider.
+- [ ] Status line shows the active image model, dimensions, format, and output path while generating.
+- [ ] `Esc` cancels an active image-generation job when no higher-priority modal/editor interaction owns it.
+- [ ] The chat history should show a concise generated-image message with prompt, model, dimensions, format, and saved path.
+- [ ] Do not try to render bitmap images directly in the terminal in v1 unless a terminal image protocol is deliberately added and documented.
+
+## Web chat behavior
+
+The local web UI should support image generation once web mode exists.
+
+Minimum controls:
+
+- [ ] Prompt textarea or prompt field.
+- [ ] Image model selector/input.
+- [ ] Width and height controls, or a size selector.
+- [ ] Output format selector.
+- [ ] File name/path field where local saving is supported.
+- [ ] Generate button.
+- [ ] Stop/Cancel button.
+
+Requirements:
+
+- [ ] Generation runs through the runtime/job layer and does not block the web server event loop.
+- [ ] Browser UI shows status and errors.
+- [ ] Browser UI shows the saved file path and, where safe, a preview served from a controlled generated-assets route.
+- [ ] Do not expose arbitrary local file paths or directories through the web server.
+- [ ] Do not expose API keys or provider headers to the browser.
+- [ ] Generated image preview routes must only serve files created for the current session or explicitly allowed generated-image directory.
+
+## Provider architecture
+
+Provider adapters should expose image-generation capability without leaking provider-specific JSON into UI code.
+
+Suggested provider interface additions:
+
+```text
+generate_image()
+get_image_capabilities()
+cancel_request()
+```
+
+Suggested capability fields:
+
+```text
+image_generation
+image_models
+image_output_formats
+image_dimensions
+image_count
+image_seed
+image_negative_prompt
+image_reference_inputs
+```
+
+Rules:
+
+- [ ] Route provider differences through `src/provider/`.
+- [ ] Keep request JSON generation inside provider adapters.
+- [ ] Keep response parsing inside provider adapters.
+- [ ] Support providers that return base64 image data.
+- [ ] Support providers that return image URLs only if URL download safety is implemented for that provider path.
+- [ ] Do not claim support for dimensions/formats the provider cannot provide.
+- [ ] If a provider ignores a requested format or size, surface that clearly where detectable.
+
+## Settings model
+
+Image generation settings should be separate from chat settings where needed:
+
+```text
+image_model
+image_prompt
+image_width
+image_height
+image_format
+image_output_path
+image_count
+image_provider
+```
+
+Rules:
+
+- [ ] Chat model and image model are separate settings.
+- [ ] Config files may provide defaults after v0.6 exists.
+- [ ] Command-line arguments override config defaults.
+- [ ] REPL/TUI/web per-session settings can override defaults.
+- [ ] Validate dimensions before sending the request.
+- [ ] Validate output format before sending the request.
+- [ ] Default dimensions and format should come from provider capabilities or conservative built-in defaults.
+
+## File output and naming
+
+Output must be safe and deterministic:
+
+- [ ] If `--output PATH` or equivalent is provided, fail if the file exists unless overwrite is explicit.
+- [ ] If no output path is provided, choose `image#.EXT` in the current directory where `#` is the first positive integer that does not already exist.
+- [ ] Extension follows the requested/actual format: `.png`, `.jpg`, `.jpeg`, `.webp`.
+- [ ] Write files atomically where practical: temporary file, fsync where supported, rename.
+- [ ] Use restrictive permissions where practical.
+- [ ] Never write outside the requested path through provider-supplied filenames.
+- [ ] If multiple images are requested, generate a numbered sequence such as `image1.png`, `image2.png`, or derive a safe suffix from the requested base name.
+- [ ] Return saved paths to the caller/UI.
+
+## Persistence
+
+Generated images should be represented in chat/session metadata without embedding large binary data in chat JSON.
+
+Suggested metadata:
+
+```text
+kind: image_generation
+provider
+model
+prompt
+width
+height
+format
+output_path
+created_at
+provider_metadata
+```
+
+Rules:
+
+- [ ] Do not store image binary blobs in chat JSON.
+- [ ] Store relative paths when safe and useful, otherwise store explicit user-selected path.
+- [ ] Redact provider request IDs or metadata if they can contain secrets.
+- [ ] Saved chats should be able to show that an image was generated even if the image file is later missing.
+
+## Error handling
+
+Human-facing errors should name the failed setting or path:
+
+```text
+unsupported image format: bmp; supported formats: png, jpg, webp
+image output file already exists: image1.png
+provider openrouter does not support image generation with this profile
+HTTP 400 from ... provider rejected image size 2048x2048
+could not write image file: ./image3.png
+```
+
+Rules:
+
+- [ ] Unsupported provider/model/format/dimensions return `PKCHAT_ERR_UNSUPPORTED_FEATURE` or a more specific error where available.
+- [ ] File write failures use file I/O error categories.
+- [ ] Provider errors include safe provider message bodies.
+- [ ] Credentials and headers remain redacted.
+
+## Tests
+
+- [ ] Unit test CLI image option parsing.
+- [ ] Unit test size parsing such as `512x512`.
+- [ ] Unit test format validation and extension mapping.
+- [ ] Unit test automatic filename allocation with existing files.
+- [ ] Unit test overwrite refusal.
+- [ ] Unit test provider image request generation.
+- [ ] Unit test provider image response parsing for base64 data.
+- [ ] Unit test provider image response parsing for URL responses if supported.
+- [ ] Unit test atomic image save success and failure paths.
+- [ ] Integration test CLI image generation with a mock image provider.
+- [ ] Integration test REPL `/image generate` with a mock provider.
+- [ ] TUI responsiveness test during slow image generation.
+- [ ] Web test for image generation request and cancel once web mode exists.
+- [ ] Leak-check success, provider error, file write error, and cancellation paths where supported.
+
+## Acceptance criteria
+
+- [ ] CLI can generate an image with selected model, prompt, dimensions, format, and output file name.
+- [ ] CLI can auto-generate a non-existing output file name in the current directory.
+- [ ] REPL can generate an image through `/image` commands.
+- [ ] TUI can start and cancel image generation without blocking the UI.
+- [ ] Web chat can request image generation and show status/output path after web mode exists.
+- [ ] Provider differences are hidden behind provider adapter APIs.
+- [ ] Existing text chat behavior is unchanged when image generation is not requested.
+- [ ] Generated image files are not overwritten accidentally.
+- [ ] Chat/session metadata records generated-image events without embedding image binaries.
+- [ ] Leak-check tooling reports no leaks for representative image generation paths where supported.
 
 ---
 
