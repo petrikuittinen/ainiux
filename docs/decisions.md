@@ -13,6 +13,13 @@ The initial implementation uses C++17 and a plain Makefile to keep the binary po
 `src/json/` is a small internal JSON facade used for request escaping and provider response parsing. The project should replace or expand it with a reviewed JSON library when dependency installation is available.
 
 
+## Provider Registry and API Adapters
+
+v0.4 begins with a data-driven provider registry in `src/provider/`. Built-in profiles carry aliases, default base URLs, endpoint paths, key environment variables, local/remote flags, optional dummy keys, compatibility warnings, and client capability flags. The OpenAI-compatible providers share the same Chat Completions adapter instead of duplicating provider-specific request code.
+
+Responses API support is a sibling adapter selected with `--api responses`, `--responses`, or the `openai_responses` shortcut. It reuses the existing HTTP transport, cancellation token, timing, redaction, and streaming callback path. The first slice is text-only and maps Responses output text and SSE text deltas into the same internal assistant message model used by Chat Completions. Non-text Responses features remain disabled in reported client capabilities until implemented.
+
+
 ## JSON Chat Persistence
 
 v0.2 stores explicit chat files via `--save-chat PATH` and `--load-chat PATH` before adding automatic XDG chat IDs. This keeps the early REPL scriptable and reviewable while still using the target schema fields: `schema_version`, timestamps, provider, base URL, model, settings, messages, attachments, usage, and compaction events. Saves use a temporary file, fsync, rename, and restrictive file permissions.

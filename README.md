@@ -2,7 +2,7 @@
 
 `pkchat` is a fast, script-friendly command-line chat client for OpenAI and OpenAI-compatible APIs.
 
-Current status: v0.32 CLI with libcurl transport, cancellable runtime jobs, `/v1/models`, `/v1/chat/completions`, a simple REPL, a standalone `--editor` mode, a full-screen non-blocking TUI foundation, and JSON chat save/load.
+Current status: v0.40 CLI with libcurl transport, cancellable runtime jobs, provider registry/profile aliases, `/v1/models`, `/v1/chat/completions`, text-only OpenAI Responses API support, a simple REPL, a standalone `--editor` mode, a full-screen non-blocking TUI foundation, and JSON chat save/load.
 
 ## Build
 
@@ -49,7 +49,11 @@ OpenAI:
 
 ```sh
 OPENAI_API_KEY=... ./pkchat --provider openai -m MODEL -p "Hello"
+OPENAI_API_KEY=... ./pkchat --provider openai --api responses -m MODEL -p "Hello through Responses"
+OPENAI_API_KEY=... ./pkchat --provider openai_responses -m MODEL -p "Hello through Responses"
 ```
+
+`--api responses` and `--responses` use `/v1/responses` and currently support text chat only. Providers without a built-in Responses endpoint return an unsupported-feature error unless `--responses-url URL` is supplied explicitly.
 
 OpenRouter:
 
@@ -57,6 +61,8 @@ OpenRouter:
 OPENROUTER_API_KEY=... ./pkchat openrouter -model "nvidia/nemotron-3-ultra-550b-a55b:free" -i
 OPENROUTER_API_KEY=... ./pkchat --provider openrouter -m "nvidia/nemotron-3-ultra-550b-a55b:free" -p "Hello"
 ```
+
+Built-in provider profiles include `openai`, `openrouter`, `deepseek`, `gemini`, `anthropic`, `xai`/`grok`, `moonshot`/`kimi`, `groq`, `mistral`, `together`, `perplexity`, `cerebras`, `fireworks`, `deepinfra`, `nvidia_nim`, `dashscope`, `lm_studio`/`lmstudio`, `ollama`, `vllm`, `llamacpp`/`llama.cpp`, and `custom_openai_chat`. These profiles share the same OpenAI-compatible chat adapter where possible, with endpoint paths and key defaults coming from the registry.
 
 Prompt and system files:
 
@@ -118,7 +124,7 @@ Verbose timing:
 
 Supported key sources:
 
-- provider environment variables such as `OPENAI_API_KEY`, `OPENROUTER_API_KEY`, `LMSTUDIO_API_KEY`, `LM_STUDIO_API_KEY`
+- provider environment variables such as `OPENAI_API_KEY`, `OPENROUTER_API_KEY`, `DEEPSEEK_API_KEY`, `GEMINI_API_KEY`, `ANTHROPIC_API_KEY`, `XAI_API_KEY`, `MOONSHOT_API_KEY`, `GROQ_API_KEY`, `MISTRAL_API_KEY`, `TOGETHER_API_KEY`, `PERPLEXITY_API_KEY`, `CEREBRAS_API_KEY`, `FIREWORKS_API_KEY`, `DEEPINFRA_API_KEY`, `DEEPINFRA_TOKEN`, `NVIDIA_NIM_API_KEY`, `DASHSCOPE_API_KEY`, `LMSTUDIO_API_KEY`, `LM_STUDIO_API_KEY`
 - `PKCHAT_API_KEY`
 - `--key-env NAME`
 - `--key-file PATH`
@@ -135,7 +141,7 @@ Run the full local suite:
 make test
 ```
 
-The integration test starts a local mock OpenAI-compatible server and verifies model listing, non-streaming chat, streaming chat, provider reasoning fields, JSON output, NDJSON output, chat save/load, and REPL mode. Unit tests cover the runtime event queue/job cancellation, `--tui`, `--nocolors`, and `--editor` parsing, editor piece-table edits, rectangular panel rendering, editor word wrapping, editor vertical navigation modes, editor file round-trips, TUI layout sizing, TUI regeneration planning, thinking-trace display filtering, theme parsing, and WCAG contrast checks for TUI themes.
+The integration test starts a local mock OpenAI-compatible server and verifies model listing, non-streaming chat, streaming chat, text-only Responses API calls, provider reasoning fields, JSON output, NDJSON output, chat save/load, and REPL mode. Unit tests cover CLI parsing, provider registry aliases, capability reporting, Responses API endpoint selection and unsupported-feature errors, the runtime event queue/job cancellation, `--tui`, `--nocolors`, and `--editor` parsing, editor piece-table edits, rectangular panel rendering, editor word wrapping, editor vertical navigation modes, editor file round-trips, TUI layout sizing, TUI regeneration planning, thinking-trace display filtering, theme parsing, and WCAG contrast checks for TUI themes.
 
 For leak and sanitizer checks:
 
@@ -148,7 +154,9 @@ If Valgrind is not installed, `make leak-check` falls back to the sanitizer test
 
 ## Current Limitations
 
-- Streaming responses are parsed incrementally as SSE through libcurl write callbacks.
+- Streaming chat and Responses API events are parsed incrementally as SSE through libcurl write callbacks.
+- Responses API support is currently text-only; images, files, tools, and provider-side context management remain disabled in client capabilities until implemented.
+- Capability probing is not yet implemented; built-in profile capabilities are registry-defined, and `--responses-url` is the explicit override for non-OpenAI Responses endpoints.
 - The JSON facade is intentionally small and scoped to the current CLI/provider needs.
 - The editor preserves UTF-8 bytes and moves across UTF-8 code units safely, but full grapheme cluster and East Asian cell-width handling still belongs in the planned Unicode module.
 - The chat TUI is still a foundation; it now uses the editor component for multiline input, but still needs broader interactive resize, scrollback, and terminal-key coverage.

@@ -2,6 +2,6 @@
 
 namespace pkchat {
 
-constexpr const char* kVersion = "0.32";
+constexpr const char* kVersion = "0.40";
 
 }  // namespace pkchat

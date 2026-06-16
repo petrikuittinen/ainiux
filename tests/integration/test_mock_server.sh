@@ -35,11 +35,22 @@ printf '%s' "$json" | grep '"content":"Hello"' >/dev/null
 stream=$("$ROOT/pkchat" "$BASE" --quiet --stream -m "$MODEL" -p "hello")
 test "$stream" = "Hello"
 
+responses_reply=$("$ROOT/pkchat" "$BASE" --quiet --api responses --no-stream -m "$MODEL" -p "hello")
+test "$responses_reply" = "Hello"
+responses_stream=$("$ROOT/pkchat" "$BASE" --quiet --api responses --stream -m "$MODEL" -p "hello")
+test "$responses_stream" = "Hello"
+responses_json=$("$ROOT/pkchat" "$BASE" --quiet --api responses --no-stream -m "$MODEL" -p "hello" --format json)
+printf '%s' "$responses_json" | grep '"content":"Hello"' >/dev/null
+
 reasoning_expected=$(printf '<think>internal trace</think>\n\nVisible answer')
 reasoning_reply=$("$ROOT/pkchat" "$BASE" --quiet --no-stream -m "$MODEL" -p "reasoning")
 test "$reasoning_reply" = "$reasoning_expected"
 reasoning_stream=$("$ROOT/pkchat" "$BASE" --quiet --stream -m "$MODEL" -p "reasoning")
 test "$reasoning_stream" = "$reasoning_expected"
+responses_reasoning=$("$ROOT/pkchat" "$BASE" --quiet --api responses --no-stream -m "$MODEL" -p "reasoning")
+test "$responses_reasoning" = "$reasoning_expected"
+responses_reasoning_stream=$("$ROOT/pkchat" "$BASE" --quiet --api responses --stream -m "$MODEL" -p "reasoning")
+test "$responses_reasoning_stream" = "$reasoning_expected"
 reasoning_chat_file="$ROOT/build/reasoning-chat.json"
 "$ROOT/pkchat" "$BASE" --quiet --no-stream -m "$MODEL" -p "reasoning" --save-chat "$reasoning_chat_file" >/dev/null
 grep '<think>internal trace</think>' "$reasoning_chat_file" >/dev/null

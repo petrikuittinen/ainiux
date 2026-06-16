@@ -294,6 +294,103 @@ void test_tui_theme_parsing_and_contrast() {
           "TUI light thinking trace text is less stark than normal text");
 }
 
+void test_cli_responses_parse() {
+    const char* argv[] = {"pkchat", "--responses", "-p", "hello"};
+    pkchat::cli::ParseResult parsed = pkchat::cli::parse_args(4, const_cast<char**>(argv));
+    check(parsed.error.ok(), "Responses API shortcut args parse");
+    check(parsed.options.api == "responses", "--responses selects Responses API");
+}
+
+void test_provider_registry_resolves_added_profiles() {
+    std::vector<pkchat::provider::Profile> profiles = pkchat::provider::built_in_profiles();
+    check(profiles.size() >= 21, "provider registry includes added compatibility profiles");
+
+    const char* grok_argv[] = {"pkchat", "grok", "--list-models", "--header", "Authorization: Bearer test"};
+    pkchat::cli::ParseResult grok = pkchat::cli::parse_args(5, const_cast<char**>(grok_argv));
+    check(grok.error.ok(), "grok alias args parse");
+    pkchat::provider::ContextResult grok_ctx = pkchat::provider::build_context(grok.options);
+    check(grok_ctx.error.ok(), "grok alias context builds");
+    check(grok_ctx.context.profile.name == "xai", "grok alias resolves to xai");
+    check(grok_ctx.context.base_url == "https://api.x.ai/v1", "xai base URL selected");
+
+    const char* kimi_argv[] = {"pkchat", "--provider", "kimi", "--list-models", "--header", "Authorization: Bearer test"};
+    pkchat::cli::ParseResult kimi = pkchat::cli::parse_args(6, const_cast<char**>(kimi_argv));
+    check(kimi.error.ok(), "kimi alias args parse");
+    pkchat::provider::ContextResult kimi_ctx = pkchat::provider::build_context(kimi.options);
+    check(kimi_ctx.error.ok(), "kimi alias context builds");
+    check(kimi_ctx.context.profile.name == "moonshot", "kimi alias resolves to moonshot");
+
+    const char* llama_argv[] = {"pkchat", "llama.cpp", "--list-models"};
+    pkchat::cli::ParseResult llama = pkchat::cli::parse_args(3, const_cast<char**>(llama_argv));
+    check(llama.error.ok(), "llama.cpp alias args parse");
+    pkchat::provider::ContextResult llama_ctx = pkchat::provider::build_context(llama.options);
+    check(llama_ctx.error.ok(), "llama.cpp alias context builds");
+    check(llama_ctx.context.profile.name == "llamacpp", "llama.cpp alias resolves to llamacpp");
+    check(llama_ctx.context.profile.local_endpoint, "llamacpp is marked local");
+
+    const char* vllm_argv[] = {"pkchat", "vllm", "--list-models"};
+    pkchat::cli::ParseResult vllm = pkchat::cli::parse_args(3, const_cast<char**>(vllm_argv));
+    check(vllm.error.ok(), "vllm shortcut args parse");
+    pkchat::provider::ContextResult vllm_ctx = pkchat::provider::build_context(vllm.options);
+    check(vllm_ctx.error.ok(), "vllm context builds");
+    check(vllm_ctx.context.api_key == "token-abc123", "vllm uses configured dummy API key");
+
+    const char* deepinfra_argv[] = {"pkchat", "--provider", "deepinfra", "--list-models", "--header", "Authorization: Bearer test"};
+    pkchat::cli::ParseResult deepinfra = pkchat::cli::parse_args(6, const_cast<char**>(deepinfra_argv));
+    check(deepinfra.error.ok(), "deepinfra args parse");
+    pkchat::provider::ContextResult deepinfra_ctx = pkchat::provider::build_context(deepinfra.options);
+    check(deepinfra_ctx.error.ok(), "deepinfra context builds");
+    check(deepinfra_ctx.context.profile.key_envs.size() >= 2 && deepinfra_ctx.context.profile.key_envs[1] == "DEEPINFRA_TOKEN",
+          "deepinfra registers alternate token env var");
+}
+
+void test_provider_capabilities_and_responses_context() {
+    const char* argv[] = {"pkchat", "--provider", "openai", "--api", "responses", "-p", "hello", "--header", "Authorization: Bearer test"};
+    pkchat::cli::ParseResult parsed = pkchat::cli::parse_args(9, const_cast<char**>(argv));
+    check(parsed.error.ok(), "OpenAI Responses args parse");
+    pkchat::provider::ContextResult ctx = pkchat::provider::build_context(parsed.options);
+    check(ctx.error.ok(), "OpenAI Responses context builds");
+    check(ctx.context.api_kind == pkchat::provider::ApiKind::Responses, "Responses API kind selected");
+    check(pkchat::provider::active_request_url(ctx.context) == "https://api.openai.com/v1/responses",
+          "OpenAI Responses endpoint selected");
+    check(pkchat::provider::capabilities_for(ctx.context).responses_api, "OpenAI reports Responses capability");
+    check(pkchat::provider::capabilities_for(ctx.context).chat_completions, "OpenAI reports Chat Completions capability");
+
+    const char* shortcut_argv[] = {"pkchat", "--provider", "openai_responses", "-p", "hello", "--header", "Authorization: Bearer test"};
+    pkchat::cli::ParseResult shortcut = pkchat::cli::parse_args(7, const_cast<char**>(shortcut_argv));
+    check(shortcut.error.ok(), "openai_responses profile shortcut args parse");
+    pkchat::provider::ContextResult shortcut_ctx = pkchat::provider::build_context(shortcut.options);
+    check(shortcut_ctx.error.ok(), "openai_responses context builds");
+    check(shortcut_ctx.context.profile.name == "openai", "openai_responses uses OpenAI profile");
+    check(shortcut_ctx.context.api_kind == pkchat::provider::ApiKind::Responses, "openai_responses selects Responses API");
+}
+
+void test_explicit_chat_url_does_not_require_base_when_model_set() {
+    const char* argv[] = {"pkchat", "--chat-url", "https://example.test/custom/chat", "-m", "model", "-p", "hello", "--header", "Authorization: Bearer test"};
+    pkchat::cli::ParseResult parsed = pkchat::cli::parse_args(9, const_cast<char**>(argv));
+    check(parsed.error.ok(), "explicit chat URL args parse");
+    pkchat::provider::ContextResult ctx = pkchat::provider::build_context(parsed.options);
+    check(ctx.error.ok(), "explicit chat URL context builds without base URL when model is set");
+    check(ctx.context.chat_url == "https://example.test/custom/chat", "explicit chat URL is preserved");
+}
+
+void test_provider_responses_unsupported_and_override() {
+    const char* unsupported_argv[] = {"pkchat", "--provider", "openrouter", "--api", "responses", "-p", "hello", "--header", "Authorization: Bearer test"};
+    pkchat::cli::ParseResult unsupported = pkchat::cli::parse_args(9, const_cast<char**>(unsupported_argv));
+    check(unsupported.error.ok(), "unsupported Responses args parse");
+    pkchat::provider::ContextResult unsupported_ctx = pkchat::provider::build_context(unsupported.options);
+    check(!unsupported_ctx.error.ok(), "chat-only provider rejects built-in Responses API");
+    check(unsupported_ctx.error.code == pkchat::ErrorCode::UnsupportedFeature, "Responses rejection uses unsupported feature error");
+
+    const char* override_argv[] = {"pkchat", "--provider", "openrouter", "--api", "responses", "--responses-url", "https://example.test/v1/responses", "-p", "hello", "--header", "Authorization: Bearer test"};
+    pkchat::cli::ParseResult override = pkchat::cli::parse_args(11, const_cast<char**>(override_argv));
+    check(override.error.ok(), "Responses override args parse");
+    pkchat::provider::ContextResult override_ctx = pkchat::provider::build_context(override.options);
+    check(override_ctx.error.ok(), "Responses override context builds");
+    check(override_ctx.context.responses_url == "https://example.test/v1/responses", "Responses override endpoint selected");
+    check(pkchat::provider::capabilities_for(override_ctx.context).responses_api, "Responses override reports capability");
+}
+
 void test_cli_rejects_unknown() {
     const char* argv[] = {"pkchat", "--bogus"};
     pkchat::cli::ParseResult parsed = pkchat::cli::parse_args(2, const_cast<char**>(argv));
@@ -439,9 +536,14 @@ int main() {
     test_cli_tui_parse();
     test_cli_tui_nocolors_parse();
     test_cli_editor_parse();
+    test_cli_responses_parse();
     test_url_normalization();
     test_json_parse();
     test_lmstudio_context();
+    test_provider_registry_resolves_added_profiles();
+    test_provider_capabilities_and_responses_context();
+    test_explicit_chat_url_does_not_require_base_when_model_set();
+    test_provider_responses_unsupported_and_override();
     test_openrouter_shortcut_context();
     test_openai_context_allows_missing_model();
     test_lmstudio_shortcut_context();

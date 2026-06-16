@@ -11,7 +11,7 @@ bool needs_value(const std::string& opt) {
     static const char* with_values[] = {
         "-p", "--prompt", "--prompt-file", "-s", "--system", "--system-file", "-m", "--model", "-model",
         "-t", "--temperature", "--top-p", "--max-output-tokens", "--format", "--output",
-        "--provider", "--profile", "--base-url", "--chat-url", "--models-url", "--responses-url",
+        "--provider", "--profile", "--api", "--base-url", "--chat-url", "--models-url", "--responses-url",
         "--key-env", "--key-file", "-k", "--key", "--header", "--connect-timeout", "--timeout",
         "--proxy", "--save-chat", "--load-chat"};
     for (const char* item : with_values) {
@@ -99,6 +99,8 @@ ParseResult parse_args(int argc, char** argv) {
         } else if (arg == "--no-stream") {
             opts.stream = false;
             opts.stream_explicit = true;
+        } else if (arg == "--responses") {
+            opts.api = "responses";
         } else if (arg == "--quiet") {
             opts.quiet = true;
         } else if (arg == "--verbose" || arg == "-v") {
@@ -172,6 +174,14 @@ ParseResult parse_args(int argc, char** argv) {
             } else if (opt == "--profile") {
                 opts.profile = value;
                 opts.provider = value;
+            } else if (opt == "--api") {
+                if (value == "chat" || value == "chat_completions" || value == "chat-completions") {
+                    opts.api = "chat";
+                } else if (value == "responses" || value == "responses_api" || value == "responses-api") {
+                    opts.api = "responses";
+                } else {
+                    return {opts, {ErrorCode::BadArgs, "--api must be chat or responses"}};
+                }
             } else if (opt == "--base-url") {
                 opts.base_url = value;
             } else if (opt == "--chat-url") {
@@ -254,12 +264,14 @@ Options:
       --editor                  Start the standalone multiline editor.
       --save-chat PATH          Save JSON chat history after a successful reply.
       --load-chat PATH          Load JSON chat history before sending.
-      --provider NAME           openai, openrouter, custom_openai_chat, lm_studio
+      --provider NAME           openai, openrouter, lm_studio, ollama, vllm, llama.cpp, etc.
       --profile NAME            Alias for --provider.
+      --api chat|responses      Use Chat Completions (default) or Responses API.
+      --responses               Shortcut for --api responses.
       --base-url URL
       --chat-url URL
       --models-url URL
-      --responses-url URL       Reserved for later Responses API support.
+      --responses-url URL       Override the Responses API endpoint.
       --key-env NAME
       --key-file PATH
       --key-stdin

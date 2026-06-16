@@ -37,31 +37,110 @@ std::string lower_alias(std::string text) {
     return text;
 }
 
-Profile profile_for(const std::string& requested) {
+Capabilities profile_capabilities(bool requires_key,
+                                  bool local,
+                                  bool chat_completions,
+                                  bool responses_api,
+                                  bool model_listing) {
+    Capabilities caps;
+    caps.chat_completions = chat_completions;
+    caps.responses_api = responses_api;
+    caps.streaming = chat_completions || responses_api;
+    caps.model_listing = model_listing;
+    caps.usage_reporting = chat_completions || responses_api;
+    caps.requires_bearer_key = requires_key;
+    caps.optional_bearer_key = !requires_key;
+    caps.custom_headers = true;
+    caps.local_endpoint = local;
+    return caps;
+}
+
+Profile make_profile(const std::string& name,
+                     const std::vector<std::string>& aliases,
+                     const std::string& base_url,
+                     const std::string& chat_path,
+                     const std::string& models_path,
+                     const std::string& responses_path,
+                     const std::vector<std::string>& key_envs,
+                     bool requires_key,
+                     bool local,
+                     const std::string& dummy_api_key = "",
+                     const std::string& warning = "") {
+    Profile profile;
+    profile.name = name;
+    profile.aliases = aliases;
+    profile.base_url = base_url;
+    profile.chat_path = chat_path;
+    profile.models_path = models_path;
+    profile.responses_path = responses_path;
+    profile.requires_bearer_key = requires_key;
+    profile.local_endpoint = local;
+    profile.key_envs = key_envs;
+    profile.dummy_api_key = dummy_api_key;
+    profile.compatibility_warning = warning;
+    profile.capabilities = profile_capabilities(requires_key, local, !chat_path.empty(), !responses_path.empty(), !models_path.empty());
+    return profile;
+}
+
+const std::vector<Profile>& profile_registry() {
+    static const std::vector<Profile> profiles = {
+        make_profile("openai", {"openai_chat", "openai_responses"}, "https://api.openai.com/v1", "/chat/completions", "/models", "/responses", {"OPENAI_API_KEY", "PKCHAT_API_KEY"}, true, false),
+        make_profile("openrouter", {}, "https://openrouter.ai/api/v1", "/chat/completions", "/models", "", {"OPENROUTER_API_KEY", "PKCHAT_API_KEY"}, true, false),
+        make_profile("deepseek", {}, "https://api.deepseek.com", "/chat/completions", "/models", "", {"DEEPSEEK_API_KEY", "PKCHAT_API_KEY"}, true, false),
+        make_profile("gemini", {}, "https://generativelanguage.googleapis.com/v1beta/openai", "/chat/completions", "/models", "", {"GEMINI_API_KEY", "PKCHAT_API_KEY"}, true, false),
+        make_profile("anthropic", {}, "https://api.anthropic.com/v1", "/chat/completions", "/models", "", {"ANTHROPIC_API_KEY", "PKCHAT_API_KEY"}, true, false, "", "OpenAI compatibility layer is mainly for testing/comparison."),
+        make_profile("xai", {"grok"}, "https://api.x.ai/v1", "/chat/completions", "/models", "", {"XAI_API_KEY", "PKCHAT_API_KEY"}, true, false),
+        make_profile("moonshot", {"kimi"}, "https://api.moonshot.ai/v1", "/chat/completions", "/models", "", {"MOONSHOT_API_KEY", "PKCHAT_API_KEY"}, true, false),
+        make_profile("groq", {}, "https://api.groq.com/openai/v1", "/chat/completions", "/models", "", {"GROQ_API_KEY", "PKCHAT_API_KEY"}, true, false),
+        make_profile("mistral", {}, "https://api.mistral.ai/v1", "/chat/completions", "/models", "", {"MISTRAL_API_KEY", "PKCHAT_API_KEY"}, true, false),
+        make_profile("together", {}, "https://api.together.ai/v1", "/chat/completions", "/models", "", {"TOGETHER_API_KEY", "PKCHAT_API_KEY"}, true, false),
+        make_profile("perplexity", {}, "https://api.perplexity.ai", "/chat/completions", "/models", "", {"PERPLEXITY_API_KEY", "PKCHAT_API_KEY"}, true, false, "", "Perplexity canonical Sonar endpoint is /v1/sonar; /chat/completions is the OpenAI SDK-compatible alias."),
+        make_profile("cerebras", {}, "https://api.cerebras.ai/v1", "/chat/completions", "/models", "", {"CEREBRAS_API_KEY", "PKCHAT_API_KEY"}, true, false),
+        make_profile("fireworks", {}, "https://api.fireworks.ai/inference/v1", "/chat/completions", "/models", "", {"FIREWORKS_API_KEY", "PKCHAT_API_KEY"}, true, false),
+        make_profile("deepinfra", {}, "https://api.deepinfra.com/v1/openai", "/chat/completions", "/models", "", {"DEEPINFRA_API_KEY", "DEEPINFRA_TOKEN", "PKCHAT_API_KEY"}, true, false),
+        make_profile("nvidia_nim", {}, "https://integrate.api.nvidia.com/v1", "/chat/completions", "/models", "", {"NVIDIA_NIM_API_KEY", "PKCHAT_API_KEY"}, true, false),
+        make_profile("dashscope", {}, "https://dashscope.aliyuncs.com/compatible-mode/v1", "/chat/completions", "/models", "", {"DASHSCOPE_API_KEY", "PKCHAT_API_KEY"}, true, false),
+        make_profile("lm_studio", {"lmstudio"}, "http://localhost:1234/v1", "/chat/completions", "/models", "", {"LMSTUDIO_API_KEY", "LM_STUDIO_API_KEY", "PKCHAT_API_KEY"}, false, true),
+        make_profile("ollama", {}, "http://localhost:11434/v1", "/chat/completions", "/models", "", {}, false, true),
+        make_profile("vllm", {}, "http://localhost:8000/v1", "/chat/completions", "/models", "", {}, false, true, "token-abc123"),
+        make_profile("llamacpp", {"llama_cpp", "llama.cpp"}, "http://localhost:8080/v1", "/chat/completions", "/models", "", {}, false, true),
+        make_profile("custom_openai_chat", {"custom"}, "", "/chat/completions", "/models", "/responses", {"PKCHAT_API_KEY"}, false, false),
+    };
+    return profiles;
+}
+
+std::string provider_lookup_name(const std::string& requested) {
     const std::string name = lower_alias(requested.empty() ? "openai" : requested);
-    if (name == "lm_studio" || name == "lmstudio") {
-        return {"lm_studio",
-                "http://localhost:1234/v1",
-                false,
-                true,
-                {"LMSTUDIO_API_KEY", "LM_STUDIO_API_KEY", "PKCHAT_API_KEY"}};
+    if (name == "openai_responses") {
+        return "openai";
     }
-    if (name == "openrouter") {
-        return {"openrouter",
-                "https://openrouter.ai/api/v1",
-                true,
-                false,
-                {"OPENROUTER_API_KEY", "PKCHAT_API_KEY"}};
+    return name;
+}
+
+bool provider_requests_responses(const std::string& requested) {
+    return lower_alias(requested) == "openai_responses";
+}
+
+bool find_profile(const std::string& requested, Profile& out) {
+    const std::string name = provider_lookup_name(requested);
+    for (const Profile& profile : profile_registry()) {
+        if (lower_alias(profile.name) == name) {
+            out = profile;
+            return true;
+        }
+        for (const std::string& alias : profile.aliases) {
+            if (lower_alias(alias) == name) {
+                out = profile;
+                return true;
+            }
+        }
     }
-    if (name == "custom_openai_chat" || name == "custom") {
-        return {"custom_openai_chat", "", false, false, {"PKCHAT_API_KEY"}};
-    }
-    return {"openai", "https://api.openai.com/v1", true, false, {"OPENAI_API_KEY", "PKCHAT_API_KEY"}};
+    return false;
 }
 
 bool is_provider_shortcut(const std::string& text) {
-    const std::string name = lower_alias(text);
-    return name == "openai" || name == "openrouter" || name == "lm_studio" || name == "lmstudio";
+    Profile ignored;
+    return find_profile(text, ignored);
 }
 
 bool has_authorization_header(const std::vector<std::string>& headers) {
@@ -112,7 +191,7 @@ std::string resolve_key(const cli::Options& options, const Profile& profile) {
             return std::string(value);
         }
     }
-    return "";
+    return profile.dummy_api_key;
 }
 
 std::string join_url(const std::string& base, const std::string& suffix) {
@@ -168,6 +247,82 @@ std::string build_chat_request_json(const RequestContext& context, const std::ve
     return json.str();
 }
 
+std::string responses_instructions_from_messages(const std::vector<Message>& messages) {
+    std::string instructions;
+    for (const Message& message : messages) {
+        if (message.role != "system") {
+            continue;
+        }
+        if (!instructions.empty()) {
+            instructions += "\n\n";
+        }
+        instructions += message.content;
+    }
+    return instructions;
+}
+
+std::string build_responses_request_json(const RequestContext& context, const std::vector<Message>& messages) {
+    const cli::Options& o = context.options;
+    std::ostringstream out;
+    out << "{";
+    bool wrote = false;
+    auto comma = [&]() {
+        if (wrote) {
+            out << ",";
+        }
+        wrote = true;
+    };
+    if (!o.model.empty()) {
+        comma();
+        out << "\"model\":" << json::quote(o.model);
+    }
+    const std::string instructions = responses_instructions_from_messages(messages);
+    if (!instructions.empty()) {
+        comma();
+        out << "\"instructions\":" << json::quote(instructions);
+    }
+    comma();
+    out << "\"input\":[";
+    bool first_message = true;
+    for (const Message& message : messages) {
+        if (message.role == "system") {
+            continue;
+        }
+        if (!first_message) {
+            out << ",";
+        }
+        first_message = false;
+        const std::string content = message.role == "assistant"
+                                        ? strip_thinking_blocks_for_request(message.content)
+                                        : message.content;
+        if (message.role == "assistant") {
+            out << "{\"type\":\"message\",\"role\":\"assistant\",\"status\":\"completed\",\"content\":[{\"type\":\"output_text\",\"text\":"
+                << json::quote(content) << ",\"annotations\":[]}]}";
+        } else {
+            out << "{\"role\":\"user\",\"content\":" << json::quote(content) << "}";
+        }
+    }
+    out << "]";
+    comma();
+    out << "\"stream\":" << (o.stream ? "true" : "false");
+    comma();
+    out << "\"store\":false";
+    if (o.has_temperature) {
+        comma();
+        out << "\"temperature\":" << o.temperature;
+    }
+    if (o.has_top_p) {
+        comma();
+        out << "\"top_p\":" << o.top_p;
+    }
+    if (o.has_max_output_tokens) {
+        comma();
+        out << "\"max_output_tokens\":" << o.max_output_tokens;
+    }
+    out << "}";
+    return out.str();
+}
+
 Error http_status_error(const RequestContext& context, const http::Response& response, const std::string& url) {
     ErrorCode code = ErrorCode::HttpStatus;
     if (response.status == 401 || response.status == 403) {
@@ -183,7 +338,7 @@ Error http_status_error(const RequestContext& context, const http::Response& res
     if (context.profile.local_endpoint && response.status == 0) {
         suggestion = " Suggestion: start the local provider server and verify the port.";
     } else if (response.status == 404) {
-        suggestion = " Suggestion: check whether the server expects /v1, /api/v1, or an explicit --chat-url/--models-url.";
+        suggestion = " Suggestion: check whether the server expects /v1, /api/v1, or an explicit --chat-url/--responses-url/--models-url.";
     }
     return {code,
             "HTTP " + std::to_string(response.status) + " from " + url + ": " + body + suggestion};
@@ -444,6 +599,109 @@ Error parse_chat_json(const std::string& body, ChatResult& result) {
     return ok_error();
 }
 
+void append_text_with_separator(std::string& out, const std::string& text) {
+    if (text.empty()) {
+        return;
+    }
+    if (!out.empty()) {
+        out.push_back('\n');
+    }
+    out += text;
+}
+
+void append_responses_content_text(const json::Value& content, std::string& out) {
+    if (content.is_string()) {
+        append_text_with_separator(out, content.string);
+        return;
+    }
+    if (!content.is_array()) {
+        return;
+    }
+    for (const json::Value& item : content.array) {
+        if (item.is_string()) {
+            append_text_with_separator(out, item.string);
+            continue;
+        }
+        const json::Value* text = item.get("text");
+        if (text != nullptr && text->is_string()) {
+            append_text_with_separator(out, text->string);
+        }
+    }
+}
+
+void append_responses_reasoning_text(const json::Value& item, std::string& reasoning) {
+    if (const json::Value* summary = item.get("summary")) {
+        append_reasoning_details_text(*summary, reasoning);
+    }
+    if (const json::Value* content = item.get("content")) {
+        append_reasoning_details_text(*content, reasoning);
+    }
+    if (const json::Value* text = item.get("text")) {
+        if (text->is_string()) {
+            if (!reasoning.empty() && reasoning.back() != '\n') {
+                reasoning.push_back('\n');
+            }
+            reasoning += text->string;
+        }
+    }
+}
+
+Error parse_responses_json_value(const json::Value& root, ChatResult& result, bool require_content) {
+    if (const std::string provider_msg = provider_error_message(root); !provider_msg.empty()) {
+        return {ErrorCode::ProviderSchema, "provider error: " + provider_msg};
+    }
+    if (const json::Value* model = root.get("model")) {
+        if (model->is_string()) {
+            result.model = model->string;
+        }
+    }
+    std::string content_text;
+    std::string reasoning;
+    if (const json::Value* output_text = root.get("output_text")) {
+        if (output_text->is_string()) {
+            content_text = output_text->string;
+        }
+    }
+    if (const json::Value* output = root.get("output")) {
+        if (output->is_array()) {
+            for (const json::Value& item : output->array) {
+                const json::Value* type = item.get("type");
+                const bool is_reasoning = type != nullptr && type->is_string() && type->string == "reasoning";
+                if (is_reasoning) {
+                    append_responses_reasoning_text(item, reasoning);
+                    continue;
+                }
+                if (const json::Value* content = item.get("content")) {
+                    append_responses_content_text(*content, content_text);
+                }
+            }
+        }
+    }
+    if (!content_text.empty() || !reasoning.empty()) {
+        result.content = content_with_reasoning_trace(reasoning, content_text);
+    } else if (require_content) {
+        return {ErrorCode::ProviderSchema, "Responses API response did not contain output text"};
+    }
+    if (const json::Value* usage = root.get("usage")) {
+        result.usage_json = json_value_to_string(*usage);
+        if (const json::Value* output_tokens = usage->get("output_tokens")) {
+            if (output_tokens->type == json::Value::Type::Number && output_tokens->number >= 0.0) {
+                result.completion_tokens = static_cast<long long>(output_tokens->number);
+                result.completion_tokens_estimated = false;
+            }
+        }
+    }
+    return ok_error();
+}
+
+Error parse_responses_json(const std::string& body, ChatResult& result) {
+    json::ParseResult parsed = json::parse(body);
+    if (!parsed.error.ok()) {
+        return parsed.error;
+    }
+    return parse_responses_json_value(parsed.value, result, true);
+}
+
 long long estimate_completion_tokens(const std::string& text) {
     long long tokens = 0;
     bool in_ascii_word = false;
@@ -610,6 +868,178 @@ class SseParser {
     }
 };
 
+class ResponsesSseParser {
+   public:
+    Error feed(const std::string& chunk, const DeltaCallback& on_delta, ChatResult& result, bool& done) {
+        buffer_ += chunk;
+        size_t pos = 0;
+        while (true) {
+            size_t sep = buffer_.find("\n\n", pos);
+            size_t sep_len = 2;
+            const size_t crlf_sep = buffer_.find("\r\n\r\n", pos);
+            if (crlf_sep != std::string::npos && (sep == std::string::npos || crlf_sep < sep)) {
+                sep = crlf_sep;
+                sep_len = 4;
+            }
+            if (sep == std::string::npos) {
+                buffer_.erase(0, pos);
+                return ok_error();
+            }
+            const std::string event = buffer_.substr(pos, sep - pos);
+            pos = sep + sep_len;
+            Error err = process_event(event, on_delta, result, done);
+            if (!err.ok() || done) {
+                buffer_.erase(0, pos);
+                return err;
+            }
+        }
+    }
+
+    Error finish(const DeltaCallback& on_delta, ChatResult& result, bool& done) {
+        if (!buffer_.empty()) {
+            std::string event = buffer_;
+            buffer_.clear();
+            Error err = process_event(event, on_delta, result, done);
+            if (!err.ok()) {
+                return err;
+            }
+        }
+        return close_reasoning(on_delta, result, false);
+    }
+
+   private:
+    std::string buffer_;
+    bool reasoning_open_ = false;
+
+    Error emit_text(const std::string& text, const DeltaCallback& on_delta, ChatResult& result) {
+        if (text.empty()) {
+            return ok_error();
+        }
+        result.content += text;
+        return on_delta(text);
+    }
+
+    Error emit_reasoning(const std::string& text, const DeltaCallback& on_delta, ChatResult& result) {
+        if (text.empty()) {
+            return ok_error();
+        }
+        if (!reasoning_open_) {
+            Error err = emit_text("<think>", on_delta, result);
+            if (!err.ok()) {
+                return err;
+            }
+            reasoning_open_ = true;
+        }
+        return emit_text(text, on_delta, result);
+    }
+
+    Error close_reasoning(const DeltaCallback& on_delta, ChatResult& result, bool before_content) {
+        if (!reasoning_open_) {
+            return ok_error();
+        }
+        reasoning_open_ = false;
+        return emit_text(before_content ? "</think>\n\n" : "</think>", on_delta, result);
+    }
+
+    static bool ends_with(const std::string& text, const std::string& suffix) {
+        return text.size() >= suffix.size() && text.compare(text.size() - suffix.size(), suffix.size(), suffix) == 0;
+    }
+
+    Error process_event(const std::string& event,
+                        const DeltaCallback& on_delta,
+                        ChatResult& result,
+                        bool& done) {
+        std::istringstream lines(event);
+        std::string line;
+        std::string data;
+        while (std::getline(lines, line)) {
+            if (!line.empty() && line.back() == '\r') {
+                line.pop_back();
+            }
+            if (line.empty() || line[0] == ':') {
+                continue;
+            }
+            if (line.rfind("data:", 0) == 0) {
+                std::string value = line.substr(5);
+                if (!value.empty() && value.front() == ' ') {
+                    value.erase(value.begin());
+                }
+                if (!data.empty()) {
+                    data.push_back('\n');
+                }
+                data += value;
+            }
+        }
+        if (data.empty()) {
+            return ok_error();
+        }
+        if (data == "[DONE]") {
+            Error err = close_reasoning(on_delta, result, false);
+            if (!err.ok()) {
+                return err;
+            }
+            done = true;
+            return ok_error();
+        }
+        json::ParseResult parsed = json::parse(data);
+        if (!parsed.error.ok()) {
+            return {ErrorCode::SseParse, parsed.error.message};
+        }
+        if (const std::string provider_msg = provider_error_message(parsed.value); !provider_msg.empty()) {
+            return {ErrorCode::ProviderSchema, "provider error: " + provider_msg};
+        }
+        std::string type;
+        if (const json::Value* value = parsed.value.get("type")) {
+            if (value->is_string()) {
+                type = value->string;
+            }
+        }
+        if (type == "response.completed") {
+            Error err = close_reasoning(on_delta, result, false);
+            if (!err.ok()) {
+                return err;
+            }
+            if (const json::Value* response = parsed.value.get("response")) {
+                ChatResult metadata;
+                err = parse_responses_json_value(*response, metadata, false);
+                if (!err.ok()) {
+                    return err;
+                }
+                if (!metadata.model.empty()) {
+                    result.model = metadata.model;
+                }
+                if (!metadata.usage_json.empty() && metadata.usage_json != "null") {
+                    result.usage_json = metadata.usage_json;
+                }
+                if (metadata.completion_tokens > 0) {
+                    result.completion_tokens = metadata.completion_tokens;
+                    result.completion_tokens_estimated = metadata.completion_tokens_estimated;
+                }
+            }
+            done = true;
+            return ok_error();
+        }
+        if (type == "response.failed" || type == "response.incomplete") {
+            return {ErrorCode::ProviderSchema, "Responses API stream ended with " + type};
+        }
+        const json::Value* delta = parsed.value.get("delta");
+        if (delta == nullptr || !delta->is_string()) {
+            return ok_error();
+        }
+        if (ends_with(type, "reasoning_summary_text.delta") || ends_with(type, "reasoning_text.delta")) {
+            return emit_reasoning(delta->string, on_delta, result);
+        }
+        if (ends_with(type, "output_text.delta") || type == "response.text.delta") {
+            Error err = close_reasoning(on_delta, result, true);
+            if (!err.ok()) {
+                return err;
+            }
+            return emit_text(delta->string, on_delta, result);
+        }
+        return ok_error();
+    }
+};
+
 std::vector<std::string> build_headers(const RequestContext& context) {
     std::vector<std::string> headers = context.headers;
     headers.emplace_back("Content-Type: application/json");
@@ -699,22 +1129,45 @@ ContextResult build_context(const cli::Options& input_options) {
         return {{}, {ErrorCode::BadArgs, "prompt is empty; use -p/--prompt, --prompt-file, or --repl"}};
     }
 
-    Profile profile = profile_for(options.provider);
+    if (provider_requests_responses(options.provider)) {
+        options.api = "responses";
+    }
+    ApiKind api_kind = options.api == "responses" ? ApiKind::Responses : ApiKind::ChatCompletions;
+
+    Profile profile;
+    if (!find_profile(options.provider, profile)) {
+        return {{}, {ErrorCode::BadArgs, "unknown provider profile: " + options.provider}};
+    }
+
     std::string base = options.base_url;
     if (!options.positional_url.empty() && is_provider_shortcut(options.positional_url)) {
-        profile = profile_for(options.positional_url);
+        if (provider_requests_responses(options.positional_url)) {
+            options.api = "responses";
+            api_kind = ApiKind::Responses;
+        }
+        if (!find_profile(options.positional_url, profile)) {
+            return {{}, {ErrorCode::BadArgs, "unknown provider profile: " + options.positional_url}};
+        }
         options.provider = profile.name;
     } else if (base.empty() && !options.positional_url.empty()) {
         base = options.positional_url;
         if (input_options.provider == "openai") {
-            profile = profile_for("custom_openai_chat");
+            if (!find_profile("custom_openai_chat", profile)) {
+                return {{}, {ErrorCode::Internal, "custom_openai_chat profile is missing from the provider registry"}};
+            }
             options.provider = profile.name;
         }
+    } else {
+        options.provider = profile.name;
     }
     if (base.empty()) {
         base = profile.base_url;
     }
-    if (base.empty() && options.chat_url.empty() && options.models_url.empty()) {
+    const bool may_need_models = options.list_models || options.model.empty();
+    const bool needs_base_for_models = may_need_models && options.models_url.empty();
+    const bool needs_base_for_chat = api_kind == ApiKind::ChatCompletions && options.chat_url.empty();
+    const bool needs_base_for_responses = api_kind == ApiKind::Responses && options.responses_url.empty();
+    if (base.empty() && (needs_base_for_models || needs_base_for_chat || needs_base_for_responses)) {
         return {{}, {ErrorCode::BadUrl, "no base URL configured; pass BASE_URL or --base-url"}};
     }
 
@@ -737,21 +1190,49 @@ ContextResult build_context(const cli::Options& input_options) {
         }
     }
 
+    if (api_kind == ApiKind::ChatCompletions && !profile.capabilities.chat_completions && options.chat_url.empty()) {
+        return {{}, {ErrorCode::UnsupportedFeature, "provider " + profile.name + " does not define a Chat Completions endpoint"}};
+    }
+    if (api_kind == ApiKind::Responses && !profile.capabilities.responses_api && options.responses_url.empty()) {
+        return {{}, {ErrorCode::UnsupportedFeature, "provider " + profile.name + " does not define a built-in Responses API endpoint; use --responses-url or --api chat"}};
+    }
+
     std::string key = resolve_key(options, profile);
     if (profile.requires_bearer_key && key.empty() && !has_authorization_header(options.headers)) {
         return {{}, {ErrorCode::Config, "provider " + profile.name + " requires an API key; set " +
                                       (profile.key_envs.empty() ? "PKCHAT_API_KEY" : profile.key_envs[0]) +
                                       " or use --key-env/--key-file/--key-stdin"}};
     }
+    if (!profile.compatibility_warning.empty() && !options.quiet) {
+        std::cerr << "Provider warning: " << profile.compatibility_warning << "\n";
+    }
+
     RequestContext context;
     context.options = options;
     context.profile = profile;
     context.base_url = base;
-    context.chat_url = options.chat_url.empty() ? join_url(base, "/chat/completions") : options.chat_url;
-    context.models_url = options.models_url.empty() ? join_url(base, "/models") : options.models_url;
+    context.chat_url = options.chat_url.empty() ? join_url(base, profile.chat_path) : options.chat_url;
+    context.responses_url = options.responses_url.empty() ? join_url(base, profile.responses_path) : options.responses_url;
+    context.models_url = options.models_url.empty() ? join_url(base, profile.models_path) : options.models_url;
     context.api_key = key;
     context.headers = options.headers;
+    context.api_kind = api_kind;
+    if (!options.responses_url.empty()) {
+        context.profile.capabilities.responses_api = true;
+    }
     return {context, ok_error()};
+}
+
+std::vector<Profile> built_in_profiles() {
+    return profile_registry();
+}
+
+const Capabilities& capabilities_for(const RequestContext& context) {
+    return context.profile.capabilities;
+}
+
+std::string active_request_url(const RequestContext& context) {
+    return context.api_kind == ApiKind::Responses ? context.responses_url : context.chat_url;
 }
 
 Error list_models(const RequestContext& context, ModelsResult& result, runtime::CancellationToken cancellation) {
@@ -793,13 +1274,19 @@ Error send_chat_messages(const RequestContext& context,
         return on_delta(delta);
     };
 
-    http::Request req = base_http_request(context, "POST", context.chat_url, cancellation);
-    req.body = build_chat_request_json(context, messages);
-    SseParser parser;
+    const std::string url = active_request_url(context);
+    http::Request req = base_http_request(context, "POST", url, cancellation);
+    req.body = context.api_kind == ApiKind::Responses ? build_responses_request_json(context, messages)
+                                                      : build_chat_request_json(context, messages);
+    SseParser chat_parser;
+    ResponsesSseParser responses_parser;
     bool done = false;
     if (context.options.stream) {
         req.on_body = [&](const std::string& chunk) -> Error {
-            return parser.feed(chunk, timed_delta, result.content, done);
+            if (context.api_kind == ApiKind::Responses) {
+                return responses_parser.feed(chunk, timed_delta, result, done);
+            }
+            return chat_parser.feed(chunk, timed_delta, result.content, done);
         };
     }
 
@@ -808,21 +1295,24 @@ Error send_chat_messages(const RequestContext& context,
         if (context.profile.local_endpoint && http_result.error.code == ErrorCode::Connect) {
             return {ErrorCode::Connect,
                     http_result.error.message +
-                        "\nSuggestion: start LM Studio's local server or override the URL with --base-url."};
+                        "\nSuggestion: start the local provider server or override the URL with --base-url."};
         }
         return http_result.error;
     }
     if (http_result.response.status < 200 || http_result.response.status >= 300) {
-        return http_status_error(context, http_result.response, context.chat_url);
+        return http_status_error(context, http_result.response, url);
     }
     result.model = context.options.model;
     if (context.options.stream) {
-        Error err = parser.finish(timed_delta, result.content, done);
+        Error err = context.api_kind == ApiKind::Responses
+                        ? responses_parser.finish(timed_delta, result, done)
+                        : chat_parser.finish(timed_delta, result.content, done);
         if (!err.ok()) {
             return err;
         }
     } else {
-        Error err = parse_chat_json(http_result.response.body, result);
+        Error err = context.api_kind == ApiKind::Responses ? parse_responses_json(http_result.response.body, result)
+                                                           : parse_chat_json(http_result.response.body, result);
         if (!err.ok()) {
             return err;
         }

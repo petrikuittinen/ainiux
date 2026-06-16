@@ -29,6 +29,80 @@ class Handler(BaseHTTPRequestHandler):
         else:
             self._send(404, json.dumps({"error": {"message": "not found"}}))
 
+    def _responses_last_input(self, request):
+        items = request.get("input", [])
+        if isinstance(items, str):
+            return items
+        if not isinstance(items, list):
+            return ""
+        for item in reversed(items):
+            if not isinstance(item, dict) or item.get("role") != "user":
+                continue
+            content = item.get("content", "")
+            if isinstance(content, str):
+                return content
+            if isinstance(content, list):
+                parts = []
+                for part in content:
+                    if isinstance(part, str):
+                        parts.append(part)
+                    elif isinstance(part, dict) and isinstance(part.get("text"), str):
+                        parts.append(part["text"])
+                return "".join(parts)
+        return ""
+
+    def _handle_responses(self, request):
+        if request.get("model") == "":
+            self._send(400, json.dumps({"error": {"message": "empty model field"}}))
+            return
+        last = self._responses_last_input(request)
+        reply = "Hello"
+        if last == "model?":
+            reply = request.get("model", "<missing>")
+        elif last == "reasoning":
+            reply = "Visible answer"
+
+        if request.get("stream"):
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream")
+            self.end_headers()
+            midpoint = max(1, len(reply) // 2)
+            if last == "reasoning":
+                chunks = [
+                    "data: " + json.dumps({"type": "response.reasoning_summary_text.delta", "delta": "internal"}) + "\n\n",
+                    "data: " + json.dumps({"type": "response.reasoning_summary_text.delta", "delta": " trace"}) + "\n\n",
+                    "data: " + json.dumps({"type": "response.output_text.delta", "delta": reply}) + "\n\n",
+                    "data: " + json.dumps({"type": "response.completed", "response": {"model": self.model, "usage": {"input_tokens": 1, "output_tokens": 1, "total_tokens": 2}}}) + "\n\n",
+                ]
+            else:
+                chunks = [
+                    "data: " + json.dumps({"type": "response.output_text.delta", "delta": reply[:midpoint]}) + "\n\n",
+                    "data: " + json.dumps({"type": "response.output_text.delta", "delta": reply[midpoint:]}) + "\n\n",
+                    "data: " + json.dumps({"type": "response.completed", "response": {"model": self.model, "usage": {"input_tokens": 1, "output_tokens": 1, "total_tokens": 2}}}) + "\n\n",
+                ]
+            for chunk in chunks:
+                if self.stream_delay:
+                    time.sleep(self.stream_delay)
+                self.wfile.write(chunk.encode("utf-8"))
+                self.wfile.flush()
+            return
+        output = []
+        if last == "reasoning":
+            output.append({"type": "reasoning", "summary": [{"text": "internal trace"}]})
+        output.append({"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": reply, "annotations": []}]})
+        self._send(
+            200,
+            json.dumps(
+                {
+                    "id": "resp_mock",
+                    "object": "response",
+                    "model": self.model,
+                    "output": output,
+                    "usage": {"input_tokens": 1, "output_tokens": 1, "total_tokens": 2},
+                }
+            ),
+        )
+
     def do_POST(self):
         length = int(self.headers.get("Content-Length", "0"))
         body = self.rfile.read(length).decode("utf-8")
@@ -36,6 +110,9 @@ class Handler(BaseHTTPRequestHandler):
             request = json.loads(body)
         except json.JSONDecodeError:
             self._send(400, json.dumps({"error": {"message": "bad json"}}))
+            return
+        if self.path == "/v1/responses":
+            self._handle_responses(request)
             return
         if self.path != "/v1/chat/completions":
             self._send(404, json.dumps({"error": {"message": "not found"}}))

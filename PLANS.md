@@ -869,14 +869,17 @@ notes
 
 ## Tasks
 
-- [ ] Add a provider registry.
-- [ ] Add profile lookup by name and alias.
+- [x] Add a provider registry.
+- [x] Add profile lookup by name and alias.
 - [ ] Add capability detection/probing.
-- [ ] Add OpenAI Responses request generation.
-- [ ] Add OpenAI Responses streaming parser mapping into internal events.
+- [x] Add OpenAI Responses request generation.
+- [x] Add OpenAI Responses streaming parser mapping into internal events.
 - [ ] Add provider-specific error normalization.
-- [ ] Add docs for each supported provider.
-- [ ] Ensure each adapter frees provider-specific request/response state on all paths.
+- [x] Add docs for each supported provider.
+- [x] Ensure each adapter frees provider-specific request/response state on all paths through shared RAII HTTP/runtime code.
+
+
+Implementation note (2026-06-16): The first v0.4 slice is present. `src/provider/` now has a built-in registry for the expanded provider list, alias lookup, endpoint paths, key defaults, compatibility warnings, and client capability flags. `--api responses`, `--responses`, and `--provider openai_responses` select a text-only Responses API adapter that shares the existing HTTP/runtime/cancellation path and maps output text and streaming deltas into the same internal assistant message model as Chat Completions. Capability probing and provider-specific error normalization remain open.
 
 ## Compatibility matrix
 
@@ -897,11 +900,11 @@ Do not overstate support. If a capability is detected or version-dependent, say 
 
 ## Acceptance criteria
 
-- [ ] Provider registry can resolve all aliases.
-- [ ] LM Studio remains explicitly supported and documented.
-- [ ] A provider capability can be reported to CLI/TUI/web code without leaking provider internals.
-- [ ] OpenAI Chat Completions and Responses paths both map into the internal message/event model.
-- [ ] Unsupported features return clear `PKCHAT_ERR_UNSUPPORTED_FEATURE` errors.
+- [x] Provider registry can resolve all aliases.
+- [x] LM Studio remains explicitly supported and documented.
+- [x] A provider capability can be reported to CLI/TUI/web code without leaking provider internals.
+- [x] OpenAI Chat Completions and Responses paths both map into the internal message/event model.
+- [x] Unsupported features return clear `PKCHAT_ERR_UNSUPPORTED_FEATURE` errors.
 - [ ] Leak-check tooling reports no leaks for provider registry lookup, capability probing, and failed provider calls where supported.
 
 ---

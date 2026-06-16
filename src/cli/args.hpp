@@ -35,6 +35,7 @@ struct Options {
     std::string model;
     std::string provider = "openai";
     std::string profile;
+    std::string api = "chat";
     std::string base_url;
     std::string chat_url;
     std::string models_url;

@@ -169,7 +169,7 @@ void print_chat_start(const pkchat::provider::RequestContext& context) {
     if (context.options.quiet) {
         return;
     }
-    std::cerr << "Endpoint: " << context.chat_url << std::endl;
+    std::cerr << "Endpoint: " << pkchat::provider::active_request_url(context) << std::endl;
     std::cerr << "Model: " << (context.options.model.empty() ? "unknown" : context.options.model) << std::endl;
 }
 

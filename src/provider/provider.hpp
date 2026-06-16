@@ -11,12 +11,39 @@
 
 namespace pkchat::provider {
 
+enum class ApiKind { ChatCompletions, Responses };
+
+struct Capabilities {
+    bool chat_completions = false;
+    bool responses_api = false;
+    bool streaming = false;
+    bool model_listing = false;
+    bool usage_reporting = false;
+    bool requires_bearer_key = false;
+    bool optional_bearer_key = false;
+    bool images = false;
+    bool pdfs = false;
+    bool file_uploads = false;
+    bool file_urls = false;
+    bool tool_calls = false;
+    bool server_side_context_management = false;
+    bool custom_headers = false;
+    bool local_endpoint = false;
+};
+
 struct Profile {
     std::string name;
+    std::vector<std::string> aliases;
     std::string base_url;
+    std::string chat_path = "/chat/completions";
+    std::string responses_path = "/responses";
+    std::string models_path = "/models";
     bool requires_bearer_key = false;
     bool local_endpoint = false;
     std::vector<std::string> key_envs;
+    std::string dummy_api_key;
+    std::string compatibility_warning;
+    Capabilities capabilities;
 };
 
 struct RequestContext {
@@ -24,9 +51,11 @@ struct RequestContext {
     Profile profile;
     std::string base_url;
     std::string chat_url;
+    std::string responses_url;
     std::string models_url;
     std::string api_key;
     std::vector<std::string> headers;
+    ApiKind api_kind = ApiKind::ChatCompletions;
 };
 
 struct Message {
@@ -56,6 +85,9 @@ struct ContextResult {
 };
 
 ContextResult build_context(const cli::Options& options);
+std::vector<Profile> built_in_profiles();
+const Capabilities& capabilities_for(const RequestContext& context);
+std::string active_request_url(const RequestContext& context);
 Error list_models(const RequestContext& context,
                   ModelsResult& result,
                   runtime::CancellationToken cancellation = runtime::CancellationToken());
