@@ -803,14 +803,31 @@ void EditorState::move_end() {
 
 Error EditorState::kill_to_line_end() {
     const size_t line = text.line_for_offset(cursor);
-    const size_t end = text.line_start(line) + text.line_length(line);
-    if (cursor >= end) {
+    const size_t start = text.line_start(line);
+    const size_t length = text.line_length(line);
+    const size_t end = start + length;
+    if (cursor < end) {
+        Error err = text.erase(cursor, end - cursor);
+        if (!err.ok()) {
+            return err;
+        }
+        dirty = true;
+        update_preferred_column(*this);
         return ok_error();
     }
-    Error err = text.erase(cursor, end - cursor);
+    if (length != 0 || text.line_count() <= 1) {
+        return ok_error();
+    }
+
+    size_t erase_pos = start;
+    if (line + 1 >= text.line_count()) {
+        erase_pos = start == 0 ? 0 : start - 1;
+    }
+    Error err = text.erase(erase_pos, 1);
     if (!err.ok()) {
         return err;
     }
+    cursor = std::min(erase_pos, text.size());
     dirty = true;
     update_preferred_column(*this);
     return ok_error();

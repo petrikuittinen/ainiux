@@ -159,7 +159,26 @@ void test_editor_kill_to_line_end() {
 
     err = state.kill_to_line_end();
     check(err.ok(), "editor kill at end of line succeeds");
-    check(state.text.str() == "alpha \ngamma", "editor kill at end of line leaves newline intact");
+    check(state.text.str() == "alpha \ngamma", "editor kill at end of non-empty line leaves newline intact");
+
+    pkchat::editor::EditorState middle = pkchat::editor::EditorState::from_text("alpha\n\ngamma");
+    middle.cursor = middle.text.line_start(1);
+    err = middle.kill_to_line_end();
+    check(err.ok(), "editor kill empty middle line succeeds");
+    check(middle.text.str() == "alpha\ngamma", "editor kill empty middle line removes that line");
+    check(middle.cursor == middle.text.line_start(1), "editor kill empty middle line keeps cursor at next line start");
+
+    pkchat::editor::EditorState last = pkchat::editor::EditorState::from_text("alpha\n");
+    last.cursor = last.text.line_start(1);
+    err = last.kill_to_line_end();
+    check(err.ok(), "editor kill empty final line succeeds");
+    check(last.text.str() == "alpha", "editor kill empty final line removes preceding newline");
+    check(last.cursor == last.text.size(), "editor kill empty final line moves cursor to new end");
+
+    pkchat::editor::EditorState only = pkchat::editor::EditorState::from_text("");
+    err = only.kill_to_line_end();
+    check(err.ok(), "editor kill single empty buffer succeeds");
+    check(only.text.str().empty(), "editor kill single empty buffer is a no-op");
 }
 
 void test_editor_vertical_navigation_modes() {
