@@ -570,7 +570,7 @@ Use colors by default in the full-screen TUI, but keep them strictly optional an
   - [x] input label foreground/background
   - [x] background fill
 - [x] Draw full-width lines with an explicit theme background when colors are enabled so contrast is predictable.
-- [x] Color only message labels differently from message content at first; defer rich markdown coloring.
+- [x] Color message labels and visible thinking traces differently from ordinary message content; defer rich markdown coloring.
 - [x] Display errors in a distinct error color from ordinary status text.
 - [x] Use 24-bit ANSI color escapes initially so contrast is controlled instead of depending on terminal palette mappings.
 - [x] Add WCAG 2.1 contrast tests for every foreground/background pair used by the themes.
@@ -579,6 +579,7 @@ Use colors by default in the full-screen TUI, but keep them strictly optional an
   - [x] background `#0B0F14`
   - [x] normal text `#E6EDF3`
   - [x] muted text `#9BA7B4`
+  - [x] thinking trace text `#A7B8C9`
   - [x] user label `#7DD3FC`
   - [x] assistant label `#86EFAC`
   - [x] error text `#FCA5A5`
@@ -588,6 +589,7 @@ Use colors by default in the full-screen TUI, but keep them strictly optional an
   - [x] background `#FAFAFA`
   - [x] normal text `#111827`
   - [x] muted text `#4B5563`
+  - [x] thinking trace text `#52637A`
   - [x] user label `#075985`
   - [x] assistant label `#166534`
   - [x] error text `#B91C1C`

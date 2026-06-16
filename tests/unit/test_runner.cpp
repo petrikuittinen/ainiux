@@ -261,6 +261,7 @@ void test_tui_theme_parsing_and_contrast() {
     const std::vector<pkchat::tui::StyleRole> roles = {
         pkchat::tui::StyleRole::Text,
         pkchat::tui::StyleRole::Muted,
+        pkchat::tui::StyleRole::ThinkingTrace,
         pkchat::tui::StyleRole::UserLabel,
         pkchat::tui::StyleRole::AssistantLabel,
         pkchat::tui::StyleRole::Error,
@@ -275,6 +276,22 @@ void test_tui_theme_parsing_and_contrast() {
                   std::string("TUI theme contrast meets WCAG AA for ") + pkchat::tui::theme_name(item));
         }
     }
+
+    const pkchat::tui::StylePair dark_text =
+        pkchat::tui::style_pair_for(pkchat::tui::ThemeName::Dark, pkchat::tui::StyleRole::Text);
+    const pkchat::tui::StylePair dark_thinking =
+        pkchat::tui::style_pair_for(pkchat::tui::ThemeName::Dark, pkchat::tui::StyleRole::ThinkingTrace);
+    check(pkchat::tui::contrast_ratio(dark_thinking.foreground, dark_thinking.background) <
+              pkchat::tui::contrast_ratio(dark_text.foreground, dark_text.background),
+          "TUI dark thinking trace text is dimmer than normal text");
+
+    const pkchat::tui::StylePair light_text =
+        pkchat::tui::style_pair_for(pkchat::tui::ThemeName::Light, pkchat::tui::StyleRole::Text);
+    const pkchat::tui::StylePair light_thinking =
+        pkchat::tui::style_pair_for(pkchat::tui::ThemeName::Light, pkchat::tui::StyleRole::ThinkingTrace);
+    check(pkchat::tui::contrast_ratio(light_thinking.foreground, light_thinking.background) <
+              pkchat::tui::contrast_ratio(light_text.foreground, light_text.background),
+          "TUI light thinking trace text is less stark than normal text");
 }
 
 void test_cli_rejects_unknown() {

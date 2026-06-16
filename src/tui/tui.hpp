@@ -36,6 +36,7 @@ enum class ThemeName {
 enum class StyleRole {
     Text,
     Muted,
+    ThinkingTrace,
     UserLabel,
     AssistantLabel,
     Error,

@@ -82,6 +82,7 @@ StylePair style_pair_for(ThemeName theme, StyleRole role) {
     const Rgb background = dark ? Rgb{0x0B, 0x0F, 0x14} : Rgb{0xFA, 0xFA, 0xFA};
     const Rgb text = dark ? Rgb{0xE6, 0xED, 0xF3} : Rgb{0x11, 0x18, 0x27};
     const Rgb muted = dark ? Rgb{0x9B, 0xA7, 0xB4} : Rgb{0x4B, 0x55, 0x63};
+    const Rgb thinking = dark ? Rgb{0xA7, 0xB8, 0xC9} : Rgb{0x52, 0x63, 0x7A};
     const Rgb user = dark ? Rgb{0x7D, 0xD3, 0xFC} : Rgb{0x07, 0x59, 0x85};
     const Rgb assistant = dark ? Rgb{0x86, 0xEF, 0xAC} : Rgb{0x16, 0x65, 0x34};
     const Rgb error = dark ? Rgb{0xFC, 0xA5, 0xA5} : Rgb{0xB9, 0x1C, 0x1C};
@@ -93,6 +94,8 @@ StylePair style_pair_for(ThemeName theme, StyleRole role) {
             return {text, background};
         case StyleRole::Muted:
             return {muted, background};
+        case StyleRole::ThinkingTrace:
+            return {thinking, background};
         case StyleRole::UserLabel:
             return {user, background};
         case StyleRole::AssistantLabel:
@@ -468,31 +471,74 @@ void draw_line(int row, int cols, const std::string& text, StyleRole role, const
     draw_line(row, cols, std::vector<StyledSegment>{{text, role}}, role, style);
 }
 
-void append_wrapped_line(std::vector<std::string>& lines, const std::string& logical, int width) {
-    if (width <= 0) {
-        lines.push_back("");
+std::string take_cells_before_newline(const std::string& text, size_t& pos, int width) {
+    std::string out;
+    int cells = 0;
+    while (pos < text.size() && cells < width && text[pos] != '\n') {
+        const size_t len = utf8_len_at(text, pos);
+        out.append(text, pos, len);
+        pos += len;
+        ++cells;
+    }
+    return out;
+}
+
+void append_styled_piece(std::vector<StyledSegment>& line, std::string text, StyleRole role) {
+    if (text.empty()) {
         return;
     }
-    if (logical.empty()) {
-        lines.push_back("");
-        return;
-    }
-    size_t pos = 0;
-    while (pos < logical.size()) {
-        lines.push_back(take_cells(logical, pos, width));
+    if (!line.empty() && line.back().role == role) {
+        line.back().text += text;
+    } else {
+        line.push_back({std::move(text), role});
     }
 }
 
-void append_wrapped(std::vector<std::string>& lines, const std::string& text, int width) {
-    size_t start = 0;
-    while (start <= text.size()) {
-        const size_t newline = text.find('\n', start);
-        if (newline == std::string::npos) {
-            append_wrapped_line(lines, text.substr(start), width);
-            break;
+void append_wrapped_segments(std::vector<std::vector<StyledSegment>>& lines,
+                             const std::vector<StyledSegment>& segments,
+                             int width) {
+    if (width <= 0) {
+        lines.push_back({});
+        return;
+    }
+
+    std::vector<StyledSegment> current;
+    int cells = 0;
+    bool last_was_newline = false;
+    auto finish_line = [&]() {
+        lines.push_back(std::move(current));
+        current.clear();
+        cells = 0;
+    };
+
+    for (const StyledSegment& segment : segments) {
+        size_t pos = 0;
+        while (pos < segment.text.size()) {
+            if (segment.text[pos] == '\n') {
+                finish_line();
+                last_was_newline = true;
+                ++pos;
+                continue;
+            }
+            if (cells >= width) {
+                finish_line();
+            }
+            const size_t before = pos;
+            const std::string piece = take_cells_before_newline(segment.text, pos, width - cells);
+            if (piece.empty()) {
+                if (pos == before) {
+                    pos += utf8_len_at(segment.text, pos);
+                }
+                continue;
+            }
+            append_styled_piece(current, piece, segment.role);
+            cells += displayed_cells(piece);
+            last_was_newline = false;
         }
-        append_wrapped_line(lines, text.substr(start, newline - start), width);
-        start = newline + 1;
+    }
+
+    if (lines.empty() || !current.empty() || last_was_newline) {
+        lines.push_back(std::move(current));
     }
 }
 
@@ -515,6 +561,76 @@ std::string error_line(const Error& error) {
 
 bool starts_with(const std::string& text, const std::string& prefix) {
     return text.rfind(prefix, 0) == 0;
+}
+
+char lower_ascii(char ch) {
+    if (ch >= 'A' && ch <= 'Z') {
+        return static_cast<char>(ch - 'A' + 'a');
+    }
+    return ch;
+}
+
+bool tag_at_case_insensitive(const std::string& text, std::size_t pos, const std::string& tag) {
+    if (pos + tag.size() > text.size()) {
+        return false;
+    }
+    for (std::size_t i = 0; i < tag.size(); ++i) {
+        if (lower_ascii(text[pos + i]) != tag[i]) {
+            return false;
+        }
+    }
+    return true;
+}
+
+std::size_t find_tag_case_insensitive(const std::string& text, const std::string& tag, std::size_t start) {
+    for (std::size_t pos = start; pos + tag.size() <= text.size(); ++pos) {
+        if (tag_at_case_insensitive(text, pos, tag)) {
+            return pos;
+        }
+    }
+    return std::string::npos;
+}
+
+void append_segment(std::vector<StyledSegment>& segments, std::string text, StyleRole role) {
+    if (text.empty()) {
+        return;
+    }
+    if (!segments.empty() && segments.back().role == role) {
+        segments.back().text += text;
+        return;
+    }
+    segments.push_back({std::move(text), role});
+}
+
+std::vector<StyledSegment> visible_thinking_trace_segments(const std::string& content) {
+    const std::string open_tag = "<think>";
+    const std::string close_tag = "</think>";
+    std::vector<StyledSegment> segments;
+    std::size_t pos = 0;
+    while (pos < content.size()) {
+        const std::size_t open = find_tag_case_insensitive(content, open_tag, pos);
+        if (open == std::string::npos) {
+            append_segment(segments, content.substr(pos), StyleRole::Text);
+            break;
+        }
+        append_segment(segments, content.substr(pos, open - pos), StyleRole::Text);
+        const std::size_t after_open = open + open_tag.size();
+        const std::size_t close = find_tag_case_insensitive(content, close_tag, after_open);
+        if (close == std::string::npos) {
+            append_segment(segments, content.substr(open), StyleRole::ThinkingTrace);
+            break;
+        }
+        append_segment(segments, content.substr(open, close + close_tag.size() - open), StyleRole::ThinkingTrace);
+        pos = close + close_tag.size();
+    }
+    if (segments.empty()) {
+        segments.push_back({"", StyleRole::Text});
+    }
+    return segments;
+}
+
+std::vector<StyledSegment> plain_text_segments(const std::string& content) {
+    return std::vector<StyledSegment>{{content, StyleRole::Text}};
 }
 
 StyleRole status_role_for_text(const std::string& status) {
@@ -546,8 +662,12 @@ std::vector<StyledLine> history_lines_for_session(const chat::Session& session, 
                 }
             }
         }
-        std::vector<std::string> wrapped;
-        append_wrapped(wrapped, content, std::max(min_content_width, cols - static_cast<int>(prefix.size())));
+        std::vector<StyledSegment> content_segments = plain_text_segments(content);
+        if (message.role == "assistant" && show_thinking_traces) {
+            content_segments = visible_thinking_trace_segments(content);
+        }
+        std::vector<std::vector<StyledSegment>> wrapped;
+        append_wrapped_segments(wrapped, content_segments, std::max(min_content_width, cols - static_cast<int>(prefix.size())));
         for (size_t i = 0; i < wrapped.size(); ++i) {
             StyledLine line;
             if (i == 0) {
@@ -555,7 +675,7 @@ std::vector<StyledLine> history_lines_for_session(const chat::Session& session, 
             } else {
                 line.segments.push_back({std::string(prefix.size(), ' '), StyleRole::Muted});
             }
-            line.segments.push_back({wrapped[i], StyleRole::Text});
+            line.segments.insert(line.segments.end(), wrapped[i].begin(), wrapped[i].end());
             history.push_back(std::move(line));
         }
     }
