@@ -46,9 +46,11 @@ v0.2  Simple interactive REPL and JSON chat persistence
 v0.3  Runtime/job layer and non-blocking full-screen TUI foundation
 v0.4  Provider adapters, Responses API, LM Studio refinement, and compatibility profiles
 v0.5  Context management, attachments, and safe URL fetching
-v0.6  Benchmark mode
-v0.7  Local web server mode
-v0.8  Local agent mode with sandbox/approval design
+v0.6  TOML-alike simple configuration files
+v0.7  Benchmark mode
+v0.8  AI-assisted editor
+v0.9  Local web server mode
+v1.0  Local agent mode with sandbox/approval design
 ```
 
 Each milestone should leave the program usable. Do not create a long-lived pile of half-wired features.
@@ -1011,7 +1013,196 @@ Safety defaults:
 
 ---
 
-# v0.6 - Benchmark mode
+# v0.6 - TOML-alike simple configuration files
+
+## Goal
+
+Add small, predictable configuration files for built-in defaults, system config, user config, and later profile/settings persistence without bringing in full TOML/YAML complexity.
+
+The syntax is TOML-alike, but deliberately simpler. The same parser should load built-in defaults and user-supplied config files.
+
+## Suggested grammar
+
+Keep the grammar intentionally small:
+
+```text
+file         = line*
+line         = blank | comment | section | assignment
+blank        = whitespace*
+comment      = whitespace* "#" text
+section      = "[" section_name "]"
+assignment   = key whitespace* "=" whitespace* value
+section_name = name ("." name)*
+key          = name ("." name)*
+name         = ASCII letter/digit plus "_" "-" "."
+value        = boolean | integer | float | quoted_string | bare_string
+```
+
+Supported values:
+
+```text
+true
+false
+123
+3.14
+"quoted string"
+bare-string
+https://api.openai.com/v1
+```
+
+String rules:
+
+- [ ] Quoted strings support only these escapes:
+  - [ ] `\\` backslash
+  - [ ] `\"` quote
+  - [ ] `\n` newline
+  - [ ] `\r` carriage return
+  - [ ] `\t` tab
+- [ ] Bare strings are trimmed left/right.
+- [ ] Bare strings have no escaping.
+- [ ] Bare strings allow UTF-8.
+
+Do not support in v1:
+
+- [ ] nested objects
+- [ ] arrays
+- [ ] implicit environment expansion
+- [ ] arbitrary expressions
+- [ ] includes
+- [ ] conditionals
+- [ ] YAML-style indentation semantics
+- [ ] multiline strings
+
+## Handling lists without arrays
+
+Duplicate keys are errors by default. Specific documented keys may be repeated and become lists.
+
+Example:
+
+```text
+[headers.openrouter]
+HTTP-Referer = https://example.com
+X-Title = pkchat
+
+[url_fetch]
+allow_domain = example.com
+allow_domain = docs.example.com
+allow_domain = api.example.com
+```
+
+Rules:
+
+- [ ] Duplicate keys are errors by default inside the same file.
+- [ ] Documented repeated-list keys may appear multiple times and accumulate values.
+- [ ] Across different config layers, later layers override earlier layers.
+- [ ] Repeated-list keys should merge or replace according to documented per-key policy before implementation.
+
+Good repeated-list keys:
+
+```text
+url_fetch.allow_domain
+url_fetch.block_domain
+benchmark.prompt_file
+```
+
+For most settings, duplicate keys should remain an error inside the same file. This catches typos while still supporting the few list-like settings that need repetition.
+
+## Built-in defaults
+
+Use the exact same syntax for built-in defaults and user config:
+
+```cpp
+static constexpr std::string_view kBuiltinConfig = R"PKCHATCONF(
+# pkchat built-in defaults
+config_version = 1
+profile = lmstudio
+model =
+
+[profile.lmstudio]
+provider = lmstudio
+base_url = http://localhost:1234/v1
+api_key_required = false
+
+[profile.openai]
+provider = openai
+base_url = https://api.openai.com/v1
+api_key_env = OPENAI_API_KEY
+api_key_required = true
+
+[tui]
+enabled = true
+input_height_ratio = 0.20
+send_key = alt-enter
+theme = auto
+
+[web]
+bind = 127.0.0.1
+port = 80
+theme = auto
+
+[network]
+connect_timeout_seconds = 10
+request_timeout_seconds = 0
+
+[url_fetch]
+enabled = false
+max_bytes = 1048576
+block_private_addresses = true
+)PKCHATCONF";
+```
+
+## Load order
+
+Load and merge config in this order:
+
+1. built-in defaults
+2. system config
+3. user config
+4. environment variables
+5. command-line arguments
+
+For Unix-like systems:
+
+```text
+system config:
+  /etc/xdg/pkchat/config.conf
+
+user config:
+  $XDG_CONFIG_HOME/pkchat/config.conf
+  fallback ~/.config/pkchat/config.conf
+```
+
+The XDG spec defines user-specific config through `$XDG_CONFIG_HOME` and preference-ordered system config directories through `$XDG_CONFIG_DIRS`. Start with `/etc/xdg/pkchat/config.conf`, but keep the loader design compatible with `$XDG_CONFIG_DIRS` ordering.
+
+## Parser and merge rules
+
+- [ ] Keep the parser independent from CLI/TUI/web code in `src/config/`.
+- [ ] Preserve source location for parse errors: path, line, column where practical.
+- [ ] Report duplicate-key errors with section and key names.
+- [ ] Validate types after parsing so errors can name the expected setting type.
+- [ ] Treat unknown keys as warnings or errors according to a documented strictness mode.
+- [ ] Do not expand environment variables inside config files.
+- [ ] Do not allow config files to include other files in v1.
+- [ ] Apply environment variables after file layers, not during parsing.
+- [ ] Apply command-line options last.
+- [ ] Never save API key values into generated config files.
+
+## Acceptance criteria
+
+- [ ] Built-in defaults parse through the same parser as user config.
+- [ ] System and user config paths follow XDG rules on Unix-like systems.
+- [ ] Later config layers override earlier scalar settings.
+- [ ] Duplicate scalar keys in the same file are reported as errors.
+- [ ] Documented repeated-list keys can appear multiple times.
+- [ ] Invalid quoted-string escapes are rejected with clear errors.
+- [ ] Bare strings preserve UTF-8 and trim surrounding whitespace.
+- [ ] CLI arguments override config file values.
+- [ ] Unit tests cover parser grammar, duplicate handling, repeated-list keys, merge order, and XDG path resolution.
+- [ ] Leak-check tooling reports no leaks for successful parsing and parse-error paths where supported.
+
+---
+
+# v0.7 - Benchmark mode
 
 ## Goal
 
@@ -1091,7 +1282,233 @@ Options:
 
 ---
 
-# v0.7 - Local web server mode
+# v0.8 - AI-assisted editor
+
+## Goal
+
+Extend `--editor` into an AI-assisted writing and editing mode that uses the configured provider/model while keeping the editor usable as a local text editor. This is not agent mode: it must not gain filesystem, shell, or network powers beyond the configured model endpoint and ordinary file open/save behavior.
+
+The feature should support spelling checks, grammar checks, rewrites, continuation, comments, proof checks, and user-provided prompts that insert or modify text.
+
+## Command shape
+
+Keep the existing editor mode as the base:
+
+```sh
+pkchat --editor draft.md
+pkchat --editor draft.md --provider lmstudio -m MODEL
+pkchat --editor draft.md --assist
+pkchat --editor draft.md --assist --provider openai -m MODEL
+pkchat --editor draft.md --assist-prompt "Make this more concise"
+```
+
+Possible later aliases or subcommands:
+
+```sh
+pkchat edit draft.md
+pkchat edit draft.md --assist
+```
+
+`--editor` without assist options must continue to work offline and must not contact a model.
+
+## Editor interaction model
+
+Start with simple, explicit actions. Avoid hidden automatic rewrites.
+
+Suggested commands inside the editor:
+
+```text
+/assist spelling
+/assist grammar
+/assist rewrite
+/assist continue
+/assist comment
+/assist proof
+/assist prompt TEXT
+```
+
+Suggested keyboard/menu layer later:
+
+```text
+Ctrl+G        grammar check current selection or paragraph
+Ctrl+L        spelling check current selection or paragraph
+Ctrl+W        rewrite current selection or paragraph
+Ctrl+Space    continue text at cursor
+Ctrl+/        ask with custom prompt
+```
+
+The exact keys may change after testing terminal portability. Commands should exist even if a key is not detectable on some terminals.
+
+## Text range model
+
+AI editing needs a clear text range contract:
+
+- [ ] Add selection support to the editor core.
+- [ ] If no selection exists, operate on the current paragraph or current logical line depending on action.
+- [ ] Provide an explicit command to operate on the whole file.
+- [ ] Preserve cursor position and scroll position where practical after applying edits.
+- [ ] Keep ranges in byte offsets internally until the Unicode module can provide grapheme-aware selections.
+- [ ] Never split invalid UTF-8 or corrupt the piece table when applying an AI edit.
+
+Suggested range defaults:
+
+```text
+spelling      selection, current paragraph, or whole file by confirmation
+grammar       selection, current paragraph, or whole file by confirmation
+rewrite       selection or current paragraph
+continue      insert at cursor
+comment       selection or current paragraph, inserted as editor notes/comments
+proof         whole file or selected range, no automatic mutation
+prompt        selection/current paragraph for modify; cursor for insert
+```
+
+## AI actions
+
+Spelling check:
+
+- [ ] Ask model for spelling corrections only.
+- [ ] Return a patch-like preview or replacement suggestions.
+- [ ] Do not silently rewrite style or grammar.
+
+Grammar check:
+
+- [ ] Ask model for grammar corrections only.
+- [ ] Preserve meaning and formatting as much as possible.
+- [ ] Show preview before applying.
+
+Rewrite:
+
+- [ ] Rewrite selected/current text according to default or user-specified style.
+- [ ] Support concise, clear, formal, informal, and custom instructions later.
+- [ ] Show before/after preview.
+
+Continue text:
+
+- [ ] Send nearby context around the cursor.
+- [ ] Insert generated continuation at the cursor only after user approval.
+- [ ] Let user retry/regenerate before applying.
+
+Comment text:
+
+- [ ] Generate feedback comments without modifying the source text by default.
+- [ ] Support inserting comments as plain text notes where appropriate for the file type later.
+
+Proof check:
+
+- [ ] Produce a review report for the selected range or file.
+- [ ] Separate issues by severity/type: spelling, grammar, clarity, consistency, factual-risk notes.
+- [ ] Do not mutate text unless the user chooses a proposed edit.
+
+Custom prompt:
+
+- [ ] Let the user provide a prompt to insert text at cursor or modify selected/current text.
+- [ ] Make the prompt and target range visible before sending.
+- [ ] Show preview before applying any replacement.
+
+## Preview and apply workflow
+
+AI changes should be reviewable before mutation:
+
+- [ ] Stream model output into a preview panel or temporary assistant buffer.
+- [ ] Support accept, reject, regenerate, and edit-before-apply.
+- [ ] Applying a replacement should be one undoable editor operation once undo exists.
+- [ ] Store enough local state to reject or revert a pending suggestion without reloading the file.
+- [ ] Mark the buffer dirty only after a suggestion is applied.
+- [ ] Save remains explicit through the editor save command.
+
+Minimal first implementation can use a split-screen preview with these commands:
+
+```text
+/apply
+/reject
+/regenerate
+```
+
+## Provider/runtime integration
+
+Use the existing provider, runtime, cancellation, and TUI/editor infrastructure:
+
+- [ ] AI assist requests run as cancellable runtime jobs.
+- [ ] Editor input and navigation remain responsive while the model is thinking or streaming.
+- [ ] `Esc` or another documented key cancels an active assist request.
+- [ ] Reuse provider model discovery/default model selection.
+- [ ] Reuse Chat Completions and Responses API adapters through the provider layer.
+- [ ] Do not let worker threads mutate editor state directly; send events to the editor loop.
+- [ ] Shutdown cancels/joins assist jobs cleanly.
+
+## Prompt construction
+
+Prompts must be deterministic and scoped:
+
+- [ ] Include action type, target text, optional surrounding context, and user instructions.
+- [ ] Keep system prompts short and action-specific.
+- [ ] Clearly ask for either replacement text, comments, or a structured report.
+- [ ] Avoid sending the whole file unless the user requested whole-file proofing or the file is under a documented size limit.
+- [ ] Redact or warn about potential secrets before sending selected text when feasible.
+- [ ] Respect provider context limits and return clear errors when input is too large.
+
+Possible structured response shape for edit suggestions:
+
+```json
+{
+  "kind": "replacement",
+  "replacement": "...",
+  "notes": "..."
+}
+```
+
+If the JSON facade is not strong enough for robust structured output at this stage, use plain replacement text with a conservative preview first.
+
+## UI layout
+
+The editor core already renders into rectangles. Use that for assist panels:
+
+- [ ] Main editor panel for the file.
+- [ ] Preview/result panel for suggestions or comments.
+- [ ] Status line for provider/model/job state.
+- [ ] Optional command prompt line for `/assist prompt ...`.
+- [ ] Support resize without corrupting the editor or preview.
+
+Do not make the AI panel modal-only if it blocks basic editing for long requests. The editor should remain cancellable and responsive.
+
+## Persistence and privacy
+
+- [ ] Do not save API keys in editor files or assist metadata.
+- [ ] Do not persist AI suggestions unless the user applies them or explicitly saves a sidecar/report.
+- [ ] Do not silently send unsaved file contents beyond the selected/target range and required context.
+- [ ] Show which provider/model is used for assist actions when a request starts.
+- [ ] Keep stdout/stderr behavior sane for `--editor`; status belongs in the terminal UI.
+
+## Tests
+
+- [ ] Unit test selection/range calculations.
+- [ ] Unit test prompt construction for each action.
+- [ ] Unit test applying replacement text to the piece table.
+- [ ] Unit test reject/regenerate state transitions.
+- [ ] Unit test cancellation events do not mutate editor text.
+- [ ] Integration test spelling/grammar/rewrite against mock provider.
+- [ ] Integration test streaming preview output.
+- [ ] Integration test cancel during assist request.
+- [ ] Resize test with active preview panel.
+- [ ] UTF-8 tests for selected text and replacement text.
+- [ ] Leak-check successful assist, rejected assist, applied assist, failed provider call, and cancelled assist where supported.
+
+## Acceptance criteria
+
+- [ ] `pkchat --editor FILE --assist` opens the editor and can call the configured model explicitly.
+- [ ] Existing `pkchat --editor FILE` remains usable without any model/network requirement.
+- [ ] At least spelling, grammar, rewrite, continue, comment, proof, and custom prompt actions have command paths planned or implemented.
+- [ ] The editor remains responsive during an assist request.
+- [ ] Assist requests are cancellable.
+- [ ] Suggestions are previewed before modifying the buffer.
+- [ ] Applying a suggestion updates only the intended range.
+- [ ] Rejected suggestions leave the buffer unchanged.
+- [ ] Secrets/API keys are not saved or displayed.
+- [ ] Leak-check tooling reports no leaks for representative assist paths where supported.
+
+---
+
+# v0.9 - Local web server mode
 
 ## Goal
 
@@ -1237,7 +1654,7 @@ GET  /api/events?session=ID    streaming events if using SSE
 
 ---
 
-# v0.8 - Local agent mode with sandbox/approval design
+# v1.0 - Local agent mode with sandbox/approval design
 
 ## Goal
 
