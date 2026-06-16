@@ -801,6 +801,21 @@ void EditorState::move_end() {
     update_preferred_column(*this);
 }
 
+Error EditorState::kill_to_line_end() {
+    const size_t line = text.line_for_offset(cursor);
+    const size_t end = text.line_start(line) + text.line_length(line);
+    if (cursor >= end) {
+        return ok_error();
+    }
+    Error err = text.erase(cursor, end - cursor);
+    if (!err.ok()) {
+        return err;
+    }
+    dirty = true;
+    update_preferred_column(*this);
+    return ok_error();
+}
+
 void EditorState::ensure_cursor_visible(const Rect& rect) {
     const size_t line = text.line_for_offset(cursor);
     const size_t height = static_cast<size_t>(std::max(1, rect.height));
@@ -964,6 +979,15 @@ int run_editor(const std::string& path, const std::string& save_as) {
             quit = true;
         } else if (ch == 3) {
             quit = true;
+        } else if (ch == 1) {
+            state.move_home();
+        } else if (ch == 5) {
+            state.move_end();
+        } else if (ch == 11) {
+            Error kill_error = state.kill_to_line_end();
+            if (!kill_error.ok()) {
+                status = kill_error.message;
+            }
         } else if (ch == 19) {
             const std::string target = save_as.empty() ? state.path : save_as;
             Error save_error = save_file(target, state.text);

@@ -148,6 +148,20 @@ void test_editor_word_wrap_breaks_on_spaces() {
     check(rendered.lines[1] == "beta    ", "editor continues after the wrapped word break");
 }
 
+void test_editor_kill_to_line_end() {
+    pkchat::editor::EditorState state = pkchat::editor::EditorState::from_text("alpha beta\ngamma");
+    state.cursor = state.text.offset_for_line_column(0, 6);
+    pkchat::Error err = state.kill_to_line_end();
+    check(err.ok(), "editor kill to line end succeeds");
+    check(state.text.str() == "alpha \ngamma", "editor kill to line end erases text before newline only");
+    check(state.cursor == state.text.offset_for_line_column(0, 6), "editor kill to line end keeps cursor in place");
+    check(state.dirty, "editor kill to line end marks dirty after deleting text");
+
+    err = state.kill_to_line_end();
+    check(err.ok(), "editor kill at end of line succeeds");
+    check(state.text.str() == "alpha \ngamma", "editor kill at end of line leaves newline intact");
+}
+
 void test_editor_vertical_navigation_modes() {
     pkchat::editor::Rect rect{1, 1, 3, 4};
     pkchat::editor::EditorState logical = pkchat::editor::EditorState::from_text("abcdefghij\nXYZ");
@@ -554,6 +568,7 @@ int main() {
     test_editor_rectangular_rendering();
     test_editor_word_wrap_rendering();
     test_editor_word_wrap_breaks_on_spaces();
+    test_editor_kill_to_line_end();
     test_editor_vertical_navigation_modes();
     test_editor_file_round_trip();
     test_tui_layout_reserves_editor_input_panel();

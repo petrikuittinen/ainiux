@@ -103,6 +103,7 @@ struct EditorState {
     void move_down_visual(const Rect& rect);
     void move_home();
     void move_end();
+    Error kill_to_line_end();
     void ensure_cursor_visible(const Rect& rect);
     RenderedPanel render(const Rect& rect) const;
 };

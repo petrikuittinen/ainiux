@@ -1306,6 +1306,18 @@ int run(provider::RequestContext context, chat::Session session) {
                     submit_input();
                     continue;
                 }
+                if (ch == 1) {
+                    input.move_home();
+                    continue;
+                }
+                if (ch == 5) {
+                    input.move_end();
+                    continue;
+                }
+                if (ch == 11) {
+                    set_status_from_error(input.kill_to_line_end(), status);
+                    continue;
+                }
                 if (ch == 4 && input.text.empty()) {
                     quit = true;
                     continue;
