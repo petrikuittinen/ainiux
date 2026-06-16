@@ -682,19 +682,163 @@ Always provide `--no-markdown` or equivalent before markdown rendering becomes c
 
 Expand from a basic OpenAI-compatible Chat Completions client into a provider-profile based client that can support newer OpenAI APIs and common local/third-party dialects.
 
-## Adapters/profiles
+## Built-in provider registry
 
-Implement or refine:
+Seed the provider registry with these built-in OpenAI-compatible profiles. Keep
+`custom_openai_chat` separately for explicit user-supplied endpoints.
 
 ```text
-openai_chat
-openai_responses
-custom_openai_chat
-lm_studio
-openrouter
-ollama
-vllm
-llama_cpp
+[provider.openai]
+base_url = https://api.openai.com/v1
+chat_path = /chat/completions
+models_path = /models
+api_key_env = OPENAI_API_KEY
+api_key_required = true
+
+[provider.openrouter]
+base_url = https://openrouter.ai/api/v1
+chat_path = /chat/completions
+models_path = /models
+api_key_env = OPENROUTER_API_KEY
+api_key_required = true
+
+[provider.deepseek]
+base_url = https://api.deepseek.com
+chat_path = /chat/completions
+models_path = /models
+api_key_env = DEEPSEEK_API_KEY
+api_key_required = true
+
+[provider.gemini]
+base_url = https://generativelanguage.googleapis.com/v1beta/openai
+chat_path = /chat/completions
+models_path = /models
+api_key_env = GEMINI_API_KEY
+api_key_required = true
+
+[provider.anthropic]
+base_url = https://api.anthropic.com/v1
+chat_path = /chat/completions
+models_path = /models
+api_key_env = ANTHROPIC_API_KEY
+api_key_required = true
+compatibility_warning = OpenAI compatibility layer is mainly for testing/comparison.
+
+[provider.grok]
+alias_for = xai
+
+[provider.xai]
+base_url = https://api.x.ai/v1
+chat_path = /chat/completions
+models_path = /models
+api_key_env = XAI_API_KEY
+api_key_required = true
+
+[provider.moonshot]
+base_url = https://api.moonshot.ai/v1
+chat_path = /chat/completions
+models_path = /models
+api_key_env = MOONSHOT_API_KEY
+api_key_required = true
+
+[provider.kimi]
+alias_for = moonshot
+
+[provider.groq]
+base_url = https://api.groq.com/openai/v1
+chat_path = /chat/completions
+models_path = /models
+api_key_env = GROQ_API_KEY
+api_key_required = true
+
+[provider.mistral]
+base_url = https://api.mistral.ai/v1
+chat_path = /chat/completions
+models_path = /models
+api_key_env = MISTRAL_API_KEY
+api_key_required = true
+
+[provider.together]
+base_url = https://api.together.ai/v1
+chat_path = /chat/completions
+models_path = /models
+api_key_env = TOGETHER_API_KEY
+api_key_required = true
+
+[provider.perplexity]
+base_url = https://api.perplexity.ai
+chat_path = /chat/completions
+models_path = /models
+api_key_env = PERPLEXITY_API_KEY
+api_key_required = true
+compatibility_warning = Perplexity canonical Sonar endpoint is /v1/sonar; /chat/completions is the OpenAI SDK-compatible alias.
+
+[provider.cerebras]
+base_url = https://api.cerebras.ai/v1
+chat_path = /chat/completions
+models_path = /models
+api_key_env = CEREBRAS_API_KEY
+api_key_required = true
+
+[provider.fireworks]
+base_url = https://api.fireworks.ai/inference/v1
+chat_path = /chat/completions
+models_path = /models
+api_key_env = FIREWORKS_API_KEY
+api_key_required = true
+
+[provider.deepinfra]
+base_url = https://api.deepinfra.com/v1/openai
+chat_path = /chat/completions
+models_path = /models
+api_key_env = DEEPINFRA_API_KEY
+api_key_env_alt = DEEPINFRA_TOKEN
+api_key_required = true
+
+[provider.nvidia_nim]
+base_url = https://integrate.api.nvidia.com/v1
+chat_path = /chat/completions
+models_path = /models
+api_key_env = NVIDIA_NIM_API_KEY
+api_key_required = true
+
+[provider.dashscope]
+base_url = https://dashscope.aliyuncs.com/compatible-mode/v1
+chat_path = /chat/completions
+models_path = /models
+api_key_env = DASHSCOPE_API_KEY
+api_key_required = true
+
+[provider.lmstudio]
+base_url = http://localhost:1234/v1
+chat_path = /chat/completions
+models_path = /models
+api_key_required = false
+
+[provider.lm_studio]
+alias_for = lmstudio
+
+[provider.ollama]
+base_url = http://localhost:11434/v1
+chat_path = /chat/completions
+models_path = /models
+api_key_required = false
+
+[provider.vllm]
+base_url = http://localhost:8000/v1
+chat_path = /chat/completions
+models_path = /models
+api_key_required = false
+dummy_api_key = token-abc123
+
+[provider.llamacpp]
+base_url = http://localhost:8080/v1
+chat_path = /chat/completions
+models_path = /models
+api_key_required = false
+
+[provider.llama.cpp]
+alias_for = llamacpp
 ```
 
 ## Provider profile fields
