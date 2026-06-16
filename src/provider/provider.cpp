@@ -133,6 +133,8 @@ Error validate_header(const std::string& header) {
     return ok_error();
 }
 
+std::string strip_thinking_blocks_for_request(const std::string& content);
+
 std::string build_chat_request_json(const RequestContext& context, const std::vector<Message>& messages) {
     const cli::Options& o = context.options;
     std::ostringstream json;
@@ -145,8 +147,11 @@ std::string build_chat_request_json(const RequestContext& context, const std::ve
         if (i != 0) {
             json << ",";
         }
+        const std::string content = messages[i].role == "assistant"
+                                        ? strip_thinking_blocks_for_request(messages[i].content)
+                                        : messages[i].content;
         json << "{\"role\":" << json::quote(messages[i].role)
-             << ",\"content\":" << json::quote(messages[i].content) << "}";
+             << ",\"content\":" << json::quote(content) << "}";
     }
     json << "],";
     json << "\"stream\":" << (o.stream ? "true" : "false");
@@ -236,6 +241,146 @@ std::string provider_error_message(const json::Value& root) {
     return "";
 }
 
+bool contains_think_tag(const std::string& text) {
+    const std::string tag = "<think>";
+    auto lower_ascii = [](char ch) {
+        if (ch >= 'A' && ch <= 'Z') {
+            return static_cast<char>(ch - 'A' + 'a');
+        }
+        return ch;
+    };
+    for (std::size_t pos = 0; pos + tag.size() <= text.size(); ++pos) {
+        bool match = true;
+        for (std::size_t i = 0; i < tag.size(); ++i) {
+            if (lower_ascii(text[pos + i]) != tag[i]) {
+                match = false;
+                break;
+            }
+        }
+        if (match) {
+            return true;
+        }
+    }
+    return false;
+}
+
+void append_reasoning_details_text(const json::Value& details, std::string& out) {
+    if (!details.is_array()) {
+        return;
+    }
+    for (const json::Value& item : details.array) {
+        std::string text;
+        if (item.is_string()) {
+            text = item.string;
+        } else if (const json::Value* value = item.get("text")) {
+            if (value->is_string()) {
+                text = value->string;
+            }
+        }
+        if (text.empty()) {
+            continue;
+        }
+        if (!out.empty() && out.back() != '\n') {
+            out.push_back('\n');
+        }
+        out += text;
+    }
+}
+
+std::string reasoning_text_from_object(const json::Value& object) {
+    std::string reasoning;
+    if (const json::Value* value = object.get("reasoning_content")) {
+        if (value->is_string()) {
+            reasoning += value->string;
+        }
+    }
+    if (reasoning.empty()) {
+        if (const json::Value* value = object.get("reasoning")) {
+            if (value->is_string()) {
+                reasoning += value->string;
+            }
+        }
+    }
+    if (const json::Value* details = object.get("reasoning_details")) {
+        append_reasoning_details_text(*details, reasoning);
+    }
+    return reasoning;
+}
+
+std::string content_with_reasoning_trace(const std::string& reasoning, const std::string& content) {
+    if (reasoning.empty() || contains_think_tag(content)) {
+        return content;
+    }
+    return "<think>" + reasoning + "</think>" + (content.empty() ? std::string() : std::string("\n\n") + content);
+}
+
+std::string strip_thinking_blocks_for_request(const std::string& content) {
+    const std::string open_tag = "<think>";
+    const std::string close_tag = "</think>";
+    auto lower_ascii = [](char ch) {
+        if (ch >= 'A' && ch <= 'Z') {
+            return static_cast<char>(ch - 'A' + 'a');
+        }
+        return ch;
+    };
+    auto tag_at = [&](std::size_t pos, const std::string& tag) {
+        if (pos + tag.size() > content.size()) {
+            return false;
+        }
+        for (std::size_t i = 0; i < tag.size(); ++i) {
+            if (lower_ascii(content[pos + i]) != tag[i]) {
+                return false;
+            }
+        }
+        return true;
+    };
+    auto find_tag = [&](const std::string& tag, std::size_t start) {
+        for (std::size_t pos = start; pos + tag.size() <= content.size(); ++pos) {
+            if (tag_at(pos, tag)) {
+                return pos;
+            }
+        }
+        return std::string::npos;
+    };
+    auto trim_outer_newlines = [](std::string& text) {
+        while (!text.empty() && (text.front() == '\n' || text.front() == '\r')) {
+            text.erase(text.begin());
+        }
+        while (!text.empty() && (text.back() == '\n' || text.back() == '\r')) {
+            text.pop_back();
+        }
+    };
+
+    std::string out;
+    bool in_thinking = false;
+    std::size_t pos = 0;
+    bool stripped = false;
+    while (pos < content.size()) {
+        if (!in_thinking) {
+            const std::size_t open = find_tag(open_tag, pos);
+            if (open == std::string::npos) {
+                out.append(content, pos, std::string::npos);
+                break;
+            }
+            out.append(content, pos, open - pos);
+            pos = open + open_tag.size();
+            in_thinking = true;
+            stripped = true;
+            continue;
+        }
+        const std::size_t close = find_tag(close_tag, pos);
+        if (close == std::string::npos) {
+            break;
+        }
+        pos = close + close_tag.size();
+        in_thinking = false;
+    }
+    if (stripped) {
+        trim_outer_newlines(out);
+    }
+    return out;
+}
+
 Error parse_models_json(const std::string& body, ModelsResult& result) {
     json::ParseResult parsed = json::parse(body);
     if (!parsed.error.ok()) {
@@ -278,11 +423,15 @@ Error parse_chat_json(const std::string& body, ChatResult& result) {
     if (message == nullptr) {
         return {ErrorCode::ProviderSchema, "chat response did not contain choices[0].message"};
     }
+    const std::string reasoning = reasoning_text_from_object(*message);
     const json::Value* content = message->get("content");
-    if (content == nullptr || !content->is_string()) {
+    std::string content_text;
+    if (content != nullptr && content->is_string()) {
+        content_text = content->string;
+    } else if (reasoning.empty()) {
         return {ErrorCode::ProviderSchema, "chat response did not contain choices[0].message.content"};
     }
-    result.content = content->string;
+    result.content = content_with_reasoning_trace(reasoning, content_text);
     if (const json::Value* usage = parsed.value.get("usage")) {
         result.usage_json = json_value_to_string(*usage);
         if (const json::Value* completion_tokens = usage->get("completion_tokens")) {
@@ -345,21 +494,58 @@ class SseParser {
     }
 
     Error finish(const DeltaCallback& on_delta, std::string& accumulated, bool& done) {
-        if (buffer_.empty()) {
-            return ok_error();
+        if (!buffer_.empty()) {
+            std::string event = buffer_;
+            buffer_.clear();
+            Error err = process_event(event, on_delta, accumulated, done);
+            if (!err.ok()) {
+                return err;
+            }
         }
-        std::string event = buffer_;
-        buffer_.clear();
-        return process_event(event, on_delta, accumulated, done);
+        if (!done) {
+            return close_reasoning(on_delta, accumulated, false);
+        }
+        return ok_error();
     }
 
    private:
     std::string buffer_;
+    bool reasoning_open_ = false;
 
-    static Error process_event(const std::string& event,
-                               const DeltaCallback& on_delta,
-                               std::string& accumulated,
-                               bool& done) {
+    Error emit_text(const std::string& text, const DeltaCallback& on_delta, std::string& accumulated) {
+        if (text.empty()) {
+            return ok_error();
+        }
+        accumulated += text;
+        return on_delta(text);
+    }
+
+    Error emit_reasoning(const std::string& text, const DeltaCallback& on_delta, std::string& accumulated) {
+        if (text.empty()) {
+            return ok_error();
+        }
+        if (!reasoning_open_) {
+            Error err = emit_text("<think>", on_delta, accumulated);
+            if (!err.ok()) {
+                return err;
+            }
+            reasoning_open_ = true;
+        }
+        return emit_text(text, on_delta, accumulated);
+    }
+
+    Error close_reasoning(const DeltaCallback& on_delta, std::string& accumulated, bool before_content) {
+        if (!reasoning_open_) {
+            return ok_error();
+        }
+        reasoning_open_ = false;
+        return emit_text(before_content ? "</think>\n\n" : "</think>", on_delta, accumulated);
+    }
+
+    Error process_event(const std::string& event,
+                        const DeltaCallback& on_delta,
+                        std::string& accumulated,
+                        bool& done) {
         std::istringstream lines(event);
         std::string line;
         std::string data;
@@ -385,6 +571,10 @@ class SseParser {
             return ok_error();
         }
         if (data == "[DONE]") {
+            Error err = close_reasoning(on_delta, accumulated, false);
+            if (!err.ok()) {
+                return err;
+            }
             done = true;
             return ok_error();
         }
@@ -400,10 +590,21 @@ class SseParser {
             return ok_error();
         }
         const json::Value* delta = choices->array[0].get("delta");
-        const json::Value* content = delta == nullptr ? nullptr : delta->get("content");
+        if (delta == nullptr) {
+            return ok_error();
+        }
+        const std::string reasoning = reasoning_text_from_object(*delta);
+        Error err = emit_reasoning(reasoning, on_delta, accumulated);
+        if (!err.ok()) {
+            return err;
+        }
+        const json::Value* content = delta->get("content");
         if (content != nullptr && content->is_string() && !content->string.empty()) {
-            accumulated += content->string;
-            return on_delta(content->string);
+            err = close_reasoning(on_delta, accumulated, true);
+            if (!err.ok()) {
+                return err;
+            }
+            return emit_text(content->string, on_delta, accumulated);
         }
         return ok_error();
     }

@@ -35,6 +35,17 @@ printf '%s' "$json" | grep '"content":"Hello"' >/dev/null
 stream=$("$ROOT/pkchat" "$BASE" --quiet --stream -m "$MODEL" -p "hello")
 test "$stream" = "Hello"
 
+reasoning_expected=$(printf '<think>internal trace</think>\n\nVisible answer')
+reasoning_reply=$("$ROOT/pkchat" "$BASE" --quiet --no-stream -m "$MODEL" -p "reasoning")
+test "$reasoning_reply" = "$reasoning_expected"
+reasoning_stream=$("$ROOT/pkchat" "$BASE" --quiet --stream -m "$MODEL" -p "reasoning")
+test "$reasoning_stream" = "$reasoning_expected"
+reasoning_chat_file="$ROOT/build/reasoning-chat.json"
+"$ROOT/pkchat" "$BASE" --quiet --no-stream -m "$MODEL" -p "reasoning" --save-chat "$reasoning_chat_file" >/dev/null
+grep '<think>internal trace</think>' "$reasoning_chat_file" >/dev/null
+previous_assistant=$("$ROOT/pkchat" "$BASE" --quiet --no-stream -m "$MODEL" --load-chat "$reasoning_chat_file" -p "previous-assistant")
+test "$previous_assistant" = "Visible answer"
+
 ndjson=$("$ROOT/pkchat" "$BASE" --quiet --stream -m "$MODEL" -p "hello" --format ndjson)
 printf '%s\n' "$ndjson" | grep '"event":"delta"' >/dev/null
 printf '%s\n' "$ndjson" | grep '"event":"done"' >/dev/null

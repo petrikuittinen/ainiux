@@ -133,6 +133,80 @@ int history_scroll_for_thread_end() {
     return 0;
 }
 
+ThinkingDisplay thinking_display_text(const std::string& content, bool show_traces) {
+    ThinkingDisplay display;
+    if (show_traces) {
+        display.text = content;
+        return display;
+    }
+
+    const std::string open_tag = "<think>";
+    const std::string close_tag = "</think>";
+    auto lower_ascii = [](char ch) {
+        if (ch >= 'A' && ch <= 'Z') {
+            return static_cast<char>(ch - 'A' + 'a');
+        }
+        return ch;
+    };
+    auto tag_at = [&](std::size_t pos, const std::string& tag) {
+        if (pos + tag.size() > content.size()) {
+            return false;
+        }
+        for (std::size_t i = 0; i < tag.size(); ++i) {
+            if (lower_ascii(content[pos + i]) != tag[i]) {
+                return false;
+            }
+        }
+        return true;
+    };
+    auto find_tag = [&](const std::string& tag, std::size_t start) {
+        for (std::size_t pos = start; pos + tag.size() <= content.size(); ++pos) {
+            if (tag_at(pos, tag)) {
+                return pos;
+            }
+        }
+        return std::string::npos;
+    };
+    auto trim_outer_newlines = [](std::string& text) {
+        while (!text.empty() && (text.front() == '\n' || text.front() == '\r')) {
+            text.erase(text.begin());
+        }
+        while (!text.empty() && (text.back() == '\n' || text.back() == '\r')) {
+            text.pop_back();
+        }
+    };
+
+    bool in_thinking = false;
+    std::size_t pos = 0;
+    while (pos < content.size()) {
+        if (!in_thinking) {
+            const std::size_t open = find_tag(open_tag, pos);
+            if (open == std::string::npos) {
+                display.text.append(content, pos, std::string::npos);
+                break;
+            }
+            display.text.append(content, pos, open - pos);
+            display.saw_thinking_tag = true;
+            pos = open + open_tag.size();
+            in_thinking = true;
+            continue;
+        }
+
+        const std::size_t close = find_tag(close_tag, pos);
+        if (close == std::string::npos) {
+            display.open_thinking_tag = true;
+            break;
+        }
+        pos = close + close_tag.size();
+        in_thinking = false;
+    }
+
+    if (display.saw_thinking_tag) {
+        trim_outer_newlines(display.text);
+    }
+    return display;
+}
+
 namespace {
 
 int exit_code_for(ErrorCode code) {
@@ -453,13 +527,25 @@ StyleRole status_role_for_text(const std::string& status) {
     return StyleRole::Status;
 }
 
-std::vector<StyledLine> history_lines_for_session(const chat::Session& session, int cols) {
+std::vector<StyledLine> history_lines_for_session(const chat::Session& session, int cols, bool show_thinking_traces) {
     std::vector<StyledLine> history;
     const int min_content_width = 8;
     for (const provider::Message& message : session.messages) {
         const std::string prefix = message_label(message.role) + ": ";
         const StyleRole label_role = label_role_for_message(message.role);
-        const std::string content = message.role == "assistant" && message.content.empty() ? "(waiting...)" : message.content;
+        std::string content = message.content;
+        if (message.role == "assistant") {
+            if (message.content.empty()) {
+                content = "(waiting...)";
+            } else {
+                const ThinkingDisplay display = thinking_display_text(message.content, show_thinking_traces);
+                if (!show_thinking_traces && display.saw_thinking_tag && trim_ascii(display.text).empty()) {
+                    content = "thinking...";
+                } else {
+                    content = display.text;
+                }
+            }
+        }
         std::vector<std::string> wrapped;
         append_wrapped(wrapped, content, std::max(min_content_width, cols - static_cast<int>(prefix.size())));
         for (size_t i = 0; i < wrapped.size(); ++i) {
@@ -496,6 +582,7 @@ void render(const chat::Session& session,
             editor::EditorState& input,
             std::string& status,
             int& history_scroll,
+            bool show_thinking_traces,
             const RenderStyle& style) {
     const TuiSize terminal = terminal_size();
     const Layout layout = layout_for_terminal(terminal.rows, terminal.cols);
@@ -503,7 +590,7 @@ void render(const chat::Session& session,
 
     input.ensure_cursor_visible(layout.input_rect);
     const editor::RenderedPanel input_panel = input.render(layout.input_rect);
-    std::vector<StyledLine> history = history_lines_for_session(session, cols);
+    std::vector<StyledLine> history = history_lines_for_session(session, cols, show_thinking_traces);
     const int max_history_scroll = std::max(0, static_cast<int>(history.size()) - layout.history_rows);
     history_scroll = std::min(std::max(0, history_scroll), max_history_scroll);
 
@@ -641,11 +728,30 @@ int run(provider::RequestContext context, chat::Session session) {
     ThemeName theme = ThemeName::Dark;
     const bool use_colors = !context.options.no_colors;
     bool quit = false;
+    bool show_thinking_traces = false;
     size_t pending_user = static_cast<size_t>(-1);
     size_t pending_assistant = static_cast<size_t>(-1);
     int history_scroll = 0;
     bool regenerate_after_cancel = false;
     std::string queued_regeneration_prompt;
+
+    auto pending_assistant_is_hidden_thinking = [&]() {
+        if (show_thinking_traces || pending_assistant == static_cast<size_t>(-1) ||
+            pending_assistant >= session.messages.size()) {
+            return false;
+        }
+        const ThinkingDisplay display = thinking_display_text(session.messages[pending_assistant].content, false);
+        return display.saw_thinking_tag && trim_ascii(display.text).empty();
+    };
+
+    auto set_thinking_trace_mode = [&](bool show_traces) {
+        show_thinking_traces = show_traces;
+        if (!show_thinking_traces && pending_assistant_is_hidden_thinking()) {
+            status = "thinking...";
+        } else {
+            status = show_thinking_traces ? "Thinking traces shown" : "Thinking traces hidden";
+        }
+    };
 
     auto rollback_pending_turn = [&]() {
         if (pending_assistant != static_cast<size_t>(-1) && pending_assistant < session.messages.size()) {
@@ -841,7 +947,25 @@ int run(provider::RequestContext context, chat::Session session) {
             return;
         }
         if (text == "/help") {
-            status = "Enter sends | Alt+Enter newline | Esc cancels | Ctrl+R regenerates | /theme light|dark";
+            status = "Enter sends | Alt+Enter newline | Esc cancels | Ctrl+R regen | Ctrl+T thinking";
+            return;
+        }
+        if (text.rfind("/thinking", 0) == 0) {
+            const std::string requested = trim_ascii(text.substr(9));
+            if (requested.empty()) {
+                status = std::string("Thinking traces: ") + (show_thinking_traces ? "trace" : "notrace") +
+                         ". Use /thinking trace or /thinking notrace";
+                return;
+            }
+            if (requested == "trace") {
+                set_thinking_trace_mode(true);
+                return;
+            }
+            if (requested == "notrace") {
+                set_thinking_trace_mode(false);
+                return;
+            }
+            status = "Usage: /thinking trace|notrace";
             return;
         }
         if (text.rfind("/theme", 0) == 0) {
@@ -941,7 +1065,7 @@ int run(provider::RequestContext context, chat::Session session) {
         start_turn(context.options.prompt);
     }
 
-    render(session, input, status, history_scroll, RenderStyle{theme, use_colors});
+    render(session, input, status, history_scroll, show_thinking_traces, RenderStyle{theme, use_colors});
     while (!quit) {
         TuiEvent event;
         while (events.try_pop(event)) {
@@ -950,7 +1074,7 @@ int run(provider::RequestContext context, chat::Session session) {
                     if (pending_assistant != static_cast<size_t>(-1) && pending_assistant < session.messages.size()) {
                         session.messages[pending_assistant].content += event.text;
                     }
-                    status = "Streaming...";
+                    status = pending_assistant_is_hidden_thinking() ? "thinking..." : "Streaming...";
                     break;
                 case TuiEventType::Done: {
                     model_job.join();
@@ -1054,6 +1178,10 @@ int run(provider::RequestContext context, chat::Session session) {
                     regenerate_last_turn();
                     continue;
                 }
+                if (ch == 20) {
+                    set_thinking_trace_mode(!show_thinking_traces);
+                    continue;
+                }
                 if (ch == 19) {
                     submit_input();
                     continue;
@@ -1075,7 +1203,7 @@ int run(provider::RequestContext context, chat::Session session) {
                 }
             }
         }
-        render(session, input, status, history_scroll, RenderStyle{theme, use_colors});
+        render(session, input, status, history_scroll, show_thinking_traces, RenderStyle{theme, use_colors});
     }
 
     model_job.cancel();

@@ -52,18 +52,34 @@ class Handler(BaseHTTPRequestHandler):
             reply = request.get("model", "<missing>")
         elif last == "repl-one":
             reply = "repl-one-reply"
+        elif last == "reasoning":
+            reply = "Visible answer"
+        elif last == "previous-assistant":
+            reply = ""
+            for message in reversed(messages[:-1]):
+                if isinstance(message, dict) and message.get("role") == "assistant":
+                    reply = message.get("content", "")
+                    break
 
         if request.get("stream"):
             self.send_response(200)
             self.send_header("Content-Type", "text/event-stream")
             self.end_headers()
             midpoint = max(1, len(reply) // 2)
-            chunks = [
-                "data: " + json.dumps({"choices": [{"delta": {"content": reply[:midpoint]}}]}) + "\n\n",
-                ": comment\n\n",
-                "data: " + json.dumps({"choices": [{"delta": {"content": reply[midpoint:]}}]}) + "\n\n",
-                "data: [DONE]\n\n",
-            ]
+            if last == "reasoning":
+                chunks = [
+                    "data: " + json.dumps({"choices": [{"delta": {"reasoning_content": "internal"}}]}) + "\n\n",
+                    "data: " + json.dumps({"choices": [{"delta": {"reasoning_content": " trace"}}]}) + "\n\n",
+                    "data: " + json.dumps({"choices": [{"delta": {"content": reply}}]}) + "\n\n",
+                    "data: [DONE]\n\n",
+                ]
+            else:
+                chunks = [
+                    "data: " + json.dumps({"choices": [{"delta": {"content": reply[:midpoint]}}]}) + "\n\n",
+                    ": comment\n\n",
+                    "data: " + json.dumps({"choices": [{"delta": {"content": reply[midpoint:]}}]}) + "\n\n",
+                    "data: [DONE]\n\n",
+                ]
             for chunk in chunks:
                 if self.stream_delay:
                     time.sleep(self.stream_delay)
@@ -77,7 +93,16 @@ class Handler(BaseHTTPRequestHandler):
                     "id": "chatcmpl_mock",
                     "object": "chat.completion",
                     "model": self.model,
-                    "choices": [{"index": 0, "message": {"role": "assistant", "content": reply}}],
+                    "choices": [
+                        {
+                            "index": 0,
+                            "message": {
+                                "role": "assistant",
+                                "content": reply,
+                                **({"reasoning_content": "internal trace"} if last == "reasoning" else {}),
+                            },
+                        }
+                    ],
                     "usage": {"prompt_tokens": len(messages), "completion_tokens": 1, "total_tokens": len(messages) + 1},
                 }
             ),

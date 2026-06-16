@@ -2,7 +2,7 @@
 
 `pkchat` is a fast, script-friendly command-line chat client for OpenAI and OpenAI-compatible APIs.
 
-Current status: v0.31 CLI with libcurl transport, cancellable runtime jobs, `/v1/models`, `/v1/chat/completions`, a simple REPL, a standalone `--editor` mode, a full-screen non-blocking TUI foundation, and JSON chat save/load.
+Current status: v0.32 CLI with libcurl transport, cancellable runtime jobs, `/v1/models`, `/v1/chat/completions`, a simple REPL, a standalone `--editor` mode, a full-screen non-blocking TUI foundation, and JSON chat save/load.
 
 ## Build
 
@@ -94,7 +94,7 @@ Full-screen TUI foundation:
 ./pkchat --tui lmstudio
 ```
 
-The TUI keeps model requests, `/models`, `/save`, and `/load` behind runtime jobs so the terminal loop stays responsive. The bottom input area embeds the editor component in a fixed-height panel with soft wrap and visual-row cursor movement. Colors are enabled by default with the `dark` theme; use `--nocolors` to disable color styling, and `/theme`, `/theme dark`, or `/theme light` inside the TUI to inspect or switch themes. `Enter` sends, `Alt+Enter` or `Esc` then `Enter` inserts a newline, and `Ctrl+S` sends the current multiline draft. A bare `Esc` cancels the active model request while keeping the current turn visible. `Ctrl+R` regenerates the last answer by resending the last user prompt. `PageUp` and `PageDown` scroll chat history, `Home` jumps to the beginning of the chat thread, and `End` returns to the live bottom. `Ctrl+C` cancels the active job, or exits when no job is active.
+The TUI keeps model requests, `/models`, `/save`, and `/load` behind runtime jobs so the terminal loop stays responsive. The bottom input area embeds the editor component in a fixed-height panel with soft wrap and visual-row cursor movement. Colors are enabled by default with the `dark` theme; use `--nocolors` to disable color styling, and `/theme`, `/theme dark`, or `/theme light` inside the TUI to inspect or switch themes. Thinking traces are hidden by default; use `/thinking trace`, `/thinking notrace`, or `Ctrl+T` to toggle display of `<think>...</think>` blocks. Provider reasoning fields such as `reasoning_content`, `reasoning`, and text `reasoning_details` are displayed as `<think>` blocks. `Enter` sends, `Alt+Enter` or `Esc` then `Enter` inserts a newline, and `Ctrl+S` sends the current multiline draft. A bare `Esc` cancels the active model request while keeping the current turn visible. `Ctrl+R` regenerates the last answer by resending the last user prompt. `PageUp` and `PageDown` scroll chat history, `Home` jumps to the beginning of the chat thread, and `End` returns to the live bottom. `Ctrl+C` cancels the active job, or exits when no job is active.
 
 Verbose timing:
 
@@ -135,7 +135,7 @@ Run the full local suite:
 make test
 ```
 
-The integration test starts a local mock OpenAI-compatible server and verifies model listing, non-streaming chat, streaming chat, JSON output, NDJSON output, chat save/load, and REPL mode. Unit tests cover the runtime event queue/job cancellation, `--tui`, `--nocolors`, and `--editor` parsing, editor piece-table edits, rectangular panel rendering, editor word wrapping, editor vertical navigation modes, editor file round-trips, TUI layout sizing, TUI regeneration planning, theme parsing, and WCAG contrast checks for TUI themes.
+The integration test starts a local mock OpenAI-compatible server and verifies model listing, non-streaming chat, streaming chat, provider reasoning fields, JSON output, NDJSON output, chat save/load, and REPL mode. Unit tests cover the runtime event queue/job cancellation, `--tui`, `--nocolors`, and `--editor` parsing, editor piece-table edits, rectangular panel rendering, editor word wrapping, editor vertical navigation modes, editor file round-trips, TUI layout sizing, TUI regeneration planning, thinking-trace display filtering, theme parsing, and WCAG contrast checks for TUI themes.
 
 For leak and sanitizer checks:
 

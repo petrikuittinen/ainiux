@@ -55,6 +55,14 @@ double contrast_ratio(Rgb foreground, Rgb background);
 int history_scroll_for_thread_beginning();
 int history_scroll_for_thread_end();
 
+struct ThinkingDisplay {
+    std::string text;
+    bool saw_thinking_tag = false;
+    bool open_thinking_tag = false;
+};
+
+ThinkingDisplay thinking_display_text(const std::string& content, bool show_traces);
+
 struct RegenerationPlan {
     bool available = false;
     std::size_t erase_from = 0;
