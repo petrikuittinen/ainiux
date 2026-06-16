@@ -5,6 +5,7 @@
 #include <cmath>
 #include <cstring>
 #include <iostream>
+#include <limits>
 #include <string>
 #include <sys/ioctl.h>
 #include <sys/select.h>
@@ -122,6 +123,14 @@ double contrast_ratio(Rgb foreground, Rgb background) {
     const double lighter = std::max(a, b);
     const double darker = std::min(a, b);
     return (lighter + 0.05) / (darker + 0.05);
+}
+
+int history_scroll_for_thread_beginning() {
+    return std::numeric_limits<int>::max();
+}
+
+int history_scroll_for_thread_end() {
+    return 0;
 }
 
 namespace {
@@ -600,9 +609,9 @@ bool handle_escape(editor::EditorState& input, const Layout& layout, int& histor
     } else if (sequence == "[D" || sequence == "OD") {
         input.move_left();
     } else if (sequence == "[H" || sequence == "[1~" || sequence == "OH") {
-        input.move_home();
+        history_scroll = history_scroll_for_thread_beginning();
     } else if (sequence == "[F" || sequence == "[4~" || sequence == "OF") {
-        input.move_end();
+        history_scroll = history_scroll_for_thread_end();
     } else if (sequence == "[3~") {
         set_status_from_error(input.erase_at_cursor(), status);
     } else if (sequence == "[5~") {

@@ -220,6 +220,13 @@ void test_tui_regeneration_plan_uses_last_user_turn() {
     check(!plan.available, "TUI regeneration plan is unavailable without a user turn");
 }
 
+void test_tui_history_jump_helpers() {
+    check(pkchat::tui::history_scroll_for_thread_beginning() > 1000000,
+          "TUI Home jump requests a clamped scrollback maximum");
+    check(pkchat::tui::history_scroll_for_thread_end() == 0,
+          "TUI End jump returns to the live chat bottom");
+}
+
 void test_tui_theme_parsing_and_contrast() {
     pkchat::tui::ThemeName theme = pkchat::tui::ThemeName::Dark;
     check(pkchat::tui::parse_theme_name("dark", theme), "TUI dark theme parses");
@@ -413,6 +420,7 @@ int main() {
     test_editor_file_round_trip();
     test_tui_layout_reserves_editor_input_panel();
     test_tui_regeneration_plan_uses_last_user_turn();
+    test_tui_history_jump_helpers();
     test_tui_theme_parsing_and_contrast();
     if (failures != 0) {
         std::cerr << failures << " unit test(s) failed\n";

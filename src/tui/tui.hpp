@@ -52,6 +52,8 @@ const char* theme_name(ThemeName theme);
 bool parse_theme_name(const std::string& text, ThemeName& out);
 StylePair style_pair_for(ThemeName theme, StyleRole role);
 double contrast_ratio(Rgb foreground, Rgb background);
+int history_scroll_for_thread_beginning();
+int history_scroll_for_thread_end();
 
 struct RegenerationPlan {
     bool available = false;
