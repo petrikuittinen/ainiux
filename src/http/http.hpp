@@ -22,12 +22,14 @@ struct Request {
     bool insecure_tls = false;
     bool trace = false;
     runtime::CancellationToken cancellation;
+    long max_body_bytes = 0;
     BodyCallback on_body;
 };
 
 struct Response {
     long status = 0;
     std::string body;
+    std::string content_type;
     std::string stderr_text;
 };
 

@@ -13,7 +13,8 @@ bool needs_value(const std::string& opt) {
         "-t", "--temperature", "--top-p", "--max-output-tokens", "--format", "--output",
         "--provider", "--profile", "--api", "--base-url", "--chat-url", "--models-url", "--responses-url",
         "--key-env", "--key-file", "-k", "--key", "--header", "--connect-timeout", "--timeout",
-        "--proxy", "--save-chat", "--load-chat"};
+        "--proxy", "--fetch-url", "--html-file", "--html-format", "--max-fetch-bytes",
+        "--save-chat", "--load-chat"};
     for (const char* item : with_values) {
         if (opt == item) {
             return true;
@@ -119,6 +120,8 @@ ParseResult parse_args(int argc, char** argv) {
             opts.tui = true;
         } else if (arg == "--nocolors" || arg == "--no-colors") {
             opts.no_colors = true;
+        } else if (arg == "--allow-private-url-fetch") {
+            opts.allow_private_url_fetch = true;
         } else if (arg == "--editor") {
             opts.editor = true;
         } else if (needs_value(opt)) {
@@ -210,6 +213,20 @@ ParseResult parse_args(int argc, char** argv) {
                 }
             } else if (opt == "--proxy") {
                 opts.proxy = value;
+            } else if (opt == "--fetch-url") {
+                opts.fetch_url = value;
+            } else if (opt == "--html-file") {
+                opts.html_file = value;
+            } else if (opt == "--html-format") {
+                if (value != "text" && value != "plain" && value != "plaintext" && value != "markdown" && value != "md") {
+                    return {opts, {ErrorCode::BadArgs, "--html-format must be text or markdown"}};
+                }
+                opts.html_format = value;
+            } else if (opt == "--max-fetch-bytes") {
+                Error err = parse_long(opt, value, opts.max_fetch_bytes);
+                if (!err.ok()) {
+                    return {opts, err};
+                }
             }
         } else if (!arg.empty() && arg[0] == '-') {
             return {opts, {ErrorCode::BadArgs, "unknown option: " + arg}};
@@ -232,6 +249,8 @@ Usage:
   pkchat --repl [BASE_URL|PROFILE] [options]
   pkchat --tui [BASE_URL|PROFILE] [options]
   pkchat --editor [PATH] [--output PATH]
+  pkchat --fetch-url URL [--html-format text|markdown] [--output PATH]
+  pkchat --html-file PATH [--html-format text|markdown] [--output PATH]
 
 Examples:
   pkchat http://localhost:8000 -p "What is the capital of Norway?"
@@ -243,6 +262,8 @@ Examples:
   pkchat lmstudio -i
   pkchat --tui lmstudio
   pkchat --editor notes.txt
+  pkchat --fetch-url https://example.com --html-format markdown
+  pkchat --html-file page.html --html-format text
   pkchat --prompt-file prompt.txt --system-file system.txt --format json
   pkchat --repl --load-chat chat.json --save-chat chat.json
 
@@ -262,6 +283,11 @@ Options:
       --tui                     Start the full-screen non-blocking terminal UI foundation.
       --nocolors                Disable TUI color styling.
       --editor                  Start the standalone multiline editor.
+      --fetch-url URL           Fetch HTML and print converted text/markdown.
+      --html-file PATH          Read local HTML and print converted text/markdown; '-' reads stdin.
+      --html-format text|markdown
+      --max-fetch-bytes N       Default 1048576.
+      --allow-private-url-fetch Allow loopback/private URL fetches.
       --save-chat PATH          Save JSON chat history after a successful reply.
       --load-chat PATH          Load JSON chat history before sending.
       --provider NAME           openai, openrouter, lm_studio, ollama, vllm, llama.cpp, etc.

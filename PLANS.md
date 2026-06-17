@@ -986,29 +986,32 @@ pkchat --fetch-url https://example.com/article -p "Summarize this"
 
 Safety defaults:
 
-- [ ] Make fetching explicit or clearly visible.
-- [ ] Limit response size.
-- [ ] Set connect and total timeouts.
-- [ ] Limit redirects.
-- [ ] Check content type.
-- [ ] Block private addresses by default:
-  - [ ] loopback
-  - [ ] link-local
-  - [ ] multicast
-  - [ ] RFC1918 private ranges
-  - [ ] metadata-service addresses
-- [ ] Add override such as `--allow-private-url-fetch` only with clear warnings.
-- [ ] Show which URL was fetched.
+- [x] Make fetching explicit or clearly visible for the first extraction mode.
+- [x] Limit response size with a hard HTTP body cap.
+- [x] Set connect and total timeouts for fetch mode.
+- [x] Limit redirects by not following redirects in the first slice.
+- [x] Check content type for HTML extraction.
+- [x] Block private addresses by default for literal/localhost/common metadata hosts:
+  - [x] loopback
+  - [x] link-local
+  - [x] multicast
+  - [x] RFC1918 private ranges
+  - [x] metadata-service addresses
+- [x] Add override such as `--allow-private-url-fetch` only with clear warnings.
+- [x] Show which URL was fetched unless `--quiet` is set.
 - [ ] Handle charset conversion or reject unsupported encodings clearly.
 - [ ] Release transfer handles, buffers, parsers, and temporary files after success, failure, timeout, and cancellation.
+
+
+Implementation note (2026-06-17): The first v0.5 slice is present. `src/html/` provides a small C++17 `std::regex` HTML converter with plaintext and Markdown output for simple headings, emphasis, strong text, links, line breaks, and block spacing. `--html-file` converts local HTML without contacting a provider. `--fetch-url` uses libcurl to fetch HTML explicitly, applies a response-size cap, a default fetch timeout, content-type checks, no redirect following, and private/loopback/link-local/multicast/common metadata literal-host blocking unless `--allow-private-url-fetch` is set. This slice does not yet inject fetched content into chat prompts, process JavaScript, convert charsets, check DNS-resolved private addresses, or implement PDF/Word extraction.
 
 ## Acceptance criteria
 
 - [ ] Context compaction never modifies the full saved transcript destructively.
 - [ ] Text file insertion works for UTF-8 text files.
 - [ ] Binary/unreadable/too-large files produce clear errors.
-- [ ] URL fetching refuses private addresses by default.
-- [ ] URL fetch timeout and max-size limits work.
+- [x] URL fetching refuses private literal/localhost addresses by default.
+- [x] URL fetch timeout and max-size limits work for the explicit CLI extraction path.
 - [ ] TUI remains responsive while file insertion or URL fetching is in progress.
 - [ ] Leak-check tooling reports no leaks for attachment and URL-fetch success/failure/cancellation paths where supported.
 

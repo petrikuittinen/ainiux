@@ -21,6 +21,25 @@ done
 
 BASE="http://127.0.0.1:$PORT"
 
+
+private_fetch_err="$ROOT/build/fetch-private.err"
+if "$ROOT/pkchat" --fetch-url "$BASE/page" --html-format markdown --quiet >"$ROOT/build/fetch-private.out" 2>"$private_fetch_err"; then
+    echo "private URL fetch should have failed without --allow-private-url-fetch" >&2
+    exit 1
+fi
+grep 'refusing to fetch private' "$private_fetch_err" >/dev/null
+
+page_md=$("$ROOT/pkchat" --fetch-url "$BASE/page" --allow-private-url-fetch --html-format markdown --quiet)
+printf '%s\n' "$page_md" | grep -F '# Mock Page' >/dev/null
+printf '%s\n' "$page_md" | grep -F '**bold**' >/dev/null
+printf '%s\n' "$page_md" | grep -F '*emphasis*' >/dev/null
+printf '%s\n' "$page_md" | grep -F '[docs](https://example.com/docs)' >/dev/null
+printf '%s\n' "$page_md" | grep -F 'bad()' >/dev/null && exit 1 || true
+
+page_text=$("$ROOT/pkchat" --fetch-url "$BASE/page" --allow-private-url-fetch --html-format text --quiet)
+printf '%s\n' "$page_text" | grep -F 'Mock Page' >/dev/null
+printf '%s\n' "$page_text" | grep -F 'Hello bold and emphasis with docs (https://example.com/docs).' >/dev/null
+
 models=$("$ROOT/pkchat" --list-models "$BASE" --quiet)
 test "$models" = "$MODEL"
 

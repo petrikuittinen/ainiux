@@ -10,6 +10,7 @@
 #include "chat/session.hpp"
 #include "cli/args.hpp"
 #include "editor/editor.hpp"
+#include "html/html.hpp"
 #include "json/json.hpp"
 #include "provider/provider.hpp"
 #include "runtime/runtime.hpp"
@@ -79,6 +80,65 @@ void test_cli_editor_parse() {
     check(parsed.options.editor, "editor flag parsed");
     check(parsed.options.positional_url == "notes.txt", "editor positional file parsed");
     check(parsed.options.output_path == "saved.txt", "editor save-as output parsed");
+}
+
+
+void test_cli_html_extract_parse() {
+    const char* argv[] = {"pkchat", "--fetch-url", "https://example.com/page", "--html-format", "markdown",
+                          "--max-fetch-bytes", "123", "--allow-private-url-fetch", "--output", "page.md"};
+    pkchat::cli::ParseResult parsed = pkchat::cli::parse_args(10, const_cast<char**>(argv));
+    check(parsed.error.ok(), "HTML fetch args parse");
+    check(parsed.options.fetch_url == "https://example.com/page", "HTML fetch URL parsed");
+    check(parsed.options.html_format == "markdown", "HTML output format parsed");
+    check(parsed.options.max_fetch_bytes == 123, "HTML max fetch bytes parsed");
+    check(parsed.options.allow_private_url_fetch, "HTML private fetch override parsed");
+    check(parsed.options.output_path == "page.md", "HTML output path parsed");
+
+    const char* file_argv[] = {"pkchat", "--html-file", "page.html", "--html-format", "text"};
+    parsed = pkchat::cli::parse_args(5, const_cast<char**>(file_argv));
+    check(parsed.error.ok(), "HTML file args parse");
+    check(parsed.options.html_file == "page.html", "HTML file path parsed");
+    check(parsed.options.html_format == "text", "HTML text format parsed");
+}
+
+void test_html_markdown_conversion() {
+    const std::string html =
+        "<html><head><style>.x{}</style><script>bad()</script></head>"
+        "<body><h1>Title &amp; More</h1><p>Hello <strong>bold</strong> and <em>em</em> "
+        "<a href=\"https://example.com?q=1&amp;x=2\">link</a>.</p>"
+        "<h2>Next</h2><p><b>heavy</b> <italic>tilt</italic></p></body></html>";
+    const std::string out = pkchat::html::convert(html, pkchat::html::OutputFormat::Markdown);
+    check(out.find("# Title & More") != std::string::npos, "HTML h1 converts to Markdown heading");
+    check(out.find("Hello **bold** and *em* [link](https://example.com?q=1&x=2).") != std::string::npos,
+          "HTML inline tags convert to Markdown");
+    check(out.find("## Next") != std::string::npos, "HTML h2 converts to Markdown heading");
+    check(out.find("**heavy** *tilt*") != std::string::npos, "HTML b and italic convert to Markdown emphasis");
+    check(out.find("bad()") == std::string::npos, "HTML script content is ignored");
+}
+
+void test_html_text_conversion() {
+    const std::string html =
+        "<h1>Title &amp; More</h1><p>Hello <strong>bold</strong> and <em>em</em> "
+        "<a href='https://example.com/docs'>docs</a>.</p>";
+    const std::string out = pkchat::html::convert(html, pkchat::html::OutputFormat::Text);
+    check(out.find("Title & More") != std::string::npos, "HTML text output keeps heading text");
+    check(out.find("Hello bold and em docs (https://example.com/docs).") != std::string::npos,
+          "HTML text output keeps link URL next to link text");
+    check(out.find("**") == std::string::npos && out.find("[") == std::string::npos,
+          "HTML text output does not include Markdown syntax");
+}
+
+
+void test_html_large_ignored_blocks() {
+    std::string html = "<h1>Before</h1><script>";
+    html += std::string(200000, '<');
+    html += "</script><style>";
+    html += std::string(200000, '>');
+    html += "</style><p>After <a href=\"https://example.com\">link</a></p>";
+    const std::string out = pkchat::html::convert(html, pkchat::html::OutputFormat::Markdown);
+    check(out.find("# Before") != std::string::npos, "HTML large ignored block keeps preceding text");
+    check(out.find("After [link](https://example.com)") != std::string::npos,
+          "HTML large ignored block keeps following text");
 }
 
 void test_editor_piece_table_edits() {
@@ -569,6 +629,10 @@ int main() {
     test_cli_tui_parse();
     test_cli_tui_nocolors_parse();
     test_cli_editor_parse();
+    test_cli_html_extract_parse();
+    test_html_markdown_conversion();
+    test_html_text_conversion();
+    test_html_large_ignored_blocks();
     test_cli_responses_parse();
     test_url_normalization();
     test_json_parse();

@@ -40,3 +40,16 @@ v0.3 adds `--tui` as an alternate-screen terminal UI without adding an ncurses d
 `--editor` is a permanent bonus mode and a controlled test bed for the multiline editing layer now embedded in the chat TUI. The editor core uses a piece table: the original file and appended edit buffer are kept separately while visible text is represented by pieces. This keeps inserts and deletes local to the piece list instead of rewriting the whole buffer on every keystroke, which is a better fit for large files than a single mutable string.
 
 Rendering is split from terminal I/O. `EditorState` renders into a caller-provided `Rect`, so one terminal window can eventually host multiple editor panels or embed the editor in a partial-screen chat layout. Long lines soft-wrap inside that rectangle, preferring whitespace breakpoints and hard-wrapping long words. Vertical movement has two modes: logical hard-line movement for file editing, and visual-row movement that treats wrapped overflow rows as cursor targets for TUI chat input. The current terminal harness uses POSIX `termios` and ANSI escape sequences because `ncursesw` was not available in the build environment; the core renderer is independent of that choice.
+
+
+## Document Extraction Modules
+
+v0.5 starts document extraction with a separate `src/html/` module. The HTML converter is intentionally small, uses C++17 `std::regex` for simple tag and attribute matching, and converts easy page content to plaintext or Markdown without adding another parser dependency. Script/style/noscript removal uses a linear scanner instead of a broad regular expression so large real pages do not trigger catastrophic regex recursion. The first slice handles headings, bold/strong, emphasis/italic, links, line breaks, and simple block spacing. It does not execute JavaScript or attempt to be a browser-grade HTML parser.
+
+Future PDF and Word extraction should live in separate modules such as `src/pdf/` and `src/word/` rather than growing the HTML module.
+
+## URL Fetching First Slice
+
+`--fetch-url` is an explicit extraction mode, not hidden prompt injection. The CLI path uses the existing libcurl RAII wrapper, sends browser-style `User-Agent`, `Accept`, `Accept-Language`, and `Upgrade-Insecure-Requests` headers, captures `Content-Type`, applies a hard `max_body_bytes` cap in the HTTP write callback before appending oversized chunks, sets a fetch-mode total timeout when the user did not provide one, and refuses private/loopback/link-local/multicast/metadata literal hosts unless `--allow-private-url-fetch` is provided. Redirect following remains disabled in this slice.
+
+This is not the final URL safety model. DNS-resolved private-address blocking, charset conversion, allow/block domain configuration, and runtime-job integration for TUI/web fetches remain v0.5 follow-up work.

@@ -26,6 +26,7 @@ struct Options {
     bool tui = false;
     bool editor = false;
     bool no_colors = false;
+    bool allow_private_url_fetch = false;
 
     std::string positional_url;
     std::string prompt;
@@ -44,6 +45,9 @@ struct Options {
     std::string key_file;
     std::string key;
     std::string output_path;
+    std::string fetch_url;
+    std::string html_file;
+    std::string html_format = "markdown";
     std::string save_chat_path;
     std::string load_chat_path;
     std::string proxy;
@@ -57,6 +61,7 @@ struct Options {
     bool has_max_output_tokens = false;
     long connect_timeout_seconds = 10;
     long timeout_seconds = 0;
+    long max_fetch_bytes = 1048576;
 
     std::vector<std::string> headers;
 };

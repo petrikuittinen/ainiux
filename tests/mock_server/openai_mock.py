@@ -21,6 +21,28 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(data)
     def do_GET(self):
+        if self.path == "/page":
+            user_agent = self.headers.get("User-Agent", "")
+            accept = self.headers.get("Accept", "")
+            if "Mozilla/5.0" not in user_agent or "text/html" not in accept:
+                self._send(403, json.dumps({"error": {"message": "browser-like headers required"}}))
+                return
+            self._send(
+                200,
+                """
+                <!doctype html>
+                <html>
+                  <head><title>ignored title</title><style>.hidden { display: none; }</style></head>
+                  <body>
+                    <h1>Mock Page</h1>
+                    <p>Hello <strong>bold</strong> and <em>emphasis</em> with <a href="https://example.com/docs">docs</a>.</p>
+                    <script>bad()</script>
+                  </body>
+                </html>
+                """,
+                "text/html; charset=utf-8",
+            )
+            return
         if self.path == "/v1/models":
             if self.empty_models:
                 self._send(200, json.dumps({"object": "list", "data": []}))

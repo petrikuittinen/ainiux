@@ -1,13 +1,18 @@
+#include <algorithm>
+#include <cctype>
 #include <fstream>
 #include <iomanip>
 #include <iostream>
 #include <memory>
 #include <sstream>
+#include <vector>
 
 #include "chat/session.hpp"
 #include "cli/args.hpp"
 #include "common.hpp"
 #include "editor/editor.hpp"
+#include "html/html.hpp"
+#include "http/http.hpp"
 #include "json/json.hpp"
 #include "pkchat/version.hpp"
 #include "provider/provider.hpp"
@@ -73,6 +78,287 @@ std::string trim_ascii(std::string text) {
         text.pop_back();
     }
     return text;
+}
+
+std::string lower_ascii(std::string text) {
+    for (char& ch : text) {
+        ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+    }
+    return text;
+}
+
+bool ends_with(const std::string& text, const std::string& suffix) {
+    return text.size() >= suffix.size() && text.compare(text.size() - suffix.size(), suffix.size(), suffix) == 0;
+}
+
+bool starts_with(const std::string& text, const std::string& prefix) {
+    return text.rfind(prefix, 0) == 0;
+}
+
+bool parse_ipv4_literal(const std::string& host, std::vector<int>& parts) {
+    parts.clear();
+    size_t start = 0;
+    while (start <= host.size()) {
+        const size_t dot = host.find('.', start);
+        const size_t end = dot == std::string::npos ? host.size() : dot;
+        if (end == start) {
+            return false;
+        }
+        int value = 0;
+        for (size_t i = start; i < end; ++i) {
+            if (host[i] < '0' || host[i] > '9') {
+                return false;
+            }
+            value = value * 10 + (host[i] - '0');
+            if (value > 255) {
+                return false;
+            }
+        }
+        parts.push_back(value);
+        if (dot == std::string::npos) {
+            break;
+        }
+        start = dot + 1;
+    }
+    return parts.size() == 4;
+}
+
+bool is_blocked_ipv4(const std::vector<int>& ip) {
+    if (ip.size() != 4) {
+        return false;
+    }
+    if (ip[0] == 0 || ip[0] == 10 || ip[0] == 127) {
+        return true;
+    }
+    if (ip[0] == 100 && ip[1] >= 64 && ip[1] <= 127) {
+        return true;
+    }
+    if (ip[0] == 169 && ip[1] == 254) {
+        return true;
+    }
+    if (ip[0] == 172 && ip[1] >= 16 && ip[1] <= 31) {
+        return true;
+    }
+    if (ip[0] == 192 && ip[1] == 168) {
+        return true;
+    }
+    if (ip[0] >= 224) {
+        return true;
+    }
+    return false;
+}
+
+struct FetchUrlParts {
+    std::string scheme;
+    std::string host;
+};
+
+pkchat::Error parse_fetch_url(const std::string& url, FetchUrlParts& parts) {
+    const size_t scheme_end = url.find("://");
+    if (scheme_end == std::string::npos) {
+        return {pkchat::ErrorCode::BadUrl, "--fetch-url expects an absolute http:// or https:// URL: " + url};
+    }
+    parts.scheme = lower_ascii(url.substr(0, scheme_end));
+    if (parts.scheme != "http" && parts.scheme != "https") {
+        return {pkchat::ErrorCode::BadUrl, "--fetch-url only supports http:// and https:// URLs: " + url};
+    }
+    const size_t authority_start = scheme_end + 3;
+    const size_t authority_end = url.find_first_of("/?#", authority_start);
+    std::string authority = authority_end == std::string::npos
+                                ? url.substr(authority_start)
+                                : url.substr(authority_start, authority_end - authority_start);
+    if (authority.empty()) {
+        return {pkchat::ErrorCode::BadUrl, "--fetch-url URL has no host: " + url};
+    }
+    const size_t at = authority.rfind('@');
+    if (at != std::string::npos) {
+        authority = authority.substr(at + 1);
+    }
+    if (!authority.empty() && authority.front() == '[') {
+        const size_t close = authority.find(']');
+        if (close == std::string::npos) {
+            return {pkchat::ErrorCode::BadUrl, "--fetch-url has an unterminated IPv6 host: " + url};
+        }
+        parts.host = authority.substr(1, close - 1);
+    } else {
+        const size_t colon = authority.rfind(':');
+        parts.host = colon == std::string::npos ? authority : authority.substr(0, colon);
+    }
+    parts.host = lower_ascii(parts.host);
+    while (!parts.host.empty() && parts.host.back() == '.') {
+        parts.host.pop_back();
+    }
+    if (parts.host.empty()) {
+        return {pkchat::ErrorCode::BadUrl, "--fetch-url URL has no host: " + url};
+    }
+    return pkchat::ok_error();
+}
+
+bool is_private_or_loopback_host(const std::string& raw_host) {
+    std::string host = lower_ascii(raw_host);
+    while (!host.empty() && host.back() == '.') {
+        host.pop_back();
+    }
+    if (host == "localhost" || ends_with(host, ".localhost")) {
+        return true;
+    }
+    if (host == "metadata.google.internal" || host == "metadata" || host == "metadata.local") {
+        return true;
+    }
+    std::vector<int> ipv4;
+    if (parse_ipv4_literal(host, ipv4)) {
+        return is_blocked_ipv4(ipv4);
+    }
+    if (starts_with(host, "::ffff:") && parse_ipv4_literal(host.substr(7), ipv4)) {
+        return is_blocked_ipv4(ipv4);
+    }
+    if (host.find(':') != std::string::npos) {
+        if (host == "::1" || host == "0:0:0:0:0:0:0:1") {
+            return true;
+        }
+        const size_t colon = host.find(':');
+        const std::string first = host.substr(0, colon);
+        if (starts_with(first, "fc") || starts_with(first, "fd") || starts_with(first, "ff")) {
+            return true;
+        }
+        if (first.size() >= 3 && first[0] == 'f' && first[1] == 'e' &&
+            (first[2] == '8' || first[2] == '9' || first[2] == 'a' || first[2] == 'b')) {
+            return true;
+        }
+    }
+    return false;
+}
+
+pkchat::Error read_html_file(const std::string& path, std::string& body) {
+    std::ostringstream buffer;
+    if (path == "-") {
+        buffer << std::cin.rdbuf();
+        if (!std::cin.good() && !std::cin.eof()) {
+            return {pkchat::ErrorCode::FileRead, "could not read HTML from stdin"};
+        }
+        body = buffer.str();
+        return pkchat::ok_error();
+    }
+    std::ifstream file(path, std::ios::binary);
+    if (!file) {
+        return {pkchat::ErrorCode::FileRead, "could not open HTML file for reading: " + path};
+    }
+    buffer << file.rdbuf();
+    if (!file.good() && !file.eof()) {
+        return {pkchat::ErrorCode::FileRead, "could not read HTML file: " + path};
+    }
+    body = buffer.str();
+    return pkchat::ok_error();
+}
+
+bool is_supported_html_content_type(const std::string& content_type) {
+    if (content_type.empty()) {
+        return true;
+    }
+    std::string type = lower_ascii(content_type);
+    const size_t semi = type.find(';');
+    if (semi != std::string::npos) {
+        type = type.substr(0, semi);
+    }
+    type = trim_ascii(type);
+    return type == "text/html" || type == "application/xhtml+xml";
+}
+
+pkchat::Error fetch_html_url(const pkchat::cli::Options& options, std::string& body) {
+    if (options.max_fetch_bytes <= 0) {
+        return {pkchat::ErrorCode::BadArgs, "--max-fetch-bytes must be greater than zero for --fetch-url"};
+    }
+    FetchUrlParts parts;
+    pkchat::Error err = parse_fetch_url(options.fetch_url, parts);
+    if (!err.ok()) {
+        return err;
+    }
+    if (!options.allow_private_url_fetch && is_private_or_loopback_host(parts.host)) {
+        return {pkchat::ErrorCode::BadUrl,
+                "refusing to fetch private, loopback, link-local, multicast, or metadata URL without "
+                "--allow-private-url-fetch: " + options.fetch_url};
+    }
+
+    pkchat::http::Request request;
+    request.method = "GET";
+    request.url = options.fetch_url;
+    request.headers.push_back(
+        "User-Agent: Mozilla/5.0 (X11; Linux x86_64; rv:128.0) Gecko/20100101 Firefox/128.0");
+    request.headers.push_back("Accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8");
+    request.headers.push_back("Accept-Language: en-US,en;q=0.5");
+    request.headers.push_back("Upgrade-Insecure-Requests: 1");
+    request.connect_timeout_seconds = options.connect_timeout_seconds;
+    request.timeout_seconds = options.timeout_seconds > 0 ? options.timeout_seconds : 30;
+    request.proxy = options.proxy;
+    request.insecure_tls = options.insecure_tls;
+    request.trace = options.trace_http;
+    request.max_body_bytes = options.max_fetch_bytes;
+
+    pkchat::http::Result result = pkchat::http::perform(request, {});
+    if (!result.error.ok()) {
+        return result.error;
+    }
+    if (result.response.status < 200 || result.response.status >= 300) {
+        return {pkchat::ErrorCode::HttpStatus,
+                "HTTP " + std::to_string(result.response.status) + " while fetching URL: " + options.fetch_url};
+    }
+    if (!is_supported_html_content_type(result.response.content_type)) {
+        return {pkchat::ErrorCode::UnsupportedFeature,
+                "fetched URL did not return an HTML content type: " + options.fetch_url +
+                    " (Content-Type: " + result.response.content_type + ")"};
+    }
+    body = std::move(result.response.body);
+    if (!options.quiet) {
+        std::cerr << "Fetched URL: " << options.fetch_url << "\n";
+    }
+    return pkchat::ok_error();
+}
+
+pkchat::Error validate_html_extract_options(const pkchat::cli::Options& options) {
+    if (!options.fetch_url.empty() && !options.html_file.empty()) {
+        return {pkchat::ErrorCode::BadArgs, "--fetch-url and --html-file cannot be combined"};
+    }
+    if (options.editor || options.repl || options.tui || options.list_models) {
+        return {pkchat::ErrorCode::BadArgs,
+                "HTML extraction cannot be combined with --editor, --repl, --tui, or --list-models"};
+    }
+    if (!options.prompt.empty() || !options.prompt_file.empty() || !options.system.empty() || !options.system_file.empty()) {
+        return {pkchat::ErrorCode::BadArgs, "HTML extraction cannot be combined with prompt or system options"};
+    }
+    if (!options.load_chat_path.empty() || !options.save_chat_path.empty()) {
+        return {pkchat::ErrorCode::BadArgs, "HTML extraction cannot be combined with --load-chat or --save-chat"};
+    }
+    if (options.format != pkchat::cli::OutputFormat::Text) {
+        return {pkchat::ErrorCode::BadArgs, "HTML extraction uses --html-format text|markdown, not --format"};
+    }
+    return pkchat::ok_error();
+}
+
+int run_html_extract(const pkchat::cli::Options& options, std::ostream& out) {
+    pkchat::Error err = validate_html_extract_options(options);
+    if (!err.ok()) {
+        print_error(err);
+        return exit_code_for(err.code);
+    }
+    pkchat::html::OutputFormat format = pkchat::html::OutputFormat::Markdown;
+    if (!pkchat::html::parse_output_format(options.html_format, format)) {
+        err = {pkchat::ErrorCode::BadArgs, "--html-format must be text or markdown"};
+        print_error(err);
+        return exit_code_for(err.code);
+    }
+
+    std::string body;
+    if (!options.html_file.empty()) {
+        err = read_html_file(options.html_file, body);
+    } else {
+        err = fetch_html_url(options, body);
+    }
+    if (!err.ok()) {
+        print_error(err);
+        return exit_code_for(err.code);
+    }
+    out << pkchat::html::convert(body, format);
+    return 0;
 }
 
 void write_json_chat(std::ostream& out,
@@ -377,6 +663,16 @@ int main(int argc, char** argv) {
     if (options.version) {
         std::cout << "pkchat " << pkchat::kVersion << "\n";
         return 0;
+    }
+    if (!options.fetch_url.empty() || !options.html_file.empty()) {
+        std::ofstream out_file;
+        pkchat::Error output_error;
+        std::ostream* out = output_stream(options, out_file, output_error);
+        if (!output_error.ok()) {
+            print_error(output_error);
+            return exit_code_for(output_error.code);
+        }
+        return run_html_extract(options, *out);
     }
     if (options.editor && (options.repl || options.tui)) {
         print_error({pkchat::ErrorCode::BadArgs, "--editor cannot be combined with --repl or --tui"});
