@@ -24,6 +24,7 @@ Defaults:
 - redirects: not followed in this slice
 - request headers: sends browser-style `User-Agent`, `Accept`, `Accept-Language`, and `Upgrade-Insecure-Requests` headers
 - content type: accepts empty content type, `text/html`, and `application/xhtml+xml`
+- body encoding: validates UTF-8 and rejects invalid legacy-charset bytes with a clear unsupported-feature error
 - private/loopback/link-local/multicast/common metadata literal hosts are refused unless `--allow-private-url-fetch` is set
 
 Current limitation: hostname checks are string/IP-literal based. DNS resolution followed by private-address verification is still required before treating arbitrary hostnames as fully protected against local-network probing.

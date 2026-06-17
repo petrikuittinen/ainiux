@@ -44,7 +44,7 @@ Rendering is split from terminal I/O. `EditorState` renders into a caller-provid
 
 ## Document Extraction Modules
 
-v0.5 starts document extraction with a separate `src/html/` module. The HTML converter is intentionally small, uses C++17 `std::regex` for simple tag and attribute matching, and converts easy page content to plaintext or Markdown without adding another parser dependency. Script/style/noscript removal uses a linear scanner instead of a broad regular expression so large real pages do not trigger catastrophic regex recursion. The first slice handles headings, bold/strong, emphasis/italic, links, line breaks, and simple block spacing. It does not execute JavaScript or attempt to be a browser-grade HTML parser.
+v0.5 starts document extraction with a separate `src/html/` module. The HTML converter is intentionally small, uses C++17 `std::regex` for simple tag and attribute matching, and converts easy page content to plaintext or Markdown without adding another parser dependency. Script/style/noscript removal uses a linear scanner instead of a broad regular expression so large real pages do not trigger catastrophic regex recursion. The first slice handles headings, bold/strong, emphasis/italic, links, line breaks, and simple block spacing. It tolerates common malformed HTML by ignoring unknown or broken tags while preserving text. Input is validated as UTF-8 at the extraction boundary; legacy charset conversion is deferred, so invalid bytes produce an explicit unsupported-feature error instead of mojibake or crashes. It does not execute JavaScript or attempt to be a browser-grade HTML parser.
 
 Future PDF and Word extraction should live in separate modules such as `src/pdf/` and `src/word/` rather than growing the HTML module.
 

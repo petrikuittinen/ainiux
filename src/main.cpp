@@ -264,6 +264,17 @@ bool is_supported_html_content_type(const std::string& content_type) {
     return type == "text/html" || type == "application/xhtml+xml";
 }
 
+pkchat::Error validate_html_utf8(const std::string& body, const std::string& source) {
+    size_t offset = 0;
+    if (pkchat::html::is_valid_utf8(body, &offset)) {
+        return pkchat::ok_error();
+    }
+    return {pkchat::ErrorCode::UnsupportedFeature,
+            "HTML extraction expects UTF-8 input; charset conversion is not implemented yet for " + source +
+                " (invalid byte at offset " + std::to_string(offset) +
+                "). Convert the document to UTF-8 and try again."};
+}
+
 pkchat::Error fetch_html_url(const pkchat::cli::Options& options, std::string& body) {
     if (options.max_fetch_bytes <= 0) {
         return {pkchat::ErrorCode::BadArgs, "--max-fetch-bytes must be greater than zero for --fetch-url"};
@@ -353,6 +364,14 @@ int run_html_extract(const pkchat::cli::Options& options, std::ostream& out) {
     } else {
         err = fetch_html_url(options, body);
     }
+    if (!err.ok()) {
+        print_error(err);
+        return exit_code_for(err.code);
+    }
+    const std::string source = !options.html_file.empty()
+                                   ? (options.html_file == "-" ? std::string("stdin") : "file " + options.html_file)
+                                   : "URL " + options.fetch_url;
+    err = validate_html_utf8(body, source);
     if (!err.ok()) {
         print_error(err);
         return exit_code_for(err.code);

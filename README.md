@@ -80,7 +80,7 @@ HTML extraction:
 ./pkchat --fetch-url https://example.com/article --html-format markdown
 ```
 
-`--html-file` and `--fetch-url` are explicit extraction modes: they print converted page text to `stdout` and do not contact a model. The first parser lives in `src/html/` and handles simple HTML text extraction, including `h1`, `h2`, `strong`/`b`, `em`/`i`/`italic`, and `a href` links in Markdown output. Fetching uses libcurl, browser-style `User-Agent`/`Accept` headers, a default 1 MiB body limit, a default 30 second total timeout for this mode, HTML content-type checks, and no redirect following. Private, loopback, link-local, multicast, and common metadata-service literal hosts are blocked by default; use `--allow-private-url-fetch` only for explicit local testing. JavaScript-rendered pages are not supported.
+`--html-file` and `--fetch-url` are explicit extraction modes: they print converted page text to `stdout` and do not contact a model. The first parser lives in `src/html/` and handles simple HTML text extraction, including `h1`, `h2`, `strong`/`b`, `em`/`i`/`italic`, and `a href` links in Markdown output. Fetching uses libcurl, browser-style `User-Agent`/`Accept` headers, a default 1 MiB body limit, a default 30 second total timeout for this mode, HTML content-type checks, and no redirect following. Private, loopback, link-local, multicast, and common metadata-service literal hosts are blocked by default; use `--allow-private-url-fetch` only for explicit local testing. Input must be UTF-8; legacy charsets such as Windows-1251 or GBK are rejected with a clear error until charset conversion is implemented. JavaScript-rendered pages are not supported.
 
 Interactive REPL and chat files:
 
@@ -151,7 +151,7 @@ Run the full local suite:
 make test
 ```
 
-The integration test starts a local mock OpenAI-compatible server and verifies model listing, non-streaming chat, streaming chat, text-only Responses API calls, provider reasoning fields, JSON output, NDJSON output, chat save/load, REPL mode, and explicit HTML URL extraction with private-address blocking. Unit tests cover CLI parsing, provider registry aliases, capability reporting, Responses API endpoint selection and unsupported-feature errors, the runtime event queue/job cancellation, `--tui`, `--nocolors`, and `--editor` parsing, editor piece-table edits, rectangular panel rendering, editor word wrapping, editor vertical navigation modes, editor file round-trips, TUI layout sizing, TUI regeneration planning, thinking-trace display filtering, theme parsing, and WCAG contrast checks for TUI themes.
+The integration test starts a local mock OpenAI-compatible server and verifies model listing, non-streaming chat, streaming chat, text-only Responses API calls, provider reasoning fields, JSON output, NDJSON output, chat save/load, REPL mode, explicit HTML URL extraction with private-address blocking, and non-UTF-8 HTML rejection. Unit tests cover CLI parsing, provider registry aliases, capability reporting, Responses API endpoint selection and unsupported-feature errors, HTML conversion including malformed documents and UTF-8 validation, the runtime event queue/job cancellation, `--tui`, `--nocolors`, and `--editor` parsing, editor piece-table edits, rectangular panel rendering, editor word wrapping, editor vertical navigation modes, editor file round-trips, TUI layout sizing, TUI regeneration planning, thinking-trace display filtering, theme parsing, and WCAG contrast checks for TUI themes.
 
 For leak and sanitizer checks:
 
@@ -168,6 +168,6 @@ If Valgrind is not installed, `make leak-check` falls back to the sanitizer test
 - Responses API support is currently text-only; images, files, tools, and provider-side context management remain disabled in client capabilities until implemented.
 - Capability probing is not yet implemented; built-in profile capabilities are registry-defined, and `--responses-url` is the explicit override for non-OpenAI Responses endpoints.
 - The JSON facade is intentionally small and scoped to the current CLI/provider needs.
-- HTML extraction is intentionally simple: no JavaScript execution, no full DOM implementation, no charset conversion yet, and no DNS-level private-address verification yet.
+- HTML extraction is intentionally simple: no JavaScript execution, no full DOM implementation, no charset conversion yet, and no DNS-level private-address verification yet. Non-UTF-8 input is rejected instead of transcoded.
 - The editor preserves UTF-8 bytes and moves across UTF-8 code units safely, but full grapheme cluster and East Asian cell-width handling still belongs in the planned Unicode module.
 - The chat TUI is still a foundation; it now uses the editor component for multiline input, but still needs broader interactive resize, scrollback, and terminal-key coverage.

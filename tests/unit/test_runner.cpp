@@ -141,6 +141,50 @@ void test_html_large_ignored_blocks() {
           "HTML large ignored block keeps following text");
 }
 
+void test_html_malformed_documents() {
+    const std::string no_doctype = "<html><body><h1>No doctype</h1><p>Body text</p></body></html>";
+    std::string out = pkchat::html::convert(no_doctype, pkchat::html::OutputFormat::Markdown);
+    check(out.find("# No doctype") != std::string::npos, "HTML conversion does not require a DOCTYPE");
+    check(out.find("Body text") != std::string::npos, "HTML without DOCTYPE keeps body text");
+
+    const std::string unclosed = "<html><body><h1>I forgot to close this...<p>Next paragraph";
+    out = pkchat::html::convert(unclosed, pkchat::html::OutputFormat::Markdown);
+    check(out.find("# I forgot to close this...") != std::string::npos,
+          "HTML unclosed heading keeps heading text");
+    check(out.find("Next paragraph") != std::string::npos, "HTML unclosed tags keep following text");
+
+    const std::string misquoted = "<p>Before <img width=\"100 height=\"100\"> after</p>";
+    out = pkchat::html::convert(misquoted, pkchat::html::OutputFormat::Text);
+    check(out.find("Before after") != std::string::npos,
+          "HTML misquoted image attributes do not swallow surrounding text");
+    check(out.find("width") == std::string::npos, "HTML misquoted image tag is stripped as a tag");
+
+    const std::string misspelled = "<p><strnog>not bold</strnog> and <emphasis>not italic</emphasis></p>";
+    out = pkchat::html::convert(misspelled, pkchat::html::OutputFormat::Markdown);
+    check(out.find("not bold and not italic") != std::string::npos,
+          "HTML misspelled tags are ignored while keeping text");
+    check(out.find("**") == std::string::npos && out.find("*not italic*") == std::string::npos,
+          "HTML misspelled formatting tags do not create Markdown emphasis");
+}
+
+void test_html_utf8_validation() {
+    const std::string utf8 = u8"<h1>Привет 中文</h1>";
+    size_t offset = 0;
+    check(pkchat::html::is_valid_utf8(utf8, &offset), "HTML validator accepts valid UTF-8 Russian and Chinese text");
+    check(offset == utf8.size(), "HTML validator reports end offset for valid UTF-8");
+
+    const std::string windows1251_russian = std::string("<h1>") + "\xCF\xF0\xE8\xE2\xE5\xF2" + "</h1>";
+    offset = 0;
+    check(!pkchat::html::is_valid_utf8(windows1251_russian, &offset),
+          "HTML validator rejects Windows-1251 Russian bytes");
+    check(offset == 4, "HTML validator reports the first invalid Windows-1251 byte offset");
+
+    const std::string gbk_chinese = std::string("<h1>") + "\xD6\xD0\xCE\xC4" + "</h1>";
+    offset = 0;
+    check(!pkchat::html::is_valid_utf8(gbk_chinese, &offset), "HTML validator rejects GBK Chinese bytes");
+    check(offset == 4, "HTML validator reports the first invalid GBK byte offset");
+}
+
 void test_editor_piece_table_edits() {
     pkchat::editor::PieceTable table = pkchat::editor::PieceTable::from_string("alpha\nbeta\ngamma");
     check(table.size() == 16, "piece table initial size");
@@ -633,6 +677,8 @@ int main() {
     test_html_markdown_conversion();
     test_html_text_conversion();
     test_html_large_ignored_blocks();
+    test_html_malformed_documents();
+    test_html_utf8_validation();
     test_cli_responses_parse();
     test_url_normalization();
     test_json_parse();

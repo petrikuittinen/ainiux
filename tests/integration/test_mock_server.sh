@@ -40,6 +40,16 @@ page_text=$("$ROOT/pkchat" --fetch-url "$BASE/page" --allow-private-url-fetch --
 printf '%s\n' "$page_text" | grep -F 'Mock Page' >/dev/null
 printf '%s\n' "$page_text" | grep -F 'Hello bold and emphasis with docs (https://example.com/docs).' >/dev/null
 
+legacy_html="$ROOT/build/windows1251-russian.html"
+printf '<h1>\317\360\350\342\345\362</h1>' >"$legacy_html"
+legacy_err="$ROOT/build/nonutf-html.err"
+if "$ROOT/pkchat" --html-file "$legacy_html" --html-format text --quiet >"$ROOT/build/nonutf-html.out" 2>"$legacy_err"; then
+    echo "non-UTF-8 HTML extraction should have failed" >&2
+    exit 1
+fi
+grep 'HTML extraction expects UTF-8 input' "$legacy_err" >/dev/null
+grep 'charset conversion is not implemented yet' "$legacy_err" >/dev/null
+
 models=$("$ROOT/pkchat" --list-models "$BASE" --quiet)
 test "$models" = "$MODEL"
 
