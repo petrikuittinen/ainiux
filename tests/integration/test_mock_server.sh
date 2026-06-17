@@ -40,15 +40,47 @@ page_text=$("$ROOT/pkchat" --fetch-url "$BASE/page" --allow-private-url-fetch --
 printf '%s\n' "$page_text" | grep -F 'Mock Page' >/dev/null
 printf '%s\n' "$page_text" | grep -F 'Hello bold and emphasis with docs (https://example.com/docs).' >/dev/null
 
+local_html="$ROOT/build/local-input.html"
+cat >"$local_html" <<'HTML'
+<!doctype html>
+<h1>Local Input Title</h1>
+<p>Local <strong>bold</strong> and <a href="https://example.com/local">link</a>.</p>
+HTML
+input_html_plain=$("$ROOT/pkchat" --input "$local_html" --output-format plaintext --quiet)
+printf '%s\n' "$input_html_plain" | grep -F 'Local Input Title' >/dev/null
+printf '%s\n' "$input_html_plain" | grep -F 'Local bold and link (https://example.com/local).' >/dev/null
+
+local_md="$ROOT/build/local-input.md"
+printf '# Local Input Title\n\nLocal **bold** and [link](https://example.com/local).\n' >"$local_md"
+input_md_html="$ROOT/build/local-input-output.html"
+"$ROOT/pkchat" --input "$local_md" --output-format html --output "$input_md_html" --quiet
+grep '<!doctype html>' "$input_md_html" >/dev/null
+grep '<meta charset="utf-8">' "$input_md_html" >/dev/null
+grep 'name="viewport"' "$input_md_html" >/dev/null
+grep '<h1>Local Input Title</h1>' "$input_md_html" >/dev/null
+
+input_json=$("$ROOT/pkchat" --input "$local_md" --output-format json --quiet)
+printf '%s\n' "$input_json" | grep '"source":"file ' >/dev/null
+printf '%s\n' "$input_json" | grep '"output_format":"md"' >/dev/null
+printf '%s\n' "$input_json" | grep 'Local Input Title' >/dev/null
+
+local_txt="$ROOT/build/local-input.txt"
+printf 'Plain local input\nSecond line\n' >"$local_txt"
+input_jsond=$("$ROOT/pkchat" --input "$local_txt" --output-format jsond --quiet)
+printf '%s\n' "$input_jsond" | grep '"event":"content"' >/dev/null
+printf '%s\n' "$input_jsond" | grep 'Plain local input' >/dev/null
+
 url_context=$("$ROOT/pkchat" "$BASE" --quiet --no-stream -m "$MODEL" -p "summarize-url" --fetch-url "$BASE/page" --allow-private-url-fetch)
 test "$url_context" = "url-context-ok"
 url_system_context=$("$ROOT/pkchat" "$BASE" --quiet --no-stream -m "$MODEL" -s "url-system" -p "summarize-url-system" --fetch-url "$BASE/page" --allow-private-url-fetch)
 test "$url_system_context" = "url-system-context-ok"
+input_context=$("$ROOT/pkchat" "$BASE" --quiet --no-stream -m "$MODEL" -p "summarize-input" --input "$local_md")
+test "$input_context" = "input-context-ok"
 
 legacy_html="$ROOT/build/windows1251-russian.html"
 printf '<h1>\317\360\350\342\345\362</h1>' >"$legacy_html"
 legacy_err="$ROOT/build/nonutf-html.err"
-if "$ROOT/pkchat" --html-file "$legacy_html" --html-format text --quiet >"$ROOT/build/nonutf-html.out" 2>"$legacy_err"; then
+if "$ROOT/pkchat" --input "$legacy_html" --output-format plaintext --quiet >"$ROOT/build/nonutf-html.out" 2>"$legacy_err"; then
     echo "non-UTF-8 HTML extraction should have failed" >&2
     exit 1
 fi
@@ -115,6 +147,10 @@ test "$previous_assistant" = "Visible answer"
 ndjson=$("$ROOT/pkchat" "$BASE" --quiet --stream -m "$MODEL" -p "hello" --format ndjson)
 printf '%s\n' "$ndjson" | grep '"event":"delta"' >/dev/null
 printf '%s\n' "$ndjson" | grep '"event":"done"' >/dev/null
+
+jsond=$("$ROOT/pkchat" "$BASE" --quiet --stream -m "$MODEL" -p "hello" --output-format jsond)
+printf '%s\n' "$jsond" | grep '"event":"delta"' >/dev/null
+printf '%s\n' "$jsond" | grep '"event":"done"' >/dev/null
 
 verbose_err="$ROOT/build/verbose.err"
 verbose_out=$("$ROOT/pkchat" "$BASE" -v --stream -m "$MODEL" -p "hello" 2>"$verbose_err")

@@ -230,23 +230,23 @@ bool is_private_or_loopback_host(const std::string& raw_host) {
     return false;
 }
 
-pkchat::Error read_html_file(const std::string& path, std::string& body) {
+pkchat::Error read_local_file(const std::string& path, const std::string& description, std::string& body) {
     std::ostringstream buffer;
     if (path == "-") {
         buffer << std::cin.rdbuf();
         if (!std::cin.good() && !std::cin.eof()) {
-            return {pkchat::ErrorCode::FileRead, "could not read HTML from stdin"};
+            return {pkchat::ErrorCode::FileRead, "could not read " + description + " from stdin"};
         }
         body = buffer.str();
         return pkchat::ok_error();
     }
     std::ifstream file(path, std::ios::binary);
     if (!file) {
-        return {pkchat::ErrorCode::FileRead, "could not open HTML file for reading: " + path};
+        return {pkchat::ErrorCode::FileRead, "could not open " + description + " for reading: " + path};
     }
     buffer << file.rdbuf();
     if (!file.good() && !file.eof()) {
-        return {pkchat::ErrorCode::FileRead, "could not read HTML file: " + path};
+        return {pkchat::ErrorCode::FileRead, "could not read " + description + ": " + path};
     }
     body = buffer.str();
     return pkchat::ok_error();
@@ -326,99 +326,253 @@ pkchat::Error fetch_html_url(const pkchat::cli::Options& options, std::string& b
     return pkchat::ok_error();
 }
 
-pkchat::Error validate_html_extract_options(const pkchat::cli::Options& options) {
-    if (!options.fetch_url.empty() && !options.html_file.empty()) {
-        return {pkchat::ErrorCode::BadArgs, "--fetch-url and --html-file cannot be combined"};
+enum class InputKind {
+    Plaintext,
+    Markdown,
+    Html,
+};
+
+const char* input_kind_name(InputKind kind) {
+    switch (kind) {
+        case InputKind::Plaintext:
+            return "plaintext";
+        case InputKind::Markdown:
+            return "markdown";
+        case InputKind::Html:
+            return "html";
     }
-    if (options.editor || options.repl || options.tui || options.list_models) {
-        return {pkchat::ErrorCode::BadArgs,
-                "HTML extraction cannot be combined with --editor, --repl, --tui, or --list-models"};
-    }
-    if (!options.prompt.empty() || !options.prompt_file.empty() || !options.system.empty() || !options.system_file.empty()) {
-        return {pkchat::ErrorCode::BadArgs, "HTML extraction cannot be combined with prompt or system options"};
-    }
-    if (!options.load_chat_path.empty() || !options.save_chat_path.empty()) {
-        return {pkchat::ErrorCode::BadArgs, "HTML extraction cannot be combined with --load-chat or --save-chat"};
-    }
-    if (options.format != pkchat::cli::OutputFormat::Text) {
-        return {pkchat::ErrorCode::BadArgs, "HTML extraction uses --html-format text|markdown, not --format"};
-    }
-    return pkchat::ok_error();
+    return "plaintext";
 }
 
-bool has_html_source(const pkchat::cli::Options& options) {
-    return !options.fetch_url.empty() || !options.html_file.empty();
+std::string local_input_path(const pkchat::cli::Options& options) {
+    return !options.input_path.empty() ? options.input_path : options.html_file;
 }
 
-bool wants_html_prompt_context(const pkchat::cli::Options& options) {
-    return has_html_source(options) && (!options.prompt.empty() || !options.prompt_file.empty());
+bool has_local_input_source(const pkchat::cli::Options& options) {
+    return !options.input_path.empty() || !options.html_file.empty();
 }
 
-std::string html_source_label(const pkchat::cli::Options& options) {
+bool has_document_source(const pkchat::cli::Options& options) {
+    return !options.fetch_url.empty() || has_local_input_source(options);
+}
+
+bool wants_document_prompt_context(const pkchat::cli::Options& options) {
+    return has_document_source(options) && (!options.prompt.empty() || !options.prompt_file.empty());
+}
+
+std::string document_source_label(const pkchat::cli::Options& options) {
     if (!options.fetch_url.empty()) {
         return "URL " + options.fetch_url;
     }
-    return options.html_file == "-" ? std::string("stdin") : "file " + options.html_file;
+    const std::string path = local_input_path(options);
+    return path == "-" ? std::string("stdin") : "file " + path;
 }
 
-pkchat::Error load_converted_html(const pkchat::cli::Options& options,
-                                  pkchat::html::OutputFormat format,
-                                  std::string& converted,
-                                  std::string& source) {
-    if (!options.fetch_url.empty() && !options.html_file.empty()) {
-        return {pkchat::ErrorCode::BadArgs, "--fetch-url and --html-file cannot be combined"};
+pkchat::Error validate_document_source_options(const pkchat::cli::Options& options) {
+    if (!options.fetch_url.empty() && has_local_input_source(options)) {
+        return {pkchat::ErrorCode::BadArgs, "--fetch-url and --input cannot be combined"};
     }
-    std::string body;
-    pkchat::Error err;
-    if (!options.html_file.empty()) {
-        err = read_html_file(options.html_file, body);
-    } else {
-        err = fetch_html_url(options, body);
+    if (!options.input_path.empty() && !options.html_file.empty()) {
+        return {pkchat::ErrorCode::BadArgs, "--input and --html-file cannot be combined"};
     }
-    if (!err.ok()) {
-        return err;
+    if (has_local_input_source(options) && local_input_path(options).empty()) {
+        return {pkchat::ErrorCode::BadArgs, "--input requires a non-empty path"};
     }
-    source = html_source_label(options);
-    err = validate_html_utf8(body, source);
-    if (!err.ok()) {
-        return err;
-    }
-    converted = pkchat::html::convert(body, format);
     return pkchat::ok_error();
 }
 
-std::string html_context_message(const std::string& source,
-                                 const std::string& converted,
-                                 pkchat::html::OutputFormat format) {
-    std::string message = "Fetched HTML context from " + source + "\n";
+pkchat::Error local_input_kind_for_options(const pkchat::cli::Options& options, InputKind& kind) {
+    if (!options.html_file.empty()) {
+        kind = InputKind::Html;
+        return pkchat::ok_error();
+    }
+    const std::string path = local_input_path(options);
+    if (path == "-") {
+        return {pkchat::ErrorCode::BadArgs,
+                "--input - cannot infer a file type from the path ending; use a .txt, .md, or .html file path"};
+    }
+    const std::string lower = lower_ascii(path);
+    if (ends_with(lower, ".txt") || ends_with(lower, ".text")) {
+        kind = InputKind::Plaintext;
+        return pkchat::ok_error();
+    }
+    if (ends_with(lower, ".md") || ends_with(lower, ".markdown")) {
+        kind = InputKind::Markdown;
+        return pkchat::ok_error();
+    }
+    if (ends_with(lower, ".html") || ends_with(lower, ".htm")) {
+        kind = InputKind::Html;
+        return pkchat::ok_error();
+    }
+    return {pkchat::ErrorCode::UnsupportedFeature,
+            "unsupported --input file type for " + path + "; supported endings are .txt, .md, .markdown, .html, and .htm"};
+}
+
+pkchat::Error validate_text_utf8(const std::string& body, const std::string& source) {
+    size_t offset = 0;
+    if (pkchat::html::is_valid_utf8(body, &offset)) {
+        return pkchat::ok_error();
+    }
+    return {pkchat::ErrorCode::UnsupportedFeature,
+            "Input expects UTF-8 text; charset conversion is not implemented yet for " + source +
+                " (invalid byte at offset " + std::to_string(offset) +
+                "). Convert the document to UTF-8 and try again."};
+}
+
+pkchat::markdown::OutputFormat legacy_html_output_format(const pkchat::cli::Options& options) {
+    pkchat::html::OutputFormat html_format = pkchat::html::OutputFormat::Markdown;
+    if (pkchat::html::parse_output_format(options.html_format, html_format) &&
+        html_format == pkchat::html::OutputFormat::Text) {
+        return pkchat::markdown::OutputFormat::Plaintext;
+    }
+    return pkchat::markdown::OutputFormat::Markdown;
+}
+
+pkchat::markdown::OutputFormat document_output_format(const pkchat::cli::Options& options,
+                                                       InputKind kind,
+                                                       bool standalone) {
+    if (standalone && options.rendered_output_format_explicit) {
+        return options.output_format;
+    }
+    if (kind == InputKind::Html) {
+        return legacy_html_output_format(options);
+    }
+    if (kind == InputKind::Markdown) {
+        return pkchat::markdown::OutputFormat::Markdown;
+    }
+    return pkchat::markdown::OutputFormat::Plaintext;
+}
+
+std::string render_document_body(const std::string& body,
+                                 InputKind kind,
+                                 pkchat::markdown::OutputFormat output_format,
+                                 bool complete_html_document) {
+    if (kind == InputKind::Html) {
+        if (output_format == pkchat::markdown::OutputFormat::Plaintext) {
+            return pkchat::html::convert(body, pkchat::html::OutputFormat::Text);
+        }
+        const std::string markdown = pkchat::html::convert(body, pkchat::html::OutputFormat::Markdown);
+        if (output_format == pkchat::markdown::OutputFormat::Html) {
+            return pkchat::markdown::render(markdown, output_format, complete_html_document);
+        }
+        return markdown;
+    }
+    if (kind == InputKind::Markdown) {
+        return pkchat::markdown::render(body, output_format, complete_html_document);
+    }
+    if (output_format == pkchat::markdown::OutputFormat::Plaintext ||
+        output_format == pkchat::markdown::OutputFormat::Markdown) {
+        return body;
+    }
+    return pkchat::markdown::render(body, output_format, complete_html_document);
+}
+
+struct LoadedDocument {
+    std::string source;
+    InputKind input_kind = InputKind::Plaintext;
+    pkchat::markdown::OutputFormat output_format = pkchat::markdown::OutputFormat::Markdown;
+    std::string converted;
+};
+
+pkchat::Error load_document(const pkchat::cli::Options& options, bool standalone, LoadedDocument& document) {
+    pkchat::Error err = validate_document_source_options(options);
+    if (!err.ok()) {
+        return err;
+    }
+
+    std::string body;
+    if (!options.fetch_url.empty()) {
+        document.input_kind = InputKind::Html;
+        err = fetch_html_url(options, body);
+    } else {
+        err = local_input_kind_for_options(options, document.input_kind);
+        if (!err.ok()) {
+            return err;
+        }
+        err = read_local_file(local_input_path(options), input_kind_name(document.input_kind), body);
+    }
+    if (!err.ok()) {
+        return err;
+    }
+
+    document.source = document_source_label(options);
+    if (document.input_kind == InputKind::Html) {
+        err = validate_html_utf8(body, document.source);
+    } else {
+        err = validate_text_utf8(body, document.source);
+    }
+    if (!err.ok()) {
+        return err;
+    }
+
+    document.output_format = document_output_format(options, document.input_kind, standalone);
+    const bool complete_html_document = standalone &&
+                                        document.output_format == pkchat::markdown::OutputFormat::Html &&
+                                        !options.output_path.empty();
+    document.converted = render_document_body(body, document.input_kind, document.output_format, complete_html_document);
+    return pkchat::ok_error();
+}
+
+pkchat::Error validate_document_extract_options(const pkchat::cli::Options& options) {
+    pkchat::Error err = validate_document_source_options(options);
+    if (!err.ok()) {
+        return err;
+    }
+    if (options.editor || options.repl || options.tui || options.list_models) {
+        return {pkchat::ErrorCode::BadArgs,
+                "input extraction cannot be combined with --editor, --repl, --chat, or --list-models"};
+    }
+    if (!options.prompt.empty() || !options.prompt_file.empty() || !options.system.empty() || !options.system_file.empty()) {
+        return {pkchat::ErrorCode::BadArgs, "input extraction cannot be combined with prompt or system options"};
+    }
+    if (!options.load_chat_path.empty() || !options.save_chat_path.empty()) {
+        return {pkchat::ErrorCode::BadArgs, "input extraction cannot be combined with --load-chat or --save-chat"};
+    }
+    return pkchat::ok_error();
+}
+
+void write_document_json(std::ostream& out, const LoadedDocument& document) {
+    out << "{"
+        << "\"source\":" << pkchat::json::quote(document.source) << ","
+        << "\"input_format\":" << pkchat::json::quote(input_kind_name(document.input_kind)) << ","
+        << "\"output_format\":" << pkchat::json::quote(pkchat::markdown::output_format_name(document.output_format)) << ","
+        << "\"content\":" << pkchat::json::quote(document.converted)
+        << "}\n";
+}
+
+std::string document_context_message(const LoadedDocument& document) {
+    std::string message = "Input context from " + document.source + "\n";
     message += "Format: ";
-    message += pkchat::html::output_format_name(format);
+    message += pkchat::markdown::output_format_name(document.output_format);
     message += "\n\n";
-    message += converted;
+    message += document.converted;
     return message;
 }
 
-int run_html_extract(const pkchat::cli::Options& options, std::ostream& out) {
-    pkchat::Error err = validate_html_extract_options(options);
+int run_document_extract(const pkchat::cli::Options& options, std::ostream& out) {
+    pkchat::Error err = validate_document_extract_options(options);
     if (!err.ok()) {
-        print_error(err);
-        return exit_code_for(err.code);
-    }
-    pkchat::html::OutputFormat format = pkchat::html::OutputFormat::Markdown;
-    if (!pkchat::html::parse_output_format(options.html_format, format)) {
-        err = {pkchat::ErrorCode::BadArgs, "--html-format must be text or markdown"};
         print_error(err);
         return exit_code_for(err.code);
     }
 
-    std::string converted;
-    std::string source;
-    err = load_converted_html(options, format, converted, source);
+    LoadedDocument document;
+    err = load_document(options, true, document);
     if (!err.ok()) {
         print_error(err);
         return exit_code_for(err.code);
     }
-    out << converted;
+
+    if (options.format == pkchat::cli::OutputFormat::Json) {
+        write_document_json(out, document);
+    } else if (options.format == pkchat::cli::OutputFormat::Ndjson) {
+        out << "{\"event\":\"start\",\"source\":" << pkchat::json::quote(document.source) << "}\n";
+        out << "{\"event\":\"content\",\"text\":" << pkchat::json::quote(document.converted) << "}\n";
+        out << "{\"event\":\"done\",\"output_format\":"
+            << pkchat::json::quote(pkchat::markdown::output_format_name(document.output_format)) << "}\n";
+    } else {
+        out << document.converted;
+    }
     return 0;
 }
 
@@ -748,11 +902,7 @@ int main(int argc, char** argv) {
         std::cout << "pkchat " << pkchat::kVersion << "\n";
         return 0;
     }
-    if (has_html_source(options) && !wants_html_prompt_context(options)) {
-        if (options.output_format_explicit) {
-            print_error({pkchat::ErrorCode::BadArgs, "HTML extraction uses --html-format text|markdown, not --output-format"});
-            return exit_code_for(pkchat::ErrorCode::BadArgs);
-        }
+    if (has_document_source(options) && !wants_document_prompt_context(options)) {
         std::ofstream out_file;
         pkchat::Error output_error;
         std::ostream* out = output_stream(options, out_file, output_error);
@@ -760,27 +910,27 @@ int main(int argc, char** argv) {
             print_error(output_error);
             return exit_code_for(output_error.code);
         }
-        return run_html_extract(options, *out);
+        return run_document_extract(options, *out);
     }
-    if (wants_html_prompt_context(options) && (options.editor || options.repl || options.tui || options.list_models)) {
+    if (wants_document_prompt_context(options) && (options.editor || options.repl || options.tui || options.list_models)) {
         print_error({pkchat::ErrorCode::BadArgs,
-                     "--fetch-url/--html-file prompt context currently supports non-interactive prompt mode only"});
+                     "--fetch-url/--input prompt context currently supports non-interactive prompt mode only"});
         return exit_code_for(pkchat::ErrorCode::BadArgs);
     }
-    if (options.output_format_explicit && options.format != pkchat::cli::OutputFormat::Text) {
+    if (options.rendered_output_format_explicit && options.format != pkchat::cli::OutputFormat::Text) {
         print_error({pkchat::ErrorCode::BadArgs, "--output-format can only be combined with --format text"});
         return exit_code_for(pkchat::ErrorCode::BadArgs);
     }
-    if (options.output_format_explicit && options.list_models) {
-        print_error({pkchat::ErrorCode::BadArgs, "--output-format cannot be combined with --list-models"});
+    if (options.rendered_output_format_explicit && options.list_models) {
+        print_error({pkchat::ErrorCode::BadArgs, "rendered --output-format cannot be combined with --list-models"});
         return exit_code_for(pkchat::ErrorCode::BadArgs);
     }
     if (options.editor && (options.repl || options.tui)) {
-        print_error({pkchat::ErrorCode::BadArgs, "--editor cannot be combined with --repl or --tui"});
+        print_error({pkchat::ErrorCode::BadArgs, "--editor cannot be combined with --repl or --chat"});
         return exit_code_for(pkchat::ErrorCode::BadArgs);
     }
     if (options.repl && options.tui) {
-        print_error({pkchat::ErrorCode::BadArgs, "--repl cannot be combined with --tui"});
+        print_error({pkchat::ErrorCode::BadArgs, "--repl cannot be combined with --chat"});
         return exit_code_for(pkchat::ErrorCode::BadArgs);
     }
     if (options.repl && options.list_models) {
@@ -788,7 +938,7 @@ int main(int argc, char** argv) {
         return exit_code_for(pkchat::ErrorCode::BadArgs);
     }
     if (options.tui && options.list_models) {
-        print_error({pkchat::ErrorCode::BadArgs, "--tui cannot be combined with --list-models; use /models inside the TUI"});
+        print_error({pkchat::ErrorCode::BadArgs, "--chat cannot be combined with --list-models; use /models inside the chat UI"});
         return exit_code_for(pkchat::ErrorCode::BadArgs);
     }
     if (options.editor && options.list_models) {
@@ -800,23 +950,23 @@ int main(int argc, char** argv) {
         return exit_code_for(pkchat::ErrorCode::BadArgs);
     }
     if (options.tui && options.format != pkchat::cli::OutputFormat::Text) {
-        print_error({pkchat::ErrorCode::BadArgs, "--tui currently supports --format text only"});
+        print_error({pkchat::ErrorCode::BadArgs, "--chat currently supports --format text only"});
         return exit_code_for(pkchat::ErrorCode::BadArgs);
     }
     if (options.tui && !options.output_path.empty()) {
-        print_error({pkchat::ErrorCode::BadArgs, "--tui cannot be combined with --output"});
+        print_error({pkchat::ErrorCode::BadArgs, "--chat cannot be combined with --output"});
         return exit_code_for(pkchat::ErrorCode::BadArgs);
     }
-    if (options.tui && options.output_format_explicit) {
-        print_error({pkchat::ErrorCode::BadArgs, "--tui does not use --output-format"});
+    if (options.tui && options.rendered_output_format_explicit) {
+        print_error({pkchat::ErrorCode::BadArgs, "--chat does not use rendered --output-format"});
         return exit_code_for(pkchat::ErrorCode::BadArgs);
     }
     if (options.editor && options.format != pkchat::cli::OutputFormat::Text) {
         print_error({pkchat::ErrorCode::BadArgs, "--editor does not use --format"});
         return exit_code_for(pkchat::ErrorCode::BadArgs);
     }
-    if (options.editor && options.output_format_explicit) {
-        print_error({pkchat::ErrorCode::BadArgs, "--editor does not use --output-format"});
+    if (options.editor && options.rendered_output_format_explicit) {
+        print_error({pkchat::ErrorCode::BadArgs, "--editor does not use rendered --output-format"});
         return exit_code_for(pkchat::ErrorCode::BadArgs);
     }
     if (options.editor && (!options.prompt.empty() || !options.prompt_file.empty() ||
@@ -871,20 +1021,14 @@ int main(int argc, char** argv) {
     }
 
     std::string fetched_context_message;
-    if (wants_html_prompt_context(context.options)) {
-        pkchat::html::OutputFormat html_format = pkchat::html::OutputFormat::Markdown;
-        if (!pkchat::html::parse_output_format(context.options.html_format, html_format)) {
-            print_error({pkchat::ErrorCode::BadArgs, "--html-format must be text or markdown"});
-            return exit_code_for(pkchat::ErrorCode::BadArgs);
-        }
-        std::string converted;
-        std::string source;
-        pkchat::Error err = load_converted_html(context.options, html_format, converted, source);
+    if (wants_document_prompt_context(context.options)) {
+        LoadedDocument document;
+        pkchat::Error err = load_document(context.options, false, document);
         if (!err.ok()) {
             print_error(err);
             return exit_code_for(err.code);
         }
-        fetched_context_message = html_context_message(source, converted, html_format);
+        fetched_context_message = document_context_message(document);
     }
 
     if (context.options.list_models) {

@@ -19,7 +19,7 @@
 
 ## URL Fetching
 
-The first v0.5 URL-fetching slice is explicit: `--fetch-url URL` fetches an HTML page and prints converted text or Markdown when used by itself. When combined with `-p`/`--prompt` or `--prompt-file` in non-interactive CLI mode, it inserts the converted page as a visible user-context message before the final prompt. It is never triggered implicitly from text inside a prompt.
+The first v0.5 input/URL-fetching slice is explicit: `--input PATH` reads supported local `.txt`, `.md`, and `.html` files, and `--fetch-url URL` fetches an HTML page. Used alone, they print converted content according to `--output-format`; used with `-p`/`--prompt` or `--prompt-file` in non-interactive CLI mode, they insert the converted content as a visible user-context message before the final prompt. URL fetching is never triggered implicitly from text inside a prompt.
 
 Defaults:
 

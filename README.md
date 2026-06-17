@@ -43,7 +43,7 @@ LM Studio profile:
 
 ```sh
 ./pkchat lmstudio -i
-./pkchat --tui lmstudio
+./pkchat --chat lmstudio
 ./pkchat --provider lm_studio -m MODEL -p "Hello from LM Studio"
 ./pkchat --provider lmstudio --list-models
 ```
@@ -85,21 +85,26 @@ Rendered assistant output:
 ./pkchat http://localhost:30000 -p "Write a short report" --output-format html
 ./pkchat http://localhost:30000 -p "Write a short report" --output-format html --output report.html
 ./pkchat http://localhost:30000 -p "Write a short report" --output-format plaintext
+./pkchat http://localhost:30000 -p "Write a short report" --output-format jsond
 ```
 
-`--output-format md|html|plaintext` controls how assistant Markdown is written in text mode. `md` is the default and preserves the existing streaming behavior. `html` and `plaintext` render after the full assistant reply is received; when `html` is combined with `--output PATH`, the file contains a complete HTML document with doctype, charset, viewport, head, and body. HTML fragments and raw HTML blocks in model output are preserved; this is a renderer, not an HTML sanitizer.
+`--output-format md|html|plaintext` controls how assistant Markdown is written in text mode. `md` is the default and preserves the existing streaming behavior. `html` and `plaintext` render after the full assistant reply is received; when `html` is combined with `--output PATH`, the file contains a complete HTML document with doctype, charset, viewport, head, and body. `--output-format json|jsond|ndjson` is accepted as an alias for machine-readable JSON or newline-delimited JSON output. HTML fragments and raw HTML blocks in model output are preserved; this is a renderer, not an HTML sanitizer.
 
-HTML extraction and URL context:
+Input extraction and URL context:
 
 ```sh
-./pkchat --html-file page.html --html-format markdown
-./pkchat --html-file page.html --html-format text --output page.txt
-./pkchat --fetch-url https://example.com/article --html-format markdown
+./pkchat --input page.html --output-format md
+./pkchat --input page.html --output-format plaintext --output page.txt
+./pkchat --input notes.md --output-format html --output notes.html
+./pkchat --input notes.txt --output-format jsond
+./pkchat --fetch-url https://example.com/article --output-format md
 ./pkchat http://localhost:30000 -p "Tee yhteenveto" --fetch-url https://yle.fi/uutiset/lyhyesti/74-20232138
-./pkchat http://localhost:30000 -s "Vastaa suomeksi" -p "Tee yhteenveto" --fetch-url https://example.com/article
+./pkchat http://localhost:30000 -s "Vastaa suomeksi" -p "Tee yhteenveto" --input page.html
 ```
 
-`--html-file` and `--fetch-url` by themselves are explicit extraction modes: they print converted page text to `stdout` and do not contact a model. When either option is combined with `-p`/`--prompt` or `--prompt-file` in non-interactive CLI mode, `pkchat` converts the HTML and sends it as a separate user-context message before the final prompt, while any `-s`/`--system` or `--system-file` remains the system prompt. The first parser lives in `src/html/` and handles simple HTML text extraction, including `h1`, `h2`, `strong`/`b`, `em`/`i`/`italic`, and `a href` links in Markdown output. Fetching uses libcurl, browser-style `User-Agent`/`Accept` headers, a default 1 MiB body limit, a default 30 second total timeout for this mode, HTML content-type checks, and no redirect following. Private, loopback, link-local, multicast, and common metadata-service literal hosts are blocked by default; use `--allow-private-url-fetch` only for explicit local testing. Input must be UTF-8; legacy charsets such as Windows-1251 or GBK are rejected with a clear error until charset conversion is implemented. JavaScript-rendered pages are not supported.
+`--input PATH` reads local `.txt`, `.md`/`.markdown`, and `.html`/`.htm` files, choosing the parser from the path ending. `--input` and `--fetch-url` by themselves are explicit extraction modes: they print converted content to `stdout` and do not contact a model. In standalone extraction, `--output-format md|html|plaintext|json|jsond|ndjson` controls the output; `html` writes a fragment to `stdout` or a complete HTML document with `--output PATH`. When either option is combined with `-p`/`--prompt` or `--prompt-file` in non-interactive CLI mode, `pkchat` sends the extracted input as a separate user-context message before the final prompt, while any `-s`/`--system` or `--system-file` remains the system prompt. The older `--html-file` option remains accepted as a compatibility alias for local HTML input.
+
+The first HTML parser lives in `src/html/` and handles simple text extraction, including `h1`, `h2`, `strong`/`b`, `em`/`i`/`italic`, and `a href` links in Markdown output. Fetching uses libcurl, browser-style `User-Agent`/`Accept` headers, a default 1 MiB body limit, a default 30 second total timeout for this mode, HTML content-type checks, and no redirect following. Private, loopback, link-local, multicast, and common metadata-service literal hosts are blocked by default; use `--allow-private-url-fetch` only for explicit local testing. Input must be UTF-8; legacy charsets such as Windows-1251 or GBK are rejected with a clear error until charset conversion is implemented. JavaScript-rendered pages are not supported.
 
 Interactive REPL and chat files:
 
@@ -121,11 +126,11 @@ Standalone multiline editor:
 
 The editor is a permanent bonus mode and the same component now powers the TUI chat input panel. It uses a piece table buffer and a rectangular panel renderer, so the same core can support large files and multiple editor panels in one terminal window. Long lines soft-wrap inside the panel. The standalone file editor keeps logical-line up/down movement by default, while the TUI input uses visual-row movement across soft-wrapped overflow rows. Controls: arrows move, Home/End jump within the line, `Ctrl+A`/`Ctrl+E` jump to the beginning/end of the current line, `Ctrl+K` kills from the cursor to the end of the line and removes the line when it is already empty, Backspace/Delete remove text, `Enter` inserts a newline, `Ctrl+S` saves, and `Ctrl+Q` or `Ctrl+C` exits.
 
-Full-screen TUI foundation:
+Full-screen chat TUI foundation:
 
 ```sh
-./pkchat --tui http://localhost:30000 -m MODEL
-./pkchat --tui lmstudio
+./pkchat --chat http://localhost:30000 -m MODEL
+./pkchat --chat lmstudio
 ```
 
 The TUI keeps model requests, `/models`, `/save`, and `/load` behind runtime jobs so the terminal loop stays responsive. The bottom input area embeds the editor component in a fixed-height panel with soft wrap and visual-row cursor movement. Colors are enabled by default with the `dark` theme; use `--nocolors` to disable color styling, and `/theme`, `/theme dark`, or `/theme light` inside the TUI to inspect or switch themes. Thinking traces are hidden by default; use `/thinking trace`, `/thinking notrace`, or `Ctrl+T` to toggle display of `<think>...</think>` blocks; visible thinking traces use a subdued tinted color that is kept WCAG 2.1 AA compliant. Provider reasoning fields such as `reasoning_content`, `reasoning`, and text `reasoning_details` are displayed as `<think>` blocks. `Enter` sends, `Alt+Enter` or `Esc` then `Enter` inserts a newline, `Ctrl+A`/`Ctrl+E` jump to the beginning/end of the current input line, `Ctrl+K` kills from the cursor to the end of the input line and removes the line when it is already empty, and `Ctrl+S` sends the current multiline draft. A bare `Esc` cancels the active model request while keeping the current turn visible. `Ctrl+R` regenerates the last answer by resending the last user prompt. `PageUp` and `PageDown` scroll chat history, `Home` jumps to the beginning of the chat thread, and `End` returns to the live bottom. `Ctrl+C` cancels the active job, or exits when no job is active.
@@ -141,12 +146,12 @@ Verbose timing:
 ## Output Behavior
 
 - `stdout` is model output in text mode.
-- `--output-format md|html|plaintext` renders assistant Markdown in text mode; `html` writes a fragment to `stdout` or a complete page with `--output PATH`.
+- `--output-format md|html|plaintext` renders assistant Markdown in text mode; `html` writes a fragment to `stdout` or a complete page with `--output PATH`. `--output-format json|jsond|ndjson` selects machine-readable response output.
 - `stderr` is used for warnings, status, and errors.
-- Chat startup status prints the chat endpoint and selected model to `stderr` unless `--quiet` is set. `--tui` does not reserve persistent screen rows for endpoint/model details.
-- `--html-file` and `--fetch-url` reserve `stdout` for converted text/Markdown; fetch status is written to `stderr` unless `--quiet` is set.
+- Chat startup status prints the chat endpoint and selected model to `stderr` unless `--quiet` is set. `--chat` does not reserve persistent screen rows for endpoint/model details.
+- `--input` and `--fetch-url` reserve `stdout` for converted text/Markdown/HTML/JSON in extraction mode; fetch status is written to `stderr` unless `--quiet` is set.
 - `--format json` returns one JSON object.
-- `--format ndjson` returns streaming-style events.
+- `--format ndjson` and `--output-format jsond` return streaming-style events.
 - `--save-chat PATH` writes a JSON chat file atomically with restrictive permissions.
 - `--load-chat PATH` loads prior messages before sending the next prompt.
 
@@ -171,7 +176,7 @@ Run the full local suite:
 make test
 ```
 
-The integration test starts a local mock OpenAI-compatible server and verifies model listing, non-streaming chat, streaming chat, text-only Responses API calls, provider reasoning fields, JSON output, NDJSON output, Markdown-to-HTML/plaintext assistant rendering, complete HTML file output, chat save/load, REPL mode, explicit HTML URL extraction with private-address blocking, fetched URL prompt context with system prompts, and non-UTF-8 HTML rejection. Unit tests cover CLI parsing, provider registry aliases, capability reporting, Responses API endpoint selection and unsupported-feature errors, HTML conversion including malformed documents and UTF-8 validation, Markdown output rendering, the runtime event queue/job cancellation, `--tui`, `--nocolors`, and `--editor` parsing, editor piece-table edits, rectangular panel rendering, editor word wrapping, editor vertical navigation modes, editor file round-trips, TUI layout sizing, TUI regeneration planning, thinking-trace display filtering, theme parsing, and WCAG contrast checks for TUI themes.
+The integration test starts a local mock OpenAI-compatible server and verifies model listing, non-streaming chat, streaming chat, text-only Responses API calls, provider reasoning fields, JSON output, NDJSON output, Markdown-to-HTML/plaintext assistant rendering, complete HTML file output, chat save/load, REPL mode, explicit local input and HTML URL extraction with private-address blocking, input/fetched URL prompt context with system prompts, complete HTML file output from input Markdown, JSOND output aliases, and non-UTF-8 HTML rejection. Unit tests cover CLI parsing, provider registry aliases, capability reporting, Responses API endpoint selection and unsupported-feature errors, HTML conversion including malformed documents and UTF-8 validation, Markdown output rendering, the runtime event queue/job cancellation, `--chat`, legacy `--tui`, `--nocolors`, and `--editor` parsing, editor piece-table edits, rectangular panel rendering, editor word wrapping, editor vertical navigation modes, editor file round-trips, TUI layout sizing, TUI regeneration planning, thinking-trace display filtering, theme parsing, and WCAG contrast checks for TUI themes.
 
 For leak and sanitizer checks:
 

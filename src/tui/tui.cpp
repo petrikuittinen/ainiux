@@ -314,7 +314,7 @@ class TerminalSession {
 
     Error enter() {
         if (!isatty(STDIN_FILENO) || !isatty(STDOUT_FILENO)) {
-            return {ErrorCode::BadArgs, "--tui requires an interactive terminal"};
+            return {ErrorCode::BadArgs, "--chat requires an interactive terminal"};
         }
         if (tcgetattr(STDIN_FILENO, &original_) != 0) {
             return {ErrorCode::Internal, std::string("could not read terminal mode: ") + std::strerror(errno)};

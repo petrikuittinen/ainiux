@@ -149,8 +149,18 @@ class Handler(BaseHTTPRequestHandler):
         url_context_seen = any(
             isinstance(message, dict)
             and isinstance(message.get("content"), str)
-            and "Fetched HTML context from URL" in message.get("content", "")
+            and (
+                "Input context from URL" in message.get("content", "")
+                or "Fetched HTML context from URL" in message.get("content", "")
+            )
             and "Mock Page" in message.get("content", "")
+            for message in messages
+        )
+        input_context_seen = any(
+            isinstance(message, dict)
+            and isinstance(message.get("content"), str)
+            and "Input context from file" in message.get("content", "")
+            and "Local Input Title" in message.get("content", "")
             for message in messages
         )
         system_context_seen = any(
@@ -174,6 +184,8 @@ class Handler(BaseHTTPRequestHandler):
             reply = "url-context-ok" if url_context_seen else "missing-url-context"
         elif last == "summarize-url-system":
             reply = "url-system-context-ok" if url_context_seen and system_context_seen else "missing-url-system-context"
+        elif last == "summarize-input":
+            reply = "input-context-ok" if input_context_seen else "missing-input-context"
         elif last == "previous-assistant":
             reply = ""
             for message in reversed(messages[:-1]):

@@ -13,7 +13,7 @@ bool needs_value(const std::string& opt) {
         "-t", "--temperature", "--top-p", "--max-output-tokens", "--format", "--output-format", "--output",
         "--provider", "--profile", "--api", "--base-url", "--chat-url", "--models-url", "--responses-url",
         "--key-env", "--key-file", "-k", "--key", "--header", "--connect-timeout", "--timeout",
-        "--proxy", "--fetch-url", "--html-file", "--html-format", "--max-fetch-bytes",
+        "--proxy", "--fetch-url", "--input", "--html-file", "--html-format", "--max-fetch-bytes",
         "--save-chat", "--load-chat"};
     for (const char* item : with_values) {
         if (opt == item) {
@@ -116,7 +116,7 @@ ParseResult parse_args(int argc, char** argv) {
             opts.key_stdin = true;
         } else if (arg == "--repl" || arg == "-i") {
             opts.repl = true;
-        } else if (arg == "--tui") {
+        } else if (arg == "--chat" || arg == "--tui") {
             opts.tui = true;
         } else if (arg == "--nocolors" || arg == "--no-colors") {
             opts.no_colors = true;
@@ -161,16 +161,24 @@ ParseResult parse_args(int argc, char** argv) {
                     opts.format = OutputFormat::Text;
                 } else if (value == "json") {
                     opts.format = OutputFormat::Json;
-                } else if (value == "ndjson") {
+                } else if (value == "ndjson" || value == "jsond") {
                     opts.format = OutputFormat::Ndjson;
                 } else {
-                    return {opts, {ErrorCode::BadArgs, "--format must be text, json, or ndjson"}};
+                    return {opts, {ErrorCode::BadArgs, "--format must be text, json, ndjson, or jsond"}};
                 }
             } else if (opt == "--output-format") {
-                if (!pkchat::markdown::parse_output_format(value, opts.output_format)) {
-                    return {opts, {ErrorCode::BadArgs, "--output-format must be html, md, or plaintext"}};
+                if (value == "json") {
+                    opts.format = OutputFormat::Json;
+                    opts.output_format_explicit = true;
+                } else if (value == "ndjson" || value == "jsond") {
+                    opts.format = OutputFormat::Ndjson;
+                    opts.output_format_explicit = true;
+                } else if (pkchat::markdown::parse_output_format(value, opts.output_format)) {
+                    opts.output_format_explicit = true;
+                    opts.rendered_output_format_explicit = true;
+                } else {
+                    return {opts, {ErrorCode::BadArgs, "--output-format must be html, md, plaintext, json, jsond, or ndjson"}};
                 }
-                opts.output_format_explicit = true;
             } else if (opt == "--output") {
                 opts.output_path = value;
             } else if (opt == "--save-chat") {
@@ -220,6 +228,8 @@ ParseResult parse_args(int argc, char** argv) {
                 opts.proxy = value;
             } else if (opt == "--fetch-url") {
                 opts.fetch_url = value;
+            } else if (opt == "--input") {
+                opts.input_path = value;
             } else if (opt == "--html-file") {
                 opts.html_file = value;
             } else if (opt == "--html-format") {
@@ -252,10 +262,10 @@ Usage:
   pkchat [BASE_URL|PROFILE] -p TEXT [options]
   pkchat --list-models [BASE_URL|PROFILE] [options]
   pkchat --repl [BASE_URL|PROFILE] [options]
-  pkchat --tui [BASE_URL|PROFILE] [options]
+  pkchat --chat [BASE_URL|PROFILE] [options]
   pkchat --editor [PATH] [--output PATH]
-  pkchat --fetch-url URL [--html-format text|markdown] [--output PATH]
-  pkchat --html-file PATH [--html-format text|markdown] [--output PATH]
+  pkchat --input PATH [--output-format md|html|plaintext|json|jsond] [--output PATH]
+  pkchat --fetch-url URL [--output-format md|html|plaintext|json|jsond] [--output PATH]
 
 Examples:
   pkchat http://localhost:8000 -p "What is the capital of Norway?"
@@ -265,10 +275,10 @@ Examples:
   pkchat --provider lmstudio --list-models
   pkchat openrouter -model MODEL -i
   pkchat lmstudio -i
-  pkchat --tui lmstudio
+  pkchat --chat lmstudio
   pkchat --editor notes.txt
-  pkchat --fetch-url https://example.com --html-format markdown
-  pkchat --html-file page.html --html-format text
+  pkchat --fetch-url https://example.com --output-format md
+  pkchat --input page.html --output-format plaintext
   pkchat --prompt-file prompt.txt --system-file system.txt --format json
   pkchat http://localhost:8000 -p "Write a report" --output-format html --output report.html
   pkchat --repl --load-chat chat.json --save-chat chat.json
@@ -283,16 +293,17 @@ Options:
       --top-p FLOAT
       --max-output-tokens N
       --stream | --no-stream
-      --format text|json|ndjson
-      --output-format html|md|plaintext
+      --format text|json|ndjson|jsond
+      --output-format html|md|plaintext|json|jsond|ndjson
       --output PATH
       --repl, -i                Start a simple line-oriented interactive chat.
-      --tui                     Start the full-screen non-blocking terminal UI foundation.
+      --chat                    Start the full-screen non-blocking terminal chat.
       --nocolors                Disable TUI color styling.
       --editor                  Start the standalone multiline editor.
+      --input PATH              Read .txt, .md, or .html input for extraction or prompt context.
       --fetch-url URL           Fetch HTML for extraction, or as prompt context with -p.
-      --html-file PATH          Read local HTML for extraction or prompt context; '-' reads stdin.
       --html-format text|markdown
+                                Compatibility alias for old HTML extraction commands.
       --max-fetch-bytes N       Default 1048576.
       --allow-private-url-fetch Allow loopback/private URL fetches.
       --save-chat PATH          Save JSON chat history after a successful reply.

@@ -47,10 +47,12 @@ struct Options {
     std::string key;
     std::string output_path;
     std::string fetch_url;
+    std::string input_path;
     std::string html_file;
     std::string html_format = "markdown";
     pkchat::markdown::OutputFormat output_format = pkchat::markdown::OutputFormat::Markdown;
     bool output_format_explicit = false;
+    bool rendered_output_format_explicit = false;
     std::string save_chat_path;
     std::string load_chat_path;
     std::string proxy;

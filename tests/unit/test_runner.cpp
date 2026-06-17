@@ -57,21 +57,26 @@ void test_cli_repl_parse() {
     check(parsed.options.load_chat_path == "chat.json", "load chat parsed");
 }
 
-void test_cli_tui_parse() {
-    const char* argv[] = {"pkchat", "--tui", "lmstudio"};
+void test_cli_chat_parse() {
+    const char* argv[] = {"pkchat", "--chat", "lmstudio"};
     pkchat::cli::ParseResult parsed = pkchat::cli::parse_args(3, const_cast<char**>(argv));
-    check(parsed.error.ok(), "TUI args parse");
-    check(parsed.options.tui, "TUI flag parsed");
-    check(parsed.options.positional_url == "lmstudio", "TUI positional profile parsed");
+    check(parsed.error.ok(), "chat UI args parse");
+    check(parsed.options.tui, "chat UI flag parsed");
+    check(parsed.options.positional_url == "lmstudio", "chat UI positional profile parsed");
+
+    const char* alias_argv[] = {"pkchat", "--tui", "lmstudio"};
+    parsed = pkchat::cli::parse_args(3, const_cast<char**>(alias_argv));
+    check(parsed.error.ok(), "legacy TUI alias args parse");
+    check(parsed.options.tui, "legacy TUI alias flag parsed");
 }
 
-void test_cli_tui_nocolors_parse() {
-    const char* argv[] = {"pkchat", "--tui", "--nocolors", "lmstudio"};
+void test_cli_chat_nocolors_parse() {
+    const char* argv[] = {"pkchat", "--chat", "--nocolors", "lmstudio"};
     pkchat::cli::ParseResult parsed = pkchat::cli::parse_args(4, const_cast<char**>(argv));
-    check(parsed.error.ok(), "TUI nocolors args parse");
-    check(parsed.options.tui, "TUI flag parsed with nocolors");
+    check(parsed.error.ok(), "chat UI nocolors args parse");
+    check(parsed.options.tui, "chat UI flag parsed with nocolors");
     check(parsed.options.no_colors, "nocolors flag parsed");
-    check(parsed.options.positional_url == "lmstudio", "TUI nocolors positional profile parsed");
+    check(parsed.options.positional_url == "lmstudio", "chat UI nocolors positional profile parsed");
 }
 
 void test_cli_editor_parse() {
@@ -95,11 +100,18 @@ void test_cli_html_extract_parse() {
     check(parsed.options.allow_private_url_fetch, "HTML private fetch override parsed");
     check(parsed.options.output_path == "page.md", "HTML output path parsed");
 
-    const char* file_argv[] = {"pkchat", "--html-file", "page.html", "--html-format", "text"};
+    const char* file_argv[] = {"pkchat", "--input", "page.html", "--output-format", "plaintext"};
     parsed = pkchat::cli::parse_args(5, const_cast<char**>(file_argv));
-    check(parsed.error.ok(), "HTML file args parse");
-    check(parsed.options.html_file == "page.html", "HTML file path parsed");
-    check(parsed.options.html_format == "text", "HTML text format parsed");
+    check(parsed.error.ok(), "input file args parse");
+    check(parsed.options.input_path == "page.html", "input file path parsed");
+    check(parsed.options.output_format == pkchat::markdown::OutputFormat::Plaintext, "input plaintext output format parsed");
+    check(parsed.options.rendered_output_format_explicit, "input rendered output format marked explicit");
+
+    const char* legacy_file_argv[] = {"pkchat", "--html-file", "page.html", "--html-format", "text"};
+    parsed = pkchat::cli::parse_args(5, const_cast<char**>(legacy_file_argv));
+    check(parsed.error.ok(), "legacy HTML file args parse");
+    check(parsed.options.html_file == "page.html", "legacy HTML file path parsed");
+    check(parsed.options.html_format == "text", "legacy HTML text format parsed");
 }
 
 void test_cli_output_format_parse() {
@@ -114,6 +126,17 @@ void test_cli_output_format_parse() {
     parsed = pkchat::cli::parse_args(5, const_cast<char**>(plain_argv));
     check(parsed.error.ok(), "CLI plaintext output-format args parse");
     check(parsed.options.output_format == pkchat::markdown::OutputFormat::Plaintext, "plaintext output format parsed");
+
+    const char* json_argv[] = {"pkchat", "-p", "hello", "--output-format", "json"};
+    parsed = pkchat::cli::parse_args(5, const_cast<char**>(json_argv));
+    check(parsed.error.ok(), "CLI json output-format args parse");
+    check(parsed.options.format == pkchat::cli::OutputFormat::Json, "json output-format maps to JSON format");
+    check(!parsed.options.rendered_output_format_explicit, "json output-format is not a rendered text format");
+
+    const char* jsond_argv[] = {"pkchat", "-p", "hello", "--output-format", "jsond"};
+    parsed = pkchat::cli::parse_args(5, const_cast<char**>(jsond_argv));
+    check(parsed.error.ok(), "CLI jsond output-format args parse");
+    check(parsed.options.format == pkchat::cli::OutputFormat::Ndjson, "jsond output-format maps to NDJSON format");
 
     const char* bad_argv[] = {"pkchat", "-p", "hello", "--output-format", "pdf"};
     parsed = pkchat::cli::parse_args(5, const_cast<char**>(bad_argv));
@@ -745,8 +768,8 @@ int main() {
     test_cli_rejects_unknown();
     test_cli_provider_shortcut_parse();
     test_cli_repl_parse();
-    test_cli_tui_parse();
-    test_cli_tui_nocolors_parse();
+    test_cli_chat_parse();
+    test_cli_chat_nocolors_parse();
     test_cli_editor_parse();
     test_cli_html_extract_parse();
     test_cli_output_format_parse();
