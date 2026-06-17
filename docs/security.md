@@ -12,9 +12,14 @@
 `--save-chat PATH` writes the transcript, provider name, base URL, model, settings, messages, usage, and compaction metadata. API keys and authorization headers are not saved. New chat files are written through a temporary file, fsynced where supported, renamed over the target, and created with mode `0600`.
 
 
+## Rendered HTML Output
+
+`--output-format html` renders assistant Markdown to HTML, and preserves raw HTML blocks/fragments emitted by the model. It is meant for local rendering and file export, not sanitizing untrusted model output. Do not serve generated HTML to other users or open it in privileged browser contexts unless the content is trusted or sanitized by a separate tool.
+
+
 ## URL Fetching
 
-The first v0.5 URL-fetching slice is explicit: `--fetch-url URL` fetches an HTML page and prints converted text or Markdown. It does not silently insert fetched content into a prompt.
+The first v0.5 URL-fetching slice is explicit: `--fetch-url URL` fetches an HTML page and prints converted text or Markdown when used by itself. When combined with `-p`/`--prompt` or `--prompt-file` in non-interactive CLI mode, it inserts the converted page as a visible user-context message before the final prompt. It is never triggered implicitly from text inside a prompt.
 
 Defaults:
 

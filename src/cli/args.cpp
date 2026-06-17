@@ -10,7 +10,7 @@ namespace {
 bool needs_value(const std::string& opt) {
     static const char* with_values[] = {
         "-p", "--prompt", "--prompt-file", "-s", "--system", "--system-file", "-m", "--model", "-model",
-        "-t", "--temperature", "--top-p", "--max-output-tokens", "--format", "--output",
+        "-t", "--temperature", "--top-p", "--max-output-tokens", "--format", "--output-format", "--output",
         "--provider", "--profile", "--api", "--base-url", "--chat-url", "--models-url", "--responses-url",
         "--key-env", "--key-file", "-k", "--key", "--header", "--connect-timeout", "--timeout",
         "--proxy", "--fetch-url", "--html-file", "--html-format", "--max-fetch-bytes",
@@ -166,6 +166,11 @@ ParseResult parse_args(int argc, char** argv) {
                 } else {
                     return {opts, {ErrorCode::BadArgs, "--format must be text, json, or ndjson"}};
                 }
+            } else if (opt == "--output-format") {
+                if (!pkchat::markdown::parse_output_format(value, opts.output_format)) {
+                    return {opts, {ErrorCode::BadArgs, "--output-format must be html, md, or plaintext"}};
+                }
+                opts.output_format_explicit = true;
             } else if (opt == "--output") {
                 opts.output_path = value;
             } else if (opt == "--save-chat") {
@@ -265,6 +270,7 @@ Examples:
   pkchat --fetch-url https://example.com --html-format markdown
   pkchat --html-file page.html --html-format text
   pkchat --prompt-file prompt.txt --system-file system.txt --format json
+  pkchat http://localhost:8000 -p "Write a report" --output-format html --output report.html
   pkchat --repl --load-chat chat.json --save-chat chat.json
 
 Options:
@@ -278,13 +284,14 @@ Options:
       --max-output-tokens N
       --stream | --no-stream
       --format text|json|ndjson
+      --output-format html|md|plaintext
       --output PATH
       --repl, -i                Start a simple line-oriented interactive chat.
       --tui                     Start the full-screen non-blocking terminal UI foundation.
       --nocolors                Disable TUI color styling.
       --editor                  Start the standalone multiline editor.
-      --fetch-url URL           Fetch HTML and print converted text/markdown.
-      --html-file PATH          Read local HTML and print converted text/markdown; '-' reads stdin.
+      --fetch-url URL           Fetch HTML for extraction, or as prompt context with -p.
+      --html-file PATH          Read local HTML for extraction or prompt context; '-' reads stdin.
       --html-format text|markdown
       --max-fetch-bytes N       Default 1048576.
       --allow-private-url-fetch Allow loopback/private URL fetches.

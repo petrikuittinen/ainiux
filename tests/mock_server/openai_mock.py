@@ -83,6 +83,8 @@ class Handler(BaseHTTPRequestHandler):
             reply = request.get("model", "<missing>")
         elif last == "reasoning":
             reply = "Visible answer"
+        elif last == "markdown":
+            reply = "# Mock Title\n\nHello **bold** and [docs](https://example.com/docs)."
 
         if request.get("stream"):
             self.send_response(200)
@@ -144,6 +146,19 @@ class Handler(BaseHTTPRequestHandler):
             return
         messages = request.get("messages", [])
         last = messages[-1].get("content", "") if messages and isinstance(messages[-1], dict) else ""
+        url_context_seen = any(
+            isinstance(message, dict)
+            and isinstance(message.get("content"), str)
+            and "Fetched HTML context from URL" in message.get("content", "")
+            and "Mock Page" in message.get("content", "")
+            for message in messages
+        )
+        system_context_seen = any(
+            isinstance(message, dict)
+            and message.get("role") == "system"
+            and "url-system" in message.get("content", "")
+            for message in messages
+        )
         reply = "Hello"
         if last == "count-messages":
             reply = f"messages:{len(messages)}"
@@ -153,6 +168,12 @@ class Handler(BaseHTTPRequestHandler):
             reply = "repl-one-reply"
         elif last == "reasoning":
             reply = "Visible answer"
+        elif last == "markdown":
+            reply = "# Mock Title\n\nHello **bold** and [docs](https://example.com/docs)."
+        elif last == "summarize-url":
+            reply = "url-context-ok" if url_context_seen else "missing-url-context"
+        elif last == "summarize-url-system":
+            reply = "url-system-context-ok" if url_context_seen and system_context_seen else "missing-url-system-context"
         elif last == "previous-assistant":
             reply = ""
             for message in reversed(messages[:-1]):

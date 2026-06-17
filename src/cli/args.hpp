@@ -5,6 +5,7 @@
 #include <vector>
 
 #include "common.hpp"
+#include "markdown/markdown.hpp"
 
 namespace pkchat::cli {
 
@@ -48,6 +49,8 @@ struct Options {
     std::string fetch_url;
     std::string html_file;
     std::string html_format = "markdown";
+    pkchat::markdown::OutputFormat output_format = pkchat::markdown::OutputFormat::Markdown;
+    bool output_format_explicit = false;
     std::string save_chat_path;
     std::string load_chat_path;
     std::string proxy;

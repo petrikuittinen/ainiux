@@ -40,6 +40,11 @@ page_text=$("$ROOT/pkchat" --fetch-url "$BASE/page" --allow-private-url-fetch --
 printf '%s\n' "$page_text" | grep -F 'Mock Page' >/dev/null
 printf '%s\n' "$page_text" | grep -F 'Hello bold and emphasis with docs (https://example.com/docs).' >/dev/null
 
+url_context=$("$ROOT/pkchat" "$BASE" --quiet --no-stream -m "$MODEL" -p "summarize-url" --fetch-url "$BASE/page" --allow-private-url-fetch)
+test "$url_context" = "url-context-ok"
+url_system_context=$("$ROOT/pkchat" "$BASE" --quiet --no-stream -m "$MODEL" -s "url-system" -p "summarize-url-system" --fetch-url "$BASE/page" --allow-private-url-fetch)
+test "$url_system_context" = "url-system-context-ok"
+
 legacy_html="$ROOT/build/windows1251-russian.html"
 printf '<h1>\317\360\350\342\345\362</h1>' >"$legacy_html"
 legacy_err="$ROOT/build/nonutf-html.err"
@@ -60,6 +65,27 @@ auto_model=$("$ROOT/pkchat" "$BASE" --quiet --no-stream -p "model?")
 test "$auto_model" = "$MODEL"
 json=$("$ROOT/pkchat" "$BASE" --quiet --no-stream -m "$MODEL" -p "hello" --format json)
 printf '%s' "$json" | grep '"content":"Hello"' >/dev/null
+
+html_reply=$("$ROOT/pkchat" "$BASE" --quiet --stream -m "$MODEL" -p "markdown" --output-format html)
+printf '%s
+' "$html_reply" | grep -F '<h1>Mock Title</h1>' >/dev/null
+printf '%s
+' "$html_reply" | grep -F '<strong>bold</strong>' >/dev/null
+printf '%s
+' "$html_reply" | grep -F '<a href="https://example.com/docs">docs</a>' >/dev/null
+plain_reply=$("$ROOT/pkchat" "$BASE" --quiet --no-stream -m "$MODEL" -p "markdown" --output-format plaintext)
+printf '%s
+' "$plain_reply" | grep -F 'Mock Title' >/dev/null
+printf '%s
+' "$plain_reply" | grep -F 'Hello bold and docs (https://example.com/docs).' >/dev/null
+printf '%s
+' "$plain_reply" | grep -F '**bold**' >/dev/null && exit 1 || true
+html_file="$ROOT/build/assistant-output.html"
+"$ROOT/pkchat" "$BASE" --quiet --no-stream -m "$MODEL" -p "markdown" --output-format html --output "$html_file"
+grep '<!doctype html>' "$html_file" >/dev/null
+grep '<meta charset="utf-8">' "$html_file" >/dev/null
+grep 'name="viewport"' "$html_file" >/dev/null
+grep '<h1>Mock Title</h1>' "$html_file" >/dev/null
 
 stream=$("$ROOT/pkchat" "$BASE" --quiet --stream -m "$MODEL" -p "hello")
 test "$stream" = "Hello"

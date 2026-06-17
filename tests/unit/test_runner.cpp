@@ -12,6 +12,7 @@
 #include "editor/editor.hpp"
 #include "html/html.hpp"
 #include "json/json.hpp"
+#include "markdown/markdown.hpp"
 #include "provider/provider.hpp"
 #include "runtime/runtime.hpp"
 #include "tui/tui.hpp"
@@ -101,6 +102,24 @@ void test_cli_html_extract_parse() {
     check(parsed.options.html_format == "text", "HTML text format parsed");
 }
 
+void test_cli_output_format_parse() {
+    const char* argv[] = {"pkchat", "-p", "hello", "--output-format", "html", "--output", "answer.html"};
+    pkchat::cli::ParseResult parsed = pkchat::cli::parse_args(7, const_cast<char**>(argv));
+    check(parsed.error.ok(), "CLI output-format args parse");
+    check(parsed.options.output_format == pkchat::markdown::OutputFormat::Html, "HTML output format parsed");
+    check(parsed.options.output_format_explicit, "output-format explicit flag parsed");
+    check(parsed.options.output_path == "answer.html", "output path parsed with output-format");
+
+    const char* plain_argv[] = {"pkchat", "-p", "hello", "--output-format", "plaintext"};
+    parsed = pkchat::cli::parse_args(5, const_cast<char**>(plain_argv));
+    check(parsed.error.ok(), "CLI plaintext output-format args parse");
+    check(parsed.options.output_format == pkchat::markdown::OutputFormat::Plaintext, "plaintext output format parsed");
+
+    const char* bad_argv[] = {"pkchat", "-p", "hello", "--output-format", "pdf"};
+    parsed = pkchat::cli::parse_args(5, const_cast<char**>(bad_argv));
+    check(!parsed.error.ok(), "CLI rejects bad output-format");
+}
+
 void test_html_markdown_conversion() {
     const std::string html =
         "<html><head><style>.x{}</style><script>bad()</script></head>"
@@ -183,6 +202,62 @@ void test_html_utf8_validation() {
     offset = 0;
     check(!pkchat::html::is_valid_utf8(gbk_chinese, &offset), "HTML validator rejects GBK Chinese bytes");
     check(offset == 4, "HTML validator reports the first invalid GBK byte offset");
+}
+
+void test_markdown_html_rendering() {
+    const std::string md =
+        "# Title & More\n\n"
+        "Paragraph with **bold**, *em*, ++under++, [docs](https://example.com?a=1&b=2), and `code <x>`.\n\n"
+        "- parent\n"
+        "  - child\n\n"
+        "1. first\n"
+        "2. second\n\n"
+        "| Name | Value |\n"
+        "| --- | --- |\n"
+        "| A | **B** |\n\n"
+        "```cpp\n"
+        "if (a < b) return;\n"
+        "```\n\n"
+        "<div>raw</div>\n";
+    const std::string html = pkchat::markdown::to_html_fragment(md);
+    check(html.find("<h1>Title &amp; More</h1>") != std::string::npos, "Markdown h1 converts to HTML");
+    check(html.find("<strong>bold</strong>") != std::string::npos, "Markdown bold converts to strong");
+    check(html.find("<em>em</em>") != std::string::npos, "Markdown italic converts to em");
+    check(html.find("<u>under</u>") != std::string::npos, "Markdown underline converts to u");
+    check(html.find(R"PK(<a href="https://example.com?a=1&amp;b=2">docs</a>)PK") != std::string::npos,
+          "Markdown links become escaped anchors");
+    check(html.find("<code>code &lt;x&gt;</code>") != std::string::npos, "Markdown inline code escapes HTML");
+    check(html.find(R"PK(<ul>
+<li>parent<ul>
+<li>child</li>)PK") != std::string::npos,
+          "Markdown nested unordered lists convert to nested ul/li");
+    check(html.find(R"PK(<ol>
+<li>first</li>
+<li>second</li>)PK") != std::string::npos,
+          "Markdown ordered lists convert to ol/li");
+    check(html.find("<table>") != std::string::npos && html.find("<th>Name</th>") != std::string::npos &&
+              html.find("<td><strong>B</strong></td>") != std::string::npos,
+          "Markdown tables convert to HTML tables");
+    check(html.find(R"PK(<pre><code class="language-cpp">if (a &lt; b) return;
+</code></pre>)PK") != std::string::npos,
+          "Markdown fenced code converts to escaped pre/code");
+    check(html.find("<div>raw</div>") != std::string::npos, "Markdown raw HTML block is preserved");
+}
+
+void test_markdown_plaintext_and_document_rendering() {
+    const std::string md = "## Heading\n\nParagraph with **bold** and [docs](https://example.com).\n\n```\n**not bold**\n```\n";
+    const std::string plain = pkchat::markdown::to_plaintext(md);
+    check(plain.find("Heading") != std::string::npos && plain.find("##") == std::string::npos,
+          "Markdown plaintext strips heading marker");
+    check(plain.find("Paragraph with bold and docs (https://example.com).") != std::string::npos,
+          "Markdown plaintext strips inline markup and keeps link URL");
+    check(plain.find("**not bold**") != std::string::npos, "Markdown plaintext keeps code block content");
+
+    const std::string doc = pkchat::markdown::to_html_document("# Saved");
+    check(doc.find("<!doctype html>") == 0, "Markdown HTML document starts with doctype");
+    check(doc.find(R"PK(<meta charset="utf-8">)PK") != std::string::npos, "Markdown HTML document includes charset");
+    check(doc.find(R"PK(name="viewport")PK") != std::string::npos, "Markdown HTML document includes viewport");
+    check(doc.find("<h1>Saved</h1>") != std::string::npos, "Markdown HTML document includes rendered body");
 }
 
 void test_editor_piece_table_edits() {
@@ -674,11 +749,14 @@ int main() {
     test_cli_tui_nocolors_parse();
     test_cli_editor_parse();
     test_cli_html_extract_parse();
+    test_cli_output_format_parse();
     test_html_markdown_conversion();
     test_html_text_conversion();
     test_html_large_ignored_blocks();
     test_html_malformed_documents();
     test_html_utf8_validation();
+    test_markdown_html_rendering();
+    test_markdown_plaintext_and_document_rendering();
     test_cli_responses_parse();
     test_url_normalization();
     test_json_parse();

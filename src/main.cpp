@@ -14,6 +14,7 @@
 #include "html/html.hpp"
 #include "http/http.hpp"
 #include "json/json.hpp"
+#include "markdown/markdown.hpp"
 #include "pkchat/version.hpp"
 #include "provider/provider.hpp"
 #include "tui/tui.hpp"
@@ -345,6 +346,58 @@ pkchat::Error validate_html_extract_options(const pkchat::cli::Options& options)
     return pkchat::ok_error();
 }
 
+bool has_html_source(const pkchat::cli::Options& options) {
+    return !options.fetch_url.empty() || !options.html_file.empty();
+}
+
+bool wants_html_prompt_context(const pkchat::cli::Options& options) {
+    return has_html_source(options) && (!options.prompt.empty() || !options.prompt_file.empty());
+}
+
+std::string html_source_label(const pkchat::cli::Options& options) {
+    if (!options.fetch_url.empty()) {
+        return "URL " + options.fetch_url;
+    }
+    return options.html_file == "-" ? std::string("stdin") : "file " + options.html_file;
+}
+
+pkchat::Error load_converted_html(const pkchat::cli::Options& options,
+                                  pkchat::html::OutputFormat format,
+                                  std::string& converted,
+                                  std::string& source) {
+    if (!options.fetch_url.empty() && !options.html_file.empty()) {
+        return {pkchat::ErrorCode::BadArgs, "--fetch-url and --html-file cannot be combined"};
+    }
+    std::string body;
+    pkchat::Error err;
+    if (!options.html_file.empty()) {
+        err = read_html_file(options.html_file, body);
+    } else {
+        err = fetch_html_url(options, body);
+    }
+    if (!err.ok()) {
+        return err;
+    }
+    source = html_source_label(options);
+    err = validate_html_utf8(body, source);
+    if (!err.ok()) {
+        return err;
+    }
+    converted = pkchat::html::convert(body, format);
+    return pkchat::ok_error();
+}
+
+std::string html_context_message(const std::string& source,
+                                 const std::string& converted,
+                                 pkchat::html::OutputFormat format) {
+    std::string message = "Fetched HTML context from " + source + "\n";
+    message += "Format: ";
+    message += pkchat::html::output_format_name(format);
+    message += "\n\n";
+    message += converted;
+    return message;
+}
+
 int run_html_extract(const pkchat::cli::Options& options, std::ostream& out) {
     pkchat::Error err = validate_html_extract_options(options);
     if (!err.ok()) {
@@ -358,25 +411,14 @@ int run_html_extract(const pkchat::cli::Options& options, std::ostream& out) {
         return exit_code_for(err.code);
     }
 
-    std::string body;
-    if (!options.html_file.empty()) {
-        err = read_html_file(options.html_file, body);
-    } else {
-        err = fetch_html_url(options, body);
-    }
+    std::string converted;
+    std::string source;
+    err = load_converted_html(options, format, converted, source);
     if (!err.ok()) {
         print_error(err);
         return exit_code_for(err.code);
     }
-    const std::string source = !options.html_file.empty()
-                                   ? (options.html_file == "-" ? std::string("stdin") : "file " + options.html_file)
-                                   : "URL " + options.fetch_url;
-    err = validate_html_utf8(body, source);
-    if (!err.ok()) {
-        print_error(err);
-        return exit_code_for(err.code);
-    }
-    out << pkchat::html::convert(body, format);
+    out << converted;
     return 0;
 }
 
@@ -478,6 +520,23 @@ void print_chat_start(const pkchat::provider::RequestContext& context) {
     std::cerr << "Model: " << (context.options.model.empty() ? "unknown" : context.options.model) << std::endl;
 }
 
+bool streams_raw_markdown_output(const pkchat::cli::Options& options) {
+    return options.format == pkchat::cli::OutputFormat::Text &&
+           options.output_format == pkchat::markdown::OutputFormat::Markdown;
+}
+
+void write_rendered_assistant_output(const pkchat::cli::Options& options,
+                                     const std::string& content,
+                                     std::ostream& out) {
+    const bool complete_html_document = options.output_format == pkchat::markdown::OutputFormat::Html &&
+                                        !options.output_path.empty();
+    const std::string rendered = pkchat::markdown::render(content, options.output_format, complete_html_document);
+    out << rendered;
+    if (rendered.empty() || rendered.back() != '\n') {
+        out << '\n';
+    }
+}
+
 pkchat::Error send_session_turn(pkchat::provider::RequestContext& context,
                                 pkchat::chat::Session& session,
                                 const std::string& prompt,
@@ -487,8 +546,10 @@ pkchat::Error send_session_turn(pkchat::provider::RequestContext& context,
     bool started_ndjson = false;
     auto on_delta = [&](const std::string& delta) -> pkchat::Error {
         if (context.options.format == pkchat::cli::OutputFormat::Text) {
-            out << delta;
-            out.flush();
+            if (streams_raw_markdown_output(context.options)) {
+                out << delta;
+                out.flush();
+            }
         } else if (context.options.format == pkchat::cli::OutputFormat::Ndjson) {
             if (!started_ndjson) {
                 out << "{\"event\":\"start\",\"model\":" << pkchat::json::quote(context.options.model) << "}\n";
@@ -514,10 +575,14 @@ pkchat::Error send_session_turn(pkchat::provider::RequestContext& context,
     }
 
     if (context.options.format == pkchat::cli::OutputFormat::Text) {
-        if (!context.options.stream) {
-            out << chat.content;
+        if (context.options.output_format == pkchat::markdown::OutputFormat::Markdown) {
+            if (!context.options.stream) {
+                out << chat.content;
+            }
+            out << "\n";
+        } else {
+            write_rendered_assistant_output(context.options, chat.content, out);
         }
-        out << "\n";
     } else if (context.options.format == pkchat::cli::OutputFormat::Json) {
         write_json_chat(out, context, chat);
     } else {
@@ -683,7 +748,11 @@ int main(int argc, char** argv) {
         std::cout << "pkchat " << pkchat::kVersion << "\n";
         return 0;
     }
-    if (!options.fetch_url.empty() || !options.html_file.empty()) {
+    if (has_html_source(options) && !wants_html_prompt_context(options)) {
+        if (options.output_format_explicit) {
+            print_error({pkchat::ErrorCode::BadArgs, "HTML extraction uses --html-format text|markdown, not --output-format"});
+            return exit_code_for(pkchat::ErrorCode::BadArgs);
+        }
         std::ofstream out_file;
         pkchat::Error output_error;
         std::ostream* out = output_stream(options, out_file, output_error);
@@ -692,6 +761,19 @@ int main(int argc, char** argv) {
             return exit_code_for(output_error.code);
         }
         return run_html_extract(options, *out);
+    }
+    if (wants_html_prompt_context(options) && (options.editor || options.repl || options.tui || options.list_models)) {
+        print_error({pkchat::ErrorCode::BadArgs,
+                     "--fetch-url/--html-file prompt context currently supports non-interactive prompt mode only"});
+        return exit_code_for(pkchat::ErrorCode::BadArgs);
+    }
+    if (options.output_format_explicit && options.format != pkchat::cli::OutputFormat::Text) {
+        print_error({pkchat::ErrorCode::BadArgs, "--output-format can only be combined with --format text"});
+        return exit_code_for(pkchat::ErrorCode::BadArgs);
+    }
+    if (options.output_format_explicit && options.list_models) {
+        print_error({pkchat::ErrorCode::BadArgs, "--output-format cannot be combined with --list-models"});
+        return exit_code_for(pkchat::ErrorCode::BadArgs);
     }
     if (options.editor && (options.repl || options.tui)) {
         print_error({pkchat::ErrorCode::BadArgs, "--editor cannot be combined with --repl or --tui"});
@@ -725,8 +807,16 @@ int main(int argc, char** argv) {
         print_error({pkchat::ErrorCode::BadArgs, "--tui cannot be combined with --output"});
         return exit_code_for(pkchat::ErrorCode::BadArgs);
     }
+    if (options.tui && options.output_format_explicit) {
+        print_error({pkchat::ErrorCode::BadArgs, "--tui does not use --output-format"});
+        return exit_code_for(pkchat::ErrorCode::BadArgs);
+    }
     if (options.editor && options.format != pkchat::cli::OutputFormat::Text) {
         print_error({pkchat::ErrorCode::BadArgs, "--editor does not use --format"});
+        return exit_code_for(pkchat::ErrorCode::BadArgs);
+    }
+    if (options.editor && options.output_format_explicit) {
+        print_error({pkchat::ErrorCode::BadArgs, "--editor does not use --output-format"});
         return exit_code_for(pkchat::ErrorCode::BadArgs);
     }
     if (options.editor && (!options.prompt.empty() || !options.prompt_file.empty() ||
@@ -780,6 +870,23 @@ int main(int argc, char** argv) {
         return exit_code_for(output_error.code);
     }
 
+    std::string fetched_context_message;
+    if (wants_html_prompt_context(context.options)) {
+        pkchat::html::OutputFormat html_format = pkchat::html::OutputFormat::Markdown;
+        if (!pkchat::html::parse_output_format(context.options.html_format, html_format)) {
+            print_error({pkchat::ErrorCode::BadArgs, "--html-format must be text or markdown"});
+            return exit_code_for(pkchat::ErrorCode::BadArgs);
+        }
+        std::string converted;
+        std::string source;
+        pkchat::Error err = load_converted_html(context.options, html_format, converted, source);
+        if (!err.ok()) {
+            print_error(err);
+            return exit_code_for(err.code);
+        }
+        fetched_context_message = html_context_message(source, converted, html_format);
+    }
+
     if (context.options.list_models) {
         pkchat::provider::ModelsResult models;
         pkchat::Error err = pkchat::provider::list_models(context, models);
@@ -823,6 +930,10 @@ int main(int argc, char** argv) {
 
     if (context.options.repl) {
         return run_repl(context, std::move(session), *out);
+    }
+
+    if (!fetched_context_message.empty()) {
+        session.messages.push_back({"user", fetched_context_message});
     }
 
     pkchat::provider::ChatResult chat;

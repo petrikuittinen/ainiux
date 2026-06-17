@@ -6,6 +6,9 @@ LIBCURL_LIBS ?= $(shell pkg-config --libs libcurl 2>/dev/null || curl-config --l
 CXXFLAGS += $(LIBCURL_CFLAGS)
 LDFLAGS += $(LIBCURL_LIBS)
 PREFIX ?= /usr/local
+DEBUG_FLAG_PATTERNS := -g -g0 -g1 -g2 -g3 -ggdb -ggdb% -glldb -glldb% -gdwarf% -gstabs%
+OPTIMIZED_CXXFLAGS := $(filter-out -O% $(DEBUG_FLAG_PATTERNS),$(CXXFLAGS)) -O3 -DNDEBUG
+OPTIMIZED_LDFLAGS := $(LDFLAGS) -s
 
 BUILD_DIR := build
 OBJ_DIR := $(BUILD_DIR)/obj
@@ -20,7 +23,7 @@ LIB_OBJ := $(patsubst %.cpp,$(OBJ_DIR)/%.o,$(LIB_SRC))
 TEST_SRC := $(shell find tests/unit -name '*.cpp' | sort)
 TEST_OBJ := $(patsubst %.cpp,$(OBJ_DIR)/%.o,$(TEST_SRC))
 
-.PHONY: all clean test test-unit test-integration sanitize test-sanitize leak-check test-leak install
+.PHONY: all clean optimized test test-unit test-integration sanitize test-sanitize leak-check test-leak install
 
 all: $(BIN)
 
@@ -41,6 +44,10 @@ test-unit: $(TEST_BIN)
 
 test-integration: $(BIN)
 	tests/integration/test_mock_server.sh
+
+optimized:
+	$(MAKE) clean
+	$(MAKE) CXXFLAGS="$(OPTIMIZED_CXXFLAGS)" LDFLAGS="$(OPTIMIZED_LDFLAGS)" all
 
 sanitize:
 	$(MAKE) clean
