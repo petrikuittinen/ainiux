@@ -28,7 +28,7 @@ struct ImageData {
 };
 
 struct TextContext {
-    std::string source_path;
+    std::string source;
     Kind kind = Kind::Plaintext;
     std::string content;
 };

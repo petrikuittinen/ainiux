@@ -178,6 +178,17 @@ multiple_image_reply=$("$ROOT/pkchat" "$BASE" --quiet --no-stream -m "$MODEL" -p
     --attach "$local_png" --attach "$local_jpeg" --image-capability allow)
 test "$multiple_image_reply" = "images:2"
 
+repl_insert_image=$(printf '/insert %s\ndescribe-image\ndescribe-image\n/quit\n' "$local_png" | \
+    "$ROOT/pkchat" "$BASE" --quiet --repl --no-stream -m "$MODEL" --image-capability allow)
+repl_insert_image_expected=$(printf 'image-input-ok\nmissing-image-input')
+test "$repl_insert_image" = "$repl_insert_image_expected"
+repl_attach_image=$(printf '/attach %s\ndescribe-image\n/quit\n' "$local_jpeg" | \
+    "$ROOT/pkchat" "$BASE" --quiet --repl --no-stream -m "$MODEL" --image-capability allow)
+test "$repl_attach_image" = "image-input-ok"
+repl_fetch_reply=$(printf '/fetch %s/page\nsummarize-url\n/quit\n' "$BASE" | \
+    "$ROOT/pkchat" "$BASE" --quiet --repl --no-stream -m "$MODEL" --allow-private-url-fetch)
+test "$repl_fetch_reply" = "url-context-ok"
+
 image_extract_err="$ROOT/build/image-extract.err"
 if "$ROOT/pkchat" --input "$local_png" --quiet >"$ROOT/build/image-extract.out" 2>"$image_extract_err"; then
     echo "standalone image extraction should require a prompt" >&2
@@ -309,9 +320,16 @@ grep 'repl-one-reply' "$REPL_FILE" >/dev/null
 
 TUI_FILE="$ROOT/build/tui-insert-chat.json"
 python3 "$ROOT/tests/integration/tui_insert_driver.py" \
-    "$ROOT/pkchat" "$BASE" "$MODEL" "$insert_file" "$TUI_FILE"
+    "$ROOT/pkchat" "$BASE" "$MODEL" "$insert_file" "$local_png" "$BASE/page" "$TUI_FILE"
 grep 'Inserted Context Marker' "$TUI_FILE" >/dev/null
 grep 'insert-ok' "$TUI_FILE" >/dev/null
+grep 'image-input-ok' "$TUI_FILE" >/dev/null
+grep 'Input context from URL' "$TUI_FILE" >/dev/null
+grep 'url-context-ok' "$TUI_FILE" >/dev/null
+if grep '/quit or /exit' "$TUI_FILE" >/dev/null; then
+    echo "TUI help text must not be persisted in chat JSON" >&2
+    exit 1
+fi
 
 
 lmstudio_shortcut_out=$(printf 'repl-one

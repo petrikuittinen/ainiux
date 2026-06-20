@@ -5,6 +5,7 @@
 #include <cmath>
 #include <cstring>
 #include <iostream>
+#include <iterator>
 #include <limits>
 #include <string>
 #include <sys/ioctl.h>
@@ -14,6 +15,7 @@
 #include <vector>
 
 #include "context/context.hpp"
+#include "fetch/fetch.hpp"
 #include "input/input.hpp"
 #include "runtime/runtime.hpp"
 
@@ -705,6 +707,7 @@ void render(const chat::Session& session,
             std::string& status,
             int& history_scroll,
             bool show_thinking_traces,
+            const std::string& help_text,
             const RenderStyle& style) {
     const TuiSize terminal = terminal_size();
     const Layout layout = layout_for_terminal(terminal.rows, terminal.cols);
@@ -713,6 +716,13 @@ void render(const chat::Session& session,
     input.ensure_cursor_visible(layout.input_rect);
     const editor::RenderedPanel input_panel = input.render(layout.input_rect);
     std::vector<StyledLine> history = history_lines_for_session(session, cols, show_thinking_traces);
+    if (!help_text.empty()) {
+        chat::Session help_session;
+        help_session.messages.push_back({"Help", help_text});
+        std::vector<StyledLine> help_lines = history_lines_for_session(help_session, cols, true);
+        history.insert(history.end(), std::make_move_iterator(help_lines.begin()),
+                       std::make_move_iterator(help_lines.end()));
+    }
     const int max_history_scroll = std::max(0, static_cast<int>(history.size()) - layout.history_rows);
     history_scroll = std::min(std::max(0, history_scroll), max_history_scroll);
 
@@ -749,7 +759,7 @@ void render(const chat::Session& session,
     std::cout.flush();
 }
 
-enum class TuiEventType { Delta, Done, Error, SaveDone, LoadDone, InsertDone, ModelsDone };
+enum class TuiEventType { Delta, Done, Error, SaveDone, LoadDone, InsertDone, FetchDone, ModelsDone };
 
 enum class ActiveJob { None, Chat, Models };
 
@@ -760,6 +770,9 @@ struct TuiEvent {
     provider::ChatResult chat;
     chat::Session session;
     std::vector<std::string> models;
+    provider::Message inserted_message;
+    provider::ImageInput image;
+    bool image_attachment = false;
     context::CompactionEvent compaction;
     bool compacted = false;
 };
@@ -858,6 +871,9 @@ int run(provider::RequestContext context, chat::Session session) {
     int history_scroll = 0;
     bool regenerate_after_cancel = false;
     std::string queued_regeneration_prompt;
+    std::vector<provider::ImageInput> pending_images;
+    size_t inflight_image_count = 0;
+    std::string help_text;
 
     auto pending_assistant_is_hidden_thinking = [&]() {
         if (show_thinking_traces || pending_assistant == static_cast<size_t>(-1) ||
@@ -943,27 +959,88 @@ int run(provider::RequestContext context, chat::Session session) {
             return;
         }
         if (path.empty()) {
-            status = "Usage: /insert PATH";
+            status = "Usage: /insert PATH or /attach PATH";
             return;
         }
-        const long configured_limit = context.options.max_input_bytes;
-        file_job.start([path, configured_limit, &events](runtime::CancellationToken token) mutable {
+        input::FileType type;
+        Error type_error = input::classify_file_type(path, type);
+        if (!type_error.ok()) {
+            status = error_line(type_error);
+            return;
+        }
+        if (type.kind == input::Kind::Image) {
+            Error capability_error = provider::validate_image_input(context);
+            if (!capability_error.ok()) {
+                status = error_line(capability_error);
+                return;
+            }
+        }
+        const long text_limit = context.options.max_input_bytes;
+        const long image_limit = context.options.max_image_bytes;
+        file_job.start([path, type, text_limit, image_limit, &events](runtime::CancellationToken token) mutable {
             TuiEvent event;
             event.type = TuiEventType::InsertDone;
             event.text = path;
-            if (configured_limit <= 0) {
+            if (type.kind == input::Kind::Image) {
+                event.image_attachment = true;
+                if (image_limit <= 0) {
+                    event.error = {ErrorCode::BadArgs, "--max-image-bytes must be greater than zero"};
+                } else {
+                    input::ImageData loaded;
+                    event.error = input::load_image_file(
+                        path, type, static_cast<size_t>(image_limit), loaded, token);
+                    if (event.error.ok()) {
+                        event.image = {loaded.mime_type, std::move(loaded.base64_data)};
+                    }
+                }
+            } else if (text_limit <= 0) {
                 event.error = {ErrorCode::BadArgs, "--max-input-bytes must be greater than zero"};
             } else {
                 input::TextContext loaded;
                 event.error = input::load_text_context_file(
-                    path, static_cast<size_t>(configured_limit), loaded, token);
+                    path, static_cast<size_t>(text_limit), loaded, token);
                 if (event.error.ok()) {
-                    event.session.messages.push_back({"user", input::text_context_message(loaded)});
+                    event.inserted_message = {"user", input::text_context_message(loaded)};
                 }
             }
             events.push(std::move(event));
         });
-        status = "Inserting " + path + "...";
+        status = (type.kind == input::Kind::Image ? "Attaching " : "Inserting ") + path + "...";
+    };
+
+    auto start_fetch = [&](const std::string& url) {
+        if (file_job.running()) {
+            status = "A file job is already running";
+            return;
+        }
+        if (url.empty()) {
+            status = "Usage: /fetch URL";
+            return;
+        }
+        fetch::Options options;
+        options.connect_timeout_seconds = context.options.connect_timeout_seconds;
+        options.timeout_seconds = context.options.timeout_seconds > 0 ? context.options.timeout_seconds : 30;
+        options.max_bytes = context.options.max_fetch_bytes;
+        options.proxy = context.options.proxy;
+        options.insecure_tls = context.options.insecure_tls;
+        options.trace_http = context.options.trace_http;
+        options.allow_private = context.options.allow_private_url_fetch;
+        file_job.start([url, options, &events](runtime::CancellationToken token) mutable {
+            TuiEvent event;
+            event.type = TuiEventType::FetchDone;
+            event.text = url;
+            std::string markdown;
+            event.error = fetch::fetch_markdown(url, options, markdown, token);
+            if (event.error.ok()) {
+                input::TextContext fetched;
+                fetched.source = "URL " + url;
+                fetched.kind = input::Kind::Markdown;
+                fetched.content = std::move(markdown);
+                event.inserted_message = {"user", input::text_context_message(fetched)};
+            }
+            events.push(std::move(event));
+        });
+        status = "Fetching " + url + "...";
     };
 
     auto start_models = [&]() {
@@ -992,7 +1069,8 @@ int run(provider::RequestContext context, chat::Session session) {
         active_job = ActiveJob::Chat;
         history_scroll = 0;
         pending_user = session.messages.size();
-        session.messages.push_back({"user", prompt});
+        inflight_image_count = pending_images.size();
+        session.messages.push_back({"user", prompt, pending_images});
         pending_assistant = session.messages.size();
         session.messages.push_back({"assistant", ""});
 
@@ -1008,8 +1086,10 @@ int run(provider::RequestContext context, chat::Session session) {
             rollback_pending_turn();
             active_job = ActiveJob::None;
             status = error_line(prepared.error);
+            inflight_image_count = 0;
             return;
         }
+        session.messages[pending_user].images.clear();
         provider::RequestContext job_context = context;
         model_job.start([job_context, request_messages = std::move(prepared.messages),
                          compaction = std::move(prepared.event), compacted = prepared.compacted,
@@ -1116,7 +1196,26 @@ int run(provider::RequestContext context, chat::Session session) {
             return;
         }
         if (text == "/help") {
-            status = "Commands: /insert PATH /save /load /models /model /system /theme /thinking";
+            if (help_text.empty()) {
+                help_text =
+                    "/help (hide/show this panel)\n"
+                    "/quit or /exit\n"
+                    "/clear\n"
+                    "/models\n"
+                    "/model MODEL\n"
+                    "/system TEXT\n"
+                    "/save [PATH]\n"
+                    "/load PATH\n"
+                    "/insert PATH or /attach PATH (text or image)\n"
+                    "/fetch URL\n"
+                    "/theme [dark|light]\n"
+                    "/thinking [trace|notrace]";
+                status = "Help shown; /help hides it";
+            } else {
+                help_text.clear();
+                status = "Help hidden";
+            }
+            history_scroll = 0;
             return;
         }
         if (text.rfind("/thinking", 0) == 0) {
@@ -1160,6 +1259,8 @@ int run(provider::RequestContext context, chat::Session session) {
         }
         if (text == "/clear") {
             session.messages.clear();
+            pending_images.clear();
+            inflight_image_count = 0;
             apply_system_prompt(session, context.options.system);
             history_scroll = 0;
             status = "Chat history cleared";
@@ -1207,8 +1308,13 @@ int run(provider::RequestContext context, chat::Session session) {
             start_load(path);
             return;
         }
-        if (text == "/insert" || text.rfind("/insert ", 0) == 0) {
+        if (text == "/insert" || text.rfind("/insert ", 0) == 0 ||
+            text == "/attach" || text.rfind("/attach ", 0) == 0) {
             start_insert(trim_ascii(text.substr(7)));
+            return;
+        }
+        if (text == "/fetch" || text.rfind("/fetch ", 0) == 0) {
+            start_fetch(trim_ascii(text.substr(6)));
             return;
         }
         status = "Unknown command: " + text;
@@ -1238,7 +1344,8 @@ int run(provider::RequestContext context, chat::Session session) {
         start_turn(context.options.prompt);
     }
 
-    render(session, input, status, history_scroll, show_thinking_traces, RenderStyle{theme, use_colors});
+    render(session, input, status, history_scroll, show_thinking_traces, help_text,
+           RenderStyle{theme, use_colors});
     while (!quit) {
         TuiEvent event;
         while (events.try_pop(event)) {
@@ -1267,6 +1374,11 @@ int run(provider::RequestContext context, chat::Session session) {
                         event.compaction.timestamp = chat::current_timestamp_utc();
                         session.compaction_events.push_back(event.compaction);
                     }
+                    if (inflight_image_count > 0 && inflight_image_count <= pending_images.size()) {
+                        pending_images.erase(pending_images.begin(),
+                                             pending_images.begin() + static_cast<long>(inflight_image_count));
+                    }
+                    inflight_image_count = 0;
                     pending_user = static_cast<size_t>(-1);
                     pending_assistant = static_cast<size_t>(-1);
                     active_job = ActiveJob::None;
@@ -1282,6 +1394,7 @@ int run(provider::RequestContext context, chat::Session session) {
                     model_job.join();
                     const bool should_regenerate = regenerate_after_cancel && event.error.code == ErrorCode::Cancelled;
                     active_job = ActiveJob::None;
+                    inflight_image_count = 0;
                     if (should_regenerate) {
                         rollback_pending_turn();
                         start_queued_regeneration(static_cast<size_t>(-1));
@@ -1305,6 +1418,8 @@ int run(provider::RequestContext context, chat::Session session) {
                     file_job.join();
                     if (event.error.ok()) {
                         session = std::move(event.session);
+                        pending_images.clear();
+                        inflight_image_count = 0;
                         refresh_session_metadata(session, context);
                         history_scroll = 0;
                         status = "Loaded " + event.text;
@@ -1314,10 +1429,24 @@ int run(provider::RequestContext context, chat::Session session) {
                     break;
                 case TuiEventType::InsertDone:
                     file_job.join();
-                    if (event.error.ok() && !event.session.messages.empty()) {
-                        session.messages.push_back(std::move(event.session.messages.front()));
+                    if (event.error.ok() && event.image_attachment) {
+                        pending_images.push_back(std::move(event.image));
+                        status = "Attached image for next prompt: " + event.text + " (" +
+                                 std::to_string(pending_images.size()) + " pending)";
+                    } else if (event.error.ok()) {
+                        session.messages.push_back(std::move(event.inserted_message));
                         history_scroll = 0;
                         status = "Inserted context from " + event.text;
+                    } else {
+                        status = error_line(event.error);
+                    }
+                    break;
+                case TuiEventType::FetchDone:
+                    file_job.join();
+                    if (event.error.ok()) {
+                        session.messages.push_back(std::move(event.inserted_message));
+                        history_scroll = 0;
+                        status = "Fetched and inserted " + event.text;
                     } else {
                         status = error_line(event.error);
                     }
@@ -1407,7 +1536,8 @@ int run(provider::RequestContext context, chat::Session session) {
                 }
             }
         }
-        render(session, input, status, history_scroll, show_thinking_traces, RenderStyle{theme, use_colors});
+        render(session, input, status, history_scroll, show_thinking_traces, help_text,
+               RenderStyle{theme, use_colors});
     }
 
     model_job.cancel();

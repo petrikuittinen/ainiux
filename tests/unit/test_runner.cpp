@@ -12,6 +12,7 @@
 #include "cli/args.hpp"
 #include "context/context.hpp"
 #include "editor/editor.hpp"
+#include "fetch/fetch.hpp"
 #include "html/html.hpp"
 #include "http/http.hpp"
 #include "input/input.hpp"
@@ -345,6 +346,17 @@ void test_http_private_address_socket_block() {
           "HTTP transport blocks the resolved loopback socket address");
     check(result.error.message.find("127.0.0.1") != std::string::npos,
           "resolved-address refusal identifies the blocked address");
+}
+
+void test_safe_fetch_rejects_private_literal() {
+    pkchat::fetch::Options options;
+    std::string body;
+    pkchat::Error err = pkchat::fetch::fetch_html("http://127.0.0.1/private", options, body);
+    check(!err.ok() && err.code == pkchat::ErrorCode::BadUrl,
+          "shared URL fetch rejects a private literal before transport");
+    err = pkchat::fetch::fetch_html("file:///tmp/page.html", options, body);
+    check(!err.ok() && err.code == pkchat::ErrorCode::BadUrl,
+          "shared URL fetch rejects non-HTTP schemes");
 }
 
 void test_cli_output_format_parse() {
@@ -1072,6 +1084,7 @@ int main() {
     test_image_capability_detection();
     test_context_policies_preserve_full_messages();
     test_http_private_address_socket_block();
+    test_safe_fetch_rejects_private_literal();
     test_cli_output_format_parse();
     test_html_markdown_conversion();
     test_html_text_conversion();

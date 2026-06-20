@@ -165,11 +165,17 @@ Error load_image_file(const std::string& path,
         return {ErrorCode::UnsupportedFeature,
                 "image content does not match its " + type.mime_type + " file extension: " + path};
     }
+    if (cancellation.cancelled()) {
+        return {ErrorCode::Cancelled, "image read cancelled: " + path};
+    }
 
     ImageData loaded;
     loaded.mime_type = type.mime_type;
     loaded.byte_size = data.size();
     loaded.base64_data = base64_encode(data);
+    if (cancellation.cancelled()) {
+        return {ErrorCode::Cancelled, "image encoding cancelled: " + path};
+    }
     image = std::move(loaded);
     return ok_error();
 }
@@ -232,7 +238,7 @@ Error load_text_context_file(const std::string& path,
     }
 
     TextContext loaded;
-    loaded.source_path = path;
+    loaded.source = "file " + path;
     loaded.kind = type.kind;
     loaded.content = type.kind == Kind::Html ? html::convert(body, html::OutputFormat::Markdown) : std::move(body);
     if (cancellation.cancelled()) {
@@ -243,7 +249,7 @@ Error load_text_context_file(const std::string& path,
 }
 
 std::string text_context_message(const TextContext& context) {
-    std::string message = "Input context from file " + context.source_path + "\nFormat: ";
+    std::string message = "Input context from " + context.source + "\nFormat: ";
     if (context.kind == Kind::Markdown || context.kind == Kind::Html) {
         message += "md";
     } else {

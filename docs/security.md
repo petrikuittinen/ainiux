@@ -19,7 +19,7 @@
 
 ## URL Fetching
 
-The first v0.5 input/URL-fetching slice is explicit: `--input PATH` reads supported local `.txt`, `.md`, and `.html` files, and `--fetch-url URL` fetches an HTML page. Used alone, they print converted content according to `--output-format`; used with `-p`/`--prompt` or `--prompt-file` in non-interactive CLI mode, they insert the converted content as a visible user-context message before the final prompt. URL fetching is never triggered implicitly from text inside a prompt.
+The first v0.5 input/URL-fetching slice is explicit: `--input PATH` reads supported local `.txt`, `.md`, and `.html` files, `--fetch-url URL` fetches an HTML page, and interactive `/fetch URL` inserts a fetched page into context. Used alone, CLI options print converted content according to `--output-format`; used with `-p`/`--prompt` or `--prompt-file` in non-interactive CLI mode, they insert the converted content as a visible user-context message before the final prompt. URL fetching is never triggered implicitly from text inside a prompt.
 
 Defaults:
 
@@ -44,6 +44,6 @@ The default `--image-capability auto` mode requires both a provider profile whos
 
 ## Text Attachments
 
-`--attach PATH` and REPL/TUI `/insert PATH` send the selected local document contents to the configured model endpoint. Files are limited to 1 MiB each by default (`--max-input-bytes N`), rejected when they contain NUL bytes or invalid UTF-8, and converted according to their `.txt`, `.md`, or `.html` extension. Converted attachment context is intentionally part of the chat transcript and can therefore appear in saved chat files.
+`--attach PATH` and REPL/TUI `/insert PATH` or `/attach PATH` send selected local contents to the configured model endpoint. Text files are limited to 1 MiB each by default (`--max-input-bytes N`), rejected when they contain NUL bytes or invalid UTF-8, and converted according to their `.txt`, `.md`, or `.html` extension. Interactive images are queued for the next prompt, checked against provider/model capabilities, bounded by `--max-image-bytes`, and removed from memory after successful use. Converted text and fetched URL context are intentionally part of the chat transcript and can therefore appear in saved chat files; image bytes do not.
 
 PDF and DOCX are not read as text or uploaded in this slice. Their future input and output converters require explicit dependency, safety, and fidelity decisions.

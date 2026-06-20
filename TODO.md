@@ -1,5 +1,5 @@
 # TODO
-- Continue v0.5 follow-up work: charset conversion, Responses API image input, interactive image insertion, provider-reported context limits/token estimation, and cancellable URL fetching for TUI/web callers.
+- Continue v0.5 follow-up work: charset conversion, Responses API image input, provider-reported context limits/token estimation, and cancellable URL fetching for future web callers.
 
 ## Deferred Document Conversion
 

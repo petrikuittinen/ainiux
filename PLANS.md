@@ -949,8 +949,8 @@ Context compacted: 42 earlier messages summarized into 1 message. Full transcrip
 
 Start with text files:
 
-- [x] `/insert PATH` in REPL.
-- [x] `/insert PATH` in TUI through a cancellable runtime job.
+- [x] `/insert PATH` and `/attach PATH` in REPL for text and images.
+- [x] `/insert PATH` and `/attach PATH` in TUI through a cancellable runtime job.
 - [x] Repeatable `--attach PATH` for non-interactive CLI prompts.
 - [x] Size limit.
 - [x] Explicit UTF-8 requirement.
@@ -1008,11 +1008,13 @@ Safety defaults:
 
 Implementation note (2026-06-17): The first v0.5 slice is present. `src/html/` provides a small C++17 `std::regex` HTML converter with plaintext and Markdown output for simple headings, emphasis, strong text, links, line breaks, and block spacing. `--input` converts supported local `.txt`, `.md`, and `.html` files without contacting a provider. `--html-file` remains a compatibility alias for local HTML. `--fetch-url` uses libcurl to fetch HTML explicitly, applies a response-size cap, a default fetch timeout, content-type checks, no redirect following, and private/loopback/link-local/multicast/common metadata literal-host blocking unless `--allow-private-url-fetch` is set. This slice can inject fetched or local input content into non-interactive chat prompts, but does not yet process JavaScript, convert charsets, check DNS-resolved private addresses, or implement PDF/Word extraction.
 
-Implementation note (2026-06-20): `--input` now classifies supported file endings case-insensitively and accepts PNG, JPEG, and GIF images with a non-interactive prompt. WebP input is intentionally disabled after compatibility tests with common vision models. `src/input/` performs bounded reads, signature checks, and base64 encoding; Chat Completions requests use `image_url` data-URL content parts. Image bytes are temporary and are not persisted in chat JSON. Responses API images and interactive image insertion remain open.
+Implementation note (2026-06-20): `--input` now classifies supported file endings case-insensitively and accepts PNG, JPEG, and GIF images with a non-interactive prompt. WebP input is intentionally disabled after compatibility tests with common vision models. `src/input/` performs bounded reads, signature checks, and base64 encoding; Chat Completions requests use `image_url` data-URL content parts. Image bytes are temporary and are not persisted in chat JSON. Responses API images remain open.
 
 Implementation note (2026-06-20): Repeatable `--attach PATH` and REPL `/insert PATH` now add converted UTF-8 text, Markdown, or HTML context. Local document reads have a default 1 MiB `--max-input-bytes` cap and reject binary NUL bytes, invalid UTF-8, unreadable files, unsupported types, PDF, and DOCX. Charset conversion remains open; PDF/Markdown and DOCX/Markdown input/output conversion is explicitly deferred in `TODO.md`.
 
-Implementation note (2026-06-20): The remaining core slice adds repeated mixed text/image attachments, conservative provider/model image capability checks, request-only byte-budget context policies with persisted compaction events, socket-level private-address rejection after DNS resolution, and TUI `/insert` through a cancellable runtime file job. Responses API image schema support, charset conversion, interactive image insertion, and asynchronous URL fetching outside the CLI remain follow-up work.
+Implementation note (2026-06-20): The remaining core slice adds repeated mixed text/image attachments, conservative provider/model image capability checks, request-only byte-budget context policies with persisted compaction events, socket-level private-address rejection after DNS resolution, and TUI `/insert` through a cancellable runtime file job. Responses API image schema support and charset conversion remain follow-up work.
+
+Implementation note (2026-06-20): Interactive `/insert PATH` and `/attach PATH` now accept text or supported images in REPL/TUI. Images are queued for exactly the next prompt and remain request-only. `/fetch URL` inserts safely fetched Markdown; TUI fetching uses the runtime job and cancellation token. TUI `/help` now renders a persistent UI-only command panel instead of a transient status line.
 
 ## Acceptance criteria
 
@@ -1022,7 +1024,7 @@ Implementation note (2026-06-20): The remaining core slice adds repeated mixed t
 - [x] URL fetching refuses private literal, localhost, and DNS-resolved addresses by default.
 - [x] URL fetch timeout and max-size limits work for the explicit CLI extraction path.
 - [x] TUI remains responsive while file insertion is in progress.
-- [ ] TUI URL fetching remains future work.
+- [x] TUI remains responsive while cancellable URL fetching is in progress.
 - [x] Sanitizer leak checks pass for covered attachment and URL-fetch success/failure paths.
 
 ---
