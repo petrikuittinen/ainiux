@@ -73,6 +73,27 @@ class Handler(BaseHTTPRequestHandler):
                 return "".join(parts)
         return ""
 
+    def _chat_last_input(self, request):
+        messages = request.get("messages", [])
+        if not messages or not isinstance(messages[-1], dict):
+            return "", False
+        content = messages[-1].get("content", "")
+        if isinstance(content, str):
+            return content, False
+        if not isinstance(content, list):
+            return "", False
+        text = []
+        image_seen = False
+        for part in content:
+            if not isinstance(part, dict):
+                continue
+            if part.get("type") == "text" and isinstance(part.get("text"), str):
+                text.append(part["text"])
+            if part.get("type") == "image_url" and isinstance(part.get("image_url"), dict):
+                url = part["image_url"].get("url", "")
+                image_seen = isinstance(url, str) and url.startswith("data:image/png;base64,iVBOR")
+        return "".join(text), image_seen
+
     def _handle_responses(self, request):
         if request.get("model") == "":
             self._send(400, json.dumps({"error": {"message": "empty model field"}}))
@@ -145,7 +166,7 @@ class Handler(BaseHTTPRequestHandler):
             self._send(400, json.dumps({"error": {"message": "empty model field"}}))
             return
         messages = request.get("messages", [])
-        last = messages[-1].get("content", "") if messages and isinstance(messages[-1], dict) else ""
+        last, image_seen = self._chat_last_input(request)
         url_context_seen = any(
             isinstance(message, dict)
             and isinstance(message.get("content"), str)
@@ -186,6 +207,8 @@ class Handler(BaseHTTPRequestHandler):
             reply = "url-system-context-ok" if url_context_seen and system_context_seen else "missing-url-system-context"
         elif last == "summarize-input":
             reply = "input-context-ok" if input_context_seen else "missing-input-context"
+        elif last == "describe-image":
+            reply = "image-input-ok" if image_seen else "missing-image-input"
         elif last == "previous-assistant":
             reply = ""
             for message in reversed(messages[:-1]):

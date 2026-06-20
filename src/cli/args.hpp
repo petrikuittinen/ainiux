@@ -67,6 +67,7 @@ struct Options {
     long connect_timeout_seconds = 10;
     long timeout_seconds = 0;
     long max_fetch_bytes = 1048576;
+    long max_image_bytes = 20971520;
 
     std::vector<std::string> headers;
 };

@@ -5,6 +5,7 @@
 #include <iostream>
 #include <memory>
 #include <sstream>
+#include <utility>
 #include <vector>
 
 #include "chat/session.hpp"
@@ -13,6 +14,7 @@
 #include "editor/editor.hpp"
 #include "html/html.hpp"
 #include "http/http.hpp"
+#include "input/input.hpp"
 #include "json/json.hpp"
 #include "markdown/markdown.hpp"
 #include "pkchat/version.hpp"
@@ -326,11 +328,7 @@ pkchat::Error fetch_html_url(const pkchat::cli::Options& options, std::string& b
     return pkchat::ok_error();
 }
 
-enum class InputKind {
-    Plaintext,
-    Markdown,
-    Html,
-};
+using InputKind = pkchat::input::Kind;
 
 const char* input_kind_name(InputKind kind) {
     switch (kind) {
@@ -340,6 +338,8 @@ const char* input_kind_name(InputKind kind) {
             return "markdown";
         case InputKind::Html:
             return "html";
+        case InputKind::Image:
+            return "image";
     }
     return "plaintext";
 }
@@ -381,31 +381,13 @@ pkchat::Error validate_document_source_options(const pkchat::cli::Options& optio
     return pkchat::ok_error();
 }
 
-pkchat::Error local_input_kind_for_options(const pkchat::cli::Options& options, InputKind& kind) {
+pkchat::Error local_input_type_for_options(const pkchat::cli::Options& options,
+                                           pkchat::input::FileType& type) {
     if (!options.html_file.empty()) {
-        kind = InputKind::Html;
+        type = {InputKind::Html, "html", "text/html"};
         return pkchat::ok_error();
     }
-    const std::string path = local_input_path(options);
-    if (path == "-") {
-        return {pkchat::ErrorCode::BadArgs,
-                "--input - cannot infer a file type from the path ending; use a .txt, .md, or .html file path"};
-    }
-    const std::string lower = lower_ascii(path);
-    if (ends_with(lower, ".txt") || ends_with(lower, ".text")) {
-        kind = InputKind::Plaintext;
-        return pkchat::ok_error();
-    }
-    if (ends_with(lower, ".md") || ends_with(lower, ".markdown")) {
-        kind = InputKind::Markdown;
-        return pkchat::ok_error();
-    }
-    if (ends_with(lower, ".html") || ends_with(lower, ".htm")) {
-        kind = InputKind::Html;
-        return pkchat::ok_error();
-    }
-    return {pkchat::ErrorCode::UnsupportedFeature,
-            "unsupported --input file type for " + path + "; supported endings are .txt, .md, .markdown, .html, and .htm"};
+    return pkchat::input::classify_file_type(local_input_path(options), type);
 }
 
 pkchat::Error validate_text_utf8(const std::string& body, const std::string& source) {
@@ -460,6 +442,9 @@ std::string render_document_body(const std::string& body,
     if (kind == InputKind::Markdown) {
         return pkchat::markdown::render(body, output_format, complete_html_document);
     }
+    if (kind == InputKind::Image) {
+        return "";
+    }
     if (output_format == pkchat::markdown::OutputFormat::Plaintext ||
         output_format == pkchat::markdown::OutputFormat::Markdown) {
         return body;
@@ -472,6 +457,7 @@ struct LoadedDocument {
     InputKind input_kind = InputKind::Plaintext;
     pkchat::markdown::OutputFormat output_format = pkchat::markdown::OutputFormat::Markdown;
     std::string converted;
+    pkchat::provider::ImageInput image;
 };
 
 pkchat::Error load_document(const pkchat::cli::Options& options, bool standalone, LoadedDocument& document) {
@@ -481,21 +467,46 @@ pkchat::Error load_document(const pkchat::cli::Options& options, bool standalone
     }
 
     std::string body;
+    pkchat::input::FileType input_type;
     if (!options.fetch_url.empty()) {
-        document.input_kind = InputKind::Html;
+        input_type = {InputKind::Html, "html", "text/html"};
         err = fetch_html_url(options, body);
     } else {
-        err = local_input_kind_for_options(options, document.input_kind);
+        err = local_input_type_for_options(options, input_type);
         if (!err.ok()) {
             return err;
         }
-        err = read_local_file(local_input_path(options), input_kind_name(document.input_kind), body);
+        if (input_type.kind == InputKind::Image) {
+            if (standalone) {
+                return {pkchat::ErrorCode::BadArgs,
+                        "image input cannot be extracted as text; combine --input IMAGE with -p or --prompt"};
+            }
+            if (options.max_image_bytes <= 0) {
+                return {pkchat::ErrorCode::BadArgs, "--max-image-bytes must be greater than zero"};
+            }
+            pkchat::input::ImageData image;
+            err = pkchat::input::load_image_file(local_input_path(options), input_type,
+                                                  static_cast<size_t>(options.max_image_bytes), image);
+            if (!err.ok()) {
+                return err;
+            }
+            document.source = document_source_label(options);
+            document.input_kind = InputKind::Image;
+            document.image = {image.mime_type, std::move(image.base64_data)};
+            if (!options.quiet) {
+                std::cerr << "Attached image: " << local_input_path(options) << " (" << image.mime_type
+                          << ", " << image.byte_size << " bytes)\n";
+            }
+            return pkchat::ok_error();
+        }
+        err = read_local_file(local_input_path(options), input_type.name, body);
     }
     if (!err.ok()) {
         return err;
     }
 
     document.source = document_source_label(options);
+    document.input_kind = input_type.kind;
     if (document.input_kind == InputKind::Html) {
         err = validate_html_utf8(body, document.source);
     } else {
@@ -695,8 +706,9 @@ pkchat::Error send_session_turn(pkchat::provider::RequestContext& context,
                                 pkchat::chat::Session& session,
                                 const std::string& prompt,
                                 std::ostream& out,
-                                pkchat::provider::ChatResult& chat) {
-    session.messages.push_back({"user", prompt});
+                                pkchat::provider::ChatResult& chat,
+                                std::vector<pkchat::provider::ImageInput> images = {}) {
+    session.messages.push_back({"user", prompt, std::move(images)});
     bool started_ndjson = false;
     auto on_delta = [&](const std::string& delta) -> pkchat::Error {
         if (context.options.format == pkchat::cli::OutputFormat::Text) {
@@ -720,6 +732,7 @@ pkchat::Error send_session_turn(pkchat::provider::RequestContext& context,
         session.messages.pop_back();
         return err;
     }
+    session.messages.back().images.clear();
     session.messages.push_back({"assistant", chat.content});
     if (!chat.model.empty()) {
         session.model = chat.model;
@@ -1021,6 +1034,7 @@ int main(int argc, char** argv) {
     }
 
     std::string fetched_context_message;
+    std::vector<pkchat::provider::ImageInput> prompt_images;
     if (wants_document_prompt_context(context.options)) {
         LoadedDocument document;
         pkchat::Error err = load_document(context.options, false, document);
@@ -1028,7 +1042,11 @@ int main(int argc, char** argv) {
             print_error(err);
             return exit_code_for(err.code);
         }
-        fetched_context_message = document_context_message(document);
+        if (document.input_kind == InputKind::Image) {
+            prompt_images.push_back(std::move(document.image));
+        } else {
+            fetched_context_message = document_context_message(document);
+        }
     }
 
     if (context.options.list_models) {
@@ -1081,7 +1099,8 @@ int main(int argc, char** argv) {
     }
 
     pkchat::provider::ChatResult chat;
-    pkchat::Error err = send_session_turn(context, session, context.options.prompt, *out, chat);
+    pkchat::Error err = send_session_turn(context, session, context.options.prompt, *out, chat,
+                                          std::move(prompt_images));
     if (!err.ok()) {
         print_error(err);
         return exit_code_for(err.code);

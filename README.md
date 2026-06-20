@@ -2,7 +2,7 @@
 
 `pkchat` is a fast, script-friendly command-line chat client for OpenAI and OpenAI-compatible APIs.
 
-Current status: v0.44 CLI with libcurl transport, cancellable runtime jobs, provider registry/profile aliases, `/v1/models`, `/v1/chat/completions`, text-only OpenAI Responses API support, a simple REPL, a standalone `--editor` mode, a full-screen non-blocking TUI foundation, JSON chat save/load, a first v0.5 HTML-to-text/Markdown extraction slice, and Markdown assistant-output rendering to HTML or plaintext.
+Current status: v0.45 CLI with libcurl transport, cancellable runtime jobs, provider registry/profile aliases, `/v1/models`, `/v1/chat/completions`, text-only OpenAI Responses API support, local JPEG/PNG/GIF image input, a simple REPL, a standalone `--editor` mode, a full-screen non-blocking TUI foundation, JSON chat save/load, HTML-to-text/Markdown extraction, and Markdown assistant-output rendering to HTML or plaintext.
 
 ## Build
 
@@ -100,9 +100,12 @@ Input extraction and URL context:
 ./pkchat --fetch-url https://example.com/article --output-format md
 ./pkchat http://localhost:30000 -p "Tee yhteenveto" --fetch-url https://yle.fi/uutiset/lyhyesti/74-20232138
 ./pkchat http://localhost:30000 -s "Vastaa suomeksi" -p "Tee yhteenveto" --input page.html
+./pkchat http://localhost:30000 -p "Describe this image" --input photo.png
 ```
 
-`--input PATH` reads local `.txt`, `.md`/`.markdown`, and `.html`/`.htm` files, choosing the parser from the path ending. `--input` and `--fetch-url` by themselves are explicit extraction modes: they print converted content to `stdout` and do not contact a model. In standalone extraction, `--output-format md|html|plaintext|json|jsond|ndjson` controls the output; `html` writes a fragment to `stdout` or a complete HTML document with `--output PATH`. When either option is combined with `-p`/`--prompt` or `--prompt-file` in non-interactive CLI mode, `pkchat` sends the extracted input as a separate user-context message before the final prompt, while any `-s`/`--system` or `--system-file` remains the system prompt. The older `--html-file` option remains accepted as a compatibility alias for local HTML input.
+`--input PATH` classifies extensions case-insensitively. It reads local `.txt`, `.md`/`.markdown`, and `.html`/`.htm` documents, or attaches `.png`, `.jpg`, `.jpeg`, and `.gif` images. Document inputs can be extracted without a model; image inputs require `-p`/`--prompt` and non-interactive Chat Completions mode. Images are signature-checked, capped at 20 MiB by default (`--max-image-bytes N`), base64-encoded into an OpenAI-compatible `image_url` data URL, and released after the request. Saved chat JSON keeps the prompt but does not embed image bytes. WebP input is disabled because common tested vision models do not decode it reliably, and `.webm` is a video container rather than an image.
+
+`--input` and `--fetch-url` by themselves are explicit document extraction modes: they print converted content to `stdout` and do not contact a model. In standalone extraction, `--output-format md|html|plaintext|json|jsond|ndjson` controls the output; `html` writes a fragment to `stdout` or a complete HTML document with `--output PATH`. When a document input is combined with `-p`/`--prompt` or `--prompt-file` in non-interactive CLI mode, `pkchat` sends the extracted input as a separate user-context message before the final prompt, while any `-s`/`--system` or `--system-file` remains the system prompt. The older `--html-file` option remains accepted as a compatibility alias for local HTML input.
 
 The first HTML parser lives in `src/html/` and handles simple text extraction, including `h1`, `h2`, `strong`/`b`, `em`/`i`/`italic`, and `a href` links in Markdown output. Fetching uses libcurl, browser-style `User-Agent`/`Accept` headers, a default 1 MiB body limit, a default 30 second total timeout for this mode, HTML content-type checks, and no redirect following. Private, loopback, link-local, multicast, and common metadata-service literal hosts are blocked by default; use `--allow-private-url-fetch` only for explicit local testing. Input must be UTF-8; legacy charsets such as Windows-1251 or GBK are rejected with a clear error until charset conversion is implemented. JavaScript-rendered pages are not supported.
 
@@ -190,7 +193,7 @@ If Valgrind is not installed, `make leak-check` falls back to the sanitizer test
 ## Current Limitations
 
 - Streaming chat and Responses API events are parsed incrementally as SSE through libcurl write callbacks.
-- Responses API support is currently text-only; images, files, tools, and provider-side context management remain disabled in client capabilities until implemented.
+- Responses API support is currently text-only. Local image input currently uses the Chat Completions `image_url` content-part schema only.
 - Capability probing is not yet implemented; built-in profile capabilities are registry-defined, and `--responses-url` is the explicit override for non-OpenAI Responses endpoints.
 - The JSON facade is intentionally small and scoped to the current CLI/provider needs.
 - HTML extraction is intentionally simple: no JavaScript execution, no full DOM implementation, no charset conversion yet, and no DNS-level private-address verification yet. Non-UTF-8 input is rejected instead of transcoded.

@@ -12,6 +12,7 @@
 #include "cli/args.hpp"
 #include "editor/editor.hpp"
 #include "html/html.hpp"
+#include "input/input.hpp"
 #include "json/json.hpp"
 #include "markdown/markdown.hpp"
 #include "provider/provider.hpp"
@@ -119,6 +120,122 @@ void test_cli_html_extract_parse() {
     check(parsed.error.ok(), "legacy HTML file args parse");
     check(parsed.options.html_file == "page.html", "legacy HTML file path parsed");
     check(parsed.options.html_format == "text", "legacy HTML text format parsed");
+
+    const char* image_argv[] = {"pkchat", "--input", "PHOTO.JPEG", "--max-image-bytes", "4096", "-p", "describe"};
+    parsed = pkchat::cli::parse_args(7, const_cast<char**>(image_argv));
+    check(parsed.error.ok(), "image input args parse");
+    check(parsed.options.input_path == "PHOTO.JPEG", "image input path parsed");
+    check(parsed.options.max_image_bytes == 4096, "image byte limit parsed");
+}
+
+void test_input_file_type_classification() {
+    struct Case {
+        const char* path;
+        pkchat::input::Kind kind;
+        const char* mime_type;
+    };
+    const Case cases[] = {
+        {"README.MD", pkchat::input::Kind::Markdown, "text/markdown"},
+        {"notes.TxT", pkchat::input::Kind::Plaintext, "text/plain"},
+        {"page.HTML", pkchat::input::Kind::Html, "text/html"},
+        {"image.PnG", pkchat::input::Kind::Image, "image/png"},
+        {"photo.JPG", pkchat::input::Kind::Image, "image/jpeg"},
+        {"photo.JpEg", pkchat::input::Kind::Image, "image/jpeg"},
+        {"animation.GIF", pkchat::input::Kind::Image, "image/gif"},
+    };
+    for (const Case& item : cases) {
+        pkchat::input::FileType type;
+        const pkchat::Error err = pkchat::input::classify_file_type(item.path, type);
+        check(err.ok(), std::string("input extension classifies: ") + item.path);
+        check(type.kind == item.kind, std::string("input kind matches: ") + item.path);
+        check(type.mime_type == item.mime_type, std::string("input MIME type matches: ") + item.path);
+    }
+
+    pkchat::input::FileType type;
+    pkchat::Error err = pkchat::input::classify_file_type("picture.webp", type);
+    check(!err.ok() && err.code == pkchat::ErrorCode::UnsupportedFeature,
+          "WebP is rejected because common models do not support it reliably");
+    err = pkchat::input::classify_file_type("video.webm", type);
+    check(!err.ok() && err.code == pkchat::ErrorCode::UnsupportedFeature,
+          "WebM is rejected instead of treated as an image");
+    err = pkchat::input::classify_file_type("image-without-extension", type);
+    check(!err.ok(), "input without a supported extension is rejected");
+}
+
+void test_image_loading_and_chat_request() {
+    const std::string path = "build/unit-image.PNG";
+    std::string png("\x89PNG\r\n\x1a\n", 8);
+    png += "abc";
+    {
+        std::ofstream output(path, std::ios::binary | std::ios::trunc);
+        output.write(png.data(), static_cast<std::streamsize>(png.size()));
+    }
+
+    pkchat::input::FileType type;
+    pkchat::Error err = pkchat::input::classify_file_type(path, type);
+    check(err.ok(), "uppercase PNG input classifies before loading");
+    pkchat::input::ImageData image;
+    err = pkchat::input::load_image_file(path, type, 1024, image);
+    check(err.ok(), "PNG image loads");
+    check(image.mime_type == "image/png" && image.byte_size == png.size(), "loaded PNG metadata matches");
+    check(image.base64_data == "iVBORw0KGgphYmM=", "PNG bytes use expected base64 encoding");
+
+    pkchat::provider::RequestContext context;
+    context.options.model = "vision-model";
+    context.options.stream = false;
+    std::vector<pkchat::provider::Message> messages = {
+        {"user", "Describe this image", {{image.mime_type, image.base64_data}}},
+    };
+    const std::string request = pkchat::provider::serialize_chat_request(context, messages);
+    pkchat::json::ParseResult parsed = pkchat::json::parse(request);
+    check(parsed.error.ok(), "multimodal Chat Completions request is valid JSON");
+    const pkchat::json::Value* request_messages = parsed.value.get("messages");
+    const pkchat::json::Value* message = request_messages == nullptr ? nullptr : request_messages->at(0);
+    const pkchat::json::Value* content = message == nullptr ? nullptr : message->get("content");
+    check(content != nullptr && content->is_array() && content->array.size() == 2,
+          "multimodal request uses text and image content parts");
+    const pkchat::json::Value* image_url = content == nullptr ? nullptr : content->at(1);
+    image_url = image_url == nullptr ? nullptr : image_url->get("image_url");
+    const pkchat::json::Value* url = image_url == nullptr ? nullptr : image_url->get("url");
+    check(url != nullptr && url->is_string() &&
+              url->string == "data:image/png;base64,iVBORw0KGgphYmM=",
+          "multimodal request embeds the image as a data URL");
+
+    struct ImageCase {
+        const char* path;
+        std::string bytes;
+        const char* mime_type;
+    };
+    const ImageCase image_cases[] = {
+        {"build/unit-image.JPEG", std::string("\xff\xd8\xff", 3) + "jpeg", "image/jpeg"},
+        {"build/unit-image.GiF", "GIF89a-data", "image/gif"},
+    };
+    for (const ImageCase& item : image_cases) {
+        {
+            std::ofstream output(item.path, std::ios::binary | std::ios::trunc);
+            output.write(item.bytes.data(), static_cast<std::streamsize>(item.bytes.size()));
+        }
+        err = pkchat::input::classify_file_type(item.path, type);
+        check(err.ok(), std::string("image loader classifies ") + item.path);
+        err = pkchat::input::load_image_file(item.path, type, 1024, image);
+        check(err.ok() && image.mime_type == item.mime_type,
+              std::string("image loader validates ") + item.mime_type);
+    }
+
+    err = pkchat::input::load_image_file(path, type, 4, image);
+    check(!err.ok() && err.message.find("--max-image-bytes") != std::string::npos,
+          "image loader enforces its byte limit");
+
+    const std::string bad_path = "build/unit-bad.JPG";
+    {
+        std::ofstream output(bad_path, std::ios::binary | std::ios::trunc);
+        output << "not a jpeg";
+    }
+    err = pkchat::input::classify_file_type(bad_path, type);
+    check(err.ok(), "bad JPEG still classifies from its extension");
+    err = pkchat::input::load_image_file(bad_path, type, 1024, image);
+    check(!err.ok() && err.message.find("does not match") != std::string::npos,
+          "image loader rejects mismatched content and extension");
 }
 
 void test_cli_output_format_parse() {
@@ -836,6 +953,8 @@ int main() {
     test_cli_chat_nocolors_parse();
     test_cli_editor_parse();
     test_cli_html_extract_parse();
+    test_input_file_type_classification();
+    test_image_loading_and_chat_request();
     test_cli_output_format_parse();
     test_html_markdown_conversion();
     test_html_text_conversion();

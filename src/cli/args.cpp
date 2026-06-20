@@ -14,6 +14,7 @@ bool needs_value(const std::string& opt) {
         "--provider", "--profile", "--api", "--base-url", "--chat-url", "--models-url", "--responses-url",
         "--key-env", "--key-file", "-k", "--key", "--header", "--connect-timeout", "--timeout",
         "--proxy", "--fetch-url", "--input", "--html-file", "--html-format", "--max-fetch-bytes",
+        "--max-image-bytes",
         "--save-chat", "--load-chat"};
     for (const char* item : with_values) {
         if (opt == item) {
@@ -242,6 +243,11 @@ ParseResult parse_args(int argc, char** argv) {
                 if (!err.ok()) {
                     return {opts, err};
                 }
+            } else if (opt == "--max-image-bytes") {
+                Error err = parse_long(opt, value, opts.max_image_bytes);
+                if (!err.ok()) {
+                    return {opts, err};
+                }
             }
         } else if (!arg.empty() && arg[0] == '-') {
             return {opts, {ErrorCode::BadArgs, "unknown option: " + arg}};
@@ -279,6 +285,7 @@ Examples:
   pkchat --editor notes.txt
   pkchat --fetch-url https://example.com --output-format md
   pkchat --input page.html --output-format plaintext
+  pkchat http://localhost:30000 -p "Describe this image" --input photo.png
   pkchat --prompt-file prompt.txt --system-file system.txt --format json
   pkchat http://localhost:8000 -p "Write a report" --output-format html --output report.html
   pkchat --repl --load-chat chat.json --save-chat chat.json
@@ -300,11 +307,12 @@ Options:
       --chat                    Start the full-screen non-blocking terminal chat.
       --nocolors                Disable TUI color styling.
       --editor                  Start the standalone multiline editor.
-      --input PATH              Read .txt, .md, or .html input for extraction or prompt context.
+      --input PATH              Read text/Markdown/HTML, or attach PNG/JPEG/GIF with -p.
       --fetch-url URL           Fetch HTML for extraction, or as prompt context with -p.
       --html-format text|markdown
                                 Compatibility alias for old HTML extraction commands.
       --max-fetch-bytes N       Default 1048576.
+      --max-image-bytes N       Maximum encoded image input size; default 20971520.
       --allow-private-url-fetch Allow loopback/private URL fetches.
       --save-chat PATH          Save JSON chat history after a successful reply.
       --load-chat PATH          Load JSON chat history before sending.

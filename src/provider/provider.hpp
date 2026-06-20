@@ -2,6 +2,7 @@
 
 #include <functional>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "cli/args.hpp"
@@ -58,9 +59,23 @@ struct RequestContext {
     ApiKind api_kind = ApiKind::ChatCompletions;
 };
 
+struct ImageInput {
+    std::string mime_type;
+    std::string base64_data;
+};
+
 struct Message {
     std::string role;
     std::string content;
+    std::vector<ImageInput> images;
+
+    Message() = default;
+    Message(std::string message_role,
+            std::string message_content,
+            std::vector<ImageInput> message_images = {})
+        : role(std::move(message_role)),
+          content(std::move(message_content)),
+          images(std::move(message_images)) {}
 };
 
 struct ChatResult {
@@ -88,6 +103,7 @@ ContextResult build_context(const cli::Options& options);
 std::vector<Profile> built_in_profiles();
 const Capabilities& capabilities_for(const RequestContext& context);
 std::string active_request_url(const RequestContext& context);
+std::string serialize_chat_request(const RequestContext& context, const std::vector<Message>& messages);
 Error list_models(const RequestContext& context,
                   ModelsResult& result,
                   runtime::CancellationToken cancellation = runtime::CancellationToken());

@@ -1005,6 +1005,8 @@ Safety defaults:
 
 Implementation note (2026-06-17): The first v0.5 slice is present. `src/html/` provides a small C++17 `std::regex` HTML converter with plaintext and Markdown output for simple headings, emphasis, strong text, links, line breaks, and block spacing. `--input` converts supported local `.txt`, `.md`, and `.html` files without contacting a provider. `--html-file` remains a compatibility alias for local HTML. `--fetch-url` uses libcurl to fetch HTML explicitly, applies a response-size cap, a default fetch timeout, content-type checks, no redirect following, and private/loopback/link-local/multicast/common metadata literal-host blocking unless `--allow-private-url-fetch` is set. This slice can inject fetched or local input content into non-interactive chat prompts, but does not yet process JavaScript, convert charsets, check DNS-resolved private addresses, or implement PDF/Word extraction.
 
+Implementation note (2026-06-20): `--input` now classifies supported file endings case-insensitively and accepts PNG, JPEG, and GIF images with a non-interactive prompt. WebP input is intentionally disabled after compatibility tests with common vision models. `src/input/` performs bounded reads, signature checks, and base64 encoding; Chat Completions requests use `image_url` data-URL content parts. Image bytes are temporary and are not persisted in chat JSON. Responses API images, provider/model capability probing, multiple attachments, and REPL/TUI image insertion remain open.
+
 ## Acceptance criteria
 
 - [ ] Context compaction never modifies the full saved transcript destructively.

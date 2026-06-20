@@ -8,8 +8,11 @@ Implemented for built-in OpenAI-compatible profiles:
 - `POST /chat/completions` under the selected base URL, usually `POST /v1/chat/completions`
 - non-streaming responses with `choices[0].message.content`
 - streaming responses with SSE `data:` events and `choices[0].delta.content`
+- local PNG/JPEG/GIF input using user content arrays with `text` and `image_url` data-URL parts
 
 If the user does not provide `-m/--model`, `pkchat` calls the models endpoint before chat starts and uses the first returned model id. If the response has no model ids, the chat request omits the model field and user-facing startup status reports `Model: unknown`.
+
+Image request formatting is implemented by the client, but provider/model capability probing is not. Endpoints may reject or ignore formats their active model cannot decode. Responses API image input is not implemented in this slice.
 
 ## Responses API
 

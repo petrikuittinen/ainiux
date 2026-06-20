@@ -229,8 +229,29 @@ std::string build_chat_request_json(const RequestContext& context, const std::ve
         const std::string content = messages[i].role == "assistant"
                                         ? strip_thinking_blocks_for_request(messages[i].content)
                                         : messages[i].content;
-        json << "{\"role\":" << json::quote(messages[i].role)
-             << ",\"content\":" << json::quote(content) << "}";
+        json << "{\"role\":" << json::quote(messages[i].role) << ",\"content\":";
+        if (messages[i].images.empty()) {
+            json << json::quote(content);
+        } else {
+            json << "[";
+            bool wrote_part = false;
+            if (!content.empty()) {
+                json << "{\"type\":\"text\",\"text\":" << json::quote(content) << "}";
+                wrote_part = true;
+            }
+            for (const ImageInput& image : messages[i].images) {
+                if (wrote_part) {
+                    json << ",";
+                }
+                const std::string data_url =
+                    "data:" + image.mime_type + ";base64," + image.base64_data;
+                json << "{\"type\":\"image_url\",\"image_url\":{\"url\":"
+                     << json::quote(data_url) << "}}";
+                wrote_part = true;
+            }
+            json << "]";
+        }
+        json << "}";
     }
     json << "],";
     json << "\"stream\":" << (o.stream ? "true" : "false");
@@ -1235,6 +1256,10 @@ std::string active_request_url(const RequestContext& context) {
     return context.api_kind == ApiKind::Responses ? context.responses_url : context.chat_url;
 }
 
+std::string serialize_chat_request(const RequestContext& context, const std::vector<Message>& messages) {
+    return build_chat_request_json(context, messages);
+}
+
 Error list_models(const RequestContext& context, ModelsResult& result, runtime::CancellationToken cancellation) {
     http::Request req = base_http_request(context, "GET", context.models_url, cancellation);
     const http::Result http_result = http::perform(req, {context.api_key});
@@ -1260,6 +1285,14 @@ Error send_chat_messages(const RequestContext& context,
     if (cancellation.cancelled()) {
         return {ErrorCode::Cancelled, "chat request cancelled before it started"};
     }
+    if (context.api_kind == ApiKind::Responses) {
+        for (const Message& message : messages) {
+            if (!message.images.empty()) {
+                return {ErrorCode::UnsupportedFeature,
+                        "image input currently supports Chat Completions only; use --api chat"};
+            }
+        }
+    }
     auto start = std::chrono::steady_clock::now();
     bool saw_first_delta = false;
     auto timed_delta = [&](const std::string& delta) -> Error {
@@ -1277,7 +1310,7 @@ Error send_chat_messages(const RequestContext& context,
     const std::string url = active_request_url(context);
     http::Request req = base_http_request(context, "POST", url, cancellation);
     req.body = context.api_kind == ApiKind::Responses ? build_responses_request_json(context, messages)
-                                                      : build_chat_request_json(context, messages);
+                                                      : serialize_chat_request(context, messages);
     SseParser chat_parser;
     ResponsesSseParser responses_parser;
     bool done = false;

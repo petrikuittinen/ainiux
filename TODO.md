@@ -1,5 +1,5 @@
 # TODO
-- Continue v0.5 context/attachment work: DNS-resolved private-address blocking, charset handling, text attachments, context policies, and future `src/pdf/` / `src/word/` extraction modules.
+- Continue v0.5 context/attachment work: provider/model image capability detection, multiple image attachments, interactive image insertion, DNS-resolved private-address blocking, charset handling, text attachments, context policies, and future `src/pdf/` / `src/word/` extraction modules.
 
 - Continue v0.4 provider work: capability probing, provider-specific error normalization, broader Responses API schema coverage, and adapter docs/tests for real providers.
 - Harden the standalone editor with resize tests, multi-panel tests, scroll commands, search, and full Unicode grapheme/cell-width handling.

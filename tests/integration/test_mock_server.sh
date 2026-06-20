@@ -77,6 +77,32 @@ test "$url_system_context" = "url-system-context-ok"
 input_context=$("$ROOT/pkchat" "$BASE" --quiet --no-stream -m "$MODEL" -p "summarize-input" --input "$local_md")
 test "$input_context" = "input-context-ok"
 
+local_png="$ROOT/build/local-image.PnG"
+printf '\211PNG\r\n\032\nmock-image' >"$local_png"
+image_chat_file="$ROOT/build/image-chat.json"
+image_reply=$("$ROOT/pkchat" "$BASE" --quiet --no-stream -m "$MODEL" -p "describe-image" --input "$local_png" --save-chat "$image_chat_file")
+test "$image_reply" = "image-input-ok"
+grep 'describe-image' "$image_chat_file" >/dev/null
+if grep 'data:image/png;base64' "$image_chat_file" >/dev/null; then
+    echo "saved chat must not contain base64 image data" >&2
+    exit 1
+fi
+
+image_extract_err="$ROOT/build/image-extract.err"
+if "$ROOT/pkchat" --input "$local_png" --quiet >"$ROOT/build/image-extract.out" 2>"$image_extract_err"; then
+    echo "standalone image extraction should require a prompt" >&2
+    exit 1
+fi
+grep 'combine --input IMAGE with -p' "$image_extract_err" >/dev/null
+
+webm_err="$ROOT/build/webm-input.err"
+printf 'RIFFmockWEBM' >"$ROOT/build/not-an-image.webm"
+if "$ROOT/pkchat" "$BASE" --quiet --no-stream -m "$MODEL" -p "describe-image" --input "$ROOT/build/not-an-image.webm" >"$ROOT/build/webm-input.out" 2>"$webm_err"; then
+    echo "WebM input should not be classified as an image" >&2
+    exit 1
+fi
+grep 'supported endings' "$webm_err" >/dev/null
+
 legacy_html="$ROOT/build/windows1251-russian.html"
 printf '<h1>\317\360\350\342\345\362</h1>' >"$legacy_html"
 legacy_err="$ROOT/build/nonutf-html.err"

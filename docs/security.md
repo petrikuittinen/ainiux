@@ -33,3 +33,9 @@ Defaults:
 - private/loopback/link-local/multicast/common metadata literal hosts are refused unless `--allow-private-url-fetch` is set
 
 Current limitation: hostname checks are string/IP-literal based. DNS resolution followed by private-address verification is still required before treating arbitrary hostnames as fully protected against local-network probing.
+
+## Local Image Input
+
+Image input is explicit through `--input IMAGE` combined with a prompt. Supported endings are matched case-insensitively and file signatures must match PNG, JPEG, or GIF before data is sent. The default 20 MiB input cap limits both binary reads and subsequent base64 growth; use `--max-image-bytes N` to lower it for constrained environments. WebP input is disabled because tested vision endpoints did not handle it reliably.
+
+Images are embedded in the provider request as data URLs. This sends the complete selected file to the configured model endpoint. Image bytes are held only for request construction and are removed from the in-memory transcript after the call; saved chat files do not contain base64 image data. Image metadata and attachment persistence are deferred to a later schema update.
