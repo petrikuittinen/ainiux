@@ -103,6 +103,8 @@ Input extraction and URL context:
 ./pkchat http://localhost:30000 -p "Describe this image" --input photo.png
 ./pkchat http://localhost:30000 -p "Compare these notes" --attach one.md --attach two.txt
 ./pkchat http://localhost:30000 -p "Compare these images" --attach one.png --attach two.jpg
+printf 'pipeline output\n' | ./pkchat http://localhost:30000 -p "Summarize this" --attach stdin
+generate-report | ./pkchat --input stdin --output-format html --output stdout
 ./pkchat http://localhost:30000 -p "Continue" --load-chat chat.json --context-policy truncate-oldest --max-context-bytes 65536
 ```
 
@@ -111,6 +113,8 @@ Input extraction and URL context:
 `--input` and `--fetch-url` by themselves are explicit document extraction modes: they print converted content to `stdout` and do not contact a model. In standalone extraction, `--output-format md|html|plaintext|json|jsond|ndjson` controls the output; `html` writes a fragment to `stdout` or a complete HTML document with `--output PATH`. When a document input is combined with `-p`/`--prompt` or `--prompt-file` in non-interactive CLI mode, `pkchat` sends the extracted input as a separate user-context message before the final prompt, while any `-s`/`--system` or `--system-file` remains the system prompt. The older `--html-file` option remains accepted as a compatibility alias for local HTML input.
 
 `--attach PATH` is repeatable and adds UTF-8 `.txt`, `.md`, or `.html` context files and PNG/JPEG/GIF images before the final non-interactive prompt. REPL and TUI `/insert PATH` and `/attach PATH` insert text context immediately or queue images for exactly the next prompt; TUI file work is cancellable. `/fetch URL` fetches, validates, converts, and inserts HTML through the same cancellable TUI job and URL safety policy as `--fetch-url`. Local document reads default to a 1 MiB per-file limit; change it with `--max-input-bytes N`. Oversized, unreadable, binary, invalid UTF-8, PDF, DOCX, and unsupported-extension inputs fail with specific errors. PDF and MS Word input/output conversion is deferred.
+
+For pipelines, `--input stdin` and `--attach stdin` read bounded UTF-8 plaintext from standard input. A command may select stdin only once, so these cannot be combined with another stdin-consuming option such as `--prompt-file -` or `--key-stdin`. `--output stdout` writes to standard output and is equivalent to omitting `--output`; status and errors remain on standard error.
 
 Context control is opt-in through `--max-context-bytes N`. `--context-policy error` is the default; `truncate-oldest`, `summarize-oldest`, and `summarize-middle` create a bounded request copy, while `provider-auto` sends the full transcript for provider-side handling. Local summaries are deterministic extracts, not extra model calls. Saved chat messages are never compacted: each compaction is recorded in `compaction_events`, and notices state that the full transcript remains on disk. The byte estimate is a transport-independent guard, not a provider token count.
 

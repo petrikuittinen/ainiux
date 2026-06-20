@@ -70,12 +70,37 @@ input_jsond=$("$ROOT/pkchat" --input "$local_txt" --output-format jsond --quiet)
 printf '%s\n' "$input_jsond" | grep '"event":"content"' >/dev/null
 printf '%s\n' "$input_jsond" | grep 'Plain local input' >/dev/null
 
+stdin_plain=$(printf 'Plain piped input\nSecond line\n' | \
+    "$ROOT/pkchat" --input stdin --quiet)
+printf '%s\n' "$stdin_plain" | grep -F 'Plain piped input' >/dev/null
+
+rm -f "$ROOT/build/stdout"
+stdin_stdout=$(cd "$ROOT/build" && printf '# Piped heading\n' | \
+    "$ROOT/pkchat" --input stdin --output-format html --output stdout --quiet)
+printf '%s\n' "$stdin_stdout" | grep -F '<h1>Piped heading</h1>' >/dev/null
+if printf '%s\n' "$stdin_stdout" | grep -F '<!doctype html>' >/dev/null; then
+    echo "--output stdout should use stdout fragment behavior, not file output behavior" >&2
+    exit 1
+fi
+test ! -e "$ROOT/build/stdout"
+
+stdin_limit_err="$ROOT/build/stdin-limit.err"
+if printf 'too much piped text' | "$ROOT/pkchat" --input stdin --max-input-bytes 4 --quiet \
+    >"$ROOT/build/stdin-limit.out" 2>"$stdin_limit_err"; then
+    echo "oversized stdin input should fail" >&2
+    exit 1
+fi
+grep -- '--max-input-bytes limit of 4 bytes: stdin' "$stdin_limit_err" >/dev/null
+
 url_context=$("$ROOT/pkchat" "$BASE" --quiet --no-stream -m "$MODEL" -p "summarize-url" --fetch-url "$BASE/page" --allow-private-url-fetch)
 test "$url_context" = "url-context-ok"
 url_system_context=$("$ROOT/pkchat" "$BASE" --quiet --no-stream -m "$MODEL" -s "url-system" -p "summarize-url-system" --fetch-url "$BASE/page" --allow-private-url-fetch)
 test "$url_system_context" = "url-system-context-ok"
 input_context=$("$ROOT/pkchat" "$BASE" --quiet --no-stream -m "$MODEL" -p "summarize-input" --input "$local_md")
 test "$input_context" = "input-context-ok"
+stdin_input_context=$(printf 'Local Input Title from a pipeline\n' | \
+    "$ROOT/pkchat" "$BASE" --quiet --no-stream -m "$MODEL" -p "summarize-input" --input stdin)
+test "$stdin_input_context" = "input-context-ok"
 
 attachment_md="$ROOT/build/attachment-alpha.MD"
 attachment_txt="$ROOT/build/attachment-beta.TxT"
@@ -87,6 +112,18 @@ attachment_reply=$("$ROOT/pkchat" "$BASE" --quiet --no-stream -m "$MODEL" -p "su
 test "$attachment_reply" = "attachments-ok"
 grep 'Attachment Alpha' "$attachment_chat_file" >/dev/null
 grep 'Attachment Beta' "$attachment_chat_file" >/dev/null
+
+stdin_attachment_reply=$(printf 'Attachment Alpha and Attachment Beta from a pipeline\n' | \
+    "$ROOT/pkchat" "$BASE" --quiet --no-stream -m "$MODEL" -p "summarize-attachments" --attach stdin)
+test "$stdin_attachment_reply" = "attachments-ok"
+
+stdin_conflict_err="$ROOT/build/stdin-conflict.err"
+if printf 'one stream' | "$ROOT/pkchat" "$BASE" --quiet --no-stream -m "$MODEL" \
+    --prompt-file - --attach stdin >"$ROOT/build/stdin-conflict.out" 2>"$stdin_conflict_err"; then
+    echo "multiple stdin consumers should fail" >&2
+    exit 1
+fi
+grep 'stdin can only be consumed once' "$stdin_conflict_err" >/dev/null
 
 attach_without_prompt_err="$ROOT/build/attach-without-prompt.err"
 if "$ROOT/pkchat" "$BASE" --quiet --no-stream -m "$MODEL" --attach "$attachment_txt" \

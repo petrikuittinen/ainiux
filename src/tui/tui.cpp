@@ -962,6 +962,10 @@ int run(provider::RequestContext context, chat::Session session) {
             status = "Usage: /insert PATH or /attach PATH";
             return;
         }
+        if (path == "stdin") {
+            status = "stdin input is only supported by non-interactive --input and --attach";
+            return;
+        }
         input::FileType type;
         Error type_error = input::classify_file_type(path, type);
         if (!type_error.ok()) {

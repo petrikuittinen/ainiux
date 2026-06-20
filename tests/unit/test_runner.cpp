@@ -162,6 +162,7 @@ void test_input_file_type_classification() {
         {"photo.JPG", pkchat::input::Kind::Image, "image/jpeg"},
         {"photo.JpEg", pkchat::input::Kind::Image, "image/jpeg"},
         {"animation.GIF", pkchat::input::Kind::Image, "image/gif"},
+        {"stdin", pkchat::input::Kind::Plaintext, "text/plain"},
     };
     for (const Case& item : cases) {
         pkchat::input::FileType type;

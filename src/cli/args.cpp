@@ -311,6 +311,8 @@ Examples:
   pkchat --editor notes.txt
   pkchat --fetch-url https://example.com --output-format md
   pkchat --input page.html --output-format plaintext
+  printf 'piped text' | pkchat --input stdin --output stdout
+  command | pkchat http://localhost:8000 -p "Summarize" --attach stdin
   pkchat http://localhost:8000 -p "Compare these" --attach one.md --attach two.txt
   pkchat http://localhost:30000 -p "Describe this image" --input photo.png
   pkchat --prompt-file prompt.txt --system-file system.txt --format json
@@ -329,13 +331,15 @@ Options:
       --stream | --no-stream
       --format text|json|ndjson|jsond
       --output-format html|md|plaintext|json|jsond|ndjson
-      --output PATH
+      --output PATH             Use 'stdout' to write to standard output.
       --repl, -i                Start a simple line-oriented interactive chat.
       --chat                    Start the full-screen non-blocking terminal chat.
       --nocolors                Disable TUI color styling.
       --editor                  Start the standalone multiline editor.
-      --input PATH              Read text/Markdown/HTML, or attach PNG/JPEG/GIF with -p.
-      --attach PATH             Add text/Markdown/HTML or PNG/JPEG/GIF; repeatable.
+      --input PATH              Read text/Markdown/HTML, or attach PNG/JPEG/GIF with -p;
+                                'stdin' reads UTF-8 plaintext from standard input.
+      --attach PATH             Add text/Markdown/HTML or PNG/JPEG/GIF; repeatable;
+                                'stdin' reads UTF-8 plaintext from standard input.
       --fetch-url URL           Fetch HTML for extraction, or as prompt context with -p.
       --html-format text|markdown
                                 Compatibility alias for old HTML extraction commands.

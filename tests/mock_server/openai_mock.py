@@ -181,21 +181,21 @@ class Handler(BaseHTTPRequestHandler):
         input_context_seen = any(
             isinstance(message, dict)
             and isinstance(message.get("content"), str)
-            and "Input context from file" in message.get("content", "")
+            and "Input context from" in message.get("content", "")
             and "Local Input Title" in message.get("content", "")
             for message in messages
         )
         attachment_alpha_seen = any(
             isinstance(message, dict)
             and isinstance(message.get("content"), str)
-            and "Input context from file" in message.get("content", "")
+            and "Input context from" in message.get("content", "")
             and "Attachment Alpha" in message.get("content", "")
             for message in messages
         )
         attachment_beta_seen = any(
             isinstance(message, dict)
             and isinstance(message.get("content"), str)
-            and "Input context from file" in message.get("content", "")
+            and "Input context from" in message.get("content", "")
             and "Attachment Beta" in message.get("content", "")
             for message in messages
         )

@@ -3,6 +3,7 @@
 #include <array>
 #include <fstream>
 #include <initializer_list>
+#include <iostream>
 #include <string>
 #include <utility>
 
@@ -86,6 +87,10 @@ std::string base64_encode(const std::string& data) {
 }  // namespace
 
 Error classify_file_type(const std::string& path, FileType& type) {
+    if (path == "stdin") {
+        type = {Kind::Plaintext, "plaintext", "text/plain"};
+        return ok_error();
+    }
     if (path == "-") {
         return {ErrorCode::BadArgs,
                 "--input - cannot infer a file type from the path ending; use a path with a supported extension"};
@@ -194,18 +199,23 @@ Error load_text_context_file(const std::string& path,
                 "text insertion supports .txt, .md, and .html files; attach images to a prompt instead: " + path};
     }
 
-    std::ifstream file(path, std::ios::binary);
-    if (!file) {
-        return {ErrorCode::FileRead, "could not open " + type.name + " for reading: " + path};
+    std::ifstream file;
+    std::istream* input = &std::cin;
+    if (path != "stdin") {
+        file.open(path, std::ios::binary);
+        if (!file) {
+            return {ErrorCode::FileRead, "could not open " + type.name + " for reading: " + path};
+        }
+        input = &file;
     }
     std::string body;
     std::array<char, 8192> buffer{};
-    while (file) {
+    while (*input) {
         if (cancellation.cancelled()) {
             return {ErrorCode::Cancelled, "text insertion cancelled: " + path};
         }
-        file.read(buffer.data(), static_cast<std::streamsize>(buffer.size()));
-        const std::streamsize count = file.gcount();
+        input->read(buffer.data(), static_cast<std::streamsize>(buffer.size()));
+        const std::streamsize count = input->gcount();
         if (count <= 0) {
             break;
         }
@@ -217,19 +227,24 @@ Error load_text_context_file(const std::string& path,
         }
         body.append(buffer.data(), chunk_size);
     }
-    if (file.bad()) {
-        return {ErrorCode::FileRead, "could not read " + type.name + ": " + path};
+    if (input->bad()) {
+        return {ErrorCode::FileRead,
+                path == "stdin" ? "could not read plaintext from stdin"
+                                : "could not read " + type.name + ": " + path};
     }
     const size_t nul = body.find('\0');
     if (nul != std::string::npos) {
         return {ErrorCode::UnsupportedFeature,
-                "input appears to be binary: file " + path + " contains a NUL byte at offset " +
+                "input appears to be binary: " +
+                    (path == "stdin" ? std::string("stdin") : "file " + path) +
+                    " contains a NUL byte at offset " +
                     std::to_string(nul)};
     }
     size_t invalid_offset = 0;
     if (!html::is_valid_utf8(body, &invalid_offset)) {
         return {ErrorCode::UnsupportedFeature,
-                "Input expects UTF-8 text; charset conversion is not implemented yet for file " + path +
+                "Input expects UTF-8 text; charset conversion is not implemented yet for " +
+                    (path == "stdin" ? std::string("stdin") : "file " + path) +
                     " (invalid byte at offset " + std::to_string(invalid_offset) +
                     "). Convert the document to UTF-8 and try again."};
     }
@@ -238,7 +253,7 @@ Error load_text_context_file(const std::string& path,
     }
 
     TextContext loaded;
-    loaded.source = "file " + path;
+    loaded.source = path == "stdin" ? "stdin" : "file " + path;
     loaded.kind = type.kind;
     loaded.content = type.kind == Kind::Html ? html::convert(body, html::OutputFormat::Markdown) : std::move(body);
     if (cancellation.cancelled()) {

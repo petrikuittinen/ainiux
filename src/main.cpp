@@ -62,7 +62,7 @@ void print_error(const pkchat::Error& error) {
 }
 
 std::ostream* output_stream(const pkchat::cli::Options& options, std::ofstream& file, pkchat::Error& error) {
-    if (options.output_path.empty()) {
+    if (options.output_path.empty() || options.output_path == "stdout") {
         return &std::cout;
     }
     file.open(options.output_path, std::ios::binary | std::ios::trunc);
@@ -90,7 +90,7 @@ pkchat::Error read_local_file(const std::string& path,
                               std::string& body) {
     std::ifstream file;
     std::istream* input = &std::cin;
-    if (path != "-") {
+    if (path != "stdin") {
         file.open(path, std::ios::binary);
         if (!file) {
             return {pkchat::ErrorCode::FileRead, "could not open " + description + " for reading: " + path};
@@ -110,13 +110,13 @@ pkchat::Error read_local_file(const std::string& path,
         if (loaded.size() > max_bytes || chunk_size > max_bytes - loaded.size()) {
             return {pkchat::ErrorCode::UnsupportedFeature,
                     description + " exceeds --max-input-bytes limit of " + std::to_string(max_bytes) +
-                        " bytes: " + (path == "-" ? std::string("stdin") : path)};
+                        " bytes: " + (path == "stdin" ? std::string("stdin") : path)};
         }
         loaded.append(buffer.data(), chunk_size);
     }
     if (input->bad()) {
         return {pkchat::ErrorCode::FileRead,
-                "could not read " + description + (path == "-" ? std::string(" from stdin") : ": " + path)};
+                "could not read " + description + (path == "stdin" ? std::string(" from stdin") : ": " + path)};
     }
     body = std::move(loaded);
     return pkchat::ok_error();
@@ -194,7 +194,7 @@ std::string document_source_label(const pkchat::cli::Options& options) {
         return "URL " + options.fetch_url;
     }
     const std::string path = local_input_path(options);
-    return path == "-" ? std::string("stdin") : "file " + path;
+    return path == "stdin" ? std::string("stdin") : "file " + path;
 }
 
 pkchat::Error validate_document_source_options(const pkchat::cli::Options& options) {
@@ -206,6 +206,24 @@ pkchat::Error validate_document_source_options(const pkchat::cli::Options& optio
     }
     if (has_local_input_source(options) && local_input_path(options).empty()) {
         return {pkchat::ErrorCode::BadArgs, "--input requires a non-empty path"};
+    }
+    return pkchat::ok_error();
+}
+
+pkchat::Error validate_stdin_sources(const pkchat::cli::Options& options) {
+    size_t consumers = 0;
+    consumers += local_input_path(options) == "stdin" ? 1U : 0U;
+    consumers += options.prompt_file == "-" ? 1U : 0U;
+    consumers += options.system_file == "-" ? 1U : 0U;
+    consumers += options.key_stdin ? 1U : 0U;
+    consumers += options.key_file == "-" ? 1U : 0U;
+    for (const std::string& path : options.attachment_paths) {
+        consumers += path == "stdin" ? 1U : 0U;
+    }
+    if (consumers > 1) {
+        return {pkchat::ErrorCode::BadArgs,
+                "stdin can only be consumed once; use one of --input stdin, --attach stdin, "
+                "--prompt-file -, --system-file -, --key-file -, or --key-stdin"};
     }
     return pkchat::ok_error();
 }
@@ -366,7 +384,7 @@ pkchat::Error load_document(const pkchat::cli::Options& options, bool standalone
     document.output_format = document_output_format(options, document.input_kind, standalone);
     const bool complete_html_document = standalone &&
                                         document.output_format == pkchat::markdown::OutputFormat::Html &&
-                                        !options.output_path.empty();
+                                        !options.output_path.empty() && options.output_path != "stdout";
     document.converted = render_document_body(body, document.input_kind, document.output_format, complete_html_document);
     return pkchat::ok_error();
 }
@@ -423,7 +441,7 @@ pkchat::Error load_text_context_file(const pkchat::cli::Options& options,
     if (!err.ok()) {
         return err;
     }
-    document.source = "file " + path;
+    document.source = std::move(loaded.source);
     document.input_kind = loaded.kind;
     document.output_format = loaded.kind == InputKind::Plaintext
                                  ? pkchat::markdown::OutputFormat::Plaintext
@@ -566,7 +584,7 @@ void write_rendered_assistant_output(const pkchat::cli::Options& options,
                                      const std::string& content,
                                      std::ostream& out) {
     const bool complete_html_document = options.output_format == pkchat::markdown::OutputFormat::Html &&
-                                        !options.output_path.empty();
+                                        !options.output_path.empty() && options.output_path != "stdout";
     const std::string rendered = pkchat::markdown::render(content, options.output_format, complete_html_document);
     out << rendered;
     if (rendered.empty() || rendered.back() != '\n') {
@@ -789,6 +807,10 @@ int run_repl(pkchat::provider::RequestContext context, pkchat::chat::Session ses
                     std::cerr << "Usage: /insert PATH or /attach PATH\n";
                     continue;
                 }
+                if (path == "stdin") {
+                    std::cerr << "stdin input is only supported by non-interactive --input and --attach\n";
+                    continue;
+                }
                 pkchat::input::FileType type;
                 pkchat::Error err = pkchat::input::classify_file_type(path, type);
                 if (!err.ok()) {
@@ -881,6 +903,11 @@ int main(int argc, char** argv) {
     if (options.version) {
         std::cout << "pkchat " << pkchat::kVersion << "\n";
         return 0;
+    }
+    pkchat::Error stdin_error = validate_stdin_sources(options);
+    if (!stdin_error.ok()) {
+        print_error(stdin_error);
+        return exit_code_for(stdin_error.code);
     }
     if (!options.attachment_paths.empty()) {
         for (const std::string& path : options.attachment_paths) {

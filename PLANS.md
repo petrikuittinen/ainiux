@@ -1016,6 +1016,8 @@ Implementation note (2026-06-20): The remaining core slice adds repeated mixed t
 
 Implementation note (2026-06-20): Interactive `/insert PATH` and `/attach PATH` now accept text or supported images in REPL/TUI. Images are queued for exactly the next prompt and remain request-only. `/fetch URL` inserts safely fetched Markdown; TUI fetching uses the runtime job and cancellation token. TUI `/help` now renders a persistent UI-only command panel instead of a transient status line.
 
+Implementation note (2026-06-20): Non-interactive `--input stdin` and `--attach stdin` accept bounded UTF-8 plaintext from standard input, with validation preventing multiple options from consuming the same stream. `--output stdout` explicitly selects standard output for pipeline composition.
+
 ## Acceptance criteria
 
 - [x] Context compaction never modifies the full saved transcript destructively.
