@@ -188,6 +188,25 @@ bool plausible_html_tag_at(const std::string& input, size_t pos, size_t& end) {
     return true;
 }
 
+size_t find_matching_square_bracket(const std::string& input, size_t open) {
+    if (open >= input.size() || input[open] != '[') {
+        return std::string::npos;
+    }
+    size_t depth = 0;
+    for (size_t i = open; i < input.size(); ++i) {
+        if (input[i] == '\\') {
+            ++i;
+            continue;
+        }
+        if (input[i] == '[') {
+            ++depth;
+        } else if (input[i] == ']' && --depth == 0) {
+            return i;
+        }
+    }
+    return std::string::npos;
+}
+
 std::string render_inline(const std::string& input, RenderMode mode, int depth = 0) {
     if (depth > 32) {
         return mode == RenderMode::Html ? escape_html_text(input) : decode_basic_entities(input);
@@ -210,9 +229,31 @@ std::string render_inline(const std::string& input, RenderMode mode, int depth =
             }
         }
 
+        if (input.compare(i, 2, "![") == 0) {
+            const size_t label_end = find_matching_square_bracket(input, i + 1);
+            if (label_end != std::string::npos && input.compare(label_end, 2, "](") == 0) {
+                const size_t url_end = input.find(')', label_end + 2);
+                if (url_end != std::string::npos) {
+                    const std::string label = input.substr(i + 2, label_end - i - 2);
+                    const std::string url = input.substr(label_end + 2, url_end - label_end - 2);
+                    if (mode == RenderMode::Html) {
+                        out += "<img src=\"" + escape_html_attr(url) + "\" alt=\"" +
+                               escape_html_attr(label) + "\">";
+                    } else {
+                        out += label;
+                        if (!url.empty()) {
+                            out += " (" + url + ")";
+                        }
+                    }
+                    i = url_end + 1;
+                    continue;
+                }
+            }
+        }
+
         if (input[i] == '[') {
-            const size_t label_end = input.find("](", i + 1);
-            if (label_end != std::string::npos) {
+            const size_t label_end = find_matching_square_bracket(input, i);
+            if (label_end != std::string::npos && input.compare(label_end, 2, "](") == 0) {
                 const size_t url_end = input.find(')', label_end + 2);
                 if (url_end != std::string::npos) {
                     const std::string label = input.substr(i + 1, label_end - i - 1);

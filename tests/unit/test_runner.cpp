@@ -3,6 +3,7 @@
 #include <cstdlib>
 #include <fstream>
 #include <iostream>
+#include <iterator>
 #include <string>
 #include <thread>
 #include <vector>
@@ -26,6 +27,12 @@ void check(bool condition, const std::string& message) {
         std::cerr << "FAIL: " << message << "\n";
         ++failures;
     }
+}
+
+std::string read_fixture(const std::string& path) {
+    std::ifstream input(path, std::ios::binary);
+    check(input.is_open(), "fixture opens: " + path);
+    return std::string(std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>());
 }
 
 void test_cli_parse() {
@@ -281,6 +288,63 @@ void test_markdown_plaintext_and_document_rendering() {
     check(doc.find(R"PK(<meta charset="utf-8">)PK") != std::string::npos, "Markdown HTML document includes charset");
     check(doc.find(R"PK(name="viewport")PK") != std::string::npos, "Markdown HTML document includes viewport");
     check(doc.find("<h1>Saved</h1>") != std::string::npos, "Markdown HTML document includes rendered body");
+}
+
+void test_comprehensive_markdown_to_html_fixture() {
+    const std::string input = read_fixture("tests/fixtures/comprehensive.md");
+    const std::string output = pkchat::markdown::to_html_document(input);
+
+    check(output.find("<h1>Comprehensive Markdown Fixture</h1>") != std::string::npos,
+          "comprehensive Markdown converts level-one heading");
+    check(output.find("<h2>Lists And Structure</h2>") != std::string::npos &&
+              output.find("<h3>Third-Level Heading</h3>") != std::string::npos,
+          "comprehensive Markdown converts three heading levels");
+    check(output.find("<strong>bold text</strong>") != std::string::npos &&
+              output.find("<em>italic text</em>") != std::string::npos &&
+              output.find("<u>underlined text</u>") != std::string::npos,
+          "comprehensive Markdown converts inline formatting");
+    check(output.find("<ul>") != std::string::npos && output.find("<ol>") != std::string::npos,
+          "comprehensive Markdown converts ordered and unordered lists");
+    check(output.find(R"PK(<a href="https://example.com/docs?lang=en&amp;mode=test">normal link</a>)PK") !=
+              std::string::npos,
+          "comprehensive Markdown converts and escapes links");
+    check(output.find(R"PK(<a href="https://example.com/gallery"><img src="https://example.com/assets/placeholder.png" alt="A linked placeholder image"></a>)PK") !=
+              std::string::npos,
+          "comprehensive Markdown converts a linked image");
+    check(output.find("你好，世界") != std::string::npos && output.find("مرحبا بالعالم") != std::string::npos &&
+              output.find("😀 🚀 ✅") != std::string::npos,
+          "comprehensive Markdown preserves multilingual UTF-8 and emoji");
+    check(output.find(R"PK(<code class="language-javascript">)PK") != std::string::npos &&
+              output.find("<table>") != std::string::npos,
+          "comprehensive Markdown converts fenced code and a table");
+}
+
+void test_comprehensive_html_to_markdown_fixture() {
+    const std::string input = read_fixture("tests/fixtures/comprehensive.html");
+    const std::string output = pkchat::html::convert(input, pkchat::html::OutputFormat::Markdown);
+
+    check(output.find("# Comprehensive HTML Fixture") != std::string::npos,
+          "comprehensive HTML converts level-one heading");
+    check(output.find("## Languages And Emoji") != std::string::npos &&
+              output.find("### Multilingual Content") != std::string::npos,
+          "comprehensive HTML converts three heading levels");
+    check(output.find("**bold text**") != std::string::npos && output.find("*italic text*") != std::string::npos &&
+              output.find("++underlined text++") != std::string::npos,
+          "comprehensive HTML converts inline formatting");
+    check(output.find("- First item") != std::string::npos &&
+              output.find("1. Prepare the fixture") != std::string::npos &&
+              output.find("3. Verify the result ✅") != std::string::npos,
+          "comprehensive HTML converts ordered and unordered lists");
+    check(output.find("[a normal link](https://example.com/docs?lang=en&mode=test)") != std::string::npos,
+          "comprehensive HTML converts links and decodes entities");
+    check(output.find("[![A linked placeholder image](https://example.com/assets/placeholder.png)](https://example.com/gallery)") !=
+              std::string::npos,
+          "comprehensive HTML converts a linked image");
+    check(output.find("你好，世界") != std::string::npos && output.find("مرحبا بالعالم") != std::string::npos &&
+              output.find("😀 🚀 ✅") != std::string::npos,
+          "comprehensive HTML preserves multilingual UTF-8 and emoji");
+    check(output.find("fixtureGreeting") == std::string::npos && output.find("color-scheme") == std::string::npos,
+          "comprehensive HTML excludes script and style contents");
 }
 
 void test_editor_piece_table_edits() {
@@ -780,6 +844,8 @@ int main() {
     test_html_utf8_validation();
     test_markdown_html_rendering();
     test_markdown_plaintext_and_document_rendering();
+    test_comprehensive_markdown_to_html_fixture();
+    test_comprehensive_html_to_markdown_fixture();
     test_cli_responses_parse();
     test_url_normalization();
     test_json_parse();

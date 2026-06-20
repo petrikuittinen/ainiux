@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Comprehensive HTML Fixture</title>
+  <style>
+    :root { color-scheme: light dark; }
+    body { font-family: monospace; line-height: 1.5; }
+    .highlight { background: #ffe58f; padding: 0.1rem 0.25rem; }
+  </style>
+  <script>
+    function fixtureGreeting(name) {
+      return `Hello, ${name}!`;
+    }
+    document.addEventListener("DOMContentLoaded", function () {
+      document.body.dataset.fixtureReady = "true";
+      console.log(fixtureGreeting("pkchat"));
+    });
+  </script>
+</head>
+<body>
+  <header>
+    <h1>Comprehensive HTML Fixture</h1>
+    <p>This page exercises <strong>bold text</strong>, <em>italic text</em>,
+      <u>underlined text</u>, <code>inline code</code>, and
+      <a href="https://example.com/docs?lang=en&amp;mode=test">a normal link</a>.</p>
+  </header>
+
+  <main>
+    <section>
+      <h2>Languages And Emoji</h2>
+      <h3>Multilingual Content</h3>
+      <p>English: The quick brown fox tests a portable HTML converter.</p>
+      <p lang="zh">Chinese: 你好，世界！这是一个 HTML 转换测试。</p>
+      <p lang="ar" dir="rtl">Arabic: مرحبا بالعالم! هذا اختبار لتحويل HTML.</p>
+      <p>Emoji: 😀 🚀 ✅ 🌍 👨‍👩‍👧‍👦</p>
+    </section>
+
+    <section>
+      <h2>Lists</h2>
+      <h3>Unordered List</h3>
+      <ul>
+        <li>First item</li>
+        <li>Second item with <strong>bold content</strong>
+          <ul>
+            <li>Nested Chinese item: 嵌套项目</li>
+            <li>Nested Arabic item: عنصر متداخل</li>
+          </ul>
+        </li>
+        <li>Final item with an <a href="https://example.com/list">inline link</a></li>
+      </ul>
+
+      <h3>Ordered List</h3>
+      <ol>
+        <li>Prepare the fixture</li>
+        <li>Convert the document
+          <ol>
+            <li>Preserve Unicode</li>
+            <li>Preserve structure</li>
+          </ol>
+        </li>
+        <li>Verify the result ✅</li>
+      </ol>
+    </section>
+
+    <section>
+      <h2>Image And Link</h2>
+      <p><a href="https://example.com/gallery"><img
+        src="https://example.com/assets/placeholder.png"
+        alt="A linked placeholder image"></a></p>
+      <p>Standalone image: <img src="https://example.com/assets/standalone.png"
+        alt="Standalone placeholder"></p>
+    </section>
+
+    <section>
+      <h2>Quotation, Code, And Table</h2>
+      <blockquote>A quotation with <strong>emphasis</strong>, 你好, مرحبا, and 💬.</blockquote>
+      <pre><code class="language-javascript">function greet(name) {
+  return `Hello, ${name}!`;
+}</code></pre>
+      <table>
+        <thead><tr><th>Feature</th><th>English</th><th>Chinese</th><th>Arabic</th></tr></thead>
+        <tbody>
+          <tr><td>Greeting</td><td>Hello</td><td>你好</td><td>مرحبا</td></tr>
+          <tr><td>Status</td><td>Ready</td><td>已准备好</td><td>جاهز</td></tr>
+        </tbody>
+      </table>
+    </section>
+  </main>
+
+  <footer><p class="highlight">End of comprehensive HTML fixture.</p></footer>
+</body>
+</html>

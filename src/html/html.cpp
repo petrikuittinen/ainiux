@@ -196,10 +196,11 @@ bool is_self_closing_tag(const std::string& tag) {
     return std::regex_search(tag, std::regex(R"(/\s*>$)", std::regex::icase));
 }
 
-std::string href_attribute(const std::string& tag) {
+std::string attribute_value(const std::string& tag, const std::string& name) {
     std::smatch match;
-    static const std::regex href_re(R"PK(\bhref\s*=\s*("([^"]*)"|'([^']*)'|([^\s>]+)))PK", std::regex::icase);
-    if (!std::regex_search(tag, match, href_re)) {
+    const std::regex attribute_re("\\b" + name + R"PK(\s*=\s*("([^"]*)"|'([^']*)'|([^\s>]+)))PK",
+                                  std::regex::icase);
+    if (!std::regex_search(tag, match, attribute_re)) {
         return "";
     }
     if (match[2].matched) {
@@ -209,6 +210,13 @@ std::string href_attribute(const std::string& tag) {
         return decode_entities(match[3].str());
     }
     return decode_entities(match[4].str());
+}
+
+int heading_level(const std::string& name) {
+    if (name.size() == 2 && name[0] == 'h' && name[1] >= '1' && name[1] <= '6') {
+        return name[1] - '0';
+    }
+    return 0;
 }
 
 class Writer {
@@ -264,7 +272,7 @@ class Writer {
     void heading_prefix(int level) {
         blank_line();
         if (format_ == OutputFormat::Markdown) {
-            out_ += level == 1 ? "# " : "## ";
+            out_ += std::string(static_cast<size_t>(level), '#') + " ";
         }
     }
 
@@ -293,6 +301,32 @@ class Writer {
         if (format_ == OutputFormat::Markdown) {
             trim_trailing_spaces();
             out_ += "*";
+        }
+    }
+
+    void open_underline() {
+        flush_pending_space();
+        if (format_ == OutputFormat::Markdown) {
+            out_ += "++";
+        }
+    }
+
+    void close_underline() {
+        if (format_ == OutputFormat::Markdown) {
+            trim_trailing_spaces();
+            out_ += "++";
+        }
+    }
+
+    void append_image(const std::string& src, const std::string& alt) {
+        flush_pending_space();
+        if (format_ == OutputFormat::Markdown) {
+            out_ += "![" + markdown_escape_text(alt) + "](" + markdown_escape_url(src) + ")";
+        } else {
+            out_ += alt;
+            if (!src.empty()) {
+                out_ += " (" + src + ")";
+            }
         }
     }
 
@@ -499,6 +533,11 @@ std::string convert(const std::string& input, OutputFormat format) {
     static const std::regex tag_re(R"(<[^>]+>)");
     std::sregex_iterator it(cleaned.begin(), cleaned.end(), tag_re);
     const std::sregex_iterator end;
+    struct ListState {
+        bool ordered = false;
+        size_t next_number = 1;
+    };
+    std::vector<ListState> lists;
     size_t pos = 0;
     for (; it != end; ++it) {
         const std::smatch& match = *it;
@@ -515,22 +554,33 @@ std::string convert(const std::string& input, OutputFormat format) {
             continue;
         }
         if (!closing) {
-            if (name == "h1") {
-                writer.heading_prefix(1);
-            } else if (name == "h2") {
-                writer.heading_prefix(2);
+            const int level = heading_level(name);
+            if (level != 0) {
+                writer.heading_prefix(level);
             } else if (name == "br") {
                 writer.newline();
             } else if (name == "strong" || name == "b") {
                 writer.open_strong();
             } else if (name == "em" || name == "i" || name == "italic") {
                 writer.open_emphasis();
+            } else if (name == "u") {
+                writer.open_underline();
             } else if (name == "a") {
-                writer.open_link(href_attribute(tag));
+                writer.open_link(attribute_value(tag, "href"));
+            } else if (name == "img") {
+                writer.append_image(attribute_value(tag, "src"), attribute_value(tag, "alt"));
+            } else if (name == "ul" || name == "ol") {
+                writer.blank_line();
+                lists.push_back({name == "ol", 1});
             } else if (name == "li") {
                 writer.newline();
                 if (format == OutputFormat::Markdown) {
-                    writer.append_raw("- ");
+                    writer.append_raw(std::string(lists.empty() ? 0 : (lists.size() - 1) * 2, ' '));
+                    if (!lists.empty() && lists.back().ordered) {
+                        writer.append_raw(std::to_string(lists.back().next_number++) + ". ");
+                    } else {
+                        writer.append_raw("- ");
+                    }
                 }
             } else if (is_block_tag(name)) {
                 writer.blank_line();
@@ -539,16 +589,23 @@ std::string convert(const std::string& input, OutputFormat format) {
                 writer.close_link();
             }
         } else {
-            if (name == "h1" || name == "h2") {
+            if (heading_level(name) != 0) {
                 writer.blank_line();
             } else if (name == "strong" || name == "b") {
                 writer.close_strong();
             } else if (name == "em" || name == "i" || name == "italic") {
                 writer.close_emphasis();
+            } else if (name == "u") {
+                writer.close_underline();
             } else if (name == "a") {
                 writer.close_link();
             } else if (name == "li") {
                 writer.newline();
+            } else if (name == "ul" || name == "ol") {
+                if (!lists.empty()) {
+                    lists.pop_back();
+                }
+                writer.blank_line();
             } else if (is_block_tag(name)) {
                 writer.blank_line();
             }
