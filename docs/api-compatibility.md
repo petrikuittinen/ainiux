@@ -12,7 +12,7 @@ Implemented for built-in OpenAI-compatible profiles:
 
 If the user does not provide `-m/--model`, `pkchat` calls the models endpoint before chat starts and uses the first returned model id. If the response has no model ids, the chat request omits the model field and user-facing startup status reports `Model: unknown`.
 
-Image request formatting is implemented by the client, but provider/model capability probing is not. Endpoints may reject or ignore formats their active model cannot decode. Responses API image input is not implemented in this slice.
+Image request formatting supports multiple input images. In `auto` mode, the client combines registry-level provider capability with recognized vision-model names. Unknown compatible models require `--image-capability allow`, while `deny` disables image input. This is conservative client-side detection rather than a live provider capability protocol; endpoints can still reject formats their active model cannot decode. Responses API image input is not implemented in this slice.
 
 ## Responses API
 

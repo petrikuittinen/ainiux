@@ -76,14 +76,14 @@ class Handler(BaseHTTPRequestHandler):
     def _chat_last_input(self, request):
         messages = request.get("messages", [])
         if not messages or not isinstance(messages[-1], dict):
-            return "", False
+            return "", 0
         content = messages[-1].get("content", "")
         if isinstance(content, str):
-            return content, False
+            return content, 0
         if not isinstance(content, list):
-            return "", False
+            return "", 0
         text = []
-        image_seen = False
+        image_count = 0
         for part in content:
             if not isinstance(part, dict):
                 continue
@@ -91,8 +91,9 @@ class Handler(BaseHTTPRequestHandler):
                 text.append(part["text"])
             if part.get("type") == "image_url" and isinstance(part.get("image_url"), dict):
                 url = part["image_url"].get("url", "")
-                image_seen = isinstance(url, str) and url.startswith("data:image/png;base64,iVBOR")
-        return "".join(text), image_seen
+                if isinstance(url, str) and url.startswith(("data:image/png;base64,", "data:image/jpeg;base64,", "data:image/gif;base64,")):
+                    image_count += 1
+        return "".join(text), image_count
 
     def _handle_responses(self, request):
         if request.get("model") == "":
@@ -166,7 +167,7 @@ class Handler(BaseHTTPRequestHandler):
             self._send(400, json.dumps({"error": {"message": "empty model field"}}))
             return
         messages = request.get("messages", [])
-        last, image_seen = self._chat_last_input(request)
+        last, image_count = self._chat_last_input(request)
         url_context_seen = any(
             isinstance(message, dict)
             and isinstance(message.get("content"), str)
@@ -182,6 +183,26 @@ class Handler(BaseHTTPRequestHandler):
             and isinstance(message.get("content"), str)
             and "Input context from file" in message.get("content", "")
             and "Local Input Title" in message.get("content", "")
+            for message in messages
+        )
+        attachment_alpha_seen = any(
+            isinstance(message, dict)
+            and isinstance(message.get("content"), str)
+            and "Input context from file" in message.get("content", "")
+            and "Attachment Alpha" in message.get("content", "")
+            for message in messages
+        )
+        attachment_beta_seen = any(
+            isinstance(message, dict)
+            and isinstance(message.get("content"), str)
+            and "Input context from file" in message.get("content", "")
+            and "Attachment Beta" in message.get("content", "")
+            for message in messages
+        )
+        inserted_context_seen = any(
+            isinstance(message, dict)
+            and isinstance(message.get("content"), str)
+            and "Inserted Context Marker" in message.get("content", "")
             for message in messages
         )
         system_context_seen = any(
@@ -207,8 +228,14 @@ class Handler(BaseHTTPRequestHandler):
             reply = "url-system-context-ok" if url_context_seen and system_context_seen else "missing-url-system-context"
         elif last == "summarize-input":
             reply = "input-context-ok" if input_context_seen else "missing-input-context"
+        elif last == "summarize-attachments":
+            reply = "attachments-ok" if attachment_alpha_seen and attachment_beta_seen else "missing-attachments"
+        elif last == "summarize-insert":
+            reply = "insert-ok" if inserted_context_seen else "missing-insert"
         elif last == "describe-image":
-            reply = "image-input-ok" if image_seen else "missing-image-input"
+            reply = "image-input-ok" if image_count == 1 else "missing-image-input"
+        elif last == "describe-images":
+            reply = f"images:{image_count}"
         elif last == "previous-assistant":
             reply = ""
             for message in reversed(messages[:-1]):

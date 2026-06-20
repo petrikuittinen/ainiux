@@ -56,6 +56,8 @@ struct Options {
     std::string save_chat_path;
     std::string load_chat_path;
     std::string proxy;
+    std::string context_policy = "error";
+    std::string image_capability = "auto";
     OutputFormat format = OutputFormat::Text;
 
     double temperature = 0.0;
@@ -67,9 +69,12 @@ struct Options {
     long connect_timeout_seconds = 10;
     long timeout_seconds = 0;
     long max_fetch_bytes = 1048576;
+    long max_input_bytes = 1048576;
     long max_image_bytes = 20971520;
+    long max_context_bytes = 0;
 
     std::vector<std::string> headers;
+    std::vector<std::string> attachment_paths;
 };
 
 struct ParseResult {

@@ -4,6 +4,7 @@
 #include <vector>
 
 #include "common.hpp"
+#include "context/context.hpp"
 #include "provider/provider.hpp"
 
 namespace pkchat::chat {
@@ -18,6 +19,7 @@ struct Session {
     std::string settings_json = "{}";
     std::string usage_json = "{}";
     std::vector<provider::Message> messages;
+    std::vector<context::CompactionEvent> compaction_events;
 };
 
 std::string current_timestamp_utc();

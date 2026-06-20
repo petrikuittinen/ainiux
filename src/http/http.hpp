@@ -21,6 +21,7 @@ struct Request {
     std::string proxy;
     bool insecure_tls = false;
     bool trace = false;
+    bool block_private_addresses = false;
     runtime::CancellationToken cancellation;
     long max_body_bytes = 0;
     BodyCallback on_body;

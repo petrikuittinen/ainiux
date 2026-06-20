@@ -1,4 +1,5 @@
 #include <algorithm>
+#include <array>
 #include <cctype>
 #include <fstream>
 #include <iomanip>
@@ -11,6 +12,7 @@
 #include "chat/session.hpp"
 #include "cli/args.hpp"
 #include "common.hpp"
+#include "context/context.hpp"
 #include "editor/editor.hpp"
 #include "html/html.hpp"
 #include "http/http.hpp"
@@ -232,25 +234,41 @@ bool is_private_or_loopback_host(const std::string& raw_host) {
     return false;
 }
 
-pkchat::Error read_local_file(const std::string& path, const std::string& description, std::string& body) {
-    std::ostringstream buffer;
-    if (path == "-") {
-        buffer << std::cin.rdbuf();
-        if (!std::cin.good() && !std::cin.eof()) {
-            return {pkchat::ErrorCode::FileRead, "could not read " + description + " from stdin"};
+pkchat::Error read_local_file(const std::string& path,
+                              const std::string& description,
+                              size_t max_bytes,
+                              std::string& body) {
+    std::ifstream file;
+    std::istream* input = &std::cin;
+    if (path != "-") {
+        file.open(path, std::ios::binary);
+        if (!file) {
+            return {pkchat::ErrorCode::FileRead, "could not open " + description + " for reading: " + path};
         }
-        body = buffer.str();
-        return pkchat::ok_error();
+        input = &file;
     }
-    std::ifstream file(path, std::ios::binary);
-    if (!file) {
-        return {pkchat::ErrorCode::FileRead, "could not open " + description + " for reading: " + path};
+
+    std::string loaded;
+    std::array<char, 8192> buffer{};
+    while (*input) {
+        input->read(buffer.data(), static_cast<std::streamsize>(buffer.size()));
+        const std::streamsize count = input->gcount();
+        if (count <= 0) {
+            break;
+        }
+        const size_t chunk_size = static_cast<size_t>(count);
+        if (loaded.size() > max_bytes || chunk_size > max_bytes - loaded.size()) {
+            return {pkchat::ErrorCode::UnsupportedFeature,
+                    description + " exceeds --max-input-bytes limit of " + std::to_string(max_bytes) +
+                        " bytes: " + (path == "-" ? std::string("stdin") : path)};
+        }
+        loaded.append(buffer.data(), chunk_size);
     }
-    buffer << file.rdbuf();
-    if (!file.good() && !file.eof()) {
-        return {pkchat::ErrorCode::FileRead, "could not read " + description + ": " + path};
+    if (input->bad()) {
+        return {pkchat::ErrorCode::FileRead,
+                "could not read " + description + (path == "-" ? std::string(" from stdin") : ": " + path)};
     }
-    body = buffer.str();
+    body = std::move(loaded);
     return pkchat::ok_error();
 }
 
@@ -292,6 +310,11 @@ pkchat::Error fetch_html_url(const pkchat::cli::Options& options, std::string& b
                 "refusing to fetch private, loopback, link-local, multicast, or metadata URL without "
                 "--allow-private-url-fetch: " + options.fetch_url};
     }
+    if (!options.allow_private_url_fetch && !options.proxy.empty()) {
+        return {pkchat::ErrorCode::BadUrl,
+                "refusing --fetch-url through --proxy because the target DNS address cannot be verified; "
+                "use --allow-private-url-fetch only when the proxy and target are trusted"};
+    }
 
     pkchat::http::Request request;
     request.method = "GET";
@@ -306,6 +329,7 @@ pkchat::Error fetch_html_url(const pkchat::cli::Options& options, std::string& b
     request.proxy = options.proxy;
     request.insecure_tls = options.insecure_tls;
     request.trace = options.trace_http;
+    request.block_private_addresses = !options.allow_private_url_fetch;
     request.max_body_bytes = options.max_fetch_bytes;
 
     pkchat::http::Result result = pkchat::http::perform(request, {});
@@ -388,6 +412,16 @@ pkchat::Error local_input_type_for_options(const pkchat::cli::Options& options,
         return pkchat::ok_error();
     }
     return pkchat::input::classify_file_type(local_input_path(options), type);
+}
+
+pkchat::Error validate_not_binary(const std::string& body, const std::string& source) {
+    const size_t nul = body.find('\0');
+    if (nul != std::string::npos) {
+        return {pkchat::ErrorCode::UnsupportedFeature,
+                "input appears to be binary: " + source + " contains a NUL byte at offset " +
+                    std::to_string(nul)};
+    }
+    return pkchat::ok_error();
 }
 
 pkchat::Error validate_text_utf8(const std::string& body, const std::string& source) {
@@ -499,7 +533,11 @@ pkchat::Error load_document(const pkchat::cli::Options& options, bool standalone
             }
             return pkchat::ok_error();
         }
-        err = read_local_file(local_input_path(options), input_type.name, body);
+        if (options.max_input_bytes <= 0) {
+            return {pkchat::ErrorCode::BadArgs, "--max-input-bytes must be greater than zero"};
+        }
+        err = read_local_file(local_input_path(options), input_type.name,
+                              static_cast<size_t>(options.max_input_bytes), body);
     }
     if (!err.ok()) {
         return err;
@@ -507,6 +545,10 @@ pkchat::Error load_document(const pkchat::cli::Options& options, bool standalone
 
     document.source = document_source_label(options);
     document.input_kind = input_type.kind;
+    err = validate_not_binary(body, document.source);
+    if (!err.ok()) {
+        return err;
+    }
     if (document.input_kind == InputKind::Html) {
         err = validate_html_utf8(body, document.source);
     } else {
@@ -558,6 +600,31 @@ std::string document_context_message(const LoadedDocument& document) {
     message += "\n\n";
     message += document.converted;
     return message;
+}
+
+pkchat::Error load_text_context_file(const pkchat::cli::Options& options,
+                                     const std::string& path,
+                                     const std::string& option_name,
+                                     LoadedDocument& document) {
+    if (path.empty()) {
+        return {pkchat::ErrorCode::BadArgs, option_name + " requires a non-empty path"};
+    }
+    if (options.max_input_bytes <= 0) {
+        return {pkchat::ErrorCode::BadArgs, "--max-input-bytes must be greater than zero"};
+    }
+    pkchat::input::TextContext loaded;
+    pkchat::Error err = pkchat::input::load_text_context_file(
+        path, static_cast<size_t>(options.max_input_bytes), loaded);
+    if (!err.ok()) {
+        return err;
+    }
+    document.source = "file " + path;
+    document.input_kind = loaded.kind;
+    document.output_format = loaded.kind == InputKind::Plaintext
+                                 ? pkchat::markdown::OutputFormat::Plaintext
+                                 : pkchat::markdown::OutputFormat::Markdown;
+    document.converted = std::move(loaded.content);
+    return pkchat::ok_error();
 }
 
 int run_document_extract(const pkchat::cli::Options& options, std::ostream& out) {
@@ -709,6 +776,17 @@ pkchat::Error send_session_turn(pkchat::provider::RequestContext& context,
                                 pkchat::provider::ChatResult& chat,
                                 std::vector<pkchat::provider::ImageInput> images = {}) {
     session.messages.push_back({"user", prompt, std::move(images)});
+    pkchat::context::PreparedMessages prepared = pkchat::context::prepare(
+        session.messages,
+        context.options.context_policy,
+        context.options.max_context_bytes > 0
+            ? static_cast<size_t>(context.options.max_context_bytes)
+            : 0U);
+    if (!prepared.error.ok()) {
+        session.messages.pop_back();
+        return prepared.error;
+    }
+    session.messages.back().images.clear();
     bool started_ndjson = false;
     auto on_delta = [&](const std::string& delta) -> pkchat::Error {
         if (context.options.format == pkchat::cli::OutputFormat::Text) {
@@ -727,13 +805,19 @@ pkchat::Error send_session_turn(pkchat::provider::RequestContext& context,
         return pkchat::ok_error();
     };
 
-    pkchat::Error err = pkchat::provider::send_chat_messages(context, session.messages, on_delta, chat);
+    pkchat::Error err = pkchat::provider::send_chat_messages(context, prepared.messages, on_delta, chat);
     if (!err.ok()) {
         session.messages.pop_back();
         return err;
     }
-    session.messages.back().images.clear();
     session.messages.push_back({"assistant", chat.content});
+    if (prepared.compacted) {
+        prepared.event.timestamp = pkchat::chat::current_timestamp_utc();
+        session.compaction_events.push_back(prepared.event);
+        if (!context.options.quiet) {
+            std::cerr << prepared.event.notice << "\n";
+        }
+    }
     if (!chat.model.empty()) {
         session.model = chat.model;
     }
@@ -765,7 +849,8 @@ pkchat::Error send_session_turn(pkchat::provider::RequestContext& context,
 }
 
 void print_repl_help() {
-    std::cerr << "Commands: /help, /quit, /exit, /save [PATH], /load PATH, /clear, /system TEXT, /model MODEL\n";
+    std::cerr << "Commands: /help, /quit, /exit, /save [PATH], /load PATH, /insert PATH, /clear, "
+                 "/system TEXT, /model MODEL\n";
 }
 
 int run_repl(pkchat::provider::RequestContext context, pkchat::chat::Session session, std::ostream& out) {
@@ -887,6 +972,24 @@ int run_repl(pkchat::provider::RequestContext context, pkchat::chat::Session ses
                 }
                 continue;
             }
+            if (text == "/insert" || text.rfind("/insert ", 0) == 0) {
+                const std::string path = trim_ascii(text.substr(7));
+                if (path.empty()) {
+                    std::cerr << "Usage: /insert PATH\n";
+                    continue;
+                }
+                LoadedDocument document;
+                pkchat::Error err = load_text_context_file(context.options, path, "/insert", document);
+                if (!err.ok()) {
+                    print_error(err);
+                    continue;
+                }
+                session.messages.push_back({"user", document_context_message(document)});
+                if (!context.options.quiet) {
+                    std::cerr << "Inserted context from " << path << "\n";
+                }
+                continue;
+            }
             std::cerr << "Unknown command: " << text << "\n";
             continue;
         }
@@ -914,6 +1017,24 @@ int main(int argc, char** argv) {
     if (options.version) {
         std::cout << "pkchat " << pkchat::kVersion << "\n";
         return 0;
+    }
+    if (!options.attachment_paths.empty()) {
+        for (const std::string& path : options.attachment_paths) {
+            if (path.empty()) {
+                print_error({pkchat::ErrorCode::BadArgs, "--attach requires a non-empty path"});
+                return exit_code_for(pkchat::ErrorCode::BadArgs);
+            }
+        }
+        if (options.prompt.empty() && options.prompt_file.empty()) {
+            print_error({pkchat::ErrorCode::BadArgs,
+                         "--attach requires -p/--prompt or --prompt-file in non-interactive mode"});
+            return exit_code_for(pkchat::ErrorCode::BadArgs);
+        }
+        if (options.editor || options.repl || options.tui || options.list_models) {
+            print_error({pkchat::ErrorCode::BadArgs,
+                         "--attach currently supports non-interactive prompt mode only; use /insert in the REPL or TUI"});
+            return exit_code_for(pkchat::ErrorCode::BadArgs);
+        }
     }
     if (has_document_source(options) && !wants_document_prompt_context(options)) {
         std::ofstream out_file;
@@ -1034,7 +1155,46 @@ int main(int argc, char** argv) {
     }
 
     std::string fetched_context_message;
+    std::vector<std::string> attachment_context_messages;
     std::vector<pkchat::provider::ImageInput> prompt_images;
+    std::vector<pkchat::input::FileType> attachment_types;
+    attachment_types.reserve(context.options.attachment_paths.size());
+    bool image_requested = false;
+    if (wants_document_prompt_context(context.options) && !context.options.fetch_url.empty()) {
+        image_requested = false;
+    } else if (wants_document_prompt_context(context.options)) {
+        pkchat::input::FileType type;
+        pkchat::Error err = local_input_type_for_options(context.options, type);
+        if (!err.ok()) {
+            print_error(err);
+            return exit_code_for(err.code);
+        }
+        image_requested = type.kind == InputKind::Image;
+    }
+    for (const std::string& path : context.options.attachment_paths) {
+        pkchat::input::FileType type;
+        pkchat::Error err = pkchat::input::classify_file_type(path, type);
+        if (!err.ok()) {
+            print_error(err);
+            return exit_code_for(err.code);
+        }
+        image_requested = image_requested || type.kind == InputKind::Image;
+        attachment_types.push_back(std::move(type));
+    }
+    bool model_chosen = false;
+    if (image_requested) {
+        pkchat::Error model_err = choose_default_model(context);
+        if (!model_err.ok()) {
+            print_error(model_err);
+            return exit_code_for(model_err.code);
+        }
+        model_chosen = true;
+        pkchat::Error capability_error = pkchat::provider::validate_image_input(context);
+        if (!capability_error.ok()) {
+            print_error(capability_error);
+            return exit_code_for(capability_error.code);
+        }
+    }
     if (wants_document_prompt_context(context.options)) {
         LoadedDocument document;
         pkchat::Error err = load_document(context.options, false, document);
@@ -1046,6 +1206,41 @@ int main(int argc, char** argv) {
             prompt_images.push_back(std::move(document.image));
         } else {
             fetched_context_message = document_context_message(document);
+        }
+    }
+    attachment_context_messages.reserve(context.options.attachment_paths.size());
+    for (size_t attachment_index = 0; attachment_index < context.options.attachment_paths.size(); ++attachment_index) {
+        const std::string& path = context.options.attachment_paths[attachment_index];
+        const pkchat::input::FileType& type = attachment_types[attachment_index];
+        pkchat::Error err;
+        if (type.kind == InputKind::Image) {
+            if (context.options.max_image_bytes <= 0) {
+                err = {pkchat::ErrorCode::BadArgs, "--max-image-bytes must be greater than zero"};
+            } else {
+                pkchat::input::ImageData image;
+                err = pkchat::input::load_image_file(path, type,
+                                                     static_cast<size_t>(context.options.max_image_bytes), image);
+                if (err.ok()) {
+                    prompt_images.push_back({image.mime_type, std::move(image.base64_data)});
+                    if (!context.options.quiet) {
+                        std::cerr << "Attached image: " << path << " (" << image.mime_type << ", "
+                                  << image.byte_size << " bytes)\n";
+                    }
+                }
+            }
+        } else {
+            LoadedDocument document;
+            err = load_text_context_file(context.options, path, "--attach", document);
+            if (err.ok()) {
+                attachment_context_messages.push_back(document_context_message(document));
+                if (!context.options.quiet) {
+                    std::cerr << "Attached context: " << path << "\n";
+                }
+            }
+        }
+        if (!err.ok()) {
+            print_error(err);
+            return exit_code_for(err.code);
         }
     }
 
@@ -1076,10 +1271,12 @@ int main(int argc, char** argv) {
     if (!loaded_session) {
         session = pkchat::chat::new_session(context);
     }
-    pkchat::Error model_err = choose_default_model(context);
-    if (!model_err.ok()) {
-        print_error(model_err);
-        return exit_code_for(model_err.code);
+    if (!model_chosen) {
+        pkchat::Error model_err = choose_default_model(context);
+        if (!model_err.ok()) {
+            print_error(model_err);
+            return exit_code_for(model_err.code);
+        }
     }
     refresh_session_metadata(session, context);
     apply_system_prompt(session, context.options.system);
@@ -1096,6 +1293,9 @@ int main(int argc, char** argv) {
 
     if (!fetched_context_message.empty()) {
         session.messages.push_back({"user", fetched_context_message});
+    }
+    for (std::string& message : attachment_context_messages) {
+        session.messages.push_back({"user", std::move(message)});
     }
 
     pkchat::provider::ChatResult chat;

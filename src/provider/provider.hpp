@@ -102,6 +102,8 @@ struct ContextResult {
 ContextResult build_context(const cli::Options& options);
 std::vector<Profile> built_in_profiles();
 const Capabilities& capabilities_for(const RequestContext& context);
+Capabilities detected_capabilities_for(const RequestContext& context);
+Error validate_image_input(const RequestContext& context);
 std::string active_request_url(const RequestContext& context);
 std::string serialize_chat_request(const RequestContext& context, const std::vector<Message>& messages);
 Error list_models(const RequestContext& context,

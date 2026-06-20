@@ -13,8 +13,9 @@ bool needs_value(const std::string& opt) {
         "-t", "--temperature", "--top-p", "--max-output-tokens", "--format", "--output-format", "--output",
         "--provider", "--profile", "--api", "--base-url", "--chat-url", "--models-url", "--responses-url",
         "--key-env", "--key-file", "-k", "--key", "--header", "--connect-timeout", "--timeout",
-        "--proxy", "--fetch-url", "--input", "--html-file", "--html-format", "--max-fetch-bytes",
-        "--max-image-bytes",
+        "--proxy", "--fetch-url", "--input", "--attach", "--html-file", "--html-format",
+        "--max-fetch-bytes", "--max-input-bytes", "--max-image-bytes", "--max-context-bytes",
+        "--context-policy", "--image-capability",
         "--save-chat", "--load-chat"};
     for (const char* item : with_values) {
         if (opt == item) {
@@ -231,6 +232,8 @@ ParseResult parse_args(int argc, char** argv) {
                 opts.fetch_url = value;
             } else if (opt == "--input") {
                 opts.input_path = value;
+            } else if (opt == "--attach") {
+                opts.attachment_paths.push_back(value);
             } else if (opt == "--html-file") {
                 opts.html_file = value;
             } else if (opt == "--html-format") {
@@ -243,11 +246,34 @@ ParseResult parse_args(int argc, char** argv) {
                 if (!err.ok()) {
                     return {opts, err};
                 }
+            } else if (opt == "--max-input-bytes") {
+                Error err = parse_long(opt, value, opts.max_input_bytes);
+                if (!err.ok()) {
+                    return {opts, err};
+                }
             } else if (opt == "--max-image-bytes") {
                 Error err = parse_long(opt, value, opts.max_image_bytes);
                 if (!err.ok()) {
                     return {opts, err};
                 }
+            } else if (opt == "--max-context-bytes") {
+                Error err = parse_long(opt, value, opts.max_context_bytes);
+                if (!err.ok()) {
+                    return {opts, err};
+                }
+            } else if (opt == "--context-policy") {
+                if (value != "error" && value != "truncate-oldest" && value != "summarize-oldest" &&
+                    value != "summarize-middle" && value != "provider-auto") {
+                    return {opts, {ErrorCode::BadArgs,
+                                   "--context-policy must be error, truncate-oldest, summarize-oldest, "
+                                   "summarize-middle, or provider-auto"}};
+                }
+                opts.context_policy = value;
+            } else if (opt == "--image-capability") {
+                if (value != "auto" && value != "allow" && value != "deny") {
+                    return {opts, {ErrorCode::BadArgs, "--image-capability must be auto, allow, or deny"}};
+                }
+                opts.image_capability = value;
             }
         } else if (!arg.empty() && arg[0] == '-') {
             return {opts, {ErrorCode::BadArgs, "unknown option: " + arg}};
@@ -285,6 +311,7 @@ Examples:
   pkchat --editor notes.txt
   pkchat --fetch-url https://example.com --output-format md
   pkchat --input page.html --output-format plaintext
+  pkchat http://localhost:8000 -p "Compare these" --attach one.md --attach two.txt
   pkchat http://localhost:30000 -p "Describe this image" --input photo.png
   pkchat --prompt-file prompt.txt --system-file system.txt --format json
   pkchat http://localhost:8000 -p "Write a report" --output-format html --output report.html
@@ -308,11 +335,17 @@ Options:
       --nocolors                Disable TUI color styling.
       --editor                  Start the standalone multiline editor.
       --input PATH              Read text/Markdown/HTML, or attach PNG/JPEG/GIF with -p.
+      --attach PATH             Add text/Markdown/HTML or PNG/JPEG/GIF; repeatable.
       --fetch-url URL           Fetch HTML for extraction, or as prompt context with -p.
       --html-format text|markdown
                                 Compatibility alias for old HTML extraction commands.
       --max-fetch-bytes N       Default 1048576.
-      --max-image-bytes N       Maximum encoded image input size; default 20971520.
+      --max-input-bytes N       Maximum bytes per text input/attachment; default 1048576.
+      --max-image-bytes N       Maximum image file size; default 20971520.
+      --max-context-bytes N     Request text budget; 0 disables the client budget.
+      --context-policy POLICY   error, truncate-oldest, summarize-oldest,
+                                summarize-middle, or provider-auto.
+      --image-capability MODE   auto, allow, or deny; allow overrides model detection.
       --allow-private-url-fetch Allow loopback/private URL fetches.
       --save-chat PATH          Save JSON chat history after a successful reply.
       --load-chat PATH          Load JSON chat history before sending.

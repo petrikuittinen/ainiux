@@ -1,5 +1,12 @@
 # TODO
-- Continue v0.5 context/attachment work: provider/model image capability detection, multiple image attachments, interactive image insertion, DNS-resolved private-address blocking, charset handling, text attachments, context policies, and future `src/pdf/` / `src/word/` extraction modules.
+- Continue v0.5 follow-up work: charset conversion, Responses API image input, interactive image insertion, provider-reported context limits/token estimation, and cancellable URL fetching for TUI/web callers.
+
+## Deferred Document Conversion
+
+1. PDF input (PDF-to-Markdown) and PDF output (Markdown-to-PDF).
+2. MS Word input (`.docx`-to-Markdown) and MS Word output (Markdown-to-`.docx`).
+
+These formats are intentionally deferred. Do not treat PDF or DOCX binary data as prompt text.
 
 - Continue v0.4 provider work: capability probing, provider-specific error normalization, broader Responses API schema coverage, and adapter docs/tests for real providers.
 - Harden the standalone editor with resize tests, multi-panel tests, scroll commands, search, and full Unicode grapheme/cell-width handling.

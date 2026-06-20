@@ -30,12 +30,20 @@ Defaults:
 - request headers: sends browser-style `User-Agent`, `Accept`, `Accept-Language`, and `Upgrade-Insecure-Requests` headers
 - content type: accepts empty content type, `text/html`, and `application/xhtml+xml`
 - body encoding: validates UTF-8 and rejects invalid legacy-charset bytes with a clear unsupported-feature error
-- private/loopback/link-local/multicast/common metadata literal hosts are refused unless `--allow-private-url-fetch` is set
+- private/loopback/link-local/multicast/common metadata literal hosts and resolved socket addresses are refused unless `--allow-private-url-fetch` is set
 
-Current limitation: hostname checks are string/IP-literal based. DNS resolution followed by private-address verification is still required before treating arbitrary hostnames as fully protected against local-network probing.
+Resolved IPv4 and IPv6 addresses are checked in libcurl's socket-open callback before a connection is created, so a public-looking hostname cannot connect to a private result. URL fetching through `--proxy` is refused without `--allow-private-url-fetch`, because the client cannot verify target DNS performed by a proxy. The override deliberately disables both literal and resolved-address blocking.
 
 ## Local Image Input
 
-Image input is explicit through `--input IMAGE` combined with a prompt. Supported endings are matched case-insensitively and file signatures must match PNG, JPEG, or GIF before data is sent. The default 20 MiB input cap limits both binary reads and subsequent base64 growth; use `--max-image-bytes N` to lower it for constrained environments. WebP input is disabled because tested vision endpoints did not handle it reliably.
+Image input is explicit through `--input IMAGE` or repeated `--attach IMAGE` combined with a prompt. Supported endings are matched case-insensitively and file signatures must match PNG, JPEG, or GIF before data is sent. The default 20 MiB input cap limits both binary reads and subsequent base64 growth; use `--max-image-bytes N` to lower it for constrained environments. WebP input is disabled because tested vision endpoints did not handle it reliably.
 
 Images are embedded in the provider request as data URLs. This sends the complete selected file to the configured model endpoint. Image bytes are held only for request construction and are removed from the in-memory transcript after the call; saved chat files do not contain base64 image data. Image metadata and attachment persistence are deferred to a later schema update.
+
+The default `--image-capability auto` mode requires both a provider profile whose Chat Completions adapter can carry image parts and a recognized vision model name. `--image-capability allow` is an explicit trust decision for compatible unknown/custom models; it does not make an incompatible provider understand images.
+
+## Text Attachments
+
+`--attach PATH` and REPL/TUI `/insert PATH` send the selected local document contents to the configured model endpoint. Files are limited to 1 MiB each by default (`--max-input-bytes N`), rejected when they contain NUL bytes or invalid UTF-8, and converted according to their `.txt`, `.md`, or `.html` extension. Converted attachment context is intentionally part of the chat transcript and can therefore appear in saved chat files.
+
+PDF and DOCX are not read as text or uploaded in this slice. Their future input and output converters require explicit dependency, safety, and fidelity decisions.

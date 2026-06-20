@@ -7,7 +7,11 @@
 #include <cstring>
 #include <sstream>
 #include <string>
+#include <sys/socket.h>
 #include <vector>
+
+#include <arpa/inet.h>
+#include <netinet/in.h>
 
 #include "security/redact.hpp"
 
@@ -150,7 +154,60 @@ struct TransferState {
     bool current_proxy_connect = false;
     bool final_headers_seen = false;
     bool cancelled = false;
+    bool blocked_address = false;
+    std::string blocked_address_text;
 };
+
+bool blocked_ipv4(const in_addr& address) {
+    const uint32_t ip = ntohl(address.s_addr);
+    const unsigned int a = (ip >> 24U) & 0xffU;
+    const unsigned int b = (ip >> 16U) & 0xffU;
+    return a == 0U || a == 10U || a == 127U ||
+           (a == 100U && b >= 64U && b <= 127U) ||
+           (a == 169U && b == 254U) ||
+           (a == 172U && b >= 16U && b <= 31U) ||
+           (a == 192U && b == 168U) || a >= 224U;
+}
+
+bool blocked_socket_address(const curl_sockaddr* address, std::string& printable) {
+    char buffer[INET6_ADDRSTRLEN] = {};
+    if (address->family == AF_INET) {
+        const sockaddr_in* ipv4 = reinterpret_cast<const sockaddr_in*>(&address->addr);
+        inet_ntop(AF_INET, &ipv4->sin_addr, buffer, sizeof(buffer));
+        printable = buffer;
+        return blocked_ipv4(ipv4->sin_addr);
+    }
+    if (address->family == AF_INET6) {
+        const sockaddr_in6* ipv6 = reinterpret_cast<const sockaddr_in6*>(&address->addr);
+        inet_ntop(AF_INET6, &ipv6->sin6_addr, buffer, sizeof(buffer));
+        printable = buffer;
+        const unsigned char* bytes = ipv6->sin6_addr.s6_addr;
+        if (IN6_IS_ADDR_UNSPECIFIED(&ipv6->sin6_addr) || IN6_IS_ADDR_LOOPBACK(&ipv6->sin6_addr) ||
+            bytes[0] == 0xffU || (bytes[0] & 0xfeU) == 0xfcU ||
+            (bytes[0] == 0xfeU && (bytes[1] & 0xc0U) == 0x80U)) {
+            return true;
+        }
+        if (IN6_IS_ADDR_V4MAPPED(&ipv6->sin6_addr)) {
+            in_addr mapped{};
+            std::memcpy(&mapped.s_addr, bytes + 12, sizeof(mapped.s_addr));
+            return blocked_ipv4(mapped);
+        }
+    }
+    return false;
+}
+
+curl_socket_t open_socket_callback(void* userdata, curlsocktype purpose, struct curl_sockaddr* address) {
+    TransferState* state = static_cast<TransferState*>(userdata);
+    if (purpose == CURLSOCKTYPE_IPCXN) {
+        std::string printable;
+        if (blocked_socket_address(address, printable)) {
+            state->blocked_address = true;
+            state->blocked_address_text = std::move(printable);
+            return CURL_SOCKET_BAD;
+        }
+    }
+    return ::socket(address->family, address->socktype, address->protocol);
+}
 
 size_t header_callback(char* ptr, size_t size, size_t nmemb, void* userdata) {
     const size_t bytes = size * nmemb;
@@ -301,6 +358,15 @@ Result perform(const Request& request, const std::vector<std::string>& secrets) 
         err = setopt_ptr(curl, CURLOPT_HTTPHEADER, headers.get());
         if (!err.ok()) return {{}, err};
     }
+    if (request.block_private_addresses) {
+        err = setopt_ptr(curl, CURLOPT_OPENSOCKETDATA, &state);
+        if (!err.ok()) return {{}, err};
+        CURLcode open_code = curl_easy_setopt(curl, CURLOPT_OPENSOCKETFUNCTION, open_socket_callback);
+        if (open_code != CURLE_OK) {
+            return {{}, {ErrorCode::Internal,
+                         std::string("curl_easy_setopt failed: ") + curl_easy_strerror(open_code)}};
+        }
+    }
 
     if (request.method == "POST") {
         err = setopt_long(curl, CURLOPT_POST, 1L);
@@ -365,6 +431,12 @@ Result perform(const Request& request, const std::vector<std::string>& secrets) 
         }
         if (code == CURLE_WRITE_ERROR && !state.callback_error.ok()) {
             return {state.response, state.callback_error};
+        }
+        if (state.blocked_address) {
+            return {state.response,
+                    {ErrorCode::BadUrl,
+                     "refusing HTTP connection to private, loopback, link-local, multicast, or metadata "
+                     "address " + state.blocked_address_text + " resolved for " + request.url}};
         }
         std::string detail = error_buffer[0] == '\0' ? curl_easy_strerror(code) : error_buffer;
         detail = redact_secrets(detail, secrets);

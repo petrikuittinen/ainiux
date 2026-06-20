@@ -932,12 +932,12 @@ Policies:
 
 Rules:
 
-- [ ] Preserve full transcript on disk.
-- [ ] Compact only the provider-bound request context.
-- [ ] Show a clear notice when compaction happens.
-- [ ] Record compaction events in chat JSON.
-- [ ] Distinguish exact provider-reported token counts from estimates.
-- [ ] Release temporary compacted-context allocations immediately after request completion.
+- [x] Preserve full transcript on disk.
+- [x] Compact only the provider-bound request context.
+- [x] Show a clear notice when compaction happens.
+- [x] Record compaction events in chat JSON.
+- [x] Distinguish provider token counts from the local text-byte estimate.
+- [x] Release temporary compacted-context allocations immediately after request completion.
 
 Example notice:
 
@@ -949,14 +949,15 @@ Context compacted: 42 earlier messages summarized into 1 message. Full transcrip
 
 Start with text files:
 
-- [ ] `/insert PATH` in REPL/TUI.
-- [ ] `--attach PATH` for CLI, if useful.
-- [ ] Size limit.
-- [ ] Encoding detection or explicit UTF-8 requirement.
-- [ ] Clear error for binary files.
-- [ ] Clear error for unreadable files.
-- [ ] Clear error for unsupported provider-native attachment types.
-- [ ] Release file buffers after the provider request is built or after failure.
+- [x] `/insert PATH` in REPL.
+- [x] `/insert PATH` in TUI through a cancellable runtime job.
+- [x] Repeatable `--attach PATH` for non-interactive CLI prompts.
+- [x] Size limit.
+- [x] Explicit UTF-8 requirement.
+- [x] Clear error for binary files.
+- [x] Clear error for unreadable files.
+- [x] Clear error for unsupported provider-native attachment types.
+- [x] Release raw file buffers after conversion or failure.
 
 Later provider-native inputs:
 
@@ -969,11 +970,12 @@ file URLs
 
 Rules:
 
-- [ ] Check provider capabilities first.
-- [ ] Do not fake PDF support by blindly dumping binary data into a prompt.
+- [x] Check provider/model image capabilities first.
+- [x] Support multiple image attachments in one Chat Completions user turn.
+- [x] Do not fake PDF support by blindly dumping binary data into a prompt.
 - [ ] If local extraction is added, document the dependency and limitations.
-- [ ] Use size limits and timeouts.
-- [ ] Clean up temporary extracted text/files on success, failure, and cancellation.
+- [x] Use size limits for local attachment reads.
+- [x] Clean up temporary extracted text/files on success, failure, and cancellation.
 
 ## Safe URL fetching
 
@@ -997,25 +999,31 @@ Safety defaults:
   - [x] multicast
   - [x] RFC1918 private ranges
   - [x] metadata-service addresses
+- [x] Block DNS-resolved private IPv4/IPv6 addresses at the socket boundary.
 - [x] Add override such as `--allow-private-url-fetch` only with clear warnings.
 - [x] Show which URL was fetched unless `--quiet` is set.
-- [ ] Handle charset conversion or reject unsupported encodings clearly.
-- [ ] Release transfer handles, buffers, parsers, and temporary files after success, failure, timeout, and cancellation.
+- [x] Reject unsupported non-UTF-8 encodings clearly; conversion remains future work.
+- [x] Release transfer handles, buffers, parsers, and temporary files after success, failure, timeout, and cancellation.
 
 
 Implementation note (2026-06-17): The first v0.5 slice is present. `src/html/` provides a small C++17 `std::regex` HTML converter with plaintext and Markdown output for simple headings, emphasis, strong text, links, line breaks, and block spacing. `--input` converts supported local `.txt`, `.md`, and `.html` files without contacting a provider. `--html-file` remains a compatibility alias for local HTML. `--fetch-url` uses libcurl to fetch HTML explicitly, applies a response-size cap, a default fetch timeout, content-type checks, no redirect following, and private/loopback/link-local/multicast/common metadata literal-host blocking unless `--allow-private-url-fetch` is set. This slice can inject fetched or local input content into non-interactive chat prompts, but does not yet process JavaScript, convert charsets, check DNS-resolved private addresses, or implement PDF/Word extraction.
 
-Implementation note (2026-06-20): `--input` now classifies supported file endings case-insensitively and accepts PNG, JPEG, and GIF images with a non-interactive prompt. WebP input is intentionally disabled after compatibility tests with common vision models. `src/input/` performs bounded reads, signature checks, and base64 encoding; Chat Completions requests use `image_url` data-URL content parts. Image bytes are temporary and are not persisted in chat JSON. Responses API images, provider/model capability probing, multiple attachments, and REPL/TUI image insertion remain open.
+Implementation note (2026-06-20): `--input` now classifies supported file endings case-insensitively and accepts PNG, JPEG, and GIF images with a non-interactive prompt. WebP input is intentionally disabled after compatibility tests with common vision models. `src/input/` performs bounded reads, signature checks, and base64 encoding; Chat Completions requests use `image_url` data-URL content parts. Image bytes are temporary and are not persisted in chat JSON. Responses API images and interactive image insertion remain open.
+
+Implementation note (2026-06-20): Repeatable `--attach PATH` and REPL `/insert PATH` now add converted UTF-8 text, Markdown, or HTML context. Local document reads have a default 1 MiB `--max-input-bytes` cap and reject binary NUL bytes, invalid UTF-8, unreadable files, unsupported types, PDF, and DOCX. Charset conversion remains open; PDF/Markdown and DOCX/Markdown input/output conversion is explicitly deferred in `TODO.md`.
+
+Implementation note (2026-06-20): The remaining core slice adds repeated mixed text/image attachments, conservative provider/model image capability checks, request-only byte-budget context policies with persisted compaction events, socket-level private-address rejection after DNS resolution, and TUI `/insert` through a cancellable runtime file job. Responses API image schema support, charset conversion, interactive image insertion, and asynchronous URL fetching outside the CLI remain follow-up work.
 
 ## Acceptance criteria
 
-- [ ] Context compaction never modifies the full saved transcript destructively.
-- [ ] Text file insertion works for UTF-8 text files.
-- [ ] Binary/unreadable/too-large files produce clear errors.
-- [x] URL fetching refuses private literal/localhost addresses by default.
+- [x] Context compaction never modifies the full saved transcript destructively.
+- [x] Text file insertion works for UTF-8 text files in CLI, REPL, and TUI modes.
+- [x] Binary/unreadable/too-large files produce clear errors.
+- [x] URL fetching refuses private literal, localhost, and DNS-resolved addresses by default.
 - [x] URL fetch timeout and max-size limits work for the explicit CLI extraction path.
-- [ ] TUI remains responsive while file insertion or URL fetching is in progress.
-- [ ] Leak-check tooling reports no leaks for attachment and URL-fetch success/failure/cancellation paths where supported.
+- [x] TUI remains responsive while file insertion is in progress.
+- [ ] TUI URL fetching remains future work.
+- [x] Sanitizer leak checks pass for covered attachment and URL-fetch success/failure paths.
 
 ---
 

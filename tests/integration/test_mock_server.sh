@@ -77,16 +77,106 @@ test "$url_system_context" = "url-system-context-ok"
 input_context=$("$ROOT/pkchat" "$BASE" --quiet --no-stream -m "$MODEL" -p "summarize-input" --input "$local_md")
 test "$input_context" = "input-context-ok"
 
+attachment_md="$ROOT/build/attachment-alpha.MD"
+attachment_txt="$ROOT/build/attachment-beta.TxT"
+printf '# Attachment Alpha\n\nFirst attachment.\n' >"$attachment_md"
+printf 'Attachment Beta\nSecond attachment.\n' >"$attachment_txt"
+attachment_chat_file="$ROOT/build/attachment-chat.json"
+attachment_reply=$("$ROOT/pkchat" "$BASE" --quiet --no-stream -m "$MODEL" -p "summarize-attachments" \
+    --attach "$attachment_md" --attach "$attachment_txt" --save-chat "$attachment_chat_file")
+test "$attachment_reply" = "attachments-ok"
+grep 'Attachment Alpha' "$attachment_chat_file" >/dev/null
+grep 'Attachment Beta' "$attachment_chat_file" >/dev/null
+
+attach_without_prompt_err="$ROOT/build/attach-without-prompt.err"
+if "$ROOT/pkchat" "$BASE" --quiet --no-stream -m "$MODEL" --attach "$attachment_txt" \
+    >"$ROOT/build/attach-without-prompt.out" 2>"$attach_without_prompt_err"; then
+    echo "attachment without a prompt should fail" >&2
+    exit 1
+fi
+grep -- '--attach requires -p/--prompt' "$attach_without_prompt_err" >/dev/null
+
+insert_file="$ROOT/build/insert-context.txt"
+printf 'Inserted Context Marker\n' >"$insert_file"
+insert_reply=$(printf '/insert %s\nsummarize-insert\n/quit\n' "$insert_file" | \
+    "$ROOT/pkchat" "$BASE" --quiet --repl --no-stream -m "$MODEL")
+test "$insert_reply" = "insert-ok"
+
+large_attachment="$ROOT/build/large-attachment.txt"
+printf 'this attachment is too large' >"$large_attachment"
+large_attachment_err="$ROOT/build/large-attachment.err"
+if "$ROOT/pkchat" "$BASE" --quiet --no-stream -m "$MODEL" -p "hello" --attach "$large_attachment" \
+    --max-input-bytes 8 >"$ROOT/build/large-attachment.out" 2>"$large_attachment_err"; then
+    echo "oversized text attachment should fail" >&2
+    exit 1
+fi
+grep -- '--max-input-bytes limit of 8 bytes' "$large_attachment_err" >/dev/null
+
+binary_attachment="$ROOT/build/binary-attachment.txt"
+printf 'text\000binary' >"$binary_attachment"
+binary_attachment_err="$ROOT/build/binary-attachment.err"
+if "$ROOT/pkchat" "$BASE" --quiet --no-stream -m "$MODEL" -p "hello" --attach "$binary_attachment" \
+    >"$ROOT/build/binary-attachment.out" 2>"$binary_attachment_err"; then
+    echo "binary text attachment should fail" >&2
+    exit 1
+fi
+grep 'input appears to be binary' "$binary_attachment_err" >/dev/null
+
+invalid_utf8_attachment="$ROOT/build/invalid-utf8-attachment.txt"
+printf '\377' >"$invalid_utf8_attachment"
+invalid_utf8_attachment_err="$ROOT/build/invalid-utf8-attachment.err"
+if "$ROOT/pkchat" "$BASE" --quiet --no-stream -m "$MODEL" -p "hello" --attach "$invalid_utf8_attachment" \
+    >"$ROOT/build/invalid-utf8-attachment.out" 2>"$invalid_utf8_attachment_err"; then
+    echo "invalid UTF-8 attachment should fail" >&2
+    exit 1
+fi
+grep 'Input expects UTF-8 text' "$invalid_utf8_attachment_err" >/dev/null
+
+missing_attachment_err="$ROOT/build/missing-attachment.err"
+if "$ROOT/pkchat" "$BASE" --quiet --no-stream -m "$MODEL" -p "hello" \
+    --attach "$ROOT/build/does-not-exist.txt" >"$ROOT/build/missing-attachment.out" 2>"$missing_attachment_err"; then
+    echo "missing text attachment should fail" >&2
+    exit 1
+fi
+grep 'could not open plaintext for reading' "$missing_attachment_err" >/dev/null
+
+for deferred in pdf docx; do
+    deferred_path="$ROOT/build/deferred.$deferred"
+    printf 'not implemented' >"$deferred_path"
+    deferred_err="$ROOT/build/deferred-$deferred.err"
+    if "$ROOT/pkchat" "$BASE" --quiet --no-stream -m "$MODEL" -p "hello" --attach "$deferred_path" \
+        >"$ROOT/build/deferred-$deferred.out" 2>"$deferred_err"; then
+        echo "$deferred attachment should remain unsupported" >&2
+        exit 1
+    fi
+    grep 'unsupported input file type' "$deferred_err" >/dev/null
+done
+
 local_png="$ROOT/build/local-image.PnG"
 printf '\211PNG\r\n\032\nmock-image' >"$local_png"
 image_chat_file="$ROOT/build/image-chat.json"
-image_reply=$("$ROOT/pkchat" "$BASE" --quiet --no-stream -m "$MODEL" -p "describe-image" --input "$local_png" --save-chat "$image_chat_file")
+image_reply=$("$ROOT/pkchat" "$BASE" --quiet --no-stream -m "$MODEL" -p "describe-image" --input "$local_png" \
+    --image-capability allow --save-chat "$image_chat_file")
 test "$image_reply" = "image-input-ok"
 grep 'describe-image' "$image_chat_file" >/dev/null
 if grep 'data:image/png;base64' "$image_chat_file" >/dev/null; then
     echo "saved chat must not contain base64 image data" >&2
     exit 1
 fi
+
+unknown_image_err="$ROOT/build/unknown-image-capability.err"
+if "$ROOT/pkchat" "$BASE" --quiet --no-stream -m "$MODEL" -p "describe-image" --input "$local_png" \
+    >"$ROOT/build/unknown-image-capability.out" 2>"$unknown_image_err"; then
+    echo "unknown models should require an image capability override" >&2
+    exit 1
+fi
+grep 'not recognized as image-capable' "$unknown_image_err" >/dev/null
+
+local_jpeg="$ROOT/build/local-image.JPEG"
+printf '\377\330\377mock-jpeg' >"$local_jpeg"
+multiple_image_reply=$("$ROOT/pkchat" "$BASE" --quiet --no-stream -m "$MODEL" -p "describe-images" \
+    --attach "$local_png" --attach "$local_jpeg" --image-capability allow)
+test "$multiple_image_reply" = "images:2"
 
 image_extract_err="$ROOT/build/image-extract.err"
 if "$ROOT/pkchat" --input "$local_png" --quiet >"$ROOT/build/image-extract.out" 2>"$image_extract_err"; then
@@ -193,6 +283,22 @@ grep '"role": "assistant"' "$CHAT_FILE" >/dev/null
 loaded_reply=$("$ROOT/pkchat" "$BASE" --quiet --no-stream -m "$MODEL" --load-chat "$CHAT_FILE" -p "count-messages")
 test "$loaded_reply" = "messages:3"
 
+COMPACT_CHAT_FILE="$ROOT/build/compact-chat.json"
+compacted_reply=$("$ROOT/pkchat" "$BASE" --quiet --no-stream -m "$MODEL" --load-chat "$CHAT_FILE" \
+    -p "count-messages" --context-policy truncate-oldest --max-context-bytes 45 --save-chat "$COMPACT_CHAT_FILE")
+test "$compacted_reply" = "messages:1"
+grep '"policy":"truncate-oldest"' "$COMPACT_CHAT_FILE" >/dev/null
+grep '"messages_compacted":2' "$COMPACT_CHAT_FILE" >/dev/null
+grep '"content": "hello"' "$COMPACT_CHAT_FILE" >/dev/null
+
+context_error="$ROOT/build/context-error.err"
+if "$ROOT/pkchat" "$BASE" --quiet --no-stream -m "$MODEL" -p "hello" \
+    --context-policy error --max-context-bytes 1 >"$ROOT/build/context-error.out" 2>"$context_error"; then
+    echo "oversized context with error policy should fail" >&2
+    exit 1
+fi
+grep 'request context is approximately' "$context_error" >/dev/null
+
 REPL_FILE="$ROOT/build/repl-chat.json"
 repl_out=$(printf 'repl-one
 /quit
@@ -200,6 +306,12 @@ repl_out=$(printf 'repl-one
 test "$repl_out" = "repl-one-reply"
 grep 'repl-one' "$REPL_FILE" >/dev/null
 grep 'repl-one-reply' "$REPL_FILE" >/dev/null
+
+TUI_FILE="$ROOT/build/tui-insert-chat.json"
+python3 "$ROOT/tests/integration/tui_insert_driver.py" \
+    "$ROOT/pkchat" "$BASE" "$MODEL" "$insert_file" "$TUI_FILE"
+grep 'Inserted Context Marker' "$TUI_FILE" >/dev/null
+grep 'insert-ok' "$TUI_FILE" >/dev/null
 
 
 lmstudio_shortcut_out=$(printf 'repl-one

@@ -101,13 +101,20 @@ Input extraction and URL context:
 ./pkchat http://localhost:30000 -p "Tee yhteenveto" --fetch-url https://yle.fi/uutiset/lyhyesti/74-20232138
 ./pkchat http://localhost:30000 -s "Vastaa suomeksi" -p "Tee yhteenveto" --input page.html
 ./pkchat http://localhost:30000 -p "Describe this image" --input photo.png
+./pkchat http://localhost:30000 -p "Compare these notes" --attach one.md --attach two.txt
+./pkchat http://localhost:30000 -p "Compare these images" --attach one.png --attach two.jpg
+./pkchat http://localhost:30000 -p "Continue" --load-chat chat.json --context-policy truncate-oldest --max-context-bytes 65536
 ```
 
-`--input PATH` classifies extensions case-insensitively. It reads local `.txt`, `.md`/`.markdown`, and `.html`/`.htm` documents, or attaches `.png`, `.jpg`, `.jpeg`, and `.gif` images. Document inputs can be extracted without a model; image inputs require `-p`/`--prompt` and non-interactive Chat Completions mode. Images are signature-checked, capped at 20 MiB by default (`--max-image-bytes N`), base64-encoded into an OpenAI-compatible `image_url` data URL, and released after the request. Saved chat JSON keeps the prompt but does not embed image bytes. WebP input is disabled because common tested vision models do not decode it reliably, and `.webm` is a video container rather than an image.
+`--input PATH` classifies extensions case-insensitively. It reads local `.txt`, `.md`/`.markdown`, and `.html`/`.htm` documents, or attaches `.png`, `.jpg`, `.jpeg`, and `.gif` images. Document inputs can be extracted without a model; image inputs require `-p`/`--prompt` and non-interactive Chat Completions mode. Images are signature-checked, capped at 20 MiB by default (`--max-image-bytes N`), base64-encoded into an OpenAI-compatible `image_url` data URL, and released after the request. Saved chat JSON keeps the prompt but does not embed image bytes. Provider profiles and recognized vision-model names are checked in the default `--image-capability auto` mode. Compatible unknown/custom models require `--image-capability allow`; `deny` disables image input. WebP input is disabled because common tested vision models do not decode it reliably, and `.webm` is a video container rather than an image.
 
 `--input` and `--fetch-url` by themselves are explicit document extraction modes: they print converted content to `stdout` and do not contact a model. In standalone extraction, `--output-format md|html|plaintext|json|jsond|ndjson` controls the output; `html` writes a fragment to `stdout` or a complete HTML document with `--output PATH`. When a document input is combined with `-p`/`--prompt` or `--prompt-file` in non-interactive CLI mode, `pkchat` sends the extracted input as a separate user-context message before the final prompt, while any `-s`/`--system` or `--system-file` remains the system prompt. The older `--html-file` option remains accepted as a compatibility alias for local HTML input.
 
-The first HTML parser lives in `src/html/` and handles simple text extraction, including `h1`, `h2`, `strong`/`b`, `em`/`i`/`italic`, and `a href` links in Markdown output. Fetching uses libcurl, browser-style `User-Agent`/`Accept` headers, a default 1 MiB body limit, a default 30 second total timeout for this mode, HTML content-type checks, and no redirect following. Private, loopback, link-local, multicast, and common metadata-service literal hosts are blocked by default; use `--allow-private-url-fetch` only for explicit local testing. Input must be UTF-8; legacy charsets such as Windows-1251 or GBK are rejected with a clear error until charset conversion is implemented. JavaScript-rendered pages are not supported.
+`--attach PATH` is repeatable and adds UTF-8 `.txt`, `.md`, or `.html` context files and PNG/JPEG/GIF images before the final non-interactive prompt. REPL and TUI `/insert PATH` add one converted text context message without sending immediately; the TUI performs this work in a cancellable file job. Local document reads default to a 1 MiB per-file limit; change it with `--max-input-bytes N`. Oversized, unreadable, binary, invalid UTF-8, PDF, DOCX, and unsupported-extension inputs fail with specific errors. PDF and MS Word input/output conversion is deferred.
+
+Context control is opt-in through `--max-context-bytes N`. `--context-policy error` is the default; `truncate-oldest`, `summarize-oldest`, and `summarize-middle` create a bounded request copy, while `provider-auto` sends the full transcript for provider-side handling. Local summaries are deterministic extracts, not extra model calls. Saved chat messages are never compacted: each compaction is recorded in `compaction_events`, and notices state that the full transcript remains on disk. The byte estimate is a transport-independent guard, not a provider token count.
+
+The first HTML parser lives in `src/html/` and handles simple text extraction, including `h1`, `h2`, `strong`/`b`, `em`/`i`/`italic`, and `a href` links in Markdown output. Fetching uses libcurl, browser-style `User-Agent`/`Accept` headers, a default 1 MiB body limit, a default 30 second total timeout for this mode, HTML content-type checks, and no redirect following. Private, loopback, link-local, multicast, and common metadata-service literal hosts and resolved socket addresses are blocked by default; use `--allow-private-url-fetch` only for explicit local testing. A proxy also requires that override because its target DNS resolution cannot be verified by the client. Input must be UTF-8; legacy charsets such as Windows-1251 or GBK are rejected with a clear error until charset conversion is implemented. JavaScript-rendered pages are not supported.
 
 Interactive REPL and chat files:
 
@@ -118,7 +125,7 @@ Interactive REPL and chat files:
 ./pkchat --load-chat chat.json -p "Continue from the saved chat"
 ```
 
-In REPL mode, commands include `/help`, `/quit`, `/save PATH`, `/load PATH`, `/clear`, `/system TEXT`, and `/model MODEL`. Prompts and status are written to `stderr`; assistant replies remain on `stdout`.
+In REPL mode, commands include `/help`, `/quit`, `/save PATH`, `/load PATH`, `/insert PATH`, `/clear`, `/system TEXT`, and `/model MODEL`. Prompts and status are written to `stderr`; assistant replies remain on `stdout`.
 
 Standalone multiline editor:
 
@@ -194,8 +201,8 @@ If Valgrind is not installed, `make leak-check` falls back to the sanitizer test
 
 - Streaming chat and Responses API events are parsed incrementally as SSE through libcurl write callbacks.
 - Responses API support is currently text-only. Local image input currently uses the Chat Completions `image_url` content-part schema only.
-- Capability probing is not yet implemented; built-in profile capabilities are registry-defined, and `--responses-url` is the explicit override for non-OpenAI Responses endpoints.
+- Capabilities start from the provider registry. Chat Completions image input additionally recognizes common vision model names; use `--image-capability allow` only after verifying an unknown/custom model.
 - The JSON facade is intentionally small and scoped to the current CLI/provider needs.
-- HTML extraction is intentionally simple: no JavaScript execution, no full DOM implementation, no charset conversion yet, and no DNS-level private-address verification yet. Non-UTF-8 input is rejected instead of transcoded.
+- HTML extraction is intentionally simple: no JavaScript execution, no full DOM implementation, and no charset conversion yet. Non-UTF-8 input is rejected instead of transcoded.
 - The editor preserves UTF-8 bytes and moves across UTF-8 code units safely, but full grapheme cluster and East Asian cell-width handling still belongs in the planned Unicode module.
 - The chat TUI is still a foundation; it now uses the editor component for multiline input, but still needs broader interactive resize, scrollback, and terminal-key coverage.

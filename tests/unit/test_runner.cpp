@@ -10,8 +10,10 @@
 
 #include "chat/session.hpp"
 #include "cli/args.hpp"
+#include "context/context.hpp"
 #include "editor/editor.hpp"
 #include "html/html.hpp"
+#include "http/http.hpp"
 #include "input/input.hpp"
 #include "json/json.hpp"
 #include "markdown/markdown.hpp"
@@ -126,6 +128,23 @@ void test_cli_html_extract_parse() {
     check(parsed.error.ok(), "image input args parse");
     check(parsed.options.input_path == "PHOTO.JPEG", "image input path parsed");
     check(parsed.options.max_image_bytes == 4096, "image byte limit parsed");
+
+    const char* attach_argv[] = {"pkchat", "-p", "compare", "--attach", "one.md", "--attach", "two.txt",
+                                 "--max-input-bytes", "8192"};
+    parsed = pkchat::cli::parse_args(9, const_cast<char**>(attach_argv));
+    check(parsed.error.ok(), "repeatable attachment args parse");
+    check(parsed.options.attachment_paths.size() == 2, "two attachment paths parsed");
+    check(parsed.options.attachment_paths[0] == "one.md" && parsed.options.attachment_paths[1] == "two.txt",
+          "attachment path order is preserved");
+    check(parsed.options.max_input_bytes == 8192, "text input byte limit parsed");
+
+    const char* context_argv[] = {"pkchat", "-p", "hello", "--context-policy", "summarize-middle",
+                                  "--max-context-bytes", "4096", "--image-capability", "allow"};
+    parsed = pkchat::cli::parse_args(9, const_cast<char**>(context_argv));
+    check(parsed.error.ok(), "context and image capability args parse");
+    check(parsed.options.context_policy == "summarize-middle", "context policy parsed");
+    check(parsed.options.max_context_bytes == 4096, "context byte limit parsed");
+    check(parsed.options.image_capability == "allow", "image capability override parsed");
 }
 
 void test_input_file_type_classification() {
@@ -236,6 +255,96 @@ void test_image_loading_and_chat_request() {
     err = pkchat::input::load_image_file(bad_path, type, 1024, image);
     check(!err.ok() && err.message.find("does not match") != std::string::npos,
           "image loader rejects mismatched content and extension");
+}
+
+void test_text_context_loading_and_cancellation() {
+    pkchat::input::TextContext loaded;
+    pkchat::Error err = pkchat::input::load_text_context_file(
+        "tests/fixtures/comprehensive.html", 1024 * 1024, loaded);
+    check(err.ok(), "shared text context loader reads HTML");
+    check(loaded.kind == pkchat::input::Kind::Html && loaded.content.find("# Comprehensive HTML") != std::string::npos,
+          "shared text context loader converts HTML to Markdown");
+    check(pkchat::input::text_context_message(loaded).find("Input context from file") != std::string::npos,
+          "shared text context loader creates provider context message");
+
+    pkchat::runtime::CancellationSource source;
+    source.cancel();
+    err = pkchat::input::load_text_context_file(
+        "tests/fixtures/comprehensive.html", 1024 * 1024, loaded, source.token());
+    check(!err.ok() && err.code == pkchat::ErrorCode::Cancelled,
+          "shared text context loader observes cancellation");
+}
+
+void test_image_capability_detection() {
+    pkchat::provider::RequestContext context;
+    context.api_kind = pkchat::provider::ApiKind::ChatCompletions;
+    context.profile.name = "custom_openai_chat";
+    context.profile.capabilities.images = true;
+    context.options.model = "Qwen3.5-35B-A3B";
+    check(pkchat::provider::detected_capabilities_for(context).images,
+          "Qwen3.5 model is detected as image capable");
+    check(pkchat::provider::validate_image_input(context).ok(),
+          "detected vision model accepts image input");
+
+    context.options.model = "unknown-text-model";
+    check(!pkchat::provider::validate_image_input(context).ok(),
+          "unknown model requires an explicit image capability decision");
+    context.options.image_capability = "allow";
+    check(pkchat::provider::validate_image_input(context).ok(),
+          "explicit image capability override allows a compatible unknown model");
+    context.api_kind = pkchat::provider::ApiKind::Responses;
+    check(!pkchat::provider::validate_image_input(context).ok(),
+          "Responses image input remains rejected until its request schema is implemented");
+}
+
+void test_context_policies_preserve_full_messages() {
+    std::vector<pkchat::provider::Message> messages = {
+        {"system", "system"},
+        {"user", std::string(400, 'a')},
+        {"assistant", std::string(400, 'b')},
+        {"user", std::string(400, 'c')},
+        {"assistant", std::string(400, 'd')},
+    };
+    const std::vector<pkchat::provider::Message> original = messages;
+    pkchat::context::PreparedMessages error = pkchat::context::prepare(messages, "error", 500);
+    check(!error.error.ok(), "error context policy rejects an oversized request");
+
+    pkchat::context::PreparedMessages truncated = pkchat::context::prepare(messages, "truncate-oldest", 500);
+    check(truncated.error.ok() && truncated.compacted, "truncate-oldest compacts provider messages");
+    check(truncated.event.messages_compacted > 0 && pkchat::context::estimated_text_bytes(truncated.messages) <= 500,
+          "truncate-oldest respects the configured text budget");
+    check(messages.size() == original.size() && messages[1].content == original[1].content,
+          "context preparation leaves the full source transcript unchanged");
+
+    pkchat::context::PreparedMessages summarized = pkchat::context::prepare(messages, "summarize-oldest", 600);
+    check(summarized.error.ok() && summarized.compacted, "summarize-oldest compacts provider messages");
+    check(pkchat::context::estimated_text_bytes(summarized.messages) <= 600,
+          "summarize-oldest respects the configured text budget");
+    bool summary_seen = false;
+    for (const pkchat::provider::Message& message : summarized.messages) {
+        summary_seen = summary_seen || message.content.find("Context summary of") != std::string::npos;
+    }
+    check(summary_seen, "summarize-oldest inserts a visible request-only summary");
+
+    pkchat::context::PreparedMessages middle = pkchat::context::prepare(messages, "summarize-middle", 1000);
+    check(middle.error.ok() && middle.compacted, "summarize-middle compacts middle provider messages");
+    check(middle.messages.back().content == messages.back().content,
+          "summarize-middle preserves the newest message");
+    pkchat::context::PreparedMessages automatic = pkchat::context::prepare(messages, "provider-auto", 1);
+    check(automatic.error.ok() && !automatic.compacted && automatic.messages.size() == messages.size(),
+          "provider-auto delegates context management without changing messages");
+}
+
+void test_http_private_address_socket_block() {
+    pkchat::http::Request request;
+    request.url = "http://127.0.0.1:1/";
+    request.connect_timeout_seconds = 1;
+    request.block_private_addresses = true;
+    pkchat::http::Result result = pkchat::http::perform(request, {});
+    check(!result.error.ok() && result.error.code == pkchat::ErrorCode::BadUrl,
+          "HTTP transport blocks the resolved loopback socket address");
+    check(result.error.message.find("127.0.0.1") != std::string::npos,
+          "resolved-address refusal identifies the blocked address");
 }
 
 void test_cli_output_format_parse() {
@@ -849,6 +958,8 @@ void test_chat_session_json_round_trip() {
     session.updated_at = session.created_at;
     session.messages.push_back({"user", "hello"});
     session.messages.push_back({"assistant", "Hello"});
+    session.compaction_events.push_back({"2026-06-14T00:01:00Z", "truncate-oldest", 2, 1000, 500,
+                                         "Context compacted for test"});
 
     const std::string encoded = pkchat::chat::session_to_json(session);
     pkchat::json::ParseResult parsed = pkchat::json::parse(encoded);
@@ -864,6 +975,8 @@ void test_chat_session_json_round_trip() {
     check(err.ok(), "chat session loads");
     check(loaded.messages.size() == 2, "loaded chat has messages");
     check(!loaded.messages.empty() && loaded.messages[0].content == "hello", "loaded user message preserved");
+    check(loaded.compaction_events.size() == 1 && loaded.compaction_events[0].messages_compacted == 2,
+          "loaded chat preserves compaction events");
 }
 
 void test_chat_session_rejects_corrupt_json() {
@@ -955,6 +1068,10 @@ int main() {
     test_cli_html_extract_parse();
     test_input_file_type_classification();
     test_image_loading_and_chat_request();
+    test_text_context_loading_and_cancellation();
+    test_image_capability_detection();
+    test_context_policies_preserve_full_messages();
+    test_http_private_address_socket_block();
     test_cli_output_format_parse();
     test_html_markdown_conversion();
     test_html_text_conversion();

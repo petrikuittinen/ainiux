@@ -13,6 +13,8 @@
 #include <unistd.h>
 #include <vector>
 
+#include "context/context.hpp"
+#include "input/input.hpp"
 #include "runtime/runtime.hpp"
 
 namespace pkchat::tui {
@@ -747,7 +749,7 @@ void render(const chat::Session& session,
     std::cout.flush();
 }
 
-enum class TuiEventType { Delta, Done, Error, SaveDone, LoadDone, ModelsDone };
+enum class TuiEventType { Delta, Done, Error, SaveDone, LoadDone, InsertDone, ModelsDone };
 
 enum class ActiveJob { None, Chat, Models };
 
@@ -758,6 +760,8 @@ struct TuiEvent {
     provider::ChatResult chat;
     chat::Session session;
     std::vector<std::string> models;
+    context::CompactionEvent compaction;
+    bool compacted = false;
 };
 
 std::string join_models_preview(const std::vector<std::string>& models) {
@@ -933,6 +937,35 @@ int run(provider::RequestContext context, chat::Session session) {
         status = "Loading " + path;
     };
 
+    auto start_insert = [&](const std::string& path) {
+        if (file_job.running()) {
+            status = "A file job is already running";
+            return;
+        }
+        if (path.empty()) {
+            status = "Usage: /insert PATH";
+            return;
+        }
+        const long configured_limit = context.options.max_input_bytes;
+        file_job.start([path, configured_limit, &events](runtime::CancellationToken token) mutable {
+            TuiEvent event;
+            event.type = TuiEventType::InsertDone;
+            event.text = path;
+            if (configured_limit <= 0) {
+                event.error = {ErrorCode::BadArgs, "--max-input-bytes must be greater than zero"};
+            } else {
+                input::TextContext loaded;
+                event.error = input::load_text_context_file(
+                    path, static_cast<size_t>(configured_limit), loaded, token);
+                if (event.error.ok()) {
+                    event.session.messages.push_back({"user", input::text_context_message(loaded)});
+                }
+            }
+            events.push(std::move(event));
+        });
+        status = "Inserting " + path + "...";
+    };
+
     auto start_models = [&]() {
         if (active_job != ActiveJob::None) {
             status = "A model job is already running";
@@ -965,8 +998,22 @@ int run(provider::RequestContext context, chat::Session session) {
 
         std::vector<provider::Message> request_messages = session.messages;
         request_messages.pop_back();
+        pkchat::context::PreparedMessages prepared = pkchat::context::prepare(
+            request_messages,
+            context.options.context_policy,
+            context.options.max_context_bytes > 0
+                ? static_cast<size_t>(context.options.max_context_bytes)
+                : 0U);
+        if (!prepared.error.ok()) {
+            rollback_pending_turn();
+            active_job = ActiveJob::None;
+            status = error_line(prepared.error);
+            return;
+        }
         provider::RequestContext job_context = context;
-        model_job.start([job_context, request_messages = std::move(request_messages), &events](runtime::CancellationToken token) mutable {
+        model_job.start([job_context, request_messages = std::move(prepared.messages),
+                         compaction = std::move(prepared.event), compacted = prepared.compacted,
+                         &events](runtime::CancellationToken token) mutable {
             provider::ChatResult chat;
             Error send_error = provider::send_chat_messages(
                 job_context,
@@ -987,6 +1034,8 @@ int run(provider::RequestContext context, chat::Session session) {
             if (send_error.ok()) {
                 event.type = TuiEventType::Done;
                 event.chat = std::move(chat);
+                event.compaction = std::move(compaction);
+                event.compacted = compacted;
             } else {
                 event.type = TuiEventType::Error;
                 event.error = send_error;
@@ -1067,7 +1116,7 @@ int run(provider::RequestContext context, chat::Session session) {
             return;
         }
         if (text == "/help") {
-            status = "Enter sends | Alt+Enter newline | Esc cancels | Ctrl+R regen | Ctrl+T thinking";
+            status = "Commands: /insert PATH /save /load /models /model /system /theme /thinking";
             return;
         }
         if (text.rfind("/thinking", 0) == 0) {
@@ -1158,6 +1207,10 @@ int run(provider::RequestContext context, chat::Session session) {
             start_load(path);
             return;
         }
+        if (text == "/insert" || text.rfind("/insert ", 0) == 0) {
+            start_insert(trim_ascii(text.substr(7)));
+            return;
+        }
         status = "Unknown command: " + text;
     };
 
@@ -1210,13 +1263,17 @@ int run(provider::RequestContext context, chat::Session session) {
                     if (!event.chat.usage_json.empty() && event.chat.usage_json != "null") {
                         session.usage_json = event.chat.usage_json;
                     }
+                    if (event.compacted) {
+                        event.compaction.timestamp = chat::current_timestamp_utc();
+                        session.compaction_events.push_back(event.compaction);
+                    }
                     pending_user = static_cast<size_t>(-1);
                     pending_assistant = static_cast<size_t>(-1);
                     active_job = ActiveJob::None;
                     if (should_regenerate) {
                         start_queued_regeneration(regenerate_erase_from);
                     } else {
-                        status = "Ready";
+                        status = event.compacted ? event.compaction.notice : "Ready";
                         start_save(context.options.save_chat_path, session);
                     }
                     break;
@@ -1255,6 +1312,16 @@ int run(provider::RequestContext context, chat::Session session) {
                         status = error_line(event.error);
                     }
                     break;
+                case TuiEventType::InsertDone:
+                    file_job.join();
+                    if (event.error.ok() && !event.session.messages.empty()) {
+                        session.messages.push_back(std::move(event.session.messages.front()));
+                        history_scroll = 0;
+                        status = "Inserted context from " + event.text;
+                    } else {
+                        status = error_line(event.error);
+                    }
+                    break;
                 case TuiEventType::ModelsDone:
                     model_job.join();
                     active_job = ActiveJob::None;
@@ -1279,7 +1346,12 @@ int run(provider::RequestContext context, chat::Session session) {
                     const TuiSize terminal = terminal_size();
                     const bool handled = handle_escape(input, layout_for_terminal(terminal.rows, terminal.cols), history_scroll, status);
                     if (!handled) {
-                        cancel_active_request();
+                        if (active_job != ActiveJob::None) {
+                            cancel_active_request();
+                        } else if (file_job.running()) {
+                            file_job.cancel();
+                            status = "Cancelling file job...";
+                        }
                     }
                     continue;
                 }

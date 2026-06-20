@@ -79,6 +79,10 @@ Profile make_profile(const std::string& name,
     profile.dummy_api_key = dummy_api_key;
     profile.compatibility_warning = warning;
     profile.capabilities = profile_capabilities(requires_key, local, !chat_path.empty(), !responses_path.empty(), !models_path.empty());
+    profile.capabilities.images = name == "openai" || name == "openrouter" || name == "gemini" ||
+                                  name == "xai" || name == "mistral" || name == "lm_studio" ||
+                                  name == "ollama" || name == "vllm" || name == "llamacpp" ||
+                                  name == "custom_openai_chat";
     return profile;
 }
 
@@ -1252,6 +1256,59 @@ const Capabilities& capabilities_for(const RequestContext& context) {
     return context.profile.capabilities;
 }
 
+Capabilities detected_capabilities_for(const RequestContext& context) {
+    Capabilities caps = capabilities_for(context);
+    if (context.api_kind != ApiKind::ChatCompletions || context.options.image_capability == "deny") {
+        caps.images = false;
+        return caps;
+    }
+    if (context.options.image_capability == "allow") {
+        caps.images = true;
+        return caps;
+    }
+    if (!caps.images) {
+        return caps;
+    }
+
+    const std::string model = lower_alias(context.options.model);
+    const bool known_vision = model.find("gpt_4o") != std::string::npos ||
+                              model.find("gpt_4.1") != std::string::npos ||
+                              model.find("gpt_5") != std::string::npos ||
+                              model.find("vision") != std::string::npos ||
+                              model.find("llava") != std::string::npos ||
+                              model.find("pixtral") != std::string::npos ||
+                              model.find("gemini") != std::string::npos ||
+                              model.find("minicpm_v") != std::string::npos ||
+                              (model.find("qwen") != std::string::npos &&
+                               (model.find("vl") != std::string::npos || model.find("3.5") != std::string::npos ||
+                                model.find("3.6") != std::string::npos));
+    caps.images = known_vision;
+    return caps;
+}
+
+Error validate_image_input(const RequestContext& context) {
+    if (context.api_kind != ApiKind::ChatCompletions) {
+        return {ErrorCode::UnsupportedFeature,
+                "image input currently supports Chat Completions only; use --api chat"};
+    }
+    if (context.options.image_capability == "deny") {
+        return {ErrorCode::UnsupportedFeature, "image input is disabled by --image-capability deny"};
+    }
+    if (!context.profile.capabilities.images && context.options.image_capability != "allow") {
+        return {ErrorCode::UnsupportedFeature,
+                "provider profile " + context.profile.name +
+                    " does not advertise image input; use a vision-capable provider or explicitly pass "
+                    "--image-capability allow for a compatible custom endpoint"};
+    }
+    if (!detected_capabilities_for(context).images) {
+        return {ErrorCode::UnsupportedFeature,
+                "model " + context.options.model +
+                    " is not recognized as image-capable. Select a vision model or pass "
+                    "--image-capability allow after verifying endpoint support"};
+    }
+    return ok_error();
+}
+
 std::string active_request_url(const RequestContext& context) {
     return context.api_kind == ApiKind::Responses ? context.responses_url : context.chat_url;
 }
@@ -1285,12 +1342,13 @@ Error send_chat_messages(const RequestContext& context,
     if (cancellation.cancelled()) {
         return {ErrorCode::Cancelled, "chat request cancelled before it started"};
     }
-    if (context.api_kind == ApiKind::Responses) {
-        for (const Message& message : messages) {
-            if (!message.images.empty()) {
-                return {ErrorCode::UnsupportedFeature,
-                        "image input currently supports Chat Completions only; use --api chat"};
+    for (const Message& message : messages) {
+        if (!message.images.empty()) {
+            Error image_error = validate_image_input(context);
+            if (!image_error.ok()) {
+                return image_error;
             }
+            break;
         }
     }
     auto start = std::chrono::steady_clock::now();
