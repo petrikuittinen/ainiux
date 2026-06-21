@@ -6,6 +6,7 @@
 #include <fstream>
 #include <iomanip>
 #include <iostream>
+#include <limits>
 #include <sstream>
 
 #include "json/json.hpp"
@@ -1357,6 +1358,40 @@ double tokens_per_second(const ChatResult& result, bool stream) {
     }
     return static_cast<double>(result.completion_tokens) * 1000.0 /
            static_cast<double>(denominator_ms);
+}
+
+long long reported_total_tokens(const ChatResult& result) {
+    if (result.usage_json.empty() || result.usage_json == "null") {
+        return -1;
+    }
+    const json::ParseResult parsed = json::parse(result.usage_json);
+    if (!parsed.error.ok() || !parsed.value.is_object()) {
+        return -1;
+    }
+    auto token_value = [&](const std::string& name) -> long long {
+        const json::Value* value = parsed.value.get(name);
+        if (value == nullptr || value->type != json::Value::Type::Number || value->number < 0.0 ||
+            value->number >= static_cast<double>(std::numeric_limits<long long>::max())) {
+            return -1;
+        }
+        return static_cast<long long>(value->number);
+    };
+    const long long total = token_value("total_tokens");
+    if (total >= 0) {
+        return total;
+    }
+    long long input = token_value("prompt_tokens");
+    if (input < 0) {
+        input = token_value("input_tokens");
+    }
+    long long output = token_value("completion_tokens");
+    if (output < 0) {
+        output = token_value("output_tokens");
+    }
+    if (input < 0 || output < 0 || input > std::numeric_limits<long long>::max() - output) {
+        return -1;
+    }
+    return input + output;
 }
 
 std::string serialize_chat_request(const RequestContext& context, const std::vector<Message>& messages) {

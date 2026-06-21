@@ -60,7 +60,8 @@ def main():
     master, slave = pty.openpty()
     process = subprocess.Popen(
         [binary, base, "--quiet", "--chat", "--no-stream", "-m", model,
-         "--image-capability", "allow", "--allow-private-url-fetch", "--save-chat", save_path],
+         "--context", "64k", "--image-capability", "allow", "--allow-private-url-fetch",
+         "--save-chat", save_path],
         stdin=slave,
         stdout=slave,
         stderr=slave,
@@ -78,7 +79,9 @@ def main():
         if b"Completed path:" not in completion_output:
             raise RuntimeError("TUI did not report a unique path completion")
         send(master, "\r")
-        send(master, "summarize-insert\r", 0.8)
+        response_output = send(master, "summarize-insert\r", 0.8)
+        if b"Context used:" not in response_output:
+            raise RuntimeError("TUI completion status did not render estimated context usage")
         send(master, f"/attach {image_path}\r")
         send(master, "describe-image\r", 0.8)
         send(master, f"/fetch {fetch_url}\r", 0.5)

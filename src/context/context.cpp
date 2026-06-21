@@ -2,12 +2,43 @@
 
 #include <algorithm>
 #include <cctype>
+#include <limits>
 
 namespace pkchat::context {
 namespace {
 
 size_t message_bytes(const provider::Message& message) {
     return message.role.size() + message.content.size() + 16;
+}
+
+long long saturating_add(long long left, long long right) {
+    if (right > std::numeric_limits<long long>::max() - left) {
+        return std::numeric_limits<long long>::max();
+    }
+    return left + right;
+}
+
+long long estimated_content_tokens(const std::string& text) {
+    long long ascii_bytes = 0;
+    long long non_ascii_codepoints = 0;
+    for (size_t i = 0; i < text.size();) {
+        const unsigned char ch = static_cast<unsigned char>(text[i]);
+        if (ch < 0x80U) {
+            ++ascii_bytes;
+            ++i;
+            continue;
+        }
+        ++non_ascii_codepoints;
+        ++i;
+        size_t continuations = 0;
+        while (i < text.size() && continuations < 3 &&
+               (static_cast<unsigned char>(text[i]) & 0xC0U) == 0x80U) {
+            ++i;
+            ++continuations;
+        }
+    }
+    const long long ascii_tokens = ascii_bytes / 4 + (ascii_bytes % 4 == 0 ? 0 : 1);
+    return saturating_add(ascii_tokens, non_ascii_codepoints);
 }
 
 std::string compact_whitespace(const std::string& text) {
@@ -76,6 +107,15 @@ size_t estimated_text_bytes(const std::vector<provider::Message>& messages) {
     size_t total = 0;
     for (const provider::Message& message : messages) {
         total += message_bytes(message);
+    }
+    return total;
+}
+
+long long estimated_text_tokens(const std::vector<provider::Message>& messages) {
+    long long total = 3;
+    for (const provider::Message& message : messages) {
+        total = saturating_add(total, 4);
+        total = saturating_add(total, estimated_content_tokens(message.content));
     }
     return total;
 }

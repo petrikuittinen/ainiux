@@ -48,18 +48,47 @@ std::string ready_status() {
     return std::string("Pkchat v") + kVersion + " ready";
 }
 
-std::string generation_ready_status(const provider::ChatResult& result, bool stream) {
+std::string generation_ready_status(const provider::ChatResult& result,
+                                    bool stream,
+                                    const std::vector<provider::Message>& messages,
+                                    long long context_tokens) {
     std::ostringstream out;
-    out << ready_status();
+    out << (context_tokens > 0 ? std::string("Pkchat v") + kVersion : ready_status());
     if (stream) {
-        out << " | TTFT: " << result.ttft_ms << " ms";
+        if (context_tokens > 0) {
+            out << " | TTFT " << result.ttft_ms << "ms";
+        } else {
+            out << " | TTFT: " << result.ttft_ms << " ms";
+        }
     } else {
-        out << " | Response: " << result.total_ms << " ms";
+        if (context_tokens > 0) {
+            out << " | Response " << result.total_ms << "ms";
+        } else {
+            out << " | Response: " << result.total_ms << " ms";
+        }
     }
-    out << " | Token/s: " << std::fixed << std::setprecision(1)
-        << provider::tokens_per_second(result, stream);
-    if (result.completion_tokens_estimated) {
-        out << " (estimated)";
+    if (context_tokens > 0) {
+        out << " | ";
+        if (result.completion_tokens_estimated) {
+            out << "~";
+        }
+        out << std::fixed << std::setprecision(1) << provider::tokens_per_second(result, stream)
+            << " tok/s";
+    } else {
+        out << " | Token/s: " << std::fixed << std::setprecision(1)
+            << provider::tokens_per_second(result, stream);
+        if (result.completion_tokens_estimated) {
+            out << " (estimated)";
+        }
+    }
+    if (context_tokens > 0) {
+        const long long locally_estimated = context::estimated_text_tokens(messages);
+        const long long reported = provider::reported_total_tokens(result);
+        const long long used = std::max(locally_estimated, reported);
+        const double percentage = static_cast<double>(used) * 100.0 /
+                                  static_cast<double>(context_tokens);
+        out << " | Context used: " << used << "/" << context_tokens << " ("
+            << std::fixed << std::setprecision(1) << percentage << "%)";
     }
     return out.str();
 }
@@ -1460,7 +1489,9 @@ int run(provider::RequestContext context, chat::Session session) {
                     } else {
                         status = event.compacted
                                      ? event.compaction.notice
-                                     : generation_ready_status(event.chat, context.options.stream);
+                                     : generation_ready_status(event.chat, context.options.stream,
+                                                               session.messages,
+                                                               context.options.context_tokens);
                         start_save(context.options.save_chat_path, session);
                     }
                     break;

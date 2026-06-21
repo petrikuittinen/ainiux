@@ -98,6 +98,33 @@ void test_cli_repl_parse() {
     check(parsed.options.load_chat_path == "chat.json", "load chat parsed");
 }
 
+void test_cli_context_token_parse() {
+    const char* binary_argv[] = {"pkchat", "--chat", "--context", "64k"};
+    pkchat::cli::ParseResult parsed = pkchat::cli::parse_args(4, const_cast<char**>(binary_argv));
+    check(parsed.error.ok(), "binary-k context size parses");
+    check(parsed.options.context_tokens == 65536, "64k context size equals 65536 tokens");
+
+    const char* million_argv[] = {"pkchat", "--chat", "--context", "1M"};
+    parsed = pkchat::cli::parse_args(4, const_cast<char**>(million_argv));
+    check(parsed.error.ok(), "decimal-M context size parses");
+    check(parsed.options.context_tokens == 1000000, "1M context size equals one million tokens");
+
+    const char* zero_argv[] = {"pkchat", "--context", "0"};
+    parsed = pkchat::cli::parse_args(3, const_cast<char**>(zero_argv));
+    check(!parsed.error.ok() && parsed.error.code == pkchat::ErrorCode::BadArgs,
+          "zero context size is rejected");
+
+    const char* suffix_argv[] = {"pkchat", "--context", "64kb"};
+    parsed = pkchat::cli::parse_args(3, const_cast<char**>(suffix_argv));
+    check(!parsed.error.ok() && parsed.error.code == pkchat::ErrorCode::BadArgs,
+          "unsupported context size suffix is rejected");
+
+    const char* overflow_argv[] = {"pkchat", "--context", "999999999999999999999M"};
+    parsed = pkchat::cli::parse_args(3, const_cast<char**>(overflow_argv));
+    check(!parsed.error.ok() && parsed.error.code == pkchat::ErrorCode::BadArgs,
+          "overflowing context size is rejected");
+}
+
 void test_cli_help_displays_version() {
     const std::string expected_heading = std::string("pkchat ") + pkchat::kVersion +
                                          " - script-friendly OpenAI-compatible chat CLI";
@@ -372,6 +399,19 @@ void test_context_policies_preserve_full_messages() {
     pkchat::context::PreparedMessages automatic = pkchat::context::prepare(messages, "provider-auto", 1);
     check(automatic.error.ok() && !automatic.compacted && automatic.messages.size() == messages.size(),
           "provider-auto delegates context management without changing messages");
+
+    const std::vector<pkchat::provider::Message> visible_only = {
+        {"user", "question"}, {"assistant", "answer"}};
+    const std::vector<pkchat::provider::Message> with_thinking = {
+        {"user", "question"}, {"assistant", "<think>hidden reasoning tokens</think>\n\nanswer"}};
+    check(pkchat::context::estimated_text_tokens(with_thinking) >
+              pkchat::context::estimated_text_tokens(visible_only),
+          "context token estimate includes assistant thinking traces");
+
+    const std::vector<pkchat::provider::Message> unicode = {
+        {"user", "你好 مرحبا"}};
+    check(pkchat::context::estimated_text_tokens(unicode) > 0,
+          "context token estimate handles non-ASCII transcript text");
 }
 
 void test_http_private_address_socket_block() {
@@ -920,17 +960,33 @@ void test_tui_ready_and_generation_status() {
     result.completion_tokens = 20;
     result.completion_tokens_estimated = true;
 
-    const std::string streaming = pkchat::tui::generation_ready_status(result, true);
+    const std::string streaming = pkchat::tui::generation_ready_status(result, true, {}, 0);
     check(streaming.find("TTFT: 100 ms") != std::string::npos,
           "TUI streaming completion status displays time to first token");
     check(streaming.find("Token/s: 20.0 (estimated)") != std::string::npos,
           "TUI streaming completion status estimates throughput after the first token");
 
-    const std::string non_streaming = pkchat::tui::generation_ready_status(result, false);
+    const std::string non_streaming = pkchat::tui::generation_ready_status(result, false, {}, 0);
     check(non_streaming.find("Response: 1100 ms") != std::string::npos,
           "TUI non-streaming completion status reports response latency instead of TTFT");
     check(non_streaming.find("Token/s: 18.2 (estimated)") != std::string::npos,
           "TUI non-streaming completion status estimates whole-response throughput");
+
+    result.usage_json = "{\"prompt_tokens\":20,\"completion_tokens\":5,\"total_tokens\":25}";
+    const std::vector<pkchat::provider::Message> messages = {
+        {"user", "hi"}, {"assistant", "<think>x</think>ok"}};
+    const std::string context_status =
+        pkchat::tui::generation_ready_status(result, true, messages, 100);
+    check(context_status.find("TTFT 100ms | ~20.0 tok/s") != std::string::npos,
+          "TUI context status uses compact timing and estimated-throughput notation");
+    check(context_status.find("Context used: 25/100 (25.0%)") != std::string::npos,
+          "TUI completion status displays estimated context usage");
+
+    result.usage_json = "null";
+    const std::string exhausted =
+        pkchat::tui::generation_ready_status(result, true, messages, 10);
+    check(exhausted.find("Context used: 17/10 (170.0%)") != std::string::npos,
+          "TUI context estimate reports usage beyond the configured window");
 }
 
 void test_tui_theme_parsing_and_contrast() {
@@ -1190,7 +1246,10 @@ void test_chat_session_json_round_trip() {
     context.base_url = "http://localhost:8000/v1";
     context.options.model = "mock-model";
     context.options.stream = false;
+    context.options.context_tokens = 65536;
     pkchat::chat::Session session = pkchat::chat::new_session(context);
+    check(session.settings_json.find("\"context_tokens\":65536") != std::string::npos,
+          "new chat settings preserve the configured context-window size");
     session.created_at = "2026-06-14T00:00:00Z";
     session.updated_at = session.created_at;
     session.messages.push_back({"user", "hello"});
@@ -1300,6 +1359,7 @@ int main() {
     test_cli_rejects_unknown();
     test_cli_provider_shortcut_parse();
     test_cli_repl_parse();
+    test_cli_context_token_parse();
     test_cli_help_displays_version();
     test_cli_chat_parse();
     test_cli_chat_nocolors_parse();

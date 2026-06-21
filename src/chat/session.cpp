@@ -160,6 +160,9 @@ Session new_session(const provider::RequestContext& context) {
     if (context.options.has_max_output_tokens) {
         settings << ",\"max_output_tokens\":" << context.options.max_output_tokens;
     }
+    if (context.options.context_tokens > 0) {
+        settings << ",\"context_tokens\":" << context.options.context_tokens;
+    }
     settings << "}";
     session.settings_json = settings.str();
     return session;

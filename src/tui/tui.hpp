@@ -2,6 +2,7 @@
 
 #include <cstddef>
 #include <string>
+#include <vector>
 
 #include "chat/session.hpp"
 #include "editor/editor.hpp"
@@ -64,7 +65,10 @@ struct ThinkingDisplay {
 
 ThinkingDisplay thinking_display_text(const std::string& content, bool show_traces);
 std::string ready_status();
-std::string generation_ready_status(const provider::ChatResult& result, bool stream);
+std::string generation_ready_status(const provider::ChatResult& result,
+                                    bool stream,
+                                    const std::vector<provider::Message>& messages,
+                                    long long context_tokens);
 
 struct RegenerationPlan {
     bool available = false;

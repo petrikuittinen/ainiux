@@ -1,6 +1,7 @@
 #include "cli/args.hpp"
 
 #include <cstdlib>
+#include <limits>
 #include <sstream>
 
 #include "pkchat/version.hpp"
@@ -17,7 +18,7 @@ bool needs_value(const std::string& opt) {
         "--key-env", "--key-file", "-k", "--key", "--header", "--connect-timeout", "--timeout",
         "--proxy", "--fetch-url", "--input", "--attach", "--html-file", "--html-format",
         "--max-fetch-bytes", "--max-input-bytes", "--max-image-bytes", "--max-context-bytes",
-        "--context-policy", "--image-capability",
+        "--context", "--context-policy", "--image-capability",
         "--save-chat", "--load-chat"};
     for (const char* item : with_values) {
         if (opt == item) {
@@ -52,6 +53,48 @@ Error parse_int(const std::string& name, const std::string& text, int& out) {
         return err;
     }
     out = static_cast<int>(value);
+    return ok_error();
+}
+
+Error parse_context_tokens(const std::string& text, long long& out) {
+    if (text.empty()) {
+        return {ErrorCode::BadArgs,
+                "--context expects a positive token count such as 65536, 64k, or 1M"};
+    }
+    size_t digits = text.size();
+    long long multiplier = 1;
+    const char suffix = text.back();
+    if (suffix == 'k' || suffix == 'K') {
+        multiplier = 1024;
+        --digits;
+    } else if (suffix == 'm' || suffix == 'M') {
+        multiplier = 1000000;
+        --digits;
+    }
+    if (digits == 0) {
+        return {ErrorCode::BadArgs,
+                "--context expects a positive token count such as 65536, 64k, or 1M"};
+    }
+    long long value = 0;
+    for (size_t i = 0; i < digits; ++i) {
+        const char ch = text[i];
+        if (ch < '0' || ch > '9') {
+            return {ErrorCode::BadArgs,
+                    "--context expects a positive token count with an optional k or M suffix"};
+        }
+        const int digit = ch - '0';
+        if (value > (std::numeric_limits<long long>::max() - digit) / 10) {
+            return {ErrorCode::BadArgs, "--context token count is too large"};
+        }
+        value = value * 10 + digit;
+    }
+    if (value == 0) {
+        return {ErrorCode::BadArgs, "--context must be greater than zero"};
+    }
+    if (value > std::numeric_limits<long long>::max() / multiplier) {
+        return {ErrorCode::BadArgs, "--context token count is too large"};
+    }
+    out = value * multiplier;
     return ok_error();
 }
 
@@ -263,6 +306,11 @@ ParseResult parse_args(int argc, char** argv) {
                 if (!err.ok()) {
                     return {opts, err};
                 }
+            } else if (opt == "--context") {
+                Error err = parse_context_tokens(value, opts.context_tokens);
+                if (!err.ok()) {
+                    return {opts, err};
+                }
             } else if (opt == "--context-policy") {
                 if (value != "error" && value != "truncate-oldest" && value != "summarize-oldest" &&
                     value != "summarize-middle" && value != "provider-auto") {
@@ -351,6 +399,7 @@ Options:
       --max-fetch-bytes N       Default 1048576.
       --max-input-bytes N       Maximum bytes per text input/attachment; default 1048576.
       --max-image-bytes N       Maximum image file size; default 20971520.
+      --context TOKENS          Model context-window size; k is 1024, M is 1000000.
       --max-context-bytes N     Request text budget; 0 disables the client budget.
       --context-policy POLICY   error, truncate-oldest, summarize-oldest,
                                 summarize-middle, or provider-auto.

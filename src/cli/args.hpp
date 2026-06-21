@@ -72,6 +72,7 @@ struct Options {
     long max_input_bytes = 1048576;
     long max_image_bytes = 20971520;
     long max_context_bytes = 0;
+    long long context_tokens = 0;
 
     std::vector<std::string> headers;
     std::vector<std::string> attachment_paths;

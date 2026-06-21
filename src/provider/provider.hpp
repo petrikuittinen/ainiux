@@ -108,6 +108,7 @@ Capabilities detected_capabilities_for(const RequestContext& context);
 Error validate_image_input(const RequestContext& context);
 std::string active_request_url(const RequestContext& context);
 double tokens_per_second(const ChatResult& result, bool stream);
+long long reported_total_tokens(const ChatResult& result);
 std::string serialize_chat_request(const RequestContext& context, const std::vector<Message>& messages);
 Error list_models(const RequestContext& context,
                   ModelsResult& result,
