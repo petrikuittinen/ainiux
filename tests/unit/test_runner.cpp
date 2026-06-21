@@ -5,11 +5,14 @@
 #include <fstream>
 #include <iostream>
 #include <iterator>
+#include <map>
+#include <sstream>
 #include <string>
 #include <thread>
 #include <vector>
 
 #include "chat/session.hpp"
+#include "benchmark/benchmark.hpp"
 #include "cli/args.hpp"
 #include "config/config.hpp"
 #include "context/context.hpp"
@@ -54,6 +57,73 @@ void test_cli_parse() {
     check(parsed.options.format == pkchat::cli::OutputFormat::Json, "json format parsed");
     check(parsed.options.verbose, "verbose parsed");
     check(parsed.options.save_chat_path == "chat.json", "save chat parsed");
+}
+
+void test_benchmark_cli_and_jsonl_dataset() {
+    const char* argv[] = {"pkchat", "benchmark", "--dataset", "benchmarks/builtin.jsonl",
+                          "--category", "reasoning", "--limit", "2", "--runs", "3",
+                          "--warmup", "1", "--format", "jsonl"};
+    pkchat::cli::ParseResult parsed =
+        pkchat::cli::parse_args(14, const_cast<char**>(argv));
+    check(parsed.error.ok(), "benchmark CLI options parse");
+    check(parsed.options.benchmark && parsed.options.benchmark_category == "reasoning",
+          "benchmark subcommand and category parsed");
+    check(parsed.options.benchmark_limit == 2 && parsed.options.benchmark_runs == 3 &&
+              parsed.options.benchmark_warmup == 1,
+          "benchmark run controls parsed");
+    check(parsed.options.format == pkchat::cli::OutputFormat::Ndjson,
+          "jsonl output alias maps to newline-delimited JSON");
+
+    const char* misplaced_argv[] = {"pkchat", "--dataset", "cases.jsonl"};
+    pkchat::cli::ParseResult misplaced =
+        pkchat::cli::parse_args(3, const_cast<char**>(misplaced_argv));
+    check(misplaced.error.ok() && misplaced.options.benchmark_options_seen &&
+              !misplaced.options.benchmark,
+          "CLI records benchmark-only options used without the subcommand for main validation");
+    const char* overflow_argv[] = {"pkchat", "benchmark", "--runs", "999999999999999"};
+    pkchat::cli::ParseResult overflow =
+        pkchat::cli::parse_args(4, const_cast<char**>(overflow_argv));
+    check(!overflow.error.ok(), "benchmark integer controls reject values larger than int");
+
+    pkchat::benchmark::LoadResult loaded =
+        pkchat::benchmark::load_jsonl("builtin");
+    check(loaded.error.ok(), "built-in benchmark JSONL loads");
+    check(loaded.dataset.cases.size() == 50, "built-in benchmark dataset has exactly 50 cases");
+    std::map<std::string, size_t> categories;
+    for (const pkchat::benchmark::Case& benchmark_case : loaded.dataset.cases) {
+        ++categories[benchmark_case.category];
+    }
+    check(categories.size() == 5 && categories["safety"] == 10 &&
+              categories["reasoning"] == 10 && categories["writing"] == 10 &&
+              categories["coding"] == 10 && categories["multi-turn"] == 10,
+          "built-in benchmark dataset has ten cases in each category");
+    const std::vector<const pkchat::benchmark::Case*> selected =
+        pkchat::benchmark::select_cases(loaded.dataset, "reasoning", "", 2);
+    check(selected.size() == 2 && selected[0]->id == "reasoning-01",
+          "benchmark category and limit selection is deterministic");
+
+    pkchat::benchmark::LoadResult long_context =
+        pkchat::benchmark::load_jsonl("benchmarks/long-context.jsonl");
+    check(long_context.error.ok() && long_context.dataset.cases.size() == 2,
+          "long-context benchmark JSONL loads");
+    check(!long_context.dataset.cases.empty() &&
+              !long_context.dataset.cases[0].fetch_url.empty() &&
+              long_context.dataset.cases[0].turns.size() == 2,
+          "long-context cases include a URL and translation follow-up");
+
+    std::istringstream duplicate(
+        "{\"id\":\"same\",\"category\":\"test\",\"turns\":[\"one\"]}\n"
+        "{\"id\":\"same\",\"category\":\"test\",\"turns\":[\"two\"]}\n");
+    pkchat::benchmark::LoadResult invalid =
+        pkchat::benchmark::parse_jsonl(duplicate, "duplicate.jsonl");
+    check(!invalid.error.ok() && invalid.error.message.find("duplicate case id") != std::string::npos,
+          "benchmark JSONL rejects duplicate case identifiers");
+
+    std::istringstream bad_schema(
+        "{\"id\":\"bad\",\"category\":\"test\",\"turns\":[],\"typo\":true}\n");
+    invalid = pkchat::benchmark::parse_jsonl(bad_schema, "schema.jsonl");
+    check(!invalid.error.ok() && invalid.error.message.find("unknown field 'typo'") != std::string::npos,
+          "benchmark JSONL rejects unknown schema fields");
 }
 
 void test_config_reads_common_template() {
@@ -1557,6 +1627,7 @@ int main() {
     test_config_rejects_invalid_input();
     test_config_file_read_errors();
     test_cli_parse();
+    test_benchmark_cli_and_jsonl_dataset();
     test_cli_rejects_unknown();
     test_cli_provider_shortcut_parse();
     test_cli_repl_parse();

@@ -9,6 +9,7 @@
 #include <vector>
 
 #include "chat/session.hpp"
+#include "benchmark/benchmark.hpp"
 #include "cli/args.hpp"
 #include "common.hpp"
 #include "config/config.hpp"
@@ -475,6 +476,90 @@ int run_document_extract(const pkchat::cli::Options& options, std::ostream& out)
             << pkchat::json::quote(pkchat::markdown::output_format_name(document.output_format)) << "}\n";
     } else {
         out << document.converted;
+    }
+    return 0;
+}
+
+int run_benchmark_mode(const pkchat::cli::Options& options) {
+    if (options.benchmark_dataset.empty()) {
+        print_error({pkchat::ErrorCode::BadArgs, "--dataset requires a non-empty path"});
+        return exit_code_for(pkchat::ErrorCode::BadArgs);
+    }
+    if (options.format != pkchat::cli::OutputFormat::Ndjson) {
+        print_error({pkchat::ErrorCode::BadArgs,
+                     "benchmark mode currently writes JSONL; use --format jsonl or omit --format"});
+        return exit_code_for(pkchat::ErrorCode::BadArgs);
+    }
+    if (options.benchmark_validate && options.benchmark_list) {
+        print_error({pkchat::ErrorCode::BadArgs,
+                     "--validate-dataset and --list-cases cannot be combined"});
+        return exit_code_for(pkchat::ErrorCode::BadArgs);
+    }
+    if (!options.prompt.empty() || !options.prompt_file.empty() || !options.system.empty() ||
+        !options.system_file.empty() || options.repl || options.tui || options.editor ||
+        options.list_models || has_document_source(options) || !options.attachment_paths.empty()) {
+        print_error({pkchat::ErrorCode::BadArgs,
+                     "benchmark cannot be combined with chat prompts, interactive modes, input attachments, "
+                     "or --list-models"});
+        return exit_code_for(pkchat::ErrorCode::BadArgs);
+    }
+    if (!options.key.empty() && !options.quiet) {
+        std::cerr << "Warning: command line API keys may be visible to other local users; "
+                     "prefer --key-env, --key-file, or --key-stdin.\n";
+    }
+    if (options.insecure_tls) {
+        std::cerr << "Warning: TLS certificate verification is disabled by the effective configuration.\n";
+    }
+
+    pkchat::benchmark::LoadResult loaded =
+        pkchat::benchmark::load_jsonl(options.benchmark_dataset);
+    if (!loaded.error.ok()) {
+        print_error(loaded.error);
+        return exit_code_for(loaded.error.code);
+    }
+    const size_t limit = options.benchmark_limit > 0
+                             ? static_cast<size_t>(options.benchmark_limit)
+                             : 0U;
+    const std::vector<const pkchat::benchmark::Case*> selected =
+        pkchat::benchmark::select_cases(loaded.dataset, options.benchmark_category,
+                                        options.benchmark_case, limit);
+    if (selected.empty()) {
+        print_error({pkchat::ErrorCode::BadArgs,
+                     "benchmark selection matched no cases in " + options.benchmark_dataset});
+        return exit_code_for(pkchat::ErrorCode::BadArgs);
+    }
+
+    std::ofstream out_file;
+    pkchat::Error output_error;
+    std::ostream* out = output_stream(options, out_file, output_error);
+    if (!output_error.ok()) {
+        print_error(output_error);
+        return exit_code_for(output_error.code);
+    }
+    if (options.benchmark_validate) {
+        *out << "{\"type\":\"dataset\",\"path\":"
+             << pkchat::json::quote(options.benchmark_dataset)
+             << ",\"total_cases\":" << loaded.dataset.cases.size()
+             << ",\"selected_cases\":" << selected.size() << ",\"valid\":true}\n";
+        return 0;
+    }
+    if (options.benchmark_list) {
+        for (const pkchat::benchmark::Case* benchmark_case : selected) {
+            pkchat::benchmark::write_case_json(*out, *benchmark_case);
+        }
+        return 0;
+    }
+
+    pkchat::provider::ContextResult context_result = pkchat::provider::build_context(options);
+    if (!context_result.error.ok()) {
+        print_error(context_result.error);
+        return exit_code_for(context_result.error.code);
+    }
+    pkchat::Error err = pkchat::benchmark::run(context_result.context, selected, options,
+                                               *out, std::cerr);
+    if (!err.ok()) {
+        print_error(err);
+        return exit_code_for(err.code);
     }
     return 0;
 }
@@ -980,6 +1065,14 @@ int main(int argc, char** argv) {
         return exit_code_for(parsed.error.code);
     }
     pkchat::cli::Options options = parsed.options;
+    if (options.benchmark) {
+        return run_benchmark_mode(options);
+    }
+    if (options.benchmark_options_seen) {
+        print_error({pkchat::ErrorCode::BadArgs,
+                     "benchmark dataset options require the 'benchmark' subcommand"});
+        return exit_code_for(pkchat::ErrorCode::BadArgs);
+    }
     pkchat::Error profile_error = pkchat::provider::validate_profile_name(options.provider);
     if (!profile_error.ok()) {
         print_error(profile_error);

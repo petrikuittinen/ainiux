@@ -12,12 +12,16 @@ OPTIMIZED_CXXFLAGS := $(filter-out -O% $(DEBUG_FLAG_PATTERNS),$(CXXFLAGS)) -O3 -
 OPTIMIZED_LDFLAGS := $(LDFLAGS) -s
 
 BUILD_DIR := build
+GENERATED_DIR := $(BUILD_DIR)/generated
+CXXFLAGS += -I$(GENERATED_DIR)
 OBJ_DIR := $(BUILD_DIR)/obj
 BIN := pkchat
 TEST_BIN := $(BUILD_DIR)/test_runner
 COMMON_CONFIG := config/pkchat.conf
 COMMON_CONFIG_DIR := $(DESTDIR)$(SYSCONFDIR)/xdg/pkchat
 COMMON_CONFIG_PATH := $(COMMON_CONFIG_DIR)/config.conf
+BENCHMARK_DATA_DIR := $(DESTDIR)$(PREFIX)/share/pkchat/benchmarks
+BUILTIN_BENCHMARK_HEADER := $(GENERATED_DIR)/builtin_dataset.hpp
 
 SRC := $(shell find src -name '*.cpp' | sort)
 APP_SRC := $(SRC)
@@ -41,6 +45,18 @@ $(TEST_BIN): $(LIB_OBJ) $(TEST_OBJ)
 $(OBJ_DIR)/%.o: %.cpp
 	@mkdir -p $(dir $@)
 	$(CXX) $(CXXFLAGS) -MMD -MP -c $< -o $@
+
+$(BUILTIN_BENCHMARK_HEADER): benchmarks/builtin.jsonl
+	@mkdir -p $(dir $@)
+	@{ \
+		printf '%s\n' '#pragma once' 'namespace pkchat::benchmark {' \
+			'inline constexpr char kBuiltinDatasetJsonl[] = R"PKCHAT_JSONL('; \
+		cat $<; \
+		printf '%s\n' ')PKCHAT_JSONL";' '}  // namespace pkchat::benchmark'; \
+	} >$@.tmp
+	@mv $@.tmp $@
+
+$(OBJ_DIR)/src/benchmark/benchmark.o: $(BUILTIN_BENCHMARK_HEADER)
 
 -include $(DEP)
 
@@ -83,6 +99,8 @@ install: $(BIN) $(COMMON_CONFIG)
 	else \
 		install -m 0644 "$(COMMON_CONFIG)" "$(COMMON_CONFIG_PATH)"; \
 	fi
+	install -d "$(BENCHMARK_DATA_DIR)"
+	install -m 0644 benchmarks/builtin.jsonl benchmarks/long-context.jsonl "$(BENCHMARK_DATA_DIR)"
 
 clean:
 	rm -rf $(BUILD_DIR) $(BIN)

@@ -53,3 +53,9 @@ The default `--image-capability auto` mode requires both a provider profile whos
 `--attach PATH` and REPL/TUI `/insert PATH` or `/attach PATH` send selected local contents to the configured model endpoint. Text files are limited to 1 MiB each by default (`--max-input-bytes N`), rejected when they contain NUL bytes or invalid UTF-8, and converted according to their `.txt`, `.md`, or `.html` extension. Interactive images are queued for the next prompt, checked against provider/model capabilities, bounded by `--max-image-bytes`, and removed from memory after successful use. Converted text and fetched URL context are intentionally part of the chat transcript and can therefore appear in saved chat files; image bytes do not.
 
 PDF and DOCX are not read as text or uploaded in this slice. Their future input and output converters require explicit dependency, safety, and fidelity decisions.
+
+## Benchmark Datasets
+
+Benchmark prompts and any fetched reference text are sent to the selected model provider. The built-in 50-case corpus performs no URL fetches. A custom JSONL case may specify `fetch_url`; this is an explicit network operation using the same response-size, timeout, proxy, TLS, private-address, and resolved-socket restrictions as other URL fetching. Benchmark text fetching accepts UTF-8 `text/plain`, `text/html`, or `application/xhtml+xml`; HTML is converted to Markdown before it enters context. The supplied `benchmarks/long-context.jsonl` contacts Project Gutenberg and must be selected explicitly.
+
+Treat third-party datasets as untrusted input. Loading is capped at 16 MiB total and 1 MiB per line, requires unique IDs and a known schema, and validates UTF-8 before any model request. Dataset content can still contain adversarial instructions by design, so do not run benchmarks against providers or tools with privileges beyond ordinary chat.

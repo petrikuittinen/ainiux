@@ -162,11 +162,20 @@ bool supported_html_content_type(std::string content_type) {
     return content_type == "text/html" || content_type == "application/xhtml+xml";
 }
 
-}  // namespace
+bool supported_plain_content_type(std::string content_type) {
+    content_type = lower_ascii(std::move(content_type));
+    const size_t semi = content_type.find(';');
+    if (semi != std::string::npos) {
+        content_type = content_type.substr(0, semi);
+    }
+    return trim_ascii(std::move(content_type)) == "text/plain";
+}
 
-Error fetch_html(const std::string& url,
+Error fetch_body(const std::string& url,
                  const Options& options,
-                 std::string& html_body,
+                 bool allow_plaintext,
+                 std::string& body,
+                 std::string& content_type,
                  runtime::CancellationToken cancellation) {
     if (url.empty()) {
         return {ErrorCode::BadArgs, "URL fetch requires a non-empty URL"};
@@ -195,7 +204,9 @@ Error fetch_html(const std::string& url,
     request.url = url;
     request.headers.push_back(
         "User-Agent: Mozilla/5.0 (X11; Linux x86_64; rv:128.0) Gecko/20100101 Firefox/128.0");
-    request.headers.push_back("Accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8");
+    request.headers.push_back(allow_plaintext
+                                  ? "Accept: text/plain,text/html;q=0.9,application/xhtml+xml;q=0.8"
+                                  : "Accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8");
     request.headers.push_back("Accept-Language: en-US,en;q=0.5");
     request.headers.push_back("Upgrade-Insecure-Requests: 1");
     request.connect_timeout_seconds = options.connect_timeout_seconds;
@@ -215,13 +226,26 @@ Error fetch_html(const std::string& url,
         return {ErrorCode::HttpStatus,
                 "HTTP " + std::to_string(result.response.status) + " while fetching URL: " + url};
     }
-    if (!supported_html_content_type(result.response.content_type)) {
+    if (!supported_html_content_type(result.response.content_type) &&
+        !(allow_plaintext && supported_plain_content_type(result.response.content_type))) {
         return {ErrorCode::UnsupportedFeature,
-                "fetched URL did not return an HTML content type: " + url +
+                std::string("fetched URL did not return ") +
+                    (allow_plaintext ? "a supported text content type: " : "an HTML content type: ") + url +
                     " (Content-Type: " + result.response.content_type + ")"};
     }
-    html_body = std::move(result.response.body);
+    content_type = result.response.content_type;
+    body = std::move(result.response.body);
     return ok_error();
+}
+
+}  // namespace
+
+Error fetch_html(const std::string& url,
+                 const Options& options,
+                 std::string& html_body,
+                 runtime::CancellationToken cancellation) {
+    std::string content_type;
+    return fetch_body(url, options, false, html_body, content_type, cancellation);
 }
 
 Error fetch_markdown(const std::string& url,
@@ -247,6 +271,31 @@ Error fetch_markdown(const std::string& url,
     if (cancellation.cancelled()) {
         return {ErrorCode::Cancelled, "URL fetch cancelled: " + url};
     }
+    return ok_error();
+}
+
+Error fetch_text(const std::string& url,
+                 const Options& options,
+                 std::string& text,
+                 runtime::CancellationToken cancellation) {
+    std::string body;
+    std::string content_type;
+    Error err = fetch_body(url, options, true, body, content_type, cancellation);
+    if (!err.ok()) {
+        return err;
+    }
+    size_t invalid_offset = 0;
+    if (!html::is_valid_utf8(body, &invalid_offset)) {
+        return {ErrorCode::UnsupportedFeature,
+                "text fetch expects UTF-8 input from " + url + " (invalid byte at offset " +
+                    std::to_string(invalid_offset) + ")"};
+    }
+    if (cancellation.cancelled()) {
+        return {ErrorCode::Cancelled, "URL fetch cancelled: " + url};
+    }
+    text = supported_plain_content_type(content_type)
+               ? std::move(body)
+               : html::convert(body, html::OutputFormat::Markdown);
     return ok_error();
 }
 

@@ -1234,10 +1234,21 @@ Add repeatable benchmarking for endpoint/model behavior without turning it into 
 ## Command shape
 
 ```sh
-pkchat benchmark --provider lm_studio -m MODEL --prompt-file bench.txt --runs 10 --warmup 2
-pkchat benchmark --base-url http://localhost:8000/v1 -m MODEL --format csv
-pkchat benchmark --provider openai -m MODEL --concurrency 4 --runs 20 --format json
+pkchat benchmark --provider lm_studio -m MODEL --runs 10 --warmup 2
+pkchat benchmark --dataset cases.jsonl --base-url http://localhost:8000/v1 -m MODEL
+pkchat benchmark --validate-dataset
+pkchat benchmark --dataset benchmarks/long-context.jsonl --provider openai -m MODEL
 ```
+
+## Dataset formats
+
+- [x] Implement strict, bounded UTF-8 JSONL input first.
+- [x] Add an embedded 50-case built-in JSONL corpus with ten safety, reasoning, writing, coding, and multi-turn cases each.
+- [x] Add optional `fetch_url` cases and a separate Project Gutenberg long-context dataset.
+- [x] Add category, case-ID, and count filtering plus offline validation/listing.
+- [ ] Add Parquet input compatible with Hugging Face Datasets after JSONL behavior stabilizes.
+
+Each JSONL object uses required `id`, `category`, and `turns` fields, with optional `language`, `tags`, and `fetch_url`. Generated assistant replies are appended between turns so multi-turn cases exercise actual conversation state.
 
 ## Metrics
 
@@ -1271,8 +1282,12 @@ Options:
 --runs N
 --warmup N
 --concurrency N
---prompt-file PATH
---prompt TEXT
+--dataset PATH|builtin
+--category NAME
+--case ID
+--limit N
+--validate-dataset
+--list-cases
 --max-output-tokens N
 --temperature FLOAT
 --top-p FLOAT
@@ -1280,26 +1295,26 @@ Options:
 --stream
 --no-stream
 --timeout SECONDS
---format table|json|csv|ndjson
+--format jsonl
 --output PATH
 ```
 
 ## Benchmark integrity rules
 
 - [ ] Print model, provider, base URL, prompt size, settings, and timestamp.
-- [ ] Separate warmup runs from measured runs.
+- [x] Separate warmup runs from measured runs.
 - [ ] Report p50/p90/p99 where enough samples exist.
 - [ ] Do not compare different models/settings as if equivalent.
-- [ ] Distinguish provider-reported tokens from estimated tokens.
+- [x] Distinguish provider-reported tokens from estimated tokens.
 - [ ] Keep benchmark jobs cancellable.
 - [ ] Release all per-run request/response/timing allocations after each run.
 
 ## Acceptance criteria
 
-- [ ] Benchmark mode works against mock server.
+- [x] Benchmark mode works against mock server.
 - [ ] Benchmark mode works against LM Studio when running locally.
 - [ ] CSV and JSON output are parseable.
-- [ ] Failed runs are counted and reported.
+- [x] Failed runs are counted and reported.
 - [ ] Ctrl+C/cancellation stops benchmark cleanly.
 - [ ] Leak-check tooling reports no leaks after repeated benchmark runs where supported.
 

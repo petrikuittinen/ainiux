@@ -25,5 +25,9 @@ Error fetch_markdown(const std::string& url,
                      const Options& options,
                      std::string& markdown,
                      runtime::CancellationToken cancellation = runtime::CancellationToken());
+Error fetch_text(const std::string& url,
+                 const Options& options,
+                 std::string& text,
+                 runtime::CancellationToken cancellation = runtime::CancellationToken());
 
 }  // namespace pkchat::fetch

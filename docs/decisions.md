@@ -85,3 +85,9 @@ The same loader now backs TUI `/insert PATH` and its `/attach PATH` synonym in a
 ## Request-Only Context Policies
 
 `--max-context-bytes N` enables a conservative text-byte budget. The `error`, `truncate-oldest`, `summarize-oldest`, `summarize-middle`, and `provider-auto` policies operate on a temporary provider request vector. Summaries are bounded deterministic extracts and do not make nested model calls. The full `Session::messages` transcript remains unchanged, while successful compactions append structured `compaction_events` containing the policy, estimated byte counts, affected-message count, timestamp, and notice. This is explicitly a byte estimate and is not presented as an exact provider token count.
+
+## JSONL Benchmark Datasets
+
+Benchmark input starts with JSONL because it is streamable, diffable, Unicode-safe, easy to generate without an added dependency, and maps cleanly onto single- and multi-turn cases. `src/benchmark/` owns strict schema validation and bounded loading. The authoritative 50-case corpus remains the ordinary file `benchmarks/builtin.jsonl`; the Makefile converts that file into a generated C++ raw string so the default `builtin` dataset remains available after moving or installing the executable. The original JSONL and the opt-in long-context dataset are installed as data files for inspection and extension.
+
+Benchmark result output is JSONL in the first slice. One record is emitted for each measured turn and a final summary record reports completed and failed case runs. Warmups use the same execution path but are not emitted or counted as measurements. Multi-turn history includes actual prior assistant output. Quality scoring, aggregate percentiles, concurrency, cancellation, and Parquet/Hugging Face Datasets input are separate follow-up work rather than hidden approximations in the initial runner.

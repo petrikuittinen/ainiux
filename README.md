@@ -2,7 +2,7 @@
 
 `pkchat` is a fast, script-friendly command-line chat client for OpenAI and OpenAI-compatible APIs.
 
-Current status: v0.6 CLI with libcurl transport, cancellable runtime jobs, provider registry/profile aliases, `/v1/models`, `/v1/chat/completions`, text-only OpenAI Responses API support, local JPEG/PNG/GIF image input, interactive text/image attachments, request-only context policies, safe URL insertion, a simple REPL, a standalone `--editor` mode, a full-screen non-blocking TUI foundation, JSON chat save/load, HTML-to-text/Markdown extraction, Markdown assistant-output rendering to HTML or plaintext, and automatic system/user TOML-alike configuration loading.
+Current status: v0.6 CLI with libcurl transport, cancellable runtime jobs, provider registry/profile aliases, `/v1/models`, `/v1/chat/completions`, text-only OpenAI Responses API support, local JPEG/PNG/GIF image input, interactive text/image attachments, request-only context policies, safe URL insertion, a simple REPL, a standalone `--editor` mode, a full-screen non-blocking TUI foundation, JSON chat save/load, HTML-to-text/Markdown extraction, Markdown assistant-output rendering to HTML or plaintext, automatic system/user TOML-alike configuration loading, and the first JSONL benchmark-mode slice.
 
 ## Build
 
@@ -53,6 +53,28 @@ thinking_traces = true
 The format is deliberately TOML-alike rather than full TOML. Keep secrets out of it; `[credentials]` selects an environment variable or key file and never contains an API key value. Explicit `--config` and `--no-config` controls are planned for the next v0.6 slice.
 
 The HTTP transport uses libcurl through RAII wrappers in `src/http/`. Build flags are discovered with `pkg-config libcurl`, falling back to `curl-config` when needed.
+
+## Benchmarks
+
+The first benchmark slice uses JSONL for datasets and results. The built-in dataset contains 50 cases: ten each for safety, reasoning, writing, coding, and multi-turn behavior. Every non-empty dataset line is one UTF-8 JSON object:
+
+```json
+{"id":"reasoning-01","category":"reasoning","language":"en","tags":["arithmetic"],"turns":["Question text"]}
+```
+
+`id`, `category`, and the non-empty string array `turns` are required. `language`, string-array `tags`, and `fetch_url` are optional. IDs must be unique; unknown fields, invalid UTF-8, malformed JSON, empty turns, files over 16 MiB, and lines over 1 MiB are rejected before a model request. Multi-turn cases retain each generated assistant response before sending the next turn.
+
+```sh
+./pkchat benchmark --validate-dataset
+./pkchat benchmark --list-cases --category reasoning --limit 2
+./pkchat benchmark --provider lm_studio -m MODEL --category reasoning --runs 3 --warmup 1
+./pkchat benchmark --dataset my-cases.jsonl --base-url http://localhost:8000/v1 -m MODEL
+./pkchat benchmark --dataset benchmarks/long-context.jsonl --provider lm_studio -m MODEL
+```
+
+The default `builtin` corpus is embedded from `benchmarks/builtin.jsonl` at build time and is also installed under `share/pkchat/benchmarks`. Results are JSONL records on `stdout`; status and errors remain on `stderr`. `--case ID`, `--category NAME`, and `--limit N` select cases. `--runs N` controls measured repetitions, while `--warmup N` runs separate unreported repetitions. The opt-in long-context file fetches two Project Gutenberg plain-text books and therefore requires network access; normal built-in cases are fully local until sent to the configured model endpoint.
+
+This initial runner records responses, TTFT, wall time, completion-token source, and token rate but does not score answer quality. Aggregate percentiles, concurrency, cancellation, richer timing points, and Parquet/Hugging Face Datasets input remain planned.
 
 ## Examples
 

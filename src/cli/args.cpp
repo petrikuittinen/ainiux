@@ -19,7 +19,8 @@ bool needs_value(const std::string& opt) {
         "--proxy", "--fetch-url", "--input", "--attach", "--html-file", "--html-format",
         "--max-fetch-bytes", "--max-input-bytes", "--max-image-bytes", "--max-context-bytes",
         "--context", "--context-policy", "--image-capability",
-        "--save-chat", "--load-chat"};
+        "--save-chat", "--load-chat", "--dataset", "--category", "--case",
+        "--runs", "--warmup", "--limit"};
     for (const char* item : with_values) {
         if (opt == item) {
             return true;
@@ -51,6 +52,9 @@ Error parse_int(const std::string& name, const std::string& text, int& out) {
     Error err = parse_long(name, text, value);
     if (!err.ok()) {
         return err;
+    }
+    if (value > std::numeric_limits<int>::max()) {
+        return {ErrorCode::BadArgs, name + " value is too large"};
     }
     out = static_cast<int>(value);
     return ok_error();
@@ -137,6 +141,15 @@ ParseResult parse_args(int argc, char** argv, const Options& base_options) {
 
         if (arg == "--help" || arg == "-h") {
             opts.help = true;
+        } else if (arg == "benchmark" && i == 1) {
+            opts.benchmark = true;
+            opts.format = OutputFormat::Ndjson;
+        } else if (arg == "--validate-dataset") {
+            opts.benchmark_validate = true;
+            opts.benchmark_options_seen = true;
+        } else if (arg == "--list-cases") {
+            opts.benchmark_list = true;
+            opts.benchmark_options_seen = true;
         } else if (arg == "--version") {
             opts.version = true;
         } else if (arg == "--list-models") {
@@ -208,10 +221,10 @@ ParseResult parse_args(int argc, char** argv, const Options& base_options) {
                     opts.format = OutputFormat::Text;
                 } else if (value == "json") {
                     opts.format = OutputFormat::Json;
-                } else if (value == "ndjson" || value == "jsond") {
+                } else if (value == "ndjson" || value == "jsond" || value == "jsonl") {
                     opts.format = OutputFormat::Ndjson;
                 } else {
-                    return {opts, {ErrorCode::BadArgs, "--format must be text, json, ndjson, or jsond"}};
+                    return {opts, {ErrorCode::BadArgs, "--format must be text, json, ndjson, jsonl, or jsond"}};
                 }
             } else if (opt == "--output-format") {
                 if (value == "json") {
@@ -324,6 +337,33 @@ ParseResult parse_args(int argc, char** argv, const Options& base_options) {
                     return {opts, {ErrorCode::BadArgs, "--image-capability must be auto, allow, or deny"}};
                 }
                 opts.image_capability = value;
+            } else if (opt == "--dataset") {
+                opts.benchmark_dataset = value;
+                opts.benchmark_options_seen = true;
+            } else if (opt == "--category") {
+                opts.benchmark_category = value;
+                opts.benchmark_options_seen = true;
+            } else if (opt == "--case") {
+                opts.benchmark_case = value;
+                opts.benchmark_options_seen = true;
+            } else if (opt == "--runs") {
+                Error err = parse_int(opt, value, opts.benchmark_runs);
+                if (!err.ok() || opts.benchmark_runs < 1) {
+                    return {opts, {ErrorCode::BadArgs, "--runs expects an integer greater than zero"}};
+                }
+                opts.benchmark_options_seen = true;
+            } else if (opt == "--warmup") {
+                Error err = parse_int(opt, value, opts.benchmark_warmup);
+                if (!err.ok()) {
+                    return {opts, err};
+                }
+                opts.benchmark_options_seen = true;
+            } else if (opt == "--limit") {
+                Error err = parse_int(opt, value, opts.benchmark_limit);
+                if (!err.ok()) {
+                    return {opts, err};
+                }
+                opts.benchmark_options_seen = true;
             }
         } else if (!arg.empty() && arg[0] == '-') {
             return {opts, {ErrorCode::BadArgs, "unknown option: " + arg}};
@@ -352,6 +392,7 @@ Usage:
   pkchat --editor [PATH] [--output PATH]
   pkchat --input PATH [--output-format md|html|plaintext|json|jsond] [--output PATH]
   pkchat --fetch-url URL [--output-format md|html|plaintext|json|jsond] [--output PATH]
+  pkchat benchmark [--dataset FILE] [--provider NAME] [-m MODEL]
 
 Examples:
   pkchat http://localhost:8000 -p "What is the capital of Norway?"
@@ -375,6 +416,8 @@ Examples:
   pkchat --prompt-file prompt.txt --system-file system.txt --format json
   pkchat http://localhost:8000 -p "Write a report" --output-format html --output report.html
   pkchat --repl --load-chat chat.json --save-chat chat.json
+  pkchat benchmark --validate-dataset
+  pkchat benchmark --category reasoning --limit 2 --provider lm_studio -m MODEL
 
 Options:
   -p, --prompt TEXT
@@ -386,7 +429,7 @@ Options:
       --top-p FLOAT
       --max-output-tokens N
       --stream | --no-stream
-      --format text|json|ndjson|jsond
+      --format text|json|ndjson|jsonl|jsond
       --output-format html|md|plaintext|json|jsond|ndjson
       --output PATH             Use 'stdout' to write to standard output.
       --repl, -i                Start a simple line-oriented interactive chat.
@@ -398,6 +441,14 @@ Options:
       --attach PATH             Add text/Markdown/HTML or PNG/JPEG/GIF; repeatable;
                                 'stdin' reads UTF-8 plaintext from standard input.
       --fetch-url URL           Fetch HTML for extraction, or as prompt context with -p.
+      --dataset PATH            Benchmark JSONL dataset; default 'builtin'.
+      --category NAME           Run only benchmark cases in this category.
+      --case ID                 Run only one benchmark case.
+      --runs N                  Measured runs per case; default 1.
+      --warmup N                Unreported warmup runs per case; default 0.
+      --limit N                 Limit selected benchmark cases; 0 means unlimited.
+      --validate-dataset        Validate and summarize the dataset without model calls.
+      --list-cases              List selected benchmark cases without model calls.
       --html-format text|markdown
                                 Compatibility alias for old HTML extraction commands.
       --max-fetch-bytes N       Default 1048576.

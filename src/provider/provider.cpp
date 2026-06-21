@@ -1167,7 +1167,8 @@ ContextResult build_context(const cli::Options& input_options) {
         }
         options.key = trim_ascii(options.key);
     }
-    if (!options.list_models && !options.repl && !options.tui && trim_ascii(options.prompt).empty()) {
+    if (!options.list_models && !options.repl && !options.tui && !options.benchmark &&
+        trim_ascii(options.prompt).empty()) {
         return {{}, {ErrorCode::BadArgs, "prompt is empty; use -p/--prompt, --prompt-file, or --repl"}};
     }
 

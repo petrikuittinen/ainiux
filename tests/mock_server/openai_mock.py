@@ -21,6 +21,13 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(data)
     def do_GET(self):
+        if self.path == "/plain":
+            accept = self.headers.get("Accept", "")
+            if "text/plain" not in accept:
+                self._send(406, "plain text required", "text/plain; charset=utf-8")
+                return
+            self._send(200, "Benchmark reference text: 你好 مرحبا\n", "text/plain; charset=utf-8")
+            return
         if self.path == "/page":
             user_agent = self.headers.get("User-Agent", "")
             accept = self.headers.get("Accept", "")

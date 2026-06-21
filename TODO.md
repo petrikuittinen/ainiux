@@ -1,5 +1,7 @@
 # TODO
 - Continue v0.6 configuration support: add repeatable `--config`, `--no-config`, broader precedence/error integration tests, and config debug diagnostics.
+- Continue benchmark mode with cancellable/concurrent jobs, aggregate p50/p90/p99 metrics, richer provider timing/usage fields, deterministic scoring hooks, and CSV/table summaries.
+- Add Parquet benchmark input compatible with Hugging Face Datasets after the JSONL path is mature; keep the dependency isolated behind `src/benchmark/`.
 - Continue v0.5 follow-up work: charset conversion, Responses API image input, provider-reported context limits/token estimation, and cancellable URL fetching for future web callers.
 
 ## Deferred Document Conversion

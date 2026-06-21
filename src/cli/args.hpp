@@ -29,6 +29,10 @@ struct Options {
     bool no_colors = false;
     bool allow_private_url_fetch = false;
     bool show_thinking_traces = false;
+    bool benchmark = false;
+    bool benchmark_validate = false;
+    bool benchmark_list = false;
+    bool benchmark_options_seen = false;
 
     std::string positional_url;
     std::string prompt;
@@ -60,6 +64,9 @@ struct Options {
     std::string context_policy = "error";
     std::string image_capability = "auto";
     std::string tui_theme = "dark";
+    std::string benchmark_dataset = "builtin";
+    std::string benchmark_category;
+    std::string benchmark_case;
     OutputFormat format = OutputFormat::Text;
 
     double temperature = 0.0;
@@ -75,6 +82,9 @@ struct Options {
     long max_image_bytes = 20971520;
     long max_context_bytes = 0;
     long long context_tokens = 0;
+    int benchmark_runs = 1;
+    int benchmark_warmup = 0;
+    int benchmark_limit = 0;
 
     std::vector<std::string> headers;
     std::vector<std::string> attachment_paths;

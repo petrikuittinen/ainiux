@@ -26,6 +26,25 @@ done
 
 BASE="http://127.0.0.1:$PORT"
 
+benchmark_dataset="$ROOT/build/integration-benchmark.jsonl"
+cat >"$benchmark_dataset" <<JSONL
+{"id":"integration-single","category":"reasoning","language":"en","turns":["reasoning"]}
+{"id":"integration-multi","category":"multi-turn","language":"en","turns":["first turn","second turn"]}
+{"id":"integration-fetch","category":"long-context","language":"en","fetch_url":"$BASE/plain","turns":["summarize reference"]}
+JSONL
+benchmark_validate=$("$ROOT/pkchat" benchmark --dataset "$benchmark_dataset" --validate-dataset --quiet)
+printf '%s\n' "$benchmark_validate" | grep '"total_cases":3' >/dev/null
+benchmark_results=$("$ROOT/pkchat" benchmark "$BASE" --dataset "$benchmark_dataset" \
+    --allow-private-url-fetch --quiet -m "$MODEL")
+test "$(printf '%s\n' "$benchmark_results" | grep -c '"type":"result"')" -eq 4
+printf '%s\n' "$benchmark_results" | grep '"id":"integration-multi".*"turn":2.*"ok":true' >/dev/null
+printf '%s\n' "$benchmark_results" | grep '"id":"integration-single".*"thinking_trace_present":true.*"response":"Visible answer"' >/dev/null
+if printf '%s\n' "$benchmark_results" | grep 'internal trace' >/dev/null; then
+    echo "benchmark JSONL must not expose thinking traces on stdout" >&2
+    exit 1
+fi
+printf '%s\n' "$benchmark_results" | grep '"type":"summary".*"completed_case_runs":3.*"failed_case_runs":0' >/dev/null
+
 
 private_fetch_err="$ROOT/build/fetch-private.err"
 if "$ROOT/pkchat" --fetch-url "$BASE/page" --html-format markdown --quiet >"$ROOT/build/fetch-private.out" 2>"$private_fetch_err"; then
