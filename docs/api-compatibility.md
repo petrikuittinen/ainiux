@@ -41,6 +41,8 @@ cerebras                               https://api.cerebras.ai/v1               
 fireworks                              https://api.fireworks.ai/inference/v1                 yes   no         FIREWORKS_API_KEY      no
 deepinfra                              https://api.deepinfra.com/v1/openai                   yes   no         DEEPINFRA_API_KEY      no
 nvidia_nim                             https://integrate.api.nvidia.com/v1                   yes   no         NVIDIA_NIM_API_KEY     no
+zai            z.ai, z_ai              https://api.z.ai/api/paas/v4                         yes   no         ZAI_API_KEY            no
+qwen           dashscope_intl          https://dashscope-intl.aliyuncs.com/compatible-mode/v1 yes no         DASHSCOPE_API_KEY      no
 dashscope                              https://dashscope.aliyuncs.com/compatible-mode/v1    yes   no         DASHSCOPE_API_KEY      no
 lm_studio      lmstudio, lm-studio     http://localhost:1234/v1                              yes   no         optional               yes
 ollama                                 http://localhost:11434/v1                             yes   no         none                   yes
@@ -56,6 +58,8 @@ The `none` profile is an explicit model-offline mode. It accepts no model endpoi
 `custom_openai_chat` can use `/responses` from the supplied base URL when `--api responses` is selected, or any explicit endpoint passed with `--responses-url`.
 
 Anthropic's OpenAI compatibility layer is mainly for testing/comparison. Perplexity's canonical Sonar endpoint is `/v1/sonar`; `/chat/completions` is the OpenAI SDK-compatible alias.
+
+Z.AI uses its general OpenAI-compatible endpoint. Its published API specification does not expose a model-list route, so pass `--model MODEL`; `--list-models` returns an unsupported-feature error without making an HTTP request. Qwen uses Alibaba Cloud Model Studio's Singapore endpoint by default, while `dashscope` retains the China (Beijing) endpoint. Override `--base-url` for another Model Studio region.
 
 ## LM Studio
 

@@ -82,7 +82,7 @@ Profile make_profile(const std::string& name,
     profile.capabilities.images = name == "openai" || name == "openrouter" || name == "gemini" ||
                                   name == "xai" || name == "mistral" || name == "lm_studio" ||
                                   name == "ollama" || name == "vllm" || name == "llamacpp" ||
-                                  name == "custom_openai_chat";
+                                  name == "qwen" || name == "custom_openai_chat";
     return profile;
 }
 
@@ -117,6 +117,8 @@ const std::vector<Profile>& profile_registry() {
         make_profile("fireworks", {}, "https://api.fireworks.ai/inference/v1", "/chat/completions", "/models", "", {"FIREWORKS_API_KEY", "PKCHAT_API_KEY"}, true, false),
         make_profile("deepinfra", {}, "https://api.deepinfra.com/v1/openai", "/chat/completions", "/models", "", {"DEEPINFRA_API_KEY", "DEEPINFRA_TOKEN", "PKCHAT_API_KEY"}, true, false),
         make_profile("nvidia_nim", {}, "https://integrate.api.nvidia.com/v1", "/chat/completions", "/models", "", {"NVIDIA_NIM_API_KEY", "PKCHAT_API_KEY"}, true, false),
+        make_profile("zai", {"z.ai", "z_ai"}, "https://api.z.ai/api/paas/v4", "/chat/completions", "", "", {"ZAI_API_KEY", "PKCHAT_API_KEY"}, true, false),
+        make_profile("qwen", {"dashscope_intl"}, "https://dashscope-intl.aliyuncs.com/compatible-mode/v1", "/chat/completions", "/models", "", {"DASHSCOPE_API_KEY", "QWEN_API_KEY", "PKCHAT_API_KEY"}, true, false),
         make_profile("dashscope", {}, "https://dashscope.aliyuncs.com/compatible-mode/v1", "/chat/completions", "/models", "", {"DASHSCOPE_API_KEY", "PKCHAT_API_KEY"}, true, false),
         make_profile("lm_studio", {"lmstudio"}, "http://localhost:1234/v1", "/chat/completions", "/models", "", {"LMSTUDIO_API_KEY", "LM_STUDIO_API_KEY", "PKCHAT_API_KEY"}, false, true),
         make_profile("ollama", {}, "http://localhost:11434/v1", "/chat/completions", "/models", "", {}, false, true),
@@ -1353,6 +1355,11 @@ Error list_models(const RequestContext& context, ModelsResult& result, runtime::
     if (context.profile.offline) {
         return {ErrorCode::UnsupportedFeature,
                 "provider none disables model listing; select an OpenAI-compatible provider first"};
+    }
+    if (!context.profile.capabilities.model_listing || context.models_url.empty()) {
+        return {ErrorCode::UnsupportedFeature,
+                "provider " + context.profile.name +
+                    " does not define a model-list endpoint; pass --model MODEL using a model supported by the provider"};
     }
     http::Request req = base_http_request(context, "GET", context.models_url, cancellation);
     const http::Result http_result = http::perform(req, {context.api_key});

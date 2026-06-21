@@ -2,7 +2,7 @@
 
 `pkchat` is a fast, script-friendly command-line chat client for OpenAI and OpenAI-compatible APIs.
 
-Current status: v0.51 CLI with libcurl transport, cancellable runtime jobs, provider registry/profile aliases, `/v1/models`, `/v1/chat/completions`, text-only OpenAI Responses API support, local JPEG/PNG/GIF image input, interactive text/image attachments, request-only context policies, safe URL insertion, a simple REPL, a standalone `--editor` mode, a full-screen non-blocking TUI foundation, JSON chat save/load, HTML-to-text/Markdown extraction, and Markdown assistant-output rendering to HTML or plaintext.
+Current status: v0.52 CLI with libcurl transport, cancellable runtime jobs, provider registry/profile aliases, `/v1/models`, `/v1/chat/completions`, text-only OpenAI Responses API support, local JPEG/PNG/GIF image input, interactive text/image attachments, request-only context policies, safe URL insertion, a simple REPL, a standalone `--editor` mode, a full-screen non-blocking TUI foundation, JSON chat save/load, HTML-to-text/Markdown extraction, and Markdown assistant-output rendering to HTML or plaintext.
 
 ## Build
 
@@ -69,7 +69,48 @@ OPENROUTER_API_KEY=... ./pkchat openrouter -model "nvidia/nemotron-3-ultra-550b-
 OPENROUTER_API_KEY=... ./pkchat --provider openrouter -m "nvidia/nemotron-3-ultra-550b-a55b:free" -p "Hello"
 ```
 
-Built-in provider profiles include `none`/`offline`, `openai`, `openrouter`, `deepseek`, `gemini`, `anthropic`, `xai`/`grok`, `moonshot`/`kimi`, `groq`, `mistral`, `together`, `perplexity`, `cerebras`, `fireworks`, `deepinfra`, `nvidia_nim`, `dashscope`, `lm_studio`/`lmstudio`, `ollama`, `vllm`, `llamacpp`/`llama.cpp`, and `custom_openai_chat`. The model-backed profiles share the same OpenAI-compatible chat adapter where possible, with endpoint paths and key defaults coming from the registry.
+Z.AI and Qwen:
+
+```sh
+ZAI_API_KEY=... ./pkchat --provider zai -m glm-5 -p "Hello"
+DASHSCOPE_API_KEY=... ./pkchat --provider qwen -m qwen-plus -p "Hello"
+DASHSCOPE_API_KEY=... ./pkchat --provider qwen --list-models
+```
+
+Z.AI does not publish an OpenAI-compatible model-list endpoint, so its profile requires `--model`. The Qwen profile uses Alibaba Cloud Model Studio's global Singapore endpoint; use `dashscope` for the China (Beijing) endpoint or override `--base-url` for another region.
+
+Endpoint references: [Z.AI HTTP API](https://docs.z.ai/guides/develop/http/introduction), [Qwen API Platform](https://qwen.ai/apiplatform), and [Model Studio OpenAI compatibility](https://www.alibabacloud.com/help/en/model-studio/compatibility-of-openai-with-dashscope).
+
+Complete built-in provider list:
+
+| Provider | Aliases | Default base URL | Default key environment |
+| --- | --- | --- | --- |
+| `none` | `offline` | none | none |
+| `openai` | `openai_chat`, `openai_responses` | `https://api.openai.com/v1` | `OPENAI_API_KEY` |
+| `openrouter` | | `https://openrouter.ai/api/v1` | `OPENROUTER_API_KEY` |
+| `deepseek` | | `https://api.deepseek.com` | `DEEPSEEK_API_KEY` |
+| `gemini` | | `https://generativelanguage.googleapis.com/v1beta/openai` | `GEMINI_API_KEY` |
+| `anthropic` | | `https://api.anthropic.com/v1` | `ANTHROPIC_API_KEY` |
+| `xai` | `grok` | `https://api.x.ai/v1` | `XAI_API_KEY` |
+| `moonshot` | `kimi` | `https://api.moonshot.ai/v1` | `MOONSHOT_API_KEY` |
+| `groq` | | `https://api.groq.com/openai/v1` | `GROQ_API_KEY` |
+| `mistral` | | `https://api.mistral.ai/v1` | `MISTRAL_API_KEY` |
+| `together` | | `https://api.together.ai/v1` | `TOGETHER_API_KEY` |
+| `perplexity` | | `https://api.perplexity.ai` | `PERPLEXITY_API_KEY` |
+| `cerebras` | | `https://api.cerebras.ai/v1` | `CEREBRAS_API_KEY` |
+| `fireworks` | | `https://api.fireworks.ai/inference/v1` | `FIREWORKS_API_KEY` |
+| `deepinfra` | | `https://api.deepinfra.com/v1/openai` | `DEEPINFRA_API_KEY` |
+| `nvidia_nim` | | `https://integrate.api.nvidia.com/v1` | `NVIDIA_NIM_API_KEY` |
+| `zai` | `z.ai`, `z_ai` | `https://api.z.ai/api/paas/v4` | `ZAI_API_KEY` |
+| `qwen` | `dashscope_intl` | `https://dashscope-intl.aliyuncs.com/compatible-mode/v1` | `DASHSCOPE_API_KEY` |
+| `dashscope` | | `https://dashscope.aliyuncs.com/compatible-mode/v1` | `DASHSCOPE_API_KEY` |
+| `lm_studio` | `lmstudio`, `lm-studio` | `http://localhost:1234/v1` | optional |
+| `ollama` | | `http://localhost:11434/v1` | none |
+| `vllm` | | `http://localhost:8000/v1` | `token-abc123` |
+| `llamacpp` | `llama_cpp`, `llama.cpp` | `http://localhost:8080/v1` | none |
+| `custom_openai_chat` | `custom` | user supplied | `PKCHAT_API_KEY` (optional) |
+
+The model-backed profiles share the same OpenAI-compatible chat adapter where possible, with endpoint paths and key defaults coming from the registry. Provider names and aliases are case-insensitive; hyphens and underscores are interchangeable.
 
 Offline mode uses the `none` provider (alias `offline`) and requires no model endpoint or API key:
 
@@ -189,7 +230,7 @@ Verbose timing:
 
 Supported key sources:
 
-- provider environment variables such as `OPENAI_API_KEY`, `OPENROUTER_API_KEY`, `DEEPSEEK_API_KEY`, `GEMINI_API_KEY`, `ANTHROPIC_API_KEY`, `XAI_API_KEY`, `MOONSHOT_API_KEY`, `GROQ_API_KEY`, `MISTRAL_API_KEY`, `TOGETHER_API_KEY`, `PERPLEXITY_API_KEY`, `CEREBRAS_API_KEY`, `FIREWORKS_API_KEY`, `DEEPINFRA_API_KEY`, `DEEPINFRA_TOKEN`, `NVIDIA_NIM_API_KEY`, `DASHSCOPE_API_KEY`, `LMSTUDIO_API_KEY`, `LM_STUDIO_API_KEY`
+- provider environment variables such as `OPENAI_API_KEY`, `OPENROUTER_API_KEY`, `DEEPSEEK_API_KEY`, `GEMINI_API_KEY`, `ANTHROPIC_API_KEY`, `XAI_API_KEY`, `MOONSHOT_API_KEY`, `GROQ_API_KEY`, `MISTRAL_API_KEY`, `TOGETHER_API_KEY`, `PERPLEXITY_API_KEY`, `CEREBRAS_API_KEY`, `FIREWORKS_API_KEY`, `DEEPINFRA_API_KEY`, `DEEPINFRA_TOKEN`, `NVIDIA_NIM_API_KEY`, `ZAI_API_KEY`, `DASHSCOPE_API_KEY`, `QWEN_API_KEY`, `LMSTUDIO_API_KEY`, `LM_STUDIO_API_KEY`
 - `PKCHAT_API_KEY`
 - `--key-env NAME`
 - `--key-file PATH`

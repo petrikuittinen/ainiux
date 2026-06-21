@@ -957,7 +957,7 @@ void test_cli_responses_parse() {
 
 void test_provider_registry_resolves_added_profiles() {
     std::vector<pkchat::provider::Profile> profiles = pkchat::provider::built_in_profiles();
-    check(profiles.size() >= 22, "provider registry includes offline and compatibility profiles");
+    check(profiles.size() >= 24, "provider registry includes offline and compatibility profiles");
 
     const char* grok_argv[] = {"pkchat", "grok", "--list-models", "--header", "Authorization: Bearer test"};
     pkchat::cli::ParseResult grok = pkchat::cli::parse_args(5, const_cast<char**>(grok_argv));
@@ -996,6 +996,34 @@ void test_provider_registry_resolves_added_profiles() {
     check(deepinfra_ctx.error.ok(), "deepinfra context builds");
     check(deepinfra_ctx.context.profile.key_envs.size() >= 2 && deepinfra_ctx.context.profile.key_envs[1] == "DEEPINFRA_TOKEN",
           "deepinfra registers alternate token env var");
+
+    const char* zai_argv[] = {"pkchat", "--provider", "z.ai", "--list-models", "--header", "Authorization: Bearer test"};
+    pkchat::cli::ParseResult zai = pkchat::cli::parse_args(6, const_cast<char**>(zai_argv));
+    check(zai.error.ok(), "Z.AI alias args parse");
+    pkchat::provider::ContextResult zai_ctx = pkchat::provider::build_context(zai.options);
+    check(zai_ctx.error.ok(), "Z.AI alias context builds");
+    check(zai_ctx.context.profile.name == "zai", "z.ai alias resolves to zai");
+    check(zai_ctx.context.base_url == "https://api.z.ai/api/paas/v4", "Z.AI base URL selected");
+    check(zai_ctx.context.chat_url == "https://api.z.ai/api/paas/v4/chat/completions",
+          "Z.AI Chat Completions URL selected");
+    pkchat::provider::ModelsResult zai_models;
+    pkchat::Error zai_models_error = pkchat::provider::list_models(zai_ctx.context, zai_models);
+    check(zai_models_error.code == pkchat::ErrorCode::UnsupportedFeature,
+          "Z.AI rejects undocumented model listing before transport");
+
+    const char* qwen_argv[] = {"pkchat", "qwen", "--list-models", "--header", "Authorization: Bearer test"};
+    pkchat::cli::ParseResult qwen = pkchat::cli::parse_args(5, const_cast<char**>(qwen_argv));
+    check(qwen.error.ok(), "Qwen shortcut args parse");
+    pkchat::provider::ContextResult qwen_ctx = pkchat::provider::build_context(qwen.options);
+    check(qwen_ctx.error.ok(), "Qwen context builds");
+    check(qwen_ctx.context.profile.name == "qwen", "Qwen shortcut resolves to qwen");
+    check(qwen_ctx.context.base_url == "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
+          "Qwen selects the global Model Studio base URL");
+    check(qwen_ctx.context.models_url ==
+              "https://dashscope-intl.aliyuncs.com/compatible-mode/v1/models",
+          "Qwen model-list URL selected");
+    check(qwen_ctx.context.profile.key_envs.front() == "DASHSCOPE_API_KEY",
+          "Qwen uses the documented Model Studio key environment variable");
 }
 
 void test_none_provider_allows_an_empty_endpoint() {

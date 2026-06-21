@@ -356,8 +356,8 @@ Options:
       --allow-private-url-fetch Allow loopback/private URL fetches.
       --save-chat PATH          Save JSON chat history after a successful reply.
       --load-chat PATH          Load JSON chat history before sending.
-      --provider NAME           none (offline), openai, openrouter, lm_studio, ollama,
-                                vllm, llama.cpp, etc.
+      --provider NAME           none (offline), openai, openrouter, zai, qwen,
+                                lm_studio, ollama, vllm, llama.cpp, etc.
       --profile NAME            Alias for --provider.
       --api chat|responses      Use Chat Completions (default) or Responses API.
       --responses               Shortcut for --api responses.
