@@ -11,6 +11,7 @@
 
 #include "chat/session.hpp"
 #include "cli/args.hpp"
+#include "config/config.hpp"
 #include "context/context.hpp"
 #include "editor/editor.hpp"
 #include "editor/path_completion.hpp"
@@ -53,6 +54,115 @@ void test_cli_parse() {
     check(parsed.options.format == pkchat::cli::OutputFormat::Json, "json format parsed");
     check(parsed.options.verbose, "verbose parsed");
     check(parsed.options.save_chat_path == "chat.json", "save chat parsed");
+}
+
+void test_config_reads_common_template() {
+    pkchat::config::ParseResult parsed = pkchat::config::read_file("config/pkchat.conf");
+    check(parsed.error.ok(), "common config file parses");
+    check(parsed.document.entries.size() == 27, "common config has every expected setting");
+
+    const pkchat::config::Entry* provider = parsed.document.find("provider");
+    check(provider != nullptr && provider->value.is_string() && provider->value.string == "openai",
+          "common config provider is stored as a string");
+    check(provider != nullptr && provider->source.path == "config/pkchat.conf" && provider->source.line == 12,
+          "common config entry retains source path and line");
+
+    const pkchat::config::Entry* stream = parsed.document.find("generation", "stream");
+    check(stream != nullptr && stream->value.is_boolean() && stream->value.boolean,
+          "common config streaming value is a boolean");
+    const pkchat::config::Entry* timeout = parsed.document.find("network.connect_timeout_seconds");
+    check(timeout != nullptr && timeout->value.is_integer() && timeout->value.integer == 10,
+          "common config timeout is an integer");
+    const pkchat::config::Entry* model = parsed.document.find("model");
+    check(model != nullptr && model->value.is_string() && model->value.string.empty(),
+          "common config supports an empty bare string");
+}
+
+void test_config_parses_supported_values() {
+    const std::string input =
+        std::string("\xEF\xBB\xBF") +
+        "config_version = 1\r\n"
+        "title = \"line\\nquote: \\\" slash: \\\\ tab:\\t\"\r\n"
+        "url = https://example.test/page#fragment\r\n"
+        "greeting = 你好 مرحبا 👋\r\n"
+        "negative = -12\r\n"
+        "ratio = 3.25\r\n"
+        "scientific = 1e3\r\n"
+        "enabled = false\r\n"
+        "window = 64k\r\n"
+        "[nested.section]\r\n"
+        "name = value\r\n";
+    pkchat::config::ParseResult parsed = pkchat::config::parse(input, "unicode.conf");
+    check(parsed.error.ok(), "config accepts BOM, CRLF, Unicode, and supported scalar types");
+
+    const pkchat::config::Entry* title = parsed.document.find("title");
+    check(title != nullptr && title->value.string == "line\nquote: \" slash: \\ tab:\t",
+          "quoted config escapes are decoded");
+    const pkchat::config::Entry* url = parsed.document.find("url");
+    check(url != nullptr && url->value.string == "https://example.test/page#fragment",
+          "bare config string preserves hash characters");
+    const pkchat::config::Entry* greeting = parsed.document.find("greeting");
+    check(greeting != nullptr && greeting->value.string == "你好 مرحبا 👋", "bare config string preserves UTF-8");
+    const pkchat::config::Entry* negative = parsed.document.find("negative");
+    check(negative != nullptr && negative->value.is_integer() && negative->value.integer == -12,
+          "signed config integer parsed");
+    const pkchat::config::Entry* ratio = parsed.document.find("ratio");
+    check(ratio != nullptr && ratio->value.is_float() && ratio->value.floating == 3.25,
+          "config decimal float parsed");
+    const pkchat::config::Entry* scientific = parsed.document.find("scientific");
+    check(scientific != nullptr && scientific->value.is_float() && scientific->value.floating == 1000.0,
+          "config exponent float parsed");
+    const pkchat::config::Entry* enabled = parsed.document.find("enabled");
+    check(enabled != nullptr && enabled->value.is_boolean() && !enabled->value.boolean,
+          "config false boolean parsed");
+    const pkchat::config::Entry* window = parsed.document.find("window");
+    check(window != nullptr && window->value.is_string() && window->value.string == "64k",
+          "context shorthand remains a schema-level string");
+    const pkchat::config::Entry* nested = parsed.document.find("nested.section", "name");
+    check(nested != nullptr && nested->value.string == "value", "dotted config section parsed");
+}
+
+void test_config_rejects_invalid_input() {
+    pkchat::config::ParseResult parsed = pkchat::config::parse("key = one\nkey = two\n", "duplicate.conf");
+    check(!parsed.error.ok() && parsed.error.code == pkchat::ErrorCode::Config,
+          "duplicate config key is rejected");
+    check(parsed.error.message.find("duplicate.conf:2:1") != std::string::npos &&
+              parsed.error.message.find("first defined at duplicate.conf:1:1") != std::string::npos,
+          "duplicate config error reports both source locations");
+    check(parsed.document.entries.empty(), "failed config parse returns no partially applied document");
+
+    parsed = pkchat::config::parse("value = \"bad\\q\"\n", "escape.conf");
+    check(!parsed.error.ok() && parsed.error.message.find("escape.conf:1:") != std::string::npos,
+          "unsupported config string escape is rejected with location");
+
+    parsed = pkchat::config::parse("number = 999999999999999999999999999\n", "overflow.conf");
+    check(!parsed.error.ok() && parsed.error.message.find("signed 64-bit") != std::string::npos,
+          "overflowing config integer is rejected");
+
+    parsed = pkchat::config::parse("[bad section]\nkey = value\n", "section.conf");
+    check(!parsed.error.ok() && parsed.error.message.find("invalid section name") != std::string::npos,
+          "invalid config section name is rejected");
+
+    const std::string invalid_utf8 = std::string("name = ") + static_cast<char>(0xC3) + "(\n";
+    parsed = pkchat::config::parse(invalid_utf8, "utf8.conf");
+    check(!parsed.error.ok() && parsed.error.message.find("utf8.conf:1:8") != std::string::npos &&
+              parsed.error.message.find("invalid UTF-8") != std::string::npos,
+          "invalid config UTF-8 is rejected at its byte column");
+}
+
+void test_config_file_read_errors() {
+    pkchat::config::ParseResult parsed =
+        pkchat::config::read_file("build/config-file-does-not-exist.conf");
+    check(!parsed.error.ok() && parsed.error.code == pkchat::ErrorCode::Config,
+          "missing config file reports config error");
+
+    parsed = pkchat::config::read_file("build", pkchat::config::kMaxConfigBytes);
+    check(!parsed.error.ok() && parsed.error.message.find("not a regular file") != std::string::npos,
+          "config reader rejects a directory");
+
+    parsed = pkchat::config::read_file("config/pkchat.conf", 16);
+    check(!parsed.error.ok() && parsed.error.message.find("exceeds 16 byte limit") != std::string::npos,
+          "config reader enforces its byte limit");
 }
 
 void test_thinking_trace_splitter() {
@@ -1355,6 +1465,10 @@ void test_lmstudio_context() {
 
 int main() {
     test_thinking_trace_splitter();
+    test_config_reads_common_template();
+    test_config_parses_supported_values();
+    test_config_rejects_invalid_input();
+    test_config_file_read_errors();
     test_cli_parse();
     test_cli_rejects_unknown();
     test_cli_provider_shortcut_parse();

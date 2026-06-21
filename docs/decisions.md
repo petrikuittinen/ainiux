@@ -12,6 +12,12 @@ The initial implementation uses C++17 and a plain Makefile to keep the binary po
 
 `src/json/` is a small internal JSON facade used for request escaping and provider response parsing. The project should replace or expand it with a reviewed JSON library when dependency installation is available.
 
+## System Configuration Template
+
+v0.6 begins with one canonical, system-wide TOML-alike template at `config/pkchat.conf`. It mirrors the existing runtime defaults without duplicating built-in provider registry records or setting optional sampling parameters. `make install` installs it to `${SYSCONFDIR}/xdg/pkchat/config.conf`, normally `/etc/xdg/pkchat/config.conf`, with mode `0644` and does not overwrite an existing administrator-managed file.
+
+`src/config/` owns the dependency-free parser. It reads regular files with a 1 MiB default cap and produces an owned map keyed by fully qualified setting name. Boolean, signed 64-bit integer, finite float, quoted string, and bare string values remain typed, and every entry retains its source path and byte-based line/column location. Parsing validates UTF-8 and rejects duplicate keys or malformed syntax without returning a partially populated document. Schema validation and configuration-layer merging are intentionally separate follow-up stages.
+
 
 ## Provider Registry and API Adapters
 

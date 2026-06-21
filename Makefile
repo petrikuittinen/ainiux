@@ -6,6 +6,7 @@ LIBCURL_LIBS ?= $(shell pkg-config --libs libcurl 2>/dev/null || curl-config --l
 CXXFLAGS += $(LIBCURL_CFLAGS)
 LDFLAGS += $(LIBCURL_LIBS)
 PREFIX ?= /usr/local
+SYSCONFDIR ?= /etc
 DEBUG_FLAG_PATTERNS := -g -g0 -g1 -g2 -g3 -ggdb -ggdb% -glldb -glldb% -gdwarf% -gstabs%
 OPTIMIZED_CXXFLAGS := $(filter-out -O% $(DEBUG_FLAG_PATTERNS),$(CXXFLAGS)) -O3 -DNDEBUG
 OPTIMIZED_LDFLAGS := $(LDFLAGS) -s
@@ -14,6 +15,9 @@ BUILD_DIR := build
 OBJ_DIR := $(BUILD_DIR)/obj
 BIN := pkchat
 TEST_BIN := $(BUILD_DIR)/test_runner
+COMMON_CONFIG := config/pkchat.conf
+COMMON_CONFIG_DIR := $(DESTDIR)$(SYSCONFDIR)/xdg/pkchat
+COMMON_CONFIG_PATH := $(COMMON_CONFIG_DIR)/config.conf
 
 SRC := $(shell find src -name '*.cpp' | sort)
 APP_SRC := $(SRC)
@@ -67,9 +71,15 @@ leak-check: $(BIN)
 
 test-leak: leak-check
 
-install: $(BIN)
+install: $(BIN) $(COMMON_CONFIG)
 	install -d "$(DESTDIR)$(PREFIX)/bin"
 	install -m 0755 $(BIN) "$(DESTDIR)$(PREFIX)/bin/$(BIN)"
+	install -d "$(COMMON_CONFIG_DIR)"
+	@if test -e "$(COMMON_CONFIG_PATH)"; then \
+		echo "Preserving existing system config: $(COMMON_CONFIG_PATH)"; \
+	else \
+		install -m 0644 "$(COMMON_CONFIG)" "$(COMMON_CONFIG_PATH)"; \
+	fi
 
 clean:
 	rm -rf $(BUILD_DIR) $(BIN)

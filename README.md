@@ -2,7 +2,7 @@
 
 `pkchat` is a fast, script-friendly command-line chat client for OpenAI and OpenAI-compatible APIs.
 
-Current status: v0.54 CLI with libcurl transport, cancellable runtime jobs, provider registry/profile aliases, `/v1/models`, `/v1/chat/completions`, text-only OpenAI Responses API support, local JPEG/PNG/GIF image input, interactive text/image attachments, request-only context policies, safe URL insertion, a simple REPL, a standalone `--editor` mode, a full-screen non-blocking TUI foundation, JSON chat save/load, HTML-to-text/Markdown extraction, and Markdown assistant-output rendering to HTML or plaintext.
+Current status: v0.55 CLI with libcurl transport, cancellable runtime jobs, provider registry/profile aliases, `/v1/models`, `/v1/chat/completions`, text-only OpenAI Responses API support, local JPEG/PNG/GIF image input, interactive text/image attachments, request-only context policies, safe URL insertion, a simple REPL, a standalone `--editor` mode, a full-screen non-blocking TUI foundation, JSON chat save/load, HTML-to-text/Markdown extraction, Markdown assistant-output rendering to HTML or plaintext, and the first v0.6 TOML-alike configuration parser slice.
 
 ## Build
 
@@ -26,6 +26,14 @@ make test-sanitize
 make leak-check
 make clean
 ```
+
+Install the binary and the v0.6 system-wide configuration template with:
+
+```sh
+make install PREFIX=/usr/local
+```
+
+The template source is `config/pkchat.conf`. It is installed as `/etc/xdg/pkchat/config.conf` by default; set `SYSCONFDIR` when packaging for a different system configuration root. Installation preserves an existing system config instead of overwriting administrator changes. The v0.6 parser can read this TOML-alike syntax into a typed internal document with source locations. Automatic XDG discovery, schema mapping, partial user overrides at `$XDG_CONFIG_HOME/pkchat/config.conf`, and application to runtime options remain the next slice, so existing runtime behavior is not changed by these files yet.
 
 The HTTP transport uses libcurl through RAII wrappers in `src/http/`. Build flags are discovered with `pkg-config libcurl`, falling back to `curl-config` when needed.
 

@@ -22,14 +22,13 @@ Create the best practical command-line, terminal, and local-web chat client for 
 - Responsive in full-screen mode and web mode even while waiting for an endpoint, streaming, saving/loading chats, or processing files.
 - Free of memory leaks.
 
-## Product non-goals for early versions
+## Deferred product work
 
-Do not implement these before the core CLI, streaming, persistence, provider architecture, runtime/job layer, and memory/leak-check discipline are solid:
+The CLI, streaming, persistence, provider architecture, runtime/job layer, TUI foundation, and first attachment layer now exist. Keep the following work outside the v0.6 configuration milestone unless it is required to integrate configuration safely:
 
 - Autonomous local agent mode.
-- Full markdown renderer.
-- PDF extraction.
-- Image attachment support.
+- Full rich Markdown rendering in the TUI.
+- PDF and DOCX input/output conversion.
 - Clipboard integration.
 - Complex terminal key protocols.
 - Browser automation.
@@ -46,7 +45,7 @@ v0.2  Simple interactive REPL and JSON chat persistence
 v0.3  Runtime/job layer and non-blocking full-screen TUI foundation
 v0.4  Provider adapters, Responses API, LM Studio refinement, and compatibility profiles
 v0.5  Context management, attachments, and safe URL fetching
-v0.6  TOML-alike simple configuration files
+v0.6  Layered TOML-alike configuration files
 v0.7  Benchmark mode
 v0.8  AI-assisted editor
 v0.9  Local web server mode
@@ -55,6 +54,12 @@ v1.1  Image generation from CLI, REPL, TUI, and web chat
 ```
 
 Each milestone should leave the program usable. Do not create a long-lived pile of half-wired features.
+
+## Current baseline
+
+Implementation status (2026-06-21): `pkchat` is at v0.55. The repository has the scriptable CLI, built-in provider registry and aliases, Chat Completions, text-only Responses API support, streaming SSE, credential lookup, JSON chat persistence, cancellable runtime jobs, REPL, full-screen TUI foundation, editor, request-only context policies, context-use estimates, bounded text/HTML/Markdown input, JPEG/PNG/GIF image input for Chat Completions, safe URL fetching, Markdown output conversion, and the first v0.6 configuration parser slice. `--provider none` supports local conversion and editor workflows without a model endpoint.
+
+There is no configuration-file loader yet. Runtime defaults currently live in `cli::Options`, provider defaults live in `src/provider/`, API keys are resolved while building the provider request context, and `main.cpp` parses the CLI before constructing that context. v0.6 must extend this flow rather than introduce a parallel settings or provider system.
 
 ## Execution-plan template for agents
 
@@ -1031,192 +1036,189 @@ Implementation note (2026-06-20): Non-interactive `--input stdin` and `--attach 
 
 ---
 
-# v0.6 - TOML-alike simple configuration files
+# v0.6 - Layered TOML-alike configuration files
 
 ## Goal
 
-Add small, predictable configuration files for built-in defaults, system config, user config, and later profile/settings persistence without bringing in full TOML/YAML complexity.
+Add predictable system, user, and explicitly selected configuration files without adding a TOML dependency or claiming full TOML compatibility. A configuration file supplies persistent defaults; command-line arguments and positional provider/URL shortcuts continue to win.
 
-The syntax is TOML-alike, but deliberately simpler. The same parser should load built-in defaults and user-supplied config files.
+With no configuration files present, behavior must remain identical to v0.55. In particular, the default provider remains `openai`, the default API remains Chat Completions, streaming remains enabled, and the existing size and timeout defaults do not change.
 
-## Suggested grammar
+## Architectural fit
 
-Keep the grammar intentionally small:
+- [ ] Add a parser, schema validator, XDG path resolver, and layer loader under `src/config/`.
+- [ ] Keep `cli::Options` as the effective application settings passed to existing CLI, provider, input, context, REPL, and TUI code.
+- [ ] Keep built-in provider definitions and aliases in `src/provider/`; do not copy OpenAI, LM Studio, Qwen, ZAI, or other registry records into an embedded config string.
+- [ ] Use the current `cli::Options` initializers as code defaults. Parsed files are typed overrides, not a second source of built-in defaults.
+- [ ] Apply configuration before the full CLI parse, then parse CLI arguments over the configured `Options` value. An overload such as `parse_args(argc, argv, base_options)` can preserve existing parser tests and callers.
+- [ ] Keep credential resolution in `provider::build_context` after the final provider and `key_env`/`key_file` settings are known. The config parser must never read or retain an API key value.
+- [ ] Extend `cli::Options` only for settings the current runtime can consume, such as a persistent TUI theme. Do not add unused web, benchmark, agent, PDF, or DOCX settings in this milestone.
+
+Implementation note (2026-06-21): The first v0.6 artifact is `config/pkchat.conf`, a system-wide template containing values aligned with the v0.55 `cli::Options` defaults. `make install` places it at `${SYSCONFDIR}/xdg/pkchat/config.conf` with mode `0644` and preserves an existing file. `src/config/` now provides a bounded regular-file reader and TOML-alike syntax parser producing an owned map of typed entries with source locations. Schema validation, XDG discovery, user-layer overrides, and CLI-last merging remain the next slice.
+
+## File syntax
+
+Call the format "pkchat config" or "TOML-alike" in documentation, not TOML. Use `config.conf` so users do not reasonably expect a general TOML parser.
 
 ```text
 file         = line*
 line         = blank | comment | section | assignment
-blank        = whitespace*
-comment      = whitespace* "#" text
-section      = "[" section_name "]"
-assignment   = key whitespace* "=" whitespace* value
+blank        = horizontal_whitespace*
+comment      = horizontal_whitespace* "#" text
+section      = horizontal_whitespace* "[" section_name "]" horizontal_whitespace*
+assignment   = horizontal_whitespace* key horizontal_whitespace* "=" horizontal_whitespace* value
 section_name = name ("." name)*
-key          = name ("." name)*
-name         = ASCII letter/digit plus "_" "-" "."
+key          = name
+name         = ASCII letter or "_", followed by ASCII letters, digits, "_", or "-"
 value        = boolean | integer | float | quoted_string | bare_string
-```
-
-Supported values:
-
-```text
-true
-false
-123
-3.14
-"quoted string"
-bare-string
-https://api.openai.com/v1
-```
-
-String rules:
-
-- [ ] Quoted strings support only these escapes:
-  - [ ] `\\` backslash
-  - [ ] `\"` quote
-  - [ ] `\n` newline
-  - [ ] `\r` carriage return
-  - [ ] `\t` tab
-- [ ] Bare strings are trimmed left/right.
-- [ ] Bare strings have no escaping.
-- [ ] Bare strings allow UTF-8.
-
-Do not support in v1:
-
-- [ ] nested objects
-- [ ] arrays
-- [ ] implicit environment expansion
-- [ ] arbitrary expressions
-- [ ] includes
-- [ ] conditionals
-- [ ] YAML-style indentation semantics
-- [ ] multiline strings
-
-## Handling lists without arrays
-
-Duplicate keys are errors by default. Specific documented keys may be repeated and become lists.
-
-Example:
-
-```text
-[headers.openrouter]
-HTTP-Referer = https://example.com
-X-Title = pkchat
-
-[url_fetch]
-allow_domain = example.com
-allow_domain = docs.example.com
-allow_domain = api.example.com
 ```
 
 Rules:
 
-- [ ] Duplicate keys are errors by default inside the same file.
-- [ ] Documented repeated-list keys may appear multiple times and accumulate values.
-- [ ] Across different config layers, later layers override earlier layers.
-- [ ] Repeated-list keys should merge or replace according to documented per-key policy before implementation.
+- [x] Accept LF and CRLF input and an optional UTF-8 BOM at the start of the file.
+- [x] Validate the complete file as UTF-8 before parsing.
+- [x] Support lowercase `true` and `false`, base-10 signed integers, finite decimal floats, quoted strings, and bare strings.
+- [x] Quoted strings support only `\\`, `\"`, `\n`, `\r`, and `\t` escapes. Reject unknown and incomplete escapes.
+- [x] Bare strings extend to end of line, preserve `#`, allow UTF-8, and trim ASCII space and tab at both ends. Comments are full-line only in v0.6.
+- [x] Permit an empty bare string, although schema validation may reject it for a specific key.
+- [x] Reject malformed section headers, trailing text after a section, invalid names, integer overflow, non-finite floats, and unterminated strings with a `PKCHAT_ERR_CONFIG` error.
+- [x] Report the source path, line, column, section, and key where applicable.
+- [x] Reject duplicate fully qualified keys within one file. A later file may override a key from an earlier layer.
+- [ ] Reject unknown sections and keys. Silent typo handling is not acceptable for the first version.
+- [ ] Accept optional `config_version = 1` at the root and reject unsupported versions clearly.
 
-Good repeated-list keys:
+Do not support arrays, repeated keys, dotted assignment keys, inline comments, multiline strings, tables as values, date/time literals, includes, environment interpolation, or expressions in v0.6. Add list syntax only when a concrete implemented setting needs it; current attachment paths and prompts are per-command inputs and must not become persistent lists.
 
-```text
-url_fetch.allow_domain
-url_fetch.block_domain
-benchmark.prompt_file
-```
+## Initial schema
 
-For most settings, duplicate keys should remain an error inside the same file. This catches typos while still supporting the few list-like settings that need repetition.
+The first schema maps only to behavior already implemented or explicitly completed as part of v0.6:
 
-## Built-in defaults
-
-Use the exact same syntax for built-in defaults and user config:
-
-```cpp
-static constexpr std::string_view kBuiltinConfig = R"PKCHATCONF(
-# pkchat built-in defaults
+```conf
+# Example user overrides; these are not new built-in defaults.
 config_version = 1
-profile = lmstudio
-model =
-
-[profile.lmstudio]
-provider = lmstudio
-base_url = http://localhost:1234/v1
-api_key_required = false
-
-[profile.openai]
 provider = openai
-base_url = https://api.openai.com/v1
-api_key_env = OPENAI_API_KEY
-api_key_required = true
+model = gpt-4.1-mini
+api = chat
 
-[tui]
-enabled = true
-input_height_ratio = 0.20
-send_key = alt-enter
-theme = auto
+[endpoint]
+base_url =
+chat_url =
+models_url =
+responses_url =
 
-[web]
-bind = 127.0.0.1
-port = 80
-theme = auto
+[generation]
+stream = true
+temperature = 0.7
+top_p = 0.9
+max_output_tokens = 4096
+
+[context]
+window_tokens = 64k
+max_bytes = 0
+policy = error
 
 [network]
 connect_timeout_seconds = 10
 request_timeout_seconds = 0
+proxy =
+insecure_tls = false
+
+[credentials]
+key_env = OPENAI_API_KEY
+key_file =
+
+[output]
+format = text
+render_format = md
+
+[input]
+max_input_bytes = 1048576
+max_image_bytes = 20971520
+image_capability = auto
 
 [url_fetch]
-enabled = false
 max_bytes = 1048576
-block_private_addresses = true
-)PKCHATCONF";
+allow_private_addresses = false
+
+[tui]
+colors = true
+theme = dark
 ```
 
-## Load order
+Schema requirements:
 
-Load and merge config in this order:
+- [ ] Use the same enum spellings and numeric ranges as their CLI counterparts: `api`, formats, context policy, image capability, timeouts, byte limits, sampling values, and context-window shorthand must not diverge.
+- [ ] Omitted `temperature`, `top_p`, and `max_output_tokens` remain unset so the request does not gain parameters merely because config support exists.
+- [ ] `context.window_tokens` maps to `--context`; accept positive integers plus the existing case-insensitive `k` (1024) and `M` (1000000) suffixes. Omission or `0` disables the TUI estimate.
+- [ ] `tui.theme` accepts only `dark` or `light` and becomes the initial TUI theme; `/theme` can still change it for the current process.
+- [ ] `network.insecure_tls = true` emits a security warning to `stderr` whenever it is effective.
+- [ ] Do not accept prompt text, system text, input/attachment paths, fetch URLs, output paths, save/load paths, mode/action flags, `--key`, `--key-stdin`, arbitrary headers, or API key values from persistent configuration.
+- [ ] Do not add named custom provider profiles in the first slice. Users can select a built-in provider and configure endpoint overrides; dynamic profiles require a later provider-registry extension with separate validation tests.
 
-1. built-in defaults
-2. system config
-3. user config
-4. environment variables
-5. command-line arguments
+## Discovery and precedence
 
-For Unix-like systems:
+Add these control options:
 
 ```text
-system config:
-  /etc/xdg/pkchat/config.conf
-
-user config:
-  $XDG_CONFIG_HOME/pkchat/config.conf
-  fallback ~/.config/pkchat/config.conf
+--config PATH    Load an additional config file; repeatable.
+--no-config      Skip automatically discovered system and user files.
 ```
 
-The XDG spec defines user-specific config through `$XDG_CONFIG_HOME` and preference-ordered system config directories through `$XDG_CONFIG_DIRS`. Start with `/etc/xdg/pkchat/config.conf`, but keep the loader design compatible with `$XDG_CONFIG_DIRS` ordering.
+Resolve layers from lowest to highest precedence:
 
-## Parser and merge rules
+1. current C++ defaults in `cli::Options` and the built-in provider registry
+2. system files named `pkchat/config.conf` from `$XDG_CONFIG_DIRS`, or `/etc/xdg` when unset
+3. `$XDG_CONFIG_HOME/pkchat/config.conf`, or `$HOME/.config/pkchat/config.conf` when unset
+4. each explicit `--config PATH`, in command-line order
+5. command-line options and the positional `BASE_URL|PROFILE` shortcut
 
-- [ ] Keep the parser independent from CLI/TUI/web code in `src/config/`.
-- [ ] Preserve source location for parse errors: path, line, column where practical.
-- [ ] Report duplicate-key errors with section and key names.
-- [ ] Validate types after parsing so errors can name the expected setting type.
-- [ ] Treat unknown keys as warnings or errors according to a documented strictness mode.
-- [ ] Do not expand environment variables inside config files.
-- [ ] Do not allow config files to include other files in v1.
-- [ ] Apply environment variables after file layers, not during parsing.
-- [ ] Apply command-line options last.
-- [ ] Never save API key values into generated config files.
+Implementation details:
+
+- [ ] Because `$XDG_CONFIG_DIRS` lists higher-priority directories first, load existing system files in reverse order so the first directory wins after merging.
+- [ ] Follow XDG path validity rules: ignore relative `$XDG_CONFIG_DIRS` entries, and use the documented fallback when `$XDG_CONFIG_HOME` is empty or relative. If `HOME` is also unavailable, skip automatic user-config discovery without preventing explicit/system configuration.
+- [ ] `--no-config` skips only automatic system/user discovery; explicit `--config` files still load, allowing deterministic isolated use.
+- [ ] Missing automatic files are normal. A missing or unreadable explicit file is `PKCHAT_ERR_CONFIG`; an existing but unreadable or invalid automatic file is also an error.
+- [ ] Bound each config file to 1 MiB and reject non-regular files with a specific error.
+- [ ] Do a small bootstrap scan for only `--config`, `--no-config`, `--help`, and `--version`, then run the existing full parser over the merged base options. The bootstrap scan must still detect missing values and malformed control options.
+- [ ] `--help` and `--version` must work without reading config files, including when an automatically discovered file is malformed.
+- [ ] XDG and `HOME` affect path discovery. Provider-specific environment variables and an explicitly selected `key_env` continue to supply credentials after files are merged. Do not invent a second general `PKCHAT_*` environment-settings layer in this milestone.
+- [ ] Do not print config status on `stdout`. Optional debug diagnostics may list loaded paths on `stderr`, but must redact URL userinfo, credential paths where appropriate, and all authorization values.
+
+## Merge and validation
+
+- [ ] Represent parsed values with owned RAII types and source metadata; no raw owning pointers or parser-global mutable state.
+- [ ] Merge typed setting overrides by fully qualified schema key. Scalars replace earlier scalars.
+- [ ] Validate each file completely before applying it so one invalid file cannot partially mutate effective settings.
+- [ ] Reuse or factor the CLI's existing numeric, format, context-policy, image-capability, and context-token validation helpers instead of implementing subtly different rules.
+- [ ] Preserve the CLI's explicit-state semantics (`has_temperature`, `has_top_p`, `has_max_output_tokens`, output format flags, and `stream_explicit`) when config supplies a setting and when CLI later overrides it.
+- [ ] Ensure a configured provider is validated by the existing provider registry and that `provider = none` cannot acquire a model endpoint accidentally.
+- [ ] Keep config data out of saved chat JSON except for the effective non-secret settings already recorded by chat persistence. Never record the config path, key values, or raw config text.
+
+## Implementation sequence
+
+0. [x] Add the common `config/pkchat.conf` template and install it without overwriting an existing administrator-managed file.
+1. [x] Add parser/value/source-location types in `src/config/config.hpp` and `src/config/config.cpp` plus grammar/error unit tests.
+2. [ ] Add the typed schema mapper and tests for every supported key, enum, range, and rejected key.
+3. [ ] Add XDG discovery and deterministic layer merging with injectable environment/path inputs for tests.
+4. [ ] Add CLI bootstrap parsing, `--config`, `--no-config`, and parsing over configured base options.
+5. [ ] Wire effective settings into `main.cpp`, provider context construction, input/fetch limits, output formatting, context handling, and the initial TUI theme.
+6. [ ] Add integration tests using isolated temporary `HOME`, `XDG_CONFIG_HOME`, and `XDG_CONFIG_DIRS` values.
+7. [ ] Update `README.md`, `TODO.md`, `docs/decisions.md`, and `docs/security.md` with syntax, precedence, examples, limitations, and credential guidance.
+8. [ ] Run normal, sanitizer, and leak-check suites and restore a normal build afterward.
 
 ## Acceptance criteria
 
-- [ ] Built-in defaults parse through the same parser as user config.
-- [ ] System and user config paths follow XDG rules on Unix-like systems.
-- [ ] Later config layers override earlier scalar settings.
-- [ ] Duplicate scalar keys in the same file are reported as errors.
-- [ ] Documented repeated-list keys can appear multiple times.
-- [ ] Invalid quoted-string escapes are rejected with clear errors.
-- [ ] Bare strings preserve UTF-8 and trim surrounding whitespace.
-- [ ] CLI arguments override config file values.
-- [ ] Unit tests cover parser grammar, duplicate handling, repeated-list keys, merge order, and XDG path resolution.
-- [ ] Leak-check tooling reports no leaks for successful parsing and parse-error paths where supported.
+- [ ] With no config files, existing CLI/unit/integration behavior and defaults are unchanged.
+- [ ] System, user, explicit-file, and CLI precedence is deterministic and covered by tests.
+- [ ] `--no-config --config FILE` loads only code defaults plus `FILE`, followed by CLI overrides.
+- [ ] Positional provider/URL shortcuts and explicit CLI options override configured values.
+- [ ] Parser errors identify the file and exact source location; schema errors identify the fully qualified key and expected type/value.
+- [ ] Duplicate and unknown keys fail without partially applying the file.
+- [ ] Unicode bare/quoted strings, CRLF, BOM, invalid UTF-8, invalid escapes, numeric overflow, empty values, and the 1 MiB cap are tested.
+- [ ] Configured `provider = none` conversion/editor workflows do not contact a model endpoint.
+- [ ] Configured credentials are references (`key_env` or `key_file`) only; secrets are absent from errors, debug output, saved chats, and test logs.
+- [ ] `stdout` remains reserved for requested command content; all config diagnostics use `stderr` and established exit-code mapping.
+- [ ] `make test` and `make test-sanitize` pass, and leak checking covers successful load, missing file, parse error, schema error, and merge replacement paths where tooling is available.
 
 ---
 

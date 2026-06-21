@@ -1,4 +1,5 @@
 # TODO
+- Continue v0.6 configuration support: map parsed documents to the supported schema, load XDG system and user layers, and apply CLI arguments last.
 - Continue v0.5 follow-up work: charset conversion, Responses API image input, provider-reported context limits/token estimation, and cancellable URL fetching for future web callers.
 
 ## Deferred Document Conversion
