@@ -6,6 +6,7 @@
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <limits>
 #include <locale>
 #include <sstream>
 #include <utility>
@@ -433,6 +434,140 @@ class Parser {
     }
 };
 
+Error schema_error(const Entry& entry, const std::string& detail) {
+    const std::string qualified = entry.section.empty() ? entry.key : entry.section + "." + entry.key;
+    return {ErrorCode::Config,
+            entry.source.path + ":" + std::to_string(entry.source.line) + ":" +
+                std::to_string(entry.source.column) + ": invalid config setting " + qualified + ": " + detail};
+}
+
+Error require_type(const Entry& entry, Value::Type expected) {
+    if (entry.value.type == expected) {
+        return ok_error();
+    }
+    return schema_error(entry, std::string("expected ") + value_type_name(expected) + ", got " +
+                                   value_type_name(entry.value.type));
+}
+
+Error nonnegative_long(const Entry& entry, long& output) {
+    Error err = require_type(entry, Value::Type::Integer);
+    if (!err.ok()) {
+        return err;
+    }
+    if (entry.value.integer < 0 ||
+        static_cast<std::uint64_t>(entry.value.integer) > static_cast<std::uint64_t>(std::numeric_limits<long>::max())) {
+        return schema_error(entry, "expected a non-negative integer in the platform long range");
+    }
+    output = static_cast<long>(entry.value.integer);
+    return ok_error();
+}
+
+Error nonnegative_int(const Entry& entry, int& output) {
+    Error err = require_type(entry, Value::Type::Integer);
+    if (!err.ok()) {
+        return err;
+    }
+    if (entry.value.integer < 0 || entry.value.integer > std::numeric_limits<int>::max()) {
+        return schema_error(entry, "expected a non-negative integer in the platform int range");
+    }
+    output = static_cast<int>(entry.value.integer);
+    return ok_error();
+}
+
+Error numeric_double(const Entry& entry, double& output) {
+    if (entry.value.is_float()) {
+        output = entry.value.floating;
+        return ok_error();
+    }
+    if (entry.value.is_integer()) {
+        output = static_cast<double>(entry.value.integer);
+        return ok_error();
+    }
+    return schema_error(entry, std::string("expected integer or float, got ") +
+                                   value_type_name(entry.value.type));
+}
+
+Error enum_string(const Entry& entry,
+                  const std::vector<std::string>& allowed,
+                  std::string& output,
+                  const std::string& description) {
+    Error err = require_type(entry, Value::Type::String);
+    if (!err.ok()) {
+        return err;
+    }
+    for (const std::string& value : allowed) {
+        if (entry.value.string == value) {
+            output = value;
+            return ok_error();
+        }
+    }
+    return schema_error(entry, "expected " + description);
+}
+
+Error context_window_tokens(const Entry& entry, long long& output) {
+    if (entry.value.is_integer()) {
+        if (entry.value.integer < 0) {
+            return schema_error(entry, "expected zero or a positive token count");
+        }
+        output = entry.value.integer;
+        return ok_error();
+    }
+    if (!entry.value.is_string()) {
+        return schema_error(entry, "expected an integer or token count such as 64k or 1M");
+    }
+    const std::string& text = entry.value.string;
+    if (text.empty()) {
+        return schema_error(entry, "expected zero or a token count such as 64k or 1M");
+    }
+    size_t digits = text.size();
+    long long multiplier = 1;
+    const char suffix = text.back();
+    if (suffix == 'k' || suffix == 'K') {
+        multiplier = 1024;
+        --digits;
+    } else if (suffix == 'm' || suffix == 'M') {
+        multiplier = 1000000;
+        --digits;
+    }
+    if (digits == 0) {
+        return schema_error(entry, "expected zero or a token count such as 64k or 1M");
+    }
+    long long value = 0;
+    for (size_t i = 0; i < digits; ++i) {
+        const char ch = text[i];
+        if (ch < '0' || ch > '9') {
+            return schema_error(entry, "expected zero or a token count with an optional k or M suffix");
+        }
+        const int digit = ch - '0';
+        if (value > (std::numeric_limits<long long>::max() - digit) / 10) {
+            return schema_error(entry, "token count is too large");
+        }
+        value = value * 10 + digit;
+    }
+    if (value > std::numeric_limits<long long>::max() / multiplier) {
+        return schema_error(entry, "token count is too large");
+    }
+    output = value * multiplier;
+    return ok_error();
+}
+
+bool absolute_path(const std::string& path) {
+    return !path.empty() && std::filesystem::path(path).is_absolute();
+}
+
+std::string environment_value(const char* name) {
+    const char* value = std::getenv(name);
+    return value == nullptr ? std::string() : std::string(value);
+}
+
+Error apply_config_file(const std::string& path, cli::Options& options) {
+    ParseResult parsed = read_file(path);
+    if (!parsed.error.ok()) {
+        return parsed.error;
+    }
+    return apply_document(parsed.document, options);
+}
+
 }  // namespace
 
 const Entry* Document::find(const std::string& qualified_key) const {
@@ -490,6 +625,195 @@ ParseResult read_file(const std::string& path, size_t max_bytes) {
         return {{}, {ErrorCode::Config, "could not read config file: " + path}};
     }
     return parse(input, path);
+}
+
+Error apply_document(const Document& document, cli::Options& options) {
+    cli::Options candidate = options;
+    for (const auto& item : document.entries) {
+        const std::string& name = item.first;
+        const Entry& entry = item.second;
+        Error err = ok_error();
+
+        if (name == "config_version") {
+            err = require_type(entry, Value::Type::Integer);
+            if (err.ok() && entry.value.integer != 1) {
+                err = schema_error(entry, "unsupported config version " + std::to_string(entry.value.integer) +
+                                              "; supported version is 1");
+            }
+        } else if (name == "provider") {
+            err = require_type(entry, Value::Type::String);
+            if (err.ok() && entry.value.string.empty()) {
+                err = schema_error(entry, "provider must not be empty");
+            } else if (err.ok()) {
+                candidate.provider = entry.value.string;
+            }
+        } else if (name == "model") {
+            err = require_type(entry, Value::Type::String);
+            if (err.ok()) candidate.model = entry.value.string;
+        } else if (name == "api") {
+            std::string value;
+            err = enum_string(entry, {"chat", "responses"}, value, "chat or responses");
+            if (err.ok()) candidate.api = value;
+        } else if (name == "endpoint.base_url") {
+            err = require_type(entry, Value::Type::String);
+            if (err.ok()) candidate.base_url = entry.value.string;
+        } else if (name == "endpoint.chat_url") {
+            err = require_type(entry, Value::Type::String);
+            if (err.ok()) candidate.chat_url = entry.value.string;
+        } else if (name == "endpoint.models_url") {
+            err = require_type(entry, Value::Type::String);
+            if (err.ok()) candidate.models_url = entry.value.string;
+        } else if (name == "endpoint.responses_url") {
+            err = require_type(entry, Value::Type::String);
+            if (err.ok()) candidate.responses_url = entry.value.string;
+        } else if (name == "generation.stream") {
+            err = require_type(entry, Value::Type::Boolean);
+            if (err.ok()) {
+                candidate.stream = entry.value.boolean;
+                candidate.stream_explicit = true;
+            }
+        } else if (name == "generation.temperature") {
+            err = numeric_double(entry, candidate.temperature);
+            if (err.ok()) candidate.has_temperature = true;
+        } else if (name == "generation.top_p") {
+            err = numeric_double(entry, candidate.top_p);
+            if (err.ok()) candidate.has_top_p = true;
+        } else if (name == "generation.max_output_tokens") {
+            err = nonnegative_int(entry, candidate.max_output_tokens);
+            if (err.ok()) candidate.has_max_output_tokens = true;
+        } else if (name == "context.window_tokens") {
+            err = context_window_tokens(entry, candidate.context_tokens);
+        } else if (name == "context.max_bytes") {
+            err = nonnegative_long(entry, candidate.max_context_bytes);
+        } else if (name == "context.policy") {
+            err = enum_string(entry,
+                              {"error", "truncate-oldest", "summarize-oldest", "summarize-middle", "provider-auto"},
+                              candidate.context_policy,
+                              "error, truncate-oldest, summarize-oldest, summarize-middle, or provider-auto");
+        } else if (name == "network.connect_timeout_seconds") {
+            err = nonnegative_long(entry, candidate.connect_timeout_seconds);
+        } else if (name == "network.request_timeout_seconds") {
+            err = nonnegative_long(entry, candidate.timeout_seconds);
+        } else if (name == "network.proxy") {
+            err = require_type(entry, Value::Type::String);
+            if (err.ok()) candidate.proxy = entry.value.string;
+        } else if (name == "network.insecure_tls") {
+            err = require_type(entry, Value::Type::Boolean);
+            if (err.ok()) candidate.insecure_tls = entry.value.boolean;
+        } else if (name == "credentials.key_env") {
+            err = require_type(entry, Value::Type::String);
+            if (err.ok()) candidate.key_env = entry.value.string;
+        } else if (name == "credentials.key_file") {
+            err = require_type(entry, Value::Type::String);
+            if (err.ok()) candidate.key_file = entry.value.string;
+        } else if (name == "output.format") {
+            std::string value;
+            err = enum_string(entry, {"text", "json", "ndjson", "jsond"}, value,
+                              "text, json, ndjson, or jsond");
+            if (err.ok()) {
+                candidate.format = value == "text" ? cli::OutputFormat::Text
+                                   : value == "json" ? cli::OutputFormat::Json
+                                                     : cli::OutputFormat::Ndjson;
+            }
+        } else if (name == "output.render_format") {
+            err = require_type(entry, Value::Type::String);
+            if (err.ok() && !pkchat::markdown::parse_output_format(entry.value.string, candidate.output_format)) {
+                err = schema_error(entry, "expected html, md, or plaintext");
+            } else if (err.ok()) {
+                const bool rendered = candidate.output_format != pkchat::markdown::OutputFormat::Markdown;
+                candidate.output_format_explicit = rendered;
+                candidate.rendered_output_format_explicit = rendered;
+            }
+        } else if (name == "input.max_input_bytes") {
+            err = nonnegative_long(entry, candidate.max_input_bytes);
+        } else if (name == "input.max_image_bytes") {
+            err = nonnegative_long(entry, candidate.max_image_bytes);
+        } else if (name == "input.image_capability") {
+            err = enum_string(entry, {"auto", "allow", "deny"}, candidate.image_capability,
+                              "auto, allow, or deny");
+        } else if (name == "url_fetch.max_bytes") {
+            err = nonnegative_long(entry, candidate.max_fetch_bytes);
+        } else if (name == "url_fetch.allow_private_addresses") {
+            err = require_type(entry, Value::Type::Boolean);
+            if (err.ok()) candidate.allow_private_url_fetch = entry.value.boolean;
+        } else if (name == "tui.colors") {
+            err = require_type(entry, Value::Type::Boolean);
+            if (err.ok()) candidate.no_colors = !entry.value.boolean;
+        } else if (name == "tui.theme") {
+            err = enum_string(entry, {"dark", "light"}, candidate.tui_theme, "dark or light");
+        } else if (name == "tui.thinking_traces") {
+            err = require_type(entry, Value::Type::Boolean);
+            if (err.ok()) candidate.show_thinking_traces = entry.value.boolean;
+        } else {
+            err = schema_error(entry, "unknown section or key");
+        }
+        if (!err.ok()) {
+            return err;
+        }
+    }
+    options = std::move(candidate);
+    return ok_error();
+}
+
+Environment process_environment() {
+    return {environment_value("XDG_CONFIG_HOME"), environment_value("XDG_CONFIG_DIRS"),
+            environment_value("HOME")};
+}
+
+std::string user_config_path(const Environment& environment) {
+    if (absolute_path(environment.xdg_config_home)) {
+        return (std::filesystem::path(environment.xdg_config_home) / "pkchat" / "config.conf").string();
+    }
+    if (!absolute_path(environment.home)) {
+        return {};
+    }
+    return (std::filesystem::path(environment.home) / ".config" / "pkchat" / "config.conf").string();
+}
+
+std::vector<std::string> system_config_paths(const Environment& environment) {
+    const std::string dirs = environment.xdg_config_dirs.empty() ? "/etc/xdg" : environment.xdg_config_dirs;
+    std::vector<std::string> priority_order;
+    size_t begin = 0;
+    while (begin <= dirs.size()) {
+        const size_t colon = dirs.find(':', begin);
+        const size_t end = colon == std::string::npos ? dirs.size() : colon;
+        const std::string dir = dirs.substr(begin, end - begin);
+        if (absolute_path(dir)) {
+            priority_order.push_back((std::filesystem::path(dir) / "pkchat" / "config.conf").string());
+        }
+        if (colon == std::string::npos) {
+            break;
+        }
+        begin = colon + 1;
+    }
+    return std::vector<std::string>(priority_order.rbegin(), priority_order.rend());
+}
+
+LoadResult load_automatic(const cli::Options& base_options, const Environment& environment) {
+    LoadResult result{base_options, {}, ok_error()};
+    std::vector<std::string> paths = system_config_paths(environment);
+    const std::string user_path = user_config_path(environment);
+    if (!user_path.empty()) {
+        paths.push_back(user_path);
+    }
+    for (const std::string& path : paths) {
+        std::error_code filesystem_error;
+        const bool exists = std::filesystem::exists(path, filesystem_error);
+        if (filesystem_error) {
+            result.error = {ErrorCode::Config, "could not inspect config file: " + path};
+            return result;
+        }
+        if (!exists) {
+            continue;
+        }
+        Error err = apply_config_file(path, result.options);
+        if (!err.ok()) {
+            result.error = std::move(err);
+            return result;
+        }
+        result.loaded_paths.push_back(path);
+    }
+    return result;
 }
 
 const char* value_type_name(Value::Type type) {

@@ -5,6 +5,11 @@ ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
 PORT="${PKCHAT_TEST_PORT:-18080}"
 MODEL="mock-model"
 SERVER_LOG="$ROOT/build/mock_server.log"
+EMPTY_CONFIG_HOME="$ROOT/build/empty-config-home"
+
+mkdir -p "$EMPTY_CONFIG_HOME"
+export XDG_CONFIG_HOME="$EMPTY_CONFIG_HOME"
+export XDG_CONFIG_DIRS="$ROOT/build/empty-system-config"
 
 python3 "$ROOT/tests/mock_server/openai_mock.py" --port "$PORT" --model "$MODEL" >"$SERVER_LOG" 2>&1 &
 SERVER_PID=$!
@@ -35,6 +40,10 @@ printf '%s\n' "$page_md" | grep -F '**bold**' >/dev/null
 printf '%s\n' "$page_md" | grep -F '*emphasis*' >/dev/null
 printf '%s\n' "$page_md" | grep -F '[docs](https://example.com/docs)' >/dev/null
 printf '%s\n' "$page_md" | grep -F 'bad()' >/dev/null && exit 1 || true
+
+configured_page_md=$(XDG_CONFIG_HOME="$ROOT/tests/fixtures/config-home" \
+    "$ROOT/pkchat" --fetch-url "$BASE/page" --html-format markdown --quiet)
+printf '%s\n' "$configured_page_md" | grep -F '# Mock Page' >/dev/null
 
 offline_page_md=$("$ROOT/pkchat" --provider none --fetch-url "$BASE/page" \
     --allow-private-url-fetch --html-format markdown --quiet)

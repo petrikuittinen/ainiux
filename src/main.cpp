@@ -11,6 +11,7 @@
 #include "chat/session.hpp"
 #include "cli/args.hpp"
 #include "common.hpp"
+#include "config/config.hpp"
 #include "context/context.hpp"
 #include "editor/editor.hpp"
 #include "fetch/fetch.hpp"
@@ -959,15 +960,26 @@ int main(int argc, char** argv) {
         print_error(parsed.error);
         return exit_code_for(parsed.error.code);
     }
-    pkchat::cli::Options options = parsed.options;
-    if (options.help) {
+    if (parsed.options.help) {
         std::cout << pkchat::cli::help_text();
         return 0;
     }
-    if (options.version) {
+    if (parsed.options.version) {
         std::cout << "pkchat " << pkchat::kVersion << "\n";
         return 0;
     }
+    pkchat::config::LoadResult configured =
+        pkchat::config::load_automatic(pkchat::cli::Options{}, pkchat::config::process_environment());
+    if (!configured.error.ok()) {
+        print_error(configured.error);
+        return exit_code_for(configured.error.code);
+    }
+    parsed = pkchat::cli::parse_args(argc, argv, configured.options);
+    if (!parsed.error.ok()) {
+        print_error(parsed.error);
+        return exit_code_for(parsed.error.code);
+    }
+    pkchat::cli::Options options = parsed.options;
     pkchat::Error profile_error = pkchat::provider::validate_profile_name(options.provider);
     if (!profile_error.ok()) {
         print_error(profile_error);
@@ -1077,6 +1089,9 @@ int main(int argc, char** argv) {
     }
     if (!options.key.empty() && !options.quiet) {
         std::cerr << "Warning: command line API keys may be visible to other local users; prefer --key-env, --key-file, or --key-stdin.\n";
+    }
+    if (options.insecure_tls) {
+        std::cerr << "Warning: TLS certificate verification is disabled by the effective configuration.\n";
     }
 
     pkchat::chat::Session session;

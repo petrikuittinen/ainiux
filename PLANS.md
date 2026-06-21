@@ -57,9 +57,9 @@ Each milestone should leave the program usable. Do not create a long-lived pile 
 
 ## Current baseline
 
-Implementation status (2026-06-21): `pkchat` is at v0.55. The repository has the scriptable CLI, built-in provider registry and aliases, Chat Completions, text-only Responses API support, streaming SSE, credential lookup, JSON chat persistence, cancellable runtime jobs, REPL, full-screen TUI foundation, editor, request-only context policies, context-use estimates, bounded text/HTML/Markdown input, JPEG/PNG/GIF image input for Chat Completions, safe URL fetching, Markdown output conversion, and the first v0.6 configuration parser slice. `--provider none` supports local conversion and editor workflows without a model endpoint.
+Implementation status (2026-06-21): `pkchat` is at v0.6. The repository has the scriptable CLI, built-in provider registry and aliases, Chat Completions, text-only Responses API support, streaming SSE, credential lookup, JSON chat persistence, cancellable runtime jobs, REPL, full-screen TUI foundation, editor, request-only context policies, context-use estimates, bounded text/HTML/Markdown input, JPEG/PNG/GIF image input for Chat Completions, safe URL fetching, Markdown output conversion, and automatic v0.6 system/user TOML-alike configuration loading. `--provider none` supports local conversion and editor workflows without a model endpoint.
 
-There is no configuration-file loader yet. Runtime defaults currently live in `cli::Options`, provider defaults live in `src/provider/`, API keys are resolved while building the provider request context, and `main.cpp` parses the CLI before constructing that context. v0.6 must extend this flow rather than introduce a parallel settings or provider system.
+Runtime defaults live in `cli::Options`, provider defaults live in `src/provider/`, and API keys are resolved while building the provider request context. Automatic system and user config layers now map into a base `cli::Options`, after which `main.cpp` parses CLI arguments over that base. Explicit config files and a `--no-config` control remain to complete v0.6.
 
 ## Execution-plan template for agents
 
@@ -1046,15 +1046,15 @@ With no configuration files present, behavior must remain identical to v0.55. In
 
 ## Architectural fit
 
-- [ ] Add a parser, schema validator, XDG path resolver, and layer loader under `src/config/`.
-- [ ] Keep `cli::Options` as the effective application settings passed to existing CLI, provider, input, context, REPL, and TUI code.
-- [ ] Keep built-in provider definitions and aliases in `src/provider/`; do not copy OpenAI, LM Studio, Qwen, ZAI, or other registry records into an embedded config string.
-- [ ] Use the current `cli::Options` initializers as code defaults. Parsed files are typed overrides, not a second source of built-in defaults.
-- [ ] Apply configuration before the full CLI parse, then parse CLI arguments over the configured `Options` value. An overload such as `parse_args(argc, argv, base_options)` can preserve existing parser tests and callers.
-- [ ] Keep credential resolution in `provider::build_context` after the final provider and `key_env`/`key_file` settings are known. The config parser must never read or retain an API key value.
-- [ ] Extend `cli::Options` only for settings the current runtime can consume, such as a persistent TUI theme. Do not add unused web, benchmark, agent, PDF, or DOCX settings in this milestone.
+- [x] Add a parser, schema validator, XDG path resolver, and layer loader under `src/config/`.
+- [x] Keep `cli::Options` as the effective application settings passed to existing CLI, provider, input, context, REPL, and TUI code.
+- [x] Keep built-in provider definitions and aliases in `src/provider/`; do not copy OpenAI, LM Studio, Qwen, ZAI, or other registry records into an embedded config string.
+- [x] Use the current `cli::Options` initializers as code defaults. Parsed files are typed overrides, not a second source of built-in defaults.
+- [x] Apply configuration before the full CLI parse, then parse CLI arguments over the configured `Options` value. An overload such as `parse_args(argc, argv, base_options)` preserves existing parser tests and callers.
+- [x] Keep credential resolution in `provider::build_context` after the final provider and `key_env`/`key_file` settings are known. The config parser never reads or retains an API key value.
+- [x] Extend `cli::Options` only for settings the current runtime can consume, such as persistent TUI theme/thinking defaults. Do not add unused web, benchmark, agent, PDF, or DOCX settings in this milestone.
 
-Implementation note (2026-06-21): The first v0.6 artifact is `config/pkchat.conf`, a system-wide template containing values aligned with the v0.55 `cli::Options` defaults. `make install` places it at `${SYSCONFDIR}/xdg/pkchat/config.conf` with mode `0644` and preserves an existing file. `src/config/` now provides a bounded regular-file reader and TOML-alike syntax parser producing an owned map of typed entries with source locations. Schema validation, XDG discovery, user-layer overrides, and CLI-last merging remain the next slice.
+Implementation note (2026-06-21): `config/pkchat.conf` is the system-wide template aligned with the v0.6 `cli::Options` defaults. `make install` places it at `${SYSCONFDIR}/xdg/pkchat/config.conf` with mode `0644` and preserves an existing file. `src/config/` provides a bounded parser, complete initial-schema validation, XDG system/user discovery, transactional layer application, and CLI-last option merging. TUI theme/thinking defaults and URL-fetch private-address policy are wired to effective configuration. Explicit `--config`/`--no-config` controls remain the next slice.
 
 ## File syntax
 
@@ -1084,8 +1084,8 @@ Rules:
 - [x] Reject malformed section headers, trailing text after a section, invalid names, integer overflow, non-finite floats, and unterminated strings with a `PKCHAT_ERR_CONFIG` error.
 - [x] Report the source path, line, column, section, and key where applicable.
 - [x] Reject duplicate fully qualified keys within one file. A later file may override a key from an earlier layer.
-- [ ] Reject unknown sections and keys. Silent typo handling is not acceptable for the first version.
-- [ ] Accept optional `config_version = 1` at the root and reject unsupported versions clearly.
+- [x] Reject unknown sections and keys. Silent typo handling is not acceptable for the first version.
+- [x] Accept optional `config_version = 1` at the root and reject unsupported versions clearly.
 
 Do not support arrays, repeated keys, dotted assignment keys, inline comments, multiline strings, tables as values, date/time literals, includes, environment interpolation, or expressions in v0.6. Add list syntax only when a concrete implemented setting needs it; current attachment paths and prompts are per-command inputs and must not become persistent lists.
 
@@ -1143,17 +1143,19 @@ allow_private_addresses = false
 [tui]
 colors = true
 theme = dark
+thinking_traces = false
 ```
 
 Schema requirements:
 
 - [ ] Use the same enum spellings and numeric ranges as their CLI counterparts: `api`, formats, context policy, image capability, timeouts, byte limits, sampling values, and context-window shorthand must not diverge.
-- [ ] Omitted `temperature`, `top_p`, and `max_output_tokens` remain unset so the request does not gain parameters merely because config support exists.
-- [ ] `context.window_tokens` maps to `--context`; accept positive integers plus the existing case-insensitive `k` (1024) and `M` (1000000) suffixes. Omission or `0` disables the TUI estimate.
-- [ ] `tui.theme` accepts only `dark` or `light` and becomes the initial TUI theme; `/theme` can still change it for the current process.
-- [ ] `network.insecure_tls = true` emits a security warning to `stderr` whenever it is effective.
-- [ ] Do not accept prompt text, system text, input/attachment paths, fetch URLs, output paths, save/load paths, mode/action flags, `--key`, `--key-stdin`, arbitrary headers, or API key values from persistent configuration.
-- [ ] Do not add named custom provider profiles in the first slice. Users can select a built-in provider and configure endpoint overrides; dynamic profiles require a later provider-registry extension with separate validation tests.
+- [x] Omitted `temperature`, `top_p`, and `max_output_tokens` remain unset so the request does not gain parameters merely because config support exists.
+- [x] `context.window_tokens` maps to `--context`; accept positive integers plus the existing case-insensitive `k` (1024) and `M` (1000000) suffixes. Omission or `0` disables the TUI estimate.
+- [x] `tui.theme` accepts only `dark` or `light` and becomes the initial TUI theme; `/theme` can still change it for the current process.
+- [x] `tui.thinking_traces` controls whether the TUI initially displays model thinking traces; `/thinking` can still change it for the current process.
+- [x] `network.insecure_tls = true` emits a security warning to `stderr` whenever it is effective.
+- [x] Do not accept prompt text, system text, input/attachment paths, fetch URLs, output paths, save/load paths, mode/action flags, `--key`, `--key-stdin`, arbitrary headers, or API key values from persistent configuration.
+- [x] Do not add named custom provider profiles in the first slice. Users can select a built-in provider and configure endpoint overrides; dynamic profiles require a later provider-registry extension with separate validation tests.
 
 ## Discovery and precedence
 
@@ -1174,23 +1176,24 @@ Resolve layers from lowest to highest precedence:
 
 Implementation details:
 
-- [ ] Because `$XDG_CONFIG_DIRS` lists higher-priority directories first, load existing system files in reverse order so the first directory wins after merging.
-- [ ] Follow XDG path validity rules: ignore relative `$XDG_CONFIG_DIRS` entries, and use the documented fallback when `$XDG_CONFIG_HOME` is empty or relative. If `HOME` is also unavailable, skip automatic user-config discovery without preventing explicit/system configuration.
+- [x] Because `$XDG_CONFIG_DIRS` lists higher-priority directories first, load existing system files in reverse order so the first directory wins after merging.
+- [x] Follow XDG path validity rules: ignore relative `$XDG_CONFIG_DIRS` entries, and use the documented fallback when `$XDG_CONFIG_HOME` is empty or relative. If `HOME` is also unavailable, skip automatic user-config discovery without preventing explicit/system configuration.
 - [ ] `--no-config` skips only automatic system/user discovery; explicit `--config` files still load, allowing deterministic isolated use.
-- [ ] Missing automatic files are normal. A missing or unreadable explicit file is `PKCHAT_ERR_CONFIG`; an existing but unreadable or invalid automatic file is also an error.
-- [ ] Bound each config file to 1 MiB and reject non-regular files with a specific error.
+- [x] Missing automatic files are normal; an existing but unreadable or invalid automatic file is an error.
+- [ ] A missing or unreadable explicit file is `PKCHAT_ERR_CONFIG` once `--config` is implemented.
+- [x] Bound each config file to 1 MiB and reject non-regular files with a specific error.
 - [ ] Do a small bootstrap scan for only `--config`, `--no-config`, `--help`, and `--version`, then run the existing full parser over the merged base options. The bootstrap scan must still detect missing values and malformed control options.
-- [ ] `--help` and `--version` must work without reading config files, including when an automatically discovered file is malformed.
-- [ ] XDG and `HOME` affect path discovery. Provider-specific environment variables and an explicitly selected `key_env` continue to supply credentials after files are merged. Do not invent a second general `PKCHAT_*` environment-settings layer in this milestone.
-- [ ] Do not print config status on `stdout`. Optional debug diagnostics may list loaded paths on `stderr`, but must redact URL userinfo, credential paths where appropriate, and all authorization values.
+- [x] `--help` and `--version` must work without reading config files, including when an automatically discovered file is malformed.
+- [x] XDG and `HOME` affect path discovery. Provider-specific environment variables and an explicitly selected `key_env` continue to supply credentials after files are merged. Do not invent a second general `PKCHAT_*` environment-settings layer in this milestone.
+- [x] Do not print config status on `stdout`. Optional debug diagnostics may list loaded paths on `stderr`, but must redact URL userinfo, credential paths where appropriate, and all authorization values.
 
 ## Merge and validation
 
-- [ ] Represent parsed values with owned RAII types and source metadata; no raw owning pointers or parser-global mutable state.
-- [ ] Merge typed setting overrides by fully qualified schema key. Scalars replace earlier scalars.
-- [ ] Validate each file completely before applying it so one invalid file cannot partially mutate effective settings.
+- [x] Represent parsed values with owned RAII types and source metadata; no raw owning pointers or parser-global mutable state.
+- [x] Merge typed setting overrides by fully qualified schema key. Scalars replace earlier scalars.
+- [x] Validate each file completely before applying it so one invalid file cannot partially mutate effective settings.
 - [ ] Reuse or factor the CLI's existing numeric, format, context-policy, image-capability, and context-token validation helpers instead of implementing subtly different rules.
-- [ ] Preserve the CLI's explicit-state semantics (`has_temperature`, `has_top_p`, `has_max_output_tokens`, output format flags, and `stream_explicit`) when config supplies a setting and when CLI later overrides it.
+- [x] Preserve the CLI's explicit-state semantics (`has_temperature`, `has_top_p`, `has_max_output_tokens`, output format flags, and `stream_explicit`) when config supplies a setting and when CLI later overrides it.
 - [ ] Ensure a configured provider is validated by the existing provider registry and that `provider = none` cannot acquire a model endpoint accidentally.
 - [ ] Keep config data out of saved chat JSON except for the effective non-secret settings already recorded by chat persistence. Never record the config path, key values, or raw config text.
 
@@ -1198,13 +1201,13 @@ Implementation details:
 
 0. [x] Add the common `config/pkchat.conf` template and install it without overwriting an existing administrator-managed file.
 1. [x] Add parser/value/source-location types in `src/config/config.hpp` and `src/config/config.cpp` plus grammar/error unit tests.
-2. [ ] Add the typed schema mapper and tests for every supported key, enum, range, and rejected key.
-3. [ ] Add XDG discovery and deterministic layer merging with injectable environment/path inputs for tests.
+2. [x] Add the typed schema mapper and tests for supported keys, representative enums/ranges, and rejected keys.
+3. [x] Add XDG discovery and deterministic automatic layer merging with injectable environment/path inputs for tests.
 4. [ ] Add CLI bootstrap parsing, `--config`, `--no-config`, and parsing over configured base options.
-5. [ ] Wire effective settings into `main.cpp`, provider context construction, input/fetch limits, output formatting, context handling, and the initial TUI theme.
-6. [ ] Add integration tests using isolated temporary `HOME`, `XDG_CONFIG_HOME`, and `XDG_CONFIG_DIRS` values.
-7. [ ] Update `README.md`, `TODO.md`, `docs/decisions.md`, and `docs/security.md` with syntax, precedence, examples, limitations, and credential guidance.
-8. [ ] Run normal, sanitizer, and leak-check suites and restore a normal build afterward.
+5. [x] Wire effective settings into `main.cpp`, provider context construction, input/fetch limits, output formatting, context handling, and the initial TUI theme/thinking mode.
+6. [x] Add integration coverage using an isolated `XDG_CONFIG_HOME` fixture and isolated automatic system paths.
+7. [x] Update `README.md`, `TODO.md`, `docs/decisions.md`, and `docs/security.md` with syntax, precedence, examples, limitations, and credential guidance.
+8. [x] Run normal, sanitizer, and leak-check suites and restore a normal build afterward.
 
 ## Acceptance criteria
 

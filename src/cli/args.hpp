@@ -28,6 +28,7 @@ struct Options {
     bool editor = false;
     bool no_colors = false;
     bool allow_private_url_fetch = false;
+    bool show_thinking_traces = false;
 
     std::string positional_url;
     std::string prompt;
@@ -58,6 +59,7 @@ struct Options {
     std::string proxy;
     std::string context_policy = "error";
     std::string image_capability = "auto";
+    std::string tui_theme = "dark";
     OutputFormat format = OutputFormat::Text;
 
     double temperature = 0.0;
@@ -84,6 +86,7 @@ struct ParseResult {
 };
 
 ParseResult parse_args(int argc, char** argv);
+ParseResult parse_args(int argc, char** argv, const Options& base_options);
 std::string help_text();
 const char* format_name(OutputFormat format);
 

@@ -16,7 +16,9 @@ The initial implementation uses C++17 and a plain Makefile to keep the binary po
 
 v0.6 begins with one canonical, system-wide TOML-alike template at `config/pkchat.conf`. It mirrors the existing runtime defaults without duplicating built-in provider registry records or setting optional sampling parameters. `make install` installs it to `${SYSCONFDIR}/xdg/pkchat/config.conf`, normally `/etc/xdg/pkchat/config.conf`, with mode `0644` and does not overwrite an existing administrator-managed file.
 
-`src/config/` owns the dependency-free parser. It reads regular files with a 1 MiB default cap and produces an owned map keyed by fully qualified setting name. Boolean, signed 64-bit integer, finite float, quoted string, and bare string values remain typed, and every entry retains its source path and byte-based line/column location. Parsing validates UTF-8 and rejects duplicate keys or malformed syntax without returning a partially populated document. Schema validation and configuration-layer merging are intentionally separate follow-up stages.
+`src/config/` owns the dependency-free parser, schema mapper, and automatic layer loader. It reads regular files with a 1 MiB default cap and produces an owned map keyed by fully qualified setting name. Boolean, signed 64-bit integer, finite float, quoted string, and bare string values remain typed, and every entry retains its source path and byte-based line/column location. Parsing validates UTF-8 and rejects duplicate keys or malformed syntax without returning a partially populated document.
+
+Automatic layers follow XDG precedence: system files are applied in reverse `$XDG_CONFIG_DIRS` order, then `$XDG_CONFIG_HOME/pkchat/config.conf` or the `HOME` fallback. Each document is schema-validated into a temporary `cli::Options` copy before it replaces the effective options, preventing partial application. The ordinary CLI parser then runs over that configured base so command-line values remain authoritative. TUI theme and thinking-trace visibility are ordinary effective options; provider credentials remain references resolved later by the provider layer.
 
 
 ## Provider Registry and API Adapters

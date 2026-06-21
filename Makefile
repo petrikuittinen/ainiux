@@ -26,6 +26,7 @@ APP_OBJ := $(patsubst %.cpp,$(OBJ_DIR)/%.o,$(APP_SRC))
 LIB_OBJ := $(patsubst %.cpp,$(OBJ_DIR)/%.o,$(LIB_SRC))
 TEST_SRC := $(shell find tests/unit -name '*.cpp' | sort)
 TEST_OBJ := $(patsubst %.cpp,$(OBJ_DIR)/%.o,$(TEST_SRC))
+DEP := $(sort $(APP_OBJ:.o=.d) $(TEST_OBJ:.o=.d))
 
 .PHONY: all clean optimized test test-unit test-integration sanitize test-sanitize leak-check test-leak install
 
@@ -39,7 +40,9 @@ $(TEST_BIN): $(LIB_OBJ) $(TEST_OBJ)
 
 $(OBJ_DIR)/%.o: %.cpp
 	@mkdir -p $(dir $@)
-	$(CXX) $(CXXFLAGS) -c $< -o $@
+	$(CXX) $(CXXFLAGS) -MMD -MP -c $< -o $@
+
+-include $(DEP)
 
 test: test-unit test-integration
 

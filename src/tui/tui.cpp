@@ -934,9 +934,10 @@ int run(provider::RequestContext context, chat::Session session) {
     bool completion_pending = false;
     std::string status = ready_status();
     ThemeName theme = ThemeName::Dark;
+    parse_theme_name(context.options.tui_theme, theme);
     const bool use_colors = !context.options.no_colors;
     bool quit = false;
-    bool show_thinking_traces = false;
+    bool show_thinking_traces = context.options.show_thinking_traces;
     size_t pending_user = static_cast<size_t>(-1);
     size_t pending_assistant = static_cast<size_t>(-1);
     int history_scroll = 0;

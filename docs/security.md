@@ -6,6 +6,12 @@
 - LM Studio authentication is optional by default.
 - Local web mode and agent mode are not implemented yet.
 
+## Configuration Files
+
+Automatic system and user configuration files may select a credential environment variable or key-file path, but API key values and arbitrary authorization headers are not accepted by the schema. Files are capped at 1 MiB and must be regular files. Unknown settings and invalid types fail closed before any part of that file is applied.
+
+`url_fetch.allow_private_addresses = true` relaxes SSRF protections for explicit CLI/TUI fetches and should only be enabled when local-network access is intended. `network.insecure_tls = true` prints a warning whenever effective. User configuration normally lives at `~/.config/pkchat/config.conf`; protect it appropriately if it contains a sensitive key-file path or private endpoint URL.
+
 
 ## Chat Files
 

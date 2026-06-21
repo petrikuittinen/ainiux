@@ -59,7 +59,7 @@ void test_cli_parse() {
 void test_config_reads_common_template() {
     pkchat::config::ParseResult parsed = pkchat::config::read_file("config/pkchat.conf");
     check(parsed.error.ok(), "common config file parses");
-    check(parsed.document.entries.size() == 27, "common config has every expected setting");
+    check(parsed.document.entries.size() == 28, "common config has every expected setting");
 
     const pkchat::config::Entry* provider = parsed.document.find("provider");
     check(provider != nullptr && provider->value.is_string() && provider->value.string == "openai",
@@ -76,6 +76,90 @@ void test_config_reads_common_template() {
     const pkchat::config::Entry* model = parsed.document.find("model");
     check(model != nullptr && model->value.is_string() && model->value.string.empty(),
           "common config supports an empty bare string");
+
+    pkchat::cli::Options options;
+    pkchat::Error err = pkchat::config::apply_document(parsed.document, options);
+    check(err.ok(), "every common config setting passes schema validation");
+    check(options.provider == "openai" && options.stream && options.tui_theme == "dark" &&
+              !options.show_thinking_traces && !options.allow_private_url_fetch,
+          "common config maps to the built-in runtime defaults");
+}
+
+void test_config_applies_user_settings() {
+    pkchat::config::ParseResult parsed =
+        pkchat::config::read_file("tests/fixtures/config-home/pkchat/config.conf");
+    check(parsed.error.ok(), "user config fixture parses");
+
+    pkchat::cli::Options options;
+    pkchat::Error err = pkchat::config::apply_document(parsed.document, options);
+    check(err.ok(), "user config fixture passes schema validation");
+    check(options.allow_private_url_fetch, "user config enables private URL fetching");
+    check(options.tui_theme == "dark", "user config selects the dark theme");
+    check(options.show_thinking_traces, "user config shows thinking traces by default");
+
+    const std::string system_home =
+        std::filesystem::absolute("build/config-system").lexically_normal().string();
+    std::filesystem::create_directories(system_home + "/pkchat");
+    {
+        std::ofstream system_config(system_home + "/pkchat/config.conf", std::ios::trunc);
+        check(system_config.is_open(), "system config test file opens");
+        system_config << "[url_fetch]\nallow_private_addresses = false\n"
+                         "[tui]\ntheme = light\nthinking_traces = false\n";
+        system_config.close();
+        check(system_config.good(), "system config test file is written");
+    }
+    const std::string config_home =
+        std::filesystem::absolute("tests/fixtures/config-home").lexically_normal().string();
+    pkchat::config::Environment environment{config_home, system_home, "/nonexistent"};
+    pkchat::config::LoadResult loaded = pkchat::config::load_automatic(pkchat::cli::Options{}, environment);
+    check(loaded.error.ok(), "automatic user config loading succeeds");
+    check(loaded.loaded_paths.size() == 2 &&
+              loaded.loaded_paths[0] == system_home + "/pkchat/config.conf" &&
+              loaded.loaded_paths[1] == config_home + "/pkchat/config.conf",
+          "automatic loading applies the system file before the XDG user file");
+    check(loaded.options.allow_private_url_fetch && loaded.options.show_thinking_traces &&
+              loaded.options.tui_theme == "dark",
+          "user settings partially override automatic system settings");
+
+    const char* argv[] = {"pkchat", "--no-stream", "--nocolors"};
+    pkchat::cli::ParseResult cli =
+        pkchat::cli::parse_args(3, const_cast<char**>(argv), loaded.options);
+    check(cli.error.ok() && !cli.options.stream && cli.options.no_colors,
+          "command-line arguments apply over configured defaults");
+}
+
+void test_config_schema_rejects_invalid_settings_transactionally() {
+    pkchat::cli::Options options;
+    options.tui_theme = "light";
+    pkchat::config::ParseResult unknown =
+        pkchat::config::parse("[tui]\ntheme = dark\ntypo = true\n", "unknown.conf");
+    pkchat::Error err = pkchat::config::apply_document(unknown.document, options);
+    check(!err.ok() && err.code == pkchat::ErrorCode::Config &&
+              err.message.find("tui.typo") != std::string::npos,
+          "config schema rejects unknown keys with the qualified name");
+    check(options.tui_theme == "light", "invalid config does not partially change options");
+
+    pkchat::config::ParseResult wrong_type =
+        pkchat::config::parse("[url_fetch]\nallow_private_addresses = yes\n", "type.conf");
+    err = pkchat::config::apply_document(wrong_type.document, options);
+    check(!err.ok() && err.message.find("expected boolean, got string") != std::string::npos,
+          "config schema reports expected and actual types");
+
+    pkchat::config::ParseResult bad_version =
+        pkchat::config::parse("config_version = 2\n", "version.conf");
+    err = pkchat::config::apply_document(bad_version.document, options);
+    check(!err.ok() && err.message.find("supported version is 1") != std::string::npos,
+          "config schema rejects unsupported versions");
+}
+
+void test_config_xdg_path_resolution() {
+    pkchat::config::Environment environment{"relative", "/high:relative:/low", "/home/tester"};
+    check(pkchat::config::user_config_path(environment) == "/home/tester/.config/pkchat/config.conf",
+          "relative XDG_CONFIG_HOME falls back to HOME");
+    const std::vector<std::string> system = pkchat::config::system_config_paths(environment);
+    check(system.size() == 2 && system[0] == "/low/pkchat/config.conf" &&
+              system[1] == "/high/pkchat/config.conf",
+          "system config directories load in reverse order and ignore relative entries");
 }
 
 void test_config_parses_supported_values() {
@@ -1466,6 +1550,9 @@ void test_lmstudio_context() {
 int main() {
     test_thinking_trace_splitter();
     test_config_reads_common_template();
+    test_config_applies_user_settings();
+    test_config_schema_rejects_invalid_settings_transactionally();
+    test_config_xdg_path_resolution();
     test_config_parses_supported_values();
     test_config_rejects_invalid_input();
     test_config_file_read_errors();

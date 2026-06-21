@@ -4,7 +4,9 @@
 #include <cstdint>
 #include <map>
 #include <string>
+#include <vector>
 
+#include "cli/args.hpp"
 #include "common.hpp"
 
 namespace pkchat::config {
@@ -51,8 +53,25 @@ struct ParseResult {
     Error error;
 };
 
+struct Environment {
+    std::string xdg_config_home;
+    std::string xdg_config_dirs;
+    std::string home;
+};
+
+struct LoadResult {
+    cli::Options options;
+    std::vector<std::string> loaded_paths;
+    Error error;
+};
+
 ParseResult parse(const std::string& input, const std::string& source_path = "<memory>");
 ParseResult read_file(const std::string& path, size_t max_bytes = kMaxConfigBytes);
+Error apply_document(const Document& document, cli::Options& options);
+Environment process_environment();
+std::string user_config_path(const Environment& environment);
+std::vector<std::string> system_config_paths(const Environment& environment);
+LoadResult load_automatic(const cli::Options& base_options, const Environment& environment);
 const char* value_type_name(Value::Type type);
 
 }  // namespace pkchat::config

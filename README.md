@@ -2,7 +2,7 @@
 
 `pkchat` is a fast, script-friendly command-line chat client for OpenAI and OpenAI-compatible APIs.
 
-Current status: v0.55 CLI with libcurl transport, cancellable runtime jobs, provider registry/profile aliases, `/v1/models`, `/v1/chat/completions`, text-only OpenAI Responses API support, local JPEG/PNG/GIF image input, interactive text/image attachments, request-only context policies, safe URL insertion, a simple REPL, a standalone `--editor` mode, a full-screen non-blocking TUI foundation, JSON chat save/load, HTML-to-text/Markdown extraction, Markdown assistant-output rendering to HTML or plaintext, and the first v0.6 TOML-alike configuration parser slice.
+Current status: v0.6 CLI with libcurl transport, cancellable runtime jobs, provider registry/profile aliases, `/v1/models`, `/v1/chat/completions`, text-only OpenAI Responses API support, local JPEG/PNG/GIF image input, interactive text/image attachments, request-only context policies, safe URL insertion, a simple REPL, a standalone `--editor` mode, a full-screen non-blocking TUI foundation, JSON chat save/load, HTML-to-text/Markdown extraction, Markdown assistant-output rendering to HTML or plaintext, and automatic system/user TOML-alike configuration loading.
 
 ## Build
 
@@ -33,7 +33,24 @@ Install the binary and the v0.6 system-wide configuration template with:
 make install PREFIX=/usr/local
 ```
 
-The template source is `config/pkchat.conf`. It is installed as `/etc/xdg/pkchat/config.conf` by default; set `SYSCONFDIR` when packaging for a different system configuration root. Installation preserves an existing system config instead of overwriting administrator changes. The v0.6 parser can read this TOML-alike syntax into a typed internal document with source locations. Automatic XDG discovery, schema mapping, partial user overrides at `$XDG_CONFIG_HOME/pkchat/config.conf`, and application to runtime options remain the next slice, so existing runtime behavior is not changed by these files yet.
+The template source is `config/pkchat.conf`. It is installed as `/etc/xdg/pkchat/config.conf` by default; set `SYSCONFDIR` when packaging for a different system configuration root. Installation preserves an existing system config instead of overwriting administrator changes.
+
+At startup, pkchat loads system `pkchat/config.conf` files from `$XDG_CONFIG_DIRS` (default `/etc/xdg`) and then the user file at `$XDG_CONFIG_HOME/pkchat/config.conf` (normally `~/.config/pkchat/config.conf`). User keys partially override system keys, and command-line arguments override both. Missing automatic files are ignored; malformed, unknown, or incorrectly typed settings produce a configuration error with the file and source location. `--help` and `--version` do not load configuration.
+
+For example, a user config can enable visible TUI thinking traces, retain the dark theme, and permit explicit private URL fetches:
+
+```conf
+config_version = 1
+
+[url_fetch]
+allow_private_addresses = true
+
+[tui]
+theme = dark
+thinking_traces = true
+```
+
+The format is deliberately TOML-alike rather than full TOML. Keep secrets out of it; `[credentials]` selects an environment variable or key file and never contains an API key value. Explicit `--config` and `--no-config` controls are planned for the next v0.6 slice.
 
 The HTTP transport uses libcurl through RAII wrappers in `src/http/`. Build flags are discovered with `pkg-config libcurl`, falling back to `curl-config` when needed.
 

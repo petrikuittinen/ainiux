@@ -112,8 +112,8 @@ const char* format_name(OutputFormat format) {
     return "text";
 }
 
-ParseResult parse_args(int argc, char** argv) {
-    Options opts;
+ParseResult parse_args(int argc, char** argv, const Options& base_options) {
+    Options opts = base_options;
     for (int i = 1; i < argc; ++i) {
         std::string arg = argv[i];
         std::string value;
@@ -335,6 +335,10 @@ ParseResult parse_args(int argc, char** argv) {
         }
     }
     return {opts, ok_error()};
+}
+
+ParseResult parse_args(int argc, char** argv) {
+    return parse_args(argc, argv, Options{});
 }
 
 std::string help_text() {
