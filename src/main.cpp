@@ -575,6 +575,18 @@ void print_chat_start(const pkchat::provider::RequestContext& context) {
     if (context.options.quiet) {
         return;
     }
+    if (context.options.repl) {
+        std::cerr << "pkchat " << pkchat::kVersion << " REPL | ";
+        if (context.profile.offline) {
+            std::cerr << "Provider: none (offline; AI/model requests disabled)\n";
+        } else {
+            std::cerr << "Endpoint: " << pkchat::provider::active_request_url(context)
+                      << " | Model: "
+                      << (context.options.model.empty() ? "unknown" : context.options.model) << "\n";
+        }
+        std::cerr << "Type /help for commands, /quit to exit.\n";
+        return;
+    }
     if (context.profile.offline) {
         std::cerr << "Provider: none (offline; AI/model requests disabled)" << std::endl;
         return;
@@ -744,9 +756,6 @@ void print_repl_help() {
 int run_repl(pkchat::provider::RequestContext context, pkchat::chat::Session session, std::ostream& out) {
     refresh_session_metadata(session, context);
     apply_system_prompt(session, context.options.system);
-    if (!context.options.quiet) {
-        std::cerr << "pkchat REPL. Type /help for commands, /quit to exit.\n";
-    }
 
     std::vector<pkchat::provider::ImageInput> pending_images;
 

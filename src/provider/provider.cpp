@@ -1228,7 +1228,7 @@ ContextResult build_context(const cli::Options& input_options) {
             return {{}, err};
         }
     }
-    if (changed && !options.quiet) {
+    if (changed && !options.quiet && !options.repl) {
         std::cerr << "Using base URL: " << base << "\n";
     }
 

@@ -407,6 +407,18 @@ test "$repl_out" = "repl-one-reply"
 grep 'repl-one' "$REPL_FILE" >/dev/null
 grep 'repl-one-reply' "$REPL_FILE" >/dev/null
 
+repl_start_err="$ROOT/build/repl-start.err"
+printf '/quit\n' | "$ROOT/pkchat" "$BASE" --repl --no-stream -m "$MODEL" \
+    >"$ROOT/build/repl-start.out" 2>"$repl_start_err"
+version=$("$ROOT/pkchat" --version | awk '{print $2}')
+test "$(sed -n '1p' "$repl_start_err")" = \
+    "pkchat $version REPL | Endpoint: $BASE/v1/chat/completions | Model: $MODEL"
+test "$(sed -n '2p' "$repl_start_err")" = "Type /help for commands, /quit to exit."
+if grep 'Using base URL:' "$repl_start_err" >/dev/null; then
+    echo "REPL startup should not print a separate normalized base URL line" >&2
+    exit 1
+fi
+
 TUI_FILE="$ROOT/build/tui-insert-chat.json"
 python3 "$ROOT/tests/integration/tui_insert_driver.py" \
     "$ROOT/pkchat" "$BASE" "$MODEL" "$insert_file" "$local_png" "$BASE/page" "$TUI_FILE"

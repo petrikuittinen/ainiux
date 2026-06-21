@@ -21,6 +21,7 @@
 #include "json/json.hpp"
 #include "markdown/markdown.hpp"
 #include "output/thinking.hpp"
+#include "pkchat/version.hpp"
 #include "provider/provider.hpp"
 #include "runtime/runtime.hpp"
 #include "tui/tui.hpp"
@@ -95,6 +96,13 @@ void test_cli_repl_parse() {
     check(parsed.error.ok(), "REPL args parse");
     check(parsed.options.repl, "REPL flag parsed");
     check(parsed.options.load_chat_path == "chat.json", "load chat parsed");
+}
+
+void test_cli_help_displays_version() {
+    const std::string expected_heading = std::string("pkchat ") + pkchat::kVersion +
+                                         " - script-friendly OpenAI-compatible chat CLI";
+    check(pkchat::cli::help_text().rfind(expected_heading, 0) == 0,
+          "CLI help heading displays the current pkchat version");
 }
 
 void test_cli_chat_parse() {
@@ -555,6 +563,8 @@ void test_markdown_plaintext_and_document_rendering() {
     check(doc.find("<!doctype html>") == 0, "Markdown HTML document starts with doctype");
     check(doc.find(R"PK(<meta charset="utf-8">)PK") != std::string::npos, "Markdown HTML document includes charset");
     check(doc.find(R"PK(name="viewport")PK") != std::string::npos, "Markdown HTML document includes viewport");
+    check(doc.find(std::string("<title>pkchat ") + pkchat::kVersion + " output</title>") != std::string::npos,
+          "Markdown HTML document title displays the current pkchat version");
     check(doc.find("<h1>Saved</h1>") != std::string::npos, "Markdown HTML document includes rendered body");
 }
 
@@ -1267,6 +1277,7 @@ int main() {
     test_cli_rejects_unknown();
     test_cli_provider_shortcut_parse();
     test_cli_repl_parse();
+    test_cli_help_displays_version();
     test_cli_chat_parse();
     test_cli_chat_nocolors_parse();
     test_cli_editor_parse();

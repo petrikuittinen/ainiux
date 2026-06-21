@@ -3,6 +3,8 @@
 #include <cstdlib>
 #include <sstream>
 
+#include "pkchat/version.hpp"
+
 namespace pkchat::cli {
 
 namespace {
@@ -288,7 +290,7 @@ ParseResult parse_args(int argc, char** argv) {
 }
 
 std::string help_text() {
-    return R"(pkchat - script-friendly OpenAI-compatible chat CLI
+    return std::string("pkchat ") + kVersion + R"( - script-friendly OpenAI-compatible chat CLI
 
 Usage:
   pkchat [BASE_URL|PROFILE] -p TEXT [options]
