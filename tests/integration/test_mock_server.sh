@@ -293,17 +293,38 @@ test "$responses_stream" = "Hello"
 responses_json=$("$ROOT/pkchat" "$BASE" --quiet --api responses --no-stream -m "$MODEL" -p "hello" --format json)
 printf '%s' "$responses_json" | grep '"content":"Hello"' >/dev/null
 
-reasoning_expected=$(printf '<think>internal trace</think>\n\nVisible answer')
-reasoning_reply=$("$ROOT/pkchat" "$BASE" --quiet --no-stream -m "$MODEL" -p "reasoning")
-test "$reasoning_reply" = "$reasoning_expected"
-reasoning_stream=$("$ROOT/pkchat" "$BASE" --quiet --stream -m "$MODEL" -p "reasoning")
-test "$reasoning_stream" = "$reasoning_expected"
-responses_reasoning=$("$ROOT/pkchat" "$BASE" --quiet --api responses --no-stream -m "$MODEL" -p "reasoning")
-test "$responses_reasoning" = "$reasoning_expected"
-responses_reasoning_stream=$("$ROOT/pkchat" "$BASE" --quiet --api responses --stream -m "$MODEL" -p "reasoning")
-test "$responses_reasoning_stream" = "$reasoning_expected"
+reasoning_trace='<think>internal trace</think>'
+reasoning_err="$ROOT/build/reasoning.err"
+reasoning_reply=$("$ROOT/pkchat" "$BASE" --quiet --no-stream -m "$MODEL" -p "reasoning" 2>"$reasoning_err")
+test "$reasoning_reply" = "Visible answer"
+test "$(cat "$reasoning_err")" = "$reasoning_trace"
+reasoning_stream=$("$ROOT/pkchat" "$BASE" --quiet --stream -m "$MODEL" -p "reasoning" 2>"$reasoning_err")
+test "$reasoning_stream" = "Visible answer"
+test "$(cat "$reasoning_err")" = "$reasoning_trace"
+responses_reasoning=$("$ROOT/pkchat" "$BASE" --quiet --api responses --no-stream -m "$MODEL" -p "reasoning" 2>"$reasoning_err")
+test "$responses_reasoning" = "Visible answer"
+test "$(cat "$reasoning_err")" = "$reasoning_trace"
+responses_reasoning_stream=$("$ROOT/pkchat" "$BASE" --quiet --api responses --stream -m "$MODEL" -p "reasoning" 2>"$reasoning_err")
+test "$responses_reasoning_stream" = "Visible answer"
+test "$(cat "$reasoning_err")" = "$reasoning_trace"
+reasoning_json=$("$ROOT/pkchat" "$BASE" --quiet --no-stream -m "$MODEL" -p "reasoning" --format json 2>"$reasoning_err")
+printf '%s' "$reasoning_json" | grep '"content":"Visible answer"' >/dev/null
+if printf '%s' "$reasoning_json" | grep -q 'internal trace'; then
+    echo "thinking trace leaked into JSON stdout" >&2
+    exit 1
+fi
+test "$(cat "$reasoning_err")" = "$reasoning_trace"
+reasoning_ndjson=$("$ROOT/pkchat" "$BASE" --quiet --stream -m "$MODEL" -p "reasoning" --format ndjson 2>"$reasoning_err")
+printf '%s' "$reasoning_ndjson" | grep 'Visible answer' >/dev/null
+if printf '%s' "$reasoning_ndjson" | grep -q 'internal trace'; then
+    echo "thinking trace leaked into NDJSON stdout" >&2
+    exit 1
+fi
+test "$(cat "$reasoning_err")" = "$reasoning_trace"
 reasoning_chat_file="$ROOT/build/reasoning-chat.json"
-"$ROOT/pkchat" "$BASE" --quiet --no-stream -m "$MODEL" -p "reasoning" --save-chat "$reasoning_chat_file" >/dev/null
+"$ROOT/pkchat" "$BASE" --quiet --no-stream -m "$MODEL" -p "reasoning" \
+    --save-chat "$reasoning_chat_file" >/dev/null 2>"$reasoning_err"
+test "$(cat "$reasoning_err")" = "$reasoning_trace"
 grep '<think>internal trace</think>' "$reasoning_chat_file" >/dev/null
 previous_assistant=$("$ROOT/pkchat" "$BASE" --quiet --no-stream -m "$MODEL" --load-chat "$reasoning_chat_file" -p "previous-assistant")
 test "$previous_assistant" = "Visible answer"

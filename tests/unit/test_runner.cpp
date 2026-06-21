@@ -18,6 +18,7 @@
 #include "input/input.hpp"
 #include "json/json.hpp"
 #include "markdown/markdown.hpp"
+#include "output/thinking.hpp"
 #include "provider/provider.hpp"
 #include "runtime/runtime.hpp"
 #include "tui/tui.hpp"
@@ -49,6 +50,32 @@ void test_cli_parse() {
     check(parsed.options.format == pkchat::cli::OutputFormat::Json, "json format parsed");
     check(parsed.options.verbose, "verbose parsed");
     check(parsed.options.save_chat_path == "chat.json", "save chat parsed");
+}
+
+void test_thinking_trace_splitter() {
+    pkchat::output::ThinkingChunk split = pkchat::output::split_thinking_traces(
+        "<think>internal trace</think>\n\nVisible answer");
+    check(split.visible == "Visible answer", "thinking splitter keeps only visible response content");
+    check(split.trace == "<think>internal trace</think>", "thinking splitter extracts trace with tags");
+
+    pkchat::output::ThinkingTraceSplitter streaming;
+    pkchat::output::ThinkingChunk first = streaming.feed("<thi");
+    pkchat::output::ThinkingChunk second = streaming.feed("nk>split trace</TH");
+    pkchat::output::ThinkingChunk third = streaming.feed("INK>\r\nanswer");
+    pkchat::output::ThinkingChunk final = streaming.finish();
+    check(first.visible.empty() && second.visible.empty(), "partial thinking tag never leaks as visible output");
+    check(first.trace.empty(), "partial thinking tag waits for classification");
+    check(second.trace == "<think>split trace", "streaming splitter extracts reasoning across chunks");
+    check(third.trace == "</THINK>", "streaming splitter preserves closing trace tag");
+    check(third.visible + final.visible == "answer", "streaming splitter removes trace separator newlines");
+
+    split = pkchat::output::split_thinking_traces("Before <think>hidden</think> after");
+    check(split.visible == "Before  after", "thinking splitter preserves visible text around trace");
+    check(split.trace == "<think>hidden</think>", "thinking splitter extracts embedded trace");
+
+    split = pkchat::output::split_thinking_traces("<think>unfinished");
+    check(split.visible.empty(), "unfinished thinking trace does not leak into visible output");
+    check(split.trace == "<think>unfinished", "unfinished thinking trace is sent to trace output");
 }
 
 void test_cli_provider_shortcut_parse() {
@@ -1071,6 +1098,7 @@ void test_lmstudio_context() {
 }  // namespace
 
 int main() {
+    test_thinking_trace_splitter();
     test_cli_parse();
     test_cli_rejects_unknown();
     test_cli_provider_shortcut_parse();

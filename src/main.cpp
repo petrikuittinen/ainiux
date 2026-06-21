@@ -18,6 +18,7 @@
 #include "input/input.hpp"
 #include "json/json.hpp"
 #include "markdown/markdown.hpp"
+#include "output/thinking.hpp"
 #include "pkchat/version.hpp"
 #include "provider/provider.hpp"
 #include "tui/tui.hpp"
@@ -597,7 +598,8 @@ pkchat::Error send_session_turn(pkchat::provider::RequestContext& context,
                                 const std::string& prompt,
                                 std::ostream& out,
                                 pkchat::provider::ChatResult& chat,
-                                std::vector<pkchat::provider::ImageInput> images = {}) {
+                                std::vector<pkchat::provider::ImageInput> images = {},
+                                bool separate_thinking_traces = false) {
     session.messages.push_back({"user", prompt, std::move(images)});
     pkchat::context::PreparedMessages prepared = pkchat::context::prepare(
         session.messages,
@@ -611,10 +613,33 @@ pkchat::Error send_session_turn(pkchat::provider::RequestContext& context,
     }
     session.messages.back().images.clear();
     bool started_ndjson = false;
+    pkchat::output::ThinkingTraceSplitter thinking_splitter;
+    std::string visible_content;
+    bool emitted_trace = false;
+    char last_trace_character = '\0';
+    auto emit_trace = [&](const std::string& trace) {
+        if (trace.empty()) {
+            return;
+        }
+        emitted_trace = true;
+        last_trace_character = trace.back();
+        std::cerr << trace;
+        std::cerr.flush();
+    };
     auto on_delta = [&](const std::string& delta) -> pkchat::Error {
+        std::string visible_delta = delta;
+        if (separate_thinking_traces) {
+            pkchat::output::ThinkingChunk split = thinking_splitter.feed(delta);
+            visible_delta = std::move(split.visible);
+            visible_content += visible_delta;
+            emit_trace(split.trace);
+        }
+        if (visible_delta.empty()) {
+            return pkchat::ok_error();
+        }
         if (context.options.format == pkchat::cli::OutputFormat::Text) {
             if (streams_raw_markdown_output(context.options)) {
-                out << delta;
+                out << visible_delta;
                 out.flush();
             }
         } else if (context.options.format == pkchat::cli::OutputFormat::Ndjson) {
@@ -622,7 +647,7 @@ pkchat::Error send_session_turn(pkchat::provider::RequestContext& context,
                 out << "{\"event\":\"start\",\"model\":" << pkchat::json::quote(context.options.model) << "}\n";
                 started_ndjson = true;
             }
-            out << "{\"event\":\"delta\",\"text\":" << pkchat::json::quote(delta) << "}\n";
+            out << "{\"event\":\"delta\",\"text\":" << pkchat::json::quote(visible_delta) << "}\n";
             out.flush();
         }
         return pkchat::ok_error();
@@ -632,6 +657,37 @@ pkchat::Error send_session_turn(pkchat::provider::RequestContext& context,
     if (!err.ok()) {
         session.messages.pop_back();
         return err;
+    }
+    if (separate_thinking_traces) {
+        if (context.options.stream) {
+            pkchat::output::ThinkingChunk final = thinking_splitter.finish();
+            visible_content += final.visible;
+            emit_trace(final.trace);
+            if (!final.visible.empty()) {
+                if (context.options.format == pkchat::cli::OutputFormat::Text &&
+                    streams_raw_markdown_output(context.options)) {
+                    out << final.visible;
+                    out.flush();
+                } else if (context.options.format == pkchat::cli::OutputFormat::Ndjson) {
+                    if (!started_ndjson) {
+                        out << "{\"event\":\"start\",\"model\":"
+                            << pkchat::json::quote(context.options.model) << "}\n";
+                        started_ndjson = true;
+                    }
+                    out << "{\"event\":\"delta\",\"text\":"
+                        << pkchat::json::quote(final.visible) << "}\n";
+                }
+            }
+        } else {
+            pkchat::output::ThinkingChunk split = pkchat::output::split_thinking_traces(chat.content);
+            visible_content = std::move(split.visible);
+            emit_trace(split.trace);
+        }
+        if (emitted_trace && last_trace_character != '\n') {
+            std::cerr << '\n';
+        }
+    } else {
+        visible_content = chat.content;
     }
     session.messages.push_back({"assistant", chat.content});
     if (prepared.compacted) {
@@ -651,20 +707,22 @@ pkchat::Error send_session_turn(pkchat::provider::RequestContext& context,
     if (context.options.format == pkchat::cli::OutputFormat::Text) {
         if (context.options.output_format == pkchat::markdown::OutputFormat::Markdown) {
             if (!context.options.stream) {
-                out << chat.content;
+                out << visible_content;
             }
             out << "\n";
         } else {
-            write_rendered_assistant_output(context.options, chat.content, out);
+            write_rendered_assistant_output(context.options, visible_content, out);
         }
     } else if (context.options.format == pkchat::cli::OutputFormat::Json) {
-        write_json_chat(out, context, chat);
+        pkchat::provider::ChatResult visible_chat = chat;
+        visible_chat.content = std::move(visible_content);
+        write_json_chat(out, context, visible_chat);
     } else {
         if (!started_ndjson) {
             out << "{\"event\":\"start\",\"model\":" << pkchat::json::quote(context.options.model) << "}\n";
         }
-        if (!context.options.stream && !chat.content.empty()) {
-            out << "{\"event\":\"delta\",\"text\":" << pkchat::json::quote(chat.content) << "}\n";
+        if (!context.options.stream && !visible_content.empty()) {
+            out << "{\"event\":\"delta\",\"text\":" << pkchat::json::quote(visible_content) << "}\n";
         }
         out << "{\"event\":\"done\",\"usage\":null}\n";
     }
@@ -1191,7 +1249,7 @@ int main(int argc, char** argv) {
 
     pkchat::provider::ChatResult chat;
     pkchat::Error err = send_session_turn(context, session, context.options.prompt, *out, chat,
-                                          std::move(prompt_images));
+                                          std::move(prompt_images), true);
     if (!err.ok()) {
         print_error(err);
         return exit_code_for(err.code);
