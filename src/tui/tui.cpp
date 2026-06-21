@@ -15,6 +15,7 @@
 #include <vector>
 
 #include "context/context.hpp"
+#include "editor/path_completion.hpp"
 #include "fetch/fetch.hpp"
 #include "input/input.hpp"
 #include "runtime/runtime.hpp"
@@ -741,7 +742,7 @@ void render(const chat::Session& session,
     draw_line(layout.status_row, cols, status, status_role_for_text(status), style);
     draw_line(layout.input_label_row,
               cols,
-              "Input  Enter send | Alt+Enter newline | Esc cancel | Ctrl+R regen | PgUp/PgDn scroll | Ctrl+C quit",
+              "Input  Tab path | Enter send | Alt+Enter newline | Esc cancel | Ctrl+R regen | PgUp/PgDn scroll | Ctrl+C quit",
               StyleRole::InputLabel,
               style);
 
@@ -759,7 +760,17 @@ void render(const chat::Session& session,
     std::cout.flush();
 }
 
-enum class TuiEventType { Delta, Done, Error, SaveDone, LoadDone, InsertDone, FetchDone, ModelsDone };
+enum class TuiEventType {
+    Delta,
+    Done,
+    Error,
+    SaveDone,
+    LoadDone,
+    InsertDone,
+    FetchDone,
+    ModelsDone,
+    CompletionDone,
+};
 
 enum class ActiveJob { None, Chat, Models };
 
@@ -775,6 +786,10 @@ struct TuiEvent {
     bool image_attachment = false;
     context::CompactionEvent compaction;
     bool compacted = false;
+    editor::EditorState completed_input;
+    editor::PathCompleter path_completer;
+    editor::PathCompletionResult completion;
+    size_t completion_generation = 0;
 };
 
 std::string join_models_preview(const std::vector<std::string>& models) {
@@ -859,8 +874,12 @@ int run(provider::RequestContext context, chat::Session session) {
     runtime::EventQueue<TuiEvent> events;
     runtime::JobHandle model_job;
     runtime::JobHandle file_job;
+    runtime::JobHandle completion_job;
     ActiveJob active_job = ActiveJob::None;
     editor::EditorState input = empty_input_editor();
+    editor::PathCompleter path_completer;
+    size_t completion_generation = 0;
+    bool completion_pending = false;
     std::string status = "Ready";
     ThemeName theme = ThemeName::Dark;
     const bool use_colors = !context.options.no_colors;
@@ -891,6 +910,33 @@ int run(provider::RequestContext context, chat::Session session) {
         } else {
             status = show_thinking_traces ? "Thinking traces shown" : "Thinking traces hidden";
         }
+    };
+
+    auto start_path_completion = [&]() {
+        if (path_completer.can_cycle(input)) {
+            status = editor::path_completion_status(path_completer.complete(input));
+            return;
+        }
+        if (completion_pending) {
+            status = "Path completion is still running";
+            return;
+        }
+
+        editor::EditorState completion_input = input;
+        const size_t generation = completion_generation;
+        completion_job.start(
+            [completion_input = std::move(completion_input), generation, &events](
+                runtime::CancellationToken token) mutable {
+                TuiEvent event;
+                event.type = TuiEventType::CompletionDone;
+                event.completion_generation = generation;
+                event.completion = event.path_completer.complete(
+                    completion_input, [&token]() { return token.cancelled(); });
+                event.completed_input = std::move(completion_input);
+                events.push(std::move(event));
+            });
+        completion_pending = true;
+        status = "Completing path...";
     };
 
     auto rollback_pending_turn = [&]() {
@@ -1460,6 +1506,15 @@ int run(provider::RequestContext context, chat::Session session) {
                     active_job = ActiveJob::None;
                     status = event.error.ok() ? join_models_preview(event.models) : error_line(event.error);
                     break;
+                case TuiEventType::CompletionDone:
+                    completion_job.join();
+                    completion_pending = false;
+                    if (event.completion_generation == completion_generation) {
+                        input = std::move(event.completed_input);
+                        path_completer = std::move(event.path_completer);
+                        status = editor::path_completion_status(event.completion);
+                    }
+                    break;
             }
         }
 
@@ -1475,6 +1530,13 @@ int run(provider::RequestContext context, chat::Session session) {
         if (ready > 0 && FD_ISSET(STDIN_FILENO, &readfds)) {
             unsigned char ch = 0;
             while (read(STDIN_FILENO, &ch, 1) == 1) {
+                if (ch == '\t') {
+                    start_path_completion();
+                    continue;
+                }
+                path_completer.reset();
+                ++completion_generation;
+                completion_job.cancel();
                 if (ch == 27) {
                     const TuiSize terminal = terminal_size();
                     const bool handled = handle_escape(input, layout_for_terminal(terminal.rows, terminal.cols), history_scroll, status);
@@ -1535,7 +1597,7 @@ int run(provider::RequestContext context, chat::Session session) {
                     submit_input();
                     continue;
                 }
-                if (ch >= 32 || ch == '\t') {
+                if (ch >= 32) {
                     insert_input(input, std::string(1, static_cast<char>(ch)), status);
                 }
             }
@@ -1546,8 +1608,10 @@ int run(provider::RequestContext context, chat::Session session) {
 
     model_job.cancel();
     file_job.cancel();
+    completion_job.cancel();
     model_job.join();
     file_job.join();
+    completion_job.join();
     return 0;
 }
 

@@ -1,6 +1,7 @@
 #include <atomic>
 #include <chrono>
 #include <cstdlib>
+#include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <iterator>
@@ -12,6 +13,7 @@
 #include "cli/args.hpp"
 #include "context/context.hpp"
 #include "editor/editor.hpp"
+#include "editor/path_completion.hpp"
 #include "fetch/fetch.hpp"
 #include "html/html.hpp"
 #include "http/http.hpp"
@@ -751,6 +753,93 @@ void test_editor_file_round_trip() {
     check(loaded.str() == "first\nsecond", "editor file round trip preserves text");
 }
 
+void test_editor_path_completion() {
+    const std::string directory = "build/pkchat-tab-completion";
+    std::error_code filesystem_error;
+    std::filesystem::create_directories(directory + "/pkchat-folder", filesystem_error);
+    check(!filesystem_error, "path completion fixture directory is created");
+
+    const std::vector<std::string> files = {
+        "pkchat-single-result.txt",
+        "pkchat-cycle-alpha.txt",
+        "pkchat-cycle-alpine.txt",
+    };
+    for (const std::string& name : files) {
+        std::ofstream fixture(directory + "/" + name, std::ios::binary | std::ios::trunc);
+        fixture << name;
+        check(static_cast<bool>(fixture), "path completion fixture file is written: " + name);
+    }
+
+    pkchat::editor::PathCompleter completer;
+    const std::string unique_prefix = "/insert " + directory + "/pkchat-single-r";
+    pkchat::editor::EditorState unique = pkchat::editor::EditorState::from_text(unique_prefix);
+    unique.cursor = unique.text.size();
+    pkchat::editor::PathCompletionResult result = completer.complete(unique);
+    check(result.error.ok() && result.match_count == 1, "path completion finds a unique file");
+    check(unique.text.str() == "/insert " + directory + "/pkchat-single-result.txt",
+          "one Tab fully completes a unique path");
+
+    completer.reset();
+    const std::string cycle_prefix = "/attach " + directory + "/pkchat-cy";
+    pkchat::editor::EditorState cycling = pkchat::editor::EditorState::from_text(cycle_prefix);
+    cycling.cursor = cycling.text.size();
+    result = completer.complete(cycling);
+    const std::string common = "/attach " + directory + "/pkchat-cycle-alp";
+    check(result.error.ok() && result.match_count == 2 && !result.cycling,
+          "first Tab reports multiple path matches");
+    check(cycling.text.str() == common, "first Tab completes the unambiguous common path prefix");
+
+    result = completer.complete(cycling);
+    check(result.cycling && result.choice_index == 0,
+          "second Tab selects the first sorted path choice");
+    check(cycling.text.str() == "/attach " + directory + "/pkchat-cycle-alpha.txt",
+          "second Tab inserts the first path choice");
+
+    result = completer.complete(cycling);
+    check(result.cycling && result.choice_index == 1,
+          "third Tab selects the next path choice");
+    check(cycling.text.str() == "/attach " + directory + "/pkchat-cycle-alpine.txt",
+          "third Tab inserts the next path choice");
+
+    result = completer.complete(cycling);
+    check(result.cycling && result.choice_index == 0,
+          "repeated Tab wraps path choices in sorted order");
+
+    completer.reset();
+    pkchat::editor::EditorState directory_state =
+        pkchat::editor::EditorState::from_text(directory + "/pkchat-fol");
+    directory_state.cursor = directory_state.text.size();
+    result = completer.complete(directory_state);
+    check(result.match_count == 1 && directory_state.text.str() == directory + "/pkchat-folder/",
+          "directory completion appends a slash");
+
+    completer.reset();
+    pkchat::editor::EditorState missing =
+        pkchat::editor::EditorState::from_text(directory + "/pkchat-does-not-exist");
+    missing.cursor = missing.text.size();
+    result = completer.complete(missing);
+    check(result.error.ok() && result.match_count == 0 &&
+              missing.text.str() == directory + "/pkchat-does-not-exist",
+          "path completion leaves an unmatched path unchanged");
+
+    pkchat::editor::EditorState cancelled =
+        pkchat::editor::EditorState::from_text(directory + "/pkchat-single-r");
+    cancelled.cursor = cancelled.text.size();
+    result = completer.complete(cancelled, []() { return true; });
+    check(result.error.code == pkchat::ErrorCode::Cancelled &&
+              cancelled.text.str() == directory + "/pkchat-single-r",
+          "a cancelled path scan leaves editor input unchanged");
+
+    completer.reset();
+    pkchat::editor::EditorState reset_cycle = pkchat::editor::EditorState::from_text(cycle_prefix);
+    reset_cycle.cursor = reset_cycle.text.size();
+    completer.complete(reset_cycle);
+    completer.reset();
+    result = completer.complete(reset_cycle);
+    check(!result.cycling && reset_cycle.text.str() == common,
+          "resetting completion prevents a later Tab from cycling stale choices");
+}
+
 void test_tui_layout_reserves_editor_input_panel() {
     pkchat::tui::Layout small = pkchat::tui::layout_for_terminal(8, 20);
     check(small.rows == 8 && small.cols == 20, "TUI layout clamps to requested small terminal");
@@ -1145,6 +1234,7 @@ int main() {
     test_editor_kill_to_line_end();
     test_editor_vertical_navigation_modes();
     test_editor_file_round_trip();
+    test_editor_path_completion();
     test_tui_layout_reserves_editor_input_panel();
     test_tui_regeneration_plan_uses_last_user_turn();
     test_tui_history_jump_helpers();

@@ -1,4 +1,5 @@
 #include "editor/editor.hpp"
+#include "editor/path_completion.hpp"
 
 #include <algorithm>
 #include <cerrno>
@@ -347,7 +348,7 @@ std::string editor_title(const EditorState& state, const std::string& status) {
         out << " *";
     }
     out << "  " << status;
-    out << "  Ctrl+S save | Ctrl+Q quit | Enter newline";
+    out << "  Tab complete path | Ctrl+S save | Ctrl+Q quit | Enter newline";
     return out.str();
 }
 
@@ -979,6 +980,7 @@ int run_editor(const std::string& path, const std::string& save_as) {
     }
 
     bool quit = false;
+    PathCompleter path_completer;
     TerminalSize last_size = terminal_size();
     render_terminal(state, status);
     while (!quit) {
@@ -990,6 +992,12 @@ int run_editor(const std::string& path, const std::string& save_as) {
                 render_terminal(state, status);
             }
             continue;
+        }
+
+        if (ch == '\t') {
+            status = path_completion_status(path_completer.complete(state));
+        } else {
+            path_completer.reset();
         }
 
         if (ch == 17) {
@@ -1026,11 +1034,6 @@ int run_editor(const std::string& path, const std::string& save_as) {
             }
         } else if (ch == '\r' || ch == '\n') {
             Error insert_error = state.insert("\n");
-            if (!insert_error.ok()) {
-                status = insert_error.message;
-            }
-        } else if (ch == '\t') {
-            Error insert_error = state.insert("\t");
             if (!insert_error.ok()) {
                 status = insert_error.message;
             }

@@ -26,6 +26,35 @@ def send(master, text, delay=0.35):
     return drain(master)
 
 
+def verify_editor_completion(binary, target_path, save_path):
+    master, slave = pty.openpty()
+    process = subprocess.Popen(
+        [binary, "--editor", save_path],
+        stdin=slave,
+        stdout=slave,
+        stderr=slave,
+        close_fds=True,
+    )
+    os.close(slave)
+    try:
+        time.sleep(0.25)
+        drain(master)
+        send(master, target_path[:-4] + "\t")
+        send(master, "\x13")
+        send(master, "\x11", 0.2)
+        process.wait(timeout=5)
+    finally:
+        if process.poll() is None:
+            process.terminate()
+            process.wait(timeout=2)
+        os.close(master)
+    if process.returncode != 0:
+        raise RuntimeError(f"editor exited with status {process.returncode}")
+    with open(save_path, "r", encoding="utf-8") as saved:
+        if saved.read() != target_path:
+            raise RuntimeError("editor Tab did not complete the unique file path")
+
+
 def main():
     binary, base, model, insert_path, image_path, fetch_url, save_path = sys.argv[1:]
     master, slave = pty.openpty()
@@ -45,7 +74,10 @@ def main():
         if b"/fetch URL" not in help_output:
             raise RuntimeError("TUI help panel did not render slash commands")
         send(master, "/help\r")
-        send(master, f"/insert {insert_path}\r")
+        completion_output = send(master, f"/insert {insert_path[:-4]}\t")
+        if b"Completed path:" not in completion_output:
+            raise RuntimeError("TUI did not report a unique path completion")
+        send(master, "\r")
         send(master, "summarize-insert\r", 0.8)
         send(master, f"/attach {image_path}\r")
         send(master, "describe-image\r", 0.8)
@@ -60,6 +92,7 @@ def main():
         os.close(master)
     if process.returncode != 0:
         raise SystemExit(f"TUI exited with status {process.returncode}")
+    verify_editor_completion(binary, insert_path, save_path + ".editor-completion")
 
 
 if __name__ == "__main__":
