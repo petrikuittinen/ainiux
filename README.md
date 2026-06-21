@@ -69,7 +69,19 @@ OPENROUTER_API_KEY=... ./pkchat openrouter -model "nvidia/nemotron-3-ultra-550b-
 OPENROUTER_API_KEY=... ./pkchat --provider openrouter -m "nvidia/nemotron-3-ultra-550b-a55b:free" -p "Hello"
 ```
 
-Built-in provider profiles include `openai`, `openrouter`, `deepseek`, `gemini`, `anthropic`, `xai`/`grok`, `moonshot`/`kimi`, `groq`, `mistral`, `together`, `perplexity`, `cerebras`, `fireworks`, `deepinfra`, `nvidia_nim`, `dashscope`, `lm_studio`/`lmstudio`, `ollama`, `vllm`, `llamacpp`/`llama.cpp`, and `custom_openai_chat`. These profiles share the same OpenAI-compatible chat adapter where possible, with endpoint paths and key defaults coming from the registry.
+Built-in provider profiles include `none`/`offline`, `openai`, `openrouter`, `deepseek`, `gemini`, `anthropic`, `xai`/`grok`, `moonshot`/`kimi`, `groq`, `mistral`, `together`, `perplexity`, `cerebras`, `fireworks`, `deepinfra`, `nvidia_nim`, `dashscope`, `lm_studio`/`lmstudio`, `ollama`, `vllm`, `llamacpp`/`llama.cpp`, and `custom_openai_chat`. The model-backed profiles share the same OpenAI-compatible chat adapter where possible, with endpoint paths and key defaults coming from the registry.
+
+Offline mode uses the `none` provider (alias `offline`) and requires no model endpoint or API key:
+
+```sh
+./pkchat --provider none --editor notes.txt
+./pkchat --provider none --input page.html --output-format md
+./pkchat --provider none --input notes.md --output-format html --output notes.html
+./pkchat --provider none --fetch-url https://example.com/article --output-format md
+printf '/quit\n' | ./pkchat --provider none --repl --quiet
+```
+
+The `none` provider never sends model requests or lists models. REPL and TUI modes can still run local commands such as `/insert`, `/fetch`, `/save`, and `/load`, but entering a chat prompt returns an unsupported-feature error until an OpenAI-compatible provider is selected. Model endpoint overrides are rejected with `--provider none` so offline mode cannot accidentally contact one. Explicit `--fetch-url` and `/fetch` operations still access their requested URL and retain the normal URL-fetch safety checks.
 
 Prompt and system files:
 

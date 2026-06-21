@@ -41,6 +41,7 @@ struct Profile {
     std::string models_path = "/models";
     bool requires_bearer_key = false;
     bool local_endpoint = false;
+    bool offline = false;
     std::vector<std::string> key_envs;
     std::string dummy_api_key;
     std::string compatibility_warning;
@@ -101,6 +102,7 @@ struct ContextResult {
 
 ContextResult build_context(const cli::Options& options);
 std::vector<Profile> built_in_profiles();
+Error validate_profile_name(const std::string& name);
 const Capabilities& capabilities_for(const RequestContext& context);
 Capabilities detected_capabilities_for(const RequestContext& context);
 Error validate_image_input(const RequestContext& context);

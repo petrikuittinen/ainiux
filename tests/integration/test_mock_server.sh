@@ -36,6 +36,10 @@ printf '%s\n' "$page_md" | grep -F '*emphasis*' >/dev/null
 printf '%s\n' "$page_md" | grep -F '[docs](https://example.com/docs)' >/dev/null
 printf '%s\n' "$page_md" | grep -F 'bad()' >/dev/null && exit 1 || true
 
+offline_page_md=$("$ROOT/pkchat" --provider none --fetch-url "$BASE/page" \
+    --allow-private-url-fetch --html-format markdown --quiet)
+printf '%s\n' "$offline_page_md" | grep -F '# Mock Page' >/dev/null
+
 page_text=$("$ROOT/pkchat" --fetch-url "$BASE/page" --allow-private-url-fetch --html-format text --quiet)
 printf '%s\n' "$page_text" | grep -F 'Mock Page' >/dev/null
 printf '%s\n' "$page_text" | grep -F 'Hello bold and emphasis with docs (https://example.com/docs).' >/dev/null
@@ -52,6 +56,33 @@ printf '%s\n' "$input_html_plain" | grep -F 'Local bold and link (https://exampl
 
 local_md="$ROOT/build/local-input.md"
 printf '# Local Input Title\n\nLocal **bold** and [link](https://example.com/local).\n' >"$local_md"
+
+offline_markdown=$("$ROOT/pkchat" --provider none --input "$local_html" --output-format md --quiet)
+printf '%s\n' "$offline_markdown" | grep -F '# Local Input Title' >/dev/null
+printf '%s\n' "$offline_markdown" | grep -F '**bold**' >/dev/null
+
+offline_html=$("$ROOT/pkchat" --provider none --input "$local_md" --output-format html --quiet)
+printf '%s\n' "$offline_html" | grep -F '<h1>Local Input Title</h1>' >/dev/null
+
+unknown_offline_err="$ROOT/build/unknown-offline-provider.err"
+if "$ROOT/pkchat" --provider nnoe --input "$local_md" --quiet \
+    >"$ROOT/build/unknown-offline-provider.out" 2>"$unknown_offline_err"; then
+    echo "standalone conversion should reject an unknown provider" >&2
+    exit 1
+fi
+grep 'unknown provider profile: nnoe' "$unknown_offline_err" >/dev/null
+
+offline_repl=$(printf '/quit\n' | "$ROOT/pkchat" --provider none --repl --quiet)
+test -z "$offline_repl"
+
+offline_prompt_err="$ROOT/build/offline-prompt.err"
+if "$ROOT/pkchat" --provider none -p "must not be sent" --quiet \
+    >"$ROOT/build/offline-prompt.out" 2>"$offline_prompt_err"; then
+    echo "none provider should reject model requests" >&2
+    exit 1
+fi
+grep 'provider none disables AI/model requests' "$offline_prompt_err" >/dev/null
+
 input_md_html="$ROOT/build/local-input-output.html"
 "$ROOT/pkchat" --input "$local_md" --output-format html --output "$input_md_html" --quiet
 grep '<!doctype html>' "$input_md_html" >/dev/null

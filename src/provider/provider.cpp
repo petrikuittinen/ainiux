@@ -86,8 +86,22 @@ Profile make_profile(const std::string& name,
     return profile;
 }
 
+Profile make_offline_profile() {
+    Profile profile;
+    profile.name = "none";
+    profile.aliases = {"offline"};
+    profile.base_url.clear();
+    profile.chat_path.clear();
+    profile.responses_path.clear();
+    profile.models_path.clear();
+    profile.offline = true;
+    profile.capabilities = {};
+    return profile;
+}
+
 const std::vector<Profile>& profile_registry() {
     static const std::vector<Profile> profiles = {
+        make_offline_profile(),
         make_profile("openai", {"openai_chat", "openai_responses"}, "https://api.openai.com/v1", "/chat/completions", "/models", "/responses", {"OPENAI_API_KEY", "PKCHAT_API_KEY"}, true, false),
         make_profile("openrouter", {}, "https://openrouter.ai/api/v1", "/chat/completions", "/models", "", {"OPENROUTER_API_KEY", "PKCHAT_API_KEY"}, true, false),
         make_profile("deepseek", {}, "https://api.deepseek.com", "/chat/completions", "/models", "", {"DEEPSEEK_API_KEY", "PKCHAT_API_KEY"}, true, false),
@@ -1188,11 +1202,19 @@ ContextResult build_context(const cli::Options& input_options) {
     if (base.empty()) {
         base = profile.base_url;
     }
+    if (profile.offline &&
+        (!base.empty() || !options.chat_url.empty() || !options.models_url.empty() ||
+         !options.responses_url.empty())) {
+        return {{}, {ErrorCode::BadArgs,
+                     "provider none cannot be combined with a model API endpoint; choose an OpenAI-compatible "
+                     "provider to use --base-url, --chat-url, --models-url, or --responses-url"}};
+    }
     const bool may_need_models = options.list_models || options.model.empty();
     const bool needs_base_for_models = may_need_models && options.models_url.empty();
     const bool needs_base_for_chat = api_kind == ApiKind::ChatCompletions && options.chat_url.empty();
     const bool needs_base_for_responses = api_kind == ApiKind::Responses && options.responses_url.empty();
-    if (base.empty() && (needs_base_for_models || needs_base_for_chat || needs_base_for_responses)) {
+    if (!profile.offline && base.empty() &&
+        (needs_base_for_models || needs_base_for_chat || needs_base_for_responses)) {
         return {{}, {ErrorCode::BadUrl, "no base URL configured; pass BASE_URL or --base-url"}};
     }
 
@@ -1215,10 +1237,12 @@ ContextResult build_context(const cli::Options& input_options) {
         }
     }
 
-    if (api_kind == ApiKind::ChatCompletions && !profile.capabilities.chat_completions && options.chat_url.empty()) {
+    if (!profile.offline && api_kind == ApiKind::ChatCompletions &&
+        !profile.capabilities.chat_completions && options.chat_url.empty()) {
         return {{}, {ErrorCode::UnsupportedFeature, "provider " + profile.name + " does not define a Chat Completions endpoint"}};
     }
-    if (api_kind == ApiKind::Responses && !profile.capabilities.responses_api && options.responses_url.empty()) {
+    if (!profile.offline && api_kind == ApiKind::Responses &&
+        !profile.capabilities.responses_api && options.responses_url.empty()) {
         return {{}, {ErrorCode::UnsupportedFeature, "provider " + profile.name + " does not define a built-in Responses API endpoint; use --responses-url or --api chat"}};
     }
 
@@ -1250,6 +1274,14 @@ ContextResult build_context(const cli::Options& input_options) {
 
 std::vector<Profile> built_in_profiles() {
     return profile_registry();
+}
+
+Error validate_profile_name(const std::string& name) {
+    Profile profile;
+    if (!find_profile(name, profile)) {
+        return {ErrorCode::BadArgs, "unknown provider profile: " + name};
+    }
+    return ok_error();
 }
 
 const Capabilities& capabilities_for(const RequestContext& context) {
@@ -1318,6 +1350,10 @@ std::string serialize_chat_request(const RequestContext& context, const std::vec
 }
 
 Error list_models(const RequestContext& context, ModelsResult& result, runtime::CancellationToken cancellation) {
+    if (context.profile.offline) {
+        return {ErrorCode::UnsupportedFeature,
+                "provider none disables model listing; select an OpenAI-compatible provider first"};
+    }
     http::Request req = base_http_request(context, "GET", context.models_url, cancellation);
     const http::Result http_result = http::perform(req, {context.api_key});
     if (!http_result.error.ok()) {
@@ -1339,6 +1375,10 @@ Error send_chat_messages(const RequestContext& context,
                          DeltaCallback on_delta,
                          ChatResult& result,
                          runtime::CancellationToken cancellation) {
+    if (context.profile.offline) {
+        return {ErrorCode::UnsupportedFeature,
+                "provider none disables AI/model requests; select an OpenAI-compatible provider first"};
+    }
     if (cancellation.cancelled()) {
         return {ErrorCode::Cancelled, "chat request cancelled before it started"};
     }

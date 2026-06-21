@@ -957,7 +957,7 @@ void test_cli_responses_parse() {
 
 void test_provider_registry_resolves_added_profiles() {
     std::vector<pkchat::provider::Profile> profiles = pkchat::provider::built_in_profiles();
-    check(profiles.size() >= 21, "provider registry includes added compatibility profiles");
+    check(profiles.size() >= 22, "provider registry includes offline and compatibility profiles");
 
     const char* grok_argv[] = {"pkchat", "grok", "--list-models", "--header", "Authorization: Bearer test"};
     pkchat::cli::ParseResult grok = pkchat::cli::parse_args(5, const_cast<char**>(grok_argv));
@@ -996,6 +996,53 @@ void test_provider_registry_resolves_added_profiles() {
     check(deepinfra_ctx.error.ok(), "deepinfra context builds");
     check(deepinfra_ctx.context.profile.key_envs.size() >= 2 && deepinfra_ctx.context.profile.key_envs[1] == "DEEPINFRA_TOKEN",
           "deepinfra registers alternate token env var");
+}
+
+void test_none_provider_allows_an_empty_endpoint() {
+    const char* argv[] = {"pkchat", "--provider", "none", "--repl"};
+    pkchat::cli::ParseResult parsed = pkchat::cli::parse_args(4, const_cast<char**>(argv));
+    check(parsed.error.ok(), "none provider parses without a positional endpoint");
+    check(parsed.options.positional_url.empty(), "none provider keeps the omitted endpoint empty");
+    check(pkchat::provider::validate_profile_name(parsed.options.provider).ok(),
+          "none is a recognized provider name in standalone modes");
+
+    pkchat::provider::ContextResult context = pkchat::provider::build_context(parsed.options);
+    check(context.error.ok(), "none provider context builds without an endpoint");
+    check(context.context.profile.name == "none" && context.context.profile.offline,
+          "none resolves to the offline provider profile");
+    check(context.context.base_url.empty() && context.context.chat_url.empty() &&
+              context.context.responses_url.empty() && context.context.models_url.empty(),
+          "none provider leaves every model endpoint empty");
+    check(!pkchat::provider::capabilities_for(context.context).chat_completions &&
+              !pkchat::provider::capabilities_for(context.context).model_listing,
+          "none provider advertises no model capabilities");
+
+    pkchat::provider::ModelsResult models;
+    pkchat::Error err = pkchat::provider::list_models(context.context, models);
+    check(err.code == pkchat::ErrorCode::UnsupportedFeature,
+          "none provider rejects model listing before transport");
+
+    pkchat::provider::ChatResult chat;
+    err = pkchat::provider::send_chat_messages(
+        context.context, {{"user", "hello"}},
+        [](const std::string&) { return pkchat::ok_error(); }, chat);
+    check(err.code == pkchat::ErrorCode::UnsupportedFeature,
+          "none provider rejects chat before transport");
+
+    const char* alias_argv[] = {"pkchat", "offline", "--repl"};
+    pkchat::cli::ParseResult alias = pkchat::cli::parse_args(3, const_cast<char**>(alias_argv));
+    pkchat::provider::ContextResult alias_context = pkchat::provider::build_context(alias.options);
+    check(alias_context.error.ok() && alias_context.context.profile.name == "none",
+          "offline positional alias resolves without an endpoint");
+
+    const char* endpoint_argv[] = {
+        "pkchat", "--provider", "none", "--base-url", "http://localhost:1234", "--repl"};
+    pkchat::cli::ParseResult endpoint =
+        pkchat::cli::parse_args(6, const_cast<char**>(endpoint_argv));
+    pkchat::provider::ContextResult endpoint_context =
+        pkchat::provider::build_context(endpoint.options);
+    check(endpoint_context.error.code == pkchat::ErrorCode::BadArgs,
+          "none provider rejects model endpoint overrides");
 }
 
 void test_provider_capabilities_and_responses_context() {
@@ -1218,6 +1265,7 @@ int main() {
     test_json_parse();
     test_lmstudio_context();
     test_provider_registry_resolves_added_profiles();
+    test_none_provider_allows_an_empty_endpoint();
     test_provider_capabilities_and_responses_context();
     test_explicit_chat_url_does_not_require_base_when_model_set();
     test_provider_responses_unsupported_and_override();

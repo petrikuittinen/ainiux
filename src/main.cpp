@@ -555,6 +555,9 @@ pkchat::Error save_if_requested(const pkchat::cli::Options& options, const pkcha
     return pkchat::chat::save_session_atomic(options.save_chat_path, session);
 }
 pkchat::Error choose_default_model(pkchat::provider::RequestContext& context) {
+    if (context.profile.offline) {
+        return pkchat::ok_error();
+    }
     if (!context.options.model.empty()) {
         return pkchat::ok_error();
     }
@@ -570,6 +573,10 @@ pkchat::Error choose_default_model(pkchat::provider::RequestContext& context) {
 }
 void print_chat_start(const pkchat::provider::RequestContext& context) {
     if (context.options.quiet) {
+        return;
+    }
+    if (context.profile.offline) {
+        std::cerr << "Provider: none (offline; AI/model requests disabled)" << std::endl;
         return;
     }
     std::cerr << "Endpoint: " << pkchat::provider::active_request_url(context) << std::endl;
@@ -961,6 +968,11 @@ int main(int argc, char** argv) {
     if (options.version) {
         std::cout << "pkchat " << pkchat::kVersion << "\n";
         return 0;
+    }
+    pkchat::Error profile_error = pkchat::provider::validate_profile_name(options.provider);
+    if (!profile_error.ok()) {
+        print_error(profile_error);
+        return exit_code_for(profile_error.code);
     }
     pkchat::Error stdin_error = validate_stdin_sources(options);
     if (!stdin_error.ok()) {

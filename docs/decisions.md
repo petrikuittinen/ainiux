@@ -19,6 +19,8 @@ v0.4 begins with a data-driven provider registry in `src/provider/`. Built-in pr
 
 Responses API support is a sibling adapter selected with `--api responses`, `--responses`, or the `openai_responses` shortcut. It reuses the existing HTTP transport, cancellation token, timing, redaction, and streaming callback path. The first slice is text-only and maps Responses output text and SSE text deltas into the same internal assistant message model used by Chat Completions. Non-text Responses features remain disabled in reported client capabilities until implemented.
 
+The `none` provider profile represents an explicit model-offline state. It has no base URL, endpoint paths, credentials, or model capabilities. Provider transport entry points reject model listing and chat before constructing an HTTP request, and endpoint overrides are invalid with this profile. This lets editor, conversion, explicit URL fetching, and local REPL/TUI commands run without inventing a dummy OpenAI-compatible endpoint. URL fetching remains a separate explicit network operation governed by its own safety policy.
+
 
 ## JSON Chat Persistence
 

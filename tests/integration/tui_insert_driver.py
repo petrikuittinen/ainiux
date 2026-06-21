@@ -29,7 +29,7 @@ def send(master, text, delay=0.35):
 def verify_editor_completion(binary, target_path, save_path):
     master, slave = pty.openpty()
     process = subprocess.Popen(
-        [binary, "--editor", save_path],
+        [binary, "--provider", "none", "--editor", save_path],
         stdin=slave,
         stdout=slave,
         stderr=slave,

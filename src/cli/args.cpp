@@ -305,6 +305,9 @@ Examples:
   pkchat --provider openai -m MODEL -p "Hello"
   pkchat --provider lm_studio -m MODEL -p "Hello from local LM Studio"
   pkchat --provider lmstudio --list-models
+  pkchat --provider none --editor notes.txt
+  pkchat --provider none --input page.html --output-format md
+  pkchat --provider none --fetch-url https://example.com --output-format md
   pkchat openrouter -model MODEL -i
   pkchat lmstudio -i
   pkchat --chat lmstudio
@@ -353,7 +356,8 @@ Options:
       --allow-private-url-fetch Allow loopback/private URL fetches.
       --save-chat PATH          Save JSON chat history after a successful reply.
       --load-chat PATH          Load JSON chat history before sending.
-      --provider NAME           openai, openrouter, lm_studio, ollama, vllm, llama.cpp, etc.
+      --provider NAME           none (offline), openai, openrouter, lm_studio, ollama,
+                                vllm, llama.cpp, etc.
       --profile NAME            Alias for --provider.
       --api chat|responses      Use Chat Completions (default) or Responses API.
       --responses               Shortcut for --api responses.

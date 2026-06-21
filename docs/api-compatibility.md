@@ -24,6 +24,7 @@ Current Responses support maps `output_text` and streaming `response.output_text
 
 ```text
 provider       aliases                 base URL                                               chat  responses  key default              local
+none           offline                 none                                                   no    no         none                   n/a
 openai         openai_chat,            https://api.openai.com/v1                              yes   yes        OPENAI_API_KEY          no
                openai_responses*
 openrouter                             https://openrouter.ai/api/v1                          yes   no         OPENROUTER_API_KEY     no
@@ -47,6 +48,8 @@ vllm                                   http://localhost:8000/v1                 
 llamacpp       llama_cpp, llama.cpp    http://localhost:8080/v1                              yes   no         none                   yes
 custom_openai_chat custom              user supplied                                         yes   yes**      PKCHAT_API_KEY optional yes/no
 ```
+
+The `none` profile is an explicit model-offline mode. It accepts no model endpoint, performs no model discovery or chat HTTP requests, and returns `PKCHAT_ERR_UNSUPPORTED_FEATURE` for those operations. Standalone editor, local HTML/Markdown/plaintext conversion, URL extraction, and non-model REPL/TUI commands remain available without configuring an endpoint. Explicit URL fetching still performs the requested non-model HTTP operation.
 
 `openai_responses` selects the OpenAI profile and `--api responses`.
 
