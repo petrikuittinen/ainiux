@@ -63,6 +63,8 @@ struct ThinkingDisplay {
 };
 
 ThinkingDisplay thinking_display_text(const std::string& content, bool show_traces);
+std::string ready_status();
+std::string generation_ready_status(const provider::ChatResult& result, bool stream);
 
 struct RegenerationPlan {
     bool available = false;

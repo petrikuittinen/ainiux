@@ -4,9 +4,11 @@
 #include <cerrno>
 #include <cmath>
 #include <cstring>
+#include <iomanip>
 #include <iostream>
 #include <iterator>
 #include <limits>
+#include <sstream>
 #include <string>
 #include <sys/ioctl.h>
 #include <sys/select.h>
@@ -18,6 +20,7 @@
 #include "editor/path_completion.hpp"
 #include "fetch/fetch.hpp"
 #include "input/input.hpp"
+#include "pkchat/version.hpp"
 #include "runtime/runtime.hpp"
 
 namespace pkchat::tui {
@@ -39,6 +42,26 @@ Layout layout_for_terminal(int terminal_rows, int terminal_cols) {
     layout.input_label_row = layout.status_row + 1;
     layout.input_rect = editor::Rect{layout.input_label_row + 1, 1, input_height, layout.cols};
     return layout;
+}
+
+std::string ready_status() {
+    return std::string("Pkchat v") + kVersion + " ready";
+}
+
+std::string generation_ready_status(const provider::ChatResult& result, bool stream) {
+    std::ostringstream out;
+    out << ready_status();
+    if (stream) {
+        out << " | TTFT: " << result.ttft_ms << " ms";
+    } else {
+        out << " | Response: " << result.total_ms << " ms";
+    }
+    out << " | Token/s: " << std::fixed << std::setprecision(1)
+        << provider::tokens_per_second(result, stream);
+    if (result.completion_tokens_estimated) {
+        out << " (estimated)";
+    }
+    return out.str();
 }
 
 RegenerationPlan regeneration_plan_for_session(const chat::Session& session) {
@@ -880,7 +903,7 @@ int run(provider::RequestContext context, chat::Session session) {
     editor::PathCompleter path_completer;
     size_t completion_generation = 0;
     bool completion_pending = false;
-    std::string status = "Ready";
+    std::string status = ready_status();
     ThemeName theme = ThemeName::Dark;
     const bool use_colors = !context.options.no_colors;
     bool quit = false;
@@ -1435,7 +1458,9 @@ int run(provider::RequestContext context, chat::Session session) {
                     if (should_regenerate) {
                         start_queued_regeneration(regenerate_erase_from);
                     } else {
-                        status = event.compacted ? event.compaction.notice : "Ready";
+                        status = event.compacted
+                                     ? event.compaction.notice
+                                     : generation_ready_status(event.chat, context.options.stream);
                         start_save(context.options.save_chat_path, session);
                     }
                     break;

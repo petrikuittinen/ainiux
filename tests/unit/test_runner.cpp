@@ -910,6 +910,29 @@ void test_tui_thinking_trace_display() {
     check(hidden.text == "Before  after", "TUI thinking notrace preserves visible text around a trace");
 }
 
+void test_tui_ready_and_generation_status() {
+    check(pkchat::tui::ready_status() == std::string("Pkchat v") + pkchat::kVersion + " ready",
+          "TUI ready status displays the current pkchat version");
+
+    pkchat::provider::ChatResult result;
+    result.ttft_ms = 100;
+    result.total_ms = 1100;
+    result.completion_tokens = 20;
+    result.completion_tokens_estimated = true;
+
+    const std::string streaming = pkchat::tui::generation_ready_status(result, true);
+    check(streaming.find("TTFT: 100 ms") != std::string::npos,
+          "TUI streaming completion status displays time to first token");
+    check(streaming.find("Token/s: 20.0 (estimated)") != std::string::npos,
+          "TUI streaming completion status estimates throughput after the first token");
+
+    const std::string non_streaming = pkchat::tui::generation_ready_status(result, false);
+    check(non_streaming.find("Response: 1100 ms") != std::string::npos,
+          "TUI non-streaming completion status reports response latency instead of TTFT");
+    check(non_streaming.find("Token/s: 18.2 (estimated)") != std::string::npos,
+          "TUI non-streaming completion status estimates whole-response throughput");
+}
+
 void test_tui_theme_parsing_and_contrast() {
     pkchat::tui::ThemeName theme = pkchat::tui::ThemeName::Dark;
     check(pkchat::tui::parse_theme_name("dark", theme), "TUI dark theme parses");
@@ -1326,6 +1349,7 @@ int main() {
     test_tui_regeneration_plan_uses_last_user_turn();
     test_tui_history_jump_helpers();
     test_tui_thinking_trace_display();
+    test_tui_ready_and_generation_status();
     test_tui_theme_parsing_and_contrast();
     if (failures != 0) {
         std::cerr << failures << " unit test(s) failed\n";

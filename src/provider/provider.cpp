@@ -1347,6 +1347,18 @@ std::string active_request_url(const RequestContext& context) {
     return context.api_kind == ApiKind::Responses ? context.responses_url : context.chat_url;
 }
 
+double tokens_per_second(const ChatResult& result, bool stream) {
+    long long denominator_ms = result.total_ms;
+    if (stream && result.ttft_ms >= 0 && result.total_ms > result.ttft_ms) {
+        denominator_ms = result.total_ms - result.ttft_ms;
+    }
+    if (denominator_ms <= 0) {
+        denominator_ms = 1;
+    }
+    return static_cast<double>(result.completion_tokens) * 1000.0 /
+           static_cast<double>(denominator_ms);
+}
+
 std::string serialize_chat_request(const RequestContext& context, const std::vector<Message>& messages) {
     return build_chat_request_json(context, messages);
 }
