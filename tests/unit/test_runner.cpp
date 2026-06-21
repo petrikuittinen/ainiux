@@ -74,6 +74,30 @@ void test_benchmark_cli_and_jsonl_dataset() {
     check(parsed.options.format == pkchat::cli::OutputFormat::Ndjson,
           "jsonl output alias maps to newline-delimited JSON");
 
+    const char* mode_argv[] = {"pkchat", "--benchmark", "--mode", "quality,refusals",
+                               "--concurrency", "4", "--duration", "250ms"};
+    pkchat::cli::ParseResult modes =
+        pkchat::cli::parse_args(8, const_cast<char**>(mode_argv));
+    check(modes.error.ok() && modes.options.benchmark,
+          "--benchmark enables benchmark mode as a subcommand alias");
+    check(modes.options.benchmark_mode == "quality,refusals" &&
+              modes.options.benchmark_concurrency == 4 &&
+              modes.options.benchmark_duration_ms == 250,
+          "benchmark mode, concurrency, and duration controls parse");
+
+    const char* bad_mode_argv[] = {"pkchat", "--benchmark", "--mode", "accuracy"};
+    check(!pkchat::cli::parse_args(4, const_cast<char**>(bad_mode_argv)).error.ok(),
+          "unknown benchmark modes are rejected");
+    const char* mixed_speed_argv[] = {"pkchat", "--benchmark", "--mode", "speed,quality"};
+    check(!pkchat::cli::parse_args(4, const_cast<char**>(mixed_speed_argv)).error.ok(),
+          "speed benchmark mode is exclusive");
+    const char* bad_duration_argv[] = {"pkchat", "--benchmark", "--duration", "60"};
+    check(!pkchat::cli::parse_args(4, const_cast<char**>(bad_duration_argv)).error.ok(),
+          "benchmark durations require an explicit unit");
+    const char* bad_concurrency_argv[] = {"pkchat", "--benchmark", "--concurrency", "257"};
+    check(!pkchat::cli::parse_args(4, const_cast<char**>(bad_concurrency_argv)).error.ok(),
+          "benchmark concurrency is bounded");
+
     const char* misplaced_argv[] = {"pkchat", "--dataset", "cases.jsonl"};
     pkchat::cli::ParseResult misplaced =
         pkchat::cli::parse_args(3, const_cast<char**>(misplaced_argv));

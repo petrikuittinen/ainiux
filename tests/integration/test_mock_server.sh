@@ -35,7 +35,7 @@ JSONL
 benchmark_validate=$("$ROOT/pkchat" benchmark --dataset "$benchmark_dataset" --validate-dataset --quiet)
 printf '%s\n' "$benchmark_validate" | grep '"total_cases":3' >/dev/null
 benchmark_results=$("$ROOT/pkchat" benchmark "$BASE" --dataset "$benchmark_dataset" \
-    --allow-private-url-fetch --quiet -m "$MODEL")
+    --mode quality,refusals --concurrency 2 --allow-private-url-fetch --quiet -m "$MODEL")
 test "$(printf '%s\n' "$benchmark_results" | grep -c '"type":"result"')" -eq 4
 printf '%s\n' "$benchmark_results" | grep '"id":"integration-multi".*"turn":2.*"ok":true' >/dev/null
 printf '%s\n' "$benchmark_results" | grep '"id":"integration-single".*"thinking_trace_present":true.*"response":"Visible answer"' >/dev/null
@@ -44,6 +44,19 @@ if printf '%s\n' "$benchmark_results" | grep 'internal trace' >/dev/null; then
     exit 1
 fi
 printf '%s\n' "$benchmark_results" | grep '"type":"summary".*"completed_case_runs":3.*"failed_case_runs":0' >/dev/null
+printf '%s\n' "$benchmark_results" | grep '"modes":\["quality","refusals"\].*"estimated_total_tokens":' >/dev/null
+
+benchmark_speed=$("$ROOT/pkchat" --benchmark "$BASE" --dataset "$benchmark_dataset" \
+    --mode speed --concurrency 2 --duration 20ms --limit 1 --quiet -m "$MODEL")
+printf '%s\n' "$benchmark_speed" | grep '"type":"summary".*"modes":\["speed"\].*"concurrency":2.*"duration_ms":20' >/dev/null
+printf '%s\n' "$benchmark_speed" | grep '"average_ttft_ms":.*"aggregate_tokens_per_second":' >/dev/null
+
+benchmark_output_dir="$ROOT/build/benchmark-results"
+rm -rf "$benchmark_output_dir"
+"$ROOT/pkchat" --benchmark "$BASE" --dataset "$benchmark_dataset" --mode long-context \
+    --limit 1 --output "$benchmark_output_dir/" --quiet -m "$MODEL"
+test "$(find "$benchmark_output_dir" -type f -name 'benchmark-*.jsonl' | wc -l)" -eq 1
+grep '"type":"summary".*"modes":\["long-context"\]' "$benchmark_output_dir"/*.jsonl >/dev/null
 
 
 private_fetch_err="$ROOT/build/fetch-private.err"

@@ -57,7 +57,7 @@ Each milestone should leave the program usable. Do not create a long-lived pile 
 
 ## Current baseline
 
-Implementation status (2026-06-21): `pkchat` is at v0.6. The repository has the scriptable CLI, built-in provider registry and aliases, Chat Completions, text-only Responses API support, streaming SSE, credential lookup, JSON chat persistence, cancellable runtime jobs, REPL, full-screen TUI foundation, editor, request-only context policies, context-use estimates, bounded text/HTML/Markdown input, JPEG/PNG/GIF image input for Chat Completions, safe URL fetching, Markdown output conversion, and automatic v0.6 system/user TOML-alike configuration loading. `--provider none` supports local conversion and editor workflows without a model endpoint.
+Implementation status (2026-06-21): `pkchat` is at v0.7. The repository has the scriptable CLI, built-in provider registry and aliases, Chat Completions, text-only Responses API support, streaming SSE, credential lookup, JSON chat persistence, cancellable runtime jobs, REPL, full-screen TUI foundation, editor, request-only context policies, context-use estimates, bounded text/HTML/Markdown input, JPEG/PNG/GIF image input for Chat Completions, safe URL fetching, Markdown output conversion, automatic v0.6 system/user TOML-alike configuration loading, and concurrent JSONL benchmark execution. `--provider none` supports local conversion and editor workflows without a model endpoint.
 
 Runtime defaults live in `cli::Options`, provider defaults live in `src/provider/`, and API keys are resolved while building the provider request context. Automatic system and user config layers now map into a base `cli::Options`, after which `main.cpp` parses CLI arguments over that base. Explicit config files and a `--no-config` control remain to complete v0.6.
 
@@ -1237,7 +1237,9 @@ Add repeatable benchmarking for endpoint/model behavior without turning it into 
 pkchat benchmark --provider lm_studio -m MODEL --runs 10 --warmup 2
 pkchat benchmark --dataset cases.jsonl --base-url http://localhost:8000/v1 -m MODEL
 pkchat benchmark --validate-dataset
-pkchat benchmark --dataset benchmarks/long-context.jsonl --provider openai -m MODEL
+pkchat --benchmark --dataset prompts.jsonl --mode speed --concurrency 4 --duration 60s
+pkchat --benchmark --dataset benchmarks/long-context.jsonl --mode long-context --provider openai -m MODEL
+pkchat --benchmark --dataset eval.jsonl --mode quality,refusals --output results/
 ```
 
 ## Dataset formats
@@ -1282,6 +1284,8 @@ Options:
 --runs N
 --warmup N
 --concurrency N
+--duration TIME
+--mode speed|long-context|quality|refusals
 --dataset PATH|builtin
 --category NAME
 --case ID
@@ -1303,15 +1307,19 @@ Options:
 
 - [ ] Print model, provider, base URL, prompt size, settings, and timestamp.
 - [x] Separate warmup runs from measured runs.
+- [x] Bound concurrent execution and stop timed speed runs at their deadline.
+- [x] Report estimated prompt/total tokens plus average TTFT and token throughput.
 - [ ] Report p50/p90/p99 where enough samples exist.
 - [ ] Do not compare different models/settings as if equivalent.
 - [x] Distinguish provider-reported tokens from estimated tokens.
 - [ ] Keep benchmark jobs cancellable.
-- [ ] Release all per-run request/response/timing allocations after each run.
+- [x] Release all per-run request/response/timing allocations after each run.
 
 ## Acceptance criteria
 
 - [x] Benchmark mode works against mock server.
+- [x] Speed, long-context, quality, and refusal mode labels produce parseable JSONL.
+- [x] Benchmark output directories receive timestamped JSONL result files.
 - [ ] Benchmark mode works against LM Studio when running locally.
 - [ ] CSV and JSON output are parseable.
 - [x] Failed runs are counted and reported.

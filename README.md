@@ -2,7 +2,7 @@
 
 `pkchat` is a fast, script-friendly command-line chat client for OpenAI and OpenAI-compatible APIs.
 
-Current status: v0.6 CLI with libcurl transport, cancellable runtime jobs, provider registry/profile aliases, `/v1/models`, `/v1/chat/completions`, text-only OpenAI Responses API support, local JPEG/PNG/GIF image input, interactive text/image attachments, request-only context policies, safe URL insertion, a simple REPL, a standalone `--editor` mode, a full-screen non-blocking TUI foundation, JSON chat save/load, HTML-to-text/Markdown extraction, Markdown assistant-output rendering to HTML or plaintext, automatic system/user TOML-alike configuration loading, and the first JSONL benchmark-mode slice.
+Current status: v0.7 CLI with libcurl transport, cancellable runtime jobs, provider registry/profile aliases, `/v1/models`, `/v1/chat/completions`, text-only OpenAI Responses API support, local JPEG/PNG/GIF image input, interactive text/image attachments, request-only context policies, safe URL insertion, a simple REPL, a standalone `--editor` mode, a full-screen non-blocking TUI foundation, JSON chat save/load, HTML-to-text/Markdown extraction, Markdown assistant-output rendering to HTML or plaintext, automatic system/user TOML-alike configuration loading, and a concurrent JSONL benchmark runner.
 
 ## Build
 
@@ -67,14 +67,16 @@ The first benchmark slice uses JSONL for datasets and results. The built-in data
 ```sh
 ./pkchat benchmark --validate-dataset
 ./pkchat benchmark --list-cases --category reasoning --limit 2
-./pkchat benchmark --provider lm_studio -m MODEL --category reasoning --runs 3 --warmup 1
-./pkchat benchmark --dataset my-cases.jsonl --base-url http://localhost:8000/v1 -m MODEL
-./pkchat benchmark --dataset benchmarks/long-context.jsonl --provider lm_studio -m MODEL
+./pkchat --benchmark --dataset prompts.jsonl --mode speed --concurrency 4 --duration 60s
+./pkchat --benchmark --dataset benchmarks/long-context.jsonl --mode long-context --provider lm_studio -m MODEL
+./pkchat --benchmark --dataset eval.jsonl --mode quality,refusals --output results/
 ```
 
-The default `builtin` corpus is embedded from `benchmarks/builtin.jsonl` at build time and is also installed under `share/pkchat/benchmarks`. Results are JSONL records on `stdout`; status and errors remain on `stderr`. `--case ID`, `--category NAME`, and `--limit N` select cases. `--runs N` controls measured repetitions, while `--warmup N` runs separate unreported repetitions. The opt-in long-context file fetches two Project Gutenberg plain-text books and therefore requires network access; normal built-in cases are fully local until sent to the configured model endpoint.
+`--benchmark` and the `benchmark` subcommand are equivalent. Modes are `speed`, `long-context`, `quality`, and `refusals`; `quality,refusals` runs each selected case once while labeling the result with both evaluation purposes. Speed mode is exclusive, repeats cases until `--duration` expires, and cancels requests still active at the deadline. `--concurrency` uses a bounded worker pool in every mode. Durations accept `ms`, `s`, `m`, and `h` suffixes.
 
-This initial runner records responses, TTFT, wall time, completion-token source, and token rate but does not score answer quality. Aggregate percentiles, concurrency, cancellation, richer timing points, and Parquet/Hugging Face Datasets input remain planned.
+The default `builtin` corpus is embedded from `benchmarks/builtin.jsonl` at build time and is also installed under `share/pkchat/benchmarks`. Results are JSONL records on `stdout`; status and errors remain on `stderr`. If `--output` names an existing directory or ends in `/`, pkchat creates it when needed and writes a timestamped `benchmark-*.jsonl` file. `--case ID`, `--category NAME`, and `--limit N` select cases. `--runs N` controls measured repetitions outside speed mode, while `--warmup N` runs separate unreported repetitions. The opt-in long-context file fetches two Project Gutenberg plain-text books and therefore requires network access; normal built-in cases are fully local until sent to the configured model endpoint.
+
+Each result records the estimated prompt and total token counts, completion-token source, TTFT, wall time, token rate, response, and error state. The summary includes total estimated tokens, average TTFT, average per-request token rate, aggregate token throughput, and completed/failed/cancelled counts. Quality and refusal modes currently collect responses but deliberately do not score them. Regex-based refusal and reasoning checks, aggregate percentiles, richer provider timing points, and Parquet/Hugging Face Datasets input remain planned.
 
 ## Examples
 

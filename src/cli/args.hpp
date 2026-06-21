@@ -67,6 +67,7 @@ struct Options {
     std::string benchmark_dataset = "builtin";
     std::string benchmark_category;
     std::string benchmark_case;
+    std::string benchmark_mode = "quality";
     OutputFormat format = OutputFormat::Text;
 
     double temperature = 0.0;
@@ -85,6 +86,8 @@ struct Options {
     int benchmark_runs = 1;
     int benchmark_warmup = 0;
     int benchmark_limit = 0;
+    int benchmark_concurrency = 1;
+    long long benchmark_duration_ms = 60000;
 
     std::vector<std::string> headers;
     std::vector<std::string> attachment_paths;

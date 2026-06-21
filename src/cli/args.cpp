@@ -20,7 +20,7 @@ bool needs_value(const std::string& opt) {
         "--max-fetch-bytes", "--max-input-bytes", "--max-image-bytes", "--max-context-bytes",
         "--context", "--context-policy", "--image-capability",
         "--save-chat", "--load-chat", "--dataset", "--category", "--case",
-        "--runs", "--warmup", "--limit"};
+        "--runs", "--warmup", "--limit", "--mode", "--concurrency", "--duration"};
     for (const char* item : with_values) {
         if (opt == item) {
             return true;
@@ -102,6 +102,82 @@ Error parse_context_tokens(const std::string& text, long long& out) {
     return ok_error();
 }
 
+Error parse_duration(const std::string& text, long long& out) {
+    if (text.empty()) {
+        return {ErrorCode::BadArgs, "--duration expects a positive duration such as 500ms, 60s, or 2m"};
+    }
+    size_t digits = text.size();
+    long long multiplier = 1000;
+    if (text.size() >= 2 && text.compare(text.size() - 2, 2, "ms") == 0) {
+        multiplier = 1;
+        digits -= 2;
+    } else if (text.back() == 's') {
+        digits -= 1;
+    } else if (text.back() == 'm') {
+        multiplier = 60 * 1000;
+        digits -= 1;
+    } else if (text.back() == 'h') {
+        multiplier = 60 * 60 * 1000;
+        digits -= 1;
+    } else {
+        return {ErrorCode::BadArgs, "--duration requires an ms, s, m, or h suffix"};
+    }
+    if (digits == 0) {
+        return {ErrorCode::BadArgs, "--duration expects a positive duration such as 500ms, 60s, or 2m"};
+    }
+    long long value = 0;
+    for (size_t i = 0; i < digits; ++i) {
+        if (text[i] < '0' || text[i] > '9') {
+            return {ErrorCode::BadArgs, "--duration expects an integer followed by ms, s, m, or h"};
+        }
+        const int digit = text[i] - '0';
+        if (value > (std::numeric_limits<long long>::max() - digit) / 10) {
+            return {ErrorCode::BadArgs, "--duration value is too large"};
+        }
+        value = value * 10 + digit;
+    }
+    if (value == 0 || value > std::numeric_limits<long long>::max() / multiplier) {
+        return {ErrorCode::BadArgs, value == 0 ? "--duration must be greater than zero"
+                                               : "--duration value is too large"};
+    }
+    const long long duration = value * multiplier;
+    constexpr long long kMaxBenchmarkDurationMs = 7LL * 24LL * 60LL * 60LL * 1000LL;
+    if (duration > kMaxBenchmarkDurationMs) {
+        return {ErrorCode::BadArgs, "--duration cannot exceed 168h"};
+    }
+    out = duration;
+    return ok_error();
+}
+
+bool valid_benchmark_mode_list(const std::string& text) {
+    if (text.empty()) {
+        return false;
+    }
+    size_t start = 0;
+    size_t count = 0;
+    bool saw_speed = false;
+    while (start < text.size()) {
+        const size_t comma = text.find(',', start);
+        const std::string mode = text.substr(start, comma == std::string::npos
+                                                        ? std::string::npos
+                                                        : comma - start);
+        if (mode != "speed" && mode != "long-context" && mode != "quality" &&
+            mode != "refusals") {
+            return false;
+        }
+        ++count;
+        saw_speed = saw_speed || mode == "speed";
+        if (comma == std::string::npos) {
+            break;
+        }
+        start = comma + 1;
+        if (start == text.size()) {
+            return false;
+        }
+    }
+    return !saw_speed || count == 1;
+}
+
 }  // namespace
 
 const char* format_name(OutputFormat format) {
@@ -141,7 +217,7 @@ ParseResult parse_args(int argc, char** argv, const Options& base_options) {
 
         if (arg == "--help" || arg == "-h") {
             opts.help = true;
-        } else if (arg == "benchmark" && i == 1) {
+        } else if ((arg == "benchmark" && i == 1) || arg == "--benchmark") {
             opts.benchmark = true;
             opts.format = OutputFormat::Ndjson;
         } else if (arg == "--validate-dataset") {
@@ -364,6 +440,30 @@ ParseResult parse_args(int argc, char** argv, const Options& base_options) {
                     return {opts, err};
                 }
                 opts.benchmark_options_seen = true;
+            } else if (opt == "--mode") {
+                if (value.rfind("speed,", 0) == 0 || value.find(",speed") != std::string::npos) {
+                    return {opts, {ErrorCode::BadArgs,
+                                   "speed benchmark mode cannot be combined with other modes"}};
+                }
+                if (!valid_benchmark_mode_list(value)) {
+                    return {opts, {ErrorCode::BadArgs,
+                                   "--mode expects a comma-separated list of speed, long-context, quality, or refusals"}};
+                }
+                opts.benchmark_mode = value;
+                opts.benchmark_options_seen = true;
+            } else if (opt == "--concurrency") {
+                Error err = parse_int(opt, value, opts.benchmark_concurrency);
+                if (!err.ok() || opts.benchmark_concurrency < 1 || opts.benchmark_concurrency > 256) {
+                    return {opts, {ErrorCode::BadArgs,
+                                   "--concurrency expects an integer from 1 through 256"}};
+                }
+                opts.benchmark_options_seen = true;
+            } else if (opt == "--duration") {
+                Error err = parse_duration(value, opts.benchmark_duration_ms);
+                if (!err.ok()) {
+                    return {opts, err};
+                }
+                opts.benchmark_options_seen = true;
             }
         } else if (!arg.empty() && arg[0] == '-') {
             return {opts, {ErrorCode::BadArgs, "unknown option: " + arg}};
@@ -392,7 +492,8 @@ Usage:
   pkchat --editor [PATH] [--output PATH]
   pkchat --input PATH [--output-format md|html|plaintext|json|jsond] [--output PATH]
   pkchat --fetch-url URL [--output-format md|html|plaintext|json|jsond] [--output PATH]
-  pkchat benchmark [--dataset FILE] [--provider NAME] [-m MODEL]
+  pkchat --benchmark [--dataset FILE] [--mode MODE] [--provider NAME] [-m MODEL]
+  pkchat benchmark [--dataset FILE] [--mode MODE] [--provider NAME] [-m MODEL]
 
 Examples:
   pkchat http://localhost:8000 -p "What is the capital of Norway?"
@@ -418,6 +519,8 @@ Examples:
   pkchat --repl --load-chat chat.json --save-chat chat.json
   pkchat benchmark --validate-dataset
   pkchat benchmark --category reasoning --limit 2 --provider lm_studio -m MODEL
+  pkchat --benchmark --dataset prompts.jsonl --mode speed --concurrency 4 --duration 60s
+  pkchat --benchmark --dataset eval.jsonl --mode quality,refusals --output results/
 
 Options:
   -p, --prompt TEXT
@@ -442,6 +545,9 @@ Options:
                                 'stdin' reads UTF-8 plaintext from standard input.
       --fetch-url URL           Fetch HTML for extraction, or as prompt context with -p.
       --dataset PATH            Benchmark JSONL dataset; default 'builtin'.
+      --mode MODE               speed, long-context, quality, refusals; comma-separated.
+      --concurrency N           Concurrent benchmark requests; default 1, maximum 256.
+      --duration TIME           Speed-test duration with ms, s, m, or h suffix; default 60s.
       --category NAME           Run only benchmark cases in this category.
       --case ID                 Run only one benchmark case.
       --runs N                  Measured runs per case; default 1.

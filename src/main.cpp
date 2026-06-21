@@ -1,5 +1,7 @@
 #include <algorithm>
 #include <array>
+#include <chrono>
+#include <filesystem>
 #include <fstream>
 #include <iomanip>
 #include <iostream>
@@ -71,6 +73,67 @@ std::ostream* output_stream(const pkchat::cli::Options& options, std::ofstream& 
     file.open(options.output_path, std::ios::binary | std::ios::trunc);
     if (!file) {
         error = {pkchat::ErrorCode::FileWrite, "could not open output file for writing: " + options.output_path};
+        return nullptr;
+    }
+    return &file;
+}
+
+std::ostream* benchmark_output_stream(const pkchat::cli::Options& options,
+                                      std::ofstream& file,
+                                      pkchat::Error& error,
+                                      std::string& actual_path) {
+    if (options.output_path.empty() || options.output_path == "stdout") {
+        return &std::cout;
+    }
+    std::filesystem::path path(options.output_path);
+    std::error_code filesystem_error;
+    const bool trailing_separator = options.output_path.back() == '/' ||
+                                    options.output_path.back() == '\\';
+    const bool path_exists = std::filesystem::exists(path, filesystem_error);
+    if (filesystem_error) {
+        error = {pkchat::ErrorCode::FileWrite,
+                 "could not inspect benchmark output path " + options.output_path + ": " +
+                     filesystem_error.message()};
+        return nullptr;
+    }
+    const bool existing_directory = path_exists &&
+                                    std::filesystem::is_directory(path, filesystem_error);
+    if (filesystem_error) {
+        error = {pkchat::ErrorCode::FileWrite,
+                 "could not inspect benchmark output path " + options.output_path + ": " +
+                     filesystem_error.message()};
+        return nullptr;
+    }
+    if (trailing_separator || existing_directory) {
+        std::filesystem::create_directories(path, filesystem_error);
+        if (filesystem_error) {
+            error = {pkchat::ErrorCode::FileWrite,
+                     "could not create benchmark output directory " + options.output_path + ": " +
+                         filesystem_error.message()};
+            return nullptr;
+        }
+        const long long timestamp = std::chrono::duration_cast<std::chrono::seconds>(
+                                        std::chrono::system_clock::now().time_since_epoch())
+                                        .count();
+        std::filesystem::path candidate = path / ("benchmark-" + std::to_string(timestamp) + ".jsonl");
+        size_t suffix = 1;
+        while (std::filesystem::exists(candidate, filesystem_error) && !filesystem_error) {
+            candidate = path / ("benchmark-" + std::to_string(timestamp) + "-" +
+                                std::to_string(suffix++) + ".jsonl");
+        }
+        if (filesystem_error) {
+            error = {pkchat::ErrorCode::FileWrite,
+                     "could not select a benchmark result file in " + options.output_path + ": " +
+                         filesystem_error.message()};
+            return nullptr;
+        }
+        path = std::move(candidate);
+    }
+    actual_path = path.string();
+    file.open(actual_path, std::ios::binary | std::ios::trunc);
+    if (!file) {
+        error = {pkchat::ErrorCode::FileWrite,
+                 "could not open benchmark output file for writing: " + actual_path};
         return nullptr;
     }
     return &file;
@@ -531,10 +594,15 @@ int run_benchmark_mode(const pkchat::cli::Options& options) {
 
     std::ofstream out_file;
     pkchat::Error output_error;
-    std::ostream* out = output_stream(options, out_file, output_error);
+    std::string actual_output_path;
+    std::ostream* out = benchmark_output_stream(options, out_file, output_error,
+                                                actual_output_path);
     if (!output_error.ok()) {
         print_error(output_error);
         return exit_code_for(output_error.code);
+    }
+    if (!actual_output_path.empty() && !options.quiet) {
+        std::cerr << "Benchmark results: " << actual_output_path << "\n";
     }
     if (options.benchmark_validate) {
         *out << "{\"type\":\"dataset\",\"path\":"
