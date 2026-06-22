@@ -20,6 +20,8 @@ v0.6 begins with one canonical, system-wide TOML-alike template at `config/pkcha
 
 Automatic layers follow XDG precedence: system files are applied in reverse `$XDG_CONFIG_DIRS` order, then `$XDG_CONFIG_HOME/pkchat/config.conf` or the `HOME` fallback. Each document is schema-validated into a temporary `cli::Options` copy before it replaces the effective options, preventing partial application. The ordinary CLI parser then runs over that configured base so command-line values remain authoritative. TUI theme and thinking-trace visibility are ordinary effective options; provider credentials remain references resolved later by the provider layer.
 
+`--no-config` narrowly disables the automatic user file while retaining system configuration. This gives users a simple way to troubleshoot or bypass personal defaults without bypassing administrator policy. Arbitrary `--config PATH` layering is intentionally omitted until there is a concrete need. `--debug` reports considered configuration paths and their loaded, missing, skipped, or failed state on `stderr`; it never prints configuration values.
+
 
 ## Provider Registry and API Adapters
 

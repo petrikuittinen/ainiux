@@ -187,6 +187,50 @@ struct Statistics {
 
 enum class RunOutcome { Completed, Failed, Cancelled };
 
+struct ProgressSnapshot {
+    size_t finished = 0;
+    size_t completed = 0;
+    size_t failed = 0;
+    size_t cancelled = 0;
+};
+
+struct ProgressCounts {
+    std::mutex mutex;
+    ProgressSnapshot values;
+};
+
+void record_outcome(ProgressCounts& counts, RunOutcome outcome) {
+    std::lock_guard<std::mutex> lock(counts.mutex);
+    if (outcome == RunOutcome::Completed) {
+        ++counts.values.completed;
+    } else if (outcome == RunOutcome::Failed) {
+        ++counts.values.failed;
+    } else {
+        ++counts.values.cancelled;
+    }
+    ++counts.values.finished;
+}
+
+ProgressSnapshot progress_snapshot(ProgressCounts& counts) {
+    std::lock_guard<std::mutex> lock(counts.mutex);
+    return counts.values;
+}
+
+void write_progress_counts(std::ostream& status, const ProgressSnapshot& counts) {
+    status << "completed " << counts.completed
+           << ", failed " << counts.failed
+           << ", cancelled " << counts.cancelled;
+}
+
+void write_modes_text(std::ostream& status, const std::vector<std::string>& modes) {
+    for (size_t index = 0; index < modes.size(); ++index) {
+        if (index != 0) {
+            status << ",";
+        }
+        status << modes[index];
+    }
+}
+
 RunOutcome run_case(const provider::RequestContext& request_context,
                     const PreparedCase& prepared,
                     size_t run_number,
@@ -458,6 +502,7 @@ Error run(const provider::RequestContext& context,
     std::mutex output_mutex;
     std::mutex statistics_mutex;
     runtime::CancellationSource never_cancel;
+    std::mutex status_mutex;
 
     const size_t case_count = prepared_cases.size();
     if (static_cast<size_t>(options.benchmark_warmup) >
@@ -467,14 +512,30 @@ Error run(const provider::RequestContext& context,
         return {ErrorCode::BadArgs, "benchmark run count is too large for the selected dataset"};
     }
 
+    if (!options.quiet) {
+        status << "Benchmark started: modes ";
+        write_modes_text(status, modes);
+        status << "; provider " << request_context.profile.name
+               << "; model " << request_context.options.model
+               << "; cases " << case_count
+               << "; concurrency " << options.benchmark_concurrency << "\n";
+    }
+
     auto run_finite_batch = [&](size_t repetitions, bool warmup) {
         const size_t total_tasks = repetitions * prepared_cases.size();
         if (total_tasks == 0) {
             return;
         }
         std::atomic<size_t> next_task{0};
+        ProgressCounts progress;
+        size_t last_reported = 0;
         std::vector<std::thread> workers;
         const size_t worker_count = worker_count_for(total_tasks, options.benchmark_concurrency);
+        if (!options.quiet) {
+            std::lock_guard<std::mutex> lock(status_mutex);
+            status << (warmup ? "Warm-up" : "Benchmark") << " progress: 0/"
+                   << total_tasks << " runs (0%)\n";
+        }
         workers.reserve(worker_count);
         for (size_t worker = 0; worker < worker_count; ++worker) {
             workers.emplace_back([&] {
@@ -485,9 +546,29 @@ Error run(const provider::RequestContext& context,
                     }
                     const size_t case_index = task % prepared_cases.size();
                     const size_t run_number = task / prepared_cases.size() + 1;
-                    run_case(request_context, prepared_cases[case_index], run_number, warmup,
-                             modes, never_cancel.token(), output, output_mutex, statistics,
-                             statistics_mutex);
+                    const RunOutcome outcome = run_case(
+                        request_context, prepared_cases[case_index], run_number, warmup,
+                        modes, never_cancel.token(), output, output_mutex, statistics,
+                        statistics_mutex);
+                    record_outcome(progress, outcome);
+                    if (!options.quiet) {
+                        std::lock_guard<std::mutex> lock(status_mutex);
+                        const ProgressSnapshot progress_now = progress_snapshot(progress);
+                        const size_t reporting_interval =
+                            total_tasks / 20 + (total_tasks % 20 == 0 ? 0 : 1);
+                        if (progress_now.finished == total_tasks || last_reported == 0 ||
+                            progress_now.finished - last_reported >= reporting_interval) {
+                            last_reported = progress_now.finished;
+                            status << (warmup ? "Warm-up" : "Benchmark") << " progress: "
+                                   << progress_now.finished << "/" << total_tasks << " runs ("
+                                   << static_cast<unsigned>(
+                                          static_cast<long double>(progress_now.finished) *
+                                          100.0L / static_cast<long double>(total_tasks))
+                                   << "%; ";
+                            write_progress_counts(status, progress_now);
+                            status << ")\n";
+                        }
+                    }
                 }
             });
         }
@@ -503,13 +584,48 @@ Error run(const provider::RequestContext& context,
                               std::chrono::milliseconds(options.benchmark_duration_ms);
         runtime::CancellationSource duration_cancellation;
         std::atomic<size_t> next_task{0};
+        ProgressCounts progress;
         std::mutex timer_mutex;
         std::condition_variable timer_cv;
         bool stop_timer = false;
+        if (!options.quiet) {
+            status << "Speed progress: 0/" << options.benchmark_duration_ms
+                   << " ms (0%; 0 runs finished)\n";
+        }
         std::thread timer([&] {
             std::unique_lock<std::mutex> lock(timer_mutex);
-            if (!timer_cv.wait_until(lock, deadline, [&] { return stop_timer; })) {
-                duration_cancellation.cancel();
+            const auto reporting_interval = std::chrono::milliseconds(
+                std::max<long long>(100, std::min<long long>(1000,
+                    options.benchmark_duration_ms / 10)));
+            while (!stop_timer) {
+                const auto now = std::chrono::steady_clock::now();
+                if (now >= deadline) {
+                    duration_cancellation.cancel();
+                    break;
+                }
+                const auto wake_at = std::min(deadline, now + reporting_interval);
+                if (timer_cv.wait_until(lock, wake_at, [&] { return stop_timer; })) {
+                    break;
+                }
+                const auto current = std::chrono::steady_clock::now();
+                if (current >= deadline) {
+                    duration_cancellation.cancel();
+                    break;
+                }
+                if (!options.quiet) {
+                    const long long elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+                        current - measured_start).count();
+                    lock.unlock();
+                    {
+                        std::lock_guard<std::mutex> status_lock(status_mutex);
+                        status << "Speed progress: " << elapsed << "/"
+                               << options.benchmark_duration_ms << " ms ("
+                               << (elapsed * 100 / options.benchmark_duration_ms) << "%; ";
+                        write_progress_counts(status, progress_snapshot(progress));
+                        status << ")\n";
+                    }
+                    lock.lock();
+                }
             }
         });
         std::vector<std::thread> workers;
@@ -525,6 +641,7 @@ Error run(const provider::RequestContext& context,
                         request_context, prepared_cases[case_index], run_number, false, modes,
                         duration_cancellation.token(), output, output_mutex, statistics,
                         statistics_mutex);
+                    record_outcome(progress, outcome);
                     if (outcome == RunOutcome::Failed) {
                         duration_cancellation.cancel();
                         break;
@@ -541,6 +658,18 @@ Error run(const provider::RequestContext& context,
         }
         timer_cv.notify_one();
         timer.join();
+        if (!options.quiet) {
+            const long long elapsed = std::min<long long>(
+                options.benchmark_duration_ms,
+                std::chrono::duration_cast<std::chrono::milliseconds>(
+                    std::chrono::steady_clock::now() - measured_start).count());
+            std::lock_guard<std::mutex> lock(status_mutex);
+            status << "Speed progress: " << elapsed << "/"
+                   << options.benchmark_duration_ms << " ms ("
+                   << (elapsed * 100 / options.benchmark_duration_ms) << "%; ";
+            write_progress_counts(status, progress_snapshot(progress));
+            status << ")\n";
+        }
     } else {
         run_finite_batch(static_cast<size_t>(options.benchmark_runs), false);
     }
@@ -585,6 +714,25 @@ Error run(const provider::RequestContext& context,
            << "}\n";
     if (!output) {
         return {ErrorCode::FileWrite, "could not write benchmark JSONL output"};
+    }
+    if (!options.quiet) {
+        const char* scoring = contains_mode(modes, "quality") || contains_mode(modes, "refusals")
+                                  ? "not implemented (responses collected)"
+                                  : "not applicable";
+        status << "Benchmark summary:\n"
+               << "  Completed runs: " << statistics.completed_case_runs << "\n"
+               << "  Failed runs: " << statistics.failed_case_runs << "\n"
+               << "  Cancelled runs: " << statistics.cancelled_case_runs << "\n"
+               << "  Estimated prompt tokens: " << statistics.estimated_prompt_tokens << "\n"
+               << "  Completion tokens: " << statistics.completion_tokens << "\n"
+               << "  Estimated total tokens: "
+               << saturating_add(statistics.estimated_prompt_tokens,
+                                  statistics.completion_tokens) << "\n"
+               << std::fixed << std::setprecision(3)
+               << "  Average TTFT ms: " << average_ttft << "\n"
+               << "  Average token/s: " << average_token_rate << "\n"
+               << "  Aggregate tokens per second: " << aggregate_token_rate << "\n"
+               << "  Scoring: " << scoring << "\n";
     }
     return statistics.failed_case_runs == 0
                ? ok_error()

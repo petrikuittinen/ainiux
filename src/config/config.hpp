@@ -59,9 +59,19 @@ struct Environment {
     std::string home;
 };
 
+enum class ConfigScope { System, User };
+enum class ConfigFileState { Loaded, Missing, Skipped, Error, Unavailable };
+
+struct ConfigDiagnostic {
+    ConfigScope scope = ConfigScope::System;
+    ConfigFileState state = ConfigFileState::Missing;
+    std::string path;
+};
+
 struct LoadResult {
     cli::Options options;
     std::vector<std::string> loaded_paths;
+    std::vector<ConfigDiagnostic> diagnostics;
     Error error;
 };
 
@@ -71,7 +81,9 @@ Error apply_document(const Document& document, cli::Options& options);
 Environment process_environment();
 std::string user_config_path(const Environment& environment);
 std::vector<std::string> system_config_paths(const Environment& environment);
-LoadResult load_automatic(const cli::Options& base_options, const Environment& environment);
+LoadResult load_automatic(const cli::Options& base_options,
+                          const Environment& environment,
+                          bool load_user_config = true);
 const char* value_type_name(Value::Type type);
 
 }  // namespace pkchat::config

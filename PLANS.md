@@ -45,7 +45,7 @@ v0.2  Simple interactive REPL and JSON chat persistence
 v0.3  Runtime/job layer and non-blocking full-screen TUI foundation
 v0.4  Provider adapters, Responses API, LM Studio refinement, and compatibility profiles
 v0.5  Context management, attachments, and safe URL fetching
-v0.6  Layered TOML-alike configuration files
+v0.6  System and user TOML-alike configuration files
 v0.7  Benchmark mode
 v0.8  AI-assisted editor
 v0.9  Local web server mode
@@ -59,7 +59,7 @@ Each milestone should leave the program usable. Do not create a long-lived pile 
 
 Implementation status (2026-06-21): `pkchat` is at v0.7. The repository has the scriptable CLI, built-in provider registry and aliases, Chat Completions, text-only Responses API support, streaming SSE, credential lookup, JSON chat persistence, cancellable runtime jobs, REPL, full-screen TUI foundation, editor, request-only context policies, context-use estimates, bounded text/HTML/Markdown input, JPEG/PNG/GIF image input for Chat Completions, safe URL fetching, Markdown output conversion, automatic v0.6 system/user TOML-alike configuration loading, and concurrent JSONL benchmark execution. `--provider none` supports local conversion and editor workflows without a model endpoint.
 
-Runtime defaults live in `cli::Options`, provider defaults live in `src/provider/`, and API keys are resolved while building the provider request context. Automatic system and user config layers now map into a base `cli::Options`, after which `main.cpp` parses CLI arguments over that base. Explicit config files and a `--no-config` control remain to complete v0.6.
+Runtime defaults live in `cli::Options`, provider defaults live in `src/provider/`, and API keys are resolved while building the provider request context. Automatic system and user config files map into a base `cli::Options`, after which `main.cpp` parses CLI arguments over that base. `--no-config` can bypass the automatic user file while retaining system configuration, and `--debug` reports configuration discovery on `stderr`.
 
 ## Execution-plan template for agents
 
@@ -1036,11 +1036,11 @@ Implementation note (2026-06-20): Non-interactive `--input stdin` and `--attach 
 
 ---
 
-# v0.6 - Layered TOML-alike configuration files
+# v0.6 - System and user TOML-alike configuration files
 
 ## Goal
 
-Add predictable system, user, and explicitly selected configuration files without adding a TOML dependency or claiming full TOML compatibility. A configuration file supplies persistent defaults; command-line arguments and positional provider/URL shortcuts continue to win.
+Add predictable system and user configuration files without adding a TOML dependency or claiming full TOML compatibility. A configuration file supplies persistent defaults; command-line arguments and positional provider/URL shortcuts continue to win. Arbitrary extra configuration-file layering is intentionally outside this milestone.
 
 With no configuration files present, behavior must remain identical to v0.55. In particular, the default provider remains `openai`, the default API remains Chat Completions, streaming remains enabled, and the existing size and timeout defaults do not change.
 
@@ -1054,7 +1054,7 @@ With no configuration files present, behavior must remain identical to v0.55. In
 - [x] Keep credential resolution in `provider::build_context` after the final provider and `key_env`/`key_file` settings are known. The config parser never reads or retains an API key value.
 - [x] Extend `cli::Options` only for settings the current runtime can consume, such as persistent TUI theme/thinking defaults. Do not add unused web, benchmark, agent, PDF, or DOCX settings in this milestone.
 
-Implementation note (2026-06-21): `config/pkchat.conf` is the system-wide template aligned with the v0.6 `cli::Options` defaults. `make install` places it at `${SYSCONFDIR}/xdg/pkchat/config.conf` with mode `0644` and preserves an existing file. `src/config/` provides a bounded parser, complete initial-schema validation, XDG system/user discovery, transactional layer application, and CLI-last option merging. TUI theme/thinking defaults and URL-fetch private-address policy are wired to effective configuration. Explicit `--config`/`--no-config` controls remain the next slice.
+Implementation note (2026-06-22): `config/pkchat.conf` is the system-wide template aligned with the v0.6 `cli::Options` defaults. `make install` places it at `${SYSCONFDIR}/xdg/pkchat/config.conf` with mode `0644` and preserves an existing file. `src/config/` provides a bounded parser, complete initial-schema validation, XDG system/user discovery, transactional application, and CLI-last option merging. TUI theme/thinking defaults and URL-fetch private-address policy are wired to effective configuration. `--no-config` skips the user file only, and `--debug` reports file discovery/load state without printing values. Repeatable explicit `--config` layering was rejected as unnecessary complexity.
 
 ## File syntax
 
@@ -1159,11 +1159,10 @@ Schema requirements:
 
 ## Discovery and precedence
 
-Add these control options:
+Configuration control:
 
 ```text
---config PATH    Load an additional config file; repeatable.
---no-config      Skip automatically discovered system and user files.
+--no-config      Skip the automatically discovered user file; retain system files.
 ```
 
 Resolve layers from lowest to highest precedence:
@@ -1171,21 +1170,19 @@ Resolve layers from lowest to highest precedence:
 1. current C++ defaults in `cli::Options` and the built-in provider registry
 2. system files named `pkchat/config.conf` from `$XDG_CONFIG_DIRS`, or `/etc/xdg` when unset
 3. `$XDG_CONFIG_HOME/pkchat/config.conf`, or `$HOME/.config/pkchat/config.conf` when unset
-4. each explicit `--config PATH`, in command-line order
-5. command-line options and the positional `BASE_URL|PROFILE` shortcut
+4. command-line options and the positional `BASE_URL|PROFILE` shortcut
 
 Implementation details:
 
 - [x] Because `$XDG_CONFIG_DIRS` lists higher-priority directories first, load existing system files in reverse order so the first directory wins after merging.
-- [x] Follow XDG path validity rules: ignore relative `$XDG_CONFIG_DIRS` entries, and use the documented fallback when `$XDG_CONFIG_HOME` is empty or relative. If `HOME` is also unavailable, skip automatic user-config discovery without preventing explicit/system configuration.
-- [ ] `--no-config` skips only automatic system/user discovery; explicit `--config` files still load, allowing deterministic isolated use.
+- [x] Follow XDG path validity rules: ignore relative `$XDG_CONFIG_DIRS` entries, and use the documented fallback when `$XDG_CONFIG_HOME` is empty or relative. If `HOME` is also unavailable, skip automatic user-config discovery without preventing system configuration.
+- [x] `--no-config` skips the automatic user file while retaining system configuration.
 - [x] Missing automatic files are normal; an existing but unreadable or invalid automatic file is an error.
-- [ ] A missing or unreadable explicit file is `PKCHAT_ERR_CONFIG` once `--config` is implemented.
 - [x] Bound each config file to 1 MiB and reject non-regular files with a specific error.
-- [ ] Do a small bootstrap scan for only `--config`, `--no-config`, `--help`, and `--version`, then run the existing full parser over the merged base options. The bootstrap scan must still detect missing values and malformed control options.
+- [x] Use the existing preliminary CLI parse to detect `--no-config`, `--help`, `--version`, `--debug`, and `--quiet`, then run the full parser over configured base options.
 - [x] `--help` and `--version` must work without reading config files, including when an automatically discovered file is malformed.
 - [x] XDG and `HOME` affect path discovery. Provider-specific environment variables and an explicitly selected `key_env` continue to supply credentials after files are merged. Do not invent a second general `PKCHAT_*` environment-settings layer in this milestone.
-- [x] Do not print config status on `stdout`. Optional debug diagnostics may list loaded paths on `stderr`, but must redact URL userinfo, credential paths where appropriate, and all authorization values.
+- [x] Do not print config status on `stdout`. `--debug` lists loaded, missing, skipped, and failed paths on `stderr` without printing configuration values; `--quiet` suppresses it.
 
 ## Merge and validation
 
@@ -1203,7 +1200,7 @@ Implementation details:
 1. [x] Add parser/value/source-location types in `src/config/config.hpp` and `src/config/config.cpp` plus grammar/error unit tests.
 2. [x] Add the typed schema mapper and tests for supported keys, representative enums/ranges, and rejected keys.
 3. [x] Add XDG discovery and deterministic automatic layer merging with injectable environment/path inputs for tests.
-4. [ ] Add CLI bootstrap parsing, `--config`, `--no-config`, and parsing over configured base options.
+4. [x] Add preliminary CLI handling for `--no-config` and parsing over configured base options; deliberately omit explicit `--config` layering.
 5. [x] Wire effective settings into `main.cpp`, provider context construction, input/fetch limits, output formatting, context handling, and the initial TUI theme/thinking mode.
 6. [x] Add integration coverage using an isolated `XDG_CONFIG_HOME` fixture and isolated automatic system paths.
 7. [x] Update `README.md`, `TODO.md`, `docs/decisions.md`, and `docs/security.md` with syntax, precedence, examples, limitations, and credential guidance.
@@ -1211,16 +1208,16 @@ Implementation details:
 
 ## Acceptance criteria
 
-- [ ] With no config files, existing CLI/unit/integration behavior and defaults are unchanged.
-- [ ] System, user, explicit-file, and CLI precedence is deterministic and covered by tests.
-- [ ] `--no-config --config FILE` loads only code defaults plus `FILE`, followed by CLI overrides.
-- [ ] Positional provider/URL shortcuts and explicit CLI options override configured values.
-- [ ] Parser errors identify the file and exact source location; schema errors identify the fully qualified key and expected type/value.
-- [ ] Duplicate and unknown keys fail without partially applying the file.
-- [ ] Unicode bare/quoted strings, CRLF, BOM, invalid UTF-8, invalid escapes, numeric overflow, empty values, and the 1 MiB cap are tested.
-- [ ] Configured `provider = none` conversion/editor workflows do not contact a model endpoint.
+- [x] With no config files, existing CLI/unit/integration behavior and defaults are unchanged.
+- [x] System, user, and CLI precedence is deterministic and covered by tests.
+- [x] `--no-config` bypasses the user file while retaining system settings and later CLI overrides.
+- [x] Positional provider shortcuts and explicit CLI options override configured values.
+- [x] Parser errors identify the file and exact source location; schema errors identify the fully qualified key and expected type/value.
+- [x] Duplicate and unknown keys fail without partially applying the file.
+- [x] Unicode bare/quoted strings, CRLF, BOM, invalid UTF-8, invalid escapes, numeric overflow, empty values, and the 1 MiB cap are tested.
+- [x] Configured `provider = none` conversion workflows do not contact a model endpoint.
 - [ ] Configured credentials are references (`key_env` or `key_file`) only; secrets are absent from errors, debug output, saved chats, and test logs.
-- [ ] `stdout` remains reserved for requested command content; all config diagnostics use `stderr` and established exit-code mapping.
+- [x] `stdout` remains reserved for requested command content; all config diagnostics use `stderr` and established exit-code mapping.
 - [ ] `make test` and `make test-sanitize` pass, and leak checking covers successful load, missing file, parse error, schema error, and merge replacement paths where tooling is available.
 
 ---
@@ -1309,6 +1306,7 @@ Options:
 - [x] Separate warmup runs from measured runs.
 - [x] Bound concurrent execution and stop timed speed runs at their deadline.
 - [x] Report estimated prompt/total tokens plus average TTFT and token throughput.
+- [x] Show bounded live progress and a human-readable stderr summary without mixing status into JSONL stdout.
 - [ ] Report p50/p90/p99 where enough samples exist.
 - [ ] Do not compare different models/settings as if equivalent.
 - [x] Distinguish provider-reported tokens from estimated tokens.

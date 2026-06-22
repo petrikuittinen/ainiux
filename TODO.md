@@ -1,5 +1,4 @@
 # TODO
-- Continue v0.6 configuration support: add repeatable `--config`, `--no-config`, broader precedence/error integration tests, and config debug diagnostics.
 - Continue benchmark mode with Ctrl+C cancellation, aggregate p50/p90/p99 metrics, richer provider timing/usage fields, deterministic scoring hooks, and CSV/table summaries.
 - Add optional dataset regex expectations for refusal and reasoning cases; keep them unscored until matching semantics and false-positive handling are specified and tested.
 - Add Parquet benchmark input compatible with Hugging Face Datasets after the JSONL path is mature; keep the dependency isolated behind `src/benchmark/`.

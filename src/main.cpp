@@ -1105,6 +1105,36 @@ int run_repl(pkchat::provider::RequestContext context, pkchat::chat::Session ses
     return 0;
 }
 
+void print_config_diagnostics(const pkchat::config::LoadResult& configured) {
+    for (const pkchat::config::ConfigDiagnostic& diagnostic : configured.diagnostics) {
+        const char* scope = diagnostic.scope == pkchat::config::ConfigScope::System
+                                ? "system"
+                                : "user";
+        const char* state = "not found";
+        switch (diagnostic.state) {
+            case pkchat::config::ConfigFileState::Loaded:
+                state = "loaded";
+                break;
+            case pkchat::config::ConfigFileState::Missing:
+                break;
+            case pkchat::config::ConfigFileState::Skipped:
+                state = "skipped (--no-config)";
+                break;
+            case pkchat::config::ConfigFileState::Error:
+                state = "failed";
+                break;
+            case pkchat::config::ConfigFileState::Unavailable:
+                state = "path unavailable";
+                break;
+        }
+        std::cerr << "Config debug: " << state << " " << scope << " config";
+        if (!diagnostic.path.empty()) {
+            std::cerr << ": " << diagnostic.path;
+        }
+        std::cerr << "\n";
+    }
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -1122,7 +1152,12 @@ int main(int argc, char** argv) {
         return 0;
     }
     pkchat::config::LoadResult configured =
-        pkchat::config::load_automatic(pkchat::cli::Options{}, pkchat::config::process_environment());
+        pkchat::config::load_automatic(pkchat::cli::Options{},
+                                       pkchat::config::process_environment(),
+                                       !parsed.options.no_config);
+    if (parsed.options.debug && !parsed.options.quiet) {
+        print_config_diagnostics(configured);
+    }
     if (!configured.error.ok()) {
         print_error(configured.error);
         return exit_code_for(configured.error.code);

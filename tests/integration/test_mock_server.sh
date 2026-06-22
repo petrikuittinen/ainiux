@@ -46,10 +46,35 @@ fi
 printf '%s\n' "$benchmark_results" | grep '"type":"summary".*"completed_case_runs":3.*"failed_case_runs":0' >/dev/null
 printf '%s\n' "$benchmark_results" | grep '"modes":\["quality","refusals"\].*"estimated_total_tokens":' >/dev/null
 
+benchmark_verbose_out="$ROOT/build/benchmark-verbose.out"
+benchmark_verbose_err="$ROOT/build/benchmark-verbose.err"
+"$ROOT/pkchat" benchmark "$BASE" --dataset "$benchmark_dataset" --mode quality \
+    --limit 1 -m "$MODEL" >"$benchmark_verbose_out" 2>"$benchmark_verbose_err"
+grep '"type":"summary"' "$benchmark_verbose_out" >/dev/null
+grep '^Benchmark started: modes quality;' "$benchmark_verbose_err" >/dev/null
+grep '^Benchmark progress: 1/1 runs (100%; completed 1, failed 0, cancelled 0)' \
+    "$benchmark_verbose_err" >/dev/null
+grep '^Benchmark summary:' "$benchmark_verbose_err" >/dev/null
+grep '^  Completed runs: 1$' "$benchmark_verbose_err" >/dev/null
+grep '^  Failed runs: 0$' "$benchmark_verbose_err" >/dev/null
+grep '^  Estimated prompt tokens: ' "$benchmark_verbose_err" >/dev/null
+grep '^  Completion tokens: ' "$benchmark_verbose_err" >/dev/null
+grep '^  Estimated total tokens: ' "$benchmark_verbose_err" >/dev/null
+grep '^  Average TTFT ms: ' "$benchmark_verbose_err" >/dev/null
+grep '^  Average token/s: ' "$benchmark_verbose_err" >/dev/null
+grep '^  Aggregate tokens per second: ' "$benchmark_verbose_err" >/dev/null
+grep '^  Scoring: not implemented (responses collected)$' "$benchmark_verbose_err" >/dev/null
+
+benchmark_speed_err="$ROOT/build/benchmark-speed.err"
 benchmark_speed=$("$ROOT/pkchat" --benchmark "$BASE" --dataset "$benchmark_dataset" \
-    --mode speed --concurrency 2 --duration 20ms --limit 1 --quiet -m "$MODEL")
+    --mode speed --concurrency 2 --duration 20ms --limit 1 -m "$MODEL" \
+    2>"$benchmark_speed_err")
 printf '%s\n' "$benchmark_speed" | grep '"type":"summary".*"modes":\["speed"\].*"concurrency":2.*"duration_ms":20' >/dev/null
 printf '%s\n' "$benchmark_speed" | grep '"average_ttft_ms":.*"aggregate_tokens_per_second":' >/dev/null
+grep '^Speed progress: 0/20 ms (0%; 0 runs finished)$' "$benchmark_speed_err" >/dev/null
+grep '^Speed progress: .*\/20 ms (.*; completed .* failed .* cancelled .*)$' \
+    "$benchmark_speed_err" >/dev/null
+grep '^Benchmark summary:' "$benchmark_speed_err" >/dev/null
 
 benchmark_output_dir="$ROOT/build/benchmark-results"
 rm -rf "$benchmark_output_dir"
@@ -97,6 +122,88 @@ printf '%s\n' "$input_html_plain" | grep -F 'Local bold and link (https://exampl
 
 local_md="$ROOT/build/local-input.md"
 printf '# Local Input Title\n\nLocal **bold** and [link](https://example.com/local).\n' >"$local_md"
+
+config_system="$ROOT/build/config-precedence-system"
+config_user="$ROOT/build/config-precedence-user"
+mkdir -p "$config_system/pkchat" "$config_user/pkchat"
+cat >"$config_system/pkchat/config.conf" <<'CONF'
+config_version = 1
+provider = none
+
+[output]
+render_format = html
+CONF
+cat >"$config_user/pkchat/config.conf" <<'CONF'
+config_version = 1
+
+[output]
+render_format = plaintext
+CONF
+
+configured_plain=$(XDG_CONFIG_DIRS="$config_system" XDG_CONFIG_HOME="$config_user" \
+    "$ROOT/pkchat" --input "$local_md" --quiet)
+printf '%s\n' "$configured_plain" | grep -F 'Local Input Title' >/dev/null
+if printf '%s\n' "$configured_plain" | grep -F '<h1>' >/dev/null; then
+    echo "user config should override the system render format" >&2
+    exit 1
+fi
+
+configured_cli=$(XDG_CONFIG_DIRS="$config_system" XDG_CONFIG_HOME="$config_user" \
+    "$ROOT/pkchat" --input "$local_md" --output-format html --quiet)
+printf '%s\n' "$configured_cli" | grep -F '<h1>Local Input Title</h1>' >/dev/null
+
+configured_system_only=$(XDG_CONFIG_DIRS="$config_system" XDG_CONFIG_HOME="$config_user" \
+    "$ROOT/pkchat" --no-config --input "$local_md" --quiet)
+printf '%s\n' "$configured_system_only" | grep -F '<h1>Local Input Title</h1>' >/dev/null
+
+config_debug_out="$ROOT/build/config-debug.out"
+config_debug_err="$ROOT/build/config-debug.err"
+XDG_CONFIG_DIRS="$config_system" XDG_CONFIG_HOME="$config_user" \
+    "$ROOT/pkchat" --no-config --debug --input "$local_md" \
+    >"$config_debug_out" 2>"$config_debug_err"
+grep -F "Config debug: loaded system config: $config_system/pkchat/config.conf" \
+    "$config_debug_err" >/dev/null
+grep -F "Config debug: skipped (--no-config) user config: $config_user/pkchat/config.conf" \
+    "$config_debug_err" >/dev/null
+if grep -F 'Config debug:' "$config_debug_out" >/dev/null; then
+    echo "config diagnostics must not be written to stdout" >&2
+    exit 1
+fi
+
+bad_config_user="$ROOT/build/config-invalid-user"
+mkdir -p "$bad_config_user/pkchat"
+cat >"$bad_config_user/pkchat/config.conf" <<'CONF'
+config_version = 1
+[tui]
+theme = ultraviolet
+CONF
+bad_config_err="$ROOT/build/config-invalid.err"
+bad_config_exit=0
+XDG_CONFIG_DIRS="$config_system" XDG_CONFIG_HOME="$bad_config_user" \
+    "$ROOT/pkchat" --debug --input "$local_md" \
+    >"$ROOT/build/config-invalid.out" 2>"$bad_config_err" || bad_config_exit=$?
+test "$bad_config_exit" -eq 5
+grep -F "Config debug: failed user config: $bad_config_user/pkchat/config.conf" \
+    "$bad_config_err" >/dev/null
+grep -F "$bad_config_user/pkchat/config.conf:3:1: invalid config setting tui.theme" \
+    "$bad_config_err" >/dev/null
+
+skipped_invalid_user=$(XDG_CONFIG_DIRS="$config_system" XDG_CONFIG_HOME="$bad_config_user" \
+    "$ROOT/pkchat" --no-config --input "$local_md" --quiet)
+printf '%s\n' "$skipped_invalid_user" | grep -F '<h1>Local Input Title</h1>' >/dev/null
+
+bad_config_system="$ROOT/build/config-invalid-system"
+mkdir -p "$bad_config_system/pkchat"
+cat >"$bad_config_system/pkchat/config.conf" <<'CONF'
+config_version = 9
+CONF
+bad_system_exit=0
+XDG_CONFIG_DIRS="$bad_config_system" XDG_CONFIG_HOME="$config_user" \
+    "$ROOT/pkchat" --no-config --input "$local_md" --quiet \
+    >"$ROOT/build/config-invalid-system.out" \
+    2>"$ROOT/build/config-invalid-system.err" || bad_system_exit=$?
+test "$bad_system_exit" -eq 5
+grep -F 'unsupported config version 9' "$ROOT/build/config-invalid-system.err" >/dev/null
 
 offline_markdown=$("$ROOT/pkchat" --provider none --input "$local_html" --output-format md --quiet)
 printf '%s\n' "$offline_markdown" | grep -F '# Local Input Title' >/dev/null

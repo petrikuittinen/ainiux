@@ -20,6 +20,7 @@ struct Options {
     bool quiet = false;
     bool verbose = false;
     bool debug = false;
+    bool no_config = false;
     bool trace_http = false;
     bool insecure_tls = false;
     bool key_stdin = false;

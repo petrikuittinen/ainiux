@@ -244,6 +244,8 @@ ParseResult parse_args(int argc, char** argv, const Options& base_options) {
             opts.verbose = true;
         } else if (arg == "--debug") {
             opts.debug = true;
+        } else if (arg == "--no-config") {
+            opts.no_config = true;
         } else if (arg == "--trace-http") {
             opts.trace_http = true;
         } else if (arg == "--insecure-tls") {
@@ -588,7 +590,8 @@ Options:
       --insecure-tls
       --quiet
   -v, --verbose             Print TTFT and token/s metrics to stderr.
-      --debug
+      --debug                   Print configuration diagnostics to stderr.
+      --no-config               Skip the automatic user config; keep system config.
       --trace-http
       --version
       --help

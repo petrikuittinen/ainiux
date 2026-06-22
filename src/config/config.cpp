@@ -789,30 +789,72 @@ std::vector<std::string> system_config_paths(const Environment& environment) {
     return std::vector<std::string>(priority_order.rbegin(), priority_order.rend());
 }
 
-LoadResult load_automatic(const cli::Options& base_options, const Environment& environment) {
-    LoadResult result{base_options, {}, ok_error()};
-    std::vector<std::string> paths = system_config_paths(environment);
-    const std::string user_path = user_config_path(environment);
-    if (!user_path.empty()) {
-        paths.push_back(user_path);
-    }
+LoadResult load_automatic(const cli::Options& base_options,
+                          const Environment& environment,
+                          bool load_user_config) {
+    LoadResult result{base_options, {}, {}, ok_error()};
+    const std::vector<std::string> paths = system_config_paths(environment);
     for (const std::string& path : paths) {
         std::error_code filesystem_error;
         const bool exists = std::filesystem::exists(path, filesystem_error);
         if (filesystem_error) {
+            result.diagnostics.push_back(
+                {ConfigScope::System, ConfigFileState::Error, path});
             result.error = {ErrorCode::Config, "could not inspect config file: " + path};
             return result;
         }
         if (!exists) {
+            result.diagnostics.push_back(
+                {ConfigScope::System, ConfigFileState::Missing, path});
             continue;
         }
         Error err = apply_config_file(path, result.options);
         if (!err.ok()) {
+            result.diagnostics.push_back(
+                {ConfigScope::System, ConfigFileState::Error, path});
             result.error = std::move(err);
             return result;
         }
         result.loaded_paths.push_back(path);
+        result.diagnostics.push_back(
+            {ConfigScope::System, ConfigFileState::Loaded, path});
     }
+
+    const std::string user_path = user_config_path(environment);
+    if (user_path.empty()) {
+        result.diagnostics.push_back(
+            {ConfigScope::User, ConfigFileState::Unavailable, {}});
+        return result;
+    }
+    if (!load_user_config) {
+        result.diagnostics.push_back(
+            {ConfigScope::User, ConfigFileState::Skipped, user_path});
+        return result;
+    }
+
+    std::error_code filesystem_error;
+    const bool exists = std::filesystem::exists(user_path, filesystem_error);
+    if (filesystem_error) {
+        result.diagnostics.push_back(
+            {ConfigScope::User, ConfigFileState::Error, user_path});
+        result.error = {ErrorCode::Config, "could not inspect config file: " + user_path};
+        return result;
+    }
+    if (!exists) {
+        result.diagnostics.push_back(
+            {ConfigScope::User, ConfigFileState::Missing, user_path});
+        return result;
+    }
+    Error err = apply_config_file(user_path, result.options);
+    if (!err.ok()) {
+        result.diagnostics.push_back(
+            {ConfigScope::User, ConfigFileState::Error, user_path});
+        result.error = std::move(err);
+        return result;
+    }
+    result.loaded_paths.push_back(user_path);
+    result.diagnostics.push_back(
+        {ConfigScope::User, ConfigFileState::Loaded, user_path});
     return result;
 }
 

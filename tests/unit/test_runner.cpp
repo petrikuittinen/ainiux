@@ -48,14 +48,15 @@ std::string read_fixture(const std::string& path) {
 }
 
 void test_cli_parse() {
-    const char* argv[] = {"pkchat", "http://localhost:8000", "-p", "hello", "--no-stream", "--format", "json", "-v", "--save-chat", "chat.json"};
-    pkchat::cli::ParseResult parsed = pkchat::cli::parse_args(10, const_cast<char**>(argv));
+    const char* argv[] = {"pkchat", "http://localhost:8000", "-p", "hello", "--no-stream", "--format", "json", "-v", "--no-config", "--save-chat", "chat.json"};
+    pkchat::cli::ParseResult parsed = pkchat::cli::parse_args(11, const_cast<char**>(argv));
     check(parsed.error.ok(), "CLI parse should succeed");
     check(parsed.options.positional_url == "http://localhost:8000", "positional URL parsed");
     check(parsed.options.prompt == "hello", "prompt parsed");
     check(!parsed.options.stream, "no-stream parsed");
     check(parsed.options.format == pkchat::cli::OutputFormat::Json, "json format parsed");
     check(parsed.options.verbose, "verbose parsed");
+    check(parsed.options.no_config, "no-config parsed");
     check(parsed.options.save_chat_path == "chat.json", "save chat parsed");
 }
 
@@ -215,11 +216,32 @@ void test_config_applies_user_settings() {
               loaded.options.tui_theme == "dark",
           "user settings partially override automatic system settings");
 
+    pkchat::config::LoadResult system_only =
+        pkchat::config::load_automatic(pkchat::cli::Options{}, environment, false);
+    check(system_only.error.ok() && !system_only.options.allow_private_url_fetch &&
+              !system_only.options.show_thinking_traces && system_only.options.tui_theme == "light",
+          "disabling user config retains the automatic system config");
+    check(system_only.loaded_paths.size() == 1 &&
+              system_only.loaded_paths[0] == system_home + "/pkchat/config.conf" &&
+              system_only.diagnostics.back().state == pkchat::config::ConfigFileState::Skipped,
+          "disabled user config is reported as skipped");
+
     const char* argv[] = {"pkchat", "--no-stream", "--nocolors"};
     pkchat::cli::ParseResult cli =
         pkchat::cli::parse_args(3, const_cast<char**>(argv), loaded.options);
     check(cli.error.ok() && !cli.options.stream && cli.options.no_colors,
           "command-line arguments apply over configured defaults");
+
+    pkchat::cli::Options offline_base;
+    offline_base.provider = "none";
+    const char* positional_argv[] = {"pkchat", "lmstudio", "--list-models"};
+    pkchat::cli::ParseResult positional =
+        pkchat::cli::parse_args(3, const_cast<char**>(positional_argv), offline_base);
+    pkchat::provider::ContextResult positional_context =
+        pkchat::provider::build_context(positional.options);
+    check(positional.error.ok() && positional_context.error.ok() &&
+              positional_context.context.profile.name == "lm_studio",
+          "positional provider shortcut overrides a configured provider");
 }
 
 void test_config_schema_rejects_invalid_settings_transactionally() {
