@@ -180,6 +180,45 @@ void test_benchmark_cli_and_jsonl_dataset() {
         "\"expect\":{\"type\":\"regex\",\"value\":\".*\"}}\n");
     invalid = pkchat::benchmark::parse_jsonl(bad_scorer, "bad-score.jsonl");
     check(!invalid.error.ok(), "benchmark JSONL rejects unimplemented regex scorers");
+
+    check(pkchat::benchmark::markdown_report_path("results/benchmark-1.jsonl") ==
+              "results/benchmark-1.md" &&
+              pkchat::benchmark::markdown_report_path("results/benchmark-1.JSONL") ==
+                  "results/benchmark-1.md" &&
+              pkchat::benchmark::markdown_report_path("results/custom") ==
+                  "results/custom.md",
+          "benchmark Markdown report path preserves the JSONL basename");
+    std::filesystem::create_directories("build");
+    const std::string report_jsonl = "build/benchmark-report-test.jsonl";
+    const std::string report_markdown = "build/benchmark-report-test.md";
+    {
+        std::ofstream report_input(report_jsonl, std::ios::binary | std::ios::trunc);
+        report_input
+            << "{\"type\":\"result\",\"id\":\"case|one\",\"model\":\"<unsafe>&\","
+               "\"run\":1,\"turn\":2,"
+               "\"ok\":true,\"provider_usage\":{\"prompt_tokens\":2},"
+               "\"response\":\"answer\\n```inside\"}\n"
+            << "{\"type\":\"summary\",\"completed_case_runs\":1,"
+               "\"ttft_p50_ms\":12.5}\n";
+    }
+    pkchat::Error report_error =
+        pkchat::benchmark::write_markdown_report(report_jsonl, report_markdown);
+    const std::string report_text = read_fixture(report_markdown);
+    check(report_error.ok() &&
+              report_text.find("# pkchat Benchmark Report") != std::string::npos &&
+              report_text.find("## Summary") != std::string::npos &&
+              report_text.find("| completed_case_runs | 1 |") != std::string::npos &&
+              report_text.find("### case\\|one - Run 1, Turn 2") != std::string::npos &&
+              report_text.find("| model | &lt;unsafe&gt;&amp; |") != std::string::npos &&
+              report_text.find("#### Provider Usage") != std::string::npos &&
+              report_text.find("{\"prompt_tokens\":2}") != std::string::npos &&
+              report_text.find("#### Response") != std::string::npos &&
+              report_text.find("answer\n```inside") != std::string::npos,
+          "benchmark Markdown report preserves summary, result, usage, and response data");
+    std::error_code report_remove_error;
+    std::filesystem::remove(report_jsonl, report_remove_error);
+    report_remove_error.clear();
+    std::filesystem::remove(report_markdown, report_remove_error);
 }
 
 void test_config_reads_common_template() {

@@ -59,6 +59,9 @@ Error run(const provider::RequestContext& context,
           std::ostream& status,
           const std::function<bool()>& interrupt_requested = {});
 void write_case_json(std::ostream& output, const Case& benchmark_case);
+std::string markdown_report_path(const std::string& jsonl_path);
+Error write_markdown_report(const std::string& jsonl_path,
+                            const std::string& markdown_path);
 ScoreResult score_response(const Case& benchmark_case,
                            size_t turn,
                            const std::string& response);

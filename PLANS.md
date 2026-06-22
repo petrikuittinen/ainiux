@@ -57,7 +57,7 @@ Each milestone should leave the program usable. Do not create a long-lived pile 
 
 ## Current baseline
 
-Implementation status (2026-06-22): `pkchat` is at v0.71. The repository has the scriptable CLI, built-in provider registry and aliases, Chat Completions, text-only Responses API support, streaming SSE, credential lookup, JSON chat persistence, cancellable runtime jobs, REPL, full-screen TUI foundation, editor, request-only context policies, context-use estimates, bounded text/HTML/Markdown input, JPEG/PNG/GIF image input for Chat Completions, safe URL fetching, Markdown output conversion, automatic v0.6 system/user TOML-alike configuration loading, and concurrent JSONL benchmark execution. `--provider none` supports local conversion and editor workflows without a model endpoint.
+Implementation status (2026-06-22): `pkchat` is at v0.72. The repository has the scriptable CLI, built-in provider registry and aliases, Chat Completions, text-only Responses API support, streaming SSE, credential lookup, JSON chat persistence, cancellable runtime jobs, REPL, full-screen TUI foundation, editor, request-only context policies, context-use estimates, bounded text/HTML/Markdown input, JPEG/PNG/GIF image input for Chat Completions, safe URL fetching, Markdown output conversion, automatic v0.6 system/user TOML-alike configuration loading, and concurrent JSONL benchmark execution. `--provider none` supports local conversion and editor workflows without a model endpoint.
 
 Runtime defaults live in `cli::Options`, provider defaults live in `src/provider/`, and API keys are resolved while building the provider request context. Automatic system and user config files map into a base `cli::Options`, after which `main.cpp` parses CLI arguments over that base. `--no-config` can bypass the automatic user file while retaining system configuration, and `--debug` reports configuration discovery on `stderr`.
 
@@ -1318,7 +1318,7 @@ Options:
 
 - [x] Benchmark mode works against mock server.
 - [x] Speed, long-context, quality, and refusal mode labels produce parseable JSONL.
-- [x] Benchmark output directories receive timestamped JSONL result files.
+- [x] Benchmark output directories receive timestamped JSONL result files and same-basename Markdown reports.
 - [ ] Benchmark mode works against LM Studio when running locally.
 - [x] CSV summaries and JSONL result output are parseable.
 - [x] Failed runs are counted and reported.

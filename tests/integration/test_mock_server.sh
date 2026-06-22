@@ -119,7 +119,16 @@ rm -rf "$benchmark_output_dir"
 "$ROOT/pkchat" --benchmark "$BASE" --dataset "$benchmark_dataset" --mode long-context \
     --limit 1 --output "$benchmark_output_dir/" --quiet -m "$MODEL"
 test "$(find "$benchmark_output_dir" -type f -name 'benchmark-*.jsonl' | wc -l)" -eq 1
-grep '"type":"summary".*"modes":\["long-context"\]' "$benchmark_output_dir"/*.jsonl >/dev/null
+benchmark_jsonl_file=$(find "$benchmark_output_dir" -type f -name 'benchmark-*.jsonl')
+benchmark_markdown_file=${benchmark_jsonl_file%.jsonl}.md
+test -f "$benchmark_markdown_file"
+grep '"type":"summary".*"modes":\["long-context"\]' "$benchmark_jsonl_file" >/dev/null
+grep '^# pkchat Benchmark Report$' "$benchmark_markdown_file" >/dev/null
+grep '^## Summary$' "$benchmark_markdown_file" >/dev/null
+grep '^## Results$' "$benchmark_markdown_file" >/dev/null
+grep '^### integration-single - Run 1, Turn 1$' "$benchmark_markdown_file" >/dev/null
+grep '^#### Provider Usage$' "$benchmark_markdown_file" >/dev/null
+grep '^#### Response$' "$benchmark_markdown_file" >/dev/null
 
 
 private_fetch_err="$ROOT/build/fetch-private.err"

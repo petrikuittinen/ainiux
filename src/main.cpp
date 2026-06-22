@@ -144,7 +144,12 @@ std::ostream* benchmark_output_stream(const pkchat::cli::Options& options,
                                         .count();
         std::filesystem::path candidate = path / ("benchmark-" + std::to_string(timestamp) + ".jsonl");
         size_t suffix = 1;
-        while (std::filesystem::exists(candidate, filesystem_error) && !filesystem_error) {
+        while (!filesystem_error &&
+               (std::filesystem::exists(candidate, filesystem_error) ||
+                (!filesystem_error && std::filesystem::exists(
+                                          pkchat::benchmark::markdown_report_path(
+                                              candidate.string()),
+                                          filesystem_error)))) {
             candidate = path / ("benchmark-" + std::to_string(timestamp) + "-" +
                                 std::to_string(suffix++) + ".jsonl");
         }
@@ -164,6 +169,28 @@ std::ostream* benchmark_output_stream(const pkchat::cli::Options& options,
         return nullptr;
     }
     return &file;
+}
+
+pkchat::Error write_benchmark_markdown(std::ofstream& jsonl_file,
+                                       const std::string& jsonl_path,
+                                       std::string& markdown_path) {
+    if (jsonl_path.empty()) {
+        return pkchat::ok_error();
+    }
+    jsonl_file.flush();
+    if (!jsonl_file) {
+        return {pkchat::ErrorCode::FileWrite,
+                "could not flush benchmark JSONL output before creating Markdown report: " +
+                    jsonl_path};
+    }
+    jsonl_file.close();
+    if (jsonl_file.fail()) {
+        return {pkchat::ErrorCode::FileWrite,
+                "could not close benchmark JSONL output before creating Markdown report: " +
+                    jsonl_path};
+    }
+    markdown_path = pkchat::benchmark::markdown_report_path(jsonl_path);
+    return pkchat::benchmark::write_markdown_report(jsonl_path, markdown_path);
 }
 
 std::string trim_ascii(std::string text) {
@@ -631,16 +658,35 @@ int run_benchmark_mode(const pkchat::cli::Options& options) {
     if (!actual_output_path.empty() && !options.quiet) {
         std::cerr << "Benchmark results: " << actual_output_path << "\n";
     }
+    auto finish_file_outputs = [&]() -> pkchat::Error {
+        std::string markdown_path;
+        pkchat::Error report_error = write_benchmark_markdown(
+            out_file, actual_output_path, markdown_path);
+        if (report_error.ok() && !markdown_path.empty() && !options.quiet) {
+            std::cerr << "Benchmark Markdown report: " << markdown_path << "\n";
+        }
+        return report_error;
+    };
     if (options.benchmark_validate) {
         *out << "{\"type\":\"dataset\",\"path\":"
              << pkchat::json::quote(options.benchmark_dataset)
              << ",\"total_cases\":" << loaded.dataset.cases.size()
              << ",\"selected_cases\":" << selected.size() << ",\"valid\":true}\n";
+        pkchat::Error report_error = finish_file_outputs();
+        if (!report_error.ok()) {
+            print_error(report_error);
+            return exit_code_for(report_error.code);
+        }
         return 0;
     }
     if (options.benchmark_list) {
         for (const pkchat::benchmark::Case* benchmark_case : selected) {
             pkchat::benchmark::write_case_json(*out, *benchmark_case);
+        }
+        pkchat::Error report_error = finish_file_outputs();
+        if (!report_error.ok()) {
+            print_error(report_error);
+            return exit_code_for(report_error.code);
         }
         return 0;
     }
@@ -659,6 +705,13 @@ int run_benchmark_mode(const pkchat::cli::Options& options) {
     pkchat::Error err = pkchat::benchmark::run(
         context_result.context, selected, options, *out, std::cerr,
         [] { return g_benchmark_interrupt != 0; });
+    pkchat::Error report_error = finish_file_outputs();
+    if (!report_error.ok()) {
+        print_error(report_error);
+        if (err.ok()) {
+            return exit_code_for(report_error.code);
+        }
+    }
     if (!err.ok()) {
         print_error(err);
         return exit_code_for(err.code);
