@@ -69,6 +69,7 @@ struct Options {
     std::string benchmark_category;
     std::string benchmark_case;
     std::string benchmark_mode = "quality";
+    std::string benchmark_summary_format = "table";
     OutputFormat format = OutputFormat::Text;
 
     double temperature = 0.0;

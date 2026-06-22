@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstddef>
+#include <functional>
 #include <iosfwd>
 #include <string>
 #include <vector>
@@ -14,6 +15,12 @@ namespace pkchat::benchmark {
 constexpr size_t kMaxDatasetBytes = 16U * 1024U * 1024U;
 constexpr size_t kMaxLineBytes = 1024U * 1024U;
 
+struct Expectation {
+    std::string type;
+    std::string value;
+    size_t turn = 0;
+};
+
 struct Case {
     std::string id;
     std::string category;
@@ -21,6 +28,13 @@ struct Case {
     std::vector<std::string> tags;
     std::vector<std::string> turns;
     std::string fetch_url;
+    std::vector<Expectation> expectations;
+};
+
+struct ScoreResult {
+    bool configured = false;
+    bool passed = false;
+    std::string method;
 };
 
 struct Dataset {
@@ -42,7 +56,11 @@ Error run(const provider::RequestContext& context,
           const std::vector<const Case*>& cases,
           const cli::Options& options,
           std::ostream& output,
-          std::ostream& status);
+          std::ostream& status,
+          const std::function<bool()>& interrupt_requested = {});
 void write_case_json(std::ostream& output, const Case& benchmark_case);
+ScoreResult score_response(const Case& benchmark_case,
+                           size_t turn,
+                           const std::string& response);
 
 }  // namespace pkchat::benchmark

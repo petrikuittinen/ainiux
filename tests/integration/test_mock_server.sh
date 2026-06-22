@@ -28,7 +28,7 @@ BASE="http://127.0.0.1:$PORT"
 
 benchmark_dataset="$ROOT/build/integration-benchmark.jsonl"
 cat >"$benchmark_dataset" <<JSONL
-{"id":"integration-single","category":"reasoning","language":"en","turns":["reasoning"]}
+{"id":"integration-single","category":"reasoning","language":"en","turns":["reasoning"],"expect":{"type":"exact","value":"Visible answer"}}
 {"id":"integration-multi","category":"multi-turn","language":"en","turns":["first turn","second turn"]}
 {"id":"integration-fetch","category":"long-context","language":"en","fetch_url":"$BASE/plain","turns":["summarize reference"]}
 JSONL
@@ -39,12 +39,16 @@ benchmark_results=$("$ROOT/pkchat" benchmark "$BASE" --dataset "$benchmark_datas
 test "$(printf '%s\n' "$benchmark_results" | grep -c '"type":"result"')" -eq 4
 printf '%s\n' "$benchmark_results" | grep '"id":"integration-multi".*"turn":2.*"ok":true' >/dev/null
 printf '%s\n' "$benchmark_results" | grep '"id":"integration-single".*"thinking_trace_present":true.*"response":"Visible answer"' >/dev/null
+printf '%s\n' "$benchmark_results" | grep '"id":"integration-single".*"provider_prompt_tokens":1.*"provider_total_tokens":2' >/dev/null
+printf '%s\n' "$benchmark_results" | grep '"id":"integration-single".*"provider_usage":{"completion_tokens":1,"prompt_tokens":1,"total_tokens":2}.*"score":1.*"score_method":"exact"' >/dev/null
 if printf '%s\n' "$benchmark_results" | grep 'internal trace' >/dev/null; then
     echo "benchmark JSONL must not expose thinking traces on stdout" >&2
     exit 1
 fi
 printf '%s\n' "$benchmark_results" | grep '"type":"summary".*"completed_case_runs":3.*"failed_case_runs":0' >/dev/null
 printf '%s\n' "$benchmark_results" | grep '"modes":\["quality","refusals"\].*"estimated_total_tokens":' >/dev/null
+printf '%s\n' "$benchmark_results" | grep '"ttft_p50_ms":.*"ttft_p90_ms":.*"ttft_p99_ms":' >/dev/null
+printf '%s\n' "$benchmark_results" | grep '"scoring":"scored".*"scored_turns":1.*"passed_turns":1.*"score_percentage":100.000' >/dev/null
 
 benchmark_verbose_out="$ROOT/build/benchmark-verbose.out"
 benchmark_verbose_err="$ROOT/build/benchmark-verbose.err"
@@ -55,15 +59,18 @@ grep '^Benchmark started: modes quality;' "$benchmark_verbose_err" >/dev/null
 grep '^Benchmark progress: 1/1 runs (100%; completed 1, failed 0, cancelled 0)' \
     "$benchmark_verbose_err" >/dev/null
 grep '^Benchmark summary:' "$benchmark_verbose_err" >/dev/null
-grep '^  Completed runs: 1$' "$benchmark_verbose_err" >/dev/null
-grep '^  Failed runs: 0$' "$benchmark_verbose_err" >/dev/null
-grep '^  Estimated prompt tokens: ' "$benchmark_verbose_err" >/dev/null
-grep '^  Completion tokens: ' "$benchmark_verbose_err" >/dev/null
-grep '^  Estimated total tokens: ' "$benchmark_verbose_err" >/dev/null
-grep '^  Average TTFT ms: ' "$benchmark_verbose_err" >/dev/null
-grep '^  Average token/s: ' "$benchmark_verbose_err" >/dev/null
-grep '^  Aggregate tokens per second: ' "$benchmark_verbose_err" >/dev/null
-grep '^  Scoring: not implemented (responses collected)$' "$benchmark_verbose_err" >/dev/null
+grep '^  Completed runs                        1$' "$benchmark_verbose_err" >/dev/null
+grep '^  Failed runs                           0$' "$benchmark_verbose_err" >/dev/null
+grep '^  TTFT p50 ms                           ' "$benchmark_verbose_err" >/dev/null
+grep '^  Total latency p99 ms                  ' "$benchmark_verbose_err" >/dev/null
+grep '^  Scoring                               scored$' "$benchmark_verbose_err" >/dev/null
+
+benchmark_csv_err="$ROOT/build/benchmark-csv.err"
+"$ROOT/pkchat" benchmark "$BASE" --dataset "$benchmark_dataset" --mode quality \
+    --limit 1 --summary-format csv -m "$MODEL" >"$ROOT/build/benchmark-csv.out" 2>"$benchmark_csv_err"
+grep '^metric,value$' "$benchmark_csv_err" >/dev/null
+grep '^ttft_p90_ms,' "$benchmark_csv_err" >/dev/null
+grep '^score_percentage,100.000$' "$benchmark_csv_err" >/dev/null
 
 benchmark_speed_err="$ROOT/build/benchmark-speed.err"
 benchmark_speed=$("$ROOT/pkchat" --benchmark "$BASE" --dataset "$benchmark_dataset" \
@@ -75,6 +82,37 @@ grep '^Speed progress: 0/20 ms (0%; 0 runs finished)$' "$benchmark_speed_err" >/
 grep '^Speed progress: .*\/20 ms (.*; completed .* failed .* cancelled .*)$' \
     "$benchmark_speed_err" >/dev/null
 grep '^Benchmark summary:' "$benchmark_speed_err" >/dev/null
+
+SLOW_PORT=$((PORT + 2))
+SLOW_SERVER_LOG="$ROOT/build/mock_server_slow.log"
+python3 "$ROOT/tests/mock_server/openai_mock.py" --port "$SLOW_PORT" --model "$MODEL" \
+    --stream-delay 1 >"$SLOW_SERVER_LOG" 2>&1 &
+SLOW_SERVER_PID=$!
+i=0
+while [ "$i" -lt 50 ]; do
+    if curl -sS "http://127.0.0.1:$SLOW_PORT/v1/models" >/dev/null 2>&1; then
+        break
+    fi
+    i=$((i + 1))
+    sleep 0.1
+done
+benchmark_cancel_out="$ROOT/build/benchmark-cancel.out"
+benchmark_cancel_err="$ROOT/build/benchmark-cancel.err"
+set +e
+"$ROOT/pkchat" benchmark "http://127.0.0.1:$SLOW_PORT" --dataset "$benchmark_dataset" \
+    --mode quality --runs 10 --limit 1 -m "$MODEL" \
+    >"$benchmark_cancel_out" 2>"$benchmark_cancel_err" &
+BENCHMARK_PID=$!
+sleep 0.2
+kill -INT "$BENCHMARK_PID"
+wait "$BENCHMARK_PID"
+benchmark_cancel_status=$?
+set -e
+kill "$SLOW_SERVER_PID" >/dev/null 2>&1 || true
+wait "$SLOW_SERVER_PID" >/dev/null 2>&1 || true
+test "$benchmark_cancel_status" -eq 130
+grep '"type":"summary".*"interrupted":true' "$benchmark_cancel_out" >/dev/null
+grep '^PKCHAT_ERR_CANCELLED: benchmark cancelled by Ctrl+C$' "$benchmark_cancel_err" >/dev/null
 
 benchmark_output_dir="$ROOT/build/benchmark-results"
 rm -rf "$benchmark_output_dir"

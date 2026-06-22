@@ -57,7 +57,7 @@ Each milestone should leave the program usable. Do not create a long-lived pile 
 
 ## Current baseline
 
-Implementation status (2026-06-21): `pkchat` is at v0.7. The repository has the scriptable CLI, built-in provider registry and aliases, Chat Completions, text-only Responses API support, streaming SSE, credential lookup, JSON chat persistence, cancellable runtime jobs, REPL, full-screen TUI foundation, editor, request-only context policies, context-use estimates, bounded text/HTML/Markdown input, JPEG/PNG/GIF image input for Chat Completions, safe URL fetching, Markdown output conversion, automatic v0.6 system/user TOML-alike configuration loading, and concurrent JSONL benchmark execution. `--provider none` supports local conversion and editor workflows without a model endpoint.
+Implementation status (2026-06-22): `pkchat` is at v0.71. The repository has the scriptable CLI, built-in provider registry and aliases, Chat Completions, text-only Responses API support, streaming SSE, credential lookup, JSON chat persistence, cancellable runtime jobs, REPL, full-screen TUI foundation, editor, request-only context policies, context-use estimates, bounded text/HTML/Markdown input, JPEG/PNG/GIF image input for Chat Completions, safe URL fetching, Markdown output conversion, automatic v0.6 system/user TOML-alike configuration loading, and concurrent JSONL benchmark execution. `--provider none` supports local conversion and editor workflows without a model endpoint.
 
 Runtime defaults live in `cli::Options`, provider defaults live in `src/provider/`, and API keys are resolved while building the provider request context. Automatic system and user config files map into a base `cli::Options`, after which `main.cpp` parses CLI arguments over that base. `--no-config` can bypass the automatic user file while retaining system configuration, and `--debug` reports configuration discovery on `stderr`.
 
@@ -1247,7 +1247,7 @@ pkchat --benchmark --dataset eval.jsonl --mode quality,refusals --output results
 - [x] Add category, case-ID, and count filtering plus offline validation/listing.
 - [ ] Add Parquet input compatible with Hugging Face Datasets after JSONL behavior stabilizes.
 
-Each JSONL object uses required `id`, `category`, and `turns` fields, with optional `language`, `tags`, and `fetch_url`. Generated assistant replies are appended between turns so multi-turn cases exercise actual conversation state.
+Each JSONL object uses required `id`, `category`, and `turns` fields, with optional `language`, `tags`, `fetch_url`, and deterministic `expect` exact/contains scorers. Generated assistant replies are appended between turns so multi-turn cases exercise actual conversation state.
 
 ## Metrics
 
@@ -1298,19 +1298,20 @@ Options:
 --timeout SECONDS
 --format jsonl
 --output PATH
+--summary-format table|csv
 ```
 
 ## Benchmark integrity rules
 
-- [ ] Print model, provider, base URL, prompt size, settings, and timestamp.
+- [ ] Print timestamp and every sampling setting alongside the model, provider, base URL, and prompt size already recorded.
 - [x] Separate warmup runs from measured runs.
 - [x] Bound concurrent execution and stop timed speed runs at their deadline.
 - [x] Report estimated prompt/total tokens plus average TTFT and token throughput.
 - [x] Show bounded live progress and a human-readable stderr summary without mixing status into JSONL stdout.
-- [ ] Report p50/p90/p99 where enough samples exist.
+- [x] Report nearest-rank p50/p90/p99 timing and throughput aggregates.
 - [ ] Do not compare different models/settings as if equivalent.
 - [x] Distinguish provider-reported tokens from estimated tokens.
-- [ ] Keep benchmark jobs cancellable.
+- [x] Keep benchmark jobs cancellable.
 - [x] Release all per-run request/response/timing allocations after each run.
 
 ## Acceptance criteria
@@ -1319,9 +1320,9 @@ Options:
 - [x] Speed, long-context, quality, and refusal mode labels produce parseable JSONL.
 - [x] Benchmark output directories receive timestamped JSONL result files.
 - [ ] Benchmark mode works against LM Studio when running locally.
-- [ ] CSV and JSON output are parseable.
+- [x] CSV summaries and JSONL result output are parseable.
 - [x] Failed runs are counted and reported.
-- [ ] Ctrl+C/cancellation stops benchmark cleanly.
+- [x] Ctrl+C/cancellation stops benchmark cleanly.
 - [ ] Leak-check tooling reports no leaks after repeated benchmark runs where supported.
 
 ---

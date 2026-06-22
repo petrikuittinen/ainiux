@@ -87,6 +87,14 @@ struct ChatResult {
     long long total_ms = 0;
     long long completion_tokens = 0;
     bool completion_tokens_estimated = false;
+    long long prompt_tokens = -1;
+    long long total_tokens = -1;
+    long http_status = 0;
+    long long dns_ms = -1;
+    long long connect_ms = -1;
+    long long tls_ms = -1;
+    long long time_to_first_byte_ms = -1;
+    long long first_body_ms = -1;
 };
 
 struct ModelsResult {

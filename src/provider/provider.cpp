@@ -599,6 +599,39 @@ Error parse_models_json(const std::string& body, ModelsResult& result) {
     return ok_error();
 }
 
+long long usage_token_value(const json::Value& usage, const std::string& name) {
+    const json::Value* value = usage.get(name);
+    if (value == nullptr || value->type != json::Value::Type::Number || value->number < 0.0 ||
+        value->number >= static_cast<double>(std::numeric_limits<long long>::max())) {
+        return -1;
+    }
+    return static_cast<long long>(value->number);
+}
+
+void parse_usage(const json::Value& usage, ChatResult& result) {
+    if (!usage.is_object()) {
+        return;
+    }
+    result.usage_json = json_value_to_string(usage);
+    result.prompt_tokens = usage_token_value(usage, "prompt_tokens");
+    if (result.prompt_tokens < 0) {
+        result.prompt_tokens = usage_token_value(usage, "input_tokens");
+    }
+    const long long completion_tokens = [&] {
+        const long long chat_tokens = usage_token_value(usage, "completion_tokens");
+        return chat_tokens >= 0 ? chat_tokens : usage_token_value(usage, "output_tokens");
+    }();
+    if (completion_tokens >= 0) {
+        result.completion_tokens = completion_tokens;
+        result.completion_tokens_estimated = false;
+    }
+    result.total_tokens = usage_token_value(usage, "total_tokens");
+    if (result.total_tokens < 0 && result.prompt_tokens >= 0 && completion_tokens >= 0 &&
+        result.prompt_tokens <= std::numeric_limits<long long>::max() - completion_tokens) {
+        result.total_tokens = result.prompt_tokens + completion_tokens;
+    }
+}
+
 Error parse_chat_json(const std::string& body, ChatResult& result) {
     json::ParseResult parsed = json::parse(body);
     if (!parsed.error.ok()) {
@@ -630,13 +663,7 @@ Error parse_chat_json(const std::string& body, ChatResult& result) {
     }
     result.content = content_with_reasoning_trace(reasoning, content_text);
     if (const json::Value* usage = parsed.value.get("usage")) {
-        result.usage_json = json_value_to_string(*usage);
-        if (const json::Value* completion_tokens = usage->get("completion_tokens")) {
-            if (completion_tokens->type == json::Value::Type::Number && completion_tokens->number >= 0.0) {
-                result.completion_tokens = static_cast<long long>(completion_tokens->number);
-                result.completion_tokens_estimated = false;
-            }
-        }
+        parse_usage(*usage, result);
     }
     return ok_error();
 }
@@ -725,13 +752,7 @@ Error parse_responses_json_value(const json::Value& root, ChatResult& result, bo
         return {ErrorCode::ProviderSchema, "Responses API response did not contain output text"};
     }
     if (const json::Value* usage = root.get("usage")) {
-        result.usage_json = json_value_to_string(*usage);
-        if (const json::Value* output_tokens = usage->get("output_tokens")) {
-            if (output_tokens->type == json::Value::Type::Number && output_tokens->number >= 0.0) {
-                result.completion_tokens = static_cast<long long>(output_tokens->number);
-                result.completion_tokens_estimated = false;
-            }
-        }
+        parse_usage(*usage, result);
     }
     return ok_error();
 }
@@ -768,7 +789,7 @@ long long estimate_completion_tokens(const std::string& text) {
 
 class SseParser {
    public:
-    Error feed(const std::string& chunk, const DeltaCallback& on_delta, std::string& accumulated, bool& done) {
+    Error feed(const std::string& chunk, const DeltaCallback& on_delta, ChatResult& result, bool& done) {
         buffer_ += chunk;
         size_t pos = 0;
         while (true) {
@@ -785,7 +806,7 @@ class SseParser {
             }
             const std::string event = buffer_.substr(pos, sep - pos);
             pos = sep + sep_len;
-            Error err = process_event(event, on_delta, accumulated, done);
+            Error err = process_event(event, on_delta, result, done);
             if (!err.ok() || done) {
                 buffer_.erase(0, pos);
                 return err;
@@ -793,17 +814,17 @@ class SseParser {
         }
     }
 
-    Error finish(const DeltaCallback& on_delta, std::string& accumulated, bool& done) {
+    Error finish(const DeltaCallback& on_delta, ChatResult& result, bool& done) {
         if (!buffer_.empty()) {
             std::string event = buffer_;
             buffer_.clear();
-            Error err = process_event(event, on_delta, accumulated, done);
+            Error err = process_event(event, on_delta, result, done);
             if (!err.ok()) {
                 return err;
             }
         }
         if (!done) {
-            return close_reasoning(on_delta, accumulated, false);
+            return close_reasoning(on_delta, result.content, false);
         }
         return ok_error();
     }
@@ -844,7 +865,7 @@ class SseParser {
 
     Error process_event(const std::string& event,
                         const DeltaCallback& on_delta,
-                        std::string& accumulated,
+                        ChatResult& result,
                         bool& done) {
         std::istringstream lines(event);
         std::string line;
@@ -871,7 +892,7 @@ class SseParser {
             return ok_error();
         }
         if (data == "[DONE]") {
-            Error err = close_reasoning(on_delta, accumulated, false);
+            Error err = close_reasoning(on_delta, result.content, false);
             if (!err.ok()) {
                 return err;
             }
@@ -885,6 +906,12 @@ class SseParser {
         if (const std::string provider_msg = provider_error_message(parsed.value); !provider_msg.empty()) {
             return {ErrorCode::ProviderSchema, "provider error: " + provider_msg};
         }
+        if (const json::Value* model = parsed.value.get("model"); model != nullptr && model->is_string()) {
+            result.model = model->string;
+        }
+        if (const json::Value* usage = parsed.value.get("usage")) {
+            parse_usage(*usage, result);
+        }
         const json::Value* choices = parsed.value.get("choices");
         if (choices == nullptr || !choices->is_array() || choices->array.empty()) {
             return ok_error();
@@ -894,17 +921,17 @@ class SseParser {
             return ok_error();
         }
         const std::string reasoning = reasoning_text_from_object(*delta);
-        Error err = emit_reasoning(reasoning, on_delta, accumulated);
+        Error err = emit_reasoning(reasoning, on_delta, result.content);
         if (!err.ok()) {
             return err;
         }
         const json::Value* content = delta->get("content");
         if (content != nullptr && content->is_string() && !content->string.empty()) {
-            err = close_reasoning(on_delta, accumulated, true);
+            err = close_reasoning(on_delta, result.content, true);
             if (!err.ok()) {
                 return err;
             }
-            return emit_text(content->string, on_delta, accumulated);
+            return emit_text(content->string, on_delta, result.content);
         }
         return ok_error();
     }
@@ -1053,6 +1080,8 @@ class ResponsesSseParser {
                 if (!metadata.usage_json.empty() && metadata.usage_json != "null") {
                     result.usage_json = metadata.usage_json;
                 }
+                result.prompt_tokens = metadata.prompt_tokens;
+                result.total_tokens = metadata.total_tokens;
                 if (metadata.completion_tokens > 0) {
                     result.completion_tokens = metadata.completion_tokens;
                     result.completion_tokens_estimated = metadata.completion_tokens_estimated;
@@ -1362,6 +1391,9 @@ double tokens_per_second(const ChatResult& result, bool stream) {
 }
 
 long long reported_total_tokens(const ChatResult& result) {
+    if (result.total_tokens >= 0) {
+        return result.total_tokens;
+    }
     if (result.usage_json.empty() || result.usage_json == "null") {
         return -1;
     }
@@ -1472,11 +1504,17 @@ Error send_chat_messages(const RequestContext& context,
             if (context.api_kind == ApiKind::Responses) {
                 return responses_parser.feed(chunk, timed_delta, result, done);
             }
-            return chat_parser.feed(chunk, timed_delta, result.content, done);
+            return chat_parser.feed(chunk, timed_delta, result, done);
         };
     }
 
     const http::Result http_result = http::perform(req, {context.api_key});
+    result.http_status = http_result.response.status;
+    result.dns_ms = http_result.response.dns_ms;
+    result.connect_ms = http_result.response.connect_ms;
+    result.tls_ms = http_result.response.tls_ms;
+    result.time_to_first_byte_ms = http_result.response.time_to_first_byte_ms;
+    result.first_body_ms = http_result.response.first_body_ms;
     if (!http_result.error.ok()) {
         if (context.profile.local_endpoint && http_result.error.code == ErrorCode::Connect) {
             return {ErrorCode::Connect,
@@ -1492,7 +1530,7 @@ Error send_chat_messages(const RequestContext& context,
     if (context.options.stream) {
         Error err = context.api_kind == ApiKind::Responses
                         ? responses_parser.finish(timed_delta, result, done)
-                        : chat_parser.finish(timed_delta, result.content, done);
+                        : chat_parser.finish(timed_delta, result, done);
         if (!err.ok()) {
             return err;
         }

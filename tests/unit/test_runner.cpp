@@ -98,6 +98,15 @@ void test_benchmark_cli_and_jsonl_dataset() {
     const char* bad_concurrency_argv[] = {"pkchat", "--benchmark", "--concurrency", "257"};
     check(!pkchat::cli::parse_args(4, const_cast<char**>(bad_concurrency_argv)).error.ok(),
           "benchmark concurrency is bounded");
+    const char* summary_argv[] = {"pkchat", "benchmark", "--summary-format", "csv"};
+    pkchat::cli::ParseResult summary_options =
+        pkchat::cli::parse_args(4, const_cast<char**>(summary_argv));
+    check(summary_options.error.ok() &&
+              summary_options.options.benchmark_summary_format == "csv",
+          "benchmark CSV summary format parses");
+    const char* bad_summary_argv[] = {"pkchat", "benchmark", "--summary-format", "yaml"};
+    check(!pkchat::cli::parse_args(4, const_cast<char**>(bad_summary_argv)).error.ok(),
+          "unknown benchmark summary formats are rejected");
 
     const char* misplaced_argv[] = {"pkchat", "--dataset", "cases.jsonl"};
     pkchat::cli::ParseResult misplaced =
@@ -149,6 +158,28 @@ void test_benchmark_cli_and_jsonl_dataset() {
     invalid = pkchat::benchmark::parse_jsonl(bad_schema, "schema.jsonl");
     check(!invalid.error.ok() && invalid.error.message.find("unknown field 'typo'") != std::string::npos,
           "benchmark JSONL rejects unknown schema fields");
+
+    std::istringstream scored_dataset(
+        "{\"id\":\"scored\",\"category\":\"reasoning\",\"turns\":[\"one\",\"two\"],"
+        "\"expect\":[{\"type\":\"contains\",\"value\":\"answer\",\"turn\":1},"
+        "{\"type\":\"exact\",\"value\":\"done\",\"turn\":2}]}\n");
+    pkchat::benchmark::LoadResult scored =
+        pkchat::benchmark::parse_jsonl(scored_dataset, "scored.jsonl");
+    check(scored.error.ok() && scored.dataset.cases[0].expectations.size() == 2,
+          "benchmark JSONL accepts deterministic exact and contains scorers");
+    pkchat::benchmark::ScoreResult contains_score =
+        pkchat::benchmark::score_response(scored.dataset.cases[0], 1, "the answer is 42");
+    pkchat::benchmark::ScoreResult exact_score =
+        pkchat::benchmark::score_response(scored.dataset.cases[0], 2, "not done");
+    check(contains_score.configured && contains_score.passed &&
+              exact_score.configured && !exact_score.passed,
+          "benchmark deterministic scorers return stable pass/fail results");
+
+    std::istringstream bad_scorer(
+        "{\"id\":\"bad-score\",\"category\":\"reasoning\",\"turns\":[\"one\"],"
+        "\"expect\":{\"type\":\"regex\",\"value\":\".*\"}}\n");
+    invalid = pkchat::benchmark::parse_jsonl(bad_scorer, "bad-score.jsonl");
+    check(!invalid.error.ok(), "benchmark JSONL rejects unimplemented regex scorers");
 }
 
 void test_config_reads_common_template() {

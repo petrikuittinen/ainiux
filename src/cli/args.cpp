@@ -20,7 +20,8 @@ bool needs_value(const std::string& opt) {
         "--max-fetch-bytes", "--max-input-bytes", "--max-image-bytes", "--max-context-bytes",
         "--context", "--context-policy", "--image-capability",
         "--save-chat", "--load-chat", "--dataset", "--category", "--case",
-        "--runs", "--warmup", "--limit", "--mode", "--concurrency", "--duration"};
+        "--runs", "--warmup", "--limit", "--mode", "--concurrency", "--duration",
+        "--summary-format"};
     for (const char* item : with_values) {
         if (opt == item) {
             return true;
@@ -466,6 +467,13 @@ ParseResult parse_args(int argc, char** argv, const Options& base_options) {
                     return {opts, err};
                 }
                 opts.benchmark_options_seen = true;
+            } else if (opt == "--summary-format") {
+                if (value != "table" && value != "csv") {
+                    return {opts, {ErrorCode::BadArgs,
+                                   "--summary-format must be table or csv"}};
+                }
+                opts.benchmark_summary_format = value;
+                opts.benchmark_options_seen = true;
             }
         } else if (!arg.empty() && arg[0] == '-') {
             return {opts, {ErrorCode::BadArgs, "unknown option: " + arg}};
@@ -550,6 +558,7 @@ Options:
       --mode MODE               speed, long-context, quality, refusals; comma-separated.
       --concurrency N           Concurrent benchmark requests; default 1, maximum 256.
       --duration TIME           Speed-test duration with ms, s, m, or h suffix; default 60s.
+      --summary-format FORMAT   Human summary on stderr: table (default) or csv.
       --category NAME           Run only benchmark cases in this category.
       --case ID                 Run only one benchmark case.
       --runs N                  Measured runs per case; default 1.

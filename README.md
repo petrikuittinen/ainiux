@@ -2,7 +2,7 @@
 
 `pkchat` is a fast, script-friendly command-line chat client for OpenAI and OpenAI-compatible APIs.
 
-Current status: v0.7 CLI with libcurl transport, cancellable runtime jobs, provider registry/profile aliases, `/v1/models`, `/v1/chat/completions`, text-only OpenAI Responses API support, local JPEG/PNG/GIF image input, interactive text/image attachments, request-only context policies, safe URL insertion, a simple REPL, a standalone `--editor` mode, a full-screen non-blocking TUI foundation, JSON chat save/load, HTML-to-text/Markdown extraction, Markdown assistant-output rendering to HTML or plaintext, automatic system/user TOML-alike configuration loading, and a concurrent JSONL benchmark runner.
+Current status: v0.71 CLI with libcurl transport, cancellable runtime jobs, provider registry/profile aliases, `/v1/models`, `/v1/chat/completions`, text-only OpenAI Responses API support, local JPEG/PNG/GIF image input, interactive text/image attachments, request-only context policies, safe URL insertion, a simple REPL, a standalone `--editor` mode, a full-screen non-blocking TUI foundation, JSON chat save/load, HTML-to-text/Markdown extraction, Markdown assistant-output rendering to HTML or plaintext, automatic system/user TOML-alike configuration loading, and a concurrent JSONL benchmark runner.
 
 ## Build
 
@@ -59,10 +59,10 @@ The HTTP transport uses libcurl through RAII wrappers in `src/http/`. Build flag
 The first benchmark slice uses JSONL for datasets and results. The built-in dataset contains 50 cases: ten each for safety, reasoning, writing, coding, and multi-turn behavior. Every non-empty dataset line is one UTF-8 JSON object:
 
 ```json
-{"id":"reasoning-01","category":"reasoning","language":"en","tags":["arithmetic"],"turns":["Question text"]}
+{"id":"reasoning-01","category":"reasoning","language":"en","tags":["arithmetic"],"turns":["Question text"],"expect":{"type":"exact","value":"Answer"}}
 ```
 
-`id`, `category`, and the non-empty string array `turns` are required. `language`, string-array `tags`, and `fetch_url` are optional. IDs must be unique; unknown fields, invalid UTF-8, malformed JSON, empty turns, files over 16 MiB, and lines over 1 MiB are rejected before a model request. Multi-turn cases retain each generated assistant response before sending the next turn.
+`id`, `category`, and the non-empty string array `turns` are required. `language`, string-array `tags`, `fetch_url`, and deterministic `expect` scoring hooks are optional. IDs must be unique; unknown fields, invalid UTF-8, malformed JSON, empty turns, files over 16 MiB, and lines over 1 MiB are rejected before a model request. Multi-turn cases retain each generated assistant response before sending the next turn.
 
 ```sh
 ./pkchat benchmark --validate-dataset
@@ -74,9 +74,11 @@ The first benchmark slice uses JSONL for datasets and results. The built-in data
 
 `--benchmark` and the `benchmark` subcommand are equivalent. Modes are `speed`, `long-context`, `quality`, and `refusals`; `quality,refusals` runs each selected case once while labeling the result with both evaluation purposes. Speed mode is exclusive, repeats cases until `--duration` expires, and cancels requests still active at the deadline. `--concurrency` uses a bounded worker pool in every mode. Durations accept `ms`, `s`, `m`, and `h` suffixes.
 
-The default `builtin` corpus is embedded from `benchmarks/builtin.jsonl` at build time and is also installed under `share/pkchat/benchmarks`. Results are JSONL records on `stdout`; progress, the final human-readable summary, status, and errors remain on `stderr`. This preserves clean pipeline and file output. `--quiet` suppresses progress and the human-readable summary but not JSONL results or errors. If `--output` names an existing directory or ends in `/`, pkchat creates it when needed and writes a timestamped `benchmark-*.jsonl` file. `--case ID`, `--category NAME`, and `--limit N` select cases. `--runs N` controls measured repetitions outside speed mode, while `--warmup N` runs separate unreported repetitions. The opt-in long-context file fetches two Project Gutenberg plain-text books and therefore requires network access; normal built-in cases are fully local until sent to the configured model endpoint.
+The default `builtin` corpus is embedded from `benchmarks/builtin.jsonl` at build time and is also installed under `share/pkchat/benchmarks`. Results are JSONL records on `stdout`; progress, the final summary, status, and errors remain on `stderr`. The summary is a two-column table by default; `--summary-format csv` emits `metric,value` CSV instead. `--quiet` suppresses progress and the summary but not JSONL results or errors. If `--output` names an existing directory or ends in `/`, pkchat creates it when needed and writes a timestamped `benchmark-*.jsonl` file. `--case ID`, `--category NAME`, and `--limit N` select cases. `--runs N` controls measured repetitions outside speed mode, while `--warmup N` runs separate unreported repetitions. Pressing `Ctrl+C` stops new work, cancels active HTTP requests, joins workers, writes an interrupted final summary, and exits with status 130. The opt-in long-context file fetches two Project Gutenberg plain-text books and therefore requires network access; normal built-in cases are fully local until sent to the configured model endpoint.
 
-Each result records the estimated prompt and total token counts, completion-token source, TTFT, wall time, token rate, response, and error state. During execution, finite runs report bounded completion milestones and speed mode periodically reports elapsed duration and finished requests. The final JSONL and human-readable summaries include total estimated tokens, average TTFT, average per-request token rate, aggregate token throughput, and completed/failed/cancelled counts. Quality and refusal modes currently collect responses but deliberately report scoring as not implemented. Regex-based refusal and reasoning checks, aggregate percentiles, richer provider timing points, and Parquet/Hugging Face Datasets input remain planned.
+Each result records estimated and provider-reported token counts, raw provider usage, HTTP status, DNS/connect/TLS/TTFB/first-body timing when libcurl exposes it, TTFT source, decode and wall throughput, response, scoring, and error state. During execution, finite runs report bounded completion milestones and speed mode periodically reports elapsed duration and finished requests. Final summaries include completed/failed/cancelled counts, token totals, average TTFT, aggregate throughput, and nearest-rank p50/p90/p99 for TTFT, total/decode latency, decode token/s, and wall token/s.
+
+Optional `expect` hooks operate on the visible response after thinking traces are removed. Use `{"type":"exact","value":"..."}` or `{"type":"contains","value":"..."}`; `turn` selects a one-based multi-turn response and defaults to the final turn. An array may configure different turns, with at most one scorer per turn. Unconfigured cases remain unscored. Regex-based refusal/reasoning checks and Parquet/Hugging Face Datasets input remain planned.
 
 ## Examples
 

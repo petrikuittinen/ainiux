@@ -3,6 +3,8 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <cctype>
+#include <cmath>
 #include <condition_variable>
 #include <fstream>
 #include <iomanip>
@@ -81,6 +83,79 @@ Error string_array(const json::Value& object,
     return ok_error();
 }
 
+Error parse_expectation(const json::Value& value,
+                        const std::string& source,
+                        size_t line,
+                        size_t turn_count,
+                        Expectation& output) {
+    if (!value.is_object()) {
+        return schema_error(source, line, "'expect' entries must be objects");
+    }
+    static const std::set<std::string> supported = {"type", "value", "turn"};
+    for (const auto& entry : value.object) {
+        if (supported.count(entry.first) == 0) {
+            return schema_error(source, line,
+                                "unknown 'expect' field '" + entry.first + "'");
+        }
+    }
+    Error err = required_string(value, "type", source, line, output.type);
+    if (!err.ok()) {
+        return err;
+    }
+    if (output.type != "exact" && output.type != "contains") {
+        return schema_error(source, line, "'expect.type' must be exact or contains");
+    }
+    err = required_string(value, "value", source, line, output.value);
+    if (!err.ok()) {
+        return err;
+    }
+    output.turn = turn_count;
+    if (const json::Value* turn = value.get("turn")) {
+        if (turn->type != json::Value::Type::Number || turn->number < 1.0 ||
+            std::floor(turn->number) != turn->number ||
+            turn->number > static_cast<double>(turn_count)) {
+            return schema_error(source, line,
+                                "'expect.turn' must identify an existing turn");
+        }
+        output.turn = static_cast<size_t>(turn->number);
+    }
+    return ok_error();
+}
+
+Error parse_expectations(const json::Value& object,
+                         const std::string& source,
+                         size_t line,
+                         size_t turn_count,
+                         std::vector<Expectation>& output) {
+    const json::Value* value = object.get("expect");
+    if (value == nullptr) {
+        return ok_error();
+    }
+    if (value->is_object()) {
+        output.emplace_back();
+        return parse_expectation(*value, source, line, turn_count, output.back());
+    }
+    if (!value->is_array() || value->array.empty()) {
+        return schema_error(source, line,
+                            "'expect' must be an object or non-empty array of objects");
+    }
+    std::set<size_t> turns;
+    for (const json::Value& entry : value->array) {
+        Expectation expectation;
+        Error err = parse_expectation(entry, source, line, turn_count, expectation);
+        if (!err.ok()) {
+            return err;
+        }
+        if (!turns.insert(expectation.turn).second) {
+            return schema_error(source, line,
+                                "'expect' contains more than one scorer for turn " +
+                                    std::to_string(expectation.turn));
+        }
+        output.push_back(std::move(expectation));
+    }
+    return ok_error();
+}
+
 Error parse_case(const json::Value& value,
                  const std::string& source,
                  size_t line,
@@ -89,7 +164,7 @@ Error parse_case(const json::Value& value,
         return schema_error(source, line, "each non-empty line must contain one JSON object");
     }
     static const std::set<std::string> supported = {
-        "id", "category", "language", "tags", "turns", "fetch_url"};
+        "id", "category", "language", "tags", "turns", "fetch_url", "expect"};
     for (const auto& entry : value.object) {
         if (supported.count(entry.first) == 0) {
             return schema_error(source, line, "unknown field '" + entry.first + "'");
@@ -115,7 +190,11 @@ Error parse_case(const json::Value& value,
     if (!err.ok()) {
         return err;
     }
-    return string_array(value, "turns", true, source, line, output.turns);
+    err = string_array(value, "turns", true, source, line, output.turns);
+    if (!err.ok()) {
+        return err;
+    }
+    return parse_expectations(value, source, line, output.turns.size(), output.expectations);
 }
 
 fetch::Options fetch_options_for(const cli::Options& options) {
@@ -183,6 +262,17 @@ struct Statistics {
     long long ttft_sum_ms = 0;
     size_t ttft_samples = 0;
     double token_rate_sum = 0.0;
+    long long provider_prompt_tokens = 0;
+    size_t provider_prompt_token_samples = 0;
+    long long provider_total_tokens = 0;
+    size_t provider_total_token_samples = 0;
+    size_t scored_turns = 0;
+    size_t passed_turns = 0;
+    std::vector<double> ttft_ms;
+    std::vector<double> total_ms;
+    std::vector<double> decode_ms;
+    std::vector<double> decode_token_rates;
+    std::vector<double> wall_token_rates;
 };
 
 enum class RunOutcome { Completed, Failed, Cancelled };
@@ -231,6 +321,90 @@ void write_modes_text(std::ostream& status, const std::vector<std::string>& mode
     }
 }
 
+class CancellationMonitor {
+   public:
+    explicit CancellationMonitor(std::function<bool()> requested)
+        : requested_(std::move(requested)) {
+        if (!requested_) {
+            return;
+        }
+        thread_ = std::thread([this] {
+            std::unique_lock<std::mutex> lock(mutex_);
+            while (!stop_) {
+                lock.unlock();
+                if (requested_()) {
+                    interrupted_.store(true, std::memory_order_release);
+                    source_.cancel();
+                    return;
+                }
+                lock.lock();
+                cv_.wait_for(lock, std::chrono::milliseconds(20), [this] { return stop_; });
+            }
+        });
+    }
+
+    ~CancellationMonitor() {
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            stop_ = true;
+        }
+        cv_.notify_one();
+        if (thread_.joinable()) {
+            thread_.join();
+        }
+    }
+
+    CancellationMonitor(const CancellationMonitor&) = delete;
+    CancellationMonitor& operator=(const CancellationMonitor&) = delete;
+
+    runtime::CancellationToken token() const { return source_.token(); }
+    void cancel() const { source_.cancel(); }
+    bool interrupted() const {
+        return interrupted_.load(std::memory_order_acquire) ||
+               (requested_ && requested_());
+    }
+
+   private:
+    std::function<bool()> requested_;
+    runtime::CancellationSource source_;
+    std::atomic<bool> interrupted_{false};
+    std::mutex mutex_;
+    std::condition_variable cv_;
+    bool stop_ = false;
+    std::thread thread_;
+};
+
+double percentile(std::vector<double> samples, double percentile_value) {
+    if (samples.empty()) {
+        return -1.0;
+    }
+    std::sort(samples.begin(), samples.end());
+    const size_t rank = static_cast<size_t>(
+        std::ceil(percentile_value * static_cast<double>(samples.size())));
+    return samples[std::max<size_t>(1, rank) - 1];
+}
+
+void write_json_metric(std::ostream& output, double value) {
+    if (value < 0.0 || !std::isfinite(value)) {
+        output << "null";
+    } else {
+        output << std::fixed << std::setprecision(3) << value;
+    }
+}
+
+void write_json_integer_or_null(std::ostream& output, long long value) {
+    if (value < 0) {
+        output << "null";
+    } else {
+        output << value;
+    }
+}
+
+double wall_tokens_per_second(const provider::ChatResult& result) {
+    return static_cast<double>(result.completion_tokens) * 1000.0 /
+           static_cast<double>(std::max<long long>(1, result.total_ms));
+}
+
 RunOutcome run_case(const provider::RequestContext& request_context,
                     const PreparedCase& prepared,
                     size_t run_number,
@@ -266,6 +440,12 @@ RunOutcome run_case(const provider::RequestContext& request_context,
                     output << ",\"run\":" << run_number
                            << ",\"turn\":" << (turn_index + 1)
                            << ",\"ok\":false,\"cancelled\":" << (cancelled ? "true" : "false")
+                           << ",\"http_status\":" << result.http_status
+                           << ",\"time_to_first_byte_ms\":";
+                    write_json_integer_or_null(output, result.time_to_first_byte_ms);
+                    output << ",\"first_body_ms\":";
+                    write_json_integer_or_null(output, result.first_body_ms);
+                    output
                            << ",\"error_code\":" << json::quote(error_code_name(err.code))
                            << ",\"error\":" << json::quote(err.message) << "}\n";
                 }
@@ -284,6 +464,12 @@ RunOutcome run_case(const provider::RequestContext& request_context,
                 ::pkchat::output::split_thinking_traces(result.content);
             const double token_rate = provider::tokens_per_second(
                 result, request_context.options.stream);
+            const double wall_token_rate = wall_tokens_per_second(result);
+            const long long decode_ms = request_context.options.stream && result.ttft_ms >= 0
+                                            ? std::max<long long>(0, result.total_ms - result.ttft_ms)
+                                            : -1;
+            const ScoreResult score = score_response(benchmark_case, turn_index + 1,
+                                                     separated.visible);
             {
                 std::lock_guard<std::mutex> lock(output_mutex);
                 output << "{\"type\":\"result\",\"id\":" << json::quote(benchmark_case.id)
@@ -298,17 +484,65 @@ RunOutcome run_case(const provider::RequestContext& request_context,
                        << ",\"run\":" << run_number
                        << ",\"turn\":" << (turn_index + 1)
                        << ",\"ok\":true,\"estimated_prompt_tokens\":" << prompt_tokens
+                       << ",\"provider_prompt_tokens\":";
+                write_json_integer_or_null(output, result.prompt_tokens);
+                output << ",\"prompt_token_count_source\":"
+                       << json::quote(result.prompt_tokens >= 0
+                                          ? "provider_reported"
+                                          : "estimated")
                        << ",\"ttft_ms\":" << result.ttft_ms
+                       << ",\"ttft_source\":"
+                       << json::quote(request_context.options.stream
+                                          ? "first_content_delta"
+                                          : "response_latency")
                        << ",\"total_ms\":" << result.total_ms
+                       << ",\"decode_ms\":";
+                write_json_integer_or_null(output, decode_ms);
+                output << ",\"dns_ms\":";
+                write_json_integer_or_null(output, result.dns_ms);
+                output << ",\"connect_ms\":";
+                write_json_integer_or_null(output, result.connect_ms);
+                output << ",\"tls_ms\":";
+                write_json_integer_or_null(output, result.tls_ms);
+                output << ",\"time_to_first_byte_ms\":";
+                write_json_integer_or_null(output, result.time_to_first_byte_ms);
+                output << ",\"first_body_ms\":";
+                write_json_integer_or_null(output, result.first_body_ms);
+                output << ",\"http_status\":" << result.http_status
                        << ",\"completion_tokens\":" << result.completion_tokens
+                       << ",\"provider_total_tokens\":";
+                write_json_integer_or_null(output, result.total_tokens);
+                output
                        << ",\"estimated_total_tokens\":"
                        << saturating_add(prompt_tokens, result.completion_tokens)
+                       << ",\"total_tokens\":"
+                       << (result.total_tokens >= 0
+                               ? result.total_tokens
+                               : saturating_add(prompt_tokens, result.completion_tokens))
+                       << ",\"total_token_count_source\":"
+                       << json::quote(result.total_tokens >= 0
+                                          ? "provider_reported"
+                                          : "estimated")
                        << ",\"token_count_source\":"
                        << json::quote(result.completion_tokens_estimated
                                           ? "estimated"
                                           : "provider_reported")
                        << ",\"tokens_per_second\":" << std::fixed << std::setprecision(3)
                        << token_rate
+                       << ",\"tokens_per_second_decode\":";
+                write_json_metric(output, request_context.options.stream ? token_rate : -1.0);
+                output << ",\"tokens_per_second_wall\":";
+                write_json_metric(output, wall_token_rate);
+                output << ",\"provider_usage\":"
+                       << (result.usage_json.empty() ? "null" : result.usage_json)
+                       << ",\"score\":";
+                if (score.configured) {
+                    output << (score.passed ? "1" : "0");
+                } else {
+                    output << "null";
+                }
+                output << ",\"score_method\":"
+                       << (score.configured ? json::quote(score.method) : "null")
                        << ",\"thinking_trace_present\":"
                        << (separated.trace.empty() ? "false" : "true")
                        << ",\"response\":" << json::quote(separated.visible) << "}\n";
@@ -320,10 +554,31 @@ RunOutcome run_case(const provider::RequestContext& request_context,
             statistics.completion_tokens =
                 saturating_add(statistics.completion_tokens, result.completion_tokens);
             statistics.token_rate_sum += token_rate;
-            if (result.ttft_ms >= 0) {
+            statistics.total_ms.push_back(static_cast<double>(result.total_ms));
+            statistics.wall_token_rates.push_back(wall_token_rate);
+            if (request_context.options.stream && result.ttft_ms >= 0) {
                 statistics.ttft_sum_ms =
                     saturating_add(statistics.ttft_sum_ms, result.ttft_ms);
                 ++statistics.ttft_samples;
+                statistics.ttft_ms.push_back(static_cast<double>(result.ttft_ms));
+                statistics.decode_ms.push_back(static_cast<double>(decode_ms));
+                statistics.decode_token_rates.push_back(token_rate);
+            }
+            if (result.prompt_tokens >= 0) {
+                statistics.provider_prompt_tokens = saturating_add(
+                    statistics.provider_prompt_tokens, result.prompt_tokens);
+                ++statistics.provider_prompt_token_samples;
+            }
+            if (result.total_tokens >= 0) {
+                statistics.provider_total_tokens = saturating_add(
+                    statistics.provider_total_tokens, result.total_tokens);
+                ++statistics.provider_total_token_samples;
+            }
+            if (score.configured) {
+                ++statistics.scored_turns;
+                if (score.passed) {
+                    ++statistics.passed_turns;
+                }
             }
         }
     }
@@ -339,6 +594,26 @@ size_t worker_count_for(size_t tasks, int requested) {
 }
 
 }  // namespace
+
+ScoreResult score_response(const Case& benchmark_case,
+                           size_t turn,
+                           const std::string& response) {
+    for (const Expectation& expectation : benchmark_case.expectations) {
+        if (expectation.turn != turn) {
+            continue;
+        }
+        ScoreResult result;
+        result.configured = true;
+        result.method = expectation.type;
+        if (expectation.type == "exact") {
+            result.passed = response == expectation.value;
+        } else if (expectation.type == "contains") {
+            result.passed = response.find(expectation.value) != std::string::npos;
+        }
+        return result;
+    }
+    return {};
+}
 
 LoadResult parse_jsonl(std::istream& input, const std::string& source) {
     Dataset dataset;
@@ -445,6 +720,19 @@ void write_case_json(std::ostream& output, const Case& benchmark_case) {
     if (!benchmark_case.fetch_url.empty()) {
         output << ",\"fetch_url\":" << json::quote(benchmark_case.fetch_url);
     }
+    if (!benchmark_case.expectations.empty()) {
+        output << ",\"expect\":[";
+        for (size_t index = 0; index < benchmark_case.expectations.size(); ++index) {
+            if (index != 0) {
+                output << ",";
+            }
+            const Expectation& expectation = benchmark_case.expectations[index];
+            output << "{\"type\":" << json::quote(expectation.type)
+                   << ",\"value\":" << json::quote(expectation.value)
+                   << ",\"turn\":" << expectation.turn << "}";
+        }
+        output << "]";
+    }
     output << "}\n";
 }
 
@@ -452,7 +740,8 @@ Error run(const provider::RequestContext& context,
           const std::vector<const Case*>& cases,
           const cli::Options& options,
           std::ostream& output,
-          std::ostream& status) {
+          std::ostream& status,
+          const std::function<bool()>& interrupt_requested) {
     if (cases.empty()) {
         return {ErrorCode::BadArgs, "benchmark selection matched no dataset cases"};
     }
@@ -461,6 +750,7 @@ Error run(const provider::RequestContext& context,
     if (speed_mode && modes.size() != 1) {
         return {ErrorCode::BadArgs, "speed benchmark mode cannot be combined with other modes"};
     }
+    CancellationMonitor cancellation(interrupt_requested);
     provider::RequestContext request_context = context;
     if (request_context.profile.offline) {
         return {ErrorCode::UnsupportedFeature,
@@ -468,7 +758,7 @@ Error run(const provider::RequestContext& context,
     }
     if (request_context.options.model.empty()) {
         provider::ModelsResult models;
-        Error err = provider::list_models(request_context, models);
+        Error err = provider::list_models(request_context, models, cancellation.token());
         if (!err.ok()) {
             return err;
         }
@@ -490,7 +780,8 @@ Error run(const provider::RequestContext& context,
                 status << "Fetching benchmark context: " << benchmark_case->fetch_url << "\n";
             }
             Error err = fetch::fetch_text(benchmark_case->fetch_url,
-                                          fetch_options_for(options), prepared.fetched_context);
+                                          fetch_options_for(options), prepared.fetched_context,
+                                          cancellation.token());
             if (!err.ok()) {
                 return err;
             }
@@ -501,7 +792,6 @@ Error run(const provider::RequestContext& context,
     Statistics statistics;
     std::mutex output_mutex;
     std::mutex statistics_mutex;
-    runtime::CancellationSource never_cancel;
     std::mutex status_mutex;
 
     const size_t case_count = prepared_cases.size();
@@ -540,15 +830,18 @@ Error run(const provider::RequestContext& context,
         for (size_t worker = 0; worker < worker_count; ++worker) {
             workers.emplace_back([&] {
                 for (;;) {
+                    if (cancellation.token().cancelled()) {
+                        break;
+                    }
                     const size_t task = next_task.fetch_add(1, std::memory_order_relaxed);
-                    if (task >= total_tasks) {
+                    if (task >= total_tasks || cancellation.token().cancelled()) {
                         break;
                     }
                     const size_t case_index = task % prepared_cases.size();
                     const size_t run_number = task / prepared_cases.size() + 1;
                     const RunOutcome outcome = run_case(
                         request_context, prepared_cases[case_index], run_number, warmup,
-                        modes, never_cancel.token(), output, output_mutex, statistics,
+                        modes, cancellation.token(), output, output_mutex, statistics,
                         statistics_mutex);
                     record_outcome(progress, outcome);
                     if (!options.quiet) {
@@ -579,10 +872,9 @@ Error run(const provider::RequestContext& context,
 
     run_finite_batch(static_cast<size_t>(options.benchmark_warmup), true);
     const auto measured_start = std::chrono::steady_clock::now();
-    if (speed_mode) {
+    if (speed_mode && !cancellation.token().cancelled()) {
         const auto deadline = measured_start +
                               std::chrono::milliseconds(options.benchmark_duration_ms);
-        runtime::CancellationSource duration_cancellation;
         std::atomic<size_t> next_task{0};
         ProgressCounts progress;
         std::mutex timer_mutex;
@@ -600,7 +892,7 @@ Error run(const provider::RequestContext& context,
             while (!stop_timer) {
                 const auto now = std::chrono::steady_clock::now();
                 if (now >= deadline) {
-                    duration_cancellation.cancel();
+                    cancellation.cancel();
                     break;
                 }
                 const auto wake_at = std::min(deadline, now + reporting_interval);
@@ -609,7 +901,7 @@ Error run(const provider::RequestContext& context,
                 }
                 const auto current = std::chrono::steady_clock::now();
                 if (current >= deadline) {
-                    duration_cancellation.cancel();
+                    cancellation.cancel();
                     break;
                 }
                 if (!options.quiet) {
@@ -632,18 +924,18 @@ Error run(const provider::RequestContext& context,
         workers.reserve(static_cast<size_t>(options.benchmark_concurrency));
         for (int worker = 0; worker < options.benchmark_concurrency; ++worker) {
             workers.emplace_back([&] {
-                while (!duration_cancellation.token().cancelled() &&
+                while (!cancellation.token().cancelled() &&
                        std::chrono::steady_clock::now() < deadline) {
                     const size_t task = next_task.fetch_add(1, std::memory_order_relaxed);
                     const size_t case_index = task % prepared_cases.size();
                     const size_t run_number = task / prepared_cases.size() + 1;
                     const RunOutcome outcome = run_case(
                         request_context, prepared_cases[case_index], run_number, false, modes,
-                        duration_cancellation.token(), output, output_mutex, statistics,
+                        cancellation.token(), output, output_mutex, statistics,
                         statistics_mutex);
                     record_outcome(progress, outcome);
                     if (outcome == RunOutcome::Failed) {
-                        duration_cancellation.cancel();
+                        cancellation.cancel();
                         break;
                     }
                 }
@@ -670,7 +962,7 @@ Error run(const provider::RequestContext& context,
             write_progress_counts(status, progress_snapshot(progress));
             status << ")\n";
         }
-    } else {
+    } else if (!cancellation.token().cancelled()) {
         run_finite_batch(static_cast<size_t>(options.benchmark_runs), false);
     }
     const auto measured_end = std::chrono::steady_clock::now();
@@ -679,7 +971,7 @@ Error run(const provider::RequestContext& context,
                .count());
 
     const double average_ttft = statistics.ttft_samples == 0
-                                    ? 0.0
+                                    ? -1.0
                                     : static_cast<double>(statistics.ttft_sum_ms) /
                                           static_cast<double>(statistics.ttft_samples);
     const double average_token_rate = statistics.completed_turns == 0
@@ -688,6 +980,31 @@ Error run(const provider::RequestContext& context,
                                                 static_cast<double>(statistics.completed_turns);
     const double aggregate_token_rate = static_cast<double>(statistics.completion_tokens) *
                                         1000.0 / static_cast<double>(elapsed_ms);
+    const double score_percentage = statistics.scored_turns == 0
+                                        ? -1.0
+                                        : static_cast<double>(statistics.passed_turns) * 100.0 /
+                                              static_cast<double>(statistics.scored_turns);
+    const bool interrupted = cancellation.interrupted();
+    const bool evaluation_mode = contains_mode(modes, "quality") ||
+                                 contains_mode(modes, "refusals");
+    const char* scoring = statistics.scored_turns != 0
+                              ? "scored"
+                              : (evaluation_mode ? "not_configured" : "not_applicable");
+    const double ttft_p50 = percentile(statistics.ttft_ms, 0.50);
+    const double ttft_p90 = percentile(statistics.ttft_ms, 0.90);
+    const double ttft_p99 = percentile(statistics.ttft_ms, 0.99);
+    const double total_p50 = percentile(statistics.total_ms, 0.50);
+    const double total_p90 = percentile(statistics.total_ms, 0.90);
+    const double total_p99 = percentile(statistics.total_ms, 0.99);
+    const double decode_p50 = percentile(statistics.decode_ms, 0.50);
+    const double decode_p90 = percentile(statistics.decode_ms, 0.90);
+    const double decode_p99 = percentile(statistics.decode_ms, 0.99);
+    const double decode_rate_p50 = percentile(statistics.decode_token_rates, 0.50);
+    const double decode_rate_p90 = percentile(statistics.decode_token_rates, 0.90);
+    const double decode_rate_p99 = percentile(statistics.decode_token_rates, 0.99);
+    const double wall_rate_p50 = percentile(statistics.wall_token_rates, 0.50);
+    const double wall_rate_p90 = percentile(statistics.wall_token_rates, 0.90);
+    const double wall_rate_p99 = percentile(statistics.wall_token_rates, 0.99);
     output << "{\"type\":\"summary\",\"selected_cases\":" << cases.size()
            << ",\"modes\":";
     write_string_array(output, modes);
@@ -696,43 +1013,170 @@ Error run(const provider::RequestContext& context,
            << ",\"elapsed_ms\":" << elapsed_ms
            << ",\"runs_per_case\":" << options.benchmark_runs
            << ",\"warmup_runs\":" << options.benchmark_warmup
+           << ",\"interrupted\":" << (interrupted ? "true" : "false")
+           << ",\"provider\":" << json::quote(request_context.profile.name)
+           << ",\"model\":" << json::quote(request_context.options.model)
+           << ",\"base_url\":" << json::quote(request_context.base_url)
+           << ",\"stream\":" << (request_context.options.stream ? "true" : "false")
            << ",\"completed_case_runs\":" << statistics.completed_case_runs
            << ",\"failed_case_runs\":" << statistics.failed_case_runs
            << ",\"cancelled_case_runs\":" << statistics.cancelled_case_runs
            << ",\"completed_turns\":" << statistics.completed_turns
            << ",\"estimated_prompt_tokens\":" << statistics.estimated_prompt_tokens
            << ",\"completion_tokens\":" << statistics.completion_tokens
+           << ",\"provider_prompt_tokens\":" << statistics.provider_prompt_tokens
+           << ",\"provider_prompt_token_samples\":"
+           << statistics.provider_prompt_token_samples
+           << ",\"provider_total_tokens\":" << statistics.provider_total_tokens
+           << ",\"provider_total_token_samples\":"
+           << statistics.provider_total_token_samples
            << ",\"estimated_total_tokens\":"
            << saturating_add(statistics.estimated_prompt_tokens, statistics.completion_tokens)
-           << ",\"average_ttft_ms\":" << std::fixed << std::setprecision(3) << average_ttft
+           << ",\"average_ttft_ms\":";
+    write_json_metric(output, average_ttft);
+    output << ",\"ttft_p50_ms\":";
+    write_json_metric(output, ttft_p50);
+    output << ",\"ttft_p90_ms\":";
+    write_json_metric(output, ttft_p90);
+    output << ",\"ttft_p99_ms\":";
+    write_json_metric(output, ttft_p99);
+    output << ",\"total_latency_p50_ms\":";
+    write_json_metric(output, total_p50);
+    output << ",\"total_latency_p90_ms\":";
+    write_json_metric(output, total_p90);
+    output << ",\"total_latency_p99_ms\":";
+    write_json_metric(output, total_p99);
+    output << ",\"decode_latency_p50_ms\":";
+    write_json_metric(output, decode_p50);
+    output << ",\"decode_latency_p90_ms\":";
+    write_json_metric(output, decode_p90);
+    output << ",\"decode_latency_p99_ms\":";
+    write_json_metric(output, decode_p99);
+    output
            << ",\"average_tokens_per_second\":" << average_token_rate
            << ",\"aggregate_tokens_per_second\":" << aggregate_token_rate
-           << ",\"scoring\":"
-           << json::quote(contains_mode(modes, "quality") || contains_mode(modes, "refusals")
-                              ? "not_implemented"
-                              : "not_applicable")
+           << ",\"decode_tokens_per_second_p50\":";
+    write_json_metric(output, decode_rate_p50);
+    output << ",\"decode_tokens_per_second_p90\":";
+    write_json_metric(output, decode_rate_p90);
+    output << ",\"decode_tokens_per_second_p99\":";
+    write_json_metric(output, decode_rate_p99);
+    output << ",\"wall_tokens_per_second_p50\":";
+    write_json_metric(output, wall_rate_p50);
+    output << ",\"wall_tokens_per_second_p90\":";
+    write_json_metric(output, wall_rate_p90);
+    output << ",\"wall_tokens_per_second_p99\":";
+    write_json_metric(output, wall_rate_p99);
+    output << ",\"scoring\":" << json::quote(scoring)
+           << ",\"scored_turns\":" << statistics.scored_turns
+           << ",\"passed_turns\":" << statistics.passed_turns
+           << ",\"failed_score_turns\":"
+           << (statistics.scored_turns - statistics.passed_turns)
+           << ",\"score_percentage\":";
+    write_json_metric(output, score_percentage);
+    output
            << "}\n";
     if (!output) {
         return {ErrorCode::FileWrite, "could not write benchmark JSONL output"};
     }
     if (!options.quiet) {
-        const char* scoring = contains_mode(modes, "quality") || contains_mode(modes, "refusals")
-                                  ? "not implemented (responses collected)"
-                                  : "not applicable";
-        status << "Benchmark summary:\n"
-               << "  Completed runs: " << statistics.completed_case_runs << "\n"
-               << "  Failed runs: " << statistics.failed_case_runs << "\n"
-               << "  Cancelled runs: " << statistics.cancelled_case_runs << "\n"
-               << "  Estimated prompt tokens: " << statistics.estimated_prompt_tokens << "\n"
-               << "  Completion tokens: " << statistics.completion_tokens << "\n"
-               << "  Estimated total tokens: "
-               << saturating_add(statistics.estimated_prompt_tokens,
-                                  statistics.completion_tokens) << "\n"
-               << std::fixed << std::setprecision(3)
-               << "  Average TTFT ms: " << average_ttft << "\n"
-               << "  Average token/s: " << average_token_rate << "\n"
-               << "  Aggregate tokens per second: " << aggregate_token_rate << "\n"
-               << "  Scoring: " << scoring << "\n";
+        const auto metric_text = [](double value) {
+            if (value < 0.0) {
+                return std::string("n/a");
+            }
+            std::ostringstream text;
+            text << std::fixed << std::setprecision(3) << value;
+            return text.str();
+        };
+        std::vector<std::pair<std::string, std::string>> rows = {
+            {"provider", request_context.profile.name},
+            {"model", request_context.options.model},
+            {"base_url", request_context.base_url},
+            {"stream", request_context.options.stream ? "true" : "false"},
+            {"elapsed_ms", std::to_string(elapsed_ms)},
+            {"completed_runs", std::to_string(statistics.completed_case_runs)},
+            {"failed_runs", std::to_string(statistics.failed_case_runs)},
+            {"cancelled_runs", std::to_string(statistics.cancelled_case_runs)},
+            {"interrupted", interrupted ? "true" : "false"},
+            {"estimated_prompt_tokens", std::to_string(statistics.estimated_prompt_tokens)},
+            {"completion_tokens", std::to_string(statistics.completion_tokens)},
+            {"provider_prompt_tokens", std::to_string(statistics.provider_prompt_tokens)},
+            {"provider_prompt_token_samples",
+             std::to_string(statistics.provider_prompt_token_samples)},
+            {"provider_total_tokens", std::to_string(statistics.provider_total_tokens)},
+            {"provider_total_token_samples",
+             std::to_string(statistics.provider_total_token_samples)},
+            {"estimated_total_tokens", std::to_string(saturating_add(
+                                           statistics.estimated_prompt_tokens,
+                                           statistics.completion_tokens))},
+            {"average_ttft_ms", metric_text(average_ttft)},
+            {"ttft_p50_ms", metric_text(ttft_p50)},
+            {"ttft_p90_ms", metric_text(ttft_p90)},
+            {"ttft_p99_ms", metric_text(ttft_p99)},
+            {"total_latency_p50_ms", metric_text(total_p50)},
+            {"total_latency_p90_ms", metric_text(total_p90)},
+            {"total_latency_p99_ms", metric_text(total_p99)},
+            {"decode_latency_p50_ms", metric_text(decode_p50)},
+            {"decode_latency_p90_ms", metric_text(decode_p90)},
+            {"decode_latency_p99_ms", metric_text(decode_p99)},
+            {"average_tokens_per_second", metric_text(average_token_rate)},
+            {"aggregate_tokens_per_second", metric_text(aggregate_token_rate)},
+            {"decode_tokens_per_second_p50", metric_text(decode_rate_p50)},
+            {"decode_tokens_per_second_p90", metric_text(decode_rate_p90)},
+            {"decode_tokens_per_second_p99", metric_text(decode_rate_p99)},
+            {"wall_tokens_per_second_p50", metric_text(wall_rate_p50)},
+            {"wall_tokens_per_second_p90", metric_text(wall_rate_p90)},
+            {"wall_tokens_per_second_p99", metric_text(wall_rate_p99)},
+            {"scoring", scoring},
+            {"scored_turns", std::to_string(statistics.scored_turns)},
+            {"passed_turns", std::to_string(statistics.passed_turns)},
+            {"score_percentage", metric_text(score_percentage)},
+        };
+        if (options.benchmark_summary_format == "csv") {
+            const auto csv_field = [](const std::string& value) {
+                if (value.find_first_of(",\"\r\n") == std::string::npos) {
+                    return value;
+                }
+                std::string escaped = "\"";
+                for (char ch : value) {
+                    if (ch == '\"') {
+                        escaped += "\"\"";
+                    } else {
+                        escaped.push_back(ch);
+                    }
+                }
+                escaped.push_back('\"');
+                return escaped;
+            };
+            status << "metric,value\n";
+            for (const auto& row : rows) {
+                status << csv_field(row.first) << "," << csv_field(row.second) << "\n";
+            }
+        } else {
+            status << "Benchmark summary:\n"
+                   << "  Metric                                Value\n"
+                   << "  ------------------------------------  ----------------\n";
+            for (const auto& row : rows) {
+                std::string label = row.first;
+                std::replace(label.begin(), label.end(), '_', ' ');
+                if (!label.empty()) {
+                    label.front() = static_cast<char>(
+                        std::toupper(static_cast<unsigned char>(label.front())));
+                }
+                if (label.rfind("Ttft", 0) == 0) {
+                    label.replace(0, 4, "TTFT");
+                }
+                if (label == "Base url") {
+                    label = "Base URL";
+                }
+                status << "  " << std::left << std::setw(36) << label << "  "
+                       << row.second << "\n";
+            }
+            status << std::right;
+        }
+    }
+    if (interrupted) {
+        return {ErrorCode::Cancelled, "benchmark cancelled by Ctrl+C"};
     }
     return statistics.failed_case_runs == 0
                ? ok_error()

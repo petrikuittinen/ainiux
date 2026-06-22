@@ -260,6 +260,7 @@ class Handler(BaseHTTPRequestHandler):
                     "data: " + json.dumps({"choices": [{"delta": {"reasoning_content": "internal"}}]}) + "\n\n",
                     "data: " + json.dumps({"choices": [{"delta": {"reasoning_content": " trace"}}]}) + "\n\n",
                     "data: " + json.dumps({"choices": [{"delta": {"content": reply}}]}) + "\n\n",
+                    "data: " + json.dumps({"model": self.model, "choices": [], "usage": {"prompt_tokens": len(messages), "completion_tokens": 1, "total_tokens": len(messages) + 1}}) + "\n\n",
                     "data: [DONE]\n\n",
                 ]
             else:
@@ -267,6 +268,7 @@ class Handler(BaseHTTPRequestHandler):
                     "data: " + json.dumps({"choices": [{"delta": {"content": reply[:midpoint]}}]}) + "\n\n",
                     ": comment\n\n",
                     "data: " + json.dumps({"choices": [{"delta": {"content": reply[midpoint:]}}]}) + "\n\n",
+                    "data: " + json.dumps({"model": self.model, "choices": [], "usage": {"prompt_tokens": len(messages), "completion_tokens": 1, "total_tokens": len(messages) + 1}}) + "\n\n",
                     "data: [DONE]\n\n",
                 ]
             for chunk in chunks:

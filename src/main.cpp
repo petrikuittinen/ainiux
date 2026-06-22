@@ -1,6 +1,7 @@
 #include <algorithm>
 #include <array>
 #include <chrono>
+#include <csignal>
 #include <filesystem>
 #include <fstream>
 #include <iomanip>
@@ -28,6 +29,32 @@
 #include "tui/tui.hpp"
 
 namespace {
+
+volatile std::sig_atomic_t g_benchmark_interrupt = 0;
+
+void benchmark_signal_handler(int) {
+    g_benchmark_interrupt = 1;
+}
+
+class BenchmarkSignalGuard {
+   public:
+    BenchmarkSignalGuard() {
+        g_benchmark_interrupt = 0;
+        previous_ = std::signal(SIGINT, benchmark_signal_handler);
+    }
+    ~BenchmarkSignalGuard() {
+        if (previous_ != SIG_ERR) {
+            std::signal(SIGINT, previous_);
+        }
+    }
+    BenchmarkSignalGuard(const BenchmarkSignalGuard&) = delete;
+    BenchmarkSignalGuard& operator=(const BenchmarkSignalGuard&) = delete;
+    bool installed() const { return previous_ != SIG_ERR; }
+
+   private:
+    using SignalHandler = void (*)(int);
+    SignalHandler previous_ = SIG_ERR;
+};
 
 int exit_code_for(pkchat::ErrorCode code) {
     using pkchat::ErrorCode;
@@ -623,8 +650,15 @@ int run_benchmark_mode(const pkchat::cli::Options& options) {
         print_error(context_result.error);
         return exit_code_for(context_result.error.code);
     }
-    pkchat::Error err = pkchat::benchmark::run(context_result.context, selected, options,
-                                               *out, std::cerr);
+    BenchmarkSignalGuard signal_guard;
+    if (!signal_guard.installed()) {
+        print_error({pkchat::ErrorCode::Internal,
+                     "could not install the benchmark Ctrl+C signal handler"});
+        return exit_code_for(pkchat::ErrorCode::Internal);
+    }
+    pkchat::Error err = pkchat::benchmark::run(
+        context_result.context, selected, options, *out, std::cerr,
+        [] { return g_benchmark_interrupt != 0; });
     if (!err.ok()) {
         print_error(err);
         return exit_code_for(err.code);

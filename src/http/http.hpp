@@ -32,6 +32,12 @@ struct Response {
     std::string body;
     std::string content_type;
     std::string stderr_text;
+    long long dns_ms = -1;
+    long long connect_ms = -1;
+    long long tls_ms = -1;
+    long long time_to_first_byte_ms = -1;
+    long long first_body_ms = -1;
+    long long total_ms = -1;
 };
 
 struct Result {

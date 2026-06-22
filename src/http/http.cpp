@@ -3,6 +3,7 @@
 #include <curl/curl.h>
 
 #include <cctype>
+#include <chrono>
 #include <cstdlib>
 #include <cstring>
 #include <sstream>
@@ -156,6 +157,8 @@ struct TransferState {
     bool cancelled = false;
     bool blocked_address = false;
     std::string blocked_address_text;
+    std::chrono::steady_clock::time_point transfer_start;
+    bool first_body_seen = false;
 };
 
 bool blocked_ipv4(const in_addr& address) {
@@ -259,6 +262,13 @@ size_t write_callback(char* ptr, size_t size, size_t nmemb, void* userdata) {
         }
     }
     const std::string chunk(ptr, bytes);
+    if (!state->first_body_seen && !chunk.empty()) {
+        state->first_body_seen = true;
+        state->response.first_body_ms =
+            std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::steady_clock::now() - state->transfer_start)
+                .count();
+    }
     state->response.body += chunk;
     if (state->request->on_body && state->response.status >= 200 && state->response.status < 300 && !chunk.empty()) {
         state->callback_error = state->request->on_body(chunk);
@@ -306,6 +316,14 @@ Error setopt_ptr(CURL* curl, CURLoption option, void* value) {
         return {ErrorCode::Internal, std::string("curl_easy_setopt failed: ") + curl_easy_strerror(code)};
     }
     return ok_error();
+}
+
+long long curl_elapsed_ms(CURL* curl, CURLINFO info) {
+    double seconds = 0.0;
+    if (curl_easy_getinfo(curl, info, &seconds) != CURLE_OK || seconds < 0.0) {
+        return -1;
+    }
+    return static_cast<long long>(seconds * 1000.0);
 }
 
 }  // namespace
@@ -419,7 +437,13 @@ Result perform(const Request& request, const std::vector<std::string>& secrets) 
         }
     }
 
+    state.transfer_start = std::chrono::steady_clock::now();
     code = curl_easy_perform(curl);
+    state.response.dns_ms = curl_elapsed_ms(curl, CURLINFO_NAMELOOKUP_TIME);
+    state.response.connect_ms = curl_elapsed_ms(curl, CURLINFO_CONNECT_TIME);
+    state.response.tls_ms = curl_elapsed_ms(curl, CURLINFO_APPCONNECT_TIME);
+    state.response.time_to_first_byte_ms = curl_elapsed_ms(curl, CURLINFO_STARTTRANSFER_TIME);
+    state.response.total_ms = curl_elapsed_ms(curl, CURLINFO_TOTAL_TIME);
     if (state.response.status == 0) {
         curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &state.response.status);
     }
