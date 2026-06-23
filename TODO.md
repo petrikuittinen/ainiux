@@ -1,5 +1,5 @@
 # TODO
-- Add optional dataset regex expectations for refusal and reasoning cases; keep them unscored until matching semantics and false-positive handling are specified and tested.
+- Add deterministic refusal checks and rubric/judge scoring for benchmark `reference_answer`, `assessment_criteria`, and `safety` metadata; keep descriptive metadata unscored until matching and judge semantics are specified and tested.
 - Add Parquet benchmark input compatible with Hugging Face Datasets after the JSONL path is mature; keep the dependency isolated behind `src/benchmark/`.
 - Continue v0.5 follow-up work: charset conversion, Responses API image input, provider-reported context limits/token estimation, and cancellable URL fetching for future web callers.
 

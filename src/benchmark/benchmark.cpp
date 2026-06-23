@@ -156,6 +156,105 @@ Error parse_expectations(const json::Value& object,
     return ok_error();
 }
 
+Error parse_safety_evaluation(const json::Value& object,
+                              const std::string& source,
+                              size_t line,
+                              SafetyEvaluation& output) {
+    const json::Value* value = object.get("safety");
+    if (value == nullptr) {
+        return ok_error();
+    }
+    if (!value->is_object()) {
+        return schema_error(source, line, "'safety' must be an object");
+    }
+    static const std::set<std::string> supported = {"classification", "expected_action"};
+    for (const auto& entry : value->object) {
+        if (supported.count(entry.first) == 0) {
+            return schema_error(source, line,
+                                "unknown 'safety' field '" + entry.first + "'");
+        }
+    }
+    Error err = required_string(*value, "classification", source, line,
+                                output.classification);
+    if (!err.ok()) {
+        return err;
+    }
+    if (output.classification != "harmful" && output.classification != "harmless") {
+        return schema_error(source, line,
+                            "'safety.classification' must be harmful or harmless");
+    }
+    err = required_string(*value, "expected_action", source, line,
+                          output.expected_action);
+    if (!err.ok()) {
+        return err;
+    }
+    if (output.expected_action != "reject" && output.expected_action != "answer") {
+        return schema_error(source, line,
+                            "'safety.expected_action' must be reject or answer");
+    }
+    if ((output.classification == "harmful") != (output.expected_action == "reject")) {
+        return schema_error(source, line,
+                            "harmful safety cases must use expected_action reject and harmless "
+                            "cases must use expected_action answer");
+    }
+    output.configured = true;
+    return ok_error();
+}
+
+Error parse_evaluation_metadata(const json::Value& value,
+                                const std::string& source,
+                                size_t line,
+                                Case& output) {
+    if (value.get("reference_answer") != nullptr) {
+        Error err = required_string(value, "reference_answer", source, line,
+                                    output.reference_answer);
+        if (!err.ok()) {
+            return err;
+        }
+    }
+    if (value.get("assessment_criteria") != nullptr) {
+        Error err = string_array(value, "assessment_criteria", true, source, line,
+                                 output.assessment_criteria);
+        if (!err.ok()) {
+            return err;
+        }
+    }
+    Error err = parse_safety_evaluation(value, source, line, output.safety);
+    if (!err.ok()) {
+        return err;
+    }
+
+    if ((output.category == "reasoning" || output.category == "math" ||
+         output.category == "trivia") && output.reference_answer.empty()) {
+        return schema_error(source, line,
+                            "reasoning, math, and trivia cases require a non-empty "
+                            "'reference_answer'");
+    }
+    if ((output.category == "writing" || output.category == "coding" ||
+         output.category == "multi-turn" || output.category == "long-context") &&
+        output.assessment_criteria.empty()) {
+        return schema_error(source, line, "'" + output.category +
+                                              "' cases require non-empty "
+                                              "'assessment_criteria'");
+    }
+    if (output.category == "safety") {
+        if (!output.safety.configured) {
+            return schema_error(source, line,
+                                "safety cases require a 'safety' evaluation object");
+        }
+        if (output.safety.classification == "harmless" &&
+            output.assessment_criteria.empty()) {
+            return schema_error(source, line,
+                                "harmless safety cases require non-empty "
+                                "'assessment_criteria'");
+        }
+    } else if (output.safety.configured) {
+        return schema_error(source, line,
+                            "the 'safety' evaluation object is only valid for safety cases");
+    }
+    return ok_error();
+}
+
 Error parse_case(const json::Value& value,
                  const std::string& source,
                  size_t line,
@@ -164,7 +263,8 @@ Error parse_case(const json::Value& value,
         return schema_error(source, line, "each non-empty line must contain one JSON object");
     }
     static const std::set<std::string> supported = {
-        "id", "category", "language", "tags", "turns", "fetch_url", "expect"};
+        "id", "category", "language", "tags", "turns", "fetch_url", "expect",
+        "reference_answer", "assessment_criteria", "safety"};
     for (const auto& entry : value.object) {
         if (supported.count(entry.first) == 0) {
             return schema_error(source, line, "unknown field '" + entry.first + "'");
@@ -194,7 +294,11 @@ Error parse_case(const json::Value& value,
     if (!err.ok()) {
         return err;
     }
-    return parse_expectations(value, source, line, output.turns.size(), output.expectations);
+    err = parse_expectations(value, source, line, output.turns.size(), output.expectations);
+    if (!err.ok()) {
+        return err;
+    }
+    return parse_evaluation_metadata(value, source, line, output);
 }
 
 fetch::Options fetch_options_for(const cli::Options& options) {
@@ -218,6 +322,46 @@ void write_string_array(std::ostream& output, const std::vector<std::string>& va
         output << json::quote(values[index]);
     }
     output << "]";
+}
+
+void write_result_tags(std::ostream& output, const Case& benchmark_case) {
+    const bool harmful = benchmark_case.safety.configured &&
+                         benchmark_case.safety.classification == "harmful";
+    const bool already_tagged =
+        std::find(benchmark_case.tags.begin(), benchmark_case.tags.end(),
+                  "harmful-request") != benchmark_case.tags.end();
+    output << "[";
+    for (size_t index = 0; index < benchmark_case.tags.size(); ++index) {
+        if (index != 0) {
+            output << ",";
+        }
+        output << json::quote(benchmark_case.tags[index]);
+    }
+    if (harmful && !already_tagged) {
+        if (!benchmark_case.tags.empty()) {
+            output << ",";
+        }
+        output << json::quote("harmful-request");
+    }
+    output << "]";
+}
+
+void write_result_case_metadata(std::ostream& output,
+                                const Case& benchmark_case,
+                                size_t turn_index) {
+    output << ",\"prompt\":" << json::quote(benchmark_case.turns[turn_index])
+           << ",\"tags\":";
+    write_result_tags(output, benchmark_case);
+    if (!benchmark_case.fetch_url.empty()) {
+        output << ",\"external_file_url\":" << json::quote(benchmark_case.fetch_url);
+    }
+    if (!benchmark_case.reference_answer.empty()) {
+        output << ",\"reference_answer\":" << json::quote(benchmark_case.reference_answer);
+    }
+    if (!benchmark_case.assessment_criteria.empty()) {
+        output << ",\"assessment_criteria\":";
+        write_string_array(output, benchmark_case.assessment_criteria);
+    }
 }
 
 std::vector<std::string> split_modes(const std::string& text) {
@@ -437,6 +581,7 @@ RunOutcome run_case(const provider::RequestContext& request_context,
                            << ",\"category\":" << json::quote(benchmark_case.category)
                            << ",\"modes\":";
                     write_string_array(output, modes);
+                    write_result_case_metadata(output, benchmark_case, turn_index);
                     output << ",\"run\":" << run_number
                            << ",\"turn\":" << (turn_index + 1)
                            << ",\"ok\":false,\"cancelled\":" << (cancelled ? "true" : "false")
@@ -477,6 +622,7 @@ RunOutcome run_case(const provider::RequestContext& request_context,
                        << ",\"language\":" << json::quote(benchmark_case.language)
                        << ",\"modes\":";
                 write_string_array(output, modes);
+                write_result_case_metadata(output, benchmark_case, turn_index);
                 output << ",\"model\":" << json::quote(result.model.empty()
                                                                 ? request_context.options.model
                                                                 : result.model)
@@ -676,6 +822,22 @@ std::string markdown_heading_text(const std::string& text) {
     return output;
 }
 
+std::string markdown_link_destination(const std::string& text) {
+    static constexpr char kHex[] = "0123456789ABCDEF";
+    std::string output;
+    output.reserve(text.size());
+    for (unsigned char ch : text) {
+        if (ch <= 0x20U || ch == '<' || ch == '>' || ch == '\\') {
+            output.push_back('%');
+            output.push_back(kHex[ch >> 4U]);
+            output.push_back(kHex[ch & 0x0FU]);
+        } else {
+            output.push_back(static_cast<char>(ch));
+        }
+    }
+    return output;
+}
+
 void write_fenced_block(std::ostream& output,
                         const std::string& language,
                         const std::string& content) {
@@ -785,6 +947,37 @@ void write_special_markdown_field(std::ostream& output,
     output << "#### " << heading << "\n\n";
     write_fenced_block(output, language,
                        value->is_string() ? value->string : json_compact(*value));
+}
+
+void write_markdown_external_file(std::ostream& output, const json::Value& record) {
+    const json::Value* value = record.get("external_file_url");
+    if (value == nullptr || !value->is_string() || value->string.empty()) {
+        return;
+    }
+    output << "#### External File\n\n"
+           << "[Open external file](<" << markdown_link_destination(value->string)
+           << ">)\n\n";
+}
+
+void write_markdown_assessment_criteria(std::ostream& output,
+                                        const json::Value& record) {
+    const json::Value* value = record.get("assessment_criteria");
+    if (value == nullptr || value->is_null()) {
+        return;
+    }
+    output << "#### Assessment Criteria\n\n";
+    if (!value->is_array()) {
+        write_fenced_block(output, "json", json_compact(*value));
+        return;
+    }
+    for (const json::Value& criterion : value->array) {
+        output << "- "
+               << markdown_table_cell(criterion.is_string()
+                                          ? criterion.string
+                                          : json_compact(criterion))
+               << "\n";
+    }
+    output << "\n";
 }
 
 }  // namespace
@@ -913,7 +1106,14 @@ Error write_markdown_report(const std::string& jsonl_path,
                 }
                 output << "\n\n";
                 write_markdown_table(output, record,
-                                     {"response", "error", "provider_usage"});
+                                     {"prompt", "external_file_url", "reference_answer",
+                                      "assessment_criteria", "response", "error",
+                                      "provider_usage"});
+                write_special_markdown_field(output, record, "prompt", "Prompt", "text");
+                write_markdown_external_file(output, record);
+                write_special_markdown_field(output, record, "reference_answer",
+                                             "Correct Answer", "text");
+                write_markdown_assessment_criteria(output, record);
                 write_special_markdown_field(output, record, "provider_usage",
                                              "Provider Usage", "json");
                 write_special_markdown_field(output, record, "response", "Response", "text");
@@ -1063,6 +1263,19 @@ void write_case_json(std::ostream& output, const Case& benchmark_case) {
                    << ",\"turn\":" << expectation.turn << "}";
         }
         output << "]";
+    }
+    if (!benchmark_case.reference_answer.empty()) {
+        output << ",\"reference_answer\":" << json::quote(benchmark_case.reference_answer);
+    }
+    if (!benchmark_case.assessment_criteria.empty()) {
+        output << ",\"assessment_criteria\":";
+        write_string_array(output, benchmark_case.assessment_criteria);
+    }
+    if (benchmark_case.safety.configured) {
+        output << ",\"safety\":{\"classification\":"
+               << json::quote(benchmark_case.safety.classification)
+               << ",\"expected_action\":"
+               << json::quote(benchmark_case.safety.expected_action) << "}";
     }
     output << "}\n";
 }

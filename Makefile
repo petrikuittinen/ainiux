@@ -7,13 +7,13 @@ CXXFLAGS += $(LIBCURL_CFLAGS)
 LDFLAGS += $(LIBCURL_LIBS)
 PREFIX ?= /usr/local
 SYSCONFDIR ?= /etc
+BUILD_DIR := build
+GENERATED_DIR := $(BUILD_DIR)/generated
+CXXFLAGS += -I$(GENERATED_DIR)
 DEBUG_FLAG_PATTERNS := -g -g0 -g1 -g2 -g3 -ggdb -ggdb% -glldb -glldb% -gdwarf% -gstabs%
 OPTIMIZED_CXXFLAGS := $(filter-out -O% $(DEBUG_FLAG_PATTERNS),$(CXXFLAGS)) -O3 -DNDEBUG
 OPTIMIZED_LDFLAGS := $(LDFLAGS) -s
 
-BUILD_DIR := build
-GENERATED_DIR := $(BUILD_DIR)/generated
-CXXFLAGS += -I$(GENERATED_DIR)
 OBJ_DIR := $(BUILD_DIR)/obj
 BIN := pkchat
 TEST_BIN := $(BUILD_DIR)/test_runner

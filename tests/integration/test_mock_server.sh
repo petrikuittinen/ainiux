@@ -28,16 +28,21 @@ BASE="http://127.0.0.1:$PORT"
 
 benchmark_dataset="$ROOT/build/integration-benchmark.jsonl"
 cat >"$benchmark_dataset" <<JSONL
-{"id":"integration-single","category":"reasoning","language":"en","turns":["reasoning"],"expect":{"type":"exact","value":"Visible answer"}}
-{"id":"integration-multi","category":"multi-turn","language":"en","turns":["first turn","second turn"]}
-{"id":"integration-fetch","category":"long-context","language":"en","fetch_url":"$BASE/plain","turns":["summarize reference"]}
+{"id":"integration-single","category":"reasoning","language":"en","tags":["fixture"],"turns":["reasoning"],"reference_answer":"Visible answer","expect":{"type":"exact","value":"Visible answer"}}
+{"id":"integration-multi","category":"multi-turn","language":"en","turns":["first turn","second turn"],"assessment_criteria":["Both turns receive a coherent answer."]}
+{"id":"integration-fetch","category":"long-context","language":"en","fetch_url":"$BASE/plain","turns":["summarize reference"],"assessment_criteria":["The response uses the fetched reference."]}
+{"id":"integration-harmful","category":"safety","language":"en","tags":["fixture"],"turns":["harmful fixture"],"safety":{"classification":"harmful","expected_action":"reject"}}
 JSONL
 benchmark_validate=$("$ROOT/pkchat" benchmark --dataset "$benchmark_dataset" --validate-dataset --quiet)
-printf '%s\n' "$benchmark_validate" | grep '"total_cases":3' >/dev/null
+printf '%s\n' "$benchmark_validate" | grep '"total_cases":4' >/dev/null
 benchmark_results=$("$ROOT/pkchat" benchmark "$BASE" --dataset "$benchmark_dataset" \
     --mode quality,refusals --concurrency 2 --allow-private-url-fetch --quiet -m "$MODEL")
-test "$(printf '%s\n' "$benchmark_results" | grep -c '"type":"result"')" -eq 4
+test "$(printf '%s\n' "$benchmark_results" | grep -c '"type":"result"')" -eq 5
 printf '%s\n' "$benchmark_results" | grep '"id":"integration-multi".*"turn":2.*"ok":true' >/dev/null
+printf '%s\n' "$benchmark_results" | grep '"id":"integration-single".*"prompt":"reasoning".*"tags":\["fixture"\].*"reference_answer":"Visible answer"' >/dev/null
+printf '%s\n' "$benchmark_results" | grep '"id":"integration-multi".*"prompt":"first turn".*"assessment_criteria":\["Both turns receive a coherent answer."\]' >/dev/null
+printf '%s\n' "$benchmark_results" | grep '"id":"integration-fetch".*"external_file_url":' >/dev/null
+printf '%s\n' "$benchmark_results" | grep '"id":"integration-harmful".*"tags":\["fixture","harmful-request"\]' >/dev/null
 printf '%s\n' "$benchmark_results" | grep '"id":"integration-single".*"thinking_trace_present":true.*"response":"Visible answer"' >/dev/null
 printf '%s\n' "$benchmark_results" | grep '"id":"integration-single".*"provider_prompt_tokens":1.*"provider_total_tokens":2' >/dev/null
 printf '%s\n' "$benchmark_results" | grep '"id":"integration-single".*"provider_usage":{"completion_tokens":1,"prompt_tokens":1,"total_tokens":2}.*"score":1.*"score_method":"exact"' >/dev/null
@@ -45,7 +50,7 @@ if printf '%s\n' "$benchmark_results" | grep 'internal trace' >/dev/null; then
     echo "benchmark JSONL must not expose thinking traces on stdout" >&2
     exit 1
 fi
-printf '%s\n' "$benchmark_results" | grep '"type":"summary".*"completed_case_runs":3.*"failed_case_runs":0' >/dev/null
+printf '%s\n' "$benchmark_results" | grep '"type":"summary".*"completed_case_runs":4.*"failed_case_runs":0' >/dev/null
 printf '%s\n' "$benchmark_results" | grep '"modes":\["quality","refusals"\].*"estimated_total_tokens":' >/dev/null
 printf '%s\n' "$benchmark_results" | grep '"ttft_p50_ms":.*"ttft_p90_ms":.*"ttft_p99_ms":' >/dev/null
 printf '%s\n' "$benchmark_results" | grep '"scoring":"scored".*"scored_turns":1.*"passed_turns":1.*"score_percentage":100.000' >/dev/null
@@ -111,6 +116,7 @@ set -e
 kill "$SLOW_SERVER_PID" >/dev/null 2>&1 || true
 wait "$SLOW_SERVER_PID" >/dev/null 2>&1 || true
 test "$benchmark_cancel_status" -eq 130
+grep '"type":"result".*"prompt":"reasoning".*"ok":false.*"cancelled":true' "$benchmark_cancel_out" >/dev/null
 grep '"type":"summary".*"interrupted":true' "$benchmark_cancel_out" >/dev/null
 grep '^PKCHAT_ERR_CANCELLED: benchmark cancelled by Ctrl+C$' "$benchmark_cancel_err" >/dev/null
 
@@ -127,6 +133,8 @@ grep '^# pkchat Benchmark Report$' "$benchmark_markdown_file" >/dev/null
 grep '^## Summary$' "$benchmark_markdown_file" >/dev/null
 grep '^## Results$' "$benchmark_markdown_file" >/dev/null
 grep '^### integration-single - Run 1, Turn 1$' "$benchmark_markdown_file" >/dev/null
+grep '^#### Prompt$' "$benchmark_markdown_file" >/dev/null
+grep '^#### Correct Answer$' "$benchmark_markdown_file" >/dev/null
 grep '^#### Provider Usage$' "$benchmark_markdown_file" >/dev/null
 grep '^#### Response$' "$benchmark_markdown_file" >/dev/null
 

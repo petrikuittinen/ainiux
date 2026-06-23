@@ -124,17 +124,56 @@ void test_benchmark_cli_and_jsonl_dataset() {
     check(loaded.error.ok(), "built-in benchmark JSONL loads");
     check(loaded.dataset.cases.size() == 50, "built-in benchmark dataset has exactly 50 cases");
     std::map<std::string, size_t> categories;
+    size_t reasoning_answers = 0;
+    size_t qualitative_rubrics = 0;
+    size_t harmful_safety_cases = 0;
+    size_t harmless_safety_cases = 0;
     for (const pkchat::benchmark::Case& benchmark_case : loaded.dataset.cases) {
         ++categories[benchmark_case.category];
+        if (benchmark_case.category == "reasoning" &&
+            !benchmark_case.reference_answer.empty()) {
+            ++reasoning_answers;
+        }
+        if ((benchmark_case.category == "writing" || benchmark_case.category == "coding" ||
+             benchmark_case.category == "multi-turn") &&
+            !benchmark_case.assessment_criteria.empty()) {
+            ++qualitative_rubrics;
+        }
+        if (benchmark_case.category == "safety" && benchmark_case.safety.configured) {
+            if (benchmark_case.safety.classification == "harmful" &&
+                benchmark_case.safety.expected_action == "reject") {
+                ++harmful_safety_cases;
+            } else if (benchmark_case.safety.classification == "harmless" &&
+                       benchmark_case.safety.expected_action == "answer" &&
+                       !benchmark_case.assessment_criteria.empty()) {
+                ++harmless_safety_cases;
+            }
+        }
     }
     check(categories.size() == 5 && categories["safety"] == 10 &&
               categories["reasoning"] == 10 && categories["writing"] == 10 &&
               categories["coding"] == 10 && categories["multi-turn"] == 10,
           "built-in benchmark dataset has ten cases in each category");
+    check(reasoning_answers == 10 && qualitative_rubrics == 30 &&
+              harmful_safety_cases == 6 && harmless_safety_cases == 4,
+          "built-in cases have complete answer keys, rubrics, and safety decisions");
     const std::vector<const pkchat::benchmark::Case*> selected =
         pkchat::benchmark::select_cases(loaded.dataset, "reasoning", "", 2);
     check(selected.size() == 2 && selected[0]->id == "reasoning-01",
           "benchmark category and limit selection is deterministic");
+    std::ostringstream listed_case;
+    pkchat::benchmark::write_case_json(listed_case, *selected[0]);
+    check(listed_case.str().find("\"reference_answer\"") != std::string::npos,
+          "listed benchmark cases retain evaluation metadata");
+    std::ostringstream listed_safety_case;
+    pkchat::benchmark::write_case_json(listed_safety_case, loaded.dataset.cases[0]);
+    std::ostringstream listed_writing_case;
+    pkchat::benchmark::write_case_json(listed_writing_case, loaded.dataset.cases[20]);
+    check(listed_safety_case.str().find("\"expected_action\":\"reject\"") !=
+                  std::string::npos &&
+              listed_writing_case.str().find("\"assessment_criteria\"") !=
+                  std::string::npos,
+          "listed cases retain safety decisions and qualitative rubrics");
 
     pkchat::benchmark::LoadResult long_context =
         pkchat::benchmark::load_jsonl("benchmarks/long-context.jsonl");
@@ -142,8 +181,10 @@ void test_benchmark_cli_and_jsonl_dataset() {
           "long-context benchmark JSONL loads");
     check(!long_context.dataset.cases.empty() &&
               !long_context.dataset.cases[0].fetch_url.empty() &&
-              long_context.dataset.cases[0].turns.size() == 2,
-          "long-context cases include a URL and translation follow-up");
+              long_context.dataset.cases[0].turns.size() == 2 &&
+              !long_context.dataset.cases[0].assessment_criteria.empty() &&
+              !long_context.dataset.cases[1].assessment_criteria.empty(),
+          "long-context cases include a URL, translation follow-up, and rubric");
 
     std::istringstream duplicate(
         "{\"id\":\"same\",\"category\":\"test\",\"turns\":[\"one\"]}\n"
@@ -161,6 +202,7 @@ void test_benchmark_cli_and_jsonl_dataset() {
 
     std::istringstream scored_dataset(
         "{\"id\":\"scored\",\"category\":\"reasoning\",\"turns\":[\"one\",\"two\"],"
+        "\"reference_answer\":\"done\","
         "\"expect\":[{\"type\":\"contains\",\"value\":\"answer\",\"turn\":1},"
         "{\"type\":\"exact\",\"value\":\"done\",\"turn\":2}]}\n");
     pkchat::benchmark::LoadResult scored =
@@ -177,9 +219,41 @@ void test_benchmark_cli_and_jsonl_dataset() {
 
     std::istringstream bad_scorer(
         "{\"id\":\"bad-score\",\"category\":\"reasoning\",\"turns\":[\"one\"],"
+        "\"reference_answer\":\"one\","
         "\"expect\":{\"type\":\"regex\",\"value\":\".*\"}}\n");
     invalid = pkchat::benchmark::parse_jsonl(bad_scorer, "bad-score.jsonl");
     check(!invalid.error.ok(), "benchmark JSONL rejects unimplemented regex scorers");
+
+    std::istringstream missing_reasoning_answer(
+        "{\"id\":\"reasoning-no-answer\",\"category\":\"reasoning\","
+        "\"turns\":[\"What is 2+2?\"]}\n");
+    invalid = pkchat::benchmark::parse_jsonl(missing_reasoning_answer,
+                                             "missing-answer.jsonl");
+    check(!invalid.error.ok() &&
+              invalid.error.message.find("reference_answer") != std::string::npos,
+          "benchmark reasoning cases require reference answers");
+
+    std::istringstream harmless_without_rubric(
+        "{\"id\":\"safe-no-rubric\",\"category\":\"safety\","
+        "\"turns\":[\"Give defensive advice\"],"
+        "\"safety\":{\"classification\":\"harmless\","
+        "\"expected_action\":\"answer\"}}\n");
+    invalid = pkchat::benchmark::parse_jsonl(harmless_without_rubric,
+                                             "missing-rubric.jsonl");
+    check(!invalid.error.ok() &&
+              invalid.error.message.find("assessment_criteria") != std::string::npos,
+          "harmless safety cases require assessment criteria");
+
+    std::istringstream mismatched_safety_action(
+        "{\"id\":\"unsafe-answer\",\"category\":\"safety\","
+        "\"turns\":[\"Harmful request\"],"
+        "\"safety\":{\"classification\":\"harmful\","
+        "\"expected_action\":\"answer\"}}\n");
+    invalid = pkchat::benchmark::parse_jsonl(mismatched_safety_action,
+                                             "bad-safety-action.jsonl");
+    check(!invalid.error.ok() &&
+              invalid.error.message.find("harmful safety cases") != std::string::npos,
+          "benchmark safety classifications enforce the expected action");
 
     check(pkchat::benchmark::markdown_report_path("results/benchmark-1.jsonl") ==
               "results/benchmark-1.md" &&
@@ -196,6 +270,10 @@ void test_benchmark_cli_and_jsonl_dataset() {
         report_input
             << "{\"type\":\"result\",\"id\":\"case|one\",\"model\":\"<unsafe>&\","
                "\"run\":1,\"turn\":2,"
+               "\"prompt\":\"Judge this answer.\","
+               "\"external_file_url\":\"https://example.com/source file_(1).txt\","
+               "\"reference_answer\":\"Expected value: 42\","
+               "\"assessment_criteria\":[\"Correct result\",\"Clear A|B explanation\"],"
                "\"ok\":true,\"provider_usage\":{\"prompt_tokens\":2},"
                "\"response\":\"answer\\n```inside\"}\n"
             << "{\"type\":\"summary\",\"completed_case_runs\":1,"
@@ -210,11 +288,20 @@ void test_benchmark_cli_and_jsonl_dataset() {
               report_text.find("| completed_case_runs | 1 |") != std::string::npos &&
               report_text.find("### case\\|one - Run 1, Turn 2") != std::string::npos &&
               report_text.find("| model | &lt;unsafe&gt;&amp; |") != std::string::npos &&
+              report_text.find("#### Prompt") != std::string::npos &&
+              report_text.find("Judge this answer.") != std::string::npos &&
+              report_text.find("#### External File") != std::string::npos &&
+              report_text.find("https://example.com/source%20file_(1).txt") !=
+                  std::string::npos &&
+              report_text.find("#### Correct Answer") != std::string::npos &&
+              report_text.find("Expected value: 42") != std::string::npos &&
+              report_text.find("#### Assessment Criteria") != std::string::npos &&
+              report_text.find("- Clear A\\|B explanation") != std::string::npos &&
               report_text.find("#### Provider Usage") != std::string::npos &&
               report_text.find("{\"prompt_tokens\":2}") != std::string::npos &&
               report_text.find("#### Response") != std::string::npos &&
               report_text.find("answer\n```inside") != std::string::npos,
-          "benchmark Markdown report preserves summary, result, usage, and response data");
+          "benchmark Markdown report preserves judge metadata, usage, and response data");
     std::error_code report_remove_error;
     std::filesystem::remove(report_jsonl, report_remove_error);
     report_remove_error.clear();

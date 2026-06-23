@@ -57,7 +57,7 @@ Each milestone should leave the program usable. Do not create a long-lived pile 
 
 ## Current baseline
 
-Implementation status (2026-06-22): `pkchat` is at v0.72. The repository has the scriptable CLI, built-in provider registry and aliases, Chat Completions, text-only Responses API support, streaming SSE, credential lookup, JSON chat persistence, cancellable runtime jobs, REPL, full-screen TUI foundation, editor, request-only context policies, context-use estimates, bounded text/HTML/Markdown input, JPEG/PNG/GIF image input for Chat Completions, safe URL fetching, Markdown output conversion, automatic v0.6 system/user TOML-alike configuration loading, and concurrent JSONL benchmark execution. `--provider none` supports local conversion and editor workflows without a model endpoint.
+Implementation status (2026-06-22): `pkchat` is at v0.73. The repository has the scriptable CLI, built-in provider registry and aliases, Chat Completions, text-only Responses API support, streaming SSE, credential lookup, JSON chat persistence, cancellable runtime jobs, REPL, full-screen TUI foundation, editor, request-only context policies, context-use estimates, bounded text/HTML/Markdown input, JPEG/PNG/GIF image input for Chat Completions, safe URL fetching, Markdown output conversion, automatic v0.6 system/user TOML-alike configuration loading, and concurrent JSONL benchmark execution. `--provider none` supports local conversion and editor workflows without a model endpoint.
 
 Runtime defaults live in `cli::Options`, provider defaults live in `src/provider/`, and API keys are resolved while building the provider request context. Automatic system and user config files map into a base `cli::Options`, after which `main.cpp` parses CLI arguments over that base. `--no-config` can bypass the automatic user file while retaining system configuration, and `--debug` reports configuration discovery on `stderr`.
 
@@ -1247,7 +1247,7 @@ pkchat --benchmark --dataset eval.jsonl --mode quality,refusals --output results
 - [x] Add category, case-ID, and count filtering plus offline validation/listing.
 - [ ] Add Parquet input compatible with Hugging Face Datasets after JSONL behavior stabilizes.
 
-Each JSONL object uses required `id`, `category`, and `turns` fields, with optional `language`, `tags`, `fetch_url`, and deterministic `expect` exact/contains scorers. Generated assistant replies are appended between turns so multi-turn cases exercise actual conversation state.
+Each JSONL object uses required `id`, `category`, and `turns` fields, with optional `language`, `tags`, `fetch_url`, and deterministic `expect` exact/contains scorers. Reasoning, math, and trivia cases require `reference_answer`; writing, coding, multi-turn, and long-context cases require `assessment_criteria`. Safety cases require a harmful/harmless classification and matching reject/answer action, with assessment criteria required for harmless requests. Generated assistant replies are appended between turns so multi-turn cases exercise actual conversation state.
 
 ## Metrics
 
@@ -1313,6 +1313,10 @@ Options:
 - [x] Distinguish provider-reported tokens from estimated tokens.
 - [x] Keep benchmark jobs cancellable.
 - [x] Release all per-run request/response/timing allocations after each run.
+- [x] Give every built-in reasoning case a correct reference answer and every qualitative case explicit assessment criteria.
+- [x] Label built-in safety cases as harmful/reject or harmless/answer, requiring criteria for harmless answers.
+- [x] Preserve prompts, tags, external-source links, answer keys, and rubrics in JSONL and Markdown result artifacts for future judge input.
+- [ ] Add automatic rubric/judge scoring; evaluation metadata remains descriptive until judge behavior is specified and tested.
 
 ## Acceptance criteria
 

@@ -21,6 +21,12 @@ struct Expectation {
     size_t turn = 0;
 };
 
+struct SafetyEvaluation {
+    bool configured = false;
+    std::string classification;
+    std::string expected_action;
+};
+
 struct Case {
     std::string id;
     std::string category;
@@ -29,6 +35,9 @@ struct Case {
     std::vector<std::string> turns;
     std::string fetch_url;
     std::vector<Expectation> expectations;
+    std::string reference_answer;
+    std::vector<std::string> assessment_criteria;
+    SafetyEvaluation safety;
 };
 
 struct ScoreResult {
