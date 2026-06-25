@@ -741,6 +741,7 @@ std::vector<StyledLine> history_lines_for_session(const chat::Session& session, 
 
 editor::EditorState empty_input_editor() {
     editor::EditorState input = editor::EditorState::from_text("");
+    input.mode = editor::EditorMode::Chat;
     input.vertical_movement = editor::VerticalMovementMode::VisualRow;
     return input;
 }
@@ -794,7 +795,7 @@ void render(const chat::Session& session,
     draw_line(layout.status_row, cols, status, status_role_for_text(status), style);
     draw_line(layout.input_label_row,
               cols,
-              "Input  Tab path | Enter send | Alt+Enter newline | Esc cancel | Ctrl+R regen | PgUp/PgDn scroll | Ctrl+C quit",
+              "Input  Tab command/path | Enter send | Alt+Enter newline | Esc cancel | Ctrl+R regen | PgUp/PgDn scroll | Ctrl+Q quit",
               StyleRole::InputLabel,
               style);
 
@@ -839,7 +840,7 @@ struct TuiEvent {
     context::CompactionEvent compaction;
     bool compacted = false;
     editor::EditorState completed_input;
-    editor::PathCompleter path_completer;
+    editor::ContextualCompleter path_completer;
     editor::PathCompletionResult completion;
     size_t completion_generation = 0;
 };
@@ -929,7 +930,7 @@ int run(provider::RequestContext context, chat::Session session) {
     runtime::JobHandle completion_job;
     ActiveJob active_job = ActiveJob::None;
     editor::EditorState input = empty_input_editor();
-    editor::PathCompleter path_completer;
+    editor::ContextualCompleter path_completer;
     size_t completion_generation = 0;
     bool completion_pending = false;
     std::string status = ready_status();
@@ -966,12 +967,18 @@ int run(provider::RequestContext context, chat::Session session) {
     };
 
     auto start_path_completion = [&]() {
+        if (!path_completer.can_complete(input)) {
+            return;
+        }
         if (path_completer.can_cycle(input)) {
-            status = editor::path_completion_status(path_completer.complete(input));
+            const editor::PathCompletionResult completion = path_completer.complete(input);
+            if (completion.handled) {
+                status = editor::path_completion_status(completion);
+            }
             return;
         }
         if (completion_pending) {
-            status = "Path completion is still running";
+            status = "Tab completion is still running";
             return;
         }
 
@@ -989,7 +996,7 @@ int run(provider::RequestContext context, chat::Session session) {
                 events.push(std::move(event));
             });
         completion_pending = true;
-        status = "Completing path...";
+        status = "Completing...";
     };
 
     auto rollback_pending_turn = [&]() {
@@ -1566,7 +1573,8 @@ int run(provider::RequestContext context, chat::Session session) {
                 case TuiEventType::CompletionDone:
                     completion_job.join();
                     completion_pending = false;
-                    if (event.completion_generation == completion_generation) {
+                    if (event.completion_generation == completion_generation &&
+                        event.completion.handled) {
                         input = std::move(event.completed_input);
                         path_completer = std::move(event.path_completer);
                         status = editor::path_completion_status(event.completion);
@@ -1594,6 +1602,10 @@ int run(provider::RequestContext context, chat::Session session) {
                 path_completer.reset();
                 ++completion_generation;
                 completion_job.cancel();
+                if (ch == 17) {
+                    quit = true;
+                    continue;
+                }
                 if (ch == 27) {
                     const TuiSize terminal = terminal_size();
                     const bool handled = handle_escape(input, layout_for_terminal(terminal.rows, terminal.cols), history_scroll, status);
@@ -1608,14 +1620,7 @@ int run(provider::RequestContext context, chat::Session session) {
                     continue;
                 }
                 if (ch == 3) {
-                    if (active_job != ActiveJob::None) {
-                        cancel_active_request();
-                    } else if (file_job.running()) {
-                        file_job.cancel();
-                        status = "Cancelling file job...";
-                    } else {
-                        quit = true;
-                    }
+                    status = "Ctrl+C is reserved for copy; use Esc to cancel or Ctrl+Q to quit";
                     continue;
                 }
                 if (ch == 18) {

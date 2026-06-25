@@ -616,7 +616,9 @@ Use portable defaults first:
 Enter                insert newline or submit, depending on configured mode
 Alt+Enter            send prompt where detectable
 Esc then Enter       send prompt fallback
-Ctrl+C               cancel active generation, then interrupt/exit when idle
+Esc                  cancel active generation
+Ctrl+Q               quit chat/editor mode
+Ctrl+C               reserved for future copy support in chat/editor mode
 Ctrl+D               quit when input is empty
 PageUp/PageDown      scroll chat
 /help                show help
@@ -1790,7 +1792,7 @@ Every tool must have:
 ```text
 Esc pauses agent loop in TUI where detectable.
 /stop pauses or cancels agent loop in REPL/web/TUI.
-Ctrl+C cancels current action first.
+Ctrl+C remains reserved for copy in editor-backed terminal modes.
 ```
 
 ## Acceptance criteria

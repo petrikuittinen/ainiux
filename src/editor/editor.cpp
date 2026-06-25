@@ -1,5 +1,4 @@
 #include "editor/editor.hpp"
-#include "editor/path_completion.hpp"
 
 #include <algorithm>
 #include <cerrno>
@@ -341,23 +340,188 @@ void update_preferred_column(EditorState& state) {
     state.preferred_column = state.text.display_column_for_offset(state.cursor);
 }
 
-std::string editor_title(const EditorState& state, const std::string& status) {
+enum class MinibufferAction {
+    None,
+    SaveFile,
+    LoadFile,
+    ConfirmQuit,
+};
+
+struct MinibufferState {
+    bool active = false;
+    MinibufferAction action = MinibufferAction::None;
+    std::string prompt;
+    std::string input;
+    std::string message = "Ready";
+};
+
+std::string trim_ascii_copy(std::string text) {
+    auto is_ws = [](unsigned char ch) {
+        return ch == ' ' || ch == '\t' || ch == '\r' || ch == '\n';
+    };
+    while (!text.empty() && is_ws(static_cast<unsigned char>(text.front()))) {
+        text.erase(text.begin());
+    }
+    while (!text.empty() && is_ws(static_cast<unsigned char>(text.back()))) {
+        text.pop_back();
+    }
+    return text;
+}
+
+std::string editor_status_line(const EditorState& state) {
     std::ostringstream out;
     out << (state.path.empty() ? "[scratch]" : state.path);
     if (state.dirty) {
         out << " *";
     }
-    out << "  " << status;
-    out << "  Tab complete path | Ctrl+S save | Ctrl+Q quit | Enter newline";
+    const size_t line = state.text.line_for_offset(state.cursor) + 1;
+    const size_t column = state.text.display_column_for_offset(state.cursor) + 1;
+    out << "  Mode: Editor"
+        << "  Ln " << line << ", Col " << column
+        << "  Ctrl+S save | Ctrl+O load | Ctrl+Q quit";
     return out.str();
 }
 
-void render_terminal(EditorState& state, const std::string& status) {
+std::string minibuffer_text(const MinibufferState& minibuffer) {
+    if (minibuffer.active) {
+        return minibuffer.prompt + minibuffer.input;
+    }
+    return minibuffer.message;
+}
+
+void minibuffer_message(MinibufferState& minibuffer, std::string message) {
+    minibuffer.active = false;
+    minibuffer.action = MinibufferAction::None;
+    minibuffer.prompt.clear();
+    minibuffer.input.clear();
+    minibuffer.message = std::move(message);
+}
+
+void start_minibuffer(MinibufferState& minibuffer,
+                      MinibufferAction action,
+                      std::string prompt,
+                      std::string initial = "") {
+    minibuffer.active = true;
+    minibuffer.action = action;
+    minibuffer.prompt = std::move(prompt);
+    minibuffer.input = std::move(initial);
+}
+
+void reset_editor_buffer(EditorState& state, PieceTable text, std::string path) {
+    state.text = std::move(text);
+    state.cursor = 0;
+    state.preferred_column = 0;
+    state.scroll_line = 0;
+    state.scroll_column = 0;
+    state.path = std::move(path);
+    state.dirty = false;
+}
+
+void save_editor_to_path(EditorState& state,
+                         const std::string& path,
+                         MinibufferState& minibuffer,
+                         bool update_path) {
+    Error save_error = save_file(path, state.text);
+    if (save_error.ok()) {
+        state.dirty = false;
+        if (update_path) {
+            state.path = path;
+        }
+        minibuffer_message(minibuffer, "Saved " + path);
+    } else {
+        minibuffer_message(minibuffer, save_error.message);
+    }
+}
+
+void load_editor_from_path(EditorState& state, const std::string& path, MinibufferState& minibuffer) {
+    PieceTable loaded;
+    Error load_error = load_file(path, loaded);
+    if (load_error.ok()) {
+        reset_editor_buffer(state, std::move(loaded), path);
+        minibuffer_message(minibuffer, "Loaded " + path);
+    } else {
+        minibuffer_message(minibuffer, load_error.message);
+    }
+}
+
+void submit_minibuffer(EditorState& state, MinibufferState& minibuffer, bool& quit) {
+    const MinibufferAction action = minibuffer.action;
+    const std::string value = trim_ascii_copy(minibuffer.input);
+    if (action == MinibufferAction::SaveFile) {
+        if (value.empty()) {
+            minibuffer.prompt = "Save file (path required): ";
+            return;
+        }
+        save_editor_to_path(state, value, minibuffer, true);
+        return;
+    }
+    if (action == MinibufferAction::LoadFile) {
+        if (value.empty()) {
+            minibuffer.prompt = "Load file (path required): ";
+            return;
+        }
+        load_editor_from_path(state, value, minibuffer);
+        return;
+    }
+    if (action == MinibufferAction::ConfirmQuit) {
+        if (value == "y" || value == "Y" || value == "yes" || value == "YES") {
+            quit = true;
+        } else {
+            minibuffer_message(minibuffer, "Quit cancelled");
+        }
+        return;
+    }
+    minibuffer_message(minibuffer, "");
+}
+
+bool handle_minibuffer_key(EditorState& state,
+                           MinibufferState& minibuffer,
+                           unsigned char ch,
+                           bool& quit) {
+    if (!minibuffer.active) {
+        return false;
+    }
+    if (ch == 27 || ch == 7) {
+        minibuffer_message(minibuffer, "Minibuffer cancelled");
+        return true;
+    }
+    if (ch == '\r' || ch == '\n') {
+        submit_minibuffer(state, minibuffer, quit);
+        return true;
+    }
+    if (ch == 127 || ch == 8) {
+        if (!minibuffer.input.empty()) {
+            minibuffer.input.pop_back();
+        }
+        return true;
+    }
+    if (minibuffer.action == MinibufferAction::ConfirmQuit) {
+        if (ch == 'y' || ch == 'Y') {
+            quit = true;
+        } else if (ch == 'n' || ch == 'N') {
+            minibuffer_message(minibuffer, "Quit cancelled");
+        } else {
+            minibuffer.prompt = "Type y or n: ";
+        }
+        return true;
+    }
+    if (ch == '\t') {
+        minibuffer.prompt = "Tab completion disabled; enter path: ";
+        return true;
+    }
+    if (ch >= 0x20U) {
+        minibuffer.input.push_back(static_cast<char>(ch));
+        return true;
+    }
+    return true;
+}
+
+void render_terminal(EditorState& state, const MinibufferState& minibuffer) {
     const TerminalSize size = terminal_size();
-    const int rows = std::max(4, size.rows);
+    const int rows = std::max(3, size.rows);
     const int cols = std::max(20, size.cols);
     const int width = std::max(1, cols - 1);
-    Rect panel_rect{1, 1, std::max(1, rows - 1), width};
+    Rect panel_rect{1, 1, std::max(1, rows - 2), width};
     state.ensure_cursor_visible(panel_rect);
     const RenderedPanel panel = state.render(panel_rect);
 
@@ -369,10 +533,22 @@ void render_terminal(EditorState& state, const std::string& status) {
         }
     }
 
-    std::cout << "\x1b[" << rows << ";1H\x1b[7m"
-              << pad_or_clip_ascii(editor_title(state, status), width) << "\x1b[0m\x1b[K";
-    const int cursor_row = panel.cursor.visible ? panel_rect.row + panel.cursor.row : panel_rect.row;
-    const int cursor_col = panel.cursor.visible ? panel_rect.col + panel.cursor.col : panel_rect.col;
+    const int status_row = rows - 1;
+    const int minibuffer_row = rows;
+    std::cout << "\x1b[" << status_row << ";1H\x1b[7m"
+              << pad_or_clip_ascii(editor_status_line(state), width) << "\x1b[0m\x1b[K";
+    std::cout << "\x1b[" << minibuffer_row << ";1H"
+              << pad_or_clip_ascii(minibuffer_text(minibuffer), width) << "\x1b[K";
+
+    int cursor_row = panel.cursor.visible ? panel_rect.row + panel.cursor.row : panel_rect.row;
+    int cursor_col = panel.cursor.visible ? panel_rect.col + panel.cursor.col : panel_rect.col;
+    if (minibuffer.active) {
+        cursor_row = minibuffer_row;
+        const size_t prompt_width = minibuffer.prompt.size();
+        const size_t input_width = minibuffer.input.size();
+        cursor_col = 1 + static_cast<int>(std::min<size_t>(
+            static_cast<size_t>(std::max(0, width - 1)), prompt_width + input_width));
+    }
     std::cout << "\x1b[" << cursor_row << ";" << cursor_col << "H\x1b[?25h";
     std::cout.flush();
 }
@@ -980,30 +1156,36 @@ int run_editor(const std::string& path, const std::string& save_as) {
     }
 
     bool quit = false;
-    PathCompleter path_completer;
+    MinibufferState minibuffer;
+    minibuffer.message = status;
     TerminalSize last_size = terminal_size();
-    render_terminal(state, status);
+    render_terminal(state, minibuffer);
     while (!quit) {
         unsigned char ch = 0;
         if (!read_byte(ch, 100)) {
             const TerminalSize current_size = terminal_size();
             if (current_size.rows != last_size.rows || current_size.cols != last_size.cols) {
                 last_size = current_size;
-                render_terminal(state, status);
+                render_terminal(state, minibuffer);
             }
             continue;
         }
 
-        if (ch == '\t') {
-            status = path_completion_status(path_completer.complete(state));
-        } else {
-            path_completer.reset();
+        if (handle_minibuffer_key(state, minibuffer, ch, quit)) {
+            last_size = terminal_size();
+            render_terminal(state, minibuffer);
+            continue;
         }
 
         if (ch == 17) {
-            quit = true;
+            if (state.dirty) {
+                start_minibuffer(minibuffer, MinibufferAction::ConfirmQuit,
+                                 "Buffer modified; quit anyway? (y/n) ");
+            } else {
+                quit = true;
+            }
         } else if (ch == 3) {
-            quit = true;
+            minibuffer_message(minibuffer, "Ctrl+C is reserved for copy; Ctrl+Q quits");
         } else if (ch == 1) {
             state.move_home();
         } else if (ch == 5) {
@@ -1011,42 +1193,46 @@ int run_editor(const std::string& path, const std::string& save_as) {
         } else if (ch == 11) {
             Error kill_error = state.kill_to_line_end();
             if (!kill_error.ok()) {
-                status = kill_error.message;
+                minibuffer_message(minibuffer, kill_error.message);
             }
+        } else if (ch == 15) {
+            start_minibuffer(minibuffer, MinibufferAction::LoadFile, "Load file: ");
         } else if (ch == 19) {
             const std::string target = save_as.empty() ? state.path : save_as;
-            Error save_error = save_file(target, state.text);
-            if (save_error.ok()) {
-                state.dirty = false;
-                if (state.path.empty()) {
-                    state.path = target;
-                }
-                status = "Saved";
+            if (target.empty()) {
+                start_minibuffer(minibuffer, MinibufferAction::SaveFile, "Save file: ");
             } else {
-                status = save_error.message;
+                const bool update_path = save_as.empty() || state.path.empty();
+                save_editor_to_path(state, target, minibuffer, update_path);
             }
+        } else if (ch == '\t') {
+            minibuffer_message(minibuffer, "Tab completion is disabled in editor mode");
         } else if (ch == 27) {
-            handle_escape(state, status);
+            std::string escape_status;
+            handle_escape(state, escape_status);
+            if (!escape_status.empty()) {
+                minibuffer_message(minibuffer, escape_status);
+            }
         } else if (ch == 127 || ch == 8) {
             Error erase_error = state.erase_before_cursor();
             if (!erase_error.ok()) {
-                status = erase_error.message;
+                minibuffer_message(minibuffer, erase_error.message);
             }
         } else if (ch == '\r' || ch == '\n') {
             Error insert_error = state.insert("\n");
             if (!insert_error.ok()) {
-                status = insert_error.message;
+                minibuffer_message(minibuffer, insert_error.message);
             }
         } else if (ch >= 0x20U) {
             const std::string text(1, static_cast<char>(ch));
             Error insert_error = state.insert(text);
             if (!insert_error.ok()) {
-                status = insert_error.message;
+                minibuffer_message(minibuffer, insert_error.message);
             }
         }
 
         last_size = terminal_size();
-        render_terminal(state, status);
+        render_terminal(state, minibuffer);
     }
     return 0;
 }

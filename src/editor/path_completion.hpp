@@ -10,13 +10,21 @@
 
 namespace pkchat::editor {
 
+enum class CompletionKind {
+    None,
+    Path,
+    Command,
+};
+
 struct PathCompletionResult {
     Error error;
+    CompletionKind kind = CompletionKind::Path;
     size_t match_count = 0;
     size_t choice_index = 0;
     std::string value;
     bool changed = false;
     bool cycling = false;
+    bool handled = true;
 };
 
 class PathCompleter {
@@ -32,6 +40,26 @@ class PathCompleter {
     size_t next_choice_ = 0;
     std::string applied_value_;
     std::vector<std::string> candidates_;
+};
+
+class ContextualCompleter {
+   public:
+    PathCompletionResult complete(EditorState& state,
+                                  const std::function<bool()>& cancelled = {});
+    bool can_complete(const EditorState& state) const;
+    bool can_cycle(const EditorState& state) const;
+    void reset();
+
+   private:
+    bool can_cycle_command(const EditorState& state) const;
+    PathCompletionResult complete_command(EditorState& state);
+
+    PathCompleter path_completer_;
+    bool command_active_ = false;
+    size_t command_start_ = 0;
+    size_t command_next_choice_ = 0;
+    std::string command_applied_value_;
+    std::vector<std::string> command_candidates_;
 };
 
 std::string path_completion_status(const PathCompletionResult& result);

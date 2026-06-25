@@ -26,10 +26,15 @@ def send(master, text, delay=0.35):
     return drain(master)
 
 
-def verify_editor_completion(binary, target_path, save_path):
+def require_running(process, description):
+    if process.poll() is not None:
+        raise RuntimeError(f"{description} exited after Ctrl+C")
+
+
+def verify_editor_minibuffer(binary, target_path, save_path):
     master, slave = pty.openpty()
     process = subprocess.Popen(
-        [binary, "--provider", "none", "--editor", save_path],
+        [binary, "--provider", "none", "--editor"],
         stdin=slave,
         stdout=slave,
         stderr=slave,
@@ -39,8 +44,17 @@ def verify_editor_completion(binary, target_path, save_path):
     try:
         time.sleep(0.25)
         drain(master)
-        send(master, target_path[:-4] + "\t")
-        send(master, "\x13")
+        send(master, "\x03", 0.2)
+        require_running(process, "editor")
+        expected_text = target_path[:-4]
+        send(master, expected_text + "\t")
+        send(master, "\x11", 0.2)
+        require_running(process, "editor")
+        send(master, "n", 0.2)
+        save_prompt = send(master, "\x13")
+        if b"Save file:" not in save_prompt:
+            raise RuntimeError("editor Ctrl+S did not open the minibuffer save prompt")
+        send(master, save_path + "\r", 0.2)
         send(master, "\x11", 0.2)
         process.wait(timeout=5)
     finally:
@@ -51,8 +65,8 @@ def verify_editor_completion(binary, target_path, save_path):
     if process.returncode != 0:
         raise RuntimeError(f"editor exited with status {process.returncode}")
     with open(save_path, "r", encoding="utf-8") as saved:
-        if saved.read() != target_path:
-            raise RuntimeError("editor Tab did not complete the unique file path")
+        if saved.read() != expected_text:
+            raise RuntimeError("editor Tab completed or modified text despite disabled completion")
 
 
 def main():
@@ -71,6 +85,8 @@ def main():
     try:
         time.sleep(0.25)
         drain(master)
+        send(master, "\x03", 0.2)
+        require_running(process, "TUI")
         help_output = send(master, "/help\r")
         if b"/fetch URL" not in help_output:
             raise RuntimeError("TUI help panel did not render slash commands")
@@ -86,7 +102,7 @@ def main():
         send(master, "describe-image\r", 0.8)
         send(master, f"/fetch {fetch_url}\r", 0.5)
         send(master, "summarize-url\r", 0.8)
-        send(master, "/quit\r", 0.2)
+        send(master, "\x11", 0.2)
         process.wait(timeout=5)
     finally:
         if process.poll() is None:
@@ -95,7 +111,7 @@ def main():
         os.close(master)
     if process.returncode != 0:
         raise SystemExit(f"TUI exited with status {process.returncode}")
-    verify_editor_completion(binary, insert_path, save_path + ".editor-completion")
+    verify_editor_minibuffer(binary, insert_path, save_path + ".editor-minibuffer")
 
 
 if __name__ == "__main__":

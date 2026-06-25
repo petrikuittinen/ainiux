@@ -53,6 +53,8 @@ v0.3 adds `--chat` as an alternate-screen terminal UI, with `--tui` retained as 
 
 Rendering is split from terminal I/O. `EditorState` renders into a caller-provided `Rect`, so one terminal window can eventually host multiple editor panels or embed the editor in a partial-screen chat layout. Long lines soft-wrap inside that rectangle, preferring whitespace breakpoints and hard-wrapping long words. Vertical movement has two modes: logical hard-line movement for file editing, and visual-row movement that treats wrapped overflow rows as cursor targets for TUI chat input. The current terminal harness uses POSIX `termios` and ANSI escape sequences because `ncursesw` was not available in the build environment; the core renderer is independent of that choice.
 
+The standalone editor reserves the bottom two terminal rows for editor-owned UI: a reverse-video status line and a one-line minibuffer. The main editing screen uses all remaining rows. The status line reports path, dirty state, mode, and cursor position, while the minibuffer handles prompts such as save path, load path, and unsaved-exit confirmation. File-path TAB completion is intentionally disabled in standalone editor mode; TAB completion remains a chat-TUI input feature where command context can constrain it safely.
+
 
 ## Document Extraction Modules
 

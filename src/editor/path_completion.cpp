@@ -12,6 +12,84 @@ bool is_token_separator(char ch) {
     return ch == ' ' || ch == '\t' || ch == '\r' || ch == '\n';
 }
 
+enum class ChatCompletionContextKind {
+    None,
+    Command,
+    Path,
+};
+
+struct ChatCompletionContext {
+    ChatCompletionContextKind kind = ChatCompletionContextKind::None;
+};
+
+const std::vector<std::string>& chat_command_completions() {
+    static const std::vector<std::string> commands = {
+        "/attach ",
+        "/clear",
+        "/exit",
+        "/fetch ",
+        "/help",
+        "/insert ",
+        "/load ",
+        "/model ",
+        "/models",
+        "/quit",
+        "/save ",
+        "/system ",
+        "/theme ",
+        "/thinking ",
+    };
+    return commands;
+}
+
+bool is_path_command(const std::string& command) {
+    return command == "/save" || command == "/load" || command == "/attach" ||
+           command == "/insert";
+}
+
+std::string trim_completion_display(std::string value) {
+    while (!value.empty() && (value.back() == ' ' || value.back() == '\t')) {
+        value.pop_back();
+    }
+    return value;
+}
+
+ChatCompletionContext chat_completion_context(const EditorState& state) {
+    ChatCompletionContext context;
+    if (state.mode != EditorMode::Chat) {
+        return context;
+    }
+
+    const std::string buffer = state.text.str();
+    const size_t cursor = std::min(state.cursor, buffer.size());
+    if (buffer.empty() || cursor == 0 || buffer[0] != '/') {
+        return context;
+    }
+
+    const size_t newline = buffer.find('\n');
+    const size_t first_line_end = newline == std::string::npos ? buffer.size() : newline;
+    if (cursor > first_line_end) {
+        return context;
+    }
+
+    size_t command_end = 0;
+    while (command_end < first_line_end && !is_token_separator(buffer[command_end])) {
+        ++command_end;
+    }
+
+    if (cursor <= command_end) {
+        context.kind = ChatCompletionContextKind::Command;
+        return context;
+    }
+
+    const std::string command = buffer.substr(0, command_end);
+    if (command_end < first_line_end && is_token_separator(buffer[command_end]) &&
+        is_path_command(command)) {
+        context.kind = ChatCompletionContextKind::Path;
+    }
+    return context;
+}
+
 std::string longest_common_prefix(const std::vector<std::string>& values) {
     if (values.empty()) {
         return "";
@@ -127,6 +205,7 @@ Error replace_token(EditorState& state, size_t start, size_t length, const std::
 PathCompletionResult PathCompleter::complete(EditorState& state,
                                              const std::function<bool()>& cancelled) {
     PathCompletionResult result;
+    result.kind = CompletionKind::Path;
     const std::string buffer = state.text.str();
 
     if (active_ && state.cursor == token_start_ + applied_value_.size() &&
@@ -209,9 +288,179 @@ void PathCompleter::reset() {
     candidates_.clear();
 }
 
+PathCompletionResult ContextualCompleter::complete(EditorState& state,
+                                                   const std::function<bool()>& cancelled) {
+    PathCompletionResult result;
+    result.kind = CompletionKind::None;
+    result.handled = false;
+
+    if (state.mode != EditorMode::Chat) {
+        reset();
+        return result;
+    }
+    if (can_cycle_command(state)) {
+        return complete_command(state);
+    }
+    if (path_completer_.can_cycle(state)) {
+        command_active_ = false;
+        command_start_ = 0;
+        command_next_choice_ = 0;
+        command_applied_value_.clear();
+        command_candidates_.clear();
+        return path_completer_.complete(state, cancelled);
+    }
+
+    const ChatCompletionContext context = chat_completion_context(state);
+    if (context.kind == ChatCompletionContextKind::Command) {
+        return complete_command(state);
+    }
+    if (context.kind == ChatCompletionContextKind::Path) {
+        command_active_ = false;
+        command_start_ = 0;
+        command_next_choice_ = 0;
+        command_applied_value_.clear();
+        command_candidates_.clear();
+        return path_completer_.complete(state, cancelled);
+    }
+
+    reset();
+    return result;
+}
+
+bool ContextualCompleter::can_complete(const EditorState& state) const {
+    if (state.mode != EditorMode::Chat) {
+        return false;
+    }
+    if (can_cycle(state)) {
+        return true;
+    }
+    return chat_completion_context(state).kind != ChatCompletionContextKind::None;
+}
+
+bool ContextualCompleter::can_cycle(const EditorState& state) const {
+    if (state.mode != EditorMode::Chat) {
+        return false;
+    }
+    return can_cycle_command(state) || path_completer_.can_cycle(state);
+}
+
+void ContextualCompleter::reset() {
+    path_completer_.reset();
+    command_active_ = false;
+    command_start_ = 0;
+    command_next_choice_ = 0;
+    command_applied_value_.clear();
+    command_candidates_.clear();
+}
+
+bool ContextualCompleter::can_cycle_command(const EditorState& state) const {
+    if (!command_active_) {
+        return false;
+    }
+    const std::string buffer = state.text.str();
+    return state.cursor == command_start_ + command_applied_value_.size() &&
+           command_start_ + command_applied_value_.size() <= buffer.size() &&
+           buffer.compare(command_start_, command_applied_value_.size(),
+                          command_applied_value_) == 0;
+}
+
+PathCompletionResult ContextualCompleter::complete_command(EditorState& state) {
+    path_completer_.reset();
+
+    PathCompletionResult result;
+    result.kind = CompletionKind::Command;
+    result.handled = true;
+
+    const std::string buffer = state.text.str();
+    if (can_cycle_command(state)) {
+        const size_t selected = command_next_choice_;
+        result.error = replace_token(state,
+                                     command_start_,
+                                     command_applied_value_.size(),
+                                     command_candidates_[selected],
+                                     result.changed);
+        if (!result.error.ok()) {
+            reset();
+            return result;
+        }
+        command_applied_value_ = command_candidates_[selected];
+        command_next_choice_ = (selected + 1) % command_candidates_.size();
+        result.match_count = command_candidates_.size();
+        result.choice_index = selected;
+        result.value = command_applied_value_;
+        result.cycling = true;
+        return result;
+    }
+
+    command_active_ = false;
+    command_start_ = 0;
+    command_next_choice_ = 0;
+    command_applied_value_.clear();
+    command_candidates_.clear();
+
+    const size_t cursor = std::min(state.cursor, buffer.size());
+    size_t command_end = 0;
+    const size_t newline = buffer.find('\n');
+    const size_t first_line_end = newline == std::string::npos ? buffer.size() : newline;
+    while (command_end < first_line_end && !is_token_separator(buffer[command_end])) {
+        ++command_end;
+    }
+
+    const std::string token = buffer.substr(0, cursor);
+    for (const std::string& command : chat_command_completions()) {
+        if (command.compare(0, token.size(), token) == 0) {
+            command_candidates_.push_back(command);
+        }
+    }
+
+    result.match_count = command_candidates_.size();
+    result.value = token;
+    if (command_candidates_.empty()) {
+        command_candidates_.clear();
+        return result;
+    }
+
+    const std::string completion = command_candidates_.size() == 1
+                                       ? command_candidates_.front()
+                                       : longest_common_prefix(command_candidates_);
+    result.error = replace_token(state, 0, command_end, completion, result.changed);
+    if (!result.error.ok()) {
+        reset();
+        return result;
+    }
+
+    result.value = completion;
+    if (command_candidates_.size() > 1) {
+        command_active_ = true;
+        command_start_ = 0;
+        command_applied_value_ = completion;
+        command_next_choice_ = 0;
+    } else {
+        command_candidates_.clear();
+    }
+    return result;
+}
+
 std::string path_completion_status(const PathCompletionResult& result) {
+    if (!result.handled || result.kind == CompletionKind::None) {
+        return "Tab completion is not active here";
+    }
     if (!result.error.ok()) {
         return result.error.message;
+    }
+    if (result.kind == CompletionKind::Command) {
+        const std::string value = trim_completion_display(result.value);
+        if (result.match_count == 0) {
+            return value.empty() ? "No commands match" : "No commands match " + value;
+        }
+        if (result.match_count == 1) {
+            return "Completed command: " + value;
+        }
+        if (result.cycling) {
+            return "Command " + std::to_string(result.choice_index + 1) + "/" +
+                   std::to_string(result.match_count) + ": " + value + " (Tab for next)";
+        }
+        return std::to_string(result.match_count) + " commands match; Tab again to cycle";
     }
     if (result.match_count == 0) {
         return result.value.empty() ? "No file paths match" : "No file paths match " + result.value;

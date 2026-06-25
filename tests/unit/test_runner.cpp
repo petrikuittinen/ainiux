@@ -1365,6 +1365,81 @@ void test_editor_path_completion() {
           "resetting completion prevents a later Tab from cycling stale choices");
 }
 
+void test_editor_contextual_completion_modes() {
+    const std::string directory = "build/pkchat-context-completion";
+    std::error_code filesystem_error;
+    std::filesystem::create_directories(directory, filesystem_error);
+    check(!filesystem_error, "contextual completion fixture directory is created");
+
+    {
+        std::ofstream fixture(directory + "/pkchat-context-file.txt",
+                              std::ios::binary | std::ios::trunc);
+        fixture << "context";
+        check(static_cast<bool>(fixture), "contextual completion fixture file is written");
+    }
+
+    pkchat::editor::ContextualCompleter completer;
+
+    pkchat::editor::EditorState empty = pkchat::editor::EditorState::from_text("");
+    empty.mode = pkchat::editor::EditorMode::Chat;
+    pkchat::editor::PathCompletionResult result = completer.complete(empty);
+    check(!result.handled && empty.text.str().empty(),
+          "chat Tab on empty input is ignored");
+
+    pkchat::editor::EditorState editor_path =
+        pkchat::editor::EditorState::from_text(directory + "/pkchat-context-fi");
+    editor_path.cursor = editor_path.text.size();
+    result = completer.complete(editor_path);
+    check(!result.handled &&
+              editor_path.text.str() == directory + "/pkchat-context-fi",
+          "editor-mode Tab does not run generic path completion");
+
+    pkchat::editor::EditorState command = pkchat::editor::EditorState::from_text("/he");
+    command.mode = pkchat::editor::EditorMode::Chat;
+    command.cursor = command.text.size();
+    result = completer.complete(command);
+    check(result.handled && result.kind == pkchat::editor::CompletionKind::Command &&
+              result.match_count == 1 && command.text.str() == "/help",
+          "chat command completion works at the start of the first line");
+
+    completer.reset();
+    pkchat::editor::EditorState path_command = pkchat::editor::EditorState::from_text("/in");
+    path_command.mode = pkchat::editor::EditorMode::Chat;
+    path_command.cursor = path_command.text.size();
+    result = completer.complete(path_command);
+    check(result.handled && result.kind == pkchat::editor::CompletionKind::Command &&
+              path_command.text.str() == "/insert ",
+          "chat command completion adds the path-command separator");
+
+    completer.reset();
+    pkchat::editor::EditorState path =
+        pkchat::editor::EditorState::from_text("/insert " + directory + "/pkchat-context-fi");
+    path.mode = pkchat::editor::EditorMode::Chat;
+    path.cursor = path.text.size();
+    result = completer.complete(path);
+    check(result.handled && result.kind == pkchat::editor::CompletionKind::Path &&
+              result.match_count == 1 &&
+              path.text.str() == "/insert " + directory + "/pkchat-context-file.txt",
+          "chat path completion runs after /insert");
+
+    completer.reset();
+    pkchat::editor::EditorState fetch =
+        pkchat::editor::EditorState::from_text("/fetch " + directory + "/pkchat-context-fi");
+    fetch.mode = pkchat::editor::EditorMode::Chat;
+    fetch.cursor = fetch.text.size();
+    result = completer.complete(fetch);
+    check(!result.handled &&
+              fetch.text.str() == "/fetch " + directory + "/pkchat-context-fi",
+          "chat path completion ignores non-file commands");
+
+    pkchat::editor::EditorState second_line = pkchat::editor::EditorState::from_text("hello\n/he");
+    second_line.mode = pkchat::editor::EditorMode::Chat;
+    second_line.cursor = second_line.text.size();
+    result = completer.complete(second_line);
+    check(!result.handled && second_line.text.str() == "hello\n/he",
+          "chat command completion is limited to the first line start");
+}
+
 void test_tui_layout_reserves_editor_input_panel() {
     pkchat::tui::Layout small = pkchat::tui::layout_for_terminal(8, 20);
     check(small.rows == 8 && small.cols == 20, "TUI layout clamps to requested small terminal");
@@ -1888,6 +1963,7 @@ int main() {
     test_editor_vertical_navigation_modes();
     test_editor_file_round_trip();
     test_editor_path_completion();
+    test_editor_contextual_completion_modes();
     test_tui_layout_reserves_editor_input_panel();
     test_tui_regeneration_plan_uses_last_user_turn();
     test_tui_history_jump_helpers();

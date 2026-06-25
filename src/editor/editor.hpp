@@ -32,6 +32,11 @@ enum class VerticalMovementMode {
     VisualRow,
 };
 
+enum class EditorMode {
+    Editor,
+    Chat,
+};
+
 class PieceTable {
    public:
     static PieceTable from_string(std::string original);
@@ -87,6 +92,7 @@ struct EditorState {
     std::string path;
     bool dirty = false;
     VerticalMovementMode vertical_movement = VerticalMovementMode::LogicalLine;
+    EditorMode mode = EditorMode::Editor;
 
     static EditorState from_text(std::string content);
 
