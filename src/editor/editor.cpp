@@ -18,6 +18,7 @@ namespace pkchat::editor {
 namespace {
 
 constexpr size_t kTabStop = 4;
+constexpr size_t kMaxUndoEntries = 100;
 
 size_t utf8_len(unsigned char ch, size_t remaining) {
     if (ch < 0x80U) return 1;
@@ -378,7 +379,7 @@ std::string editor_status_line(const EditorState& state) {
     const size_t column = state.text.display_column_for_offset(state.cursor) + 1;
     out << "  Mode: Editor"
         << "  Ln " << line << ", Col " << column
-        << "  Ctrl+S save | Ctrl+O load | Ctrl+Q quit";
+        << "  Ctrl+U undo | Ctrl+R redo | Ctrl+S save | Ctrl+O load | Ctrl+Q quit";
     return out.str();
 }
 
@@ -415,6 +416,7 @@ void reset_editor_buffer(EditorState& state, PieceTable text, std::string path) 
     state.scroll_column = 0;
     state.path = std::move(path);
     state.dirty = false;
+    state.clear_undo_history();
 }
 
 void save_editor_to_path(EditorState& state,
@@ -579,6 +581,14 @@ void handle_escape(EditorState& state, std::string& status) {
         Error err = state.erase_at_cursor();
         if (!err.ok()) {
             status = err.message;
+        }
+    } else if (sequence == "[5~" || sequence == "[6~") {
+        const TerminalSize size = terminal_size();
+        const Rect panel_rect{1, 1, std::max(1, size.rows - 2), std::max(1, size.cols - 1)};
+        if (sequence == "[5~") {
+            state.page_up(panel_rect);
+        } else {
+            state.page_down(panel_rect);
         }
     }
 }
@@ -856,12 +866,65 @@ EditorState EditorState::from_text(std::string content) {
     return state;
 }
 
+EditorSnapshot EditorState::snapshot() const {
+    return {text.str(), cursor, preferred_column, scroll_line, scroll_column};
+}
+
+void EditorState::restore_snapshot(const EditorSnapshot& snapshot) {
+    text = PieceTable::from_string(snapshot.content);
+    cursor = std::min(snapshot.cursor, text.size());
+    preferred_column = snapshot.preferred_column;
+    scroll_line = snapshot.scroll_line;
+    scroll_column = snapshot.scroll_column;
+}
+
+void EditorState::remember_undo(EditorSnapshot snapshot) {
+    if (undo_stack_.size() >= kMaxUndoEntries) {
+        undo_stack_.erase(undo_stack_.begin());
+    }
+    undo_stack_.push_back(std::move(snapshot));
+    redo_stack_.clear();
+}
+
 Error EditorState::insert(const std::string& value) {
+    if (value.empty()) {
+        return ok_error();
+    }
+    EditorSnapshot before = snapshot();
     Error err = text.insert(cursor, value);
     if (!err.ok()) {
         return err;
     }
+    remember_undo(std::move(before));
     cursor += value.size();
+    dirty = true;
+    update_preferred_column(*this);
+    return ok_error();
+}
+
+Error EditorState::replace(size_t pos, size_t count, const std::string& value) {
+    if (pos > text.size()) {
+        return {ErrorCode::BadArgs, "editor replace position is past the end of the buffer"};
+    }
+    count = std::min(count, text.size() - pos);
+    const std::string before_text = text.str();
+    if (before_text.substr(pos, count) == value) {
+        return ok_error();
+    }
+
+    EditorSnapshot before{before_text, cursor, preferred_column, scroll_line, scroll_column};
+    PieceTable replacement = text;
+    Error err = replacement.erase(pos, count);
+    if (!err.ok()) {
+        return err;
+    }
+    err = replacement.insert(pos, value);
+    if (!err.ok()) {
+        return err;
+    }
+    text = std::move(replacement);
+    remember_undo(std::move(before));
+    cursor = pos + value.size();
     dirty = true;
     update_preferred_column(*this);
     return ok_error();
@@ -871,11 +934,13 @@ Error EditorState::erase_before_cursor() {
     if (cursor == 0) {
         return ok_error();
     }
+    EditorSnapshot before = snapshot();
     const size_t previous = text.previous_char_offset(cursor);
     Error err = text.erase(previous, cursor - previous);
     if (!err.ok()) {
         return err;
     }
+    remember_undo(std::move(before));
     cursor = previous;
     dirty = true;
     update_preferred_column(*this);
@@ -886,14 +951,59 @@ Error EditorState::erase_at_cursor() {
     if (cursor >= text.size()) {
         return ok_error();
     }
+    EditorSnapshot before = snapshot();
     const size_t next = text.next_char_offset(cursor);
     Error err = text.erase(cursor, next - cursor);
     if (!err.ok()) {
         return err;
     }
+    remember_undo(std::move(before));
     dirty = true;
     update_preferred_column(*this);
     return ok_error();
+}
+
+bool EditorState::undo() {
+    if (undo_stack_.empty()) {
+        return false;
+    }
+    if (redo_stack_.size() >= kMaxUndoEntries) {
+        redo_stack_.erase(redo_stack_.begin());
+    }
+    redo_stack_.push_back(snapshot());
+    const EditorSnapshot target = std::move(undo_stack_.back());
+    undo_stack_.pop_back();
+    restore_snapshot(target);
+    dirty = true;
+    return true;
+}
+
+bool EditorState::redo() {
+    if (redo_stack_.empty()) {
+        return false;
+    }
+    if (undo_stack_.size() >= kMaxUndoEntries) {
+        undo_stack_.erase(undo_stack_.begin());
+    }
+    undo_stack_.push_back(snapshot());
+    const EditorSnapshot target = std::move(redo_stack_.back());
+    redo_stack_.pop_back();
+    restore_snapshot(target);
+    dirty = true;
+    return true;
+}
+
+bool EditorState::can_undo() const {
+    return !undo_stack_.empty();
+}
+
+bool EditorState::can_redo() const {
+    return !redo_stack_.empty();
+}
+
+void EditorState::clear_undo_history() {
+    undo_stack_.clear();
+    redo_stack_.clear();
 }
 
 void EditorState::move_left() {
@@ -936,6 +1046,30 @@ void EditorState::move_down(const Rect& rect) {
         return;
     }
     move_down();
+}
+
+void EditorState::page_up(const Rect& rect) {
+    const int count = std::max(1, rect.height);
+    for (int i = 0; i < count; ++i) {
+        const size_t previous = cursor;
+        move_up(rect);
+        if (cursor == previous) {
+            break;
+        }
+    }
+    ensure_cursor_visible(rect);
+}
+
+void EditorState::page_down(const Rect& rect) {
+    const int count = std::max(1, rect.height);
+    for (int i = 0; i < count; ++i) {
+        const size_t previous = cursor;
+        move_down(rect);
+        if (cursor == previous) {
+            break;
+        }
+    }
+    ensure_cursor_visible(rect);
 }
 
 void EditorState::move_up_visual(const Rect& rect) {
@@ -984,10 +1118,12 @@ Error EditorState::kill_to_line_end() {
     const size_t length = text.line_length(line);
     const size_t end = start + length;
     if (cursor < end) {
+        EditorSnapshot before = snapshot();
         Error err = text.erase(cursor, end - cursor);
         if (!err.ok()) {
             return err;
         }
+        remember_undo(std::move(before));
         dirty = true;
         update_preferred_column(*this);
         return ok_error();
@@ -1000,10 +1136,12 @@ Error EditorState::kill_to_line_end() {
     if (line + 1 >= text.line_count()) {
         erase_pos = start == 0 ? 0 : start - 1;
     }
+    EditorSnapshot before = snapshot();
     Error err = text.erase(erase_pos, 1);
     if (!err.ok()) {
         return err;
     }
+    remember_undo(std::move(before));
     cursor = std::min(erase_pos, text.size());
     dirty = true;
     update_preferred_column(*this);
@@ -1160,21 +1298,10 @@ int run_editor(const std::string& path, const std::string& save_as) {
     minibuffer.message = status;
     TerminalSize last_size = terminal_size();
     render_terminal(state, minibuffer);
-    while (!quit) {
-        unsigned char ch = 0;
-        if (!read_byte(ch, 100)) {
-            const TerminalSize current_size = terminal_size();
-            if (current_size.rows != last_size.rows || current_size.cols != last_size.cols) {
-                last_size = current_size;
-                render_terminal(state, minibuffer);
-            }
-            continue;
-        }
 
+    auto handle_key = [&](unsigned char ch) {
         if (handle_minibuffer_key(state, minibuffer, ch, quit)) {
-            last_size = terminal_size();
-            render_terminal(state, minibuffer);
-            continue;
+            return;
         }
 
         if (ch == 17) {
@@ -1186,6 +1313,10 @@ int run_editor(const std::string& path, const std::string& save_as) {
             }
         } else if (ch == 3) {
             minibuffer_message(minibuffer, "Ctrl+C is reserved for copy; Ctrl+Q quits");
+        } else if (ch == 21) {
+            minibuffer_message(minibuffer, state.undo() ? "Undone" : "Nothing to undo");
+        } else if (ch == 18) {
+            minibuffer_message(minibuffer, state.redo() ? "Redone" : "Nothing to redo");
         } else if (ch == 1) {
             state.move_home();
         } else if (ch == 5) {
@@ -1229,6 +1360,23 @@ int run_editor(const std::string& path, const std::string& save_as) {
             if (!insert_error.ok()) {
                 minibuffer_message(minibuffer, insert_error.message);
             }
+        }
+    };
+
+    while (!quit) {
+        unsigned char ch = 0;
+        if (!read_byte(ch, 100)) {
+            const TerminalSize current_size = terminal_size();
+            if (current_size.rows != last_size.rows || current_size.cols != last_size.cols) {
+                last_size = current_size;
+                render_terminal(state, minibuffer);
+            }
+            continue;
+        }
+
+        handle_key(ch);
+        while (!quit && read_byte(ch, 0)) {
+            handle_key(ch);
         }
 
         last_size = terminal_size();

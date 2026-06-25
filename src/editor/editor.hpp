@@ -27,6 +27,14 @@ struct RenderedPanel {
     CursorPoint cursor;
 };
 
+struct EditorSnapshot {
+    std::string content;
+    size_t cursor = 0;
+    size_t preferred_column = 0;
+    size_t scroll_line = 0;
+    size_t scroll_column = 0;
+};
+
 enum class VerticalMovementMode {
     LogicalLine,
     VisualRow,
@@ -97,14 +105,22 @@ struct EditorState {
     static EditorState from_text(std::string content);
 
     Error insert(const std::string& value);
+    Error replace(size_t pos, size_t count, const std::string& value);
     Error erase_before_cursor();
     Error erase_at_cursor();
+    bool undo();
+    bool redo();
+    bool can_undo() const;
+    bool can_redo() const;
+    void clear_undo_history();
     void move_left();
     void move_right();
     void move_up();
     void move_down();
     void move_up(const Rect& rect);
     void move_down(const Rect& rect);
+    void page_up(const Rect& rect);
+    void page_down(const Rect& rect);
     void move_up_visual(const Rect& rect);
     void move_down_visual(const Rect& rect);
     void move_home();
@@ -112,6 +128,14 @@ struct EditorState {
     Error kill_to_line_end();
     void ensure_cursor_visible(const Rect& rect);
     RenderedPanel render(const Rect& rect) const;
+
+   private:
+    EditorSnapshot snapshot() const;
+    void restore_snapshot(const EditorSnapshot& snapshot);
+    void remember_undo(EditorSnapshot snapshot);
+
+    std::vector<EditorSnapshot> undo_stack_;
+    std::vector<EditorSnapshot> redo_stack_;
 };
 
 RenderedPanel render_panel(const PieceTable& text,

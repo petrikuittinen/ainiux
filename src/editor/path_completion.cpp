@@ -184,20 +184,7 @@ Error replace_token(EditorState& state, size_t start, size_t length, const std::
         return ok_error();
     }
 
-    PieceTable replacement = state.text;
-    Error err = replacement.erase(start, length);
-    if (!err.ok()) {
-        return err;
-    }
-    err = replacement.insert(start, value);
-    if (!err.ok()) {
-        return err;
-    }
-    state.text = std::move(replacement);
-    state.cursor = start + value.size();
-    state.preferred_column = state.text.display_column_for_offset(state.cursor);
-    state.dirty = true;
-    return ok_error();
+    return state.replace(start, length, value);
 }
 
 }  // namespace

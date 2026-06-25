@@ -1240,6 +1240,59 @@ void test_editor_kill_to_line_end() {
     check(only.text.str().empty(), "editor kill single empty buffer is a no-op");
 }
 
+void test_editor_undo_redo() {
+    pkchat::editor::EditorState state = pkchat::editor::EditorState::from_text("alpha");
+    state.cursor = state.text.size();
+
+    pkchat::Error err = state.insert(" beta");
+    check(err.ok(), "editor insert before undo succeeds");
+    check(state.text.str() == "alpha beta", "editor insert changes text before undo");
+    check(state.can_undo() && !state.can_redo(), "editor records undo and clears redo after an edit");
+
+    check(state.undo(), "editor undo succeeds");
+    check(state.text.str() == "alpha", "editor undo restores previous buffer text");
+    check(state.cursor == 5, "editor undo restores previous cursor");
+    check(!state.can_undo() && state.can_redo(), "editor undo moves state to redo stack");
+
+    check(state.redo(), "editor redo succeeds");
+    check(state.text.str() == "alpha beta", "editor redo restores undone insert");
+    check(state.cursor == state.text.size(), "editor redo restores cursor after insert");
+
+    err = state.erase_before_cursor();
+    check(err.ok() && state.text.str() == "alpha bet", "editor delete records an undoable edit");
+    check(state.undo(), "editor undo after delete succeeds");
+    check(state.text.str() == "alpha beta", "editor undo restores deleted character");
+
+    err = state.insert("!");
+    check(err.ok(), "editor new edit after undo succeeds");
+    check(!state.can_redo(), "editor new edit clears stale redo history");
+
+    err = state.replace(0, 5, "ALPHA");
+    check(err.ok() && state.text.str() == "ALPHA beta!", "editor replace changes text");
+    check(state.undo(), "editor replace is undoable as one edit");
+    check(state.text.str() == "alpha beta!", "editor undo restores text before replace");
+}
+
+void test_editor_page_navigation() {
+    pkchat::editor::EditorState state =
+        pkchat::editor::EditorState::from_text("zero\none\ntwo\nthree\nfour\nfive");
+    pkchat::editor::Rect rect{1, 1, 2, 20};
+    state.cursor = state.text.line_start(5);
+    state.preferred_column = 0;
+
+    state.page_up(rect);
+    check(state.text.line_for_offset(state.cursor) == 3,
+          "editor PageUp moves by the editor panel height");
+    check(state.scroll_line == 2,
+          "editor PageUp scrolls the editor window to keep the cursor visible");
+
+    state.page_down(rect);
+    check(state.text.line_for_offset(state.cursor) == 5,
+          "editor PageDown moves by the editor panel height");
+    check(state.scroll_line == 4,
+          "editor PageDown scrolls the editor window to keep the cursor visible");
+}
+
 void test_editor_vertical_navigation_modes() {
     pkchat::editor::Rect rect{1, 1, 3, 4};
     pkchat::editor::EditorState logical = pkchat::editor::EditorState::from_text("abcdefghij\nXYZ");
@@ -1960,6 +2013,8 @@ int main() {
     test_editor_word_wrap_rendering();
     test_editor_word_wrap_breaks_on_spaces();
     test_editor_kill_to_line_end();
+    test_editor_undo_redo();
+    test_editor_page_navigation();
     test_editor_vertical_navigation_modes();
     test_editor_file_round_trip();
     test_editor_path_completion();

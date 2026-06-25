@@ -617,10 +617,13 @@ Enter                insert newline or submit, depending on configured mode
 Alt+Enter            send prompt where detectable
 Esc then Enter       send prompt fallback
 Esc                  cancel active generation
+Ctrl+U               undo editor/input edit
+Ctrl+R               redo editor/input edit
+Alt+R                regenerate last answer in chat mode
 Ctrl+Q               quit chat/editor mode
 Ctrl+C               reserved for future copy support in chat/editor mode
 Ctrl+D               quit when input is empty
-PageUp/PageDown      scroll chat
+PageUp/PageDown      scroll the active editor/input window
 /help                show help
 /quit                quit
 /send                send current prompt
@@ -634,7 +637,6 @@ Defer until the base TUI is stable:
 
 ```text
 insert/overwrite mode
-undo stack
 prompt history navigation
 clipboard integration
 mouse support

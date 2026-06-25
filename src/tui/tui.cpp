@@ -795,7 +795,7 @@ void render(const chat::Session& session,
     draw_line(layout.status_row, cols, status, status_role_for_text(status), style);
     draw_line(layout.input_label_row,
               cols,
-              "Input  Tab command/path | Enter send | Alt+Enter newline | Esc cancel | Ctrl+R regen | PgUp/PgDn scroll | Ctrl+Q quit",
+              "Input  Tab command/path | Enter send | Alt+Enter newline | Alt+R regen | Ctrl+U undo | Ctrl+R redo | Ctrl+Q quit",
               StyleRole::InputLabel,
               style);
 
@@ -865,15 +865,21 @@ bool is_escape_final(unsigned char ch) {
     return (ch >= 'A' && ch <= 'Z') || ch == '~';
 }
 
-bool handle_escape(editor::EditorState& input, const Layout& layout, int& history_scroll, std::string& status) {
+enum class EscapeResult {
+    Unhandled,
+    Handled,
+    Regenerate,
+};
+
+EscapeResult handle_escape(editor::EditorState& input, const Layout& layout, int& history_scroll, std::string& status) {
     unsigned char ch = 0;
     if (!read_byte(ch, 25)) {
-        return false;
+        return EscapeResult::Unhandled;
     }
     if (ch == '\r' || ch == '\n') {
         insert_input(input, "\n", status);
         status = "Inserted newline. Enter sends; Ctrl+S also sends.";
-        return true;
+        return EscapeResult::Handled;
     }
 
     std::string sequence;
@@ -886,10 +892,13 @@ bool handle_escape(editor::EditorState& input, const Layout& layout, int& histor
             }
         }
     } else {
+        if (ch == 'r' || ch == 'R') {
+            return EscapeResult::Regenerate;
+        }
         if (ch >= 32 || ch == '\t') {
             insert_input(input, std::string(1, static_cast<char>(ch)), status);
         }
-        return true;
+        return EscapeResult::Handled;
     }
 
     if (sequence == "[A" || sequence == "OA") {
@@ -907,11 +916,11 @@ bool handle_escape(editor::EditorState& input, const Layout& layout, int& histor
     } else if (sequence == "[3~") {
         set_status_from_error(input.erase_at_cursor(), status);
     } else if (sequence == "[5~") {
-        history_scroll += std::max(1, layout.history_rows / 2);
+        input.page_up(layout.input_rect);
     } else if (sequence == "[6~") {
-        history_scroll -= std::max(1, layout.history_rows / 2);
+        input.page_down(layout.input_rect);
     }
-    return true;
+    return EscapeResult::Handled;
 }
 
 }  // namespace
@@ -1608,8 +1617,11 @@ int run(provider::RequestContext context, chat::Session session) {
                 }
                 if (ch == 27) {
                     const TuiSize terminal = terminal_size();
-                    const bool handled = handle_escape(input, layout_for_terminal(terminal.rows, terminal.cols), history_scroll, status);
-                    if (!handled) {
+                    const EscapeResult escape_result =
+                        handle_escape(input, layout_for_terminal(terminal.rows, terminal.cols), history_scroll, status);
+                    if (escape_result == EscapeResult::Regenerate) {
+                        regenerate_last_turn();
+                    } else if (escape_result == EscapeResult::Unhandled) {
                         if (active_job != ActiveJob::None) {
                             cancel_active_request();
                         } else if (file_job.running()) {
@@ -1623,8 +1635,12 @@ int run(provider::RequestContext context, chat::Session session) {
                     status = "Ctrl+C is reserved for copy; use Esc to cancel or Ctrl+Q to quit";
                     continue;
                 }
+                if (ch == 21) {
+                    status = input.undo() ? "Undone" : "Nothing to undo";
+                    continue;
+                }
                 if (ch == 18) {
-                    regenerate_last_turn();
+                    status = input.redo() ? "Redone" : "Nothing to redo";
                     continue;
                 }
                 if (ch == 20) {
