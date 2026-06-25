@@ -56,7 +56,7 @@ The HTTP transport uses libcurl through RAII wrappers in `src/http/`. Build flag
 
 ## Benchmarks
 
-The first benchmark slice uses JSONL for datasets and results. The built-in dataset contains 50 cases: ten each for safety, reasoning, writing, coding, and multi-turn behavior. Every non-empty dataset line is one UTF-8 JSON object:
+The first benchmark slice uses JSONL for datasets and results. The built-in dataset contains 60 cases: ten safety, twenty reasoning, ten writing, ten coding, and ten multi-turn cases. Every non-empty dataset line is one UTF-8 JSON object:
 
 ```json
 {"id":"reasoning-01","category":"reasoning","language":"en","tags":["arithmetic"],"turns":["Question text"],"reference_answer":"Answer with explanation","expect":{"type":"exact","value":"Answer"}}

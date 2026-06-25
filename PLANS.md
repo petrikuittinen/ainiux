@@ -1242,7 +1242,7 @@ pkchat --benchmark --dataset eval.jsonl --mode quality,refusals --output results
 ## Dataset formats
 
 - [x] Implement strict, bounded UTF-8 JSONL input first.
-- [x] Add an embedded 50-case built-in JSONL corpus with ten safety, reasoning, writing, coding, and multi-turn cases each.
+- [x] Add an embedded 60-case built-in JSONL corpus with ten safety, twenty reasoning, ten writing, ten coding, and ten multi-turn cases.
 - [x] Add optional `fetch_url` cases and a separate Project Gutenberg long-context dataset.
 - [x] Add category, case-ID, and count filtering plus offline validation/listing.
 - [ ] Add Parquet input compatible with Hugging Face Datasets after JSONL behavior stabilizes.

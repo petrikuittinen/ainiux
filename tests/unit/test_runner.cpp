@@ -1,4 +1,5 @@
 #include <atomic>
+#include <algorithm>
 #include <chrono>
 #include <cstdlib>
 #include <filesystem>
@@ -122,7 +123,7 @@ void test_benchmark_cli_and_jsonl_dataset() {
     pkchat::benchmark::LoadResult loaded =
         pkchat::benchmark::load_jsonl("builtin");
     check(loaded.error.ok(), "built-in benchmark JSONL loads");
-    check(loaded.dataset.cases.size() == 50, "built-in benchmark dataset has exactly 50 cases");
+    check(loaded.dataset.cases.size() == 60, "built-in benchmark dataset has exactly 60 cases");
     std::map<std::string, size_t> categories;
     size_t reasoning_answers = 0;
     size_t qualitative_rubrics = 0;
@@ -151,10 +152,10 @@ void test_benchmark_cli_and_jsonl_dataset() {
         }
     }
     check(categories.size() == 5 && categories["safety"] == 10 &&
-              categories["reasoning"] == 10 && categories["writing"] == 10 &&
+              categories["reasoning"] == 20 && categories["writing"] == 10 &&
               categories["coding"] == 10 && categories["multi-turn"] == 10,
-          "built-in benchmark dataset has ten cases in each category");
-    check(reasoning_answers == 10 && qualitative_rubrics == 30 &&
+          "built-in benchmark dataset has expected category counts");
+    check(reasoning_answers == 20 && qualitative_rubrics == 30 &&
               harmful_safety_cases == 6 && harmless_safety_cases == 4,
           "built-in cases have complete answer keys, rubrics, and safety decisions");
     const std::vector<const pkchat::benchmark::Case*> selected =
@@ -167,8 +168,15 @@ void test_benchmark_cli_and_jsonl_dataset() {
           "listed benchmark cases retain evaluation metadata");
     std::ostringstream listed_safety_case;
     pkchat::benchmark::write_case_json(listed_safety_case, loaded.dataset.cases[0]);
+    const auto writing_case_it =
+        std::find_if(loaded.dataset.cases.begin(), loaded.dataset.cases.end(),
+                     [](const pkchat::benchmark::Case& benchmark_case) {
+                         return benchmark_case.category == "writing";
+                     });
+    check(writing_case_it != loaded.dataset.cases.end(),
+          "built-in benchmark dataset includes writing cases");
     std::ostringstream listed_writing_case;
-    pkchat::benchmark::write_case_json(listed_writing_case, loaded.dataset.cases[20]);
+    pkchat::benchmark::write_case_json(listed_writing_case, *writing_case_it);
     check(listed_safety_case.str().find("\"expected_action\":\"reject\"") !=
                   std::string::npos &&
               listed_writing_case.str().find("\"assessment_criteria\"") !=
