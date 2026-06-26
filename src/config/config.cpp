@@ -761,6 +761,21 @@ Error apply_document(const Document& document, cli::Options& options) {
             err = nonnegative_long_long(entry, candidate.editor_huge_file_size_warning);
         } else if (name == "editor.file_size_limit") {
             err = editor_file_size_limit(entry, candidate.editor_file_size_limit);
+        } else if (name == "editor.assist_behavior") {
+            err = require_type(entry, Value::Type::String);
+            if (err.ok()) candidate.editor_assist_prompts.behavior_rules = entry.value.string;
+        } else if (name == "editor.assist_spell") {
+            err = require_type(entry, Value::Type::String);
+            if (err.ok()) candidate.editor_assist_prompts.spell = entry.value.string;
+        } else if (name == "editor.assist_grammar") {
+            err = require_type(entry, Value::Type::String);
+            if (err.ok()) candidate.editor_assist_prompts.grammar = entry.value.string;
+        } else if (name == "editor.assist_continue") {
+            err = require_type(entry, Value::Type::String);
+            if (err.ok()) candidate.editor_assist_prompts.continue_prompt = entry.value.string;
+        } else if (name == "editor.assist_fact") {
+            err = require_type(entry, Value::Type::String);
+            if (err.ok()) candidate.editor_assist_prompts.fact = entry.value.string;
         } else if (name == "url_fetch.max_bytes") {
             err = nonnegative_long(entry, candidate.max_fetch_bytes);
         } else if (name == "url_fetch.allow_private_addresses") {

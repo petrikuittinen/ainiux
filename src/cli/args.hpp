@@ -6,6 +6,7 @@
 
 #include "common.hpp"
 #include "editor/editor.hpp"
+#include "editor/editor_prompts.hpp"
 #include "markdown/markdown.hpp"
 
 namespace pkchat::cli {
@@ -89,6 +90,7 @@ struct Options {
     int editor_undo_limit = static_cast<int>(pkchat::editor::kDefaultUndoLimit);
     long long editor_huge_file_size_warning = pkchat::editor::kDefaultHugeFileSizeWarningBytes;
     long long editor_file_size_limit = pkchat::editor::kNoEditorFileSizeLimit;
+    pkchat::editor::EditorAssistPrompts editor_assist_prompts = pkchat::editor::default_editor_assist_prompts();
     long long context_tokens = 0;
     int benchmark_runs = 1;
     int benchmark_warmup = 0;

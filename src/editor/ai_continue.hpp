@@ -4,6 +4,7 @@
 #include <string>
 
 #include "common.hpp"
+#include "editor/editor_prompts.hpp"
 #include "provider/provider.hpp"
 #include "runtime/runtime.hpp"
 
@@ -20,6 +21,7 @@ struct AiContinueSettings {
 struct AiContinueContext {
     provider::RequestContext request;
     AiContinueSettings settings;
+    EditorAssistPrompts prompts;
 };
 
 enum class ContinueEventType {

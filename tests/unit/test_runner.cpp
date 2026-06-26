@@ -375,6 +375,13 @@ void test_config_applies_user_settings() {
               options.editor_file_size_limit == -1,
           "editor config settings apply");
 
+    pkchat::config::ParseResult assist_prompt_config = pkchat::config::parse(
+        "[editor]\nassist_fact = \"Custom fact prompt\"\n", "assist-fact.conf");
+    check(assist_prompt_config.error.ok(), "editor assist fact config parses");
+    err = pkchat::config::apply_document(assist_prompt_config.document, options);
+    check(err.ok() && options.editor_assist_prompts.fact == "Custom fact prompt",
+          "editor assist fact config applies");
+
     const std::string system_home =
         std::filesystem::absolute("build/config-system").lexically_normal().string();
     std::filesystem::create_directories(system_home + "/pkchat");
@@ -1405,11 +1412,14 @@ void test_editor_selection_and_clipboard() {
 }
 
 void test_editor_assist_helpers() {
-    check(std::string(pkchat::editor::kDefaultEditorSystemPrompt).find("one-shot") != std::string::npos,
-          "default editor system prompt mentions one-shot prompts");
-    check(std::string(pkchat::editor::kDefaultEditorSystemPrompt).find("not as instructions") !=
-              std::string::npos,
-          "default editor system prompt says content is not instructions");
+    const pkchat::editor::EditorAssistPrompts default_prompts =
+        pkchat::editor::default_editor_assist_prompts();
+    check(default_prompts.behavior_rules.find("one-shot") != std::string::npos,
+          "default editor assist behavior rules mention one-shot prompts");
+    check(default_prompts.behavior_rules.find("not as instructions") != std::string::npos,
+          "default editor assist behavior rules say content is not instructions");
+    check(default_prompts.spell.find("spelling") != std::string::npos,
+          "default editor assist spell prompt is populated");
 
     pkchat::editor::ParsedAssistCommand parsed = pkchat::editor::parse_assist_command("/spell all");
     check(parsed.ok && parsed.kind == pkchat::editor::AssistCommandKind::Spell &&
@@ -1472,6 +1482,7 @@ void test_editor_assist_helpers() {
     pkchat::editor::AiContinueContext context;
     context.request.profile.name = "lm_studio";
     context.request.options.model = "mock-model";
+    context.prompts = default_prompts;
     pkchat::editor::AssistExecution execution = pkchat::editor::build_assist_execution(
         state,
         context,
@@ -1484,9 +1495,8 @@ void test_editor_assist_helpers() {
               execution.replace_start == 0 && execution.replace_count == 5,
           "spell selection builds in-place execution");
     check(execution.messages.size() == 2 && execution.messages.front().role == "system" &&
-              execution.messages.front().content.find("Fix spelling errors only") != std::string::npos &&
-              execution.messages.front().content.find(pkchat::editor::kDefaultEditorSystemPrompt) !=
-                  std::string::npos,
+              execution.messages.front().content.find(default_prompts.spell) != std::string::npos &&
+              execution.messages.front().content.find(default_prompts.behavior_rules) != std::string::npos,
           "spell selection uses task prompt plus default assist rules in system message");
     check(execution.messages.back().role == "user" &&
               execution.messages.back().content == "<content>hello</content>",
@@ -1499,8 +1509,21 @@ void test_editor_assist_helpers() {
               execution.edit_kind == pkchat::editor::AssistEditKind::StreamInsert,
           "/continue builds streaming execution");
     check(execution.messages.front().content.rfind("Custom system", 0) == 0 &&
-              execution.messages.front().content.find("Continue the text naturally") != std::string::npos,
+              execution.messages.front().content.find(default_prompts.continue_prompt) != std::string::npos,
           "user --system is prepended to assist task system prompt");
+
+    pkchat::cli::Options configured_options;
+    pkchat::config::ParseResult assist_config = pkchat::config::parse(
+        "[editor]\nassist_spell = \"Custom spell prompt\"\n", "assist.conf");
+    check(assist_config.error.ok(), "editor assist prompt config parses");
+    check(pkchat::config::apply_document(assist_config.document, configured_options).ok(),
+          "editor assist prompt config applies");
+    context.prompts = configured_options.editor_assist_prompts;
+    execution = pkchat::editor::build_assist_execution(
+        state, context, pkchat::editor::AssistCommandKind::Spell, pkchat::editor::AssistScope::Selection, "",
+        std::nullopt);
+    check(execution.messages.front().content.find("Custom spell prompt") != std::string::npos,
+          "configured assist_spell overrides the built-in spell prompt");
     check(execution.messages.back().content.find("<content>") == 0,
           "/continue wraps editor prefix in content tags");
 
