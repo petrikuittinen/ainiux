@@ -1479,6 +1479,14 @@ void test_editor_assist_helpers() {
 
     check(pkchat::editor::trim_assist_inplace_response("  fixed text \n") == "fixed text",
           "in-place assist responses are trimmed");
+    check(pkchat::editor::trim_assist_inplace_response(
+              "<think>hidden trace</think>\n\nVisible rewrite") == "Visible rewrite",
+          "in-place assist responses drop thinking traces");
+
+    const pkchat::provider::RequestContext assist_context =
+        pkchat::editor::assist_request_context(context, true);
+    check(assist_context.suppress_streaming_reasoning,
+          "editor assist suppresses streamed reasoning deltas");
 }
 
 void test_editor_ai_continue_helpers() {

@@ -800,6 +800,9 @@ bool choice_stream_finished(const json::Value& choice) {
 
 class SseParser {
    public:
+    explicit SseParser(bool suppress_streaming_reasoning = false)
+        : suppress_streaming_reasoning_(suppress_streaming_reasoning) {}
+
     Error feed(const std::string& chunk, const DeltaCallback& on_delta, ChatResult& result, bool& done) {
         buffer_ += chunk;
         size_t pos = 0;
@@ -843,27 +846,35 @@ class SseParser {
    private:
     std::string buffer_;
     bool reasoning_open_ = false;
+    bool suppress_streaming_reasoning_ = false;
 
-    Error emit_text(const std::string& text, const DeltaCallback& on_delta, std::string& accumulated) {
+    Error emit_text(const std::string& text,
+                    const DeltaCallback& on_delta,
+                    std::string& accumulated,
+                    bool forward_to_callback) {
         if (text.empty()) {
             return ok_error();
         }
         accumulated += text;
-        return on_delta(text);
+        if (forward_to_callback) {
+            return on_delta(text);
+        }
+        return ok_error();
     }
 
     Error emit_reasoning(const std::string& text, const DeltaCallback& on_delta, std::string& accumulated) {
         if (text.empty()) {
             return ok_error();
         }
+        const bool forward = !suppress_streaming_reasoning_;
         if (!reasoning_open_) {
-            Error err = emit_text("<think>", on_delta, accumulated);
+            Error err = emit_text("<think>", on_delta, accumulated, forward);
             if (!err.ok()) {
                 return err;
             }
             reasoning_open_ = true;
         }
-        return emit_text(text, on_delta, accumulated);
+        return emit_text(text, on_delta, accumulated, forward);
     }
 
     Error close_reasoning(const DeltaCallback& on_delta, std::string& accumulated, bool before_content) {
@@ -871,7 +882,10 @@ class SseParser {
             return ok_error();
         }
         reasoning_open_ = false;
-        return emit_text(before_content ? "</think>\n\n" : "</think>", on_delta, accumulated);
+        return emit_text(before_content ? "</think>\n\n" : "</think>",
+                         on_delta,
+                         accumulated,
+                         !suppress_streaming_reasoning_);
     }
 
     Error process_event(const std::string& event,
@@ -941,7 +955,7 @@ class SseParser {
                 if (!err.ok()) {
                     return err;
                 }
-                err = emit_text(content->string, on_delta, result.content);
+                err = emit_text(content->string, on_delta, result.content, true);
                 if (!err.ok()) {
                     return err;
                 }
@@ -960,6 +974,9 @@ class SseParser {
 
 class ResponsesSseParser {
    public:
+    explicit ResponsesSseParser(bool suppress_streaming_reasoning = false)
+        : suppress_streaming_reasoning_(suppress_streaming_reasoning) {}
+
     Error feed(const std::string& chunk, const DeltaCallback& on_delta, ChatResult& result, bool& done) {
         buffer_ += chunk;
         size_t pos = 0;
@@ -1000,27 +1017,35 @@ class ResponsesSseParser {
    private:
     std::string buffer_;
     bool reasoning_open_ = false;
+    bool suppress_streaming_reasoning_ = false;
 
-    Error emit_text(const std::string& text, const DeltaCallback& on_delta, ChatResult& result) {
+    Error emit_text(const std::string& text,
+                    const DeltaCallback& on_delta,
+                    ChatResult& result,
+                    bool forward_to_callback) {
         if (text.empty()) {
             return ok_error();
         }
         result.content += text;
-        return on_delta(text);
+        if (forward_to_callback) {
+            return on_delta(text);
+        }
+        return ok_error();
     }
 
     Error emit_reasoning(const std::string& text, const DeltaCallback& on_delta, ChatResult& result) {
         if (text.empty()) {
             return ok_error();
         }
+        const bool forward = !suppress_streaming_reasoning_;
         if (!reasoning_open_) {
-            Error err = emit_text("<think>", on_delta, result);
+            Error err = emit_text("<think>", on_delta, result, forward);
             if (!err.ok()) {
                 return err;
             }
             reasoning_open_ = true;
         }
-        return emit_text(text, on_delta, result);
+        return emit_text(text, on_delta, result, forward);
     }
 
     Error close_reasoning(const DeltaCallback& on_delta, ChatResult& result, bool before_content) {
@@ -1028,7 +1053,10 @@ class ResponsesSseParser {
             return ok_error();
         }
         reasoning_open_ = false;
-        return emit_text(before_content ? "</think>\n\n" : "</think>", on_delta, result);
+        return emit_text(before_content ? "</think>\n\n" : "</think>",
+                         on_delta,
+                         result,
+                         !suppress_streaming_reasoning_);
     }
 
     static bool ends_with(const std::string& text, const std::string& suffix) {
@@ -1126,7 +1154,7 @@ class ResponsesSseParser {
             if (!err.ok()) {
                 return err;
             }
-            return emit_text(delta->string, on_delta, result);
+            return emit_text(delta->string, on_delta, result, true);
         }
         return ok_error();
     }
@@ -1536,8 +1564,8 @@ Error send_chat_messages(const RequestContext& context,
     http::Request req = base_http_request(context, "POST", url, cancellation);
     req.body = context.api_kind == ApiKind::Responses ? build_responses_request_json(context, messages)
                                                       : serialize_chat_request(context, messages);
-    SseParser chat_parser;
-    ResponsesSseParser responses_parser;
+    SseParser chat_parser(context.suppress_streaming_reasoning);
+    ResponsesSseParser responses_parser(context.suppress_streaming_reasoning);
     bool done = false;
     if (context.options.stream) {
         req.on_body = [&](const std::string& chunk) -> Error {

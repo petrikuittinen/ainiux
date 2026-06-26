@@ -426,6 +426,7 @@ provider::RequestContext assist_request_context(const AiContinueContext& context
     job_context.options.stream = stream;
     job_context.options.has_max_output_tokens = true;
     job_context.options.max_output_tokens = context.settings.max_output_tokens;
+    job_context.suppress_streaming_reasoning = true;
     return job_context;
 }
 
@@ -505,6 +506,7 @@ void start_assist_job(const AiContinueContext& context,
 }
 
 std::string trim_assist_inplace_response(std::string text) {
+    text = pkchat::output::split_thinking_traces(std::move(text)).visible;
     return trim_ascii_copy(std::move(text));
 }
 

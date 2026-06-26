@@ -58,6 +58,7 @@ struct RequestContext {
     std::string api_key;
     std::vector<std::string> headers;
     ApiKind api_kind = ApiKind::ChatCompletions;
+    bool suppress_streaming_reasoning = false;
 };
 
 struct ImageInput {
