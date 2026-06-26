@@ -57,7 +57,7 @@ Each milestone should leave the program usable. Do not create a long-lived pile 
 
 ## Current baseline
 
-Implementation status (2026-06-26): `pkchat` is at v0.76. The repository has the scriptable CLI, built-in provider registry and aliases, Chat Completions, text-only Responses API support, streaming SSE, credential lookup, JSON chat persistence, cancellable runtime jobs, REPL, full-screen TUI foundation, editor with selection and copy/cut/paste, request-only context policies, context-use estimates, bounded text/HTML/Markdown input, JPEG/PNG/GIF image input for Chat Completions, safe URL fetching, Markdown output conversion, automatic v0.6 system/user TOML-alike configuration loading, and concurrent JSONL benchmark execution. `--provider none` supports local conversion and editor workflows without a model endpoint. Standalone `--editor` accepts an optional startup path after a provider shortcut or base URL, creates a missing file before editing, prompts to save scratch buffers on quit, and asks for overwrite confirmation when saving to an existing path.
+Implementation status (2026-06-26): `pkchat` is at v0.77. The repository has the scriptable CLI, built-in provider registry and aliases, Chat Completions, text-only Responses API support, streaming SSE, credential lookup, JSON chat persistence, cancellable runtime jobs, REPL, full-screen TUI foundation, editor with selection, copy/cut/paste, and AI continue/auto-write (`Ctrl+Space`), request-only context policies, context-use estimates, bounded text/HTML/Markdown input, JPEG/PNG/GIF image input for Chat Completions, safe URL fetching, Markdown output conversion, automatic v0.6 system/user TOML-alike configuration loading, and concurrent JSONL benchmark execution. `--provider none` supports local conversion and editor workflows without a model endpoint. Standalone `--editor` accepts an optional startup path after a provider shortcut or base URL, creates a missing file before editing, prompts to save scratch buffers on quit, and asks for overwrite confirmation when saving to an existing path. Local `lmstudio`, `ollama`, `vllm`, and loopback base URLs auto-select the first `/v1/models` entry when `--model` is omitted.
 
 Runtime defaults live in `cli::Options`, provider defaults live in `src/provider/`, and API keys are resolved while building the provider request context. Automatic system and user config files map into a base `cli::Options`, after which `main.cpp` parses CLI arguments over that base. `--no-config` can bypass the automatic user file while retaining system configuration, and `--debug` reports configuration discovery on `stderr`.
 
@@ -1501,7 +1501,7 @@ Use the existing provider, runtime, cancellation, and TUI/editor infrastructure:
 - [ ] `Esc` or another documented key cancels an active assist request.
 - [ ] Reuse provider model discovery/default model selection.
 - [ ] Reuse Chat Completions and Responses API adapters through the provider layer.
-- [x] Do not let worker threads mutate editor state directly; send events to the editor loop (AI continue in v0.76).
+- [x] Do not let worker threads mutate editor state directly; send events to the editor loop (AI continue in v0.77).
 - [x] Shutdown cancels/joins assist jobs cleanly for editor continue requests.
 
 ## Prompt construction

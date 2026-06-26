@@ -39,6 +39,8 @@ struct ContinueEvent {
 
 AiContinueSettings ai_continue_settings_from_env();
 std::string continue_status_message(const std::string& model_name, const std::string& suffix);
+bool editor_auto_selects_model(const provider::RequestContext& context);
+Error resolve_editor_default_model(AiContinueContext& context);
 Error validate_continue_request(const AiContinueContext& context);
 provider::RequestContext continue_request_context(const AiContinueContext& context);
 void start_continue_job(const AiContinueContext& context,

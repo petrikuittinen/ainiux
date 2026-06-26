@@ -1432,10 +1432,35 @@ void test_editor_ai_continue_helpers() {
     check(!pkchat::editor::validate_continue_request(ai_continue).ok(),
           "none provider rejects AI continue");
 
-    const char* lm_argv[] = {"pkchat", "lmstudio", "-m", "mock-model", "--editor"};
-    pkchat::cli::ParseResult lm_parsed = pkchat::cli::parse_args(5, const_cast<char**>(lm_argv));
-    check(lm_parsed.error.ok(), "lmstudio provider editor args parse");
+    const char* lm_argv[] = {"pkchat", "lmstudio", "--editor"};
+    pkchat::cli::ParseResult lm_parsed = pkchat::cli::parse_args(3, const_cast<char**>(lm_argv));
+    check(lm_parsed.error.ok(), "lmstudio editor args without model parse");
     context = pkchat::provider::build_context(lm_parsed.options);
+    check(context.error.ok(), "lmstudio provider context builds without model");
+    check(pkchat::editor::editor_auto_selects_model(context.context),
+          "lmstudio editor auto-selects the first model");
+    ai_continue.request = context.context;
+    check(pkchat::editor::validate_continue_request(ai_continue).code == pkchat::ErrorCode::BadArgs,
+          "continue validation still requires a resolved model");
+
+    const char* localhost_argv[] = {"pkchat", "http://localhost:30000/v1", "--editor"};
+    pkchat::cli::ParseResult localhost_parsed = pkchat::cli::parse_args(3, const_cast<char**>(localhost_argv));
+    check(localhost_parsed.error.ok(), "localhost editor args without model parse");
+    pkchat::provider::ContextResult localhost_context =
+        pkchat::provider::build_context(localhost_parsed.options);
+    check(localhost_context.error.ok(), "localhost custom endpoint context builds without model");
+    check(pkchat::editor::editor_auto_selects_model(localhost_context.context),
+          "localhost custom endpoint auto-selects the first model");
+
+    pkchat::provider::RequestContext openai_context;
+    openai_context.profile.name = "openai";
+    check(!pkchat::editor::editor_auto_selects_model(openai_context),
+          "openai editor does not auto-select a model");
+
+    const char* lm_model_argv[] = {"pkchat", "lmstudio", "-m", "mock-model", "--editor"};
+    pkchat::cli::ParseResult lm_model_parsed = pkchat::cli::parse_args(5, const_cast<char**>(lm_model_argv));
+    check(lm_model_parsed.error.ok(), "lmstudio provider editor args parse");
+    context = pkchat::provider::build_context(lm_model_parsed.options);
     check(context.error.ok(), "lmstudio provider context builds");
     ai_continue.request = context.context;
     ai_continue.settings.max_output_tokens = 1234;

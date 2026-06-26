@@ -1383,6 +1383,16 @@ int main(int argc, char** argv) {
         pkchat::editor::AiContinueContext ai_continue;
         ai_continue.request = std::move(context_result.context);
         ai_continue.settings = pkchat::editor::ai_continue_settings_from_env();
+        const bool auto_select_model = options.model.empty();
+        pkchat::Error model_err = pkchat::editor::resolve_editor_default_model(ai_continue);
+        if (!model_err.ok()) {
+            print_error(model_err);
+            return exit_code_for(model_err.code);
+        }
+        if (auto_select_model && !options.quiet) {
+            std::cerr << "Editor model: " << ai_continue.request.options.model
+                      << " (first model from " << ai_continue.request.models_url << ")\n";
+        }
         return pkchat::editor::run_editor(options.editor_path, options.output_path, editor_settings, &ai_continue);
     }
     if (!options.key.empty() && !options.quiet) {

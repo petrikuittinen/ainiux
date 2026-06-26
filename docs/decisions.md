@@ -57,6 +57,8 @@ The standalone editor reserves the bottom two terminal rows for editor-owned UI:
 
 v0.76 adds byte-offset selection with Shift+movement keys, reverse-video highlighting, and internal copy/cut/paste shared between standalone editor mode and the chat TUI input. Bracketed paste is enabled so terminal paste events can be distinguished from typed input; paste prefers the internal clipboard when it is non-empty and otherwise falls back to the terminal payload. Copy publishes through OSC 52 where supported, but local editing does not depend on the OS clipboard for Ctrl+C/X/V round-trips.
 
+v0.77 adds the first editor AI feature: continue/auto-write on `Ctrl+Space`. The editor sends up to `MAX_AI_CONTINUE_READ` characters before the cursor to the configured provider, streams visible continuation text at the cursor up to `MAX_AI_CONTINUE_TOKENS`, hides thinking traces from the buffer, and reports thinking/writing/stopped states in the minibuffer. Continue runs on cancellable runtime jobs with events delivered to the editor loop; SSE completion is detected through `finish_reason` and `[DONE]`, then the HTTP stream is aborted so the editor can return to idle without a keypress. For `lmstudio`, `ollama`, `vllm`, and loopback custom base URLs, editor startup auto-selects the first `/v1/models` entry when `--model` is omitted.
+
 
 ## Document Extraction Modules
 
