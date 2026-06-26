@@ -1446,6 +1446,22 @@ void test_editor_assist_helpers() {
         pkchat::editor::complete_assist_command(input, completer);
     check(completion.changed && input.rfind("/spell", 0) == 0, "assist tab completion expands /sp");
 
+    input = "/";
+    completer = pkchat::editor::AssistCompleterState{};
+    pkchat::editor::complete_assist_command(input, completer);
+    check(completer.active && input == "/", "assist tab completion on / enters cycle mode");
+    input += "fa";
+    completion = pkchat::editor::complete_assist_command(input, completer);
+    check(input == "/fact", "assist tab completion rematches after editing / to /fa");
+    check(!completer.active, "single /fact match clears cycle state");
+
+    input = "/";
+    completer = pkchat::editor::AssistCompleterState{};
+    pkchat::editor::complete_assist_command(input, completer);
+    input = "/q";
+    completion = pkchat::editor::complete_assist_command(input, completer);
+    check(input == "/quit", "assist tab completion rematches /q after stale / cycle state");
+
     pkchat::editor::EditorState state =
         pkchat::editor::EditorState::from_text("hello wrld");
     state.selection.anchor = 0;

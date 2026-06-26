@@ -172,18 +172,24 @@ AssistCompletionResult complete_assist_command(std::string& input, AssistComplet
     result.handled = true;
 
     if (state.active) {
-        const size_t selected = state.next_choice;
-        if (selected < state.candidates.size()) {
-            input = state.candidates[selected];
-            state.applied_value = input;
-            state.next_choice = (selected + 1) % state.candidates.size();
-            result.match_count = state.candidates.size();
-            result.choice_index = selected;
-            result.value = input;
-            result.changed = true;
-            result.cycling = true;
+        if (input == state.applied_value) {
+            const size_t selected = state.next_choice;
+            if (selected < state.candidates.size()) {
+                input = state.candidates[selected];
+                state.applied_value = input;
+                state.next_choice = (selected + 1) % state.candidates.size();
+                result.match_count = state.candidates.size();
+                result.choice_index = selected;
+                result.value = input;
+                result.changed = true;
+                result.cycling = true;
+            }
+            return result;
         }
-        return result;
+        state.active = false;
+        state.next_choice = 0;
+        state.applied_value.clear();
+        state.candidates.clear();
     }
 
     state.active = false;

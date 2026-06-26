@@ -2423,11 +2423,13 @@ int run_editor(const std::string& path,
                 if (ch == 127 || ch == 8) {
                     if (!minibuffer.input.empty()) {
                         minibuffer.input.pop_back();
+                        assist_completer = AssistCompleterState{};
                     }
                     return;
                 }
                 if (ch >= 0x20U) {
                     minibuffer.input.push_back(static_cast<char>(ch));
+                    assist_completer = AssistCompleterState{};
                     return;
                 }
                 return;
