@@ -619,6 +619,8 @@ Esc then Enter       send prompt fallback
 Esc                  cancel active generation
 Ctrl+U               undo editor/input edit
 Ctrl+R               redo editor/input edit
+Ctrl+F               search with a minibuffer prompt in editor mode
+F3/Shift+F3          search next/previous in editor mode
 Alt+R                regenerate last answer in chat mode
 Ctrl+Q               quit chat/editor mode
 Ctrl+C               reserved for future copy support in chat/editor mode

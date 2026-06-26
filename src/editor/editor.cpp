@@ -345,6 +345,7 @@ enum class MinibufferAction {
     None,
     SaveFile,
     LoadFile,
+    Search,
     ConfirmQuit,
 };
 
@@ -379,7 +380,7 @@ std::string editor_status_line(const EditorState& state) {
     const size_t column = state.text.display_column_for_offset(state.cursor) + 1;
     out << "  Mode: Editor"
         << "  Ln " << line << ", Col " << column
-        << "  Ctrl+U undo | Ctrl+R redo | Ctrl+S save | Ctrl+O load | Ctrl+Q quit";
+        << "  Ctrl+F find | F3 next | Ctrl+U undo | Ctrl+S save | Ctrl+Q quit";
     return out.str();
 }
 
@@ -446,7 +447,18 @@ void load_editor_from_path(EditorState& state, const std::string& path, Minibuff
     }
 }
 
-void submit_minibuffer(EditorState& state, MinibufferState& minibuffer, bool& quit) {
+std::string search_found_message(const std::string& needle) {
+    return "Found: " + needle;
+}
+
+std::string search_not_found_message(const std::string& needle) {
+    return "Search not found: " + needle;
+}
+
+void submit_minibuffer(EditorState& state,
+                       MinibufferState& minibuffer,
+                       bool& quit,
+                       std::string& last_search) {
     const MinibufferAction action = minibuffer.action;
     const std::string value = trim_ascii_copy(minibuffer.input);
     if (action == MinibufferAction::SaveFile) {
@@ -465,6 +477,17 @@ void submit_minibuffer(EditorState& state, MinibufferState& minibuffer, bool& qu
         load_editor_from_path(state, value, minibuffer);
         return;
     }
+    if (action == MinibufferAction::Search) {
+        if (value.empty()) {
+            minibuffer.prompt = "Search (substring required): ";
+            return;
+        }
+        last_search = value;
+        minibuffer_message(minibuffer,
+                           state.search(value) ? search_found_message(value)
+                                               : search_not_found_message(value));
+        return;
+    }
     if (action == MinibufferAction::ConfirmQuit) {
         if (value == "y" || value == "Y" || value == "yes" || value == "YES") {
             quit = true;
@@ -479,7 +502,8 @@ void submit_minibuffer(EditorState& state, MinibufferState& minibuffer, bool& qu
 bool handle_minibuffer_key(EditorState& state,
                            MinibufferState& minibuffer,
                            unsigned char ch,
-                           bool& quit) {
+                           bool& quit,
+                           std::string& last_search) {
     if (!minibuffer.active) {
         return false;
     }
@@ -488,7 +512,7 @@ bool handle_minibuffer_key(EditorState& state,
         return true;
     }
     if (ch == '\r' || ch == '\n') {
-        submit_minibuffer(state, minibuffer, quit);
+        submit_minibuffer(state, minibuffer, quit, last_search);
         return true;
     }
     if (ch == 127 || ch == 8) {
@@ -555,11 +579,14 @@ void render_terminal(EditorState& state, const MinibufferState& minibuffer) {
     std::cout.flush();
 }
 
-void handle_escape(EditorState& state, std::string& status) {
+void handle_escape(EditorState& state, std::string& status, const std::string& last_search) {
     std::string sequence;
     unsigned char ch = 0;
     while (sequence.size() < 16 && read_byte(ch, 25)) {
         sequence.push_back(static_cast<char>(ch));
+        if (sequence.size() == 1 && ch == 'O') {
+            continue;
+        }
         if ((ch >= 'A' && ch <= 'Z') || ch == '~') {
             break;
         }
@@ -589,6 +616,21 @@ void handle_escape(EditorState& state, std::string& status) {
             state.page_up(panel_rect);
         } else {
             state.page_down(panel_rect);
+        }
+    } else if (sequence == "OR" || sequence == "[13~" || sequence == "[[C") {
+        if (last_search.empty()) {
+            status = "No search string; use Ctrl+F";
+        } else {
+            status = state.search_next(last_search) ? search_found_message(last_search)
+                                                    : search_not_found_message(last_search);
+        }
+    } else if (sequence == "[1;2R" || sequence == "O1;2R" ||
+               sequence == "[13;2~" || sequence == "[25~") {
+        if (last_search.empty()) {
+            status = "No search string; use Ctrl+F";
+        } else {
+            status = state.search_previous(last_search) ? search_found_message(last_search)
+                                                        : search_not_found_message(last_search);
         }
     }
 }
@@ -1006,6 +1048,71 @@ void EditorState::clear_undo_history() {
     redo_stack_.clear();
 }
 
+bool EditorState::search(const std::string& needle) {
+    if (needle.empty()) {
+        return false;
+    }
+    const std::string haystack = text.str();
+    if (haystack.empty()) {
+        return false;
+    }
+
+    size_t found = haystack.find(needle, std::min(cursor, haystack.size()));
+    if (found == std::string::npos) {
+        found = haystack.find(needle);
+    }
+    if (found == std::string::npos) {
+        return false;
+    }
+    cursor = found;
+    update_preferred_column(*this);
+    return true;
+}
+
+bool EditorState::search_next(const std::string& needle) {
+    if (needle.empty()) {
+        return false;
+    }
+    const std::string haystack = text.str();
+    if (haystack.empty()) {
+        return false;
+    }
+
+    const size_t start = cursor < haystack.size() ? cursor + 1 : 0;
+    size_t found = haystack.find(needle, start);
+    if (found == std::string::npos) {
+        found = haystack.find(needle);
+    }
+    if (found == std::string::npos) {
+        return false;
+    }
+    cursor = found;
+    update_preferred_column(*this);
+    return true;
+}
+
+bool EditorState::search_previous(const std::string& needle) {
+    if (needle.empty()) {
+        return false;
+    }
+    const std::string haystack = text.str();
+    if (haystack.empty()) {
+        return false;
+    }
+
+    const size_t start = cursor == 0 ? haystack.size() : cursor - 1;
+    size_t found = haystack.rfind(needle, start);
+    if (found == std::string::npos) {
+        found = haystack.rfind(needle);
+    }
+    if (found == std::string::npos) {
+        return false;
+    }
+    cursor = found;
+    update_preferred_column(*this);
+    return true;
+}
+
 void EditorState::move_left() {
     cursor = text.previous_char_offset(cursor);
     update_preferred_column(*this);
@@ -1296,11 +1403,12 @@ int run_editor(const std::string& path, const std::string& save_as) {
     bool quit = false;
     MinibufferState minibuffer;
     minibuffer.message = status;
+    std::string last_search;
     TerminalSize last_size = terminal_size();
     render_terminal(state, minibuffer);
 
     auto handle_key = [&](unsigned char ch) {
-        if (handle_minibuffer_key(state, minibuffer, ch, quit)) {
+        if (handle_minibuffer_key(state, minibuffer, ch, quit, last_search)) {
             return;
         }
 
@@ -1313,6 +1421,8 @@ int run_editor(const std::string& path, const std::string& save_as) {
             }
         } else if (ch == 3) {
             minibuffer_message(minibuffer, "Ctrl+C is reserved for copy; Ctrl+Q quits");
+        } else if (ch == 6) {
+            start_minibuffer(minibuffer, MinibufferAction::Search, "Search: ", last_search);
         } else if (ch == 21) {
             minibuffer_message(minibuffer, state.undo() ? "Undone" : "Nothing to undo");
         } else if (ch == 18) {
@@ -1340,7 +1450,7 @@ int run_editor(const std::string& path, const std::string& save_as) {
             minibuffer_message(minibuffer, "Tab completion is disabled in editor mode");
         } else if (ch == 27) {
             std::string escape_status;
-            handle_escape(state, escape_status);
+            handle_escape(state, escape_status, last_search);
             if (!escape_status.empty()) {
                 minibuffer_message(minibuffer, escape_status);
             }

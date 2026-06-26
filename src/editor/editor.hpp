@@ -113,6 +113,9 @@ struct EditorState {
     bool can_undo() const;
     bool can_redo() const;
     void clear_undo_history();
+    bool search(const std::string& needle);
+    bool search_next(const std::string& needle);
+    bool search_previous(const std::string& needle);
     void move_left();
     void move_right();
     void move_up();

@@ -1293,6 +1293,28 @@ void test_editor_page_navigation() {
           "editor PageDown scrolls the editor window to keep the cursor visible");
 }
 
+void test_editor_search_navigation() {
+    pkchat::editor::EditorState state =
+        pkchat::editor::EditorState::from_text("alpha beta\nbeta gamma\nalpha");
+
+    check(state.search("beta"), "editor search finds a substring at or after the cursor");
+    check(state.cursor == 6, "editor search moves to the first matching substring");
+    check(!state.dirty, "editor search does not mark the buffer dirty");
+
+    check(state.search_next("beta"), "editor F3-style search next finds the following match");
+    check(state.cursor == 11, "editor search next moves to the next match");
+
+    check(state.search_next("beta"), "editor search next wraps to the first match");
+    check(state.cursor == 6, "editor search next wraps from the last match");
+
+    check(state.search_previous("beta"), "editor Shift+F3-style search previous wraps backward");
+    check(state.cursor == 11, "editor search previous moves to the previous match");
+
+    const size_t before = state.cursor;
+    check(!state.search("missing"), "editor search reports a missing substring");
+    check(state.cursor == before, "editor search leaves cursor in place when not found");
+}
+
 void test_editor_vertical_navigation_modes() {
     pkchat::editor::Rect rect{1, 1, 3, 4};
     pkchat::editor::EditorState logical = pkchat::editor::EditorState::from_text("abcdefghij\nXYZ");
@@ -2015,6 +2037,7 @@ int main() {
     test_editor_kill_to_line_end();
     test_editor_undo_redo();
     test_editor_page_navigation();
+    test_editor_search_navigation();
     test_editor_vertical_navigation_modes();
     test_editor_file_round_trip();
     test_editor_path_completion();
