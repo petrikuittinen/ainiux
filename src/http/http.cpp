@@ -454,6 +454,9 @@ Result perform(const Request& request, const std::vector<std::string>& secrets) 
             return {state.response, {ErrorCode::Cancelled, "HTTP request cancelled: " + request.url}};
         }
         if (code == CURLE_WRITE_ERROR && !state.callback_error.ok()) {
+            if (state.callback_error.code == ErrorCode::StreamComplete) {
+                return {state.response, ok_error()};
+            }
             return {state.response, state.callback_error};
         }
         if (state.blocked_address) {

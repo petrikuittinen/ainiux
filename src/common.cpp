@@ -40,6 +40,8 @@ const char* error_code_name(ErrorCode code) {
             return "PKCHAT_ERR_CONFIG";
         case ErrorCode::Cancelled:
             return "PKCHAT_ERR_CANCELLED";
+        case ErrorCode::StreamComplete:
+            return "PKCHAT_ERR_STREAM_COMPLETE";
         case ErrorCode::Internal:
             return "PKCHAT_ERR_INTERNAL";
     }

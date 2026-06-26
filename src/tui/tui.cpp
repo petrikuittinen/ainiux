@@ -297,6 +297,8 @@ int exit_code_for(ErrorCode code) {
             return 5;
         case ErrorCode::Cancelled:
             return 130;
+        case ErrorCode::StreamComplete:
+            return 0;
         case ErrorCode::UnsupportedFeature:
         case ErrorCode::Internal:
             return 6;

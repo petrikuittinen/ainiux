@@ -1450,9 +1450,11 @@ Rewrite:
 
 Continue text:
 
-- [ ] Send nearby context around the cursor.
-- [ ] Insert generated continuation at the cursor only after user approval.
-- [ ] Let user retry/regenerate before applying.
+- [x] Send nearby context around the cursor (`MAX_AI_CONTINUE_READ`, default 4096 characters before the cursor).
+- [x] Stream generated continuation at the cursor (`Ctrl+Space`; `MAX_AI_CONTINUE_TOKENS`, default 32768).
+- [x] Hide thinking traces from the editor buffer; show `[model] thinking... ESC to abort` in the minibuffer while thinking and `[model] writing. Press ESC to stop.` while visible text streams.
+- [x] `Esc` aborts an in-flight continue request without deleting already streamed text.
+- [ ] Let user retry/regenerate before applying (preview/apply workflow remains future work).
 
 Comment text:
 
@@ -1499,8 +1501,8 @@ Use the existing provider, runtime, cancellation, and TUI/editor infrastructure:
 - [ ] `Esc` or another documented key cancels an active assist request.
 - [ ] Reuse provider model discovery/default model selection.
 - [ ] Reuse Chat Completions and Responses API adapters through the provider layer.
-- [ ] Do not let worker threads mutate editor state directly; send events to the editor loop.
-- [ ] Shutdown cancels/joins assist jobs cleanly.
+- [x] Do not let worker threads mutate editor state directly; send events to the editor loop (AI continue in v0.76).
+- [x] Shutdown cancels/joins assist jobs cleanly for editor continue requests.
 
 ## Prompt construction
 

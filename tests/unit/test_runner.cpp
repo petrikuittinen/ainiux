@@ -17,6 +17,7 @@
 #include "cli/args.hpp"
 #include "config/config.hpp"
 #include "context/context.hpp"
+#include "editor/ai_continue.hpp"
 #include "editor/clipboard.hpp"
 #include "editor/editor.hpp"
 #include "editor/path_completion.hpp"
@@ -1402,6 +1403,85 @@ void test_editor_selection_and_clipboard() {
     check(state.text.str() == "alpha alpha gammaalpha", "paste replaces selected range");
 }
 
+void test_editor_ai_continue_helpers() {
+    pkchat::editor::PieceTable text = pkchat::editor::PieceTable::from_string("abcdefghij");
+    check(text.range_text(2, 4) == "cdef", "range_text returns a bounded substring");
+    check(text.range_text(0, 100) == "abcdefghij", "range_text clamps to buffer size");
+
+    check(pkchat::editor::continue_status_message("gpt-test", "thinking... ESC to abort") ==
+              "[gpt-test] thinking... ESC to abort",
+          "continue status message includes model name");
+
+    pkchat::editor::EditorState state = pkchat::editor::EditorState::from_text("Once upon a ");
+    state.cursor = state.text.size();
+    check(state.insert_without_undo("time").ok(), "stream insert succeeds");
+    check(state.text.str() == "Once upon a time", "stream insert appends at cursor");
+    check(!state.can_undo(), "stream insert does not create undo entries by itself");
+    check(state.insert("!").ok(), "normal insert after stream chunk creates undo");
+    check(state.undo(), "undo after stream chunk succeeds");
+    check(state.text.str() == "Once upon a time", "undo removes only the normal insert");
+
+    const char* none_argv[] = {"pkchat", "--provider", "none", "--editor"};
+    pkchat::cli::ParseResult none_parsed = pkchat::cli::parse_args(4, const_cast<char**>(none_argv));
+    check(none_parsed.error.ok(), "none provider editor args parse");
+    pkchat::provider::ContextResult context = pkchat::provider::build_context(none_parsed.options);
+    check(context.error.ok(), "none provider context builds");
+    pkchat::editor::AiContinueContext ai_continue;
+    ai_continue.request = context.context;
+    ai_continue.settings = pkchat::editor::ai_continue_settings_from_env();
+    check(!pkchat::editor::validate_continue_request(ai_continue).ok(),
+          "none provider rejects AI continue");
+
+    const char* lm_argv[] = {"pkchat", "lmstudio", "-m", "mock-model", "--editor"};
+    pkchat::cli::ParseResult lm_parsed = pkchat::cli::parse_args(5, const_cast<char**>(lm_argv));
+    check(lm_parsed.error.ok(), "lmstudio provider editor args parse");
+    context = pkchat::provider::build_context(lm_parsed.options);
+    check(context.error.ok(), "lmstudio provider context builds");
+    ai_continue.request = context.context;
+    ai_continue.settings.max_output_tokens = 1234;
+    check(pkchat::editor::validate_continue_request(ai_continue).ok(), "configured provider allows continue");
+    const pkchat::provider::RequestContext job_context = pkchat::editor::continue_request_context(ai_continue);
+    check(job_context.options.stream, "continue forces streaming");
+    check(job_context.options.has_max_output_tokens, "continue sets max output tokens");
+    check(job_context.options.max_output_tokens == 1234, "continue uses configured token limit");
+
+    const char* previous_read = std::getenv("MAX_AI_CONTINUE_READ");
+    const char* previous_tokens = std::getenv("MAX_AI_CONTINUE_TOKENS");
+#if defined(_WIN32)
+    _putenv_s("MAX_AI_CONTINUE_READ", "16");
+    _putenv_s("MAX_AI_CONTINUE_TOKENS", "2048");
+#else
+    setenv("MAX_AI_CONTINUE_READ", "16", 1);
+    setenv("MAX_AI_CONTINUE_TOKENS", "2048", 1);
+#endif
+    const pkchat::editor::AiContinueSettings env_settings = pkchat::editor::ai_continue_settings_from_env();
+    check(env_settings.max_read_chars == 16, "MAX_AI_CONTINUE_READ overrides default");
+    check(env_settings.max_output_tokens == 2048, "MAX_AI_CONTINUE_TOKENS overrides default");
+#if defined(_WIN32)
+    if (previous_read != nullptr) {
+        _putenv_s("MAX_AI_CONTINUE_READ", previous_read);
+    } else {
+        _putenv_s("MAX_AI_CONTINUE_READ", "");
+    }
+    if (previous_tokens != nullptr) {
+        _putenv_s("MAX_AI_CONTINUE_TOKENS", previous_tokens);
+    } else {
+        _putenv_s("MAX_AI_CONTINUE_TOKENS", "");
+    }
+#else
+    if (previous_read != nullptr) {
+        setenv("MAX_AI_CONTINUE_READ", previous_read, 1);
+    } else {
+        unsetenv("MAX_AI_CONTINUE_READ");
+    }
+    if (previous_tokens != nullptr) {
+        setenv("MAX_AI_CONTINUE_TOKENS", previous_tokens, 1);
+    } else {
+        unsetenv("MAX_AI_CONTINUE_TOKENS");
+    }
+#endif
+}
+
 void test_editor_paste_prefers_local_clipboard() {
     pkchat::editor::EditorState state = pkchat::editor::EditorState::from_text("hello");
     pkchat::editor::Clipboard clipboard;
@@ -2238,6 +2318,7 @@ int main() {
     test_editor_undo_redo();
     test_editor_home_end_navigation();
     test_editor_selection_and_clipboard();
+    test_editor_ai_continue_helpers();
     test_editor_paste_prefers_local_clipboard();
     test_editor_movement_sequence_parse();
     test_editor_page_navigation();

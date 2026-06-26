@@ -787,6 +787,17 @@ long long estimate_completion_tokens(const std::string& text) {
     return tokens;
 }
 
+bool choice_stream_finished(const json::Value& choice) {
+    const json::Value* finish_reason = choice.get("finish_reason");
+    if (finish_reason == nullptr || finish_reason->is_null()) {
+        return false;
+    }
+    if (!finish_reason->is_string()) {
+        return false;
+    }
+    return !finish_reason->string.empty();
+}
+
 class SseParser {
    public:
     Error feed(const std::string& chunk, const DeltaCallback& on_delta, ChatResult& result, bool& done) {
@@ -916,22 +927,32 @@ class SseParser {
         if (choices == nullptr || !choices->is_array() || choices->array.empty()) {
             return ok_error();
         }
-        const json::Value* delta = choices->array[0].get("delta");
-        if (delta == nullptr) {
-            return ok_error();
-        }
-        const std::string reasoning = reasoning_text_from_object(*delta);
-        Error err = emit_reasoning(reasoning, on_delta, result.content);
-        if (!err.ok()) {
-            return err;
-        }
-        const json::Value* content = delta->get("content");
-        if (content != nullptr && content->is_string() && !content->string.empty()) {
-            err = close_reasoning(on_delta, result.content, true);
+        const json::Value& choice = choices->array[0];
+        const json::Value* delta = choice.get("delta");
+        if (delta != nullptr) {
+            const std::string reasoning = reasoning_text_from_object(*delta);
+            Error err = emit_reasoning(reasoning, on_delta, result.content);
             if (!err.ok()) {
                 return err;
             }
-            return emit_text(content->string, on_delta, result.content);
+            const json::Value* content = delta->get("content");
+            if (content != nullptr && content->is_string() && !content->string.empty()) {
+                err = close_reasoning(on_delta, result.content, true);
+                if (!err.ok()) {
+                    return err;
+                }
+                err = emit_text(content->string, on_delta, result.content);
+                if (!err.ok()) {
+                    return err;
+                }
+            }
+        }
+        if (choice_stream_finished(choice)) {
+            Error err = close_reasoning(on_delta, result.content, false);
+            if (!err.ok()) {
+                return err;
+            }
+            done = true;
         }
         return ok_error();
     }
@@ -1111,6 +1132,25 @@ class ResponsesSseParser {
     }
 };
 
+Error stream_body_chunk(SseParser& chat_parser,
+                        ResponsesSseParser& responses_parser,
+                        ApiKind api_kind,
+                        const std::string& chunk,
+                        const DeltaCallback& on_delta,
+                        ChatResult& result,
+                        bool& done) {
+    Error err = api_kind == ApiKind::Responses
+                    ? responses_parser.feed(chunk, on_delta, result, done)
+                    : chat_parser.feed(chunk, on_delta, result, done);
+    if (!err.ok()) {
+        return err;
+    }
+    if (done) {
+        return {ErrorCode::StreamComplete, "chat completion stream finished"};
+    }
+    return ok_error();
+}
+
 std::vector<std::string> build_headers(const RequestContext& context) {
     std::vector<std::string> headers = context.headers;
     headers.emplace_back("Content-Type: application/json");
@@ -1196,7 +1236,7 @@ ContextResult build_context(const cli::Options& input_options) {
         }
         options.key = trim_ascii(options.key);
     }
-    if (!options.list_models && !options.repl && !options.tui && !options.benchmark &&
+    if (!options.list_models && !options.repl && !options.tui && !options.editor && !options.benchmark &&
         trim_ascii(options.prompt).empty()) {
         return {{}, {ErrorCode::BadArgs, "prompt is empty; use -p/--prompt, --prompt-file, or --repl"}};
     }
@@ -1501,10 +1541,13 @@ Error send_chat_messages(const RequestContext& context,
     bool done = false;
     if (context.options.stream) {
         req.on_body = [&](const std::string& chunk) -> Error {
-            if (context.api_kind == ApiKind::Responses) {
-                return responses_parser.feed(chunk, timed_delta, result, done);
-            }
-            return chat_parser.feed(chunk, timed_delta, result, done);
+            return stream_body_chunk(chat_parser,
+                                     responses_parser,
+                                     context.api_kind,
+                                     chunk,
+                                     timed_delta,
+                                     result,
+                                     done);
         };
     }
 
@@ -1515,7 +1558,7 @@ Error send_chat_messages(const RequestContext& context,
     result.tls_ms = http_result.response.tls_ms;
     result.time_to_first_byte_ms = http_result.response.time_to_first_byte_ms;
     result.first_body_ms = http_result.response.first_body_ms;
-    if (!http_result.error.ok()) {
+    if (!http_result.error.ok() && http_result.error.code != ErrorCode::StreamComplete) {
         if (context.profile.local_endpoint && http_result.error.code == ErrorCode::Connect) {
             return {ErrorCode::Connect,
                     http_result.error.message +

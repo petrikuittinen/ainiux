@@ -17,6 +17,7 @@
 #include "common.hpp"
 #include "config/config.hpp"
 #include "context/context.hpp"
+#include "editor/ai_continue.hpp"
 #include "editor/editor.hpp"
 #include "fetch/fetch.hpp"
 #include "html/html.hpp"
@@ -82,6 +83,8 @@ int exit_code_for(pkchat::ErrorCode code) {
             return 5;
         case ErrorCode::Cancelled:
             return 130;
+        case ErrorCode::StreamComplete:
+            return 0;
         case ErrorCode::UnsupportedFeature:
         case ErrorCode::Internal:
             return 6;
@@ -1372,7 +1375,15 @@ int main(int argc, char** argv) {
         editor_settings.undo_limit = static_cast<size_t>(options.editor_undo_limit);
         editor_settings.huge_file_size_warning = options.editor_huge_file_size_warning;
         editor_settings.file_size_limit = options.editor_file_size_limit;
-        return pkchat::editor::run_editor(options.editor_path, options.output_path, editor_settings);
+        pkchat::provider::ContextResult context_result = pkchat::provider::build_context(options);
+        if (!context_result.error.ok()) {
+            print_error(context_result.error);
+            return exit_code_for(context_result.error.code);
+        }
+        pkchat::editor::AiContinueContext ai_continue;
+        ai_continue.request = std::move(context_result.context);
+        ai_continue.settings = pkchat::editor::ai_continue_settings_from_env();
+        return pkchat::editor::run_editor(options.editor_path, options.output_path, editor_settings, &ai_continue);
     }
     if (!options.key.empty() && !options.quiet) {
         std::cerr << "Warning: command line API keys may be visible to other local users; prefer --key-env, --key-file, or --key-stdin.\n";

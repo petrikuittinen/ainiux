@@ -23,6 +23,7 @@ enum class ErrorCode {
     FileWrite,
     Config,
     Cancelled,
+    StreamComplete,
     Internal
 };
 

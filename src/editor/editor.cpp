@@ -1,8 +1,10 @@
 #include "editor/editor.hpp"
 
+#include "editor/ai_continue.hpp"
 #include "editor/clipboard.hpp"
 #include "editor/selection.hpp"
 #include "editor/terminal_input.hpp"
+#include "runtime/runtime.hpp"
 
 #include <algorithm>
 #include <array>
@@ -448,7 +450,7 @@ std::string editor_status_line(const EditorState& state) {
     const size_t column = state.text.display_column_for_offset(state.cursor) + 1;
     out << "  Mode: Editor"
         << "  Ln " << line << ", Col " << column
-        << "  Ctrl+C copy | Ctrl+X cut | Ctrl+V paste | Ctrl+U undo | Ctrl+S save | Ctrl+Q quit";
+        << "  Ctrl+Space continue | Ctrl+C copy | Ctrl+X cut | Ctrl+V paste | Ctrl+U undo | Ctrl+S save | Ctrl+Q quit";
     return out.str();
 }
 
@@ -1267,6 +1269,13 @@ std::string PieceTable::line_text(size_t line) const {
     return out;
 }
 
+std::string PieceTable::range_text(size_t start, size_t length) const {
+    std::string out;
+    out.reserve(length);
+    append_range(out, start, length);
+    return out;
+}
+
 const std::string& PieceTable::source_for(const Piece& piece) const {
     return piece.source == Source::Original ? original_ : add_;
 }
@@ -1369,6 +1378,30 @@ Error EditorState::insert(const std::string& value) {
     dirty = true;
     update_preferred_column(*this);
     return ok_error();
+}
+
+Error EditorState::insert_without_undo(const std::string& value) {
+    if (value.empty()) {
+        return ok_error();
+    }
+    Error err = text.insert(cursor, value);
+    if (!err.ok()) {
+        return err;
+    }
+    cursor += value.size();
+    dirty = true;
+    update_preferred_column(*this);
+    return ok_error();
+}
+
+void EditorState::finalize_stream_edit(const EditorSnapshot& before) {
+    if (snapshot().content != before.content || cursor != before.cursor) {
+        remember_undo(before);
+    }
+}
+
+EditorSnapshot EditorState::capture_state() const {
+    return snapshot();
 }
 
 Error EditorState::replace(size_t pos, size_t count, const std::string& value) {
@@ -2073,7 +2106,30 @@ Error ensure_empty_file(const std::string& path) {
     return save_file(path, PieceTable::from_string(""));
 }
 
-int run_editor(const std::string& path, const std::string& save_as, const EditorSettings& settings) {
+struct ContinueSession {
+    runtime::JobHandle job;
+    runtime::EventQueue<ContinueEvent> events;
+    bool active = false;
+    bool saw_visible = false;
+    EditorSnapshot undo_before;
+    std::string model_name;
+};
+
+void clear_continue_session(ContinueSession& session) {
+    session.job.join();
+    ContinueEvent event;
+    while (session.events.try_pop(event)) {
+    }
+    session.active = false;
+    session.saw_visible = false;
+    session.undo_before = EditorSnapshot{};
+    session.model_name.clear();
+}
+
+int run_editor(const std::string& path,
+               const std::string& save_as,
+               const EditorSettings& settings,
+               const AiContinueContext* ai_continue) {
     EditorState state;
     state.set_undo_limit(settings.undo_limit);
     state.path = path.empty() ? save_as : path;
@@ -2119,10 +2175,104 @@ int run_editor(const std::string& path, const std::string& save_as, const Editor
     std::string last_search;
     ReplaceSession replace;
     std::string pending_load_path;
+    ContinueSession continue_session;
     TerminalSize last_size = terminal_size();
     render_terminal(state, minibuffer);
 
+    auto continue_panel_rect = [&]() {
+        const TerminalSize size = terminal_size();
+        return Rect{1, 1, std::max(1, size.rows - 2), std::max(1, size.cols - 1)};
+    };
+
+    auto set_continue_minibuffer = [&](const std::string& suffix) {
+        minibuffer_message(minibuffer, continue_status_message(continue_session.model_name, suffix));
+    };
+
+    auto finish_continue_session = [&](const std::string& suffix, bool commit_undo) {
+        continue_session.job.join();
+        if (commit_undo && continue_session.saw_visible) {
+            state.finalize_stream_edit(continue_session.undo_before);
+        }
+        set_continue_minibuffer(suffix);
+        clear_continue_session(continue_session);
+    };
+
+    auto process_continue_events = [&]() -> bool {
+        bool updated = false;
+        ContinueEvent event;
+        while (continue_session.events.try_pop(event)) {
+            updated = true;
+            switch (event.type) {
+                case ContinueEventType::Thinking:
+                    set_continue_minibuffer("thinking... ESC to abort");
+                    break;
+                case ContinueEventType::Writing:
+                    set_continue_minibuffer("writing. Press ESC to stop.");
+                    break;
+                case ContinueEventType::Delta:
+                    continue_session.saw_visible = true;
+                    if (Error insert_error = state.insert_without_undo(event.text); !insert_error.ok()) {
+                        continue_session.job.cancel();
+                        continue_session.job.join();
+                        minibuffer_message(minibuffer, insert_error.message);
+                        clear_continue_session(continue_session);
+                        return true;
+                    }
+                    state.ensure_cursor_visible(continue_panel_rect());
+                    break;
+                case ContinueEventType::Done:
+                    if (!event.chat.model.empty()) {
+                        continue_session.model_name = event.chat.model;
+                    }
+                    finish_continue_session("stopped and ready", true);
+                    return true;
+                case ContinueEventType::Error:
+                    if (event.error.code == ErrorCode::Cancelled) {
+                        finish_continue_session("stopped and ready", true);
+                    } else {
+                        continue_session.job.join();
+                        minibuffer_message(minibuffer, event.error.message);
+                        clear_continue_session(continue_session);
+                    }
+                    return true;
+            }
+        }
+        return updated;
+    };
+
+    auto start_continue = [&]() {
+        if (continue_session.active || minibuffer.active) {
+            return;
+        }
+        if (ai_continue == nullptr) {
+            minibuffer_message(minibuffer, "AI continue requires a provider; use --provider lmstudio -m MODEL");
+            return;
+        }
+        Error validation = validate_continue_request(*ai_continue);
+        if (!validation.ok()) {
+            minibuffer_message(minibuffer, validation.message);
+            return;
+        }
+
+        const size_t read_len = std::min(state.cursor, ai_continue->settings.max_read_chars);
+        const std::string prefix = state.text.range_text(state.cursor - read_len, read_len);
+        clear_continue_session(continue_session);
+        continue_session.active = true;
+        continue_session.model_name = ai_continue->request.options.model;
+        continue_session.undo_before = state.capture_state();
+        state.clear_selection();
+        start_continue_job(*ai_continue, prefix, continue_session.events, continue_session.job);
+        set_continue_minibuffer("thinking... ESC to abort");
+    };
+
     auto handle_key = [&](unsigned char ch) {
+        if (continue_session.active) {
+            if (ch == 27) {
+                continue_session.job.cancel();
+                return;
+            }
+            return;
+        }
         if (handle_minibuffer_key(state,
                                   minibuffer,
                                   ch,
@@ -2182,6 +2332,8 @@ int run_editor(const std::string& path, const std::string& save_as, const Editor
             }
         } else if (ch == 15) {
             start_minibuffer(minibuffer, MinibufferAction::LoadFile, "Load file: ");
+        } else if (ch == 0) {
+            start_continue();
         } else if (ch == 19) {
             const std::string target = save_as.empty() ? state.path : save_as;
             if (target.empty()) {
@@ -2229,10 +2381,13 @@ int run_editor(const std::string& path, const std::string& save_as, const Editor
     };
 
     while (!quit) {
+        const bool continue_updated = process_continue_events();
+
         TerminalInputEvent event;
         if (!read_terminal_input(event, 100)) {
             const TerminalSize current_size = terminal_size();
-            if (current_size.rows != last_size.rows || current_size.cols != last_size.cols) {
+            if (current_size.rows != last_size.rows || current_size.cols != last_size.cols ||
+                continue_session.job.running() || continue_updated) {
                 last_size = current_size;
                 render_terminal(state, minibuffer);
             }

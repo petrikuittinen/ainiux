@@ -49,6 +49,8 @@ struct EditorSettings {
     long long file_size_limit = kNoEditorFileSizeLimit;
 };
 
+struct AiContinueContext;
+
 struct FileLoadCheck {
     std::uintmax_t size = 0;
     bool should_warn = false;
@@ -87,6 +89,7 @@ class PieceTable {
     size_t display_column_for_offset(size_t offset) const;
     size_t offset_for_line_column(size_t line, size_t display_column) const;
     std::string line_text(size_t line) const;
+    std::string range_text(size_t start, size_t length) const;
 
    private:
     enum class Source { Original, Add };
@@ -125,6 +128,9 @@ struct EditorState {
     static EditorState from_text(std::string content);
 
     Error insert(const std::string& value);
+    Error insert_without_undo(const std::string& value);
+    void finalize_stream_edit(const EditorSnapshot& before);
+    EditorSnapshot capture_state() const;
     Error replace(size_t pos, size_t count, const std::string& value);
     Error erase_before_cursor();
     Error erase_at_cursor();
@@ -186,6 +192,9 @@ Error load_file(const std::string& path, const EditorSettings& settings, PieceTa
 Error check_load_file_size(const std::string& path, const EditorSettings& settings, FileLoadCheck& check);
 Error save_file(const std::string& path, const PieceTable& text);
 
-int run_editor(const std::string& path, const std::string& save_as, const EditorSettings& settings = {});
+int run_editor(const std::string& path,
+               const std::string& save_as,
+               const EditorSettings& settings = {},
+               const AiContinueContext* ai_continue = nullptr);
 
 }  // namespace pkchat::editor
