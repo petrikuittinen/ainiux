@@ -3,10 +3,13 @@
 #include <cstddef>
 #include <cstdint>
 #include <iosfwd>
+#include <optional>
 #include <string>
 #include <vector>
 
 #include "common.hpp"
+#include "editor/clipboard.hpp"
+#include "editor/selection.hpp"
 
 namespace pkchat::editor {
 
@@ -117,6 +120,7 @@ struct EditorState {
     bool dirty = false;
     VerticalMovementMode vertical_movement = VerticalMovementMode::LogicalLine;
     EditorMode mode = EditorMode::Editor;
+    Selection selection;
 
     static EditorState from_text(std::string content);
 
@@ -135,6 +139,12 @@ struct EditorState {
     bool search_next(const std::string& needle);
     bool search_previous(const std::string& needle);
     Error replace_all_from(size_t start, const std::string& needle, const std::string& value, size_t& replacements);
+    void clear_selection();
+    std::string selected_text() const;
+    Error copy_selection(Clipboard& clipboard);
+    Error cut_selection(Clipboard& clipboard);
+    Error paste(Clipboard& clipboard);
+    void apply_movement(MovementKey key, const Rect& rect, bool extend_selection);
     void move_left();
     void move_right();
     void move_up();
@@ -152,6 +162,9 @@ struct EditorState {
     RenderedPanel render(const Rect& rect) const;
 
    private:
+    void begin_movement(bool extend_selection);
+    void finish_movement(bool extend_selection);
+
     EditorSnapshot snapshot() const;
     void restore_snapshot(const EditorSnapshot& snapshot);
     void remember_undo(EditorSnapshot snapshot);
@@ -165,7 +178,8 @@ RenderedPanel render_panel(const PieceTable& text,
                            const Rect& rect,
                            size_t cursor,
                            size_t scroll_line,
-                           size_t scroll_column);
+                           size_t scroll_column,
+                           const std::optional<Selection>& selection = std::nullopt);
 
 Error load_file(const std::string& path, PieceTable& out);
 Error load_file(const std::string& path, const EditorSettings& settings, PieceTable& out);

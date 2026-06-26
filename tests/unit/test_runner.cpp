@@ -17,8 +17,11 @@
 #include "cli/args.hpp"
 #include "config/config.hpp"
 #include "context/context.hpp"
+#include "editor/clipboard.hpp"
 #include "editor/editor.hpp"
 #include "editor/path_completion.hpp"
+#include "editor/selection.hpp"
+#include "editor/terminal_input.hpp"
 #include "fetch/fetch.hpp"
 #include "html/html.hpp"
 #include "http/http.hpp"
@@ -1346,6 +1349,87 @@ void test_editor_undo_redo() {
     check(!limited.can_undo(), "editor zero undo limit stores no undo entries");
 }
 
+void test_editor_home_end_navigation() {
+    pkchat::editor::EditorState state =
+        pkchat::editor::EditorState::from_text("alpha\nbeta\ngamma");
+    state.cursor = state.text.line_start(2);
+    state.scroll_line = 4;
+    state.preferred_column = 3;
+
+    state.move_home();
+    check(state.cursor == 0, "editor Home moves to the beginning of the buffer");
+    check(state.scroll_line == 0, "editor Home scrolls to the top of the buffer");
+    check(state.preferred_column == 0, "editor Home resets the preferred column");
+
+    state.move_end();
+    check(state.cursor == state.text.size(), "editor End moves to the end of the buffer");
+}
+
+void test_editor_selection_and_clipboard() {
+    pkchat::editor::EditorState state = pkchat::editor::EditorState::from_text("alpha beta gamma");
+    pkchat::editor::Rect rect{1, 1, 1, 20};
+    pkchat::editor::Clipboard clipboard;
+
+    state.cursor = 5;
+    state.apply_movement(pkchat::editor::MovementKey::Left, rect, true);
+    state.apply_movement(pkchat::editor::MovementKey::Left, rect, true);
+    state.apply_movement(pkchat::editor::MovementKey::Left, rect, true);
+    state.apply_movement(pkchat::editor::MovementKey::Left, rect, true);
+    state.apply_movement(pkchat::editor::MovementKey::Left, rect, true);
+    check(state.selection.has_range(), "shift movement creates a selection");
+    check(state.selected_text() == "alpha", "selected text matches the highlighted range");
+
+    check(state.copy_selection(clipboard).ok(), "copy selection succeeds");
+    check(clipboard.text() == "alpha", "clipboard stores copied text");
+
+    state.cursor = state.text.size();
+    state.clear_selection();
+    check(state.paste(clipboard).ok(), "paste inserts clipboard text");
+    check(state.text.str() == "alpha beta gammaalpha", "paste appends clipboard at cursor");
+
+    state.cursor = 0;
+    state.selection.anchor = 0;
+    state.selection.active = 5;
+    check(state.cut_selection(clipboard).ok(), "cut selection succeeds");
+    check(clipboard.text() == "alpha", "cut leaves clipboard unchanged from copied text");
+    check(state.text.str() == " beta gammaalpha", "cut removes selected text");
+    check(state.undo(), "cut is undoable");
+    check(state.text.str() == "alpha beta gammaalpha", "undo restores cut text");
+
+    state.selection.anchor = 6;
+    state.selection.active = 10;
+    check(state.paste(clipboard).ok(), "paste replaces active selection");
+    check(state.text.str() == "alpha alpha gammaalpha", "paste replaces selected range");
+}
+
+void test_editor_paste_prefers_local_clipboard() {
+    pkchat::editor::EditorState state = pkchat::editor::EditorState::from_text("hello");
+    pkchat::editor::Clipboard clipboard;
+    clipboard.set("local");
+    state.cursor = state.text.size();
+    pkchat::Error err = pkchat::editor::paste_with_clipboard_preference(state, clipboard, "external");
+    check(err.ok(), "paste prefers local clipboard");
+    check(state.text.str() == "hellolocal", "local clipboard overrides terminal paste payload");
+
+    clipboard.clear();
+    err = pkchat::editor::paste_with_clipboard_preference(state, clipboard, "external");
+    check(err.ok(), "paste falls back to terminal payload when local clipboard is empty");
+    check(state.text.str() == "hellolocalexternal", "terminal paste payload is inserted");
+}
+
+void test_editor_movement_sequence_parse() {
+    pkchat::editor::MovementKeyEvent event;
+    check(pkchat::editor::parse_movement_sequence("[D", event) && !event.shift &&
+              event.key == pkchat::editor::MovementKey::Left,
+          "left arrow sequence parses");
+    check(pkchat::editor::parse_movement_sequence("[1;2C", event) && event.shift &&
+              event.key == pkchat::editor::MovementKey::Right,
+          "shift right arrow sequence parses");
+    check(pkchat::editor::parse_movement_sequence("[5;2~", event) && event.shift &&
+              event.key == pkchat::editor::MovementKey::PageUp,
+          "shift page up sequence parses");
+}
+
 void test_editor_page_navigation() {
     pkchat::editor::EditorState state =
         pkchat::editor::EditorState::from_text("zero\none\ntwo\nthree\nfour\nfive");
@@ -2152,6 +2236,10 @@ int main() {
     test_editor_word_wrap_breaks_on_spaces();
     test_editor_kill_to_line_end();
     test_editor_undo_redo();
+    test_editor_home_end_navigation();
+    test_editor_selection_and_clipboard();
+    test_editor_paste_prefers_local_clipboard();
+    test_editor_movement_sequence_parse();
     test_editor_page_navigation();
     test_editor_search_navigation();
     test_editor_search_replace();

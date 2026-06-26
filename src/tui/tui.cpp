@@ -17,7 +17,10 @@
 #include <vector>
 
 #include "context/context.hpp"
+#include "editor/clipboard.hpp"
 #include "editor/path_completion.hpp"
+#include "editor/selection.hpp"
+#include "editor/terminal_input.hpp"
 #include "fetch/fetch.hpp"
 #include "input/input.hpp"
 #include "pkchat/version.hpp"
@@ -386,7 +389,8 @@ class TerminalSession {
             return {ErrorCode::Internal, std::string("could not set terminal mode: ") + std::strerror(errno)};
         }
         active_ = true;
-        std::cout << "\x1b[?1049h\x1b[?25h\x1b[2J\x1b[H";
+        editor::clear_terminal_input_queue();
+        std::cout << "\x1b[?1049h\x1b[?25h\x1b[2J\x1b[H" << editor::bracketed_paste_enable_sequence();
         std::cout.flush();
         return ok_error();
     }
@@ -396,8 +400,10 @@ class TerminalSession {
             return;
         }
         tcsetattr(STDIN_FILENO, TCSAFLUSH, &original_);
-        std::cout << "\x1b[0m\x1b[?25h\x1b[2J\x1b[H\x1b[?1049l";
+        std::cout << editor::bracketed_paste_disable_sequence()
+                  << "\x1b[0m\x1b[?25h\x1b[2J\x1b[H\x1b[?1049l";
         std::cout.flush();
+        editor::clear_terminal_input_queue();
         active_ = false;
     }
 
@@ -405,21 +411,6 @@ class TerminalSession {
     termios original_{};
     bool active_ = false;
 };
-
-bool read_byte(unsigned char& out, int timeout_ms) {
-    fd_set read_fds;
-    FD_ZERO(&read_fds);
-    FD_SET(STDIN_FILENO, &read_fds);
-    timeval tv{};
-    tv.tv_sec = timeout_ms / 1000;
-    tv.tv_usec = (timeout_ms % 1000) * 1000;
-    const int ready = select(STDIN_FILENO + 1, &read_fds, nullptr, nullptr, &tv);
-    if (ready <= 0 || !FD_ISSET(STDIN_FILENO, &read_fds)) {
-        return false;
-    }
-    const ssize_t n = read(STDIN_FILENO, &out, 1);
-    return n == 1;
-}
 
 size_t utf8_len_at(const std::string& text, size_t pos) {
     const unsigned char ch = static_cast<unsigned char>(text[pos]);
@@ -874,7 +865,7 @@ enum class EscapeResult {
 
 EscapeResult handle_escape(editor::EditorState& input, const Layout& layout, int& history_scroll, std::string& status) {
     unsigned char ch = 0;
-    if (!read_byte(ch, 25)) {
+    if (!editor::read_terminal_byte(ch, 25)) {
         return EscapeResult::Unhandled;
     }
     if (ch == '\r' || ch == '\n') {
@@ -886,7 +877,7 @@ EscapeResult handle_escape(editor::EditorState& input, const Layout& layout, int
     std::string sequence;
     if (ch == '[' || ch == 'O') {
         sequence.push_back(static_cast<char>(ch));
-        while (sequence.size() < 16 && read_byte(ch, 25)) {
+        while (sequence.size() < 16 && editor::read_terminal_byte(ch, 25)) {
             sequence.push_back(static_cast<char>(ch));
             if (is_escape_final(ch)) {
                 break;
@@ -902,24 +893,23 @@ EscapeResult handle_escape(editor::EditorState& input, const Layout& layout, int
         return EscapeResult::Handled;
     }
 
-    if (sequence == "[A" || sequence == "OA") {
-        input.move_up(layout.input_rect);
-    } else if (sequence == "[B" || sequence == "OB") {
-        input.move_down(layout.input_rect);
-    } else if (sequence == "[C" || sequence == "OC") {
-        input.move_right();
-    } else if (sequence == "[D" || sequence == "OD") {
-        input.move_left();
-    } else if (sequence == "[H" || sequence == "[1~" || sequence == "OH") {
-        history_scroll = history_scroll_for_thread_beginning();
-    } else if (sequence == "[F" || sequence == "[4~" || sequence == "OF") {
-        history_scroll = history_scroll_for_thread_end();
-    } else if (sequence == "[3~") {
+    editor::MovementKeyEvent movement;
+    if (editor::parse_movement_sequence(sequence, movement)) {
+        if (!movement.shift && (movement.key == editor::MovementKey::Home ||
+                                movement.key == editor::MovementKey::End)) {
+            if (movement.key == editor::MovementKey::Home) {
+                history_scroll = history_scroll_for_thread_beginning();
+            } else {
+                history_scroll = history_scroll_for_thread_end();
+            }
+        } else {
+            input.apply_movement(movement.key, layout.input_rect, movement.shift);
+        }
+        return EscapeResult::Handled;
+    }
+    if (sequence == "[3~") {
         set_status_from_error(input.erase_at_cursor(), status);
-    } else if (sequence == "[5~") {
-        input.page_up(layout.input_rect);
-    } else if (sequence == "[6~") {
-        input.page_down(layout.input_rect);
+        return EscapeResult::Handled;
     }
     return EscapeResult::Handled;
 }
@@ -1607,8 +1597,23 @@ int run(provider::RequestContext context, chat::Session session) {
             status = std::string("terminal input error: ") + std::strerror(errno);
         }
         if (ready > 0 && FD_ISSET(STDIN_FILENO, &readfds)) {
-            unsigned char ch = 0;
-            while (read(STDIN_FILENO, &ch, 1) == 1) {
+            editor::TerminalInputEvent event;
+            while (editor::read_terminal_input(event, 0)) {
+                if (event.type == editor::TerminalInputType::BracketedPaste) {
+                    path_completer.reset();
+                    ++completion_generation;
+                    completion_job.cancel();
+                    Error paste_error =
+                        editor::paste_with_clipboard_preference(input,
+                                                                editor::shared_clipboard(),
+                                                                event.text);
+                    status = paste_error.ok() ? "Pasted" : paste_error.message;
+                    continue;
+                }
+                if (event.type != editor::TerminalInputType::Byte) {
+                    continue;
+                }
+                const unsigned char ch = event.byte;
                 if (ch == '\t') {
                     start_path_completion();
                     continue;
@@ -1637,7 +1642,19 @@ int run(provider::RequestContext context, chat::Session session) {
                     continue;
                 }
                 if (ch == 3) {
-                    status = "Ctrl+C is reserved for copy; use Esc to cancel or Ctrl+Q to quit";
+                    Error copy_error = input.copy_selection(editor::shared_clipboard());
+                    status = copy_error.ok() ? "Copied selection" : copy_error.message;
+                    continue;
+                }
+                if (ch == 24) {
+                    Error cut_error = input.cut_selection(editor::shared_clipboard());
+                    status = cut_error.ok() ? "Cut selection" : cut_error.message;
+                    continue;
+                }
+                if (ch == 22) {
+                    Error paste_error =
+                        editor::paste_with_clipboard_preference(input, editor::shared_clipboard(), "");
+                    status = paste_error.ok() ? "Pasted" : paste_error.message;
                     continue;
                 }
                 if (ch == 21) {

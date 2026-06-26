@@ -1,5 +1,9 @@
 #include "editor/editor.hpp"
 
+#include "editor/clipboard.hpp"
+#include "editor/selection.hpp"
+#include "editor/terminal_input.hpp"
+
 #include <algorithm>
 #include <array>
 #include <cerrno>
@@ -199,6 +203,59 @@ std::string display_range(const std::string& text, size_t start, size_t end, siz
     return out;
 }
 
+std::string display_range_highlighted(const std::string& text,
+                                      size_t start,
+                                      size_t end,
+                                      size_t width,
+                                      size_t global_line_start,
+                                      size_t sel_start,
+                                      size_t sel_end,
+                                      bool highlight_selection) {
+    std::string out;
+    size_t column = 0;
+    size_t visible = 0;
+    size_t pos = start;
+    const size_t limit = std::min(end, text.size());
+    bool highlight_on = false;
+    while (pos < limit && visible < width) {
+        const size_t global_offset = global_line_start + pos;
+        const bool selected = highlight_selection && sel_start < sel_end &&
+                              global_offset >= sel_start && global_offset < sel_end;
+        if (selected != highlight_on) {
+            out += selected ? "\x1b[7m" : "\x1b[0m";
+            highlight_on = selected;
+        }
+
+        const unsigned char ch = static_cast<unsigned char>(text[pos]);
+        const size_t len = utf8_len(ch, text.size() - pos);
+        const size_t char_width = display_width_at(text, pos, column);
+        const size_t next_column = column + char_width;
+
+        if (ch == '\t') {
+            for (size_t tab_col = column; tab_col < next_column && visible < width; ++tab_col) {
+                out.push_back(' ');
+                ++visible;
+            }
+        } else if (ch < 0x20U || ch == 0x7FU) {
+            out.push_back('?');
+            ++visible;
+        } else {
+            out.append(text, pos, len);
+            ++visible;
+        }
+
+        column = next_column;
+        pos += len;
+    }
+    if (highlight_on) {
+        out += "\x1b[0m";
+    }
+    while (visible < width) {
+        out.push_back(' ');
+        ++visible;
+    }
+    return out;
+}
 
 size_t byte_offset_for_range_column(const std::string& text, size_t start, size_t end, size_t target_column) {
     size_t column = 0;
@@ -306,7 +363,8 @@ class TerminalSession {
         }
 
         active_ = true;
-        std::cout << "\x1b[?1049h\x1b[?25h\x1b[2J\x1b[H";
+        clear_terminal_input_queue();
+        std::cout << "\x1b[?1049h\x1b[?25h\x1b[2J\x1b[H" << bracketed_paste_enable_sequence();
         std::cout.flush();
         return ok_error();
     }
@@ -316,8 +374,10 @@ class TerminalSession {
             return;
         }
         tcsetattr(STDIN_FILENO, TCSAFLUSH, &original_);
-        std::cout << "\x1b[0m\x1b[?25h\x1b[2J\x1b[H\x1b[?1049l";
+        std::cout << bracketed_paste_disable_sequence()
+                  << "\x1b[0m\x1b[?25h\x1b[2J\x1b[H\x1b[?1049l";
         std::cout.flush();
+        clear_terminal_input_queue();
         active_ = false;
     }
 
@@ -325,21 +385,6 @@ class TerminalSession {
     termios original_{};
     bool active_ = false;
 };
-
-bool read_byte(unsigned char& out, int timeout_ms) {
-    fd_set read_fds;
-    FD_ZERO(&read_fds);
-    FD_SET(STDIN_FILENO, &read_fds);
-    timeval tv{};
-    tv.tv_sec = timeout_ms / 1000;
-    tv.tv_usec = (timeout_ms % 1000) * 1000;
-    const int ready = select(STDIN_FILENO + 1, &read_fds, nullptr, nullptr, &tv);
-    if (ready <= 0 || !FD_ISSET(STDIN_FILENO, &read_fds)) {
-        return false;
-    }
-    const ssize_t n = read(STDIN_FILENO, &out, 1);
-    return n == 1;
-}
 
 void update_preferred_column(EditorState& state) {
     state.preferred_column = state.text.display_column_for_offset(state.cursor);
@@ -403,7 +448,7 @@ std::string editor_status_line(const EditorState& state) {
     const size_t column = state.text.display_column_for_offset(state.cursor) + 1;
     out << "  Mode: Editor"
         << "  Ln " << line << ", Col " << column
-        << "  Ctrl+F find | Ctrl+H replace | F3 next | Ctrl+U undo | Ctrl+S save | Ctrl+Q quit";
+        << "  Ctrl+C copy | Ctrl+X cut | Ctrl+V paste | Ctrl+U undo | Ctrl+S save | Ctrl+Q quit";
     return out.str();
 }
 
@@ -441,6 +486,7 @@ void reset_editor_buffer(EditorState& state, PieceTable text, std::string path) 
     state.path = std::move(path);
     state.dirty = false;
     state.clear_undo_history();
+    state.clear_selection();
 }
 
 bool editor_target_exists(const std::string& path) {
@@ -838,7 +884,7 @@ bool handle_minibuffer_key(EditorState& state,
 void discard_escape_sequence_tail() {
     unsigned char ch = 0;
     std::string sequence;
-    while (sequence.size() < 16 && read_byte(ch, 1)) {
+    while (sequence.size() < 16 && read_terminal_byte(ch, 1)) {
         sequence.push_back(static_cast<char>(ch));
         if (sequence.size() == 1 && ch == 'O') {
             continue;
@@ -963,7 +1009,7 @@ void render_terminal(EditorState& state, const MinibufferState& minibuffer) {
 void handle_escape(EditorState& state, std::string& status, const std::string& last_search) {
     std::string sequence;
     unsigned char ch = 0;
-    while (sequence.size() < 16 && read_byte(ch, 25)) {
+    while (sequence.size() < 16 && read_terminal_byte(ch, 25)) {
         sequence.push_back(static_cast<char>(ch));
         if (sequence.size() == 1 && ch == 'O') {
             continue;
@@ -973,30 +1019,18 @@ void handle_escape(EditorState& state, std::string& status, const std::string& l
         }
     }
 
-    if (sequence == "[A") {
-        state.move_up();
-    } else if (sequence == "[B") {
-        state.move_down();
-    } else if (sequence == "[C") {
-        state.move_right();
-    } else if (sequence == "[D") {
-        state.move_left();
-    } else if (sequence == "[H" || sequence == "[1~") {
-        state.move_home();
-    } else if (sequence == "[F" || sequence == "[4~") {
-        state.move_end();
-    } else if (sequence == "[3~") {
+    MovementKeyEvent movement;
+    if (parse_movement_sequence(sequence, movement)) {
+        const TerminalSize size = terminal_size();
+        const Rect panel_rect{1, 1, std::max(1, size.rows - 2), std::max(1, size.cols - 1)};
+        state.apply_movement(movement.key, panel_rect, movement.shift);
+        return;
+    }
+
+    if (sequence == "[3~") {
         Error err = state.erase_at_cursor();
         if (!err.ok()) {
             status = err.message;
-        }
-    } else if (sequence == "[5~" || sequence == "[6~") {
-        const TerminalSize size = terminal_size();
-        const Rect panel_rect{1, 1, std::max(1, size.rows - 2), std::max(1, size.cols - 1)};
-        if (sequence == "[5~") {
-            state.page_up(panel_rect);
-        } else {
-            state.page_down(panel_rect);
         }
     } else if (sequence == "OR" || sequence == "[13~" || sequence == "[[C") {
         if (last_search.empty()) {
@@ -1286,6 +1320,7 @@ void PieceTable::rebuild_line_cache() const {
 EditorState EditorState::from_text(std::string content) {
     EditorState state;
     state.text = PieceTable::from_string(std::move(content));
+    state.selection.clear(state.cursor);
     return state;
 }
 
@@ -1299,6 +1334,7 @@ void EditorState::restore_snapshot(const EditorSnapshot& snapshot) {
     preferred_column = snapshot.preferred_column;
     scroll_line = snapshot.scroll_line;
     scroll_column = snapshot.scroll_column;
+    selection.clear(cursor);
 }
 
 void EditorState::remember_undo(EditorSnapshot snapshot) {
@@ -1315,6 +1351,13 @@ void EditorState::remember_undo(EditorSnapshot snapshot) {
 Error EditorState::insert(const std::string& value) {
     if (value.empty()) {
         return ok_error();
+    }
+    if (selection.has_range()) {
+        Error replaced = replace(selection.start(), selection.end() - selection.start(), value);
+        if (replaced.ok()) {
+            selection.clear(cursor);
+        }
+        return replaced;
     }
     EditorSnapshot before = snapshot();
     Error err = text.insert(cursor, value);
@@ -1351,12 +1394,22 @@ Error EditorState::replace(size_t pos, size_t count, const std::string& value) {
     text = std::move(replacement);
     remember_undo(std::move(before));
     cursor = pos + value.size();
+    selection.clear(cursor);
     dirty = true;
     update_preferred_column(*this);
     return ok_error();
 }
 
 Error EditorState::erase_before_cursor() {
+    if (selection.has_range()) {
+        const size_t start = selection.start();
+        Error err = replace(start, selection.end() - start, "");
+        if (err.ok()) {
+            cursor = start;
+            selection.clear(cursor);
+        }
+        return err;
+    }
     if (cursor == 0) {
         return ok_error();
     }
@@ -1468,6 +1521,7 @@ bool EditorState::search(const std::string& needle) {
         return false;
     }
     cursor = found;
+    selection.clear(cursor);
     update_preferred_column(*this);
     return true;
 }
@@ -1490,6 +1544,7 @@ bool EditorState::search_next(const std::string& needle) {
         return false;
     }
     cursor = found;
+    selection.clear(cursor);
     update_preferred_column(*this);
     return true;
 }
@@ -1512,6 +1567,7 @@ bool EditorState::search_previous(const std::string& needle) {
         return false;
     }
     cursor = found;
+    selection.clear(cursor);
     update_preferred_column(*this);
     return true;
 }
@@ -1559,6 +1615,107 @@ Error EditorState::replace_all_from(size_t start,
     dirty = true;
     update_preferred_column(*this);
     return ok_error();
+}
+
+void EditorState::clear_selection() {
+    selection.clear(cursor);
+}
+
+std::string EditorState::selected_text() const {
+    if (!selection.has_range()) {
+        return "";
+    }
+    const size_t start = selection.start();
+    const size_t count = selection.end() - start;
+    return text.str().substr(start, count);
+}
+
+Error EditorState::copy_selection(Clipboard& clipboard) {
+    if (!selection.has_range()) {
+        return {ErrorCode::BadArgs, "no selection to copy"};
+    }
+    clipboard.set(selected_text());
+    return ok_error();
+}
+
+Error EditorState::cut_selection(Clipboard& clipboard) {
+    if (!selection.has_range()) {
+        return {ErrorCode::BadArgs, "no selection to cut"};
+    }
+    clipboard.set(selected_text());
+    const size_t start = selection.start();
+    Error err = replace(start, selection.end() - start, "");
+    if (err.ok()) {
+        cursor = start;
+        selection.clear(cursor);
+    }
+    return err;
+}
+
+Error EditorState::paste(Clipboard& clipboard) {
+    if (clipboard.empty()) {
+        return {ErrorCode::BadArgs, "clipboard is empty"};
+    }
+    if (selection.has_range()) {
+        Error err = replace(selection.start(), selection.end() - selection.start(), clipboard.text());
+        if (err.ok()) {
+            selection.clear(cursor);
+        }
+        return err;
+    }
+    return insert(clipboard.text());
+}
+
+void EditorState::begin_movement(bool extend_selection) {
+    if (!extend_selection) {
+        selection.clear(cursor);
+    } else if (!selection.has_range()) {
+        selection.anchor = cursor;
+        selection.active = cursor;
+    }
+}
+
+void EditorState::finish_movement(bool extend_selection) {
+    if (extend_selection) {
+        selection.active = cursor;
+    } else {
+        selection.clear(cursor);
+    }
+}
+
+void EditorState::apply_movement(MovementKey key, const Rect& rect, bool extend_selection) {
+    begin_movement(extend_selection);
+    switch (key) {
+        case MovementKey::Left:
+            move_left();
+            break;
+        case MovementKey::Right:
+            move_right();
+            break;
+        case MovementKey::Up:
+            move_up(rect);
+            break;
+        case MovementKey::Down:
+            move_down(rect);
+            break;
+        case MovementKey::PageUp:
+            page_up(rect);
+            break;
+        case MovementKey::PageDown:
+            page_down(rect);
+            break;
+        case MovementKey::Home:
+            move_home();
+            break;
+        case MovementKey::End:
+            move_end();
+            break;
+    }
+    finish_movement(extend_selection);
+    if (key == MovementKey::PageUp || key == MovementKey::PageDown || key == MovementKey::Home ||
+        key == MovementKey::End) {
+        ensure_cursor_visible(rect);
+    }
 }
 
 void EditorState::move_left() {
@@ -1657,14 +1814,17 @@ void EditorState::move_down_visual(const Rect& rect) {
 }
 
 void EditorState::move_home() {
-    cursor = text.line_start(text.line_for_offset(cursor));
-    update_preferred_column(*this);
+    cursor = 0;
+    preferred_column = 0;
+    scroll_line = 0;
+    scroll_column = 0;
+    selection.clear(cursor);
 }
 
 void EditorState::move_end() {
-    const size_t line = text.line_for_offset(cursor);
-    cursor = text.line_start(line) + text.line_length(line);
+    cursor = text.size();
     update_preferred_column(*this);
+    selection.clear(cursor);
 }
 
 Error EditorState::kill_to_line_end() {
@@ -1725,14 +1885,17 @@ void EditorState::ensure_cursor_visible(const Rect& rect) {
 }
 
 RenderedPanel EditorState::render(const Rect& rect) const {
-    return render_panel(text, rect, cursor, scroll_line, scroll_column);
+    const std::optional<Selection> active_selection =
+        selection.has_range() ? std::optional<Selection>(selection) : std::nullopt;
+    return render_panel(text, rect, cursor, scroll_line, scroll_column, active_selection);
 }
 
 RenderedPanel render_panel(const PieceTable& text,
                            const Rect& rect,
                            size_t cursor,
                            size_t scroll_line,
-                           size_t scroll_column) {
+                           size_t scroll_column,
+                           const std::optional<Selection>& selection) {
     (void)scroll_column;
     RenderedPanel rendered;
     const size_t height = static_cast<size_t>(std::max(0, rect.height));
@@ -1742,6 +1905,10 @@ RenderedPanel render_panel(const PieceTable& text,
         rendered.lines.resize(height);
         return rendered;
     }
+
+    const bool highlight_selection = selection.has_value() && selection->has_range();
+    const size_t sel_start = highlight_selection ? selection->start() : 0;
+    const size_t sel_end = highlight_selection ? selection->end() : 0;
 
     const size_t line_count = text.line_count();
     size_t line = 0;
@@ -1767,7 +1934,19 @@ RenderedPanel render_panel(const PieceTable& text,
         const std::string line_text_value = text.line_text(line);
         const std::vector<WrapSegment> segments = wrap_line_segments(line_text_value, width);
         const WrapSegment segment = segments[std::min(segment_index, segments.size() - 1)];
-        rendered.lines.push_back(display_range(line_text_value, segment.start, segment.end, width));
+        const size_t global_line_start = text.line_start(line);
+        if (highlight_selection) {
+            rendered.lines.push_back(display_range_highlighted(line_text_value,
+                                                              segment.start,
+                                                              segment.end,
+                                                              width,
+                                                              global_line_start,
+                                                              sel_start,
+                                                              sel_end,
+                                                              true));
+        } else {
+            rendered.lines.push_back(display_range(line_text_value, segment.start, segment.end, width));
+        }
 
         ++segment_index;
         if (segment_index >= segments.size()) {
@@ -1976,7 +2155,14 @@ int run_editor(const std::string& path, const std::string& save_as, const Editor
                 quit = true;
             }
         } else if (ch == 3) {
-            minibuffer_message(minibuffer, "Ctrl+C is reserved for copy; Ctrl+Q quits");
+            Error copy_error = state.copy_selection(shared_clipboard());
+            minibuffer_message(minibuffer, copy_error.ok() ? "Copied selection" : copy_error.message);
+        } else if (ch == 24) {
+            Error cut_error = state.cut_selection(shared_clipboard());
+            minibuffer_message(minibuffer, cut_error.ok() ? "Cut selection" : cut_error.message);
+        } else if (ch == 22) {
+            Error paste_error = paste_with_clipboard_preference(state, shared_clipboard(), "");
+            minibuffer_message(minibuffer, paste_error.ok() ? "Pasted" : paste_error.message);
         } else if (ch == 6) {
             start_minibuffer(minibuffer, MinibufferAction::Search, "Search: ", last_search);
         } else if (ch == 8) {
@@ -2037,9 +2223,14 @@ int run_editor(const std::string& path, const std::string& save_as, const Editor
         }
     };
 
+    auto handle_paste = [&](const std::string& terminal_text) {
+        Error paste_error = paste_with_clipboard_preference(state, shared_clipboard(), terminal_text);
+        minibuffer_message(minibuffer, paste_error.ok() ? "Pasted" : paste_error.message);
+    };
+
     while (!quit) {
-        unsigned char ch = 0;
-        if (!read_byte(ch, 100)) {
+        TerminalInputEvent event;
+        if (!read_terminal_input(event, 100)) {
             const TerminalSize current_size = terminal_size();
             if (current_size.rows != last_size.rows || current_size.cols != last_size.cols) {
                 last_size = current_size;
@@ -2048,9 +2239,22 @@ int run_editor(const std::string& path, const std::string& save_as, const Editor
             continue;
         }
 
-        handle_key(ch);
-        while (!quit && read_byte(ch, 0)) {
-            handle_key(ch);
+        if (event.type == TerminalInputType::BracketedPaste) {
+            handle_paste(event.text);
+        } else if (event.type == TerminalInputType::Byte) {
+            handle_key(event.byte);
+            while (!quit) {
+                if (!read_terminal_input(event, 0)) {
+                    break;
+                }
+                if (event.type == TerminalInputType::BracketedPaste) {
+                    handle_paste(event.text);
+                } else if (event.type == TerminalInputType::Byte) {
+                    handle_key(event.byte);
+                } else {
+                    break;
+                }
+            }
         }
 
         last_size = terminal_size();

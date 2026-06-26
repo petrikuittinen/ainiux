@@ -57,7 +57,7 @@ Each milestone should leave the program usable. Do not create a long-lived pile 
 
 ## Current baseline
 
-Implementation status (2026-06-26): `pkchat` is at v0.75. The repository has the scriptable CLI, built-in provider registry and aliases, Chat Completions, text-only Responses API support, streaming SSE, credential lookup, JSON chat persistence, cancellable runtime jobs, REPL, full-screen TUI foundation, editor, request-only context policies, context-use estimates, bounded text/HTML/Markdown input, JPEG/PNG/GIF image input for Chat Completions, safe URL fetching, Markdown output conversion, automatic v0.6 system/user TOML-alike configuration loading, and concurrent JSONL benchmark execution. `--provider none` supports local conversion and editor workflows without a model endpoint.
+Implementation status (2026-06-26): `pkchat` is at v0.76. The repository has the scriptable CLI, built-in provider registry and aliases, Chat Completions, text-only Responses API support, streaming SSE, credential lookup, JSON chat persistence, cancellable runtime jobs, REPL, full-screen TUI foundation, editor with selection and copy/cut/paste, request-only context policies, context-use estimates, bounded text/HTML/Markdown input, JPEG/PNG/GIF image input for Chat Completions, safe URL fetching, Markdown output conversion, automatic v0.6 system/user TOML-alike configuration loading, and concurrent JSONL benchmark execution. `--provider none` supports local conversion and editor workflows without a model endpoint. Standalone `--editor` accepts an optional startup path after a provider shortcut or base URL, creates a missing file before editing, prompts to save scratch buffers on quit, and asks for overwrite confirmation when saving to an existing path.
 
 Runtime defaults live in `cli::Options`, provider defaults live in `src/provider/`, and API keys are resolved while building the provider request context. Automatic system and user config files map into a base `cli::Options`, after which `main.cpp` parses CLI arguments over that base. `--no-config` can bypass the automatic user file while retaining system configuration, and `--debug` reports configuration discovery on `stderr`.
 
@@ -624,8 +624,13 @@ Ctrl+H               search and replace with minibuffer prompts in editor mode
 F3/Shift+F3          search next/previous in editor mode
 Alt+R                regenerate last answer in chat mode
 Ctrl+Q               quit chat/editor mode
-Ctrl+C               reserved for future copy support in chat/editor mode
+Ctrl+C               copy selection in chat/editor input
+Ctrl+X               cut selection in chat/editor input
+Ctrl+V               paste in chat/editor input
 Ctrl+D               quit when input is empty
+Shift+arrows         extend selection in chat/editor input
+Shift+PageUp/Down    extend selection in chat/editor input
+Shift+Home/End       extend selection in chat/editor input
 PageUp/PageDown      scroll the active editor/input window
 /help                show help
 /quit                quit
@@ -641,7 +646,7 @@ Defer until the base TUI is stable:
 ```text
 insert/overwrite mode
 prompt history navigation
-clipboard integration
+read OS clipboard when internal clipboard is empty (e.g. Ctrl+Shift+V style)
 mouse support
 advanced key protocols
 theme persistence/config
@@ -1402,9 +1407,9 @@ The exact keys may change after testing terminal portability. Commands should ex
 
 ## Text range model
 
-AI editing needs a clear text range contract:
+Basic local selection and copy/cut/paste shipped in v0.76 as a prerequisite for AI-assisted editing. AI editing still needs a clear text range contract:
 
-- [ ] Add selection support to the editor core.
+- [x] Add selection support to the editor core.
 - [ ] If no selection exists, operate on the current paragraph or current logical line depending on action.
 - [ ] Provide an explicit command to operate on the whole file.
 - [ ] Preserve cursor position and scroll position where practical after applying edits.
@@ -1472,7 +1477,7 @@ AI changes should be reviewable before mutation:
 
 - [ ] Stream model output into a preview panel or temporary assistant buffer.
 - [ ] Support accept, reject, regenerate, and edit-before-apply.
-- [ ] Applying a replacement should be one undoable editor operation once undo exists.
+- [ ] Applying a replacement should be one undoable editor operation.
 - [ ] Store enough local state to reject or revert a pending suggestion without reloading the file.
 - [ ] Mark the buffer dirty only after a suggestion is applied.
 - [ ] Save remains explicit through the editor save command.
@@ -1542,7 +1547,7 @@ Do not make the AI panel modal-only if it blocks basic editing for long requests
 
 ## Tests
 
-- [ ] Unit test selection/range calculations.
+- [x] Unit test selection/range calculations.
 - [ ] Unit test prompt construction for each action.
 - [ ] Unit test applying replacement text to the piece table.
 - [ ] Unit test reject/regenerate state transitions.
