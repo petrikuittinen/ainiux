@@ -9,10 +9,16 @@
 namespace pkchat::editor {
 namespace {
 
-constexpr const char* kSpellTaskPrompt = "Fix the spelling, but don't change anything else.";
-constexpr const char* kGrammarTaskPrompt = "Fix the grammar, but don't change anything else.";
-constexpr const char* kContinueTaskPrompt = "Continue the text without any preamble...";
-constexpr const char* kFactTaskPrompt = "Fact check the text and comment";
+constexpr const char* kSpellTaskPrompt =
+    "Fix spelling errors only. Do not change wording, grammar, punctuation style, or meaning.";
+constexpr const char* kGrammarTaskPrompt =
+    "Fix grammar errors only. Do not change wording, spelling where it is already correct, or "
+    "meaning.";
+constexpr const char* kContinueTaskPrompt = "Continue the text naturally from where it ends.";
+constexpr const char* kFactTaskPrompt =
+    "Fact-check the text and add brief comments about any factual issues you find.";
+constexpr const char* kContentOpenTag = "<content>";
+constexpr const char* kContentCloseTag = "</content>";
 
 std::string lower_ascii_copy(std::string text) {
     for (char& ch : text) {
@@ -99,17 +105,120 @@ std::string command_name_for(AssistCommandKind kind) {
     }
 }
 
-std::string build_user_message(const std::string& task_prompt, const std::string& text) {
-    if (text.empty()) {
-        return task_prompt;
+std::string build_assist_system_prompt(const AiContinueContext& context, const std::string& task_prompt) {
+    std::string system = task_prompt + "\n\n" + kDefaultEditorSystemPrompt;
+    if (!context.request.options.system.empty()) {
+        system = context.request.options.system + "\n\n" + system;
     }
-    return task_prompt + "\n\n" + text;
+    return system;
+}
+
+std::string wrap_assist_content(const std::string& text) {
+    return std::string(kContentOpenTag) + text + kContentCloseTag;
 }
 
 std::vector<provider::Message> build_messages(const AiContinueContext& context,
-                                              const std::string& user_content) {
-    return {{"system", effective_editor_system_prompt(context)}, {"user", user_content}};
+                                              const std::string& task_prompt,
+                                              const std::string& buffer_text) {
+    return {{"system", build_assist_system_prompt(context, task_prompt)},
+            {"user", wrap_assist_content(buffer_text)}};
 }
+
+std::string strip_assist_content_tags(std::string text) {
+    text = trim_ascii_copy(std::move(text));
+    const std::string open = kContentOpenTag;
+    const std::string close = kContentCloseTag;
+    if (text.rfind(open, 0) == 0) {
+        text.erase(0, open.size());
+        text = trim_ascii_copy(std::move(text));
+        if (text.size() >= close.size() &&
+            text.compare(text.size() - close.size(), close.size(), close) == 0) {
+            text.erase(text.size() - close.size());
+            text = trim_ascii_copy(std::move(text));
+        }
+    }
+    return text;
+}
+
+class AssistContentStripper {
+   public:
+    std::string feed(const std::string& chunk) {
+        if (done_) {
+            return chunk;
+        }
+        if (!decided_) {
+            detect_buffer_ += chunk;
+            if (detect_buffer_.size() < open_tag_.size()) {
+                if (open_tag_.compare(0, detect_buffer_.size(), detect_buffer_) != 0) {
+                    done_ = true;
+                    std::string out = detect_buffer_;
+                    detect_buffer_.clear();
+                    return out;
+                }
+                return "";
+            }
+            if (detect_buffer_.rfind(open_tag_, 0) == 0) {
+                decided_ = true;
+                stripping_ = true;
+                std::string out = detect_buffer_.substr(open_tag_.size());
+                detect_buffer_.clear();
+                return emit_with_holdback(std::move(out));
+            }
+            done_ = true;
+            std::string out = detect_buffer_;
+            detect_buffer_.clear();
+            return out;
+        }
+        if (!stripping_) {
+            return chunk;
+        }
+        return emit_with_holdback(chunk);
+    }
+
+    std::string finish() {
+        if (!decided_ && !detect_buffer_.empty()) {
+            decided_ = true;
+            return detect_buffer_;
+        }
+        std::string out = holdback_;
+        holdback_.clear();
+        if (stripping_) {
+            out = strip_trailing_close_tag(std::move(out));
+        }
+        done_ = true;
+        return out;
+    }
+
+   private:
+    static std::string strip_trailing_close_tag(std::string text) {
+        const std::string close = kContentCloseTag;
+        if (text.size() >= close.size() &&
+            text.compare(text.size() - close.size(), close.size(), close) == 0) {
+            text.erase(text.size() - close.size());
+        }
+        return text;
+    }
+
+    std::string emit_with_holdback(std::string chunk) {
+        std::string combined = holdback_ + chunk;
+        holdback_.clear();
+        if (combined.size() > close_tag_.size()) {
+            holdback_ = combined.substr(combined.size() - close_tag_.size());
+            combined.resize(combined.size() - close_tag_.size());
+            return combined;
+        }
+        holdback_ = std::move(combined);
+        return "";
+    }
+
+    const std::string open_tag_ = kContentOpenTag;
+    const std::string close_tag_ = kContentCloseTag;
+    bool decided_ = false;
+    bool stripping_ = false;
+    bool done_ = false;
+    std::string detect_buffer_;
+    std::string holdback_;
+};
 
 void push_visible_delta(runtime::EventQueue<ContinueEvent>& events, const std::string& visible) {
     if (visible.empty()) {
@@ -344,8 +453,7 @@ AssistExecution build_assist_execution(const EditorState& state,
     if (kind == AssistCommandKind::Continue) {
         execution.stream = true;
         execution.edit_kind = AssistEditKind::StreamInsert;
-        execution.messages =
-            build_messages(context, build_user_message(kContinueTaskPrompt, prefix));
+        execution.messages = build_messages(context, kContinueTaskPrompt, prefix);
         execution.ok = true;
         return execution;
     }
@@ -355,8 +463,7 @@ AssistExecution build_assist_execution(const EditorState& state,
         execution.edit_kind = AssistEditKind::StreamInsert;
         const std::string source =
             state.selection.has_range() ? state.selected_text() : prefix;
-        execution.messages =
-            build_messages(context, build_user_message(kFactTaskPrompt, source));
+        execution.messages = build_messages(context, kFactTaskPrompt, source);
         execution.ok = true;
         return execution;
     }
@@ -372,13 +479,12 @@ AssistExecution build_assist_execution(const EditorState& state,
             }
             execution.replace_start = state.selection.start();
             execution.replace_count = state.selection.end() - state.selection.start();
-            execution.messages = build_messages(
-                context, build_user_message(task, state.selected_text()));
+            execution.messages =
+                build_messages(context, task, state.selected_text());
         } else {
             execution.replace_start = 0;
             execution.replace_count = state.text.size();
-            execution.messages =
-                build_messages(context, build_user_message(task, state.text.str()));
+            execution.messages = build_messages(context, task, state.text.str());
         }
         execution.stream = false;
         execution.edit_kind = AssistEditKind::ReplaceInPlace;
@@ -397,8 +503,7 @@ AssistExecution build_assist_execution(const EditorState& state,
             case AssistPromptMode::Continue:
                 execution.stream = true;
                 execution.edit_kind = AssistEditKind::StreamInsert;
-                execution.messages =
-                    build_messages(context, build_user_message(custom_prompt, prefix));
+                execution.messages = build_messages(context, custom_prompt, prefix);
                 break;
             case AssistPromptMode::Selection:
                 if (!state.selection.has_range()) {
@@ -406,8 +511,8 @@ AssistExecution build_assist_execution(const EditorState& state,
                 }
                 execution.replace_start = state.selection.start();
                 execution.replace_count = state.selection.end() - state.selection.start();
-                execution.messages = build_messages(
-                    context, build_user_message(custom_prompt, state.selected_text()));
+                execution.messages =
+                    build_messages(context, custom_prompt, state.selected_text());
                 execution.stream = false;
                 execution.edit_kind = AssistEditKind::ReplaceInPlace;
                 break;
@@ -415,7 +520,7 @@ AssistExecution build_assist_execution(const EditorState& state,
                 execution.replace_start = 0;
                 execution.replace_count = state.text.size();
                 execution.messages =
-                    build_messages(context, build_user_message(custom_prompt, state.text.str()));
+                    build_messages(context, custom_prompt, state.text.str());
                 execution.stream = false;
                 execution.edit_kind = AssistEditKind::ReplaceInPlace;
                 break;
@@ -445,6 +550,7 @@ void start_assist_job(const AiContinueContext& context,
     job.start([job_context, messages, stream, &events](runtime::CancellationToken token) mutable {
         provider::ChatResult chat;
         pkchat::output::ThinkingTraceSplitter splitter;
+        AssistContentStripper content_stripper;
         bool pushed_thinking = false;
         bool pushed_writing = false;
         auto push_thinking = [&]() {
@@ -479,7 +585,7 @@ void start_assist_job(const AiContinueContext& context,
             if (!chunk.visible.empty()) {
                 push_writing();
             }
-            push_visible_delta(events, chunk.visible);
+            push_visible_delta(events, content_stripper.feed(chunk.visible));
             return ok_error();
         };
 
@@ -493,7 +599,8 @@ void start_assist_job(const AiContinueContext& context,
                 if (!final.visible.empty()) {
                     push_writing();
                 }
-                push_visible_delta(events, final.visible);
+                push_visible_delta(events, content_stripper.feed(final.visible));
+                push_visible_delta(events, content_stripper.finish());
             } else if (!chat.content.empty()) {
                 push_writing();
             }
@@ -513,6 +620,7 @@ void start_assist_job(const AiContinueContext& context,
 
 std::string trim_assist_inplace_response(std::string text) {
     text = pkchat::output::split_thinking_traces(std::move(text)).visible;
+    text = strip_assist_content_tags(std::move(text));
     return trim_ascii_copy(std::move(text));
 }
 

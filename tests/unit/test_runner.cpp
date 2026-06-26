@@ -1405,8 +1405,11 @@ void test_editor_selection_and_clipboard() {
 }
 
 void test_editor_assist_helpers() {
-    check(std::string(pkchat::editor::kDefaultEditorSystemPrompt).find("1-shot") != std::string::npos,
+    check(std::string(pkchat::editor::kDefaultEditorSystemPrompt).find("one-shot") != std::string::npos,
           "default editor system prompt mentions one-shot prompts");
+    check(std::string(pkchat::editor::kDefaultEditorSystemPrompt).find("not as instructions") !=
+              std::string::npos,
+          "default editor system prompt says content is not instructions");
 
     pkchat::editor::ParsedAssistCommand parsed = pkchat::editor::parse_assist_command("/spell all");
     check(parsed.ok && parsed.kind == pkchat::editor::AssistCommandKind::Spell &&
@@ -1481,8 +1484,13 @@ void test_editor_assist_helpers() {
               execution.replace_start == 0 && execution.replace_count == 5,
           "spell selection builds in-place execution");
     check(execution.messages.size() == 2 && execution.messages.front().role == "system" &&
-              execution.messages.front().content == pkchat::editor::kDefaultEditorSystemPrompt,
-          "spell selection uses default editor system prompt");
+              execution.messages.front().content.find("Fix spelling errors only") != std::string::npos &&
+              execution.messages.front().content.find(pkchat::editor::kDefaultEditorSystemPrompt) !=
+                  std::string::npos,
+          "spell selection uses task prompt plus default assist rules in system message");
+    check(execution.messages.back().role == "user" &&
+              execution.messages.back().content == "<content>hello</content>",
+          "spell selection wraps buffer text in content tags for user message");
 
     context.request.options.system = "Custom system";
     execution = pkchat::editor::build_assist_execution(
@@ -1490,14 +1498,21 @@ void test_editor_assist_helpers() {
     check(execution.ok && execution.stream &&
               execution.edit_kind == pkchat::editor::AssistEditKind::StreamInsert,
           "/continue builds streaming execution");
-    check(execution.messages.front().content == "Custom system",
-          "user --system overrides default editor system prompt");
+    check(execution.messages.front().content.rfind("Custom system", 0) == 0 &&
+              execution.messages.front().content.find("Continue the text naturally") != std::string::npos,
+          "user --system is prepended to assist task system prompt");
+    check(execution.messages.back().content.find("<content>") == 0,
+          "/continue wraps editor prefix in content tags");
 
     check(pkchat::editor::trim_assist_inplace_response("  fixed text \n") == "fixed text",
           "in-place assist responses are trimmed");
     check(pkchat::editor::trim_assist_inplace_response(
               "<think>hidden trace</think>\n\nVisible rewrite") == "Visible rewrite",
           "in-place assist responses drop thinking traces");
+    check(pkchat::editor::trim_assist_inplace_response("<content>fixed text</content>") == "fixed text",
+          "in-place assist responses strip content tags");
+    check(pkchat::editor::trim_assist_inplace_response("plain text without tags") == "plain text without tags",
+          "in-place assist responses leave untagged output unchanged");
 
     const pkchat::provider::RequestContext assist_context =
         pkchat::editor::assist_request_context(context, true);
