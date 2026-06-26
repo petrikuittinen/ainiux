@@ -1361,9 +1361,8 @@ int main(int argc, char** argv) {
         print_error({pkchat::ErrorCode::BadArgs, "--editor does not use rendered --output-format"});
         return exit_code_for(pkchat::ErrorCode::BadArgs);
     }
-    if (options.editor && (!options.prompt.empty() || !options.prompt_file.empty() ||
-                           !options.system.empty() || !options.system_file.empty())) {
-        print_error({pkchat::ErrorCode::BadArgs, "--editor cannot be combined with prompt or system options"});
+    if (options.editor && (!options.prompt.empty() || !options.prompt_file.empty())) {
+        print_error({pkchat::ErrorCode::BadArgs, "--editor cannot be combined with prompt options"});
         return exit_code_for(pkchat::ErrorCode::BadArgs);
     }
     if (options.editor && (!options.load_chat_path.empty() || !options.save_chat_path.empty())) {

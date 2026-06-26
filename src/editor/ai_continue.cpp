@@ -1,10 +1,9 @@
 #include "editor/ai_continue.hpp"
 
-#include "output/thinking.hpp"
+#include "editor/editor_assist.hpp"
 
 #include <cctype>
 #include <cstdlib>
-#include <utility>
 
 namespace pkchat::editor {
 namespace {
@@ -47,16 +46,6 @@ size_t parse_positive_size_env(const char* name, size_t default_value) {
         return default_value;
     }
     return static_cast<size_t>(parsed);
-}
-
-void push_visible_delta(runtime::EventQueue<ContinueEvent>& events, const std::string& visible) {
-    if (visible.empty()) {
-        return;
-    }
-    ContinueEvent event;
-    event.type = ContinueEventType::Delta;
-    event.text = visible;
-    events.push(std::move(event));
 }
 
 }  // namespace
@@ -123,79 +112,25 @@ Error validate_continue_request(const AiContinueContext& context) {
 }
 
 provider::RequestContext continue_request_context(const AiContinueContext& context) {
-    provider::RequestContext job_context = context.request;
-    job_context.options.stream = true;
-    job_context.options.has_max_output_tokens = true;
-    job_context.options.max_output_tokens = context.settings.max_output_tokens;
-    return job_context;
+    return assist_request_context(context, true);
 }
 
 void start_continue_job(const AiContinueContext& context,
                         const std::string& prefix,
                         runtime::EventQueue<ContinueEvent>& events,
                         runtime::JobHandle& job) {
-    provider::RequestContext job_context = continue_request_context(context);
-    std::vector<provider::Message> messages = {{"user", prefix}};
-    job.start([job_context, messages = std::move(messages), &events](runtime::CancellationToken token) mutable {
-        provider::ChatResult chat;
-        pkchat::output::ThinkingTraceSplitter splitter;
-        bool pushed_thinking = false;
-        bool pushed_writing = false;
-        auto push_thinking = [&]() {
-            if (pushed_thinking) {
-                return;
-            }
-            pushed_thinking = true;
-            ContinueEvent event;
-            event.type = ContinueEventType::Thinking;
-            events.push(std::move(event));
-        };
-        auto push_writing = [&]() {
-            if (pushed_writing) {
-                return;
-            }
-            pushed_writing = true;
-            ContinueEvent event;
-            event.type = ContinueEventType::Writing;
-            events.push(std::move(event));
-        };
-        auto on_delta = [&](const std::string& delta) -> Error {
-            if (token.cancelled()) {
-                return {ErrorCode::Cancelled, "AI continue cancelled while streaming"};
-            }
-            pkchat::output::ThinkingChunk chunk = splitter.feed(delta);
-            if (!chunk.trace.empty() && chunk.visible.empty()) {
-                push_thinking();
-            }
-            if (!chunk.visible.empty()) {
-                push_writing();
-            }
-            push_visible_delta(events, chunk.visible);
-            return ok_error();
-        };
-
-        Error send_error = provider::send_chat_messages(job_context, messages, on_delta, chat, token);
-        if (send_error.ok()) {
-            pkchat::output::ThinkingChunk final = splitter.finish();
-            if (!final.trace.empty() && final.visible.empty()) {
-                push_thinking();
-            }
-            if (!final.visible.empty()) {
-                push_writing();
-            }
-            push_visible_delta(events, final.visible);
-            ContinueEvent event;
-            event.type = ContinueEventType::Done;
-            event.chat = std::move(chat);
-            events.push(std::move(event));
-            return;
-        }
-
+    EditorState continue_state = EditorState::from_text(prefix);
+    continue_state.cursor = continue_state.text.size();
+    AssistExecution execution = build_assist_execution(
+        continue_state, context, AssistCommandKind::Continue, std::nullopt, "", std::nullopt);
+    if (!execution.ok) {
         ContinueEvent event;
         event.type = ContinueEventType::Error;
-        event.error = std::move(send_error);
+        event.error = {ErrorCode::Internal, execution.error_message};
         events.push(std::move(event));
-    });
+        return;
+    }
+    start_assist_job(context, execution.messages, true, events, job);
 }
 
 }  // namespace pkchat::editor

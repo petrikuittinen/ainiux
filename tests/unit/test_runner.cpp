@@ -18,6 +18,7 @@
 #include "config/config.hpp"
 #include "context/context.hpp"
 #include "editor/ai_continue.hpp"
+#include "editor/editor_assist.hpp"
 #include "editor/clipboard.hpp"
 #include "editor/editor.hpp"
 #include "editor/path_completion.hpp"
@@ -1403,6 +1404,83 @@ void test_editor_selection_and_clipboard() {
     check(state.text.str() == "alpha alpha gammaalpha", "paste replaces selected range");
 }
 
+void test_editor_assist_helpers() {
+    check(std::string(pkchat::editor::kDefaultEditorSystemPrompt).find("1-shot") != std::string::npos,
+          "default editor system prompt mentions one-shot prompts");
+
+    pkchat::editor::ParsedAssistCommand parsed = pkchat::editor::parse_assist_command("/spell all");
+    check(parsed.ok && parsed.kind == pkchat::editor::AssistCommandKind::Spell &&
+              parsed.scope == pkchat::editor::AssistScope::All,
+          "/spell all parses");
+
+    parsed = pkchat::editor::parse_assist_command("/grammar selection");
+    check(parsed.ok && parsed.kind == pkchat::editor::AssistCommandKind::Grammar &&
+              parsed.scope == pkchat::editor::AssistScope::Selection,
+          "/grammar selection parses");
+
+    parsed = pkchat::editor::parse_assist_command("/spell");
+    check(parsed.ok && parsed.kind == pkchat::editor::AssistCommandKind::Spell && !parsed.scope.has_value(),
+          "bare /spell requests scope");
+
+    parsed = pkchat::editor::parse_assist_command("/prompt rewrite formally");
+    check(parsed.ok && parsed.kind == pkchat::editor::AssistCommandKind::Prompt &&
+              parsed.custom_prompt == "rewrite formally",
+          "/prompt captures custom text");
+
+    parsed = pkchat::editor::parse_assist_command("/prompt");
+    check(!parsed.ok, "bare /prompt is rejected");
+
+    parsed = pkchat::editor::parse_assist_command("/quit");
+    check(parsed.ok && parsed.kind == pkchat::editor::AssistCommandKind::Quit, "/quit parses");
+
+    parsed = pkchat::editor::parse_assist_command("//quit");
+    check(parsed.ok && parsed.kind == pkchat::editor::AssistCommandKind::Quit,
+          "duplicate leading slashes in /quit are accepted");
+
+    const std::vector<std::string>& completions = pkchat::editor::assist_command_completions();
+    check(!completions.empty() && completions.front() == "/spell", "assist completions include /spell");
+
+    std::string input = "/sp";
+    pkchat::editor::AssistCompleterState completer;
+    pkchat::editor::AssistCompletionResult completion =
+        pkchat::editor::complete_assist_command(input, completer);
+    check(completion.changed && input.rfind("/spell", 0) == 0, "assist tab completion expands /sp");
+
+    pkchat::editor::EditorState state =
+        pkchat::editor::EditorState::from_text("hello wrld");
+    state.selection.anchor = 0;
+    state.selection.active = 5;
+    pkchat::editor::AiContinueContext context;
+    context.request.profile.name = "lm_studio";
+    context.request.options.model = "mock-model";
+    pkchat::editor::AssistExecution execution = pkchat::editor::build_assist_execution(
+        state,
+        context,
+        pkchat::editor::AssistCommandKind::Spell,
+        pkchat::editor::AssistScope::Selection,
+        "",
+        std::nullopt);
+    check(execution.ok && !execution.stream &&
+              execution.edit_kind == pkchat::editor::AssistEditKind::ReplaceInPlace &&
+              execution.replace_start == 0 && execution.replace_count == 5,
+          "spell selection builds in-place execution");
+    check(execution.messages.size() == 2 && execution.messages.front().role == "system" &&
+              execution.messages.front().content == pkchat::editor::kDefaultEditorSystemPrompt,
+          "spell selection uses default editor system prompt");
+
+    context.request.options.system = "Custom system";
+    execution = pkchat::editor::build_assist_execution(
+        state, context, pkchat::editor::AssistCommandKind::Continue, std::nullopt, "", std::nullopt);
+    check(execution.ok && execution.stream &&
+              execution.edit_kind == pkchat::editor::AssistEditKind::StreamInsert,
+          "/continue builds streaming execution");
+    check(execution.messages.front().content == "Custom system",
+          "user --system overrides default editor system prompt");
+
+    check(pkchat::editor::trim_assist_inplace_response("  fixed text \n") == "fixed text",
+          "in-place assist responses are trimmed");
+}
+
 void test_editor_ai_continue_helpers() {
     pkchat::editor::PieceTable text = pkchat::editor::PieceTable::from_string("abcdefghij");
     check(text.range_text(2, 4) == "cdef", "range_text returns a bounded substring");
@@ -2343,6 +2421,7 @@ int main() {
     test_editor_undo_redo();
     test_editor_home_end_navigation();
     test_editor_selection_and_clipboard();
+    test_editor_assist_helpers();
     test_editor_ai_continue_helpers();
     test_editor_paste_prefers_local_clipboard();
     test_editor_movement_sequence_parse();
