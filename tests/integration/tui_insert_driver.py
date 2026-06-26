@@ -32,6 +32,8 @@ def require_running(process, description):
 
 
 def verify_editor_minibuffer(binary, target_path, save_path):
+    if os.path.exists(save_path):
+        os.remove(save_path)
     master, slave = pty.openpty()
     process = subprocess.Popen(
         [binary, "--provider", "none", "--editor"],
@@ -48,14 +50,20 @@ def verify_editor_minibuffer(binary, target_path, save_path):
         require_running(process, "editor")
         expected_text = target_path[:-4]
         send(master, expected_text + "\t")
-        send(master, "\x11", 0.2)
         require_running(process, "editor")
-        send(master, "n", 0.2)
+        quit_prompt = send(master, "\x11", 0.2)
+        if b"save before quit? (y/n)" not in quit_prompt:
+            raise RuntimeError("editor Ctrl+Q did not ask whether to save modified scratch buffer")
+        send(master, "\x1b", 0.2)
         save_prompt = send(master, "\x13")
         if b"Save file:" not in save_prompt:
             raise RuntimeError("editor Ctrl+S did not open the minibuffer save prompt")
-        send(master, save_path + "\r", 0.2)
-        send(master, "\x11", 0.2)
+        save_result = send(master, save_path + "\r", 0.2)
+        if b"overwrite it (yes/no)" in save_result:
+            send(master, "y", 0.2)
+        quit_result = send(master, "\x11", 0.2)
+        if b"save before quit? (y/n)" in quit_result:
+            send(master, "n", 0.2)
         process.wait(timeout=5)
     finally:
         if process.poll() is None:

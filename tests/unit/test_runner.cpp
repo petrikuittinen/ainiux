@@ -659,8 +659,38 @@ void test_cli_editor_parse() {
     pkchat::cli::ParseResult parsed = pkchat::cli::parse_args(5, const_cast<char**>(argv));
     check(parsed.error.ok(), "editor args parse");
     check(parsed.options.editor, "editor flag parsed");
-    check(parsed.options.positional_url == "notes.txt", "editor positional file parsed");
+    check(parsed.options.editor_path == "notes.txt", "editor file path parsed");
+    check(parsed.options.positional_url.empty(), "editor file is not stored as positional URL");
     check(parsed.options.output_path == "saved.txt", "editor save-as output parsed");
+
+    const char* provider_argv[] = {"pkchat", "lmstudio", "--editor", "notes.txt"};
+    parsed = pkchat::cli::parse_args(4, const_cast<char**>(provider_argv));
+    check(parsed.error.ok(), "editor args with provider shortcut parse");
+    check(parsed.options.positional_url == "lmstudio", "editor provider shortcut parsed");
+    check(parsed.options.editor_path == "notes.txt", "editor file with provider shortcut parsed");
+
+    const char* url_argv[] = {"pkchat", "http://localhost:1234/v1", "--editor", "draft.md"};
+    parsed = pkchat::cli::parse_args(4, const_cast<char**>(url_argv));
+    check(parsed.error.ok(), "editor args with base URL parse");
+    check(parsed.options.positional_url == "http://localhost:1234/v1", "editor base URL parsed");
+    check(parsed.options.editor_path == "draft.md", "editor file with base URL parsed");
+
+    const char* scratch_argv[] = {"pkchat", "--editor"};
+    parsed = pkchat::cli::parse_args(2, const_cast<char**>(scratch_argv));
+    check(parsed.error.ok(), "scratch editor args parse");
+    check(parsed.options.editor, "scratch editor flag parsed");
+    check(parsed.options.editor_path.empty(), "scratch editor has no file path");
+
+    const char* eq_argv[] = {"pkchat", "--editor=notes.txt"};
+    parsed = pkchat::cli::parse_args(2, const_cast<char**>(eq_argv));
+    check(parsed.error.ok(), "editor equals-form args parse");
+    check(parsed.options.editor_path == "notes.txt", "editor equals-form file path parsed");
+
+    const char* provider_file_argv[] = {"pkchat", "openrouter", "--editor", "openrouter"};
+    parsed = pkchat::cli::parse_args(4, const_cast<char**>(provider_file_argv));
+    check(parsed.error.ok(), "editor file named like provider shortcut parses");
+    check(parsed.options.positional_url == "openrouter", "provider shortcut stays positional");
+    check(parsed.options.editor_path == "openrouter", "editor path named like provider stays on --editor");
 }
 
 

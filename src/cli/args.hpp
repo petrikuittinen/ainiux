@@ -28,6 +28,7 @@ struct Options {
     bool repl = false;
     bool tui = false;
     bool editor = false;
+    std::string editor_path;
     bool no_colors = false;
     bool allow_private_url_fetch = false;
     bool show_thinking_traces = false;

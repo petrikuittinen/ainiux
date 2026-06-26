@@ -261,8 +261,16 @@ ParseResult parse_args(int argc, char** argv, const Options& base_options) {
             opts.no_colors = true;
         } else if (arg == "--allow-private-url-fetch") {
             opts.allow_private_url_fetch = true;
-        } else if (arg == "--editor") {
+        } else if (arg == "--editor" || opt == "--editor") {
             opts.editor = true;
+            if (!value.empty()) {
+                opts.editor_path = value;
+            } else if (i + 1 < argc) {
+                const char* next = argv[i + 1];
+                if (next[0] != '\0' && next[0] != '-') {
+                    opts.editor_path = argv[++i];
+                }
+            }
         } else if (needs_value(opt)) {
             if (auto err = take_value()) {
                 return {opts, *err};
@@ -499,7 +507,7 @@ Usage:
   pkchat --list-models [BASE_URL|PROFILE] [options]
   pkchat --repl [BASE_URL|PROFILE] [options]
   pkchat --chat [BASE_URL|PROFILE] [options]
-  pkchat --editor [PATH] [--output PATH]
+  pkchat [BASE_URL|PROFILE] --editor [PATH] [--output PATH]
   pkchat --input PATH [--output-format md|html|plaintext|json|jsond] [--output PATH]
   pkchat --fetch-url URL [--output-format md|html|plaintext|json|jsond] [--output PATH]
   pkchat --benchmark [--dataset FILE] [--mode MODE] [--provider NAME] [-m MODEL]
@@ -512,12 +520,15 @@ Examples:
   pkchat --provider lm_studio -m MODEL -p "Hello from local LM Studio"
   pkchat --provider lmstudio --list-models
   pkchat --provider none --editor notes.txt
+  pkchat lmstudio --editor notes.txt
+  pkchat http://localhost:1234/v1 --editor draft.md
   pkchat --provider none --input page.html --output-format md
   pkchat --provider none --fetch-url https://example.com --output-format md
   pkchat openrouter -model MODEL -i
   pkchat lmstudio -i
   pkchat --chat lmstudio
   pkchat --editor notes.txt
+  pkchat --editor
   pkchat --fetch-url https://example.com --output-format md
   pkchat --input page.html --output-format plaintext
   printf 'piped text' | pkchat --input stdin --output stdout
@@ -548,7 +559,7 @@ Options:
       --repl, -i                Start a simple line-oriented interactive chat.
       --chat                    Start the full-screen non-blocking terminal chat.
       --nocolors                Disable TUI color styling.
-      --editor                  Start the standalone multiline editor.
+      --editor [PATH]           Start the standalone multiline editor; PATH is the file to open.
       --input PATH              Read text/Markdown/HTML, or attach PNG/JPEG/GIF with -p;
                                 'stdin' reads UTF-8 plaintext from standard input.
       --attach PATH             Add text/Markdown/HTML or PNG/JPEG/GIF; repeatable;

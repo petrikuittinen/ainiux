@@ -354,6 +354,14 @@ enum class MinibufferAction {
     ReplaceWith,
     ConfirmLoad,
     ConfirmQuit,
+    ConfirmSaveOnQuit,
+    ConfirmOverwrite,
+};
+
+struct PendingSaveRequest {
+    std::string path;
+    bool update_path = true;
+    bool quit_after_save = false;
 };
 
 struct MinibufferState {
@@ -435,6 +443,26 @@ void reset_editor_buffer(EditorState& state, PieceTable text, std::string path) 
     state.clear_undo_history();
 }
 
+bool editor_target_exists(const std::string& path) {
+    if (path.empty()) {
+        return false;
+    }
+    std::error_code filesystem_error;
+    return std::filesystem::exists(path, filesystem_error) &&
+           std::filesystem::is_regular_file(path, filesystem_error);
+}
+
+bool needs_overwrite_confirm(const std::string& target, const std::string& current_path) {
+    if (!editor_target_exists(target)) {
+        return false;
+    }
+    return current_path.empty() || target != current_path;
+}
+
+std::string overwrite_prompt_message(const std::string& path) {
+    return path + " exists. Do you want to overwrite it (yes/no) ? ";
+}
+
 void save_editor_to_path(EditorState& state,
                          const std::string& path,
                          MinibufferState& minibuffer,
@@ -448,6 +476,28 @@ void save_editor_to_path(EditorState& state,
         minibuffer_message(minibuffer, "Saved " + path);
     } else {
         minibuffer_message(minibuffer, save_error.message);
+    }
+}
+
+void request_save_editor_to_path(EditorState& state,
+                                 const std::string& path,
+                                 MinibufferState& minibuffer,
+                                 bool update_path,
+                                 bool quit_after_save,
+                                 bool& quit,
+                                 PendingSaveRequest& pending_save) {
+    if (needs_overwrite_confirm(path, state.path)) {
+        pending_save.path = path;
+        pending_save.update_path = update_path;
+        pending_save.quit_after_save = quit_after_save;
+        start_minibuffer(minibuffer,
+                         MinibufferAction::ConfirmOverwrite,
+                         overwrite_prompt_message(path));
+        return;
+    }
+    save_editor_to_path(state, path, minibuffer, update_path);
+    if (quit_after_save && !state.dirty) {
+        quit = true;
     }
 }
 
@@ -574,16 +624,29 @@ void submit_minibuffer(EditorState& state,
                        std::string& last_search,
                        ReplaceSession& replace,
                        const EditorSettings& settings,
-                       std::string& pending_load_path) {
+                       std::string& pending_load_path,
+                       bool& pending_quit_after_save,
+                       PendingSaveRequest& pending_save) {
     const MinibufferAction action = minibuffer.action;
     const std::string value = trim_ascii_copy(minibuffer.input);
     const std::string raw_value = minibuffer.input;
     if (action == MinibufferAction::SaveFile) {
         if (value.empty()) {
-            minibuffer.prompt = "Save file (path required): ";
+            minibuffer.prompt = pending_quit_after_save ? "Save file before quit (path required): "
+                                                        : "Save file (path required): ";
             return;
         }
-        save_editor_to_path(state, value, minibuffer, true);
+        request_save_editor_to_path(state,
+                                    value,
+                                    minibuffer,
+                                    true,
+                                    pending_quit_after_save,
+                                    quit,
+                                    pending_save);
+        if (!pending_save.path.empty()) {
+            return;
+        }
+        pending_quit_after_save = false;
         return;
     }
     if (action == MinibufferAction::LoadFile) {
@@ -639,8 +702,42 @@ void submit_minibuffer(EditorState& state,
     if (action == MinibufferAction::ConfirmQuit) {
         if (yes_answer(value)) {
             quit = true;
-        } else {
+        } else if (no_answer(value) || value.empty()) {
             minibuffer_message(minibuffer, "Quit cancelled");
+        } else {
+            minibuffer.prompt = "Type y or n: ";
+            minibuffer.input.clear();
+        }
+        return;
+    }
+    if (action == MinibufferAction::ConfirmSaveOnQuit) {
+        if (yes_answer(value)) {
+            pending_quit_after_save = true;
+            start_minibuffer(minibuffer, MinibufferAction::SaveFile, "Save file: ");
+        } else if (no_answer(value) || value.empty()) {
+            quit = true;
+        } else {
+            minibuffer.prompt = "Type y or n: ";
+            minibuffer.input.clear();
+        }
+        return;
+    }
+    if (action == MinibufferAction::ConfirmOverwrite) {
+        if (yes_answer(value)) {
+            const PendingSaveRequest request = pending_save;
+            pending_save = PendingSaveRequest{};
+            save_editor_to_path(state, request.path, minibuffer, request.update_path);
+            if (request.quit_after_save && !state.dirty) {
+                quit = true;
+            }
+            pending_quit_after_save = false;
+        } else if (no_answer(value) || value.empty()) {
+            pending_save = PendingSaveRequest{};
+            pending_quit_after_save = false;
+            minibuffer_message(minibuffer, "Save cancelled");
+        } else {
+            minibuffer.prompt = "Type y or n: ";
+            minibuffer.input.clear();
         }
         return;
     }
@@ -654,18 +751,30 @@ bool handle_minibuffer_key(EditorState& state,
                            std::string& last_search,
                            ReplaceSession& replace,
                            const EditorSettings& settings,
-                           std::string& pending_load_path) {
+                           std::string& pending_load_path,
+                           bool& pending_quit_after_save,
+                           PendingSaveRequest& pending_save) {
     if (!minibuffer.active) {
         return false;
     }
     if (ch == 27 || ch == 7) {
         replace = ReplaceSession{};
         pending_load_path.clear();
+        pending_quit_after_save = false;
+        pending_save = PendingSaveRequest{};
         minibuffer_message(minibuffer, "Minibuffer cancelled");
         return true;
     }
     if (ch == '\r' || ch == '\n') {
-        submit_minibuffer(state, minibuffer, quit, last_search, replace, settings, pending_load_path);
+        submit_minibuffer(state,
+                          minibuffer,
+                          quit,
+                          last_search,
+                          replace,
+                          settings,
+                          pending_load_path,
+                          pending_quit_after_save,
+                          pending_save);
         return true;
     }
     if (ch == 127 || ch == 8) {
@@ -675,19 +784,38 @@ bool handle_minibuffer_key(EditorState& state,
         return true;
     }
     if (minibuffer.action == MinibufferAction::ConfirmQuit ||
-        minibuffer.action == MinibufferAction::ConfirmLoad) {
+        minibuffer.action == MinibufferAction::ConfirmLoad ||
+        minibuffer.action == MinibufferAction::ConfirmSaveOnQuit ||
+        minibuffer.action == MinibufferAction::ConfirmOverwrite) {
         if (ch == 'y' || ch == 'Y') {
             if (minibuffer.action == MinibufferAction::ConfirmQuit) {
                 quit = true;
-            } else {
+            } else if (minibuffer.action == MinibufferAction::ConfirmLoad) {
                 const std::string path = pending_load_path;
                 pending_load_path.clear();
                 load_editor_from_path(state, path, settings, minibuffer);
+            } else if (minibuffer.action == MinibufferAction::ConfirmSaveOnQuit) {
+                pending_quit_after_save = true;
+                start_minibuffer(minibuffer, MinibufferAction::SaveFile, "Save file: ");
+            } else {
+                const PendingSaveRequest request = pending_save;
+                pending_save = PendingSaveRequest{};
+                save_editor_to_path(state, request.path, minibuffer, request.update_path);
+                if (request.quit_after_save && !state.dirty) {
+                    quit = true;
+                }
+                pending_quit_after_save = false;
             }
         } else if (ch == 'n' || ch == 'N') {
             if (minibuffer.action == MinibufferAction::ConfirmLoad) {
                 pending_load_path.clear();
                 minibuffer_message(minibuffer, "Load cancelled");
+            } else if (minibuffer.action == MinibufferAction::ConfirmSaveOnQuit) {
+                quit = true;
+            } else if (minibuffer.action == MinibufferAction::ConfirmOverwrite) {
+                pending_save = PendingSaveRequest{};
+                pending_quit_after_save = false;
+                minibuffer_message(minibuffer, "Save cancelled");
             } else {
                 minibuffer_message(minibuffer, "Quit cancelled");
             }
@@ -1756,6 +1884,16 @@ Error save_file(const std::string& path, const PieceTable& text) {
     return ok_error();
 }
 
+Error ensure_empty_file(const std::string& path) {
+    if (path.empty()) {
+        return ok_error();
+    }
+    if (access(path.c_str(), F_OK) == 0) {
+        return ok_error();
+    }
+    return save_file(path, PieceTable::from_string(""));
+}
+
 int run_editor(const std::string& path, const std::string& save_as, const EditorSettings& settings) {
     EditorState state;
     state.set_undo_limit(settings.undo_limit);
@@ -1779,6 +1917,11 @@ int run_editor(const std::string& path, const std::string& save_as, const Editor
         }
         status = "Loaded";
     } else if (!path.empty()) {
+        Error create_err = ensure_empty_file(path);
+        if (!create_err.ok()) {
+            std::cerr << error_code_name(create_err.code) << ": " << create_err.message << "\n";
+            return 5;
+        }
         status = "New file";
     }
 
@@ -1790,6 +1933,8 @@ int run_editor(const std::string& path, const std::string& save_as, const Editor
     }
 
     bool quit = false;
+    bool pending_quit_after_save = false;
+    PendingSaveRequest pending_save;
     MinibufferState minibuffer;
     minibuffer.message = status;
     std::string last_search;
@@ -1806,7 +1951,9 @@ int run_editor(const std::string& path, const std::string& save_as, const Editor
                                   last_search,
                                   replace,
                                   settings,
-                                  pending_load_path)) {
+                                  pending_load_path,
+                                  pending_quit_after_save,
+                                  pending_save)) {
             return;
         }
         if (handle_replace_key(state, minibuffer, replace, ch)) {
@@ -1814,7 +1961,15 @@ int run_editor(const std::string& path, const std::string& save_as, const Editor
         }
 
         if (ch == 17) {
-            if (state.dirty) {
+            if (state.path.empty()) {
+                if (state.dirty || !state.text.empty()) {
+                    start_minibuffer(minibuffer,
+                                     MinibufferAction::ConfirmSaveOnQuit,
+                                     "Modified buffer exists; save before quit? (y/n) ");
+                } else {
+                    quit = true;
+                }
+            } else if (state.dirty) {
                 start_minibuffer(minibuffer, MinibufferAction::ConfirmQuit,
                                  "Buffer modified; quit anyway? (y/n) ");
             } else {
@@ -1847,7 +2002,13 @@ int run_editor(const std::string& path, const std::string& save_as, const Editor
                 start_minibuffer(minibuffer, MinibufferAction::SaveFile, "Save file: ");
             } else {
                 const bool update_path = save_as.empty() || state.path.empty();
-                save_editor_to_path(state, target, minibuffer, update_path);
+                request_save_editor_to_path(state,
+                                            target,
+                                            minibuffer,
+                                            update_path,
+                                            false,
+                                            quit,
+                                            pending_save);
             }
         } else if (ch == '\t') {
             minibuffer_message(minibuffer, "Tab completion is disabled in editor mode");
