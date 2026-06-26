@@ -620,6 +620,7 @@ Esc                  cancel active generation
 Ctrl+U               undo editor/input edit
 Ctrl+R               redo editor/input edit
 Ctrl+F               search with a minibuffer prompt in editor mode
+Ctrl+H               search and replace with minibuffer prompts in editor mode
 F3/Shift+F3          search next/previous in editor mode
 Alt+R                regenerate last answer in chat mode
 Ctrl+Q               quit chat/editor mode
@@ -1141,6 +1142,11 @@ render_format = md
 max_input_bytes = 1048576
 max_image_bytes = 20971520
 image_capability = auto
+
+[editor]
+undo_limit = 5
+huge_file_size_warning = 1073741824
+file_size_limit = -1
 
 [url_fetch]
 max_bytes = 1048576

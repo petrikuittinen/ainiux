@@ -1368,7 +1368,11 @@ int main(int argc, char** argv) {
         return exit_code_for(pkchat::ErrorCode::BadArgs);
     }
     if (options.editor) {
-        return pkchat::editor::run_editor(options.positional_url, options.output_path);
+        pkchat::editor::EditorSettings editor_settings;
+        editor_settings.undo_limit = static_cast<size_t>(options.editor_undo_limit);
+        editor_settings.huge_file_size_warning = options.editor_huge_file_size_warning;
+        editor_settings.file_size_limit = options.editor_file_size_limit;
+        return pkchat::editor::run_editor(options.positional_url, options.output_path, editor_settings);
     }
     if (!options.key.empty() && !options.quiet) {
         std::cerr << "Warning: command line API keys may be visible to other local users; prefer --key-env, --key-file, or --key-stdin.\n";

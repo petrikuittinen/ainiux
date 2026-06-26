@@ -5,6 +5,7 @@
 #include <vector>
 
 #include "common.hpp"
+#include "editor/editor.hpp"
 #include "markdown/markdown.hpp"
 
 namespace pkchat::cli {
@@ -84,6 +85,9 @@ struct Options {
     long max_input_bytes = 1048576;
     long max_image_bytes = 20971520;
     long max_context_bytes = 0;
+    int editor_undo_limit = static_cast<int>(pkchat::editor::kDefaultUndoLimit);
+    long long editor_huge_file_size_warning = pkchat::editor::kDefaultHugeFileSizeWarningBytes;
+    long long editor_file_size_limit = pkchat::editor::kNoEditorFileSizeLimit;
     long long context_tokens = 0;
     int benchmark_runs = 1;
     int benchmark_warmup = 0;

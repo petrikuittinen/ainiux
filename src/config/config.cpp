@@ -474,6 +474,30 @@ Error nonnegative_int(const Entry& entry, int& output) {
     return ok_error();
 }
 
+Error nonnegative_long_long(const Entry& entry, long long& output) {
+    Error err = require_type(entry, Value::Type::Integer);
+    if (!err.ok()) {
+        return err;
+    }
+    if (entry.value.integer < 0) {
+        return schema_error(entry, "expected a non-negative integer");
+    }
+    output = static_cast<long long>(entry.value.integer);
+    return ok_error();
+}
+
+Error editor_file_size_limit(const Entry& entry, long long& output) {
+    Error err = require_type(entry, Value::Type::Integer);
+    if (!err.ok()) {
+        return err;
+    }
+    if (entry.value.integer < -1) {
+        return schema_error(entry, "expected -1 or a non-negative byte limit");
+    }
+    output = static_cast<long long>(entry.value.integer);
+    return ok_error();
+}
+
 Error numeric_double(const Entry& entry, double& output) {
     if (entry.value.is_float()) {
         output = entry.value.floating;
@@ -731,6 +755,12 @@ Error apply_document(const Document& document, cli::Options& options) {
         } else if (name == "input.image_capability") {
             err = enum_string(entry, {"auto", "allow", "deny"}, candidate.image_capability,
                               "auto, allow, or deny");
+        } else if (name == "editor.undo_limit") {
+            err = nonnegative_int(entry, candidate.editor_undo_limit);
+        } else if (name == "editor.huge_file_size_warning") {
+            err = nonnegative_long_long(entry, candidate.editor_huge_file_size_warning);
+        } else if (name == "editor.file_size_limit") {
+            err = editor_file_size_limit(entry, candidate.editor_file_size_limit);
         } else if (name == "url_fetch.max_bytes") {
             err = nonnegative_long(entry, candidate.max_fetch_bytes);
         } else if (name == "url_fetch.allow_private_addresses") {

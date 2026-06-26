@@ -739,8 +739,9 @@ std::vector<StyledLine> history_lines_for_session(const chat::Session& session, 
     return history;
 }
 
-editor::EditorState empty_input_editor() {
+editor::EditorState empty_input_editor(size_t undo_limit) {
     editor::EditorState input = editor::EditorState::from_text("");
+    input.set_undo_limit(undo_limit);
     input.mode = editor::EditorMode::Chat;
     input.vertical_movement = editor::VerticalMovementMode::VisualRow;
     return input;
@@ -938,7 +939,11 @@ int run(provider::RequestContext context, chat::Session session) {
     runtime::JobHandle file_job;
     runtime::JobHandle completion_job;
     ActiveJob active_job = ActiveJob::None;
-    editor::EditorState input = empty_input_editor();
+    const size_t input_undo_limit = static_cast<size_t>(std::max(0, context.options.editor_undo_limit));
+    auto new_input_editor = [&]() {
+        return empty_input_editor(input_undo_limit);
+    };
+    editor::EditorState input = new_input_editor();
     editor::ContextualCompleter path_completer;
     size_t completion_generation = 0;
     bool completion_pending = false;
@@ -1443,11 +1448,11 @@ int run(provider::RequestContext context, chat::Session session) {
         const std::string raw = input.text.str();
         const std::string text = trim_ascii(raw);
         if (text.empty()) {
-            input = empty_input_editor();
+            input = new_input_editor();
             return;
         }
         if (raw.find('\n') == std::string::npos && text[0] == '/') {
-            input = empty_input_editor();
+            input = new_input_editor();
             handle_command(text);
             return;
         }
@@ -1455,7 +1460,7 @@ int run(provider::RequestContext context, chat::Session session) {
             status = "A model job is already running";
             return;
         }
-        input = empty_input_editor();
+        input = new_input_editor();
         start_turn(raw);
     };
 

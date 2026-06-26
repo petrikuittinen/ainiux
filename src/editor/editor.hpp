@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstddef>
+#include <cstdint>
 #include <iosfwd>
 #include <string>
 #include <vector>
@@ -33,6 +34,21 @@ struct EditorSnapshot {
     size_t preferred_column = 0;
     size_t scroll_line = 0;
     size_t scroll_column = 0;
+};
+
+constexpr size_t kDefaultUndoLimit = 5;
+constexpr long long kDefaultHugeFileSizeWarningBytes = 1024LL * 1024LL * 1024LL;
+constexpr long long kNoEditorFileSizeLimit = -1;
+
+struct EditorSettings {
+    size_t undo_limit = kDefaultUndoLimit;
+    long long huge_file_size_warning = kDefaultHugeFileSizeWarningBytes;
+    long long file_size_limit = kNoEditorFileSizeLimit;
+};
+
+struct FileLoadCheck {
+    std::uintmax_t size = 0;
+    bool should_warn = false;
 };
 
 enum class VerticalMovementMode {
@@ -112,10 +128,13 @@ struct EditorState {
     bool redo();
     bool can_undo() const;
     bool can_redo() const;
+    void set_undo_limit(size_t limit);
+    size_t undo_limit() const;
     void clear_undo_history();
     bool search(const std::string& needle);
     bool search_next(const std::string& needle);
     bool search_previous(const std::string& needle);
+    Error replace_all_from(size_t start, const std::string& needle, const std::string& value, size_t& replacements);
     void move_left();
     void move_right();
     void move_up();
@@ -139,6 +158,7 @@ struct EditorState {
 
     std::vector<EditorSnapshot> undo_stack_;
     std::vector<EditorSnapshot> redo_stack_;
+    size_t undo_limit_ = kDefaultUndoLimit;
 };
 
 RenderedPanel render_panel(const PieceTable& text,
@@ -148,8 +168,10 @@ RenderedPanel render_panel(const PieceTable& text,
                            size_t scroll_column);
 
 Error load_file(const std::string& path, PieceTable& out);
+Error load_file(const std::string& path, const EditorSettings& settings, PieceTable& out);
+Error check_load_file_size(const std::string& path, const EditorSettings& settings, FileLoadCheck& check);
 Error save_file(const std::string& path, const PieceTable& text);
 
-int run_editor(const std::string& path, const std::string& save_as);
+int run_editor(const std::string& path, const std::string& save_as, const EditorSettings& settings = {});
 
 }  // namespace pkchat::editor

@@ -319,7 +319,7 @@ void test_benchmark_cli_and_jsonl_dataset() {
 void test_config_reads_common_template() {
     pkchat::config::ParseResult parsed = pkchat::config::read_file("config/pkchat.conf");
     check(parsed.error.ok(), "common config file parses");
-    check(parsed.document.entries.size() == 28, "common config has every expected setting");
+    check(parsed.document.entries.size() == 31, "common config has every expected setting");
 
     const pkchat::config::Entry* provider = parsed.document.find("provider");
     check(provider != nullptr && provider->value.is_string() && provider->value.string == "openai",
@@ -341,7 +341,10 @@ void test_config_reads_common_template() {
     pkchat::Error err = pkchat::config::apply_document(parsed.document, options);
     check(err.ok(), "every common config setting passes schema validation");
     check(options.provider == "openai" && options.stream && options.tui_theme == "dark" &&
-              !options.show_thinking_traces && !options.allow_private_url_fetch,
+              !options.show_thinking_traces && !options.allow_private_url_fetch &&
+              options.editor_undo_limit == 5 &&
+              options.editor_huge_file_size_warning == 1073741824LL &&
+              options.editor_file_size_limit == -1,
           "common config maps to the built-in runtime defaults");
 }
 
@@ -356,6 +359,16 @@ void test_config_applies_user_settings() {
     check(options.allow_private_url_fetch, "user config enables private URL fetching");
     check(options.tui_theme == "dark", "user config selects the dark theme");
     check(options.show_thinking_traces, "user config shows thinking traces by default");
+
+    pkchat::config::ParseResult editor_config =
+        pkchat::config::parse("[editor]\nundo_limit = 7\nhuge_file_size_warning = 2048\nfile_size_limit = -1\n",
+                              "editor.conf");
+    check(editor_config.error.ok(), "editor config fixture parses");
+    err = pkchat::config::apply_document(editor_config.document, options);
+    check(err.ok() && options.editor_undo_limit == 7 &&
+              options.editor_huge_file_size_warning == 2048 &&
+              options.editor_file_size_limit == -1,
+          "editor config settings apply");
 
     const std::string system_home =
         std::filesystem::absolute("build/config-system").lexically_normal().string();
@@ -431,6 +444,18 @@ void test_config_schema_rejects_invalid_settings_transactionally() {
     err = pkchat::config::apply_document(bad_version.document, options);
     check(!err.ok() && err.message.find("supported version is 1") != std::string::npos,
           "config schema rejects unsupported versions");
+
+    pkchat::config::ParseResult bad_editor_limit =
+        pkchat::config::parse("[editor]\nfile_size_limit = -2\n", "editor-limit.conf");
+    err = pkchat::config::apply_document(bad_editor_limit.document, options);
+    check(!err.ok() && err.message.find("expected -1 or a non-negative byte limit") != std::string::npos,
+          "config schema rejects editor file limits below -1");
+
+    pkchat::config::ParseResult bad_undo =
+        pkchat::config::parse("[editor]\nundo_limit = -1\n", "editor-undo.conf");
+    err = pkchat::config::apply_document(bad_undo.document, options);
+    check(!err.ok() && err.message.find("non-negative integer") != std::string::npos,
+          "config schema rejects negative editor undo limits");
 }
 
 void test_config_xdg_path_resolution() {
@@ -1243,6 +1268,8 @@ void test_editor_kill_to_line_end() {
 void test_editor_undo_redo() {
     pkchat::editor::EditorState state = pkchat::editor::EditorState::from_text("alpha");
     state.cursor = state.text.size();
+    check(state.undo_limit() == pkchat::editor::kDefaultUndoLimit,
+          "editor undo history defaults to five entries");
 
     pkchat::Error err = state.insert(" beta");
     check(err.ok(), "editor insert before undo succeeds");
@@ -1271,6 +1298,22 @@ void test_editor_undo_redo() {
     check(err.ok() && state.text.str() == "ALPHA beta!", "editor replace changes text");
     check(state.undo(), "editor replace is undoable as one edit");
     check(state.text.str() == "alpha beta!", "editor undo restores text before replace");
+
+    pkchat::editor::EditorState limited = pkchat::editor::EditorState::from_text("");
+    limited.set_undo_limit(2);
+    check(limited.undo_limit() == 2, "editor undo history limit can be changed");
+    check(limited.insert("a").ok(), "editor limited undo first edit succeeds");
+    check(limited.insert("b").ok(), "editor limited undo second edit succeeds");
+    check(limited.insert("c").ok(), "editor limited undo third edit succeeds");
+    check(limited.undo() && limited.text.str() == "ab",
+          "editor limited undo restores the newest retained edit");
+    check(limited.undo() && limited.text.str() == "a",
+          "editor limited undo restores the oldest retained edit");
+    check(!limited.undo(), "editor undo history discards entries beyond the configured limit");
+
+    limited.set_undo_limit(0);
+    check(limited.insert("z").ok(), "editor zero undo limit still allows edits");
+    check(!limited.can_undo(), "editor zero undo limit stores no undo entries");
 }
 
 void test_editor_page_navigation() {
@@ -1315,6 +1358,31 @@ void test_editor_search_navigation() {
     check(state.cursor == before, "editor search leaves cursor in place when not found");
 }
 
+void test_editor_search_replace() {
+    pkchat::editor::EditorState state =
+        pkchat::editor::EditorState::from_text("one two one two one");
+
+    size_t replacements = 0;
+    pkchat::Error err = state.replace_all_from(4, "one", "ONE", replacements);
+    check(err.ok(), "editor replace-all from cursor succeeds");
+    check(replacements == 2, "editor replace-all counts replacements to the end of the buffer");
+    check(state.text.str() == "one two ONE two ONE",
+          "editor replace-all only changes occurrences at or after the start offset");
+    check(state.dirty, "editor replace-all marks the buffer dirty");
+    check(state.undo(), "editor replace-all is undoable as one edit");
+    check(state.text.str() == "one two one two one",
+          "editor undo restores the buffer before replace-all");
+
+    err = state.replace_all_from(0, "two", "", replacements);
+    check(err.ok(), "editor replace-all accepts an empty replacement");
+    check(replacements == 2, "editor delete-by-replace counts removed occurrences");
+    check(state.text.str() == "one  one  one",
+          "editor empty replacement deletes all matching occurrences to the end");
+
+    err = state.replace_all_from(0, "", "x", replacements);
+    check(!err.ok(), "editor replace-all rejects an empty search string");
+}
+
 void test_editor_vertical_navigation_modes() {
     pkchat::editor::Rect rect{1, 1, 3, 4};
     pkchat::editor::EditorState logical = pkchat::editor::EditorState::from_text("abcdefghij\nXYZ");
@@ -1351,6 +1419,24 @@ void test_editor_file_round_trip() {
     err = pkchat::editor::load_file(path, loaded);
     check(err.ok(), "editor file loads");
     check(loaded.str() == "first\nsecond", "editor file round trip preserves text");
+
+    pkchat::editor::EditorSettings settings;
+    settings.huge_file_size_warning = 5;
+    settings.file_size_limit = -1;
+    pkchat::editor::FileLoadCheck load_check;
+    err = pkchat::editor::check_load_file_size(path, settings, load_check);
+    check(err.ok() && load_check.size == 12 && load_check.should_warn,
+          "editor file size check reports configured huge-file warning");
+
+    settings.file_size_limit = 4;
+    err = pkchat::editor::load_file(path, settings, loaded);
+    check(!err.ok() && err.message.find("FILE_SIZE_LIMIT") != std::string::npos,
+          "editor file load rejects files above the configured size limit");
+
+    settings.file_size_limit = -1;
+    err = pkchat::editor::load_file(path, settings, loaded);
+    check(err.ok() && loaded.str() == "first\nsecond",
+          "editor file load has no configured upper limit when file_size_limit is -1");
 }
 
 void test_editor_path_completion() {
@@ -2038,6 +2124,7 @@ int main() {
     test_editor_undo_redo();
     test_editor_page_navigation();
     test_editor_search_navigation();
+    test_editor_search_replace();
     test_editor_vertical_navigation_modes();
     test_editor_file_round_trip();
     test_editor_path_completion();

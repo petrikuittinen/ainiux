@@ -1,12 +1,17 @@
 #include "editor/editor.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cerrno>
 #include <cstring>
+#include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <limits>
+#include <new>
 #include <ostream>
 #include <sstream>
+#include <stdexcept>
 #include <string>
 #include <sys/ioctl.h>
 #include <sys/select.h>
@@ -18,7 +23,6 @@ namespace pkchat::editor {
 namespace {
 
 constexpr size_t kTabStop = 4;
-constexpr size_t kMaxUndoEntries = 100;
 
 size_t utf8_len(unsigned char ch, size_t remaining) {
     if (ch < 0x80U) return 1;
@@ -346,6 +350,9 @@ enum class MinibufferAction {
     SaveFile,
     LoadFile,
     Search,
+    ReplaceSearch,
+    ReplaceWith,
+    ConfirmLoad,
     ConfirmQuit,
 };
 
@@ -355,6 +362,14 @@ struct MinibufferState {
     std::string prompt;
     std::string input;
     std::string message = "Ready";
+};
+
+struct ReplaceSession {
+    bool active = false;
+    bool match_valid = false;
+    size_t match_start = 0;
+    std::string needle;
+    std::string replacement;
 };
 
 std::string trim_ascii_copy(std::string text) {
@@ -380,7 +395,7 @@ std::string editor_status_line(const EditorState& state) {
     const size_t column = state.text.display_column_for_offset(state.cursor) + 1;
     out << "  Mode: Editor"
         << "  Ln " << line << ", Col " << column
-        << "  Ctrl+F find | F3 next | Ctrl+U undo | Ctrl+S save | Ctrl+Q quit";
+        << "  Ctrl+F find | Ctrl+H replace | F3 next | Ctrl+U undo | Ctrl+S save | Ctrl+Q quit";
     return out.str();
 }
 
@@ -436,15 +451,62 @@ void save_editor_to_path(EditorState& state,
     }
 }
 
-void load_editor_from_path(EditorState& state, const std::string& path, MinibufferState& minibuffer) {
+bool yes_answer(const std::string& value) {
+    return value == "y" || value == "Y" || value == "yes" || value == "YES";
+}
+
+bool no_answer(const std::string& value) {
+    return value == "n" || value == "N" || value == "no" || value == "NO";
+}
+
+std::string file_size_warning_message(const std::string& path, std::uintmax_t size) {
+    return "Warning: " + path + " is " + std::to_string(size) + " bytes";
+}
+
+void load_editor_from_path(EditorState& state,
+                           const std::string& path,
+                           const EditorSettings& settings,
+                           MinibufferState& minibuffer) {
     PieceTable loaded;
-    Error load_error = load_file(path, loaded);
+    Error load_error = load_file(path, settings, loaded);
     if (load_error.ok()) {
         reset_editor_buffer(state, std::move(loaded), path);
         minibuffer_message(minibuffer, "Loaded " + path);
     } else {
         minibuffer_message(minibuffer, load_error.message);
     }
+}
+
+void request_load_editor_from_path(EditorState& state,
+                                   const std::string& path,
+                                   const EditorSettings& settings,
+                                   MinibufferState& minibuffer,
+                                   std::string& pending_load_path) {
+    FileLoadCheck check;
+    Error err = check_load_file_size(path, settings, check);
+    if (!err.ok()) {
+        minibuffer_message(minibuffer, err.message);
+        return;
+    }
+    if (check.should_warn) {
+        pending_load_path = path;
+        start_minibuffer(minibuffer,
+                         MinibufferAction::ConfirmLoad,
+                         file_size_warning_message(path, check.size) + "; load anyway? (y/n) ");
+        return;
+    }
+    load_editor_from_path(state, path, settings, minibuffer);
+}
+
+bool confirm_huge_load_before_terminal(const std::string& path, const FileLoadCheck& check) {
+    std::cerr << file_size_warning_message(path, check.size)
+              << ". Load anyway? [y/N] ";
+    std::cerr.flush();
+    std::string response;
+    if (!std::getline(std::cin, response)) {
+        return false;
+    }
+    return yes_answer(trim_ascii_copy(response));
 }
 
 std::string search_found_message(const std::string& needle) {
@@ -455,12 +517,67 @@ std::string search_not_found_message(const std::string& needle) {
     return "Search not found: " + needle;
 }
 
+std::string replacement_count_message(size_t replacements) {
+    std::ostringstream out;
+    out << "Replaced " << replacements << " occurrence";
+    if (replacements != 1) {
+        out << "s";
+    }
+    return out.str();
+}
+
+std::string replace_prompt_message(const std::string& needle) {
+    return "Replace '" + needle + "': Space replace | s skip | a all | Esc done";
+}
+
+void finish_replace_session(ReplaceSession& replace, MinibufferState& minibuffer, std::string message) {
+    replace = ReplaceSession{};
+    minibuffer_message(minibuffer, std::move(message));
+}
+
+bool find_replace_match(EditorState& state, ReplaceSession& replace, size_t start) {
+    if (replace.needle.empty()) {
+        return false;
+    }
+    const std::string haystack = state.text.str();
+    if (haystack.empty()) {
+        return false;
+    }
+    const size_t found = haystack.find(replace.needle, std::min(start, haystack.size()));
+    if (found == std::string::npos) {
+        replace.match_valid = false;
+        return false;
+    }
+    replace.active = true;
+    replace.match_valid = true;
+    replace.match_start = found;
+    state.cursor = found;
+    update_preferred_column(state);
+    return true;
+}
+
+void begin_replace_choices(EditorState& state, MinibufferState& minibuffer, ReplaceSession& replace) {
+    minibuffer.active = false;
+    minibuffer.action = MinibufferAction::None;
+    minibuffer.prompt.clear();
+    minibuffer.input.clear();
+    if (find_replace_match(state, replace, state.cursor)) {
+        minibuffer.message = replace_prompt_message(replace.needle);
+    } else {
+        finish_replace_session(replace, minibuffer, search_not_found_message(replace.needle));
+    }
+}
+
 void submit_minibuffer(EditorState& state,
                        MinibufferState& minibuffer,
                        bool& quit,
-                       std::string& last_search) {
+                       std::string& last_search,
+                       ReplaceSession& replace,
+                       const EditorSettings& settings,
+                       std::string& pending_load_path) {
     const MinibufferAction action = minibuffer.action;
     const std::string value = trim_ascii_copy(minibuffer.input);
+    const std::string raw_value = minibuffer.input;
     if (action == MinibufferAction::SaveFile) {
         if (value.empty()) {
             minibuffer.prompt = "Save file (path required): ";
@@ -474,7 +591,7 @@ void submit_minibuffer(EditorState& state,
             minibuffer.prompt = "Load file (path required): ";
             return;
         }
-        load_editor_from_path(state, value, minibuffer);
+        request_load_editor_from_path(state, value, settings, minibuffer, pending_load_path);
         return;
     }
     if (action == MinibufferAction::Search) {
@@ -488,8 +605,39 @@ void submit_minibuffer(EditorState& state,
                                                : search_not_found_message(value));
         return;
     }
+    if (action == MinibufferAction::ReplaceSearch) {
+        if (raw_value.empty()) {
+            minibuffer.prompt = "Replace search (substring required): ";
+            return;
+        }
+        replace = ReplaceSession{};
+        replace.active = true;
+        replace.needle = raw_value;
+        last_search = raw_value;
+        start_minibuffer(minibuffer, MinibufferAction::ReplaceWith, "Replace with: ");
+        return;
+    }
+    if (action == MinibufferAction::ReplaceWith) {
+        replace.replacement = raw_value;
+        begin_replace_choices(state, minibuffer, replace);
+        return;
+    }
+    if (action == MinibufferAction::ConfirmLoad) {
+        if (yes_answer(value)) {
+            const std::string path = pending_load_path;
+            pending_load_path.clear();
+            load_editor_from_path(state, path, settings, minibuffer);
+        } else if (no_answer(value) || value.empty()) {
+            pending_load_path.clear();
+            minibuffer_message(minibuffer, "Load cancelled");
+        } else {
+            minibuffer.prompt = "Type y or n: ";
+            minibuffer.input.clear();
+        }
+        return;
+    }
     if (action == MinibufferAction::ConfirmQuit) {
-        if (value == "y" || value == "Y" || value == "yes" || value == "YES") {
+        if (yes_answer(value)) {
             quit = true;
         } else {
             minibuffer_message(minibuffer, "Quit cancelled");
@@ -503,16 +651,21 @@ bool handle_minibuffer_key(EditorState& state,
                            MinibufferState& minibuffer,
                            unsigned char ch,
                            bool& quit,
-                           std::string& last_search) {
+                           std::string& last_search,
+                           ReplaceSession& replace,
+                           const EditorSettings& settings,
+                           std::string& pending_load_path) {
     if (!minibuffer.active) {
         return false;
     }
     if (ch == 27 || ch == 7) {
+        replace = ReplaceSession{};
+        pending_load_path.clear();
         minibuffer_message(minibuffer, "Minibuffer cancelled");
         return true;
     }
     if (ch == '\r' || ch == '\n') {
-        submit_minibuffer(state, minibuffer, quit, last_search);
+        submit_minibuffer(state, minibuffer, quit, last_search, replace, settings, pending_load_path);
         return true;
     }
     if (ch == 127 || ch == 8) {
@@ -521,11 +674,23 @@ bool handle_minibuffer_key(EditorState& state,
         }
         return true;
     }
-    if (minibuffer.action == MinibufferAction::ConfirmQuit) {
+    if (minibuffer.action == MinibufferAction::ConfirmQuit ||
+        minibuffer.action == MinibufferAction::ConfirmLoad) {
         if (ch == 'y' || ch == 'Y') {
-            quit = true;
+            if (minibuffer.action == MinibufferAction::ConfirmQuit) {
+                quit = true;
+            } else {
+                const std::string path = pending_load_path;
+                pending_load_path.clear();
+                load_editor_from_path(state, path, settings, minibuffer);
+            }
         } else if (ch == 'n' || ch == 'N') {
-            minibuffer_message(minibuffer, "Quit cancelled");
+            if (minibuffer.action == MinibufferAction::ConfirmLoad) {
+                pending_load_path.clear();
+                minibuffer_message(minibuffer, "Load cancelled");
+            } else {
+                minibuffer_message(minibuffer, "Quit cancelled");
+            }
         } else {
             minibuffer.prompt = "Type y or n: ";
         }
@@ -539,6 +704,94 @@ bool handle_minibuffer_key(EditorState& state,
         minibuffer.input.push_back(static_cast<char>(ch));
         return true;
     }
+    return true;
+}
+
+void discard_escape_sequence_tail() {
+    unsigned char ch = 0;
+    std::string sequence;
+    while (sequence.size() < 16 && read_byte(ch, 1)) {
+        sequence.push_back(static_cast<char>(ch));
+        if (sequence.size() == 1 && ch == 'O') {
+            continue;
+        }
+        if ((ch >= 'A' && ch <= 'Z') || ch == '~') {
+            break;
+        }
+    }
+}
+
+void replace_current_match(EditorState& state, MinibufferState& minibuffer, ReplaceSession& replace) {
+    if (!replace.match_valid && !find_replace_match(state, replace, state.cursor)) {
+        finish_replace_session(replace, minibuffer, "Replace complete");
+        return;
+    }
+
+    const size_t replaced_at = replace.match_start;
+    Error err = state.replace(replaced_at, replace.needle.size(), replace.replacement);
+    if (!err.ok()) {
+        finish_replace_session(replace, minibuffer, err.message);
+        return;
+    }
+
+    const size_t next_start = replaced_at + replace.replacement.size();
+    if (find_replace_match(state, replace, next_start)) {
+        minibuffer.message = replacement_count_message(1) + ". " + replace_prompt_message(replace.needle);
+    } else {
+        finish_replace_session(replace, minibuffer, replacement_count_message(1) + "; no more matches");
+    }
+}
+
+void skip_current_match(EditorState& state, MinibufferState& minibuffer, ReplaceSession& replace) {
+    if (!replace.match_valid && !find_replace_match(state, replace, state.cursor)) {
+        finish_replace_session(replace, minibuffer, "Replace complete");
+        return;
+    }
+
+    const size_t next_start = replace.match_start + replace.needle.size();
+    if (find_replace_match(state, replace, next_start)) {
+        minibuffer.message = replace_prompt_message(replace.needle);
+    } else {
+        finish_replace_session(replace, minibuffer, "Replace complete");
+    }
+}
+
+void replace_all_remaining(EditorState& state, MinibufferState& minibuffer, ReplaceSession& replace) {
+    const size_t start = replace.match_valid ? replace.match_start : state.cursor;
+    size_t replacements = 0;
+    Error err = state.replace_all_from(start, replace.needle, replace.replacement, replacements);
+    if (!err.ok()) {
+        finish_replace_session(replace, minibuffer, err.message);
+        return;
+    }
+    finish_replace_session(replace, minibuffer, replacement_count_message(replacements));
+}
+
+bool handle_replace_key(EditorState& state,
+                        MinibufferState& minibuffer,
+                        ReplaceSession& replace,
+                        unsigned char ch) {
+    if (!replace.active || minibuffer.active) {
+        return false;
+    }
+    if (ch == 27 || ch == 7) {
+        discard_escape_sequence_tail();
+        finish_replace_session(replace, minibuffer, "Replace ended");
+        return true;
+    }
+    if (ch == ' ') {
+        replace_current_match(state, minibuffer, replace);
+        return true;
+    }
+    if (ch == 's' || ch == 'S') {
+        skip_current_match(state, minibuffer, replace);
+        return true;
+    }
+    if (ch == 'a' || ch == 'A') {
+        replace_all_remaining(state, minibuffer, replace);
+        return true;
+    }
+    minibuffer.message = replace_prompt_message(replace.needle);
     return true;
 }
 
@@ -921,11 +1174,14 @@ void EditorState::restore_snapshot(const EditorSnapshot& snapshot) {
 }
 
 void EditorState::remember_undo(EditorSnapshot snapshot) {
-    if (undo_stack_.size() >= kMaxUndoEntries) {
+    redo_stack_.clear();
+    if (undo_limit_ == 0) {
+        return;
+    }
+    while (undo_stack_.size() >= undo_limit_) {
         undo_stack_.erase(undo_stack_.begin());
     }
     undo_stack_.push_back(std::move(snapshot));
-    redo_stack_.clear();
 }
 
 Error EditorState::insert(const std::string& value) {
@@ -1009,7 +1265,7 @@ bool EditorState::undo() {
     if (undo_stack_.empty()) {
         return false;
     }
-    if (redo_stack_.size() >= kMaxUndoEntries) {
+    while (redo_stack_.size() >= undo_limit_ && undo_limit_ > 0) {
         redo_stack_.erase(redo_stack_.begin());
     }
     redo_stack_.push_back(snapshot());
@@ -1024,7 +1280,7 @@ bool EditorState::redo() {
     if (redo_stack_.empty()) {
         return false;
     }
-    if (undo_stack_.size() >= kMaxUndoEntries) {
+    while (undo_stack_.size() >= undo_limit_ && undo_limit_ > 0) {
         undo_stack_.erase(undo_stack_.begin());
     }
     undo_stack_.push_back(snapshot());
@@ -1041,6 +1297,25 @@ bool EditorState::can_undo() const {
 
 bool EditorState::can_redo() const {
     return !redo_stack_.empty();
+}
+
+void EditorState::set_undo_limit(size_t limit) {
+    undo_limit_ = limit;
+    if (undo_limit_ == 0) {
+        undo_stack_.clear();
+        redo_stack_.clear();
+        return;
+    }
+    while (undo_stack_.size() > undo_limit_) {
+        undo_stack_.erase(undo_stack_.begin());
+    }
+    while (redo_stack_.size() > undo_limit_) {
+        redo_stack_.erase(redo_stack_.begin());
+    }
+}
+
+size_t EditorState::undo_limit() const {
+    return undo_limit_;
 }
 
 void EditorState::clear_undo_history() {
@@ -1111,6 +1386,51 @@ bool EditorState::search_previous(const std::string& needle) {
     cursor = found;
     update_preferred_column(*this);
     return true;
+}
+
+Error EditorState::replace_all_from(size_t start,
+                                    const std::string& needle,
+                                    const std::string& value,
+                                    size_t& replacements) {
+    replacements = 0;
+    if (needle.empty()) {
+        return {ErrorCode::BadArgs, "editor replace search string is empty"};
+    }
+    const std::string before_text = text.str();
+    if (start > before_text.size()) {
+        return {ErrorCode::BadArgs, "editor replace start position is past the end of the buffer"};
+    }
+
+    std::string replaced;
+    replaced.reserve(before_text.size());
+    replaced.append(before_text, 0, start);
+
+    size_t scan = start;
+    size_t cursor_after_last_replacement = cursor;
+    while (scan < before_text.size()) {
+        const size_t found = before_text.find(needle, scan);
+        if (found == std::string::npos) {
+            break;
+        }
+        replaced.append(before_text, scan, found - scan);
+        replaced.append(value);
+        cursor_after_last_replacement = replaced.size();
+        ++replacements;
+        scan = found + needle.size();
+    }
+    replaced.append(before_text, scan, std::string::npos);
+
+    if (replacements == 0 || replaced == before_text) {
+        return ok_error();
+    }
+
+    EditorSnapshot before{before_text, cursor, preferred_column, scroll_line, scroll_column};
+    text = PieceTable::from_string(std::move(replaced));
+    remember_undo(std::move(before));
+    cursor = std::min(cursor_after_last_replacement, text.size());
+    dirty = true;
+    update_preferred_column(*this);
+    return ok_error();
 }
 
 void EditorState::move_left() {
@@ -1346,16 +1666,74 @@ RenderedPanel render_panel(const PieceTable& text,
 }
 
 Error load_file(const std::string& path, PieceTable& out) {
+    return load_file(path, EditorSettings{}, out);
+}
+
+Error check_load_file_size(const std::string& path, const EditorSettings& settings, FileLoadCheck& check) {
+    check = {};
+    std::error_code filesystem_error;
+    const std::filesystem::file_status status = std::filesystem::status(path, filesystem_error);
+    if (filesystem_error || !std::filesystem::exists(status)) {
+        return {ErrorCode::FileRead, "could not inspect editor file before loading: " + path};
+    }
+    if (!std::filesystem::is_regular_file(status)) {
+        return {ErrorCode::FileRead, "editor path is not a regular file: " + path};
+    }
+    const std::uintmax_t file_size = std::filesystem::file_size(path, filesystem_error);
+    if (filesystem_error) {
+        return {ErrorCode::FileRead, "could not determine editor file size before loading: " + path};
+    }
+    if (settings.file_size_limit >= 0 &&
+        file_size > static_cast<std::uintmax_t>(settings.file_size_limit)) {
+        return {ErrorCode::FileRead,
+                "editor file exceeds FILE_SIZE_LIMIT of " +
+                    std::to_string(settings.file_size_limit) + " bytes: " + path +
+                    " (" + std::to_string(file_size) + " bytes)"};
+    }
+    check.size = file_size;
+    check.should_warn = settings.huge_file_size_warning > 0 &&
+                        file_size >= static_cast<std::uintmax_t>(settings.huge_file_size_warning);
+    return ok_error();
+}
+
+Error load_file(const std::string& path, const EditorSettings& settings, PieceTable& out) {
+    FileLoadCheck check;
+    Error err = check_load_file_size(path, settings, check);
+    if (!err.ok()) {
+        return err;
+    }
+    if (check.size > static_cast<std::uintmax_t>(std::numeric_limits<size_t>::max())) {
+        return {ErrorCode::FileRead,
+                "editor file is too large for this platform address space: " + path +
+                    " (" + std::to_string(check.size) + " bytes)"};
+    }
+
     std::ifstream in(path, std::ios::binary);
     if (!in) {
         return {ErrorCode::FileRead, "could not open editor file for reading: " + path};
     }
-    std::ostringstream buffer;
-    buffer << in.rdbuf();
+
+    std::string content;
+    try {
+        content.reserve(static_cast<size_t>(check.size));
+        std::array<char, 65536> buffer{};
+        while (in) {
+            in.read(buffer.data(), static_cast<std::streamsize>(buffer.size()));
+            const std::streamsize count = in.gcount();
+            if (count <= 0) {
+                break;
+            }
+            content.append(buffer.data(), static_cast<size_t>(count));
+        }
+    } catch (const std::bad_alloc&) {
+        return {ErrorCode::Internal, "not enough memory to load editor file: " + path};
+    } catch (const std::length_error&) {
+        return {ErrorCode::FileRead, "editor file is too large to load into memory: " + path};
+    }
     if (!in.good() && !in.eof()) {
         return {ErrorCode::FileRead, "failed while reading editor file: " + path};
     }
-    out = PieceTable::from_string(buffer.str());
+    out = PieceTable::from_string(std::move(content));
     return ok_error();
 }
 
@@ -1378,12 +1756,23 @@ Error save_file(const std::string& path, const PieceTable& text) {
     return ok_error();
 }
 
-int run_editor(const std::string& path, const std::string& save_as) {
+int run_editor(const std::string& path, const std::string& save_as, const EditorSettings& settings) {
     EditorState state;
+    state.set_undo_limit(settings.undo_limit);
     state.path = path.empty() ? save_as : path;
     std::string status = "Ready";
     if (!path.empty() && access(path.c_str(), F_OK) == 0) {
-        Error err = load_file(path, state.text);
+        FileLoadCheck check;
+        Error err = check_load_file_size(path, settings, check);
+        if (!err.ok()) {
+            std::cerr << error_code_name(err.code) << ": " << err.message << "\n";
+            return 5;
+        }
+        if (check.should_warn && !confirm_huge_load_before_terminal(path, check)) {
+            std::cerr << "Editor load cancelled: " << path << "\n";
+            return 5;
+        }
+        err = load_file(path, settings, state.text);
         if (!err.ok()) {
             std::cerr << error_code_name(err.code) << ": " << err.message << "\n";
             return 5;
@@ -1404,11 +1793,23 @@ int run_editor(const std::string& path, const std::string& save_as) {
     MinibufferState minibuffer;
     minibuffer.message = status;
     std::string last_search;
+    ReplaceSession replace;
+    std::string pending_load_path;
     TerminalSize last_size = terminal_size();
     render_terminal(state, minibuffer);
 
     auto handle_key = [&](unsigned char ch) {
-        if (handle_minibuffer_key(state, minibuffer, ch, quit, last_search)) {
+        if (handle_minibuffer_key(state,
+                                  minibuffer,
+                                  ch,
+                                  quit,
+                                  last_search,
+                                  replace,
+                                  settings,
+                                  pending_load_path)) {
+            return;
+        }
+        if (handle_replace_key(state, minibuffer, replace, ch)) {
             return;
         }
 
@@ -1423,6 +1824,8 @@ int run_editor(const std::string& path, const std::string& save_as) {
             minibuffer_message(minibuffer, "Ctrl+C is reserved for copy; Ctrl+Q quits");
         } else if (ch == 6) {
             start_minibuffer(minibuffer, MinibufferAction::Search, "Search: ", last_search);
+        } else if (ch == 8) {
+            start_minibuffer(minibuffer, MinibufferAction::ReplaceSearch, "Replace search: ", last_search);
         } else if (ch == 21) {
             minibuffer_message(minibuffer, state.undo() ? "Undone" : "Nothing to undo");
         } else if (ch == 18) {
@@ -1454,7 +1857,7 @@ int run_editor(const std::string& path, const std::string& save_as) {
             if (!escape_status.empty()) {
                 minibuffer_message(minibuffer, escape_status);
             }
-        } else if (ch == 127 || ch == 8) {
+        } else if (ch == 127) {
             Error erase_error = state.erase_before_cursor();
             if (!erase_error.ok()) {
                 minibuffer_message(minibuffer, erase_error.message);
