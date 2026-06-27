@@ -1379,21 +1379,26 @@ int main(int argc, char** argv) {
             print_error(context_result.error);
             return exit_code_for(context_result.error.code);
         }
+        pkchat::provider::RequestContext editor_context = std::move(context_result.context);
         pkchat::editor::AiContinueContext ai_continue;
-        ai_continue.request = std::move(context_result.context);
-        ai_continue.settings = pkchat::editor::ai_continue_settings_from_env();
-        ai_continue.prompts = options.editor_assist_prompts;
-        const bool auto_select_model = options.model.empty();
-        pkchat::Error model_err = pkchat::editor::resolve_editor_default_model(ai_continue);
-        if (!model_err.ok()) {
-            print_error(model_err);
-            return exit_code_for(model_err.code);
+        const pkchat::editor::AiContinueContext* ai_continue_ptr = nullptr;
+        if (!editor_context.profile.offline) {
+            ai_continue.request = std::move(editor_context);
+            ai_continue.settings = pkchat::editor::ai_continue_settings_from_env();
+            ai_continue.prompts = options.editor_assist_prompts;
+            const bool auto_select_model = options.model.empty();
+            pkchat::Error model_err = pkchat::editor::resolve_editor_default_model(ai_continue);
+            if (!model_err.ok()) {
+                print_error(model_err);
+                return exit_code_for(model_err.code);
+            }
+            if (auto_select_model && !options.quiet) {
+                std::cerr << "Editor model: " << ai_continue.request.options.model
+                          << " (first model from " << ai_continue.request.models_url << ")\n";
+            }
+            ai_continue_ptr = &ai_continue;
         }
-        if (auto_select_model && !options.quiet) {
-            std::cerr << "Editor model: " << ai_continue.request.options.model
-                      << " (first model from " << ai_continue.request.models_url << ")\n";
-        }
-        return pkchat::editor::run_editor(options.editor_path, options.output_path, editor_settings, &ai_continue);
+        return pkchat::editor::run_editor(options.editor_path, options.output_path, editor_settings, ai_continue_ptr);
     }
     if (!options.key.empty() && !options.quiet) {
         std::cerr << "Warning: command line API keys may be visible to other local users; prefer --key-env, --key-file, or --key-stdin.\n";

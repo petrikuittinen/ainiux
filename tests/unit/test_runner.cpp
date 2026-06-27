@@ -1411,6 +1411,209 @@ void test_editor_selection_and_clipboard() {
     check(state.text.str() == "alpha alpha gammaalpha", "paste replaces selected range");
 }
 
+
+void test_editor_utf8_codepoint_navigation_and_editing() {
+    const std::string ni = "\xE4\xBD\xA0";
+    const std::string hao = "\xE5\xA5\xBD";
+    const std::string chinese = ni + hao;
+
+    pkchat::editor::PieceTable table =
+        pkchat::editor::PieceTable::from_string("A" + chinese + "B");
+    check(table.next_char_offset(1) == 1 + ni.size(),
+          "editor next_char_offset skips a complete three-byte UTF-8 code point");
+    check(table.next_char_offset(1 + ni.size()) == 1 + chinese.size(),
+          "editor next_char_offset skips the second Chinese code point");
+    check(table.previous_char_offset(1 + chinese.size()) == 1 + ni.size(),
+          "editor previous_char_offset lands on a UTF-8 leading byte");
+
+    pkchat::editor::EditorState state =
+        pkchat::editor::EditorState::from_text("A" + chinese + "B");
+    state.move_right();
+    check(state.cursor == 1, "editor move_right crosses ASCII one byte at a time");
+    state.move_right();
+    check(state.cursor == 1 + ni.size(), "editor move_right skips the first Chinese character bytes");
+    state.move_right();
+    check(state.cursor == 1 + chinese.size(), "editor move_right skips the second Chinese character bytes");
+    state.move_left();
+    check(state.cursor == 1 + ni.size(), "editor move_left skips a complete Chinese character");
+
+    pkchat::Error err = state.erase_before_cursor();
+    check(err.ok(), "editor backspace before cursor succeeds for UTF-8");
+    check(state.text.str() == "A" + hao + "B",
+          "editor backspace removes one full UTF-8 code point instead of one byte");
+    check(state.cursor == 1, "editor backspace leaves cursor at the removed code point start");
+
+    state = pkchat::editor::EditorState::from_text("A" + chinese + "B");
+    state.cursor = 1;
+    err = state.erase_at_cursor();
+    check(err.ok(), "editor delete at cursor succeeds for UTF-8");
+    check(state.text.str() == "A" + hao + "B",
+          "editor delete removes one full UTF-8 code point instead of one byte");
+    check(state.undo(), "editor UTF-8 delete is undoable");
+    check(state.text.str() == "A" + chinese + "B",
+          "editor undo restores deleted UTF-8 bytes exactly");
+}
+
+void test_editor_unicode_grapheme_navigation_and_delete() {
+    const std::string combining_acute = "\xCC\x81";
+    const std::string composed_visual_e = "e" + combining_acute;
+    const std::string family_emoji =
+        "\xF0\x9F\x91\xA8" "\xE2\x80\x8D"
+        "\xF0\x9F\x91\xA9" "\xE2\x80\x8D"
+        "\xF0\x9F\x91\xA7" "\xE2\x80\x8D"
+        "\xF0\x9F\x91\xA6";
+
+    pkchat::editor::EditorState combining =
+        pkchat::editor::EditorState::from_text(composed_visual_e + "x");
+    combining.move_right();
+    check(combining.cursor == composed_visual_e.size(),
+          "editor move_right treats base letter plus combining mark as one grapheme");
+    combining.move_left();
+    check(combining.cursor == 0,
+          "editor move_left treats base letter plus combining mark as one grapheme");
+    combining.cursor = composed_visual_e.size();
+    pkchat::Error err = combining.erase_before_cursor();
+    check(err.ok(), "editor backspace before a combining sequence succeeds");
+    check(combining.text.str() == "x",
+          "editor backspace removes the whole combining grapheme, not only the mark");
+
+    pkchat::editor::EditorState emoji =
+        pkchat::editor::EditorState::from_text(family_emoji + "!");
+    emoji.move_right();
+    check(emoji.cursor == family_emoji.size(),
+          "editor move_right treats a ZWJ emoji sequence as one grapheme");
+    emoji.cursor = family_emoji.size();
+    err = emoji.erase_before_cursor();
+    check(err.ok(), "editor backspace before a ZWJ emoji sequence succeeds");
+    check(emoji.text.str() == "!",
+          "editor backspace removes the complete ZWJ emoji sequence");
+}
+
+void test_editor_unicode_display_columns_and_offsets() {
+    const std::string ni = "\xE4\xBD\xA0";
+    const std::string emoji = "\xF0\x9F\x98\x80";
+    const std::string combining = "e" "\xCC\x81";
+
+    pkchat::editor::PieceTable cjk =
+        pkchat::editor::PieceTable::from_string("a" + ni + "b");
+    check(cjk.display_column_for_offset(1) == 1,
+          "editor display column after ASCII is one");
+    check(cjk.display_column_for_offset(1 + ni.size()) == 3,
+          "editor display column counts a Chinese character as two terminal cells");
+    check(cjk.offset_for_line_column(0, 2) == 1,
+          "editor column lookup does not place the cursor inside a wide Chinese cell");
+    check(cjk.offset_for_line_column(0, 3) == 1 + ni.size(),
+          "editor column lookup reaches the byte offset after a wide Chinese character");
+
+    pkchat::editor::PieceTable emoji_table =
+        pkchat::editor::PieceTable::from_string("a" + emoji + "b");
+    check(emoji_table.display_column_for_offset(1 + emoji.size()) == 3,
+          "editor display column counts an emoji as two terminal cells");
+
+    pkchat::editor::PieceTable combining_table =
+        pkchat::editor::PieceTable::from_string(combining + "x");
+    check(combining_table.display_column_for_offset(combining.size()) == 1,
+          "editor display column gives combining marks zero width");
+    check(combining_table.offset_for_line_column(0, 1) == combining.size(),
+          "editor column lookup lands after the whole combining sequence");
+}
+
+void test_editor_unicode_rendering_wraps_on_cell_boundaries() {
+    const std::string ni = "\xE4\xBD\xA0";
+    const std::string hao = "\xE5\xA5\xBD";
+    const std::string combining = "e" "\xCC\x81";
+
+    pkchat::editor::EditorState cjk =
+        pkchat::editor::EditorState::from_text(ni + hao);
+    pkchat::editor::RenderedPanel rendered = cjk.render({1, 1, 2, 2});
+    check(rendered.lines.size() == 2, "editor CJK render produces requested rows");
+    check(rendered.lines[0] == ni,
+          "editor wraps after one two-cell Chinese character in a two-column panel");
+    check(rendered.lines[1] == hao,
+          "editor keeps the second Chinese character intact on the next visual row");
+    cjk.cursor = ni.size();
+    rendered = cjk.render({1, 1, 2, 2});
+    check(rendered.cursor.visible && rendered.cursor.row == 1 && rendered.cursor.col == 0,
+          "editor cursor after a wide character at wrap boundary maps to the next visual row");
+
+    pkchat::editor::EditorState marks =
+        pkchat::editor::EditorState::from_text(combining + "x");
+    rendered = marks.render({1, 1, 1, 2});
+    check(rendered.lines[0] == combining + "x",
+          "editor render keeps a combining sequence and following ASCII in two cells");
+}
+
+void test_editor_invalid_utf8_rendering_is_sanitized() {
+    std::string invalid = "A";
+    invalid.push_back(static_cast<char>(0xFF));
+    invalid.push_back(static_cast<char>(0xE2));
+    invalid.push_back(static_cast<char>(0x82));
+    invalid += "B";
+
+    pkchat::editor::EditorState state =
+        pkchat::editor::EditorState::from_text(invalid);
+    pkchat::editor::RenderedPanel rendered = state.render({1, 1, 1, 8});
+    check(rendered.lines.size() == 1, "editor invalid UTF-8 render produces a row");
+    check(rendered.lines[0].find(static_cast<char>(0xFF)) == std::string::npos,
+          "editor render does not emit raw invalid 0xFF bytes to the terminal");
+    check(rendered.lines[0].find(std::string() + static_cast<char>(0xE2) +
+                                 static_cast<char>(0x82)) == std::string::npos,
+          "editor render does not emit raw truncated UTF-8 bytes to the terminal");
+    check(rendered.lines[0].find('?') != std::string::npos,
+          "editor render replaces invalid UTF-8 with a visible placeholder");
+}
+
+void test_editor_unicode_selection_search_replace_and_file_round_trip() {
+    const std::string chinese = "\xE4\xBD\xA0" "\xE5\xA5\xBD";
+    const std::string arabic =
+        "\xD9\x85" "\xD8\xB1" "\xD8\xAD" "\xD8\xA8" "\xD8\xA7";
+    const std::string cyrillic =
+        "\xD0\x9F" "\xD1\x80" "\xD0\xB8" "\xD0\xB2" "\xD0\xB5" "\xD1\x82";
+    const std::string nordic =
+        "\xC3\x84 \xC3\x96 \xC3\x85 \xC3\xA4 \xC3\xB6 \xC3\xA5";
+    const std::string replacement =
+        "\xD8\xB3" "\xD9\x84" "\xD8\xA7" "\xD9\x85";
+
+    pkchat::editor::EditorState state =
+        pkchat::editor::EditorState::from_text(chinese + "\n" + arabic + "\n" +
+                                               cyrillic + "\n" + nordic);
+    check(state.text.line_count() == 4, "editor multilingual buffer has four lines");
+    check(state.text.line_text(0) == chinese, "editor line_text preserves Chinese UTF-8");
+    check(state.text.line_text(1) == arabic, "editor line_text preserves Arabic UTF-8");
+    check(state.text.line_text(2) == cyrillic, "editor line_text preserves Cyrillic UTF-8");
+    check(state.text.line_text(3) == nordic, "editor line_text preserves Nordic UTF-8");
+
+    pkchat::editor::Clipboard clipboard;
+    const size_t arabic_start = state.text.line_start(1);
+    state.selection.anchor = arabic_start;
+    state.selection.active = arabic_start + arabic.size();
+    check(state.selected_text() == arabic, "editor selected_text preserves Arabic byte range");
+    check(state.copy_selection(clipboard).ok(), "editor copies Arabic selection");
+    check(clipboard.text() == arabic, "editor clipboard stores Arabic selection exactly");
+    check(state.cut_selection(clipboard).ok(), "editor cuts Arabic selection");
+    check(state.undo(), "editor cut of Arabic text is undoable");
+    check(state.text.line_text(1) == arabic, "editor undo restores Arabic text exactly");
+
+    check(state.search(cyrillic), "editor search finds Cyrillic text");
+    check(state.cursor == state.text.line_start(2), "editor search moves cursor to Cyrillic text start");
+
+    size_t replacements = 0;
+    pkchat::Error err = state.replace_all_from(0, arabic, replacement, replacements);
+    check(err.ok(), "editor replace-all accepts Unicode search and replacement");
+    check(replacements == 1, "editor replace-all counts the Arabic occurrence");
+    check(state.text.line_text(1) == replacement,
+          "editor replace-all substitutes Arabic text with replacement UTF-8");
+
+    const std::string path = "build/unit-editor-unicode.txt";
+    err = pkchat::editor::save_file(path, state.text);
+    check(err.ok(), "editor saves multilingual file");
+    pkchat::editor::PieceTable loaded;
+    err = pkchat::editor::load_file(path, loaded);
+    check(err.ok(), "editor loads multilingual file");
+    check(loaded.str() == state.text.str(),
+          "editor file round trip preserves multilingual UTF-8 exactly");
+}
+
 void test_editor_assist_helpers() {
     const pkchat::editor::EditorAssistPrompts default_prompts =
         pkchat::editor::default_editor_assist_prompts();
@@ -2483,6 +2686,12 @@ int main() {
     test_editor_undo_redo();
     test_editor_home_end_navigation();
     test_editor_selection_and_clipboard();
+    test_editor_utf8_codepoint_navigation_and_editing();
+    test_editor_unicode_grapheme_navigation_and_delete();
+    test_editor_unicode_display_columns_and_offsets();
+    test_editor_unicode_rendering_wraps_on_cell_boundaries();
+    test_editor_invalid_utf8_rendering_is_sanitized();
+    test_editor_unicode_selection_search_replace_and_file_round_trip();
     test_editor_assist_helpers();
     test_editor_ai_continue_helpers();
     test_editor_paste_prefers_local_clipboard();

@@ -11,6 +11,7 @@
 #include <array>
 #include <cerrno>
 #include <cstring>
+#include <cstdint>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -31,6 +32,63 @@ namespace {
 
 constexpr size_t kTabStop = 4;
 
+struct DecodedChar {
+    uint32_t codepoint = 0xFFFDU;
+    size_t length = 1;
+    bool valid = false;
+};
+
+bool is_continuation_byte(unsigned char ch) {
+    return (ch & 0xC0U) == 0x80U;
+}
+
+DecodedChar decode_utf8_at(const std::string& text, size_t pos) {
+    if (pos >= text.size()) {
+        return {};
+    }
+
+    const unsigned char b0 = static_cast<unsigned char>(text[pos]);
+    if (b0 < 0x80U) {
+        return {b0, 1, true};
+    }
+
+    size_t length = 0;
+    uint32_t codepoint = 0;
+    uint32_t minimum = 0;
+    if ((b0 & 0xE0U) == 0xC0U) {
+        length = 2;
+        codepoint = b0 & 0x1FU;
+        minimum = 0x80U;
+    } else if ((b0 & 0xF0U) == 0xE0U) {
+        length = 3;
+        codepoint = b0 & 0x0FU;
+        minimum = 0x800U;
+    } else if ((b0 & 0xF8U) == 0xF0U) {
+        length = 4;
+        codepoint = b0 & 0x07U;
+        minimum = 0x10000U;
+    } else {
+        return {0xFFFDU, 1, false};
+    }
+
+    if (pos + length > text.size()) {
+        return {0xFFFDU, 1, false};
+    }
+    for (size_t i = 1; i < length; ++i) {
+        const unsigned char byte = static_cast<unsigned char>(text[pos + i]);
+        if (!is_continuation_byte(byte)) {
+            return {0xFFFDU, 1, false};
+        }
+        codepoint = (codepoint << 6U) | static_cast<uint32_t>(byte & 0x3FU);
+    }
+
+    if (codepoint < minimum || codepoint > 0x10FFFFU ||
+        (codepoint >= 0xD800U && codepoint <= 0xDFFFU)) {
+        return {0xFFFDU, 1, false};
+    }
+    return {codepoint, length, true};
+}
+
 size_t utf8_len(unsigned char ch, size_t remaining) {
     if (ch < 0x80U) return 1;
     if ((ch & 0xE0U) == 0xC0U && remaining >= 2) return 2;
@@ -39,15 +97,140 @@ size_t utf8_len(unsigned char ch, size_t remaining) {
     return 1;
 }
 
-size_t display_width_at(const std::string& text, size_t pos, size_t column) {
-    const unsigned char ch = static_cast<unsigned char>(text[pos]);
-    if (ch == '\t') {
-        return kTabStop - (column % kTabStop);
+bool is_combining_mark(uint32_t codepoint) {
+    return (codepoint >= 0x0300U && codepoint <= 0x036FU) ||
+           (codepoint >= 0x0591U && codepoint <= 0x05BDU) ||
+           codepoint == 0x05BFU ||
+           (codepoint >= 0x05C1U && codepoint <= 0x05C2U) ||
+           (codepoint >= 0x05C4U && codepoint <= 0x05C5U) ||
+           codepoint == 0x05C7U ||
+           (codepoint >= 0x0610U && codepoint <= 0x061AU) ||
+           (codepoint >= 0x064BU && codepoint <= 0x065FU) ||
+           codepoint == 0x0670U ||
+           (codepoint >= 0x06D6U && codepoint <= 0x06DCU) ||
+           (codepoint >= 0x06DFU && codepoint <= 0x06E4U) ||
+           (codepoint >= 0x06E7U && codepoint <= 0x06E8U) ||
+           (codepoint >= 0x06EAU && codepoint <= 0x06EDU) ||
+           (codepoint >= 0x1AB0U && codepoint <= 0x1AFFU) ||
+           (codepoint >= 0x1DC0U && codepoint <= 0x1DFFU) ||
+           (codepoint >= 0x20D0U && codepoint <= 0x20FFU) ||
+           (codepoint >= 0xFE20U && codepoint <= 0xFE2FU);
+}
+
+bool is_variation_selector(uint32_t codepoint) {
+    return (codepoint >= 0xFE00U && codepoint <= 0xFE0FU) ||
+           (codepoint >= 0xE0100U && codepoint <= 0xE01EFU);
+}
+
+bool is_emoji_modifier(uint32_t codepoint) {
+    return codepoint >= 0x1F3FBU && codepoint <= 0x1F3FFU;
+}
+
+bool is_wide_codepoint(uint32_t codepoint) {
+    return (codepoint >= 0x1100U && codepoint <= 0x115FU) ||
+           (codepoint >= 0x2329U && codepoint <= 0x232AU) ||
+           (codepoint >= 0x2E80U && codepoint <= 0xA4CFU) ||
+           (codepoint >= 0xAC00U && codepoint <= 0xD7A3U) ||
+           (codepoint >= 0xF900U && codepoint <= 0xFAFFU) ||
+           (codepoint >= 0xFE10U && codepoint <= 0xFE19U) ||
+           (codepoint >= 0xFE30U && codepoint <= 0xFE6FU) ||
+           (codepoint >= 0xFF00U && codepoint <= 0xFF60U) ||
+           (codepoint >= 0xFFE0U && codepoint <= 0xFFE6U) ||
+           (codepoint >= 0x1F000U && codepoint <= 0x1FAFFU);
+}
+
+bool is_control_codepoint(uint32_t codepoint) {
+    return codepoint < 0x20U || (codepoint >= 0x7FU && codepoint < 0xA0U);
+}
+
+size_t next_grapheme_offset(const std::string& text, size_t pos) {
+    if (pos >= text.size()) {
+        return text.size();
     }
-    if (ch < 0x20U || ch == 0x7FU) {
+
+    DecodedChar current = decode_utf8_at(text, pos);
+    size_t next = pos + current.length;
+    if (!current.valid) {
+        return next;
+    }
+
+    while (next < text.size()) {
+        const DecodedChar decoded = decode_utf8_at(text, next);
+        if (!decoded.valid) {
+            break;
+        }
+        if (is_combining_mark(decoded.codepoint) || is_variation_selector(decoded.codepoint) ||
+            is_emoji_modifier(decoded.codepoint)) {
+            next += decoded.length;
+            current = decoded;
+            continue;
+        }
+        if (decoded.codepoint == 0x200DU) {
+            next += decoded.length;
+            if (next < text.size()) {
+                const DecodedChar joined = decode_utf8_at(text, next);
+                if (joined.valid) {
+                    next += joined.length;
+                    current = joined;
+                    continue;
+                }
+            }
+            break;
+        }
+        break;
+    }
+    return next;
+}
+
+size_t previous_grapheme_offset(const std::string& text, size_t pos) {
+    const size_t target = std::min(pos, text.size());
+    size_t previous = 0;
+    size_t current = 0;
+    while (current < target) {
+        previous = current;
+        const size_t next = next_grapheme_offset(text, current);
+        if (next <= current || next >= target) {
+            return previous;
+        }
+        current = next;
+    }
+    return previous;
+}
+
+size_t display_width_at(const std::string& text, size_t pos, size_t column) {
+    if (pos >= text.size()) {
+        return 0;
+    }
+    const DecodedChar first = decode_utf8_at(text, pos);
+    if (!first.valid || is_control_codepoint(first.codepoint)) {
         return 1;
     }
-    return 1;
+    if (first.codepoint == '\t') {
+        return kTabStop - (column % kTabStop);
+    }
+
+    const size_t end = next_grapheme_offset(text, pos);
+    size_t width = 0;
+    size_t scan = pos;
+    while (scan < end) {
+        const DecodedChar decoded = decode_utf8_at(text, scan);
+        if (!decoded.valid || is_control_codepoint(decoded.codepoint)) {
+            return 1;
+        }
+        if (decoded.codepoint == '\t') {
+            return kTabStop - (column % kTabStop);
+        }
+        if (is_wide_codepoint(decoded.codepoint)) {
+            width = std::max<size_t>(width, 2);
+        } else if (!is_combining_mark(decoded.codepoint) &&
+                   !is_variation_selector(decoded.codepoint) &&
+                   !is_emoji_modifier(decoded.codepoint) &&
+                   decoded.codepoint != 0x200DU) {
+            width = std::max<size_t>(width, 1);
+        }
+        scan += decoded.length;
+    }
+    return width;
 }
 
 size_t display_column_for_text(const std::string& text, size_t byte_offset) {
@@ -55,9 +238,12 @@ size_t display_column_for_text(const std::string& text, size_t byte_offset) {
     size_t pos = 0;
     const size_t limit = std::min(byte_offset, text.size());
     while (pos < limit) {
-        const size_t len = utf8_len(static_cast<unsigned char>(text[pos]), text.size() - pos);
+        const size_t next = next_grapheme_offset(text, pos);
+        if (next > limit) {
+            break;
+        }
         column += display_width_at(text, pos, column);
-        pos += std::min(len, limit - pos);
+        pos = next;
     }
     return column;
 }
@@ -70,9 +256,8 @@ size_t byte_offset_for_display_column(const std::string& text, size_t target_col
         if (column + width > target_column) {
             break;
         }
-        const size_t len = utf8_len(static_cast<unsigned char>(text[pos]), text.size() - pos);
         column += width;
-        pos += len;
+        pos = next_grapheme_offset(text, pos);
     }
     return pos;
 }
@@ -87,10 +272,12 @@ size_t display_width_for_range(const std::string& text, size_t start, size_t end
     size_t pos = start;
     const size_t limit = std::min(end, text.size());
     while (pos < limit) {
-        const unsigned char ch = static_cast<unsigned char>(text[pos]);
-        const size_t len = utf8_len(ch, text.size() - pos);
+        const size_t next = next_grapheme_offset(text, pos);
+        if (next > limit) {
+            break;
+        }
         column += display_width_at(text, pos, column);
-        pos += std::min(len, limit - pos);
+        pos = next;
     }
     return column;
 }
@@ -134,8 +321,7 @@ std::vector<WrapSegment> wrap_line_segments(const std::string& text, size_t widt
         if (end <= start) {
             end = text.size();
             if (start < text.size()) {
-                const size_t len = utf8_len(static_cast<unsigned char>(text[start]), text.size() - start);
-                end = std::min(text.size(), start + len);
+                end = next_grapheme_offset(text, start);
             }
         }
 
@@ -178,26 +364,26 @@ std::string display_range(const std::string& text, size_t start, size_t end, siz
     size_t pos = start;
     const size_t limit = std::min(end, text.size());
     while (pos < limit && visible < width) {
-        const unsigned char ch = static_cast<unsigned char>(text[pos]);
-        const size_t len = utf8_len(ch, text.size() - pos);
+        const DecodedChar decoded = decode_utf8_at(text, pos);
+        const size_t next = std::min(next_grapheme_offset(text, pos), limit);
         const size_t char_width = display_width_at(text, pos, column);
         const size_t next_column = column + char_width;
 
-        if (ch == '\t') {
+        if (decoded.valid && decoded.codepoint == '\t') {
             for (size_t tab_col = column; tab_col < next_column && visible < width; ++tab_col) {
                 out.push_back(' ');
                 ++visible;
             }
-        } else if (ch < 0x20U || ch == 0x7FU) {
+        } else if (!decoded.valid || is_control_codepoint(decoded.codepoint)) {
             out.push_back('?');
             ++visible;
         } else {
-            out.append(text, pos, len);
-            ++visible;
+            out.append(text, pos, next - pos);
+            visible += char_width;
         }
 
         column = next_column;
-        pos += len;
+        pos = next;
     }
     while (visible < width) {
         out.push_back(' ');
@@ -229,26 +415,26 @@ std::string display_range_highlighted(const std::string& text,
             highlight_on = selected;
         }
 
-        const unsigned char ch = static_cast<unsigned char>(text[pos]);
-        const size_t len = utf8_len(ch, text.size() - pos);
+        const DecodedChar decoded = decode_utf8_at(text, pos);
+        const size_t next = std::min(next_grapheme_offset(text, pos), limit);
         const size_t char_width = display_width_at(text, pos, column);
         const size_t next_column = column + char_width;
 
-        if (ch == '\t') {
+        if (decoded.valid && decoded.codepoint == '\t') {
             for (size_t tab_col = column; tab_col < next_column && visible < width; ++tab_col) {
                 out.push_back(' ');
                 ++visible;
             }
-        } else if (ch < 0x20U || ch == 0x7FU) {
+        } else if (!decoded.valid || is_control_codepoint(decoded.codepoint)) {
             out.push_back('?');
             ++visible;
         } else {
-            out.append(text, pos, len);
-            ++visible;
+            out.append(text, pos, next - pos);
+            visible += char_width;
         }
 
         column = next_column;
-        pos += len;
+        pos = next;
     }
     if (highlight_on) {
         out += "\x1b[0m";
@@ -265,14 +451,12 @@ size_t byte_offset_for_range_column(const std::string& text, size_t start, size_
     size_t pos = start;
     const size_t limit = std::min(end, text.size());
     while (pos < limit) {
-        const unsigned char ch = static_cast<unsigned char>(text[pos]);
         const size_t width = display_width_at(text, pos, column);
         if (column + width > target_column) {
             break;
         }
-        const size_t len = utf8_len(ch, text.size() - pos);
         column += width;
-        pos += len;
+        pos = next_grapheme_offset(text, pos);
     }
     return pos;
 }
@@ -1232,23 +1416,19 @@ Error PieceTable::erase(size_t pos, size_t count) {
 }
 
 size_t PieceTable::previous_char_offset(size_t pos) const {
-    if (pos == 0) {
+    if (pos == 0 || total_size_ == 0) {
         return 0;
     }
-    size_t out = std::min(pos, total_size_) - 1;
-    while (out > 0 && (static_cast<unsigned char>(char_at(out)) & 0xC0U) == 0x80U) {
-        --out;
-    }
-    return out;
+    const std::string content = str();
+    return previous_grapheme_offset(content, std::min(pos, total_size_));
 }
 
 size_t PieceTable::next_char_offset(size_t pos) const {
     if (pos >= total_size_) {
         return total_size_;
     }
-    const size_t remaining = total_size_ - pos;
-    const size_t len = utf8_len(static_cast<unsigned char>(char_at(pos)), remaining);
-    return std::min(total_size_, pos + len);
+    const std::string content = str();
+    return next_grapheme_offset(content, std::min(pos, total_size_));
 }
 
 size_t PieceTable::line_count() const {
