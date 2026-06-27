@@ -2593,7 +2593,7 @@ int run_editor(const std::string& path,
         }
         start_assist(AssistCommandKind::Configured,
                      *command_index,
-                     AssistScope::Insert,
+                     AssistScope::Continue,
                      "",
                      std::nullopt);
     };
@@ -2652,16 +2652,16 @@ int run_editor(const std::string& path,
                                  AssistScope::All,
                                  "",
                                  std::nullopt);
-                } else if (ch == 'i' || ch == 'I') {
+                } else if (ch == 'c' || ch == 'C') {
+                    start_assist(pending_assist.kind,
+                                 pending_assist.command_index,
+                                 AssistScope::Continue,
+                                 "",
+                                 std::nullopt);
+                } else if (ch == 'i' || ch == 'I' || ch == 'l' || ch == 'L') {
                     start_assist(pending_assist.kind,
                                  pending_assist.command_index,
                                  AssistScope::Insert,
-                                 "",
-                                 std::nullopt);
-                } else if (ch == 'l' || ch == 'L') {
-                    start_assist(pending_assist.kind,
-                                 pending_assist.command_index,
-                                 AssistScope::LocalInsert,
                                  "",
                                  std::nullopt);
                 }
@@ -2686,6 +2686,12 @@ int run_editor(const std::string& path,
                                  std::nullopt,
                                  pending_assist.custom_prompt,
                                  AssistPromptMode::All);
+                } else if (ch == 'i' || ch == 'I' || ch == 'l' || ch == 'L') {
+                    start_assist(pending_assist.kind,
+                                 pending_assist.command_index,
+                                 std::nullopt,
+                                 pending_assist.custom_prompt,
+                                 AssistPromptMode::Insert);
                 }
                 return;
             }

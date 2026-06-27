@@ -665,15 +665,12 @@ Error parse_assist_command_modes(const Entry& entry, std::vector<pkchat::editor:
             modes.push_back(pkchat::editor::AssistCommandMode::Selection);
         } else if (token == "all") {
             modes.push_back(pkchat::editor::AssistCommandMode::All);
-        } else if (token == "insert") {
+        } else if (token == "insert" || token == "local_insert" || token == "localinsert") {
             modes.push_back(pkchat::editor::AssistCommandMode::Insert);
-        } else if (token == "local_insert" || token == "localinsert") {
-            modes.push_back(pkchat::editor::AssistCommandMode::LocalInsert);
         } else if (token == "fact") {
             modes.push_back(pkchat::editor::AssistCommandMode::Fact);
         } else {
-            return schema_error(entry,
-                                "expected continue, selection, all, insert, local_insert, or fact");
+            return schema_error(entry, "expected continue, selection, all, insert, or fact");
         }
     }
     if (modes.empty()) {

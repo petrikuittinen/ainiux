@@ -2,7 +2,7 @@
 
 `pkchat` is a fast, script-friendly command-line chat client for OpenAI and OpenAI-compatible APIs.
 
-Current status: v0.78 CLI with libcurl transport, cancellable runtime jobs, provider registry/profile aliases, `/v1/models`, `/v1/chat/completions`, text-only OpenAI Responses API support, local JPEG/PNG/GIF image input, interactive text/image attachments, request-only context policies, safe URL insertion, a simple REPL, a standalone `--editor` mode with selection, copy/cut/paste, grapheme-aware Unicode editing, and AI continue (`Ctrl+Space`), a full-screen non-blocking TUI foundation, JSON chat save/load, HTML-to-text/Markdown extraction, Markdown assistant-output rendering to HTML or plaintext, automatic system/user TOML-alike configuration loading, and a concurrent JSONL benchmark runner.
+Current status: v0.79 CLI with libcurl transport, cancellable runtime jobs, provider registry/profile aliases, `/v1/models`, `/v1/chat/completions`, text-only OpenAI Responses API support, local JPEG/PNG/GIF image input, interactive text/image attachments, request-only context policies, safe URL insertion, a simple REPL, a standalone `--editor` mode with selection, copy/cut/paste, grapheme-aware Unicode editing, and AI continue (`Ctrl+Space`), a full-screen non-blocking TUI foundation, JSON chat save/load, HTML-to-text/Markdown extraction, Markdown assistant-output rendering to HTML or plaintext, automatic system/user TOML-alike configuration loading, and a concurrent JSONL benchmark runner.
 
 ## Build
 
@@ -55,6 +55,49 @@ Editor defaults can also be configured. `undo_limit` controls how many undo stat
 The format is deliberately TOML-alike rather than full TOML. Keep secrets out of it; `[credentials]` selects an environment variable or key file and never contains an API key value. Use `--debug` to list loaded, missing, skipped, or failed configuration paths on `stderr`; `--quiet` suppresses these diagnostics. Deliberately selected extra configuration files and repeatable `--config` layers are not supported.
 
 The HTTP transport uses libcurl through RAII wrappers in `src/http/`. Build flags are discovered with `pkg-config libcurl`, falling back to `curl-config` when needed.
+
+## Editor Mode
+
+`pkchat --editor` is a standalone multiline file editor and the same component powers the TUI chat input panel. It uses a piece-table buffer, grapheme-aware Unicode navigation, soft wrap, rectangular panel rendering, bounded undo/redo, and a status line plus one-line minibuffer for prompts.
+
+```sh
+./pkchat --editor notes.txt
+./pkchat lmstudio --editor notes.txt
+./pkchat http://localhost:30000/v1 --editor notes.txt
+./pkchat --editor draft.txt --output saved-draft.txt
+```
+
+A provider shortcut or base URL may precede `--editor` without changing the file argument. If the startup path does not exist, pkchat creates an empty file before editing. The `[editor]` config section controls undo depth (`undo_limit`, default `5`), a huge-file confirmation threshold (`huge_file_size_warning`, default 1 GiB), and an optional hard load limit (`file_size_limit`, default unlimited).
+
+### Editor AI Assist
+
+With a configured provider and model, the editor can run one-shot AI tasks from the minibuffer or continue writing at the cursor.
+
+| Key / trigger | Name | Input sent to the model | Output |
+|---------------|------|-------------------------|--------|
+| `s` / `selection` | selection | Selected text | Replace the selection in-place |
+| `a` / `all` | all | Whole buffer | Replace the whole buffer in-place |
+| `c` / `continue` | continue | Up to `MAX_AI_CONTINUE_READ` characters immediately before the cursor (default 4096) | Stream new text after the cursor |
+| `i` / `insert` | insert | Selected text | Stream new text after the cursor |
+
+Built-in commands are `/spell`, `/grammar`, `/continue`, and `/fact`. Each supports all four modes above. Type `Esc` to open the command minibuffer, enter a command such as `/spell`, and pkchat prompts for a mode when one is omitted. `Tab` completes commands and mode variants. `/prompt YOUR TASK` runs a custom one-shot prompt and accepts the same modes (`c`, `i`, `s`, `a`). `/quit` leaves command mode.
+
+`Ctrl+Space` runs `/continue` in **continue** mode: it sends the tail-before-cursor context, streams visible continuation text at the cursor up to `MAX_AI_CONTINUE_TOKENS` (default 32768), hides thinking traces from the buffer, and shows `[MODEL] thinking... ESC to abort` / `[MODEL] writing. Press ESC to stop.` / `[MODEL] stopped and ready` in the minibuffer. `Esc` cancels an in-flight request but keeps any text already streamed into the buffer. For `lmstudio`, `ollama`, `vllm`, and loopback `http://localhost...` / `http://127.0.0.1...` endpoints, pkchat uses the first model from `/v1/models` when `--model` is omitted; cloud providers still require an explicit model.
+
+Custom commands use repeatable `[command]` blocks in config:
+
+```conf
+[command]
+string = /example
+modes = selection, all, continue, insert
+prompt = "Output 5 examples of the user-given topic. Answer inside <content>...</content> tags only."
+```
+
+A matching `string` replaces a built-in command; new strings add commands. Config mode tokens are `selection`, `all`, `continue`, `insert`, and `fact`. `local_insert` is accepted as an alias for `insert`. Legacy `[editor]` keys `assist_spell`, `assist_grammar`, `assist_continue`, `assist_fact`, and `assist_behavior` still override the built-in prompts and behavior rules.
+
+### Editor Controls
+
+`Ctrl+S` saves, `Ctrl+O` loads, `Ctrl+F` searches, `Ctrl+H` replaces, `Ctrl+Q` quits (with save prompts when needed), `Ctrl+C`/`Ctrl+X`/`Ctrl+V` copy/cut/paste, `Ctrl+K` kills to end of line, `Ctrl+U`/`Ctrl+R` undo/redo, arrows move, `Shift` plus arrows / `PageUp`/`PageDown` / `Home`/`End` extend selection, and `Tab` completion is disabled in standalone editor mode.
 
 ## Benchmarks
 
@@ -262,7 +305,7 @@ Standalone multiline editor:
 ./pkchat --editor draft.txt --output saved-draft.txt
 ```
 
-The editor is a permanent bonus mode and the same component now powers the TUI chat input panel. It uses a piece table buffer and a rectangular panel renderer, so the same core can support large files and multiple editor panels in one terminal window. Long lines soft-wrap inside the panel. The standalone file editor keeps logical-line up/down movement by default, while the TUI input uses visual-row movement across soft-wrapped overflow rows. A provider shortcut or base URL may precede `--editor` without changing the file argument, for example `pkchat lmstudio --editor notes.txt`. If the startup path does not exist, pkchat creates an empty file before editing. Standalone editor mode has three vertical areas: the main editing screen, a reverse-video status line with path, dirty state, mode, and cursor position, and a one-line minibuffer at the bottom for prompts and messages. `Ctrl+S` saves the current file, or asks for a path in the minibuffer when no save path is known; saving to an existing path asks for overwrite confirmation. `Ctrl+O` loads a file by path through the minibuffer. `Ctrl+F` opens the minibuffer for substring search; `F3` repeats the search forward and `Shift+F3` searches backward. `Ctrl+H` starts search-and-replace: enter a non-empty search string, then enter the replacement string, which may be empty to delete matches. During replacement, `Space` replaces the current match, `s` skips it, `a` replaces all remaining matches to the end of the buffer, and `Esc` exits replacement mode. The `[editor]` config section controls undo depth and editor file-size warning/limit behavior. `Ctrl+Q` exits; scratch buffers without a save path are prompted to save before quit, and buffers with a known path are prompted when modified. `Tab` completion is disabled in standalone editor mode. With a configured provider, for example `pkchat lmstudio --editor notes.txt` or `pkchat http://localhost:30000/v1 --editor notes.txt`, `Ctrl+Space` starts AI continue/auto-write. For `lmstudio`, `ollama`, `vllm`, and loopback `http://localhost...` / `http://127.0.0.1...` endpoints, pkchat uses the first model from `/v1/models` when `--model` is omitted; cloud providers still require an explicit model. With a model configured, pkchat sends up to `MAX_AI_CONTINUE_READ` characters (default 4096) before the cursor to the configured endpoint, streams the continuation at the cursor up to `MAX_AI_CONTINUE_TOKENS` (default 32768), hides thinking traces from the buffer, shows `[MODEL] thinking... ESC to abort` in the minibuffer while the model is thinking, `[MODEL] writing. Press ESC to stop.` while visible text is streaming into the buffer, and `[MODEL] stopped and ready` when generation finishes or is aborted. `Esc` cancels an in-flight continue request but keeps any text already streamed into the buffer. Controls: arrows move, `Shift` plus arrows, `PageUp`/`PageDown`, or `Home`/`End` extend a highlighted selection, `Home`/`End` and `Ctrl+A`/`Ctrl+E` jump to the beginning/end of the buffer, `PageUp`/`PageDown` move through the editor window, `Ctrl+Space` continues text at the cursor when a provider/model is configured, `Ctrl+C` copies the selection, `Ctrl+X` cuts it, `Ctrl+V` pastes (preferring pkchat's internal clipboard over terminal paste when both are available), `Ctrl+K` kills from the cursor to the end of the line and removes the line when it is already empty, `Ctrl+U` undoes, `Ctrl+R` redoes, Backspace/Delete remove text, and `Enter` inserts a newline.
+See [Editor Mode](#editor-mode) for layout, AI assist modes, configuration, and key bindings. In the chat TUI, the same editor core uses visual-row movement across soft-wrapped lines instead of the standalone editor's logical-line up/down movement.
 
 Full-screen chat TUI foundation:
 

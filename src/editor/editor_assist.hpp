@@ -24,14 +24,15 @@ enum class AssistCommandKind {
 enum class AssistScope {
     Selection,
     All,
+    Continue,
     Insert,
-    LocalInsert,
 };
 
 enum class AssistPromptMode {
     Continue,
     Selection,
     All,
+    Insert,
 };
 
 enum class AssistEditKind {

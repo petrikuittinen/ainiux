@@ -1725,6 +1725,11 @@ void test_editor_assist_helpers() {
               !parsed.scope.has_value(),
           "bare /continue requests scope");
 
+    parsed = pkchat::editor::parse_assist_command("/fact continue", default_config);
+    check(parsed.ok && parsed.kind == pkchat::editor::AssistCommandKind::Configured &&
+              parsed.scope == pkchat::editor::AssistScope::Continue,
+          "/fact continue parses");
+
     parsed = pkchat::editor::parse_assist_command("/fact insert", default_config);
     check(parsed.ok && parsed.kind == pkchat::editor::AssistCommandKind::Configured &&
               parsed.scope == pkchat::editor::AssistScope::Insert,
@@ -1749,7 +1754,7 @@ void test_editor_assist_helpers() {
         pkchat::editor::assist_command_completions(default_config);
     check(!completions.empty() && completions.front() == "/spell", "assist completions include /spell");
     for (const char* builtin : {"/spell", "/grammar", "/continue", "/fact"}) {
-        for (const char* mode : {"selection", "all", "insert", "local_insert"}) {
+        for (const char* mode : {"selection", "all", "continue", "insert"}) {
             const std::string variant = std::string(builtin) + " " + mode;
             check(std::find(completions.begin(), completions.end(), variant) != completions.end(),
                   std::string("builtin assist completions include ") + variant);
@@ -1763,8 +1768,8 @@ void test_editor_assist_helpers() {
         const std::string scope_prompt = pkchat::editor::assist_scope_prompt(*command);
         check(scope_prompt.find("selection (s)") != std::string::npos &&
                   scope_prompt.find("all (a)") != std::string::npos &&
-                  scope_prompt.find("insert (i)") != std::string::npos &&
-                  scope_prompt.find("local insert (l)") != std::string::npos,
+                  scope_prompt.find("continue (c)") != std::string::npos &&
+                  scope_prompt.find("insert (i)") != std::string::npos,
               std::string("default ") + builtin + " scope prompt lists all four modes");
     }
 
@@ -1834,14 +1839,14 @@ void test_editor_assist_helpers() {
         context,
         pkchat::editor::AssistCommandKind::Configured,
         *continue_index,
-        pkchat::editor::AssistScope::Insert,
+        pkchat::editor::AssistScope::Continue,
         "",
         std::nullopt);
     check(execution.ok && execution.stream &&
               execution.edit_kind == pkchat::editor::AssistEditKind::StreamInsert,
-          "/continue insert builds streaming execution");
+          "/continue continue builds streaming execution");
     check(execution.messages.back().content == "<content>hello wrld</content>",
-          "/continue insert sends buffer text from start through cursor as input");
+          "/continue continue sends tail-before-cursor context as input");
     check(execution.messages.front().content.rfind("Custom system", 0) == 0 &&
               execution.messages.front().content.find(default_continue->prompt) != std::string::npos,
           "user --system is prepended to assist task system prompt");
@@ -1909,39 +1914,43 @@ void test_editor_assist_helpers() {
     pkchat::config::ParseResult insert_modes_config = pkchat::config::parse(
         "[command]\n"
         "string = /expand\n"
-        "modes = insert, local_insert\n"
+        "modes = continue, insert, local_insert\n"
         "prompt = \"Expand the input.\"\n",
         "insert-modes.conf");
-    check(insert_modes_config.error.ok(), "configured insert and local_insert modes parse");
+    check(insert_modes_config.error.ok(), "configured continue and insert modes parse");
     configured_options = pkchat::cli::Options{};
     check(pkchat::config::apply_document(insert_modes_config.document, configured_options).ok(),
-          "configured insert and local_insert modes apply");
+          "configured continue and insert modes apply");
     const pkchat::editor::EditorAssistCommand* expand_command =
         pkchat::editor::find_assist_command(configured_options.editor_assist_config, "/expand");
-    check(expand_command != nullptr && expand_command->modes.size() == 2,
-          "configured command stores insert and local_insert modes");
+    check(expand_command != nullptr && expand_command->modes.size() == 3,
+          "configured command stores continue and insert modes");
 
+    parsed = pkchat::editor::parse_assist_command("/expand continue",
+                                                  configured_options.editor_assist_config);
+    check(parsed.ok && parsed.scope == pkchat::editor::AssistScope::Continue,
+          "/expand continue parses continue mode");
     parsed = pkchat::editor::parse_assist_command("/expand insert",
                                                   configured_options.editor_assist_config);
     check(parsed.ok && parsed.scope == pkchat::editor::AssistScope::Insert,
           "/expand insert parses insert mode");
     parsed = pkchat::editor::parse_assist_command("/expand l",
                                                   configured_options.editor_assist_config);
-    check(parsed.ok && parsed.scope == pkchat::editor::AssistScope::LocalInsert,
-          "/expand l parses local_insert mode");
+    check(parsed.ok && parsed.scope == pkchat::editor::AssistScope::Insert,
+          "legacy local_insert scope alias l parses as insert");
 
     const std::vector<std::string> expand_completions =
         pkchat::editor::assist_command_completions(configured_options.editor_assist_config);
-    check(std::find(expand_completions.begin(), expand_completions.end(), "/expand insert") !=
+    check(std::find(expand_completions.begin(), expand_completions.end(), "/expand continue") !=
               expand_completions.end() &&
-              std::find(expand_completions.begin(), expand_completions.end(),
-                        "/expand local_insert") != expand_completions.end(),
-          "assist completions include insert and local_insert variants");
+              std::find(expand_completions.begin(), expand_completions.end(), "/expand insert") !=
+                  expand_completions.end(),
+          "assist completions include continue and insert variants");
 
-    check(pkchat::editor::assist_scope_prompt(*expand_command).find("insert (i)") != std::string::npos &&
-              pkchat::editor::assist_scope_prompt(*expand_command).find("local insert (l)") !=
+    check(pkchat::editor::assist_scope_prompt(*expand_command).find("continue (c)") != std::string::npos &&
+              pkchat::editor::assist_scope_prompt(*expand_command).find("insert (i)") !=
                   std::string::npos,
-          "assist scope prompt advertises insert and local_insert keys");
+          "assist scope prompt advertises continue and insert keys");
 
     pkchat::editor::EditorState insert_state =
         pkchat::editor::EditorState::from_text("Once upon a time");
@@ -1955,14 +1964,14 @@ void test_editor_assist_helpers() {
         context,
         pkchat::editor::AssistCommandKind::Configured,
         *expand_index,
-        pkchat::editor::AssistScope::Insert,
+        pkchat::editor::AssistScope::Continue,
         "",
         std::nullopt);
     check(execution.ok && execution.stream &&
               execution.edit_kind == pkchat::editor::AssistEditKind::StreamInsert,
-          "insert mode builds streaming execution after the cursor");
+          "continue mode builds streaming execution after the cursor");
     check(execution.messages.back().content == "<content>Once upon a time</content>",
-          "insert mode sends buffer text from start through cursor as input");
+          "continue mode sends tail-before-cursor context as input");
 
     insert_state.selection.anchor = 5;
     insert_state.selection.active = 9;
@@ -1971,14 +1980,14 @@ void test_editor_assist_helpers() {
         context,
         pkchat::editor::AssistCommandKind::Configured,
         *expand_index,
-        pkchat::editor::AssistScope::LocalInsert,
+        pkchat::editor::AssistScope::Insert,
         "",
         std::nullopt);
     check(execution.ok && execution.stream &&
               execution.edit_kind == pkchat::editor::AssistEditKind::StreamInsert,
-          "local_insert mode builds streaming execution after the cursor");
+          "insert mode builds streaming execution after the cursor");
     check(execution.messages.back().content == "<content>upon</content>",
-          "local_insert mode sends the current selection as input");
+          "insert mode sends the current selection as input");
 
     insert_state.clear_selection();
     execution = pkchat::editor::build_assist_execution(
@@ -1986,13 +1995,12 @@ void test_editor_assist_helpers() {
         context,
         pkchat::editor::AssistCommandKind::Configured,
         *expand_index,
-        pkchat::editor::AssistScope::LocalInsert,
+        pkchat::editor::AssistScope::Insert,
         "",
         std::nullopt);
     check(!execution.ok &&
-              execution.error_message.find("local_insert requires an active selection") !=
-                  std::string::npos,
-          "local_insert mode rejects missing selection");
+              execution.error_message.find("insert requires an active selection") != std::string::npos,
+          "insert mode rejects missing selection");
 
     check(pkchat::editor::trim_assist_inplace_response("  fixed text \n") == "fixed text",
           "in-place assist responses are trimmed");

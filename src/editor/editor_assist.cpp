@@ -76,11 +76,12 @@ std::optional<AssistScope> parse_scope_token(const std::string& token) {
     if (lower == "selection" || lower == "s" || lower == "select") {
         return AssistScope::Selection;
     }
-    if (lower == "insert" || lower == "i") {
-        return AssistScope::Insert;
+    if (lower == "continue" || lower == "c") {
+        return AssistScope::Continue;
     }
-    if (lower == "local_insert" || lower == "localinsert" || lower == "l") {
-        return AssistScope::LocalInsert;
+    if (lower == "insert" || lower == "i" || lower == "local_insert" || lower == "localinsert" ||
+        lower == "l") {
+        return AssistScope::Insert;
     }
     return std::nullopt;
 }
@@ -98,11 +99,11 @@ void append_mode_completions(const EditorAssistCommand& command,
     if (command_has_mode(command, AssistCommandMode::All)) {
         commands.push_back(name + " all");
     }
+    if (command_has_mode(command, AssistCommandMode::Continue)) {
+        commands.push_back(name + " continue");
+    }
     if (command_has_mode(command, AssistCommandMode::Insert)) {
         commands.push_back(name + " insert");
-    }
-    if (command_has_mode(command, AssistCommandMode::LocalInsert)) {
-        commands.push_back(name + " local_insert");
     }
 }
 
@@ -252,8 +253,8 @@ const std::vector<AssistCommandMode>& default_builtin_assist_modes() {
     static const std::vector<AssistCommandMode> modes = {
         AssistCommandMode::Selection,
         AssistCommandMode::All,
+        AssistCommandMode::Continue,
         AssistCommandMode::Insert,
-        AssistCommandMode::LocalInsert,
     };
     return modes;
 }
@@ -295,8 +296,8 @@ std::optional<size_t> assist_command_index(const EditorAssistConfig& config, con
 bool assist_command_requires_scope(const EditorAssistCommand& command) {
     return command_has_mode(command, AssistCommandMode::Selection) ||
            command_has_mode(command, AssistCommandMode::All) ||
-           command_has_mode(command, AssistCommandMode::Insert) ||
-           command_has_mode(command, AssistCommandMode::LocalInsert);
+           command_has_mode(command, AssistCommandMode::Continue) ||
+           command_has_mode(command, AssistCommandMode::Insert);
 }
 
 bool assist_command_runs_without_scope(const EditorAssistCommand& command) {
@@ -481,7 +482,7 @@ ParsedAssistCommand parse_assist_command(const std::string& line, const EditorAs
         const std::optional<AssistScope> scope = parse_scope_token(arg);
         if (!scope.has_value()) {
             parsed.error_message = command_display_name(entry) +
-                                   " mode must be selection, all, insert, or local_insert";
+                                   " mode must be selection, all, continue, or insert";
             return parsed;
         }
         if (*scope == AssistScope::Selection && !command_has_mode(entry, AssistCommandMode::Selection)) {
@@ -492,13 +493,13 @@ ParsedAssistCommand parse_assist_command(const std::string& line, const EditorAs
             parsed.error_message = command_display_name(entry) + " does not support all mode";
             return parsed;
         }
-        if (*scope == AssistScope::Insert && !command_has_mode(entry, AssistCommandMode::Insert)) {
-            parsed.error_message = command_display_name(entry) + " does not support insert mode";
+        if (*scope == AssistScope::Continue &&
+            !command_has_mode(entry, AssistCommandMode::Continue)) {
+            parsed.error_message = command_display_name(entry) + " does not support continue mode";
             return parsed;
         }
-        if (*scope == AssistScope::LocalInsert &&
-            !command_has_mode(entry, AssistCommandMode::LocalInsert)) {
-            parsed.error_message = command_display_name(entry) + " does not support local_insert mode";
+        if (*scope == AssistScope::Insert && !command_has_mode(entry, AssistCommandMode::Insert)) {
+            parsed.error_message = command_display_name(entry) + " does not support insert mode";
             return parsed;
         }
         parsed.scope = scope;
@@ -527,17 +528,18 @@ std::string assist_scope_prompt(const EditorAssistCommand& command) {
     if (command_has_mode(command, AssistCommandMode::All)) {
         append("all (a)");
     }
+    if (command_has_mode(command, AssistCommandMode::Continue)) {
+        append("continue (c)");
+    }
     if (command_has_mode(command, AssistCommandMode::Insert)) {
         append("insert (i)");
-    }
-    if (command_has_mode(command, AssistCommandMode::LocalInsert)) {
-        append("local insert (l)");
     }
     return prompt;
 }
 
 std::string assist_prompt_mode_message() {
-    return "/prompt: continue from cursor (c), edit selection (s), edit all (a)";
+    return "/prompt: continue from cursor (c), insert from selection (i), edit selection (s), "
+           "edit all (a)";
 }
 
 AssistExecution build_assist_execution(const EditorState& state,
@@ -587,25 +589,23 @@ AssistExecution build_assist_execution(const EditorState& state,
             return fail("Missing scope for " + name);
         }
 
-        if (*scope == AssistScope::Insert) {
-            if (!command_has_mode(command, AssistCommandMode::Insert)) {
-                return fail(name + " does not support insert mode");
+        if (*scope == AssistScope::Continue) {
+            if (!command_has_mode(command, AssistCommandMode::Continue)) {
+                return fail(name + " does not support continue mode");
             }
-            const size_t input_len = std::min(state.cursor, context.settings.max_read_chars);
             execution.stream = true;
             execution.edit_kind = AssistEditKind::StreamInsert;
-            execution.messages =
-                build_messages(context, command.prompt, state.text.range_text(0, input_len));
+            execution.messages = build_messages(context, command.prompt, prefix);
             execution.ok = true;
             return execution;
         }
 
-        if (*scope == AssistScope::LocalInsert) {
-            if (!command_has_mode(command, AssistCommandMode::LocalInsert)) {
-                return fail(name + " does not support local_insert mode");
+        if (*scope == AssistScope::Insert) {
+            if (!command_has_mode(command, AssistCommandMode::Insert)) {
+                return fail(name + " does not support insert mode");
             }
             if (!state.selection.has_range()) {
-                return fail(name + " local_insert requires an active selection");
+                return fail(name + " insert requires an active selection");
             }
             execution.stream = true;
             execution.edit_kind = AssistEditKind::StreamInsert;
@@ -679,6 +679,15 @@ AssistExecution build_assist_execution(const EditorState& state,
                     build_messages(context, custom_prompt, state.text.str());
                 execution.stream = false;
                 execution.edit_kind = AssistEditKind::ReplaceInPlace;
+                break;
+            case AssistPromptMode::Insert:
+                if (!state.selection.has_range()) {
+                    return fail("/prompt insert requires an active selection");
+                }
+                execution.stream = true;
+                execution.edit_kind = AssistEditKind::StreamInsert;
+                execution.messages =
+                    build_messages(context, custom_prompt, state.selected_text());
                 break;
         }
         execution.ok = true;

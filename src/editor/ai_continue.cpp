@@ -133,7 +133,7 @@ void start_continue_job(const AiContinueContext& context,
                                                        context,
                                                        AssistCommandKind::Configured,
                                                        *command_index,
-                                                       AssistScope::Insert,
+                                                       AssistScope::Continue,
                                                        "",
                                                        std::nullopt);
     if (!execution.ok) {

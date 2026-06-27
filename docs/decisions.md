@@ -61,6 +61,8 @@ v0.78 adds grapheme-aware Unicode handling to the standalone editor and shared e
 
 v0.77 adds the first editor AI feature: continue/auto-write on `Ctrl+Space`. The editor sends up to `MAX_AI_CONTINUE_READ` characters before the cursor to the configured provider, streams visible continuation text at the cursor up to `MAX_AI_CONTINUE_TOKENS`, hides thinking traces from the buffer, and reports thinking/writing/stopped states in the minibuffer. Continue runs on cancellable runtime jobs with events delivered to the editor loop; SSE completion is detected through `finish_reason` and `[DONE]`, then the HTTP stream is aborted so the editor can return to idle without a keypress. For `lmstudio`, `ollama`, `vllm`, and loopback custom base URLs, editor startup auto-selects the first `/v1/models` entry when `--model` is omitted.
 
+v0.79 unifies editor AI assist modes around four scoped behaviors: `selection` and `all` replace text in-place; `continue` streams after the cursor using tail-before-cursor context; `insert` streams after the cursor using the current selection as input. The older start-to-cursor `insert` mode was removed in favor of `continue` semantics. Config token `local_insert` remains an alias for `insert`. Built-in `/spell`, `/grammar`, `/continue`, and `/fact` expose all four scoped modes by default, and `Ctrl+Space` uses `continue`.
+
 
 ## Document Extraction Modules
 
