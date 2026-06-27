@@ -10,6 +10,8 @@ enum class AssistCommandMode {
     Continue,
     Selection,
     All,
+    Insert,
+    LocalInsert,
     Fact,
 };
 

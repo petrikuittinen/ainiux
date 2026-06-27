@@ -24,6 +24,8 @@ enum class AssistCommandKind {
 enum class AssistScope {
     Selection,
     All,
+    Insert,
+    LocalInsert,
 };
 
 enum class AssistPromptMode {

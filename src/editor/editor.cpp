@@ -2648,6 +2648,18 @@ int run_editor(const std::string& path,
                                  AssistScope::All,
                                  "",
                                  std::nullopt);
+                } else if (ch == 'i' || ch == 'I') {
+                    start_assist(pending_assist.kind,
+                                 pending_assist.command_index,
+                                 AssistScope::Insert,
+                                 "",
+                                 std::nullopt);
+                } else if (ch == 'l' || ch == 'L') {
+                    start_assist(pending_assist.kind,
+                                 pending_assist.command_index,
+                                 AssistScope::LocalInsert,
+                                 "",
+                                 std::nullopt);
                 }
                 return;
             }
