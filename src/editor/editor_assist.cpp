@@ -248,14 +248,25 @@ std::string AssistStreamFilter::finish() {
     return out;
 }
 
+const std::vector<AssistCommandMode>& default_builtin_assist_modes() {
+    static const std::vector<AssistCommandMode> modes = {
+        AssistCommandMode::Selection,
+        AssistCommandMode::All,
+        AssistCommandMode::Insert,
+        AssistCommandMode::LocalInsert,
+    };
+    return modes;
+}
+
 EditorAssistConfig default_editor_assist_config() {
     EditorAssistConfig config;
     config.behavior_rules = kDefaultAssistBehaviorRules;
+    const std::vector<AssistCommandMode>& modes = default_builtin_assist_modes();
     config.commands = {
-        {"/spell", {AssistCommandMode::Selection, AssistCommandMode::All}, kDefaultAssistSpellPrompt},
-        {"/grammar", {AssistCommandMode::Selection, AssistCommandMode::All}, kDefaultAssistGrammarPrompt},
-        {"/continue", {AssistCommandMode::Continue}, kDefaultAssistContinuePrompt},
-        {"/fact", {AssistCommandMode::Fact}, kDefaultAssistFactPrompt},
+        {"/spell", modes, kDefaultAssistSpellPrompt},
+        {"/grammar", modes, kDefaultAssistGrammarPrompt},
+        {"/continue", modes, kDefaultAssistContinuePrompt},
+        {"/fact", modes, kDefaultAssistFactPrompt},
     };
     return config;
 }

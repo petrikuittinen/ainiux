@@ -1720,6 +1720,16 @@ void test_editor_assist_helpers() {
               !parsed.scope.has_value(),
           "bare /spell requests scope");
 
+    parsed = pkchat::editor::parse_assist_command("/continue", default_config);
+    check(parsed.ok && parsed.kind == pkchat::editor::AssistCommandKind::Configured &&
+              !parsed.scope.has_value(),
+          "bare /continue requests scope");
+
+    parsed = pkchat::editor::parse_assist_command("/fact insert", default_config);
+    check(parsed.ok && parsed.kind == pkchat::editor::AssistCommandKind::Configured &&
+              parsed.scope == pkchat::editor::AssistScope::Insert,
+          "/fact insert parses");
+
     parsed = pkchat::editor::parse_assist_command("/prompt rewrite formally", default_config);
     check(parsed.ok && parsed.kind == pkchat::editor::AssistCommandKind::Prompt &&
               parsed.custom_prompt == "rewrite formally",
@@ -1738,6 +1748,25 @@ void test_editor_assist_helpers() {
     const std::vector<std::string> completions =
         pkchat::editor::assist_command_completions(default_config);
     check(!completions.empty() && completions.front() == "/spell", "assist completions include /spell");
+    for (const char* builtin : {"/spell", "/grammar", "/continue", "/fact"}) {
+        for (const char* mode : {"selection", "all", "insert", "local_insert"}) {
+            const std::string variant = std::string(builtin) + " " + mode;
+            check(std::find(completions.begin(), completions.end(), variant) != completions.end(),
+                  std::string("builtin assist completions include ") + variant);
+        }
+    }
+    for (const char* builtin : {"/spell", "/grammar", "/continue", "/fact"}) {
+        const pkchat::editor::EditorAssistCommand* command =
+            pkchat::editor::find_assist_command(default_config, builtin);
+        check(command != nullptr && command->modes.size() == 4,
+              std::string("default ") + builtin + " exposes all four scoped modes");
+        const std::string scope_prompt = pkchat::editor::assist_scope_prompt(*command);
+        check(scope_prompt.find("selection (s)") != std::string::npos &&
+                  scope_prompt.find("all (a)") != std::string::npos &&
+                  scope_prompt.find("insert (i)") != std::string::npos &&
+                  scope_prompt.find("local insert (l)") != std::string::npos,
+              std::string("default ") + builtin + " scope prompt lists all four modes");
+    }
 
     std::string input = "/sp";
     pkchat::editor::AssistCompleterState completer;
@@ -1752,7 +1781,8 @@ void test_editor_assist_helpers() {
     input += "fa";
     completion = pkchat::editor::complete_assist_command(input, completer, default_config);
     check(input == "/fact", "assist tab completion rematches after editing / to /fa");
-    check(!completer.active, "single /fact match clears cycle state");
+    check(completer.active && completer.candidates.size() == 5,
+          "/fa matches /fact and its four scoped variants for cycling");
 
     input = "/";
     completer = pkchat::editor::AssistCompleterState{};
@@ -1798,12 +1828,20 @@ void test_editor_assist_helpers() {
         pkchat::editor::assist_command_index(default_config, "/continue");
     check(continue_index.has_value(), "default assist config indexes /continue");
     context.request.options.system = "Custom system";
+    state.cursor = state.text.size();
     execution = pkchat::editor::build_assist_execution(
-        state, context, pkchat::editor::AssistCommandKind::Configured, *continue_index, std::nullopt, "",
+        state,
+        context,
+        pkchat::editor::AssistCommandKind::Configured,
+        *continue_index,
+        pkchat::editor::AssistScope::Insert,
+        "",
         std::nullopt);
     check(execution.ok && execution.stream &&
               execution.edit_kind == pkchat::editor::AssistEditKind::StreamInsert,
-          "/continue builds streaming execution");
+          "/continue insert builds streaming execution");
+    check(execution.messages.back().content == "<content>hello wrld</content>",
+          "/continue insert sends buffer text from start through cursor as input");
     check(execution.messages.front().content.rfind("Custom system", 0) == 0 &&
               execution.messages.front().content.find(default_continue->prompt) != std::string::npos,
           "user --system is prepended to assist task system prompt");

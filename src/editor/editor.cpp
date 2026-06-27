@@ -2591,7 +2591,11 @@ int run_editor(const std::string& path,
             minibuffer_message(minibuffer, "Configured editor assist commands are missing /continue");
             return;
         }
-        start_assist(AssistCommandKind::Configured, *command_index, std::nullopt, "", std::nullopt);
+        start_assist(AssistCommandKind::Configured,
+                     *command_index,
+                     AssistScope::Insert,
+                     "",
+                     std::nullopt);
     };
 
     auto handle_key = [&](unsigned char ch) {
