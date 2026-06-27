@@ -6,7 +6,7 @@ This file is the implementation roadmap and execution-plan template for coding a
 
 ## Product goal
 
-Create the best practical command-line, terminal, and local-web chat client for OpenAI and OpenAI-compatible APIs.
+Create the best practical command-line, terminal, local server, and future local-web chat client for OpenAI and OpenAI-compatible APIs.
 
 `pkchat` should be:
 
@@ -19,7 +19,7 @@ Create the best practical command-line, terminal, and local-web chat client for 
 - Unicode-aware.
 - Provider-adapter/profile based, not hard-coded to one API dialect.
 - Friendly to local endpoints, especially LM Studio and llama.cpp-style servers.
-- Responsive in full-screen mode and web mode even while waiting for an endpoint, streaming, saving/loading chats, or processing files.
+- Responsive in full-screen mode and future server/web modes even while waiting for an endpoint, streaming, saving/loading chats, or processing files.
 - Free of memory leaks.
 
 ## Deferred product work
@@ -34,23 +34,23 @@ The CLI, streaming, persistence, provider architecture, runtime/job layer, TUI f
 - Browser automation.
 - Plugin system.
 
-Local web server mode is not an early feature, but it must be implemented before autonomous agent mode.
+The browser-based local web UI is postponed. A local OpenAI-compatible server mode may come first, because it can expose `pkchat` conversions and later chained chat workflows to other OpenAI-compatible clients while reusing the same transport/runtime/security code. Autonomous local agent mode remains separate and must still have its own sandbox/approval design before any tool execution is added.
 
 ## High-level milestones
 
 ```text
 v0.0  Repository skeleton, build system, and leak-check infrastructure
 v0.1  Script-friendly CLI for Chat Completions plus LM Studio profile
-v0.2  Simple interactive REPL and JSON chat persistence
+v0.2  Simple interactive REPL and chat persistence
 v0.3  Runtime/job layer and non-blocking full-screen TUI foundation
 v0.4  Provider adapters, Responses API, LM Studio refinement, and compatibility profiles
 v0.5  Context management, attachments, and safe URL fetching
 v0.6  System and user TOML-alike configuration files
 v0.7  Benchmark mode
 v0.8  AI-assisted editor
-v0.9  Local web server mode
+v0.9  Local OpenAI-compatible server mode; browser web UI postponed
 v1.0  Local agent mode with sandbox/approval design
-v1.1  Image generation from CLI, REPL, TUI, and web chat
+v1.1  Image generation from CLI, REPL, TUI, and future server/web surfaces
 ```
 
 Each milestone should leave the program usable. Do not create a long-lived pile of half-wired features.
@@ -383,13 +383,13 @@ All output modes must avoid leaking credentials.
 
 ---
 
-# v0.2 - Simple interactive REPL and JSON chat persistence
+# v0.2 - Simple interactive REPL and chat persistence
 
 ## Goal
 
-Implementation note (2026-06-14): a first v0.2 slice is implemented. `--repl`/`-i` starts a line-oriented REPL, `--save-chat PATH` and `--load-chat PATH` persist explicit JSON chat files, one-shot mode can continue a saved chat, and the mock integration test covers save/load plus REPL stdout behavior. Remaining v0.2 work is tracked in TODO.md: XDG chat IDs, `/chat` listing, `/new`, fuller config/profile support, and schema migration mechanics.
+Implementation note (2026-06-14): a first v0.2 slice is implemented. `--repl`/`-i` starts a line-oriented REPL, `--save-chat PATH` and `--load-chat PATH` persist explicit JSON chat files, one-shot mode can continue a saved chat, and the mock integration test covers save/load plus REPL stdout behavior. Remaining v0.2 work is tracked in TODO.md: SQLite-backed local chat threads, automatic save/load, `/list`, `/new`, `/remove`, fuller config/profile support, and schema migration mechanics.
 
-Add a simple line-oriented interactive mode and durable chat save/load without yet building the full-screen TUI.
+Add a simple line-oriented interactive mode and durable chat persistence without yet building the full-screen TUI. Explicit JSON save/load remains useful for import/export, but the local chat library should move to a SQLite3 `pkchat.db` database in the local profile.
 
 ## Commands
 
@@ -403,9 +403,10 @@ Interactive mode should support at least:
 /system TEXT
 /temperature VALUE
 /save
-/load CHAT_ID
-/chat
+/load PATH
+/list
 /new
+/remove
 ```
 
 Command-line examples:
@@ -424,78 +425,77 @@ pkchat --new
 - [x] Add line-oriented REPL.
 - [x] Add prompt history for the session.
 - [x] Add `/save` and `/load`.
-- [ ] Add `/chat` listing.
+- [ ] Add `/list` thread listing and picker.
+- [ ] Add `/new` to create a new chat thread.
+- [ ] Add `/remove` to permanently remove the current chat thread after confirmation.
+- [ ] Add SQLite3-backed automatic chat persistence in local profile `pkchat.db`.
 - [x] Add atomic save.
 - [x] Add corrupted chat-file handling.
 - [ ] Add config/profile support.
 - [ ] Add schema migration mechanism, even if only v1 exists.
 - [x] Ensure every loaded JSON document, temporary string, file handle, and conversation allocation is released.
 
-## Chat file schema
+## Chat storage schema
 
-Use JSON with a `schema_version` field.
+Use a SQLite3 database for the automatic local chat library. The default database should be `pkchat.db` in the local profile path. Use WAL mode and explicit indexes so chat-thread listing and future agent-mode lookups remain fast.
 
-Minimum fields:
+Minimum logical entities:
 
-```json
-{
-  "schema_version": 1,
-  "id": "...",
-  "created_at": "...",
-  "updated_at": "...",
-  "provider": "lm_studio",
-  "base_url": "http://localhost:1234/v1",
-  "model": "...",
-  "settings": {
-    "temperature": 0.7,
-    "top_p": null,
-    "max_output_tokens": null
-  },
-  "messages": [
-    {
-      "role": "user",
-      "content": [
-        { "type": "text", "text": "Hello" }
-      ]
-    }
-  ],
-  "attachments": [],
-  "usage": [],
-  "compaction_events": []
-}
+```text
+threads: id, title, created_at, updated_at, provider, base_url, model, settings_json, deleted_at
+messages: id, thread_id, ordinal, role, content_json, created_at
+attachments: id, thread_id, message_id, kind, metadata_json, storage_ref, created_at
+usage: id, thread_id, message_id, usage_json, created_at
+compaction_events: id, thread_id, summary_message_id, metadata_json, created_at
 ```
 
-Do not save API keys in chat files.
+Do not save API keys in the database. Keep explicit JSON chat save/load as import/export or compatibility commands, not as the primary local thread store.
 
 ## Storage locations
 
-Use XDG-style paths:
+Use XDG-style paths for profile data and state:
 
 ```text
 config: $XDG_CONFIG_HOME/pkchat/config.json or ~/.config/pkchat/config.json
-state:  $XDG_STATE_HOME/pkchat/chats/ or ~/.local/state/pkchat/chats/
+state:  $XDG_STATE_HOME/pkchat/ or ~/.local/state/pkchat/
 data:   $XDG_DATA_HOME/pkchat/ or ~/.local/share/pkchat/
+db:     local profile `pkchat.db`, preferably under the state path unless a profile/config option overrides it
 ```
 
-## Atomic save requirements
+## SQLite persistence requirements
 
-- [ ] Write to a temporary file in the target directory.
-- [ ] Flush and fsync where supported.
-- [ ] Rename over the target.
-- [ ] fsync parent directory where supported.
-- [ ] Preserve or set restrictive permissions.
-- [ ] Remove temporary file on failure.
-- [ ] Release all temporary path strings and file handles on success or failure.
+- [ ] Open the database with clear errors for permission, corruption, and migration failures.
+- [ ] Enable WAL mode for the local profile database.
+- [ ] Add indexes for updated thread listing, thread messages, attachments, usage, and compaction events.
+- [ ] Automatically save the active chat thread after message changes.
+- [ ] Automatically load the last active thread where appropriate.
+- [ ] Add schema migrations and record the schema version.
+- [ ] Keep deletes deliberate: `/remove` must confirm and then permanently remove the current thread or mark it deleted according to the chosen migration strategy.
+- [ ] Ensure all SQLite statements, handles, transactions, temporary strings, and per-row allocations are finalized or released on success, error, and cancellation.
+
+## TUI chat thread commands
+
+- [ ] `/new` creates a new chat thread and switches to it.
+- [ ] `/remove` permanently removes the current chat thread after confirmation.
+- [ ] `/list` lists saved chat threads in the chat window.
+- [ ] `/list` selection uses up/down arrows plus Enter, and Esc cancels.
+- [ ] After selecting a thread or cancelling the list, the chat screen refreshes fully.
 
 ## Acceptance criteria
 
-- [x] A chat can be saved and loaded.
-- [x] Corrupted chat files produce a specific error without crashing.
+- [x] Explicit JSON chat files can be saved and loaded for compatibility/import-export.
+- [ ] Local profile opens or creates `pkchat.db` with WAL mode enabled.
+- [ ] Active chat threads are saved automatically after message changes.
+- [ ] The last active thread can be loaded automatically where appropriate.
+- [ ] `/new` creates and switches to a new chat thread.
+- [ ] `/list` lists saved threads and supports keyboard selection in TUI mode.
+- [ ] `/remove` permanently removes the current thread after confirmation.
+- [x] Corrupted JSON chat files produce a specific error without crashing.
+- [ ] Corrupted SQLite databases produce a specific error and recovery guidance.
 - [ ] Permission-denied writes produce a specific error.
 - [ ] Disk-full or short-write cases are handled where testable.
-- [ ] Old chats can be listed.
 - [x] API keys are not saved.
-- [ ] Leak-check tooling reports no leaks for save/load success, corrupted file, and failed write paths where supported.
+- [ ] Leak-check tooling reports no leaks for SQLite open/save/load/list/remove paths and JSON import/export paths where supported.
 
 ---
 
@@ -1260,6 +1260,7 @@ pkchat --benchmark --dataset eval.jsonl --mode quality,refusals --output results
 
 - [x] Implement strict, bounded UTF-8 JSONL input first.
 - [x] Add an embedded 60-case built-in JSONL corpus with ten safety, twenty reasoning, ten writing, ten coding, and ten multi-turn cases.
+- [ ] Expand the built-in corpus with more safety cases and prompts that reveal or estimate the model knowledge cutoff date.
 - [x] Add optional `fetch_url` cases and a separate Project Gutenberg long-context dataset.
 - [x] Add category, case-ID, and count filtering plus offline validation/listing.
 - [ ] Add Parquet input compatible with Hugging Face Datasets after JSONL behavior stabilizes.
@@ -1334,6 +1335,7 @@ Options:
 - [x] Label built-in safety cases as harmful/reject or harmless/answer, requiring criteria for harmless answers.
 - [x] Preserve prompts, tags, external-source links, answer keys, and rubrics in JSONL and Markdown result artifacts for future judge input.
 - [ ] Add automatic rubric/judge scoring; evaluation metadata remains descriptive until judge behavior is specified and tested.
+- [ ] Add knowledge-cutoff-oriented benchmark cases and report them separately from speed/quality aggregates.
 
 ## Acceptance criteria
 
@@ -1354,7 +1356,7 @@ Options:
 
 Extend `--editor` into an AI-assisted writing and editing mode that uses the configured provider/model while keeping the editor usable as a local text editor. This is not agent mode: it must not gain filesystem, shell, or network powers beyond the configured model endpoint and ordinary file open/save behavior.
 
-The feature should support spelling checks, grammar checks, rewrites, continuation, comments, proof checks, and user-provided prompts that insert or modify text.
+The feature should support spelling checks, grammar checks, rewrites, continuation, improvement comments, fact checks, translation helpers, custom prompts, and regeneration of the previous AI command result.
 
 ## Command shape
 
@@ -1363,19 +1365,16 @@ Keep the existing editor mode as the base:
 ```sh
 pkchat --editor draft.md
 pkchat --editor draft.md --provider lmstudio -m MODEL
-pkchat --editor draft.md --assist
-pkchat --editor draft.md --assist --provider openai -m MODEL
-pkchat --editor draft.md --assist-prompt "Make this more concise"
+pkchat lmstudio --editor draft.md
 ```
 
 Possible later aliases or subcommands:
 
 ```sh
 pkchat edit draft.md
-pkchat edit draft.md --assist
 ```
 
-`--editor` without assist options must continue to work offline and must not contact a model.
+`--editor` without a configured provider must continue to work offline and must not contact a model.
 
 ## Editor interaction model
 
@@ -1384,13 +1383,17 @@ Start with simple, explicit actions. Avoid hidden automatic rewrites.
 Suggested commands inside the editor:
 
 ```text
-/assist spelling
-/assist grammar
-/assist rewrite
-/assist continue
-/assist comment
-/assist proof
-/assist prompt TEXT
+/spell
+/grammar
+/rewrite
+/continue
+/comment
+/fact
+/English
+/Chinese
+/Finnish
+/prompt TEXT
+/regenerate
 ```
 
 Suggested keyboard/menu layer later:
@@ -1424,8 +1427,9 @@ grammar       selection, current paragraph, or whole file by confirmation
 rewrite       selection or current paragraph
 continue      insert at cursor
 comment       selection or current paragraph, inserted as editor notes/comments
-proof         whole file or selected range, no automatic mutation
+fact          whole file or selected range, no automatic mutation
 prompt        selection/current paragraph for modify; cursor for insert
+all           explicit whole-buffer target for commands that support broad edits
 ```
 
 ## AI actions
@@ -1433,20 +1437,20 @@ prompt        selection/current paragraph for modify; cursor for insert
 Spelling check:
 
 - [ ] Ask model for spelling corrections only.
-- [ ] Return a patch-like preview or replacement suggestions.
+- [ ] Apply replacement text as one undoable editor operation.
 - [ ] Do not silently rewrite style or grammar.
 
 Grammar check:
 
 - [ ] Ask model for grammar corrections only.
 - [ ] Preserve meaning and formatting as much as possible.
-- [ ] Show preview before applying.
+- [ ] Apply replacement text as one undoable editor operation.
 
 Rewrite:
 
-- [ ] Rewrite selected/current text according to default or user-specified style.
+- [ ] Rewrite selected/current text for spelling, grammar, factual consistency, and style.
 - [ ] Support concise, clear, formal, informal, and custom instructions later.
-- [ ] Show before/after preview.
+- [ ] Apply the replacement as one undoable operation.
 
 Continue text:
 
@@ -1454,53 +1458,52 @@ Continue text:
 - [x] Stream generated continuation at the cursor (`Ctrl+Space`; `MAX_AI_CONTINUE_TOKENS`, default 32768).
 - [x] Hide thinking traces from the editor buffer; show `[model] thinking... ESC to abort` in the minibuffer while thinking and `[model] writing. Press ESC to stop.` while visible text streams.
 - [x] `Esc` aborts an in-flight continue request without deleting already streamed text.
-- [ ] Let user retry/regenerate before applying (preview/apply workflow remains future work).
+- [ ] `/regenerate` repeats the previous continue request with the same command options.
 
 Comment text:
 
-- [ ] Generate feedback comments without modifying the source text by default.
+- [ ] `/comment` generates comments about how to improve the selected text, current paragraph, or file.
+- [ ] Do not modify the source text by default unless the command target explicitly asks for insertion.
 - [ ] Support inserting comments as plain text notes where appropriate for the file type later.
 
-Proof check:
+Fact check:
 
-- [ ] Produce a review report for the selected range or file.
-- [ ] Separate issues by severity/type: spelling, grammar, clarity, consistency, factual-risk notes.
-- [ ] Do not mutate text unless the user chooses a proposed edit.
+- [ ] `/fact` produces a review report for the selected range or file.
+- [ ] Separate issues by severity/type: spelling, grammar, clarity, consistency, and factual-risk notes.
+- [ ] Do not mutate text unless the user chooses a proposed edit command separately.
+
+Translation helpers:
+
+- [ ] `/English` translates the selected/current text into English.
+- [ ] `/Chinese` translates the selected/current text into Chinese.
+- [ ] `/Finnish` translates the selected/current text into Finnish.
+- [ ] Translation replacements are one undoable editor operation.
 
 Custom prompt:
 
-- [ ] Let the user provide a prompt to insert text at cursor or modify selected/current text.
+- [ ] `/prompt TEXT` lets the user provide a prompt to insert text at cursor or modify selected/current text.
 - [ ] Make the prompt and target range visible before sending.
-- [ ] Show preview before applying any replacement.
+- [ ] Apply replacements as one undoable operation.
 
-## Preview and apply workflow
+## Regenerate and undo workflow
 
-AI changes should be reviewable before mutation:
+A separate preview panel is not required for the initial editor assistant, because undo/redo is fast enough for rejecting a result.
 
-- [ ] Stream model output into a preview panel or temporary assistant buffer.
-- [ ] Support accept, reject, regenerate, and edit-before-apply.
-- [ ] Applying a replacement should be one undoable editor operation.
-- [ ] Store enough local state to reject or revert a pending suggestion without reloading the file.
-- [ ] Mark the buffer dirty only after a suggestion is applied.
+- [ ] Every AI mutation should be a single undoable editor operation.
+- [ ] `/regenerate` repeats the previous AI command, including command name, range mode, prompt options, provider/model settings, and generation settings where practical.
+- [ ] Regeneration should use the current buffer state when the prior target still exists; otherwise show a clear error and leave the buffer unchanged.
+- [ ] Store enough local last-command metadata to regenerate without retyping the command.
 - [ ] Save remains explicit through the editor save command.
-
-Minimal first implementation can use a split-screen preview with these commands:
-
-```text
-/apply
-/reject
-/regenerate
-```
 
 ## Provider/runtime integration
 
 Use the existing provider, runtime, cancellation, and TUI/editor infrastructure:
 
-- [ ] AI assist requests run as cancellable runtime jobs.
-- [ ] Editor input and navigation remain responsive while the model is thinking or streaming.
-- [ ] `Esc` or another documented key cancels an active assist request.
-- [ ] Reuse provider model discovery/default model selection.
-- [ ] Reuse Chat Completions and Responses API adapters through the provider layer.
+- [x] AI assist requests run as cancellable runtime jobs for implemented editor AI commands.
+- [ ] Full editor input and navigation responsiveness while a model request is active remains a nice-to-have tracked in TODO.md.
+- [x] `Esc` cancels active editor AI requests where implemented.
+- [x] Reuse provider model discovery/default model selection.
+- [x] Reuse Chat Completions and Responses API adapters through the provider layer.
 - [x] Do not let worker threads mutate editor state directly; send events to the editor loop (AI continue in v0.77).
 - [x] Shutdown cancels/joins assist jobs cleanly for editor continue requests.
 
@@ -1511,8 +1514,8 @@ Prompts must be deterministic and scoped:
 - [ ] Include action type, target text, optional surrounding context, and user instructions.
 - [ ] Keep system prompts short and action-specific.
 - [ ] Clearly ask for either replacement text, comments, or a structured report.
-- [ ] Avoid sending the whole file unless the user requested whole-file proofing or the file is under a documented size limit.
-- [ ] Redact or warn about potential secrets before sending selected text when feasible.
+- [ ] Avoid sending the whole file unless the user requested whole-file fact checking or the file is under a documented size limit.
+- [ ] Do not block local-model workflows on privacy scanning; for remote providers, make the provider/model visible before sending selected or file text.
 - [ ] Respect provider context limits and return clear errors when input is too large.
 
 Possible structured response shape for edit suggestions:
@@ -1525,26 +1528,27 @@ Possible structured response shape for edit suggestions:
 }
 ```
 
-If the JSON facade is not strong enough for robust structured output at this stage, use plain replacement text with a conservative preview first.
+If the JSON facade is not strong enough for robust structured output at this stage, use plain replacement text with conservative apply-and-undo behavior first.
 
 ## UI layout
 
-The editor core already renders into rectangles. Use that for assist panels:
+The editor core already renders into rectangles. Do not add a required preview panel for v0.8.
 
-- [ ] Main editor panel for the file.
-- [ ] Preview/result panel for suggestions or comments.
-- [ ] Status line for provider/model/job state.
-- [ ] Optional command prompt line for `/assist prompt ...`.
-- [ ] Support resize without corrupting the editor or preview.
+- [x] Main editor panel for the file.
+- [x] Status/minibuffer line for provider/model/job state and cancellation hints.
+- [x] Command prompt line for slash commands.
+- [ ] Show enough last-command status for `/regenerate` to be understandable.
+- [ ] Support resize without corrupting the editor, command prompt, or in-flight generation status.
 
-Do not make the AI panel modal-only if it blocks basic editing for long requests. The editor should remain cancellable and responsive.
+Do not make AI assistance modal-only if it blocks cancellation. Editing responsiveness during active AI requests is useful, but is tracked as a nice-to-have rather than a v0.8 blocker.
 
 ## Persistence and privacy
 
 - [ ] Do not save API keys in editor files or assist metadata.
-- [ ] Do not persist AI suggestions unless the user applies them or explicitly saves a sidecar/report.
+- [ ] Do not persist AI suggestions except as ordinary applied editor text or an explicitly saved sidecar/report.
 - [ ] Do not silently send unsaved file contents beyond the selected/target range and required context.
-- [ ] Show which provider/model is used for assist actions when a request starts.
+- [ ] Local-model workflows do not need extra privacy guardrails beyond explicit command invocation.
+- [ ] Show which provider/model is used for assist actions when a request starts, especially for remote providers.
 - [ ] Keep stdout/stderr behavior sane for `--editor`; status belongs in the terminal UI.
 
 ## Tests
@@ -1552,181 +1556,154 @@ Do not make the AI panel modal-only if it blocks basic editing for long requests
 - [x] Unit test selection/range calculations.
 - [ ] Unit test prompt construction for each action.
 - [ ] Unit test applying replacement text to the piece table.
-- [ ] Unit test reject/regenerate state transitions.
+- [ ] Unit test `/regenerate` last-command metadata and undo state.
 - [ ] Unit test cancellation events do not mutate editor text.
-- [ ] Integration test spelling/grammar/rewrite against mock provider.
-- [ ] Integration test streaming preview output.
+- [ ] Integration test spelling, grammar, rewrite, comment, fact, translation, and custom prompt commands against a mock provider.
+- [ ] Integration test streaming continue output and `/regenerate` for the previous AI command.
 - [ ] Integration test cancel during assist request.
-- [ ] Resize test with active preview panel.
+- [ ] Resize test with an active AI command and minibuffer status.
 - [ ] UTF-8 tests for selected text and replacement text.
-- [ ] Leak-check successful assist, rejected assist, applied assist, failed provider call, and cancelled assist where supported.
+- [ ] Leak-check successful assist, regenerated assist, applied assist, failed provider call, and cancelled assist where supported.
 
 ## Acceptance criteria
 
-- [ ] `pkchat --editor FILE --assist` opens the editor and can call the configured model explicitly.
-- [ ] Existing `pkchat --editor FILE` remains usable without any model/network requirement.
-- [ ] At least spelling, grammar, rewrite, continue, comment, proof, and custom prompt actions have command paths planned or implemented.
-- [ ] The editor remains responsive during an assist request.
+- [ ] `pkchat --editor FILE` remains usable without any model/network requirement.
+- [ ] Editor AI commands use the configured provider/model only after explicit command invocation.
+- [ ] At least spelling, grammar, rewrite, continue, comment, fact, English, Chinese, Finnish, and custom prompt actions have command paths planned or implemented.
+- [ ] `/regenerate` repeats the previous AI command options where practical.
 - [ ] Assist requests are cancellable.
-- [ ] Suggestions are previewed before modifying the buffer.
-- [ ] Applying a suggestion updates only the intended range.
-- [ ] Rejected suggestions leave the buffer unchanged.
+- [ ] AI mutations are one undoable editor operation and update only the intended range.
 - [ ] Secrets/API keys are not saved or displayed.
 - [ ] Leak-check tooling reports no leaks for representative assist paths where supported.
 
 ---
 
-# v0.9 - Local web server mode
+
+# v0.9 - Local OpenAI-compatible server mode
 
 ## Goal
 
-Add a local browser UI for `pkchat` without compromising the CLI/TUI architecture or blocking behavior.
+Add a local OpenAI-compatible HTTP server mode before browser web UI or local agent mode. This mode lets other OpenAI-compatible clients, agents, or chat tools call `pkchat` as a local service and gives `pkchat` a place to expose local conversion workflows through a familiar model API.
 
-`pkchat -w` or `pkchat --web 8080` should launch a local web server at the designated port. If no port is provided, use port `80`. The browser GUI should resemble the text CLI/TUI chat but use standard HTML widgets.
+The browser-based local web UI is postponed. If it is revived later, it should build on the same server/runtime/session/security layers rather than becoming a separate product surface.
+
+Initial server mode is not autonomous agent mode and must not execute shell commands, read arbitrary workspace files, or expose local secrets.
 
 ## Command shape
 
 ```sh
-pkchat -w
-pkchat --web
-pkchat --web 8080
-pkchat --web=8080
-pkchat --web-host 127.0.0.1 --web 8080
-pkchat --web-host 0.0.0.0 --web 8080 --web-allow-lan
+pkchat --server
+pkchat --server 8080
+pkchat --server=8080
+pkchat --server-host 127.0.0.1 --server 8080
+pkchat --server-host 0.0.0.0 --server 8080 --server-allow-lan --server-secret-file secret.txt
 ```
+
+Possible aliases may be added later after the command shape settles. Avoid overloading `--web` for this API server mode.
 
 ## CLI behavior
 
-- [ ] `-w` starts web mode.
-- [ ] `--web` starts web mode on default port `80`.
-- [ ] `--web PORT` and `--web=PORT` start web mode on the selected port.
+- [ ] `--server` starts local OpenAI-compatible server mode.
+- [ ] If no port is provided, default to a high non-privileged local port, not port 80.
 - [ ] Invalid ports produce a specific error.
-- [ ] Permission failure on port 80 produces a clear message and suggests `--web 8080`.
 - [ ] The server binds to `127.0.0.1` by default.
-- [ ] Binding to non-loopback addresses requires an explicit opt-in such as `--web-allow-lan`.
-- [ ] Startup prints the local URL on `stderr`, not `stdout`, so script output remains clean where relevant.
+- [ ] Binding to non-loopback addresses requires explicit opt-in such as `--server-allow-lan`.
+- [ ] Startup prints the local base URL on `stderr`, not `stdout`.
+- [ ] Shutdown cancels active requests and joins runtime jobs cleanly.
 
-## Web UI requirements
+## OpenAI-compatible API surface
 
-Use simple, durable HTML first. Do not start with a large frontend framework.
-
-Required UI elements:
-
-- [ ] Chat history area.
-- [ ] `textarea` for input.
-- [ ] `button` for Send.
-- [ ] `button` for Stop/Cancel.
-- [ ] `button` or link for New chat.
-- [ ] `select` or equivalent for model selection when models are available.
-- [ ] Provider/base URL/settings controls.
-- [ ] Status/error area.
-- [ ] Basic stats area for TTFT, token counts, and token/s when available.
-- [ ] Light/dark mode toggle.
-- [ ] Monospace font by default.
-
-Visual rule: the browser UI should feel like the text UI moved into a page, not like a separate unrelated product.
-
-## HTML/CSS/JS rules
-
-- [ ] Use standard HTML widgets.
-- [ ] Use semantic labels for form controls.
-- [ ] Use a monospace font stack.
-- [ ] Support light and dark mode.
-- [ ] Persist theme preference in browser-local storage if small client-side JS exists.
-- [ ] Do not depend on external CDNs for core functionality.
-- [ ] Keep JavaScript small and auditable.
-- [ ] Escape model output before inserting into the DOM.
-- [ ] Do not render arbitrary HTML from model output as trusted content.
-
-## Server architecture
-
-The web server must use the same core layers as the CLI/TUI:
+Start with the smallest useful compatibility surface:
 
 ```text
-web request/session
-  -> runtime/job layer
-  -> chat/conversation layer
-  -> provider adapter
-  -> http transport
+GET  /v1/models
+POST /v1/chat/completions
+POST /v1/responses, later when the local operation mapping is clear
+```
+
+Initial local pseudo-models:
+
+```text
+html-to-md
+md-to-html
 ```
 
 Requirements:
 
-- [ ] The HTTP accept loop or request dispatcher must not block while a model call is pending.
-- [ ] File processing from the web UI must run as a cancellable runtime job.
-- [ ] Streaming output must be delivered incrementally to the browser.
-- [ ] Use Server-Sent Events or WebSocket for streaming; document the choice in `docs/decisions.md`.
-- [ ] Support cancellation from the browser Stop button.
-- [ ] Keep per-session state isolated.
-- [ ] Clean up sessions after browser disconnect or timeout.
-- [ ] Cleanly close sockets on shutdown.
-- [ ] Release all request buffers, response buffers, session objects, route state, sockets, and streaming state on success, error, disconnect, and cancellation.
+- [ ] `/v1/models` lists local pseudo-models and any configured upstream chat models that are intentionally exposed.
+- [ ] `html-to-md` converts user-supplied HTML to Markdown through the existing conversion code.
+- [ ] `md-to-html` converts user-supplied Markdown to HTML through the existing conversion code.
+- [ ] Chat Completions request parsing accepts ordinary OpenAI-compatible message arrays for conversion inputs.
+- [ ] Conversion responses use OpenAI-compatible response envelopes where practical.
+- [ ] Streaming can be added only after non-streaming compatibility and cleanup paths are tested.
+- [ ] Do not expose arbitrary file conversion by path; clients must send content explicitly.
 
-## Suggested internal routes
+## Authentication and security
 
-The exact route names may change, but keep the API small and documented.
+Server mode needs rudimentary authentication before it listens beyond loopback or exposes upstream model calls.
+
+- [ ] Support a secret string via environment variable, secret file, or generated local token.
+- [ ] Accept the secret through `Authorization: Bearer ...` and document the exact behavior.
+- [ ] Require an explicit secret for LAN-visible binding.
+- [ ] Redact Authorization, cookies, API keys, and configured server secrets from logs and errors.
+- [ ] Disable permissive CORS by default.
+- [ ] Do not expose API keys, config secrets, chat files, or arbitrary local files through the server.
+- [ ] Add request body size limits, response size limits, and timeouts.
+- [ ] Add clear errors for missing, invalid, or malformed authentication.
+
+## Server architecture
+
+The server must use the same core layers as CLI/TUI/editor flows:
 
 ```text
-GET  /                         HTML UI
-GET  /app.css                  CSS, if not embedded
-GET  /app.js                   JS, if not embedded
-GET  /api/models               list models
-GET  /api/chats                list saved chats
-POST /api/chat                 submit a prompt
-POST /api/cancel               cancel active generation
-POST /api/settings             update model/system/temperature/etc.
-GET  /api/events?session=ID    streaming events if using SSE
+server request
+  -> runtime/job layer
+  -> conversion or chat layer
+  -> provider adapter when upstream model calls are enabled
+  -> http transport for upstream requests
 ```
 
-## Security rules
+Requirements:
 
-- [ ] Bind to loopback by default.
-- [ ] Refuse or strongly warn before binding to LAN-visible addresses.
-- [ ] Disable permissive CORS by default.
-- [ ] Do not expose arbitrary filesystem paths.
-- [ ] Do not expose API keys or Authorization headers to the browser.
-- [ ] Redact secrets in server logs.
-- [ ] Use a generated local session token or equivalent protection if listening beyond loopback.
-- [ ] Add basic security headers where practical.
-- [ ] Do not add agent/tool execution to web mode until agent mode has its own sandbox/approval design.
+- [ ] The accept loop or request dispatcher must not block while a conversion or upstream model call runs.
+- [ ] Long-running requests must be cancellable.
+- [ ] Keep per-request state isolated.
+- [ ] Clean up sockets, request buffers, response buffers, parser state, runtime jobs, and conversion state on success, error, disconnect, and cancellation.
+- [ ] Document dependency decisions in `docs/decisions.md` before adding a server library.
+- [ ] Keep browser UI assets out of this milestone except for possible tiny diagnostic responses.
 
 ## Tests
 
-- [ ] Unit test web option parsing.
-- [ ] Unit test port validation.
-- [ ] Unit test route matching.
-- [ ] Unit test HTML escaping.
-- [ ] Unit test theme toggle assets if client JS is testable.
-- [ ] Integration test `GET /` returns usable HTML containing textarea, buttons, and theme toggle.
-- [ ] Integration test `GET /api/models` with mock provider.
-- [ ] Integration test `POST /api/chat` starts a runtime job.
-- [ ] Integration test streaming events reach the browser client incrementally.
-- [ ] Integration test Stop/Cancel cancels the provider request.
-- [ ] Test that slow provider response does not block serving another static/UI request.
-- [ ] Test that slow file processing does not block the web server event loop.
-- [ ] Test browser disconnect cleanup.
-- [ ] Test bind failure and permission-denied errors.
-- [ ] Leak-check server startup/shutdown, one successful chat, one cancelled chat, and one browser disconnect path where supported.
+- [ ] Unit test server option parsing and port validation.
+- [ ] Unit test secret loading, Authorization parsing, and redaction.
+- [ ] Unit test route matching and OpenAI-compatible error envelopes.
+- [ ] Integration test `GET /v1/models` lists `html-to-md` and `md-to-html`.
+- [ ] Integration test `POST /v1/chat/completions` for `html-to-md`.
+- [ ] Integration test `POST /v1/chat/completions` for `md-to-html`.
+- [ ] Test unauthorized and malformed-auth requests.
+- [ ] Test body size limits and malformed JSON.
+- [ ] Test that slow requests do not block another request.
+- [ ] Test client disconnect cleanup and cancellation.
+- [ ] Leak-check startup/shutdown, successful conversion, failed request, unauthorized request, and disconnect paths where supported.
 
 ## Acceptance criteria
 
-- [ ] `pkchat --web 8080` starts a local server and prints the URL.
-- [ ] `pkchat -w` attempts port 80 by default and gives a clear actionable error if binding is not permitted.
-- [ ] The UI contains a chat history, textarea, Send button, Stop button, status area, and light/dark toggle.
-- [ ] The UI uses a monospace font.
-- [ ] A prompt can be sent from the browser to a mock provider and streamed back.
-- [ ] The browser Stop button cancels an active generation.
-- [ ] The server remains responsive while waiting for the provider or processing an input file.
-- [ ] Secrets are not exposed in HTML, JS, JSON responses, logs, or saved chat files.
-- [ ] Leak-check tooling reports no leaks for representative web-mode paths where supported.
+- [ ] `pkchat --server 8080` starts a loopback-only local OpenAI-compatible server and prints the base URL.
+- [ ] `GET /v1/models` returns local conversion pseudo-models.
+- [ ] OpenAI-compatible clients can call `html-to-md` and `md-to-html` through Chat Completions.
+- [ ] LAN binding requires explicit opt-in and a configured secret.
+- [ ] Secrets are not exposed in JSON responses, logs, saved files, or errors.
+- [ ] The server remains responsive during a slow request.
+- [ ] Leak-check tooling reports no leaks for representative server-mode paths where supported.
 
 ---
+
 
 # v1.0 - Local agent mode with sandbox/approval design
 
 ## Goal
 
-Add a deliberately constrained local agent mode after the normal chat, TUI, web, provider, attachment, and benchmark features are stable.
+Add a deliberately constrained local agent mode after the normal chat, TUI, local server, provider, attachment, and benchmark features are stable.
 
 Agent mode must be separate from ordinary chat. It should never silently gain filesystem, network, or shell powers inside normal chat.
 
@@ -1808,7 +1785,7 @@ Every tool must have:
 
 ```text
 Esc pauses agent loop in TUI where detectable.
-/stop pauses or cancels agent loop in REPL/web/TUI.
+/stop pauses or cancels agent loop in REPL/server/future web/TUI surfaces.
 Ctrl+C remains reserved for copy in editor-backed terminal modes.
 ```
 
@@ -1823,11 +1800,11 @@ Ctrl+C remains reserved for copy in editor-backed terminal modes.
 
 ---
 
-# v1.1 - Image generation from CLI, REPL, TUI, and web chat
+# v1.1 - Image generation from CLI, REPL, TUI, and future server/web surfaces
 
 ## Goal
 
-Add first-class image generation that works from non-interactive command-line usage, REPL, full-screen TUI, and local web chat. The feature must use the same provider/profile, runtime/job, cancellation, error-handling, persistence, and credential-redaction layers as text chat where practical.
+Add first-class image generation that works from non-interactive command-line usage, REPL, full-screen TUI, and future server/web surfaces. The feature must use the same provider/profile, runtime/job, cancellation, error-handling, persistence, and credential-redaction layers as text chat where practical.
 
 At minimum, the user must be able to select:
 
@@ -1920,9 +1897,9 @@ Requirements:
 - [ ] The chat history should show a concise generated-image message with prompt, model, dimensions, format, and saved path.
 - [ ] Do not try to render bitmap images directly in the terminal in v1 unless a terminal image protocol is deliberately added and documented.
 
-## Web chat behavior
+## Future server/web behavior
 
-The local web UI should support image generation once web mode exists.
+Future server/web surfaces may support image generation after the local server and postponed browser UI direction is settled.
 
 Minimum controls:
 
@@ -1936,11 +1913,11 @@ Minimum controls:
 
 Requirements:
 
-- [ ] Generation runs through the runtime/job layer and does not block the web server event loop.
-- [ ] Browser UI shows status and errors.
-- [ ] Browser UI shows the saved file path and, where safe, a preview served from a controlled generated-assets route.
-- [ ] Do not expose arbitrary local file paths or directories through the web server.
-- [ ] Do not expose API keys or provider headers to the browser.
+- [ ] Generation runs through the runtime/job layer and does not block the local server or future web event loop.
+- [ ] Future browser UI shows status and errors.
+- [ ] Future browser UI shows the saved file path and, where safe, a preview served from a controlled generated-assets route.
+- [ ] Do not expose arbitrary local file paths or directories through local server or future web routes.
+- [ ] Do not expose API keys or provider headers to browser clients.
 - [ ] Generated image preview routes must only serve files created for the current session or explicitly allowed generated-image directory.
 
 ## Provider architecture
@@ -2075,7 +2052,7 @@ Rules:
 - [ ] Integration test CLI image generation with a mock image provider.
 - [ ] Integration test REPL `/image generate` with a mock provider.
 - [ ] TUI responsiveness test during slow image generation.
-- [ ] Web test for image generation request and cancel once web mode exists.
+- [ ] Future server/web test for image generation request and cancel once those surfaces exist.
 - [ ] Leak-check success, provider error, file write error, and cancellation paths where supported.
 
 ## Acceptance criteria
@@ -2084,7 +2061,7 @@ Rules:
 - [ ] CLI can auto-generate a non-existing output file name in the current directory.
 - [ ] REPL can generate an image through `/image` commands.
 - [ ] TUI can start and cancel image generation without blocking the UI.
-- [ ] Web chat can request image generation and show status/output path after web mode exists.
+- [ ] Future server/web surfaces can request image generation and show status/output path after those surfaces exist.
 - [ ] Provider differences are hidden behind provider adapter APIs.
 - [ ] Existing text chat behavior is unchanged when image generation is not requested.
 - [ ] Generated image files are not overwritten accidentally.
@@ -2225,7 +2202,7 @@ tried base URL: http://localhost:8000/v1
 suggestion: check whether the server expects /v1, /api/v1, or a custom --chat-url
 ```
 
-Web-mode errors should be returned as JSON for API routes and as visible status messages in the browser UI. Do not expose secrets.
+Local server errors should use OpenAI-compatible JSON envelopes where practical. Future web UI errors should be visible in the browser UI. Do not expose secrets.
 
 ## Exit code proposal
 
@@ -2241,7 +2218,7 @@ Web-mode errors should be returned as JSON for API routes and as visible status 
 8   file I/O error
 9   unsupported feature
 10  cancelled by user
-11  web server bind/listen error
+11  local server bind/listen error
 12  internal error
 ```
 
@@ -2252,10 +2229,10 @@ Web-mode errors should be returned as JSON for API routes and as visible status 
 - [ ] `-k` warns unless quiet.
 - [ ] Key files use restrictive permissions when practical.
 - [ ] URL fetch blocks private addresses by default.
-- [ ] Web mode binds to loopback by default.
-- [ ] Web mode does not expose secrets to the browser.
-- [ ] Web mode disables permissive CORS by default.
-- [ ] LAN web mode requires explicit opt-in and extra protection.
+- [ ] Local server and future web mode bind to loopback by default.
+- [ ] Local server and future web mode do not expose secrets to clients.
+- [ ] Local server and future web mode disable permissive CORS by default.
+- [ ] LAN-visible local server or future web mode requires explicit opt-in and extra protection.
 - [ ] Agent mode requires approval before writes/commands/network under default settings.
 - [ ] Shell commands are never auto-executed in normal chat.
 
@@ -2270,7 +2247,7 @@ Web-mode errors should be returned as JSON for API routes and as visible status 
 - [ ] SSE parser chunk boundaries.
 - [ ] Runtime cancellation and event delivery.
 - [ ] TUI responsiveness.
-- [ ] Web server routes and streaming.
+- [ ] Local server routes, OpenAI-compatible envelopes, authentication, and streaming when added.
 - [ ] Unicode input/output.
 - [ ] Persistence and corrupted files.
 - [ ] Credential redaction.
@@ -2284,7 +2261,7 @@ Web-mode errors should be returned as JSON for API routes and as visible status 
 - [ ] README examples.
 - [ ] Provider compatibility matrix.
 - [ ] LM Studio setup notes.
-- [ ] Local web mode usage and security notes.
+- [ ] Local server usage and security notes; postponed web UI notes where relevant.
 - [ ] TUI keybinding caveats.
 - [ ] Config file format.
 - [ ] Chat file schema.
@@ -2304,5 +2281,5 @@ Good later ideas, not current priorities:
 - Import/export formats beyond JSON.
 - Plugin system.
 - Advanced provider-specific tools.
-- Browser-based markdown preview in web mode.
-- Multi-user web mode. This is explicitly not the default local web mode.
+- Browser-based markdown preview in postponed web UI.
+- Multi-user web mode. This is explicitly not the default local server or future local web mode.

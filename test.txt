@@ -1,4 +1,1 @@
-Line 1
-Line 2 ÄÖ
-
-Line 4
+This is scratch.
