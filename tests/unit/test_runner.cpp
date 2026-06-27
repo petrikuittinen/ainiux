@@ -1815,6 +1815,40 @@ void test_editor_assist_helpers() {
           "in-place assist responses strip content tags");
     check(pkchat::editor::trim_assist_inplace_response("plain text without tags") == "plain text without tags",
           "in-place assist responses leave untagged output unchanged");
+    check(pkchat::editor::trim_assist_inplace_response("continued text</content>") == "continued text",
+          "in-place assist responses strip trailing close tag without open tag");
+
+    {
+        pkchat::editor::AssistStreamFilter stream_filter;
+        std::string streamed;
+        streamed += stream_filter.feed("<content>hello");
+        streamed += stream_filter.feed("</content>");
+        streamed += stream_filter.finish();
+        check(streamed == "hello",
+              "streamed assist output strips content wrapper tags");
+    }
+    {
+        pkchat::editor::AssistStreamFilter stream_filter;
+        std::string streamed = stream_filter.feed("continued text</content>");
+        streamed += stream_filter.finish();
+        check(streamed == "continued text",
+              "streamed assist output strips trailing close tag without open tag");
+    }
+    {
+        pkchat::editor::AssistStreamFilter stream_filter;
+        std::string streamed = stream_filter.feed("hello</cont");
+        streamed += stream_filter.feed("ent>");
+        streamed += stream_filter.finish();
+        check(streamed == "hello",
+              "streamed assist output strips a close tag split across chunks");
+    }
+    {
+        pkchat::editor::AssistStreamFilter stream_filter;
+        std::string streamed = stream_filter.feed("plain");
+        streamed += stream_filter.finish();
+        check(streamed == "plain",
+              "streamed assist output leaves untagged text unchanged");
+    }
 
     const pkchat::provider::RequestContext assist_context =
         pkchat::editor::assist_request_context(context, true);

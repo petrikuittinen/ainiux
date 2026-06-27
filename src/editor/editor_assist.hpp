@@ -94,4 +94,22 @@ void start_assist_job(const AiContinueContext& context,
                       runtime::JobHandle& job);
 std::string trim_assist_inplace_response(std::string text);
 
+class AssistStreamFilter {
+   public:
+    std::string feed(const std::string& chunk);
+    std::string finish();
+
+   private:
+    std::string strip_trailing_close_tag(std::string text) const;
+    std::string emit_with_holdback(std::string chunk);
+
+    const std::string open_tag_ = "<content>";
+    const std::string close_tag_ = "</content>";
+    bool decided_ = false;
+    bool stripping_ = false;
+    bool done_ = false;
+    std::string detect_buffer_;
+    std::string holdback_;
+};
+
 }  // namespace pkchat::editor

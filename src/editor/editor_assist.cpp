@@ -138,94 +138,14 @@ std::string strip_assist_content_tags(std::string text) {
     if (text.rfind(open, 0) == 0) {
         text.erase(0, open.size());
         text = trim_ascii_copy(std::move(text));
-        if (text.size() >= close.size() &&
-            text.compare(text.size() - close.size(), close.size(), close) == 0) {
-            text.erase(text.size() - close.size());
-            text = trim_ascii_copy(std::move(text));
-        }
+    }
+    if (text.size() >= close.size() &&
+        text.compare(text.size() - close.size(), close.size(), close) == 0) {
+        text.erase(text.size() - close.size());
+        text = trim_ascii_copy(std::move(text));
     }
     return text;
 }
-
-class AssistContentStripper {
-   public:
-    std::string feed(const std::string& chunk) {
-        if (done_) {
-            return chunk;
-        }
-        if (!decided_) {
-            detect_buffer_ += chunk;
-            if (detect_buffer_.size() < open_tag_.size()) {
-                if (open_tag_.compare(0, detect_buffer_.size(), detect_buffer_) != 0) {
-                    done_ = true;
-                    std::string out = detect_buffer_;
-                    detect_buffer_.clear();
-                    return out;
-                }
-                return "";
-            }
-            if (detect_buffer_.rfind(open_tag_, 0) == 0) {
-                decided_ = true;
-                stripping_ = true;
-                std::string out = detect_buffer_.substr(open_tag_.size());
-                detect_buffer_.clear();
-                return emit_with_holdback(std::move(out));
-            }
-            done_ = true;
-            std::string out = detect_buffer_;
-            detect_buffer_.clear();
-            return out;
-        }
-        if (!stripping_) {
-            return chunk;
-        }
-        return emit_with_holdback(chunk);
-    }
-
-    std::string finish() {
-        if (!decided_ && !detect_buffer_.empty()) {
-            decided_ = true;
-            return detect_buffer_;
-        }
-        std::string out = holdback_;
-        holdback_.clear();
-        if (stripping_) {
-            out = strip_trailing_close_tag(std::move(out));
-        }
-        done_ = true;
-        return out;
-    }
-
-   private:
-    static std::string strip_trailing_close_tag(std::string text) {
-        const std::string close = kContentCloseTag;
-        if (text.size() >= close.size() &&
-            text.compare(text.size() - close.size(), close.size(), close) == 0) {
-            text.erase(text.size() - close.size());
-        }
-        return text;
-    }
-
-    std::string emit_with_holdback(std::string chunk) {
-        std::string combined = holdback_ + chunk;
-        holdback_.clear();
-        if (combined.size() > close_tag_.size()) {
-            holdback_ = combined.substr(combined.size() - close_tag_.size());
-            combined.resize(combined.size() - close_tag_.size());
-            return combined;
-        }
-        holdback_ = std::move(combined);
-        return "";
-    }
-
-    const std::string open_tag_ = kContentOpenTag;
-    const std::string close_tag_ = kContentCloseTag;
-    bool decided_ = false;
-    bool stripping_ = false;
-    bool done_ = false;
-    std::string detect_buffer_;
-    std::string holdback_;
-};
 
 void push_visible_delta(runtime::EventQueue<ContinueEvent>& events, const std::string& visible) {
     if (visible.empty()) {
@@ -238,6 +158,86 @@ void push_visible_delta(runtime::EventQueue<ContinueEvent>& events, const std::s
 }
 
 }  // namespace
+
+std::string AssistStreamFilter::strip_trailing_close_tag(std::string text) const {
+    auto trim_edges = [](std::string value) {
+        auto is_ws = [](unsigned char ch) {
+            return ch == ' ' || ch == '\t' || ch == '\r' || ch == '\n';
+        };
+        while (!value.empty() && is_ws(static_cast<unsigned char>(value.front()))) {
+            value.erase(value.begin());
+        }
+        while (!value.empty() && is_ws(static_cast<unsigned char>(value.back()))) {
+            value.pop_back();
+        }
+        return value;
+    };
+    text = trim_edges(std::move(text));
+    if (text.size() >= close_tag_.size() &&
+        text.compare(text.size() - close_tag_.size(), close_tag_.size(), close_tag_) == 0) {
+        text.erase(text.size() - close_tag_.size());
+        text = trim_edges(std::move(text));
+    }
+    return text;
+}
+
+std::string AssistStreamFilter::emit_with_holdback(std::string chunk) {
+    std::string combined = holdback_ + chunk;
+    holdback_.clear();
+    if (combined.size() > close_tag_.size()) {
+        holdback_ = combined.substr(combined.size() - close_tag_.size());
+        combined.resize(combined.size() - close_tag_.size());
+        return combined;
+    }
+    holdback_ = std::move(combined);
+    return "";
+}
+
+std::string AssistStreamFilter::feed(const std::string& chunk) {
+    if (done_) {
+        return emit_with_holdback(chunk);
+    }
+    if (!decided_) {
+        detect_buffer_ += chunk;
+        if (detect_buffer_.size() < open_tag_.size()) {
+            if (open_tag_.compare(0, detect_buffer_.size(), detect_buffer_) != 0) {
+                decided_ = true;
+                stripping_ = false;
+                std::string out = detect_buffer_;
+                detect_buffer_.clear();
+                return emit_with_holdback(std::move(out));
+            }
+            return "";
+        }
+        if (detect_buffer_.rfind(open_tag_, 0) == 0) {
+            decided_ = true;
+            stripping_ = true;
+            std::string out = detect_buffer_.substr(open_tag_.size());
+            detect_buffer_.clear();
+            return emit_with_holdback(std::move(out));
+        }
+        decided_ = true;
+        stripping_ = false;
+        std::string out = detect_buffer_;
+        detect_buffer_.clear();
+        return emit_with_holdback(std::move(out));
+    }
+    return emit_with_holdback(chunk);
+}
+
+std::string AssistStreamFilter::finish() {
+    std::string out;
+    if (!decided_ && !detect_buffer_.empty()) {
+        decided_ = true;
+        out = emit_with_holdback(std::move(detect_buffer_));
+        detect_buffer_.clear();
+    }
+    out += holdback_;
+    holdback_.clear();
+    out = strip_trailing_close_tag(std::move(out));
+    done_ = true;
+    return out;
+}
 
 EditorAssistPrompts default_editor_assist_prompts() {
     EditorAssistPrompts prompts;
@@ -561,7 +561,7 @@ void start_assist_job(const AiContinueContext& context,
     job.start([job_context, messages, stream, &events](runtime::CancellationToken token) mutable {
         provider::ChatResult chat;
         pkchat::output::ThinkingTraceSplitter splitter;
-        AssistContentStripper content_stripper;
+        AssistStreamFilter content_stripper;
         bool pushed_thinking = false;
         bool pushed_writing = false;
         auto push_thinking = [&]() {
