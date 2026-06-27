@@ -605,6 +605,7 @@ struct MinibufferState {
 
 struct PendingAssist {
     AssistCommandKind kind = AssistCommandKind::Unknown;
+    size_t command_index = 0;
     std::string custom_prompt;
 };
 
@@ -2493,6 +2494,7 @@ int run_editor(const std::string& path,
     };
 
     auto start_assist = [&](AssistCommandKind kind,
+                            size_t command_index,
                             std::optional<AssistScope> scope,
                             const std::string& custom_prompt,
                             std::optional<AssistPromptMode> prompt_mode) {
@@ -2514,7 +2516,7 @@ int run_editor(const std::string& path,
         }
 
         AssistExecution execution = build_assist_execution(
-            state, *ai_continue, kind, scope, custom_prompt, prompt_mode);
+            state, *ai_continue, kind, command_index, scope, custom_prompt, prompt_mode);
         if (!execution.ok) {
             minibuffer_message(minibuffer, execution.error_message);
             return;
@@ -2538,20 +2540,30 @@ int run_editor(const std::string& path,
     };
 
     auto submit_assist_command = [&]() {
-        const ParsedAssistCommand parsed = parse_assist_command(minibuffer.input);
+        const ParsedAssistCommand parsed =
+            parse_assist_command(minibuffer.input, ai_continue == nullptr ? default_editor_assist_config()
+                                                                          : ai_continue->assist_config);
         if (!parsed.ok) {
             minibuffer_message(minibuffer, parsed.error_message);
             return;
         }
-        if (parsed.kind == AssistCommandKind::Spell || parsed.kind == AssistCommandKind::Grammar) {
-            if (!parsed.scope.has_value()) {
-                pending_assist.kind = parsed.kind;
-                start_minibuffer(minibuffer,
-                                 MinibufferAction::AssistScopeChoice,
-                                 assist_scope_prompt(parsed.kind));
+        if (parsed.kind == AssistCommandKind::Configured) {
+            const EditorAssistConfig& assist_config =
+                ai_continue == nullptr ? default_editor_assist_config() : ai_continue->assist_config;
+            if (parsed.command_index >= assist_config.commands.size()) {
+                minibuffer_message(minibuffer, "Configured assist command index is out of range");
                 return;
             }
-            start_assist(parsed.kind, parsed.scope, "", std::nullopt);
+            const EditorAssistCommand& command = assist_config.commands[parsed.command_index];
+            if (assist_command_requires_scope(command) && !parsed.scope.has_value()) {
+                pending_assist.kind = AssistCommandKind::Configured;
+                pending_assist.command_index = parsed.command_index;
+                start_minibuffer(minibuffer,
+                                 MinibufferAction::AssistScopeChoice,
+                                 assist_scope_prompt(command));
+                return;
+            }
+            start_assist(AssistCommandKind::Configured, parsed.command_index, parsed.scope, "", std::nullopt);
             return;
         }
         if (parsed.kind == AssistCommandKind::Prompt) {
@@ -2566,10 +2578,21 @@ int run_editor(const std::string& path,
             quit = true;
             return;
         }
-        start_assist(parsed.kind, parsed.scope, parsed.custom_prompt, std::nullopt);
+        start_assist(parsed.kind, parsed.command_index, parsed.scope, parsed.custom_prompt, std::nullopt);
     };
 
-    auto start_continue = [&]() { start_assist(AssistCommandKind::Continue, std::nullopt, "", std::nullopt); };
+    auto start_continue = [&]() {
+        if (ai_continue == nullptr) {
+            return;
+        }
+        const std::optional<size_t> command_index =
+            assist_command_index(ai_continue->assist_config, "/continue");
+        if (!command_index.has_value()) {
+            minibuffer_message(minibuffer, "Configured editor assist commands are missing /continue");
+            return;
+        }
+        start_assist(AssistCommandKind::Configured, *command_index, std::nullopt, "", std::nullopt);
+    };
 
     auto handle_key = [&](unsigned char ch) {
         if (assist_session.active) {
@@ -2587,8 +2610,10 @@ int run_editor(const std::string& path,
             }
             if (minibuffer.action == MinibufferAction::AssistCommand) {
                 if (ch == '\t') {
-                    const AssistCompletionResult result =
-                        complete_assist_command(minibuffer.input, assist_completer);
+                    const AssistCompletionResult result = complete_assist_command(
+                        minibuffer.input,
+                        assist_completer,
+                        ai_continue == nullptr ? default_editor_assist_config() : ai_continue->assist_config);
                     minibuffer.message = assist_completion_status(result);
                     return;
                 }
@@ -2612,25 +2637,36 @@ int run_editor(const std::string& path,
             }
             if (minibuffer.action == MinibufferAction::AssistScopeChoice) {
                 if (ch == 's' || ch == 'S') {
-                    start_assist(pending_assist.kind, AssistScope::Selection, "", std::nullopt);
+                    start_assist(pending_assist.kind,
+                                 pending_assist.command_index,
+                                 AssistScope::Selection,
+                                 "",
+                                 std::nullopt);
                 } else if (ch == 'a' || ch == 'A') {
-                    start_assist(pending_assist.kind, AssistScope::All, "", std::nullopt);
+                    start_assist(pending_assist.kind,
+                                 pending_assist.command_index,
+                                 AssistScope::All,
+                                 "",
+                                 std::nullopt);
                 }
                 return;
             }
             if (minibuffer.action == MinibufferAction::AssistPromptMode) {
                 if (ch == 'c' || ch == 'C') {
                     start_assist(pending_assist.kind,
+                                 pending_assist.command_index,
                                  std::nullopt,
                                  pending_assist.custom_prompt,
                                  AssistPromptMode::Continue);
                 } else if (ch == 's' || ch == 'S') {
                     start_assist(pending_assist.kind,
+                                 pending_assist.command_index,
                                  std::nullopt,
                                  pending_assist.custom_prompt,
                                  AssistPromptMode::Selection);
                 } else if (ch == 'a' || ch == 'A') {
                     start_assist(pending_assist.kind,
+                                 pending_assist.command_index,
                                  std::nullopt,
                                  pending_assist.custom_prompt,
                                  AssistPromptMode::All);

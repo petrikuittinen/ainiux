@@ -121,8 +121,21 @@ void start_continue_job(const AiContinueContext& context,
                         runtime::JobHandle& job) {
     EditorState continue_state = EditorState::from_text(prefix);
     continue_state.cursor = continue_state.text.size();
-    AssistExecution execution = build_assist_execution(
-        continue_state, context, AssistCommandKind::Continue, std::nullopt, "", std::nullopt);
+    const std::optional<size_t> command_index = assist_command_index(context.assist_config, "/continue");
+    if (!command_index.has_value()) {
+        ContinueEvent event;
+        event.type = ContinueEventType::Error;
+        event.error = {ErrorCode::Internal, "configured editor assist commands are missing /continue"};
+        events.push(std::move(event));
+        return;
+    }
+    AssistExecution execution = build_assist_execution(continue_state,
+                                                       context,
+                                                       AssistCommandKind::Configured,
+                                                       *command_index,
+                                                       std::nullopt,
+                                                       "",
+                                                       std::nullopt);
     if (!execution.ok) {
         ContinueEvent event;
         event.type = ContinueEventType::Error;

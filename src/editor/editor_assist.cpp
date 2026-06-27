@@ -1,5 +1,6 @@
 #include "editor/editor_assist.hpp"
 
+#include "editor/editor_prompts.hpp"
 #include "output/thinking.hpp"
 
 #include <algorithm>
@@ -78,42 +79,27 @@ std::optional<AssistScope> parse_scope_token(const std::string& token) {
     return std::nullopt;
 }
 
-std::string task_prompt_for(AssistCommandKind kind, const EditorAssistPrompts& prompts) {
-    switch (kind) {
-        case AssistCommandKind::Spell:
-            return prompts.spell;
-        case AssistCommandKind::Grammar:
-            return prompts.grammar;
-        case AssistCommandKind::Continue:
-            return prompts.continue_prompt;
-        case AssistCommandKind::Fact:
-            return prompts.fact;
-        default:
-            return "";
-    }
+bool command_has_mode(const EditorAssistCommand& command, AssistCommandMode mode) {
+    return std::find(command.modes.begin(), command.modes.end(), mode) != command.modes.end();
 }
 
-std::string command_name_for(AssistCommandKind kind) {
-    switch (kind) {
-        case AssistCommandKind::Spell:
-            return "/spell";
-        case AssistCommandKind::Grammar:
-            return "/grammar";
-        case AssistCommandKind::Continue:
-            return "/continue";
-        case AssistCommandKind::Fact:
-            return "/fact";
-        case AssistCommandKind::Prompt:
-            return "/prompt";
-        case AssistCommandKind::Quit:
-            return "/quit";
-        default:
-            return "command";
+std::string normalized_assist_command_name(std::string command) {
+    command = trim_ascii_copy(std::move(command));
+    while (!command.empty() && command.front() == '/') {
+        command.erase(command.begin());
     }
+    return lower_ascii_copy(std::move(command));
+}
+
+std::string command_display_name(const EditorAssistCommand& command) {
+    if (!command.command.empty() && command.command.front() == '/') {
+        return command.command;
+    }
+    return "/" + command.command;
 }
 
 std::string build_assist_system_prompt(const AiContinueContext& context, const std::string& task_prompt) {
-    std::string system = task_prompt + "\n\n" + context.prompts.behavior_rules;
+    std::string system = task_prompt + "\n\n" + context.assist_config.behavior_rules;
     if (!context.request.options.system.empty()) {
         system = context.request.options.system + "\n\n" + system;
     }
@@ -239,29 +225,64 @@ std::string AssistStreamFilter::finish() {
     return out;
 }
 
-EditorAssistPrompts default_editor_assist_prompts() {
-    EditorAssistPrompts prompts;
-    prompts.behavior_rules = kDefaultAssistBehaviorRules;
-    prompts.spell = kDefaultAssistSpellPrompt;
-    prompts.grammar = kDefaultAssistGrammarPrompt;
-    prompts.continue_prompt = kDefaultAssistContinuePrompt;
-    prompts.fact = kDefaultAssistFactPrompt;
-    return prompts;
+EditorAssistConfig default_editor_assist_config() {
+    EditorAssistConfig config;
+    config.behavior_rules = kDefaultAssistBehaviorRules;
+    config.commands = {
+        {"/spell", {AssistCommandMode::Selection, AssistCommandMode::All}, kDefaultAssistSpellPrompt},
+        {"/grammar", {AssistCommandMode::Selection, AssistCommandMode::All}, kDefaultAssistGrammarPrompt},
+        {"/continue", {AssistCommandMode::Continue}, kDefaultAssistContinuePrompt},
+        {"/fact", {AssistCommandMode::Fact}, kDefaultAssistFactPrompt},
+    };
+    return config;
 }
 
-const std::vector<std::string>& assist_command_completions() {
-    static const std::vector<std::string> commands = {
-        "/spell",
-        "/spell all",
-        "/spell selection",
-        "/grammar",
-        "/grammar all",
-        "/grammar selection",
-        "/continue",
-        "/fact",
-        "/prompt ",
-        "/quit",
-    };
+const EditorAssistCommand* find_assist_command(const EditorAssistConfig& config, const std::string& command) {
+    const std::optional<size_t> index = assist_command_index(config, command);
+    if (!index.has_value()) {
+        return nullptr;
+    }
+    return &config.commands[*index];
+}
+
+std::optional<size_t> assist_command_index(const EditorAssistConfig& config, const std::string& command) {
+    const std::string normalized = normalized_assist_command_name(command);
+    if (normalized.empty()) {
+        return std::nullopt;
+    }
+    for (size_t i = 0; i < config.commands.size(); ++i) {
+        if (normalized_assist_command_name(config.commands[i].command) == normalized) {
+            return i;
+        }
+    }
+    return std::nullopt;
+}
+
+bool assist_command_requires_scope(const EditorAssistCommand& command) {
+    return command_has_mode(command, AssistCommandMode::Selection) ||
+           command_has_mode(command, AssistCommandMode::All);
+}
+
+bool assist_command_runs_without_scope(const EditorAssistCommand& command) {
+    if (command.modes.size() != 1) {
+        return false;
+    }
+    const AssistCommandMode mode = command.modes.front();
+    return mode == AssistCommandMode::Continue || mode == AssistCommandMode::Fact;
+}
+
+std::vector<std::string> assist_command_completions(const EditorAssistConfig& config) {
+    std::vector<std::string> commands;
+    for (const EditorAssistCommand& command : config.commands) {
+        const std::string name = command_display_name(command);
+        commands.push_back(name);
+        if (assist_command_requires_scope(command)) {
+            commands.push_back(name + " all");
+            commands.push_back(name + " selection");
+        }
+    }
+    commands.push_back("/prompt ");
+    commands.push_back("/quit");
     return commands;
 }
 
@@ -286,7 +307,9 @@ std::string assist_completion_status(const AssistCompletionResult& result) {
     return std::to_string(result.match_count) + " commands match; Tab again to cycle";
 }
 
-AssistCompletionResult complete_assist_command(std::string& input, AssistCompleterState& state) {
+AssistCompletionResult complete_assist_command(std::string& input,
+                                               AssistCompleterState& state,
+                                               const EditorAssistConfig& config) {
     AssistCompletionResult result;
     result.handled = true;
 
@@ -317,7 +340,7 @@ AssistCompletionResult complete_assist_command(std::string& input, AssistComplet
     state.candidates.clear();
 
     const std::string token = input;
-    for (const std::string& command : assist_command_completions()) {
+    for (const std::string& command : assist_command_completions(config)) {
         if (command.compare(0, token.size(), token) == 0) {
             state.candidates.push_back(command);
         }
@@ -345,7 +368,7 @@ AssistCompletionResult complete_assist_command(std::string& input, AssistComplet
     return result;
 }
 
-ParsedAssistCommand parse_assist_command(const std::string& line) {
+ParsedAssistCommand parse_assist_command(const std::string& line, const EditorAssistConfig& config) {
     ParsedAssistCommand parsed;
     const std::string trimmed = trim_ascii_copy(line);
     if (trimmed.empty() || trimmed[0] != '/') {
@@ -358,10 +381,8 @@ ParsedAssistCommand parse_assist_command(const std::string& line) {
     while (index < trimmed.size() && !is_token_separator(trimmed[index])) {
         ++index;
     }
-    std::string command = lower_ascii_copy(trimmed.substr(command_start, index - command_start));
-    while (!command.empty() && command.front() == '/') {
-        command.erase(command.begin());
-    }
+    const std::string command_token = trimmed.substr(command_start, index - command_start);
+    std::string command = normalized_assist_command_name(command_token);
     if (command.empty()) {
         parsed.error_message = "Command name is required after /";
         return parsed;
@@ -371,27 +392,7 @@ ParsedAssistCommand parse_assist_command(const std::string& line) {
     }
     const std::string remainder = trimmed.substr(index);
 
-    if (command == "spell") {
-        parsed.kind = AssistCommandKind::Spell;
-    } else if (command == "grammar") {
-        parsed.kind = AssistCommandKind::Grammar;
-    } else if (command == "continue") {
-        parsed.kind = AssistCommandKind::Continue;
-        if (!remainder.empty()) {
-            parsed.error_message = "/continue does not take arguments";
-            return parsed;
-        }
-        parsed.ok = true;
-        return parsed;
-    } else if (command == "fact") {
-        parsed.kind = AssistCommandKind::Fact;
-        if (!remainder.empty()) {
-            parsed.error_message = "/fact does not take arguments";
-            return parsed;
-        }
-        parsed.ok = true;
-        return parsed;
-    } else if (command == "quit") {
+    if (command == "quit") {
         parsed.kind = AssistCommandKind::Quit;
         if (!remainder.empty()) {
             parsed.error_message = "/quit does not take arguments";
@@ -399,7 +400,8 @@ ParsedAssistCommand parse_assist_command(const std::string& line) {
         }
         parsed.ok = true;
         return parsed;
-    } else if (command == "prompt") {
+    }
+    if (command == "prompt") {
         parsed.kind = AssistCommandKind::Prompt;
         parsed.custom_prompt = remainder;
         if (parsed.custom_prompt.empty()) {
@@ -408,37 +410,63 @@ ParsedAssistCommand parse_assist_command(const std::string& line) {
         }
         parsed.ok = true;
         return parsed;
-    } else {
-        parsed.error_message = "Unknown command: /" + command;
-        return parsed;
     }
 
-    if (remainder.empty()) {
+    for (size_t i = 0; i < config.commands.size(); ++i) {
+        if (normalized_assist_command_name(config.commands[i].command) != command) {
+            continue;
+        }
+        parsed.kind = AssistCommandKind::Configured;
+        parsed.command_index = i;
+        const EditorAssistCommand& entry = config.commands[i];
+
+        if (remainder.empty()) {
+            if (assist_command_runs_without_scope(entry) || assist_command_requires_scope(entry)) {
+                parsed.ok = true;
+                return parsed;
+            }
+            parsed.error_message = command_display_name(entry) + " requires a mode argument";
+            return parsed;
+        }
+
+        if (assist_command_runs_without_scope(entry)) {
+            parsed.error_message = command_display_name(entry) + " does not take arguments";
+            return parsed;
+        }
+
+        const size_t arg_end = remainder.find_first_of(" \t");
+        const std::string arg = arg_end == std::string::npos ? remainder : remainder.substr(0, arg_end);
+        const std::string trailing =
+            arg_end == std::string::npos ? "" : trim_ascii_copy(remainder.substr(arg_end + 1));
+        if (!trailing.empty()) {
+            parsed.error_message = command_display_name(entry) + " has too many arguments";
+            return parsed;
+        }
+
+        const std::optional<AssistScope> scope = parse_scope_token(arg);
+        if (!scope.has_value()) {
+            parsed.error_message = command_display_name(entry) + " scope must be all or selection";
+            return parsed;
+        }
+        if (*scope == AssistScope::Selection && !command_has_mode(entry, AssistCommandMode::Selection)) {
+            parsed.error_message = command_display_name(entry) + " does not support selection scope";
+            return parsed;
+        }
+        if (*scope == AssistScope::All && !command_has_mode(entry, AssistCommandMode::All)) {
+            parsed.error_message = command_display_name(entry) + " does not support all scope";
+            return parsed;
+        }
+        parsed.scope = scope;
         parsed.ok = true;
         return parsed;
     }
 
-    const size_t arg_end = remainder.find_first_of(" \t");
-    const std::string arg = arg_end == std::string::npos ? remainder : remainder.substr(0, arg_end);
-    const std::string trailing =
-        arg_end == std::string::npos ? "" : trim_ascii_copy(remainder.substr(arg_end + 1));
-    if (!trailing.empty()) {
-        parsed.error_message = command_name_for(parsed.kind) + " has too many arguments";
-        return parsed;
-    }
-
-    const std::optional<AssistScope> scope = parse_scope_token(arg);
-    if (!scope.has_value()) {
-        parsed.error_message = command_name_for(parsed.kind) + " scope must be all or selection";
-        return parsed;
-    }
-    parsed.scope = scope;
-    parsed.ok = true;
+    parsed.error_message = "Unknown command: /" + command;
     return parsed;
 }
 
-std::string assist_scope_prompt(AssistCommandKind kind) {
-    return command_name_for(kind) + " for selection (s), all (a)";
+std::string assist_scope_prompt(const EditorAssistCommand& command) {
+    return command_display_name(command) + " for selection (s), all (a)";
 }
 
 std::string assist_prompt_mode_message() {
@@ -448,6 +476,7 @@ std::string assist_prompt_mode_message() {
 AssistExecution build_assist_execution(const EditorState& state,
                                        const AiContinueContext& context,
                                        AssistCommandKind kind,
+                                       size_t command_index,
                                        std::optional<AssistScope> scope,
                                        const std::string& custom_prompt,
                                        std::optional<AssistPromptMode> prompt_mode) {
@@ -460,42 +489,55 @@ AssistExecution build_assist_execution(const EditorState& state,
         return execution;
     };
 
-    if (kind == AssistCommandKind::Continue) {
-        execution.stream = true;
-        execution.edit_kind = AssistEditKind::StreamInsert;
-        execution.messages =
-            build_messages(context, context.prompts.continue_prompt, prefix);
-        execution.ok = true;
-        return execution;
-    }
-
-    if (kind == AssistCommandKind::Fact) {
-        execution.stream = true;
-        execution.edit_kind = AssistEditKind::StreamInsert;
-        const std::string source =
-            state.selection.has_range() ? state.selected_text() : prefix;
-        execution.messages = build_messages(context, context.prompts.fact, source);
-        execution.ok = true;
-        return execution;
-    }
-
-    if (kind == AssistCommandKind::Spell || kind == AssistCommandKind::Grammar) {
-        if (!scope.has_value()) {
-            return fail("Missing scope for " + command_name_for(kind));
+    if (kind == AssistCommandKind::Configured) {
+        if (command_index >= context.assist_config.commands.size()) {
+            return fail("Configured assist command index is out of range");
         }
-        const std::string task = task_prompt_for(kind, context.prompts);
+        const EditorAssistCommand& command = context.assist_config.commands[command_index];
+        const std::string name = command_display_name(command);
+
+        if (command_has_mode(command, AssistCommandMode::Continue) &&
+            (!scope.has_value() || assist_command_runs_without_scope(command))) {
+            execution.stream = true;
+            execution.edit_kind = AssistEditKind::StreamInsert;
+            execution.messages = build_messages(context, command.prompt, prefix);
+            execution.ok = true;
+            return execution;
+        }
+
+        if (command_has_mode(command, AssistCommandMode::Fact) &&
+            (!scope.has_value() || assist_command_runs_without_scope(command))) {
+            execution.stream = true;
+            execution.edit_kind = AssistEditKind::StreamInsert;
+            const std::string source =
+                state.selection.has_range() ? state.selected_text() : prefix;
+            execution.messages = build_messages(context, command.prompt, source);
+            execution.ok = true;
+            return execution;
+        }
+
+        if (!scope.has_value()) {
+            return fail("Missing scope for " + name);
+        }
+
         if (*scope == AssistScope::Selection) {
+            if (!command_has_mode(command, AssistCommandMode::Selection)) {
+                return fail(name + " does not support selection scope");
+            }
             if (!state.selection.has_range()) {
-                return fail(command_name_for(kind) + " selection requires an active selection");
+                return fail(name + " selection requires an active selection");
             }
             execution.replace_start = state.selection.start();
             execution.replace_count = state.selection.end() - state.selection.start();
             execution.messages =
-                build_messages(context, task, state.selected_text());
+                build_messages(context, command.prompt, state.selected_text());
         } else {
+            if (!command_has_mode(command, AssistCommandMode::All)) {
+                return fail(name + " does not support all scope");
+            }
             execution.replace_start = 0;
             execution.replace_count = state.text.size();
-            execution.messages = build_messages(context, task, state.text.str());
+            execution.messages = build_messages(context, command.prompt, state.text.str());
         }
         execution.stream = false;
         execution.edit_kind = AssistEditKind::ReplaceInPlace;

@@ -1,5 +1,7 @@
 #include "config/config.hpp"
 
+#include "editor/editor_prompts.hpp"
+
 #include <array>
 #include <cerrno>
 #include <cmath>
@@ -373,11 +375,17 @@ class Parser {
    private:
     std::string input_;
     std::string source_path_;
+    std::map<std::string, size_t> repeatable_section_next_instance_;
+    std::map<std::string, size_t> repeatable_section_current_instance_;
+
+    static bool is_repeatable_section(const std::string& name) {
+        return name == "command";
+    }
 
     Error parse_line(const std::string& line,
                      size_t line_number,
                      std::string& section,
-                     Document& document) const {
+                     Document& document) {
         const size_t content = first_non_space(line);
         if (content == line.size() || line[content] == '#') {
             return ok_error();
@@ -393,6 +401,9 @@ class Parser {
                 return parse_error(source_path_, line_number, content + 2, "invalid section name");
             }
             section = name;
+            if (is_repeatable_section(name)) {
+                repeatable_section_current_instance_[name] = repeatable_section_next_instance_[name]++;
+            }
             return ok_error();
         }
 
@@ -416,7 +427,17 @@ class Parser {
             return err;
         }
 
-        const std::string qualified = section.empty() ? key : section + "." + key;
+        std::string qualified;
+        if (is_repeatable_section(section)) {
+            const auto current = repeatable_section_current_instance_.find(section);
+            if (current == repeatable_section_current_instance_.end()) {
+                return parse_error(source_path_, line_number, content + 1,
+                                   "repeatable section [" + section + "] requires a section header before keys");
+            }
+            qualified = section + "." + std::to_string(current->second) + "." + key;
+        } else {
+            qualified = section.empty() ? key : section + "." + key;
+        }
         const auto duplicate = document.entries.find(qualified);
         if (duplicate != document.entries.end()) {
             const SourceLocation& previous = duplicate->second.source;
@@ -582,6 +603,191 @@ bool absolute_path(const std::string& path) {
 std::string environment_value(const char* name) {
     const char* value = std::getenv(name);
     return value == nullptr ? std::string() : std::string(value);
+}
+
+std::string trim_config_ascii(std::string text) {
+    auto is_ws = [](unsigned char ch) {
+        return ch == ' ' || ch == '\t' || ch == '\r' || ch == '\n';
+    };
+    while (!text.empty() && is_ws(static_cast<unsigned char>(text.front()))) {
+        text.erase(text.begin());
+    }
+    while (!text.empty() && is_ws(static_cast<unsigned char>(text.back()))) {
+        text.pop_back();
+    }
+    return text;
+}
+
+std::string lower_config_ascii(std::string text) {
+    for (char& ch : text) {
+        ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+    }
+    return text;
+}
+
+pkchat::editor::EditorAssistCommand* find_assist_command_by_name(pkchat::editor::EditorAssistConfig& config,
+                                                                const std::string& command) {
+    std::string normalized = lower_config_ascii(trim_config_ascii(command));
+    while (!normalized.empty() && normalized.front() == '/') {
+        normalized.erase(normalized.begin());
+    }
+    for (pkchat::editor::EditorAssistCommand& entry : config.commands) {
+        std::string entry_name = lower_config_ascii(trim_config_ascii(entry.command));
+        while (!entry_name.empty() && entry_name.front() == '/') {
+            entry_name.erase(entry_name.begin());
+        }
+        if (entry_name == normalized) {
+            return &entry;
+        }
+    }
+    return nullptr;
+}
+
+Error parse_assist_command_modes(const Entry& entry, std::vector<pkchat::editor::AssistCommandMode>& modes) {
+    Error err = require_type(entry, Value::Type::String);
+    if (!err.ok()) {
+        return err;
+    }
+    modes.clear();
+    std::string remaining = entry.value.string;
+    while (!remaining.empty()) {
+        const size_t comma = remaining.find(',');
+        std::string token = trim_config_ascii(comma == std::string::npos ? remaining
+                                                                         : remaining.substr(0, comma));
+        remaining = comma == std::string::npos ? "" : remaining.substr(comma + 1);
+        token = lower_config_ascii(std::move(token));
+        if (token.empty()) {
+            continue;
+        }
+        if (token == "continue") {
+            modes.push_back(pkchat::editor::AssistCommandMode::Continue);
+        } else if (token == "selection") {
+            modes.push_back(pkchat::editor::AssistCommandMode::Selection);
+        } else if (token == "all") {
+            modes.push_back(pkchat::editor::AssistCommandMode::All);
+        } else if (token == "fact") {
+            modes.push_back(pkchat::editor::AssistCommandMode::Fact);
+        } else {
+            return schema_error(entry, "expected continue, selection, all, or fact");
+        }
+    }
+    if (modes.empty()) {
+        return schema_error(entry, "expected at least one mode");
+    }
+    return ok_error();
+}
+
+Error validate_assist_command_string(const Entry& entry, std::string& command) {
+    Error err = require_type(entry, Value::Type::String);
+    if (!err.ok()) {
+        return err;
+    }
+    command = trim_config_ascii(entry.value.string);
+    if (command.empty()) {
+        return schema_error(entry, "command string must not be empty");
+    }
+    if (command.front() != '/') {
+        command.insert(command.begin(), '/');
+    }
+    std::string normalized = command;
+    normalized.erase(normalized.begin());
+    if (normalized.empty()) {
+        return schema_error(entry, "command string must include a name after /");
+    }
+    return ok_error();
+}
+
+void merge_assist_command(pkchat::editor::EditorAssistConfig& config, pkchat::editor::EditorAssistCommand command) {
+    if (pkchat::editor::EditorAssistCommand* existing = find_assist_command_by_name(config, command.command)) {
+        *existing = std::move(command);
+        return;
+    }
+    config.commands.push_back(std::move(command));
+}
+
+Error apply_configured_assist_commands(const Document& document, cli::Options& candidate) {
+    struct PartialCommand {
+        std::optional<std::string> string;
+        std::optional<std::vector<pkchat::editor::AssistCommandMode>> modes;
+        std::optional<std::string> prompt;
+        SourceLocation source;
+    };
+
+    std::map<size_t, PartialCommand> partial_commands;
+    for (const auto& item : document.entries) {
+        const std::string& name = item.first;
+        if (name.rfind("command.", 0) != 0) {
+            continue;
+        }
+        const std::string tail = name.substr(std::string("command.").size());
+        const size_t dot = tail.find('.');
+        if (dot == std::string::npos) {
+            continue;
+        }
+        size_t index = 0;
+        try {
+            index = static_cast<size_t>(std::stoul(tail.substr(0, dot)));
+        } catch (const std::exception&) {
+            continue;
+        }
+        const std::string key = tail.substr(dot + 1);
+        PartialCommand& partial = partial_commands[index];
+        if (partial.source.path.empty()) {
+            partial.source = item.second.source;
+        }
+        const Entry& entry = item.second;
+        if (key == "string") {
+            std::string command;
+            Error err = validate_assist_command_string(entry, command);
+            if (!err.ok()) {
+                return err;
+            }
+            partial.string = std::move(command);
+        } else if (key == "modes") {
+            std::vector<pkchat::editor::AssistCommandMode> modes;
+            Error err = parse_assist_command_modes(entry, modes);
+            if (!err.ok()) {
+                return err;
+            }
+            partial.modes = std::move(modes);
+        } else if (key == "prompt") {
+            Error err = require_type(entry, Value::Type::String);
+            if (!err.ok()) {
+                return err;
+            }
+            partial.prompt = trim_config_ascii(entry.value.string);
+            if (partial.prompt->empty()) {
+                return schema_error(entry, "prompt must not be empty");
+            }
+        } else {
+            return schema_error(entry, "unknown [command] key; expected string, modes, or prompt");
+        }
+    }
+
+    for (const auto& item : partial_commands) {
+        const PartialCommand& partial = item.second;
+        if (!partial.string.has_value()) {
+            return {ErrorCode::Config,
+                    partial.source.path + ":" + std::to_string(partial.source.line) + ":" +
+                        std::to_string(partial.source.column) +
+                        ": invalid config setting [command]: string is required"};
+        }
+        if (!partial.modes.has_value()) {
+            return {ErrorCode::Config,
+                    partial.source.path + ":" + std::to_string(partial.source.line) + ":" +
+                        std::to_string(partial.source.column) +
+                        ": invalid config setting [command] " + *partial.string + ": modes is required"};
+        }
+        if (!partial.prompt.has_value()) {
+            return {ErrorCode::Config,
+                    partial.source.path + ":" + std::to_string(partial.source.line) + ":" +
+                        std::to_string(partial.source.column) +
+                        ": invalid config setting [command] " + *partial.string + ": prompt is required"};
+        }
+        merge_assist_command(candidate.editor_assist_config,
+                             {*partial.string, *partial.modes, *partial.prompt});
+    }
+    return ok_error();
 }
 
 Error apply_config_file(const std::string& path, cli::Options& options) {
@@ -763,19 +969,41 @@ Error apply_document(const Document& document, cli::Options& options) {
             err = editor_file_size_limit(entry, candidate.editor_file_size_limit);
         } else if (name == "editor.assist_behavior") {
             err = require_type(entry, Value::Type::String);
-            if (err.ok()) candidate.editor_assist_prompts.behavior_rules = entry.value.string;
+            if (err.ok()) candidate.editor_assist_config.behavior_rules = entry.value.string;
         } else if (name == "editor.assist_spell") {
             err = require_type(entry, Value::Type::String);
-            if (err.ok()) candidate.editor_assist_prompts.spell = entry.value.string;
+            if (err.ok()) {
+                if (pkchat::editor::EditorAssistCommand* command =
+                        find_assist_command_by_name(candidate.editor_assist_config, "/spell")) {
+                    command->prompt = entry.value.string;
+                }
+            }
         } else if (name == "editor.assist_grammar") {
             err = require_type(entry, Value::Type::String);
-            if (err.ok()) candidate.editor_assist_prompts.grammar = entry.value.string;
+            if (err.ok()) {
+                if (pkchat::editor::EditorAssistCommand* command =
+                        find_assist_command_by_name(candidate.editor_assist_config, "/grammar")) {
+                    command->prompt = entry.value.string;
+                }
+            }
         } else if (name == "editor.assist_continue") {
             err = require_type(entry, Value::Type::String);
-            if (err.ok()) candidate.editor_assist_prompts.continue_prompt = entry.value.string;
+            if (err.ok()) {
+                if (pkchat::editor::EditorAssistCommand* command =
+                        find_assist_command_by_name(candidate.editor_assist_config, "/continue")) {
+                    command->prompt = entry.value.string;
+                }
+            }
         } else if (name == "editor.assist_fact") {
             err = require_type(entry, Value::Type::String);
-            if (err.ok()) candidate.editor_assist_prompts.fact = entry.value.string;
+            if (err.ok()) {
+                if (pkchat::editor::EditorAssistCommand* command =
+                        find_assist_command_by_name(candidate.editor_assist_config, "/fact")) {
+                    command->prompt = entry.value.string;
+                }
+            }
+        } else if (name.rfind("command.", 0) == 0) {
+            continue;
         } else if (name == "url_fetch.max_bytes") {
             err = nonnegative_long(entry, candidate.max_fetch_bytes);
         } else if (name == "url_fetch.allow_private_addresses") {
@@ -795,6 +1023,10 @@ Error apply_document(const Document& document, cli::Options& options) {
         if (!err.ok()) {
             return err;
         }
+    }
+    Error command_err = apply_configured_assist_commands(document, candidate);
+    if (!command_err.ok()) {
+        return command_err;
     }
     options = std::move(candidate);
     return ok_error();

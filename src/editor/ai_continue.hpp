@@ -21,7 +21,7 @@ struct AiContinueSettings {
 struct AiContinueContext {
     provider::RequestContext request;
     AiContinueSettings settings;
-    EditorAssistPrompts prompts;
+    EditorAssistConfig assist_config;
 };
 
 enum class ContinueEventType {

@@ -8,6 +8,7 @@
 #include "common.hpp"
 #include "editor/ai_continue.hpp"
 #include "editor/editor.hpp"
+#include "editor/editor_prompts.hpp"
 #include "provider/provider.hpp"
 #include "runtime/runtime.hpp"
 
@@ -15,10 +16,7 @@ namespace pkchat::editor {
 
 enum class AssistCommandKind {
     Unknown,
-    Spell,
-    Grammar,
-    Continue,
-    Fact,
+    Configured,
     Prompt,
     Quit,
 };
@@ -41,6 +39,7 @@ enum class AssistEditKind {
 
 struct ParsedAssistCommand {
     AssistCommandKind kind = AssistCommandKind::Unknown;
+    size_t command_index = 0;
     std::optional<AssistScope> scope;
     std::string custom_prompt;
     bool ok = false;
@@ -74,15 +73,18 @@ struct AssistCompleterState {
     std::vector<std::string> candidates;
 };
 
-const std::vector<std::string>& assist_command_completions();
+std::vector<std::string> assist_command_completions(const EditorAssistConfig& config);
 std::string assist_completion_status(const AssistCompletionResult& result);
-AssistCompletionResult complete_assist_command(std::string& input, AssistCompleterState& state);
-ParsedAssistCommand parse_assist_command(const std::string& line);
-std::string assist_scope_prompt(AssistCommandKind kind);
+AssistCompletionResult complete_assist_command(std::string& input,
+                                               AssistCompleterState& state,
+                                               const EditorAssistConfig& config);
+ParsedAssistCommand parse_assist_command(const std::string& line, const EditorAssistConfig& config);
+std::string assist_scope_prompt(const EditorAssistCommand& command);
 std::string assist_prompt_mode_message();
 AssistExecution build_assist_execution(const EditorState& state,
                                        const AiContinueContext& context,
                                        AssistCommandKind kind,
+                                       size_t command_index,
                                        std::optional<AssistScope> scope,
                                        const std::string& custom_prompt,
                                        std::optional<AssistPromptMode> prompt_mode);

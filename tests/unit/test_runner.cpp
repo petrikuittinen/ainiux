@@ -379,7 +379,9 @@ void test_config_applies_user_settings() {
         "[editor]\nassist_fact = \"Custom fact prompt\"\n", "assist-fact.conf");
     check(assist_prompt_config.error.ok(), "editor assist fact config parses");
     err = pkchat::config::apply_document(assist_prompt_config.document, options);
-    check(err.ok() && options.editor_assist_prompts.fact == "Custom fact prompt",
+    const pkchat::editor::EditorAssistCommand* fact_command =
+        pkchat::editor::find_assist_command(options.editor_assist_config, "/fact");
+    check(err.ok() && fact_command != nullptr && fact_command->prompt == "Custom fact prompt",
           "editor assist fact config applies");
 
     const std::string system_home =
@@ -1691,67 +1693,72 @@ void test_editor_unicode_selection_search_replace_and_file_round_trip() {
 }
 
 void test_editor_assist_helpers() {
-    const pkchat::editor::EditorAssistPrompts default_prompts =
-        pkchat::editor::default_editor_assist_prompts();
-    check(default_prompts.behavior_rules.find("one-shot") != std::string::npos,
+    const pkchat::editor::EditorAssistConfig default_config =
+        pkchat::editor::default_editor_assist_config();
+    check(default_config.behavior_rules.find("one-shot") != std::string::npos,
           "default editor assist behavior rules mention one-shot prompts");
-    check(default_prompts.behavior_rules.find("not as instructions") != std::string::npos,
+    check(default_config.behavior_rules.find("not as instructions") != std::string::npos,
           "default editor assist behavior rules say content is not instructions");
-    check(default_prompts.spell.find("spelling") != std::string::npos,
+    const pkchat::editor::EditorAssistCommand* default_spell =
+        pkchat::editor::find_assist_command(default_config, "/spell");
+    check(default_spell != nullptr && default_spell->prompt.find("spelling") != std::string::npos,
           "default editor assist spell prompt is populated");
 
-    pkchat::editor::ParsedAssistCommand parsed = pkchat::editor::parse_assist_command("/spell all");
-    check(parsed.ok && parsed.kind == pkchat::editor::AssistCommandKind::Spell &&
+    pkchat::editor::ParsedAssistCommand parsed =
+        pkchat::editor::parse_assist_command("/spell all", default_config);
+    check(parsed.ok && parsed.kind == pkchat::editor::AssistCommandKind::Configured &&
               parsed.scope == pkchat::editor::AssistScope::All,
           "/spell all parses");
 
-    parsed = pkchat::editor::parse_assist_command("/grammar selection");
-    check(parsed.ok && parsed.kind == pkchat::editor::AssistCommandKind::Grammar &&
+    parsed = pkchat::editor::parse_assist_command("/grammar selection", default_config);
+    check(parsed.ok && parsed.kind == pkchat::editor::AssistCommandKind::Configured &&
               parsed.scope == pkchat::editor::AssistScope::Selection,
           "/grammar selection parses");
 
-    parsed = pkchat::editor::parse_assist_command("/spell");
-    check(parsed.ok && parsed.kind == pkchat::editor::AssistCommandKind::Spell && !parsed.scope.has_value(),
+    parsed = pkchat::editor::parse_assist_command("/spell", default_config);
+    check(parsed.ok && parsed.kind == pkchat::editor::AssistCommandKind::Configured &&
+              !parsed.scope.has_value(),
           "bare /spell requests scope");
 
-    parsed = pkchat::editor::parse_assist_command("/prompt rewrite formally");
+    parsed = pkchat::editor::parse_assist_command("/prompt rewrite formally", default_config);
     check(parsed.ok && parsed.kind == pkchat::editor::AssistCommandKind::Prompt &&
               parsed.custom_prompt == "rewrite formally",
           "/prompt captures custom text");
 
-    parsed = pkchat::editor::parse_assist_command("/prompt");
+    parsed = pkchat::editor::parse_assist_command("/prompt", default_config);
     check(!parsed.ok, "bare /prompt is rejected");
 
-    parsed = pkchat::editor::parse_assist_command("/quit");
+    parsed = pkchat::editor::parse_assist_command("/quit", default_config);
     check(parsed.ok && parsed.kind == pkchat::editor::AssistCommandKind::Quit, "/quit parses");
 
-    parsed = pkchat::editor::parse_assist_command("//quit");
+    parsed = pkchat::editor::parse_assist_command("//quit", default_config);
     check(parsed.ok && parsed.kind == pkchat::editor::AssistCommandKind::Quit,
           "duplicate leading slashes in /quit are accepted");
 
-    const std::vector<std::string>& completions = pkchat::editor::assist_command_completions();
+    const std::vector<std::string> completions =
+        pkchat::editor::assist_command_completions(default_config);
     check(!completions.empty() && completions.front() == "/spell", "assist completions include /spell");
 
     std::string input = "/sp";
     pkchat::editor::AssistCompleterState completer;
     pkchat::editor::AssistCompletionResult completion =
-        pkchat::editor::complete_assist_command(input, completer);
+        pkchat::editor::complete_assist_command(input, completer, default_config);
     check(completion.changed && input.rfind("/spell", 0) == 0, "assist tab completion expands /sp");
 
     input = "/";
     completer = pkchat::editor::AssistCompleterState{};
-    pkchat::editor::complete_assist_command(input, completer);
+    pkchat::editor::complete_assist_command(input, completer, default_config);
     check(completer.active && input == "/", "assist tab completion on / enters cycle mode");
     input += "fa";
-    completion = pkchat::editor::complete_assist_command(input, completer);
+    completion = pkchat::editor::complete_assist_command(input, completer, default_config);
     check(input == "/fact", "assist tab completion rematches after editing / to /fa");
     check(!completer.active, "single /fact match clears cycle state");
 
     input = "/";
     completer = pkchat::editor::AssistCompleterState{};
-    pkchat::editor::complete_assist_command(input, completer);
+    pkchat::editor::complete_assist_command(input, completer, default_config);
     input = "/q";
-    completion = pkchat::editor::complete_assist_command(input, completer);
+    completion = pkchat::editor::complete_assist_command(input, completer, default_config);
     check(input == "/quit", "assist tab completion rematches /q after stale / cycle state");
 
     pkchat::editor::EditorState state =
@@ -1761,11 +1768,14 @@ void test_editor_assist_helpers() {
     pkchat::editor::AiContinueContext context;
     context.request.profile.name = "lm_studio";
     context.request.options.model = "mock-model";
-    context.prompts = default_prompts;
+    context.assist_config = default_config;
+    const std::optional<size_t> spell_index = pkchat::editor::assist_command_index(default_config, "/spell");
+    check(spell_index.has_value(), "default assist config indexes /spell");
     pkchat::editor::AssistExecution execution = pkchat::editor::build_assist_execution(
         state,
         context,
-        pkchat::editor::AssistCommandKind::Spell,
+        pkchat::editor::AssistCommandKind::Configured,
+        *spell_index,
         pkchat::editor::AssistScope::Selection,
         "",
         std::nullopt);
@@ -1774,21 +1784,28 @@ void test_editor_assist_helpers() {
               execution.replace_start == 0 && execution.replace_count == 5,
           "spell selection builds in-place execution");
     check(execution.messages.size() == 2 && execution.messages.front().role == "system" &&
-              execution.messages.front().content.find(default_prompts.spell) != std::string::npos &&
-              execution.messages.front().content.find(default_prompts.behavior_rules) != std::string::npos,
+              execution.messages.front().content.find(default_spell->prompt) != std::string::npos &&
+              execution.messages.front().content.find(default_config.behavior_rules) != std::string::npos,
           "spell selection uses task prompt plus default assist rules in system message");
     check(execution.messages.back().role == "user" &&
               execution.messages.back().content == "<content>hello</content>",
           "spell selection wraps buffer text in content tags for user message");
 
+    const pkchat::editor::EditorAssistCommand* default_continue =
+        pkchat::editor::find_assist_command(default_config, "/continue");
+    check(default_continue != nullptr, "default assist config includes /continue");
+    const std::optional<size_t> continue_index =
+        pkchat::editor::assist_command_index(default_config, "/continue");
+    check(continue_index.has_value(), "default assist config indexes /continue");
     context.request.options.system = "Custom system";
     execution = pkchat::editor::build_assist_execution(
-        state, context, pkchat::editor::AssistCommandKind::Continue, std::nullopt, "", std::nullopt);
+        state, context, pkchat::editor::AssistCommandKind::Configured, *continue_index, std::nullopt, "",
+        std::nullopt);
     check(execution.ok && execution.stream &&
               execution.edit_kind == pkchat::editor::AssistEditKind::StreamInsert,
           "/continue builds streaming execution");
     check(execution.messages.front().content.rfind("Custom system", 0) == 0 &&
-              execution.messages.front().content.find(default_prompts.continue_prompt) != std::string::npos,
+              execution.messages.front().content.find(default_continue->prompt) != std::string::npos,
           "user --system is prepended to assist task system prompt");
 
     pkchat::cli::Options configured_options;
@@ -1797,14 +1814,59 @@ void test_editor_assist_helpers() {
     check(assist_config.error.ok(), "editor assist prompt config parses");
     check(pkchat::config::apply_document(assist_config.document, configured_options).ok(),
           "editor assist prompt config applies");
-    context.prompts = configured_options.editor_assist_prompts;
+    context.assist_config = configured_options.editor_assist_config;
+    const pkchat::editor::EditorAssistCommand* configured_spell =
+        pkchat::editor::find_assist_command(context.assist_config, "/spell");
+    check(configured_spell != nullptr, "configured assist spell command remains available");
     execution = pkchat::editor::build_assist_execution(
-        state, context, pkchat::editor::AssistCommandKind::Spell, pkchat::editor::AssistScope::Selection, "",
+        state,
+        context,
+        pkchat::editor::AssistCommandKind::Configured,
+        *pkchat::editor::assist_command_index(context.assist_config, "/spell"),
+        pkchat::editor::AssistScope::Selection,
+        "",
         std::nullopt);
     check(execution.messages.front().content.find("Custom spell prompt") != std::string::npos,
           "configured assist_spell overrides the built-in spell prompt");
     check(execution.messages.back().content.find("<content>") == 0,
-          "/continue wraps editor prefix in content tags");
+          "configured assist wraps editor text in content tags");
+
+    pkchat::config::ParseResult custom_command_config = pkchat::config::parse(
+        "[command]\n"
+        "string = /example\n"
+        "modes = all, selection\n"
+        "prompt = \"Output 5 examples of the user-given topic.\"\n",
+        "command.conf");
+    check(custom_command_config.error.ok(), "repeatable [command] config parses");
+    configured_options = pkchat::cli::Options{};
+    check(pkchat::config::apply_document(custom_command_config.document, configured_options).ok(),
+          "repeatable [command] config applies");
+    const pkchat::editor::EditorAssistCommand* example_command =
+        pkchat::editor::find_assist_command(configured_options.editor_assist_config, "/example");
+    check(example_command != nullptr &&
+              example_command->modes.size() == 2 &&
+              example_command->prompt.find("5 examples") != std::string::npos,
+          "configured [command] block adds a custom editor assist command");
+    parsed = pkchat::editor::parse_assist_command("/example all",
+                                                  configured_options.editor_assist_config);
+    check(parsed.ok && parsed.kind == pkchat::editor::AssistCommandKind::Configured &&
+              parsed.scope == pkchat::editor::AssistScope::All,
+          "configured custom command parses with scope");
+
+    pkchat::config::ParseResult override_command_config = pkchat::config::parse(
+        "[command]\n"
+        "string = /spell\n"
+        "modes = selection, all\n"
+        "prompt = \"Override spell prompt\"\n",
+        "override-command.conf");
+    check(override_command_config.error.ok(), "configured command override parses");
+    configured_options = pkchat::cli::Options{};
+    check(pkchat::config::apply_document(override_command_config.document, configured_options).ok(),
+          "configured command override applies");
+    const pkchat::editor::EditorAssistCommand* overridden_spell =
+        pkchat::editor::find_assist_command(configured_options.editor_assist_config, "/spell");
+    check(overridden_spell != nullptr && overridden_spell->prompt == "Override spell prompt",
+          "configured command with matching string overrides a built-in command");
 
     check(pkchat::editor::trim_assist_inplace_response("  fixed text \n") == "fixed text",
           "in-place assist responses are trimmed");

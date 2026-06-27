@@ -1385,7 +1385,7 @@ int main(int argc, char** argv) {
         if (!editor_context.profile.offline) {
             ai_continue.request = std::move(editor_context);
             ai_continue.settings = pkchat::editor::ai_continue_settings_from_env();
-            ai_continue.prompts = options.editor_assist_prompts;
+            ai_continue.assist_config = options.editor_assist_config;
             const bool auto_select_model = options.model.empty();
             pkchat::Error model_err = pkchat::editor::resolve_editor_default_model(ai_continue);
             if (!model_err.ok()) {
