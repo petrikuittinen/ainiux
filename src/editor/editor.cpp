@@ -89,14 +89,6 @@ DecodedChar decode_utf8_at(const std::string& text, size_t pos) {
     return {codepoint, length, true};
 }
 
-size_t utf8_len(unsigned char ch, size_t remaining) {
-    if (ch < 0x80U) return 1;
-    if ((ch & 0xE0U) == 0xC0U && remaining >= 2) return 2;
-    if ((ch & 0xF0U) == 0xE0U && remaining >= 3) return 3;
-    if ((ch & 0xF8U) == 0xF0U && remaining >= 4) return 4;
-    return 1;
-}
-
 bool is_combining_mark(uint32_t codepoint) {
     return (codepoint >= 0x0300U && codepoint <= 0x036FU) ||
            (codepoint >= 0x0591U && codepoint <= 0x05BDU) ||
@@ -297,16 +289,17 @@ std::vector<WrapSegment> wrap_line_segments(const std::string& text, size_t widt
         size_t hard_break = start;
 
         while (pos < text.size()) {
-            const unsigned char ch = static_cast<unsigned char>(text[pos]);
-            const size_t len = utf8_len(ch, text.size() - pos);
+            const size_t grapheme_start = pos;
+            const size_t grapheme_end = next_grapheme_offset(text, pos);
             const size_t char_width = display_width_at(text, pos, column);
             if (column + char_width > width) {
                 break;
             }
             column += char_width;
-            pos += len;
+            pos = grapheme_end;
             hard_break = pos;
-            if (ch == ' ' || ch == '\t') {
+            const DecodedChar decoded = decode_utf8_at(text, grapheme_start);
+            if (decoded.valid && (decoded.codepoint == ' ' || decoded.codepoint == '\t')) {
                 last_break = pos;
             }
             if (column >= width) {
@@ -346,12 +339,15 @@ WrappedCursor cursor_in_wrapped_line(const std::string& text, size_t byte_offset
     const size_t clamped = std::min(byte_offset, text.size());
     for (size_t i = 0; i < segments.size(); ++i) {
         const WrapSegment& segment = segments[i];
-        if (clamped < segment.end || i + 1 == segments.size()) {
-            const size_t col = display_width_for_range(text, segment.start, clamped);
-            return {i, std::min(col, width - 1)};
-        }
         if (clamped == segment.end && i + 1 < segments.size()) {
             continue;
+        }
+        if (clamped <= segment.end || i + 1 == segments.size()) {
+            const size_t col = display_width_for_range(text, segment.start, clamped);
+            if (clamped == segment.end && col >= width) {
+                return {i + 1, 0};
+            }
+            return {i, std::min(col, width - 1)};
         }
     }
     return {};

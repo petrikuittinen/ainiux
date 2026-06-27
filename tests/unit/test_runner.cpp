@@ -1543,6 +1543,82 @@ void test_editor_unicode_rendering_wraps_on_cell_boundaries() {
           "editor render keeps a combining sequence and following ASCII in two cells");
 }
 
+void test_editor_unicode_emoji_zwj_wrap_keeps_sequence_intact() {
+    const std::string family_emoji =
+        "\xF0\x9F\x91\xA8" "\xE2\x80\x8D"
+        "\xF0\x9F\x91\xA9" "\xE2\x80\x8D"
+        "\xF0\x9F\x91\xA7" "\xE2\x80\x8D"
+        "\xF0\x9F\x91\xA6";
+
+    pkchat::editor::EditorState state =
+        pkchat::editor::EditorState::from_text(family_emoji);
+    pkchat::editor::RenderedPanel rendered = state.render({1, 1, 1, 2});
+    check(rendered.lines.size() == 1,
+          "editor ZWJ family emoji render produces one row in a two-cell-wide panel");
+    check(rendered.lines[0] == family_emoji,
+          "editor wrap keeps a ZWJ family emoji sequence intact on one visual row");
+
+    state.cursor = family_emoji.size();
+    rendered = state.render({1, 1, 2, 2});
+    check(rendered.cursor.visible && rendered.cursor.row == 1 && rendered.cursor.col == 0,
+          "editor cursor after a two-cell ZWJ emoji lands at the next visual row start");
+}
+
+void test_editor_unicode_emoji_pair_wraps_on_cell_boundaries() {
+    const std::string grin = "\xF0\x9F\x98\x80";
+    const std::string pair = grin + grin;
+
+    pkchat::editor::EditorState state =
+        pkchat::editor::EditorState::from_text(pair);
+    pkchat::editor::RenderedPanel rendered = state.render({1, 1, 2, 3});
+    check(rendered.lines.size() == 2,
+          "editor emoji pair render produces two rows in a three-cell-wide panel");
+    check(rendered.lines[0] == grin + " ",
+          "editor wraps after the first two-cell emoji without splitting it");
+    check(rendered.lines[1] == grin + " ",
+          "editor keeps the second emoji intact on the next visual row");
+
+    state.cursor = grin.size();
+    rendered = state.render({1, 1, 2, 3});
+    check(rendered.cursor.visible && rendered.cursor.row == 1 && rendered.cursor.col == 0,
+          "editor cursor after the first wrapped emoji maps to the second visual row");
+}
+
+void test_editor_unicode_emoji_skin_tone_wrap_keeps_modifier() {
+    const std::string thumbs_up = "\xF0\x9F\x91\x8D";
+    const std::string skin_tone = "\xF0\x9F\x8F\xBD";
+    const std::string grapheme = thumbs_up + skin_tone;
+
+    pkchat::editor::EditorState state =
+        pkchat::editor::EditorState::from_text(grapheme + "!");
+    pkchat::editor::RenderedPanel rendered = state.render({1, 1, 1, 2});
+    check(rendered.lines[0] == grapheme,
+          "editor wrap keeps an emoji plus skin-tone modifier intact in a two-cell panel");
+
+    rendered = state.render({1, 1, 2, 3});
+    check(rendered.lines[0] == grapheme + "!",
+          "editor keeps skin-tone emoji and trailing ASCII together when they fit");
+    check(rendered.lines[1] == "   ",
+          "editor leaves the second visual row blank when only one row is needed");
+}
+
+void test_editor_unicode_combining_sequence_wraps_on_grapheme_boundary() {
+    const std::string combining = "e" "\xCC\x81";
+    const std::string text = combining + "yy";
+
+    pkchat::editor::EditorState state =
+        pkchat::editor::EditorState::from_text(text);
+    pkchat::editor::RenderedPanel rendered = state.render({1, 1, 3, 1});
+    check(rendered.lines.size() == 3,
+          "editor combining sequence render produces three rows in a one-cell-wide panel");
+    check(rendered.lines[0] == combining,
+          "editor keeps a base letter plus combining mark intact on the first visual row");
+    check(rendered.lines[1] == "y",
+          "editor wraps following ASCII only after the whole combining grapheme");
+    check(rendered.lines[2] == "y",
+          "editor keeps trailing ASCII characters intact on later visual rows");
+}
+
 void test_editor_invalid_utf8_rendering_is_sanitized() {
     std::string invalid = "A";
     invalid.push_back(static_cast<char>(0xFF));
@@ -2690,6 +2766,10 @@ int main() {
     test_editor_unicode_grapheme_navigation_and_delete();
     test_editor_unicode_display_columns_and_offsets();
     test_editor_unicode_rendering_wraps_on_cell_boundaries();
+    test_editor_unicode_emoji_zwj_wrap_keeps_sequence_intact();
+    test_editor_unicode_emoji_pair_wraps_on_cell_boundaries();
+    test_editor_unicode_emoji_skin_tone_wrap_keeps_modifier();
+    test_editor_unicode_combining_sequence_wraps_on_grapheme_boundary();
     test_editor_invalid_utf8_rendering_is_sanitized();
     test_editor_unicode_selection_search_replace_and_file_round_trip();
     test_editor_assist_helpers();
