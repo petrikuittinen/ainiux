@@ -623,7 +623,8 @@ AssistExecution build_assist_execution(const EditorState& state,
                 return fail(name + " selection requires an active selection");
             }
             execution.replace_start = state.selection.start();
-            execution.replace_count = state.selection.end() - state.selection.start();
+            execution.replace_count =
+                state.selection_end_exclusive() - state.selection.start();
             execution.messages =
                 build_messages(context, command.prompt, state.selected_text());
             execution.stream = false;
@@ -666,7 +667,8 @@ AssistExecution build_assist_execution(const EditorState& state,
                     return fail("/prompt selection requires an active selection");
                 }
                 execution.replace_start = state.selection.start();
-                execution.replace_count = state.selection.end() - state.selection.start();
+                execution.replace_count =
+                    state.selection_end_exclusive() - state.selection.start();
                 execution.messages =
                     build_messages(context, custom_prompt, state.selected_text());
                 execution.stream = false;

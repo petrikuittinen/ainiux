@@ -146,6 +146,7 @@ struct EditorState {
     bool search_previous(const std::string& needle);
     Error replace_all_from(size_t start, const std::string& needle, const std::string& value, size_t& replacements);
     void clear_selection();
+    size_t selection_end_exclusive() const;
     std::string selected_text() const;
     Error copy_selection(Clipboard& clipboard);
     Error cut_selection(Clipboard& clipboard);

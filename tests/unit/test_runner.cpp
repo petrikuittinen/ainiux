@@ -1390,6 +1390,31 @@ void test_editor_selection_and_clipboard() {
     check(state.selection.has_range(), "shift movement creates a selection");
     check(state.selected_text() == "alpha", "selected text matches the highlighted range");
 
+    pkchat::editor::EditorState ascii = pkchat::editor::EditorState::from_text("abcdef");
+    ascii.cursor = 1;
+    for (int i = 0; i < 3; ++i) {
+        ascii.apply_movement(pkchat::editor::MovementKey::Right, rect, true);
+    }
+    check(ascii.selected_text() == "bcde",
+          "shift-right selection includes the character at the cursor endpoint");
+    ascii = pkchat::editor::EditorState::from_text("abcdef");
+    ascii.cursor = 4;
+    for (int i = 0; i < 3; ++i) {
+        ascii.apply_movement(pkchat::editor::MovementKey::Left, rect, true);
+    }
+    check(ascii.selected_text() == "bcde",
+          "shift-left selection includes the anchor-side endpoint character");
+    ascii = pkchat::editor::EditorState::from_text("abcdef");
+    ascii.cursor = 0;
+    for (int i = 0; i < 2; ++i) {
+        ascii.apply_movement(pkchat::editor::MovementKey::Right, rect, true);
+    }
+    check(ascii.selected_text() == "ab",
+          "short forward selections do not over-extend the final character");
+    ascii.selection.anchor = 1;
+    ascii.selection.active = 5;
+    check(ascii.selected_text() == "bcde", "manual forward selection uses an exclusive end offset");
+
     check(state.copy_selection(clipboard).ok(), "copy selection succeeds");
     check(clipboard.text() == "alpha", "clipboard stores copied text");
 

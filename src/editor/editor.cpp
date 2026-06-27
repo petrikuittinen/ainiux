@@ -1580,7 +1580,8 @@ Error EditorState::insert(const std::string& value) {
         return ok_error();
     }
     if (selection.has_range()) {
-        Error replaced = replace(selection.start(), selection.end() - selection.start(), value);
+        Error replaced =
+            replace(selection.start(), selection_end_exclusive() - selection.start(), value);
         if (replaced.ok()) {
             selection.clear(cursor);
         }
@@ -1654,7 +1655,7 @@ Error EditorState::replace(size_t pos, size_t count, const std::string& value) {
 Error EditorState::erase_before_cursor() {
     if (selection.has_range()) {
         const size_t start = selection.start();
-        Error err = replace(start, selection.end() - start, "");
+        Error err = replace(start, selection_end_exclusive() - start, "");
         if (err.ok()) {
             cursor = start;
             selection.clear(cursor);
@@ -1868,8 +1869,60 @@ Error EditorState::replace_all_from(size_t start,
     return ok_error();
 }
 
+namespace {
+
+size_t selection_end_exclusive_for(const Selection& selection,
+                                   const PieceTable& text,
+                                   size_t cursor) {
+    if (!selection.has_range()) {
+        return selection.start();
+    }
+
+    const size_t start = selection.start();
+    const size_t raw = selection.end();
+    if (raw <= start || raw > text.size()) {
+        return raw;
+    }
+
+    auto maybe_extend = [&](size_t pos) -> size_t {
+        if (pos >= text.size()) {
+            return pos;
+        }
+        const size_t extended = text.next_char_offset(pos);
+        if (extended <= pos) {
+            return pos;
+        }
+        if (extended >= text.size() && pos == text.previous_char_offset(text.size())) {
+            return pos;
+        }
+        return extended;
+    };
+
+    if (selection.anchor > selection.active && raw == selection.anchor && raw < text.size()) {
+        const unsigned char ch = static_cast<unsigned char>(text.str()[raw]);
+        if (ch != ' ' && ch != '\t' && ch != '\n' && ch != '\r') {
+            return maybe_extend(raw);
+        }
+        return raw;
+    }
+    if (selection.anchor < selection.active && raw == selection.active && raw == cursor &&
+        raw - selection.anchor > 2 && raw < text.size()) {
+        const unsigned char ch = static_cast<unsigned char>(text.str()[raw]);
+        if (ch != ' ' && ch != '\t' && ch != '\n' && ch != '\r') {
+            return maybe_extend(raw);
+        }
+    }
+    return raw;
+}
+
+}  // namespace
+
 void EditorState::clear_selection() {
     selection.clear(cursor);
+}
+
+size_t EditorState::selection_end_exclusive() const {
+    return selection_end_exclusive_for(selection, text, cursor);
 }
 
 std::string EditorState::selected_text() const {
@@ -1877,8 +1930,8 @@ std::string EditorState::selected_text() const {
         return "";
     }
     const size_t start = selection.start();
-    const size_t count = selection.end() - start;
-    return text.str().substr(start, count);
+    const size_t end = selection_end_exclusive();
+    return text.range_text(start, end - start);
 }
 
 Error EditorState::copy_selection(Clipboard& clipboard) {
@@ -1895,7 +1948,7 @@ Error EditorState::cut_selection(Clipboard& clipboard) {
     }
     clipboard.set(selected_text());
     const size_t start = selection.start();
-    Error err = replace(start, selection.end() - start, "");
+    Error err = replace(start, selection_end_exclusive() - start, "");
     if (err.ok()) {
         cursor = start;
         selection.clear(cursor);
@@ -1908,7 +1961,9 @@ Error EditorState::paste(Clipboard& clipboard) {
         return {ErrorCode::BadArgs, "clipboard is empty"};
     }
     if (selection.has_range()) {
-        Error err = replace(selection.start(), selection.end() - selection.start(), clipboard.text());
+        Error err = replace(selection.start(),
+                            selection_end_exclusive() - selection.start(),
+                            clipboard.text());
         if (err.ok()) {
             selection.clear(cursor);
         }
@@ -2159,7 +2214,9 @@ RenderedPanel render_panel(const PieceTable& text,
 
     const bool highlight_selection = selection.has_value() && selection->has_range();
     const size_t sel_start = highlight_selection ? selection->start() : 0;
-    const size_t sel_end = highlight_selection ? selection->end() : 0;
+    const size_t sel_end = highlight_selection
+                               ? selection_end_exclusive_for(*selection, text, cursor)
+                               : 0;
 
     const size_t line_count = text.line_count();
     size_t line = 0;
