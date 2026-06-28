@@ -65,6 +65,7 @@ struct ThinkingDisplay {
 
 ThinkingDisplay thinking_display_text(const std::string& content, bool show_traces);
 std::string ready_status();
+std::string provider_model_status_message(const provider::RequestContext& context, const std::string& suffix);
 std::string generation_ready_status(const std::string& provider_name,
                                     const std::string& model_name,
                                     const provider::ChatResult& result,
