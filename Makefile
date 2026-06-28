@@ -3,8 +3,10 @@ CXXFLAGS ?= -std=c++17 -Wall -Wextra -Wpedantic -Iinclude -Isrc
 LDFLAGS ?=
 LIBCURL_CFLAGS ?= $(shell pkg-config --cflags libcurl 2>/dev/null || curl-config --cflags 2>/dev/null)
 LIBCURL_LIBS ?= $(shell pkg-config --libs libcurl 2>/dev/null || curl-config --libs 2>/dev/null)
-CXXFLAGS += $(LIBCURL_CFLAGS)
-LDFLAGS += $(LIBCURL_LIBS)
+SQLITE_CFLAGS ?= $(shell pkg-config --cflags sqlite3 2>/dev/null)
+SQLITE_LIBS ?= $(shell pkg-config --libs sqlite3 2>/dev/null || printf '%s\n' -lsqlite3)
+CXXFLAGS += $(LIBCURL_CFLAGS) $(SQLITE_CFLAGS)
+LDFLAGS += $(LIBCURL_LIBS) $(SQLITE_LIBS)
 PREFIX ?= /usr/local
 SYSCONFDIR ?= /etc
 BUILD_DIR := build

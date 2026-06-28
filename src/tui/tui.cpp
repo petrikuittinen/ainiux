@@ -16,6 +16,7 @@
 #include <unistd.h>
 #include <vector>
 
+#include "chat/sqlite_store.hpp"
 #include "context/context.hpp"
 #include "editor/clipboard.hpp"
 #include "editor/path_completion.hpp"
@@ -813,6 +814,8 @@ enum class TuiEventType {
     Error,
     SaveDone,
     LoadDone,
+    StoreSaveDone,
+    StoreLoadDone,
     InsertDone,
     FetchDone,
     ModelsDone,
@@ -820,6 +823,7 @@ enum class TuiEventType {
 };
 
 enum class ActiveJob { None, Chat, Models };
+enum class TuiMode { Chat, ThreadList, RemoveConfirm };
 
 struct TuiEvent {
     TuiEventType type = TuiEventType::Delta;
@@ -838,6 +842,44 @@ struct TuiEvent {
     editor::PathCompletionResult completion;
     size_t completion_generation = 0;
 };
+
+std::string thread_picker_text(const std::vector<chat::ThreadSummary>& threads, size_t selected) {
+    std::ostringstream out;
+    out << "Threads (newest first)\n";
+    out << "Enter opens, Esc cancels\n";
+    for (size_t i = 0; i < threads.size(); ++i) {
+        const chat::ThreadSummary& thread = threads[i];
+        out << (i == selected ? "> " : "  ");
+        out << thread.name;
+        if (!thread.last_provider.empty() || !thread.last_model.empty()) {
+            out << " [";
+            if (!thread.last_provider.empty()) {
+                out << thread.last_provider;
+            }
+            if (!thread.last_model.empty()) {
+                if (!thread.last_provider.empty()) {
+                    out << " / ";
+                }
+                out << thread.last_model;
+            }
+            out << "]";
+        }
+        out << " | " << thread.modified_at;
+        out << " | " << thread.message_count << " messages";
+        if (i + 1 != threads.size()) {
+            out << "\n";
+        }
+    }
+    return out.str();
+}
+
+std::string remove_confirm_text(const chat::Session& session) {
+    std::ostringstream out;
+    out << "Remove current thread?\n";
+    out << (session.name.empty() ? "New chat" : session.name) << "\n";
+    out << "Press y to remove, n or Esc to cancel.";
+    return out.str();
+}
 
 std::string join_models_preview(const std::vector<std::string>& models) {
     if (models.empty()) {
@@ -916,6 +958,67 @@ EscapeResult handle_escape(editor::EditorState& input, const Layout& layout, int
     return EscapeResult::Handled;
 }
 
+bool handle_thread_picker_escape(std::vector<chat::ThreadSummary>& threads,
+                                 size_t& selected,
+                                 TuiMode& mode,
+                                 std::string& status) {
+    unsigned char ch = 0;
+    if (!editor::read_terminal_byte(ch, 25)) {
+        mode = TuiMode::Chat;
+        status = "Thread list cancelled";
+        return true;
+    }
+    std::string sequence;
+    if (ch == '[' || ch == 'O') {
+        sequence.push_back(static_cast<char>(ch));
+        while (sequence.size() < 16 && editor::read_terminal_byte(ch, 25)) {
+            sequence.push_back(static_cast<char>(ch));
+            if (is_escape_final(ch)) {
+                break;
+            }
+        }
+    } else {
+        mode = TuiMode::Chat;
+        status = "Thread list cancelled";
+        return true;
+    }
+
+    editor::MovementKeyEvent movement;
+    if (!editor::parse_movement_sequence(sequence, movement) || threads.empty()) {
+        return true;
+    }
+    switch (movement.key) {
+        case editor::MovementKey::Up:
+            if (selected > 0) {
+                --selected;
+            }
+            break;
+        case editor::MovementKey::Down:
+            if (selected + 1 < threads.size()) {
+                ++selected;
+            }
+            break;
+        case editor::MovementKey::PageUp:
+            selected = selected > 10 ? selected - 10 : 0;
+            break;
+        case editor::MovementKey::PageDown:
+            selected = std::min(threads.size() - 1, selected + 10);
+            break;
+        case editor::MovementKey::Home:
+            selected = 0;
+            break;
+        case editor::MovementKey::End:
+            selected = threads.size() - 1;
+            break;
+        case editor::MovementKey::Left:
+        case editor::MovementKey::Right:
+            break;
+    }
+    status = "Selected thread " + std::to_string(selected + 1) + "/" +
+             std::to_string(threads.size());
+    return true;
+}
+
 }  // namespace
 
 int run(provider::RequestContext context, chat::Session session) {
@@ -953,6 +1056,71 @@ int run(provider::RequestContext context, chat::Session session) {
     std::vector<provider::ImageInput> pending_images;
     size_t inflight_image_count = 0;
     std::string help_text;
+    TuiMode mode = TuiMode::Chat;
+    std::vector<chat::ThreadSummary> thread_picker_threads;
+    size_t thread_picker_selected = 0;
+    chat::SqliteStore sqlite_store;
+    bool sqlite_available = false;
+    std::string sqlite_path;
+
+    auto rebuild_context_from_session = [&](const chat::Session& loaded) {
+        cli::Options next = context.options;
+        if (!loaded.provider.empty()) {
+            next.provider = loaded.provider;
+        }
+        if (!loaded.base_url.empty()) {
+            next.base_url = loaded.base_url;
+            next.positional_url.clear();
+        }
+        if (!loaded.model.empty()) {
+            next.model = loaded.model;
+        }
+        provider::ContextResult rebuilt = provider::build_context(next);
+        if (!rebuilt.error.ok()) {
+            return rebuilt.error;
+        }
+        context = std::move(rebuilt.context);
+        return ok_error();
+    };
+
+    auto panel_text = [&]() {
+        if (mode == TuiMode::ThreadList) {
+            return thread_picker_text(thread_picker_threads, thread_picker_selected);
+        }
+        if (mode == TuiMode::RemoveConfirm) {
+            return remove_confirm_text(session);
+        }
+        return help_text;
+    };
+
+    Error sqlite_open_error = sqlite_store.open_default();
+    if (sqlite_open_error.ok()) {
+        sqlite_available = true;
+        sqlite_path = sqlite_store.path();
+        if (context.options.load_chat_path.empty() && trim_ascii(context.options.prompt).empty()) {
+            long long last_id = 0;
+            bool found_last = false;
+            Error last_error = sqlite_store.last_thread_id(last_id, found_last);
+            if (last_error.ok() && found_last) {
+                chat::Session loaded;
+                Error load_error = sqlite_store.load_session(last_id, loaded);
+                if (load_error.ok()) {
+                    Error context_error = rebuild_context_from_session(loaded);
+                    session = std::move(loaded);
+                    apply_system_prompt(session, context.options.system);
+                    status = context_error.ok()
+                                 ? "Loaded last thread: " + (session.name.empty() ? std::to_string(session.thread_id) : session.name)
+                                 : error_line(context_error);
+                } else {
+                    status = error_line(load_error);
+                }
+            } else if (!last_error.ok()) {
+                status = error_line(last_error);
+            }
+        }
+    } else {
+        status = "SQLite persistence unavailable: " + sqlite_open_error.message;
+    }
 
     auto pending_assistant_is_hidden_thinking = [&]() {
         if (show_thinking_traces || pending_assistant == static_cast<size_t>(-1) ||
@@ -1063,6 +1231,62 @@ int run(provider::RequestContext context, chat::Session session) {
             events.push(std::move(event));
         });
         status = "Loading " + path;
+    };
+
+    auto start_store_load = [&](long long thread_id) {
+        if (!sqlite_available) {
+            status = "SQLite persistence is unavailable";
+            return;
+        }
+        if (file_job.running()) {
+            status = "A file job is already running";
+            return;
+        }
+        const std::string db_path = sqlite_path;
+        file_job.start([db_path, thread_id, &events](runtime::CancellationToken token) mutable {
+            TuiEvent event;
+            event.type = TuiEventType::StoreLoadDone;
+            event.text = std::to_string(thread_id);
+            if (token.cancelled()) {
+                event.error = {ErrorCode::Cancelled, "thread load cancelled: " + event.text};
+            } else {
+                chat::SqliteStore store;
+                event.error = store.open(db_path);
+                if (event.error.ok()) {
+                    event.error = store.load_session(thread_id, event.session);
+                }
+            }
+            events.push(std::move(event));
+        });
+        status = "Loading thread " + std::to_string(thread_id);
+    };
+
+    auto start_store_save = [&]() {
+        if (!sqlite_available) {
+            return;
+        }
+        if (file_job.running()) {
+            return;
+        }
+        chat::Session snapshot = session;
+        refresh_session_metadata(snapshot, context);
+        const std::string db_path = sqlite_path;
+        file_job.start([db_path, snapshot = std::move(snapshot), &events](
+                           runtime::CancellationToken token) mutable {
+            TuiEvent event;
+            event.type = TuiEventType::StoreSaveDone;
+            if (token.cancelled()) {
+                event.error = {ErrorCode::Cancelled, "SQLite autosave cancelled"};
+            } else {
+                chat::SqliteStore store;
+                event.error = store.open(db_path);
+                if (event.error.ok()) {
+                    event.error = store.save_session(snapshot);
+                }
+                event.session = std::move(snapshot);
+            }
+            events.push(std::move(event));
+        });
     };
 
     auto start_insert = [&](const std::string& path) {
@@ -1317,11 +1541,15 @@ int run(provider::RequestContext context, chat::Session session) {
                     "/help (hide/show this panel)\n"
                     "/quit or /exit\n"
                     "/clear\n"
+                    "/list\n"
+                    "/new [NAME]\n"
+                    "/provider PROVIDER\n"
                     "/models\n"
                     "/model MODEL\n"
                     "/system TEXT\n"
                     "/save [PATH]\n"
                     "/load PATH\n"
+                    "/remove\n"
                     "/insert PATH or /attach PATH (text or image)\n"
                     "/fetch URL\n"
                     "/theme [dark|light]\n"
@@ -1382,7 +1610,70 @@ int run(provider::RequestContext context, chat::Session session) {
             status = "Chat history cleared";
             return;
         }
-        if (text.rfind("/model", 0) == 0) {
+        if (text == "/list") {
+            if (!sqlite_available) {
+                status = "SQLite persistence is unavailable";
+                return;
+            }
+            if (active_job != ActiveJob::None) {
+                status = "Cannot list threads while a model job is running";
+                return;
+            }
+            Error list_error = sqlite_store.list_threads(thread_picker_threads, 200);
+            if (!list_error.ok()) {
+                status = error_line(list_error);
+                return;
+            }
+            if (thread_picker_threads.empty()) {
+                status = "No saved chat threads";
+                return;
+            }
+            thread_picker_selected = 0;
+            mode = TuiMode::ThreadList;
+            history_scroll = 0;
+            status = "Selected thread 1/" + std::to_string(thread_picker_threads.size());
+            return;
+        }
+        if (text == "/new" || text.rfind("/new ", 0) == 0) {
+            if (active_job != ActiveJob::None) {
+                status = "Cannot create a thread while a model job is running";
+                return;
+            }
+            session = chat::new_session(context);
+            session.name = trim_ascii(text.substr(4));
+            pending_images.clear();
+            inflight_image_count = 0;
+            apply_system_prompt(session, context.options.system);
+            history_scroll = 0;
+            status = session.name.empty() ? "New chat thread" : "New chat thread: " + session.name;
+            start_store_save();
+            return;
+        }
+        if (text == "/provider" || text.rfind("/provider ", 0) == 0) {
+            const std::string provider_name = trim_ascii(text.substr(9));
+            if (provider_name.empty()) {
+                status = "Usage: /provider PROVIDER";
+                return;
+            }
+            cli::Options next = context.options;
+            next.provider = provider_name;
+            next.positional_url.clear();
+            next.base_url.clear();
+            next.chat_url.clear();
+            next.models_url.clear();
+            next.responses_url.clear();
+            provider::ContextResult rebuilt = provider::build_context(next);
+            if (!rebuilt.error.ok()) {
+                status = error_line(rebuilt.error);
+                return;
+            }
+            context = std::move(rebuilt.context);
+            refresh_session_metadata(session, context);
+            status = "Provider set to " + context.profile.name;
+            start_store_save();
+            return;
+        }
+        if (text == "/model" || text.rfind("/model ", 0) == 0) {
             const std::string model = trim_ascii(text.substr(6));
             if (model.empty()) {
                 status = "Usage: /model MODEL";
@@ -1391,6 +1682,7 @@ int run(provider::RequestContext context, chat::Session session) {
             context.options.model = model;
             session.model = model;
             status = "Model set to " + model;
+            start_store_save();
             return;
         }
         if (text.rfind("/system", 0) == 0) {
@@ -1422,6 +1714,19 @@ int run(provider::RequestContext context, chat::Session session) {
                 return;
             }
             start_load(path);
+            return;
+        }
+        if (text == "/remove") {
+            if (!sqlite_available) {
+                status = "SQLite persistence is unavailable";
+                return;
+            }
+            if (session.thread_id <= 0) {
+                status = "No saved thread to remove";
+                return;
+            }
+            mode = TuiMode::RemoveConfirm;
+            status = "Confirm removal with y or cancel with n/Esc";
             return;
         }
         if (text == "/insert" || text.rfind("/insert ", 0) == 0 ||
@@ -1460,7 +1765,8 @@ int run(provider::RequestContext context, chat::Session session) {
         start_turn(context.options.prompt);
     }
 
-    render(session, input, status, history_scroll, show_thinking_traces, help_text,
+    std::string visible_panel = panel_text();
+    render(session, input, status, history_scroll, show_thinking_traces, visible_panel,
            RenderStyle{theme, use_colors});
     while (!quit) {
         TuiEvent event;
@@ -1507,6 +1813,7 @@ int run(provider::RequestContext context, chat::Session session) {
                                                                session.messages,
                                                                context.options.context_tokens);
                         start_save(context.options.save_chat_path, session);
+                        start_store_save();
                     }
                     break;
                 }
@@ -1523,6 +1830,7 @@ int run(provider::RequestContext context, chat::Session session) {
                         if (event.error.code == ErrorCode::Cancelled) {
                             keep_cancelled_turn();
                             status = "Cancelled";
+                            start_store_save();
                         } else {
                             rollback_pending_turn();
                             status = error_line(event.error);
@@ -1543,6 +1851,35 @@ int run(provider::RequestContext context, chat::Session session) {
                         refresh_session_metadata(session, context);
                         history_scroll = 0;
                         status = "Loaded " + event.text;
+                    } else {
+                        status = error_line(event.error);
+                    }
+                    break;
+                case TuiEventType::StoreSaveDone:
+                    file_job.join();
+                    if (event.error.ok()) {
+                        if (session.thread_id == 0 || session.thread_id == event.session.thread_id) {
+                            session.thread_id = event.session.thread_id;
+                            session.name = event.session.name;
+                            session.created_at = event.session.created_at;
+                            session.updated_at = event.session.updated_at;
+                        }
+                    } else if (event.error.code != ErrorCode::Cancelled) {
+                        status = error_line(event.error);
+                    }
+                    break;
+                case TuiEventType::StoreLoadDone:
+                    file_job.join();
+                    if (event.error.ok()) {
+                        session = std::move(event.session);
+                        pending_images.clear();
+                        inflight_image_count = 0;
+                        Error context_error = rebuild_context_from_session(session);
+                        apply_system_prompt(session, context.options.system);
+                        history_scroll = 0;
+                        status = context_error.ok()
+                                     ? "Loaded thread: " + (session.name.empty() ? event.text : session.name)
+                                     : error_line(context_error);
                     } else {
                         status = error_line(event.error);
                     }
@@ -1616,6 +1953,60 @@ int run(provider::RequestContext context, chat::Session session) {
                     continue;
                 }
                 const unsigned char ch = event.byte;
+                if (mode == TuiMode::ThreadList) {
+                    if (ch == 17) {
+                        quit = true;
+                        continue;
+                    }
+                    if (ch == 27) {
+                        handle_thread_picker_escape(thread_picker_threads,
+                                                    thread_picker_selected,
+                                                    mode,
+                                                    status);
+                        continue;
+                    }
+                    if (ch == '\r' || ch == '\n') {
+                        if (thread_picker_selected < thread_picker_threads.size()) {
+                            const long long thread_id = thread_picker_threads[thread_picker_selected].id;
+                            mode = TuiMode::Chat;
+                            thread_picker_threads.clear();
+                            thread_picker_selected = 0;
+                            start_store_load(thread_id);
+                        }
+                        continue;
+                    }
+                    continue;
+                }
+                if (mode == TuiMode::RemoveConfirm) {
+                    if (ch == 17) {
+                        quit = true;
+                        continue;
+                    }
+                    if (ch == 27 || ch == 'n' || ch == 'N') {
+                        mode = TuiMode::Chat;
+                        status = "Remove cancelled";
+                        continue;
+                    }
+                    if (ch == 'y' || ch == 'Y') {
+                        const long long removed_thread_id = session.thread_id;
+                        Error remove_error = sqlite_store.soft_delete_thread(removed_thread_id);
+                        if (remove_error.ok()) {
+                            sqlite_store.set_last_thread_id(0);
+                            session = chat::new_session(context);
+                            pending_images.clear();
+                            inflight_image_count = 0;
+                            apply_system_prompt(session, context.options.system);
+                            history_scroll = 0;
+                            status = "Removed thread " + std::to_string(removed_thread_id);
+                        } else {
+                            status = error_line(remove_error);
+                        }
+                        mode = TuiMode::Chat;
+                        continue;
+                    }
+                    status = "Press y to remove, n or Esc to cancel";
+                    continue;
+                }
                 if (ch == '\t') {
                     start_path_completion();
                     continue;
@@ -1704,7 +2095,8 @@ int run(provider::RequestContext context, chat::Session session) {
                 }
             }
         }
-        render(session, input, status, history_scroll, show_thinking_traces, help_text,
+        visible_panel = panel_text();
+        render(session, input, status, history_scroll, show_thinking_traces, visible_panel,
                RenderStyle{theme, use_colors});
     }
 

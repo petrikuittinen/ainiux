@@ -13,6 +13,7 @@
 #include <vector>
 
 #include "chat/session.hpp"
+#include "chat/sqlite_store.hpp"
 #include "benchmark/benchmark.hpp"
 #include "cli/args.hpp"
 #include "config/config.hpp"
@@ -2524,6 +2525,26 @@ void test_editor_contextual_completion_modes() {
           "chat command completion adds the path-command separator");
 
     completer.reset();
+    pkchat::editor::EditorState provider_command =
+        pkchat::editor::EditorState::from_text("/prov");
+    provider_command.mode = pkchat::editor::EditorMode::Chat;
+    provider_command.cursor = provider_command.text.size();
+    result = completer.complete(provider_command);
+    check(result.handled && result.kind == pkchat::editor::CompletionKind::Command &&
+              provider_command.text.str() == "/provider ",
+          "chat command completion includes /provider");
+
+    completer.reset();
+    pkchat::editor::EditorState list_command =
+        pkchat::editor::EditorState::from_text("/li");
+    list_command.mode = pkchat::editor::EditorMode::Chat;
+    list_command.cursor = list_command.text.size();
+    result = completer.complete(list_command);
+    check(result.handled && result.kind == pkchat::editor::CompletionKind::Command &&
+              list_command.text.str() == "/list",
+          "chat command completion includes /list");
+
+    completer.reset();
     pkchat::editor::EditorState path =
         pkchat::editor::EditorState::from_text("/insert " + directory + "/pkchat-context-fi");
     path.mode = pkchat::editor::EditorMode::Chat;
@@ -2948,6 +2969,81 @@ void test_chat_session_rejects_corrupt_json() {
     check(err.code == pkchat::ErrorCode::JsonParse, "corrupt chat file reports JSON parse error");
 }
 
+void test_chat_sqlite_store_round_trip_and_listing() {
+    const std::string path = "build/unit-pkchat.db";
+    std::filesystem::remove(path);
+    std::filesystem::remove(path + "-wal");
+    std::filesystem::remove(path + "-shm");
+
+    pkchat::chat::SqliteStore store;
+    pkchat::Error err = store.open(path);
+    check(err.ok(), "SQLite chat store opens");
+    check(store.path() == path, "SQLite chat store records database path");
+
+    pkchat::provider::RequestContext context;
+    context.profile.name = "lm_studio";
+    context.base_url = "http://localhost:1234/v1";
+    context.options.model = "local-model";
+    pkchat::chat::Session session = pkchat::chat::new_session(context);
+    session.messages.push_back({"system", "Be concise"});
+    session.messages.push_back({"user", "first prompt", {{"image/png", "base64-image"}}});
+    session.messages.push_back({"assistant", "first answer"});
+    session.usage_json = "{\"prompt_tokens\":2,\"completion_tokens\":3,\"total_tokens\":5}";
+    session.compaction_events.push_back({"2026-06-28T00:00:00Z", "truncate-oldest", 2, 1000, 500,
+                                         "Context compacted for test"});
+
+    err = store.save_session(session);
+    check(err.ok(), "SQLite chat session saves");
+    check(session.thread_id > 0, "SQLite save assigns a thread id");
+    check(session.name == "first prompt", "SQLite save derives a thread name from the first user message");
+
+    long long last_id = 0;
+    bool found = false;
+    err = store.last_thread_id(last_id, found);
+    check(err.ok() && found && last_id == session.thread_id, "SQLite store records last active thread");
+
+    pkchat::chat::Session loaded;
+    err = store.load_session(session.thread_id, loaded);
+    check(err.ok(), "SQLite chat session loads");
+    check(loaded.thread_id == session.thread_id && loaded.name == session.name,
+          "SQLite load preserves thread identity and name");
+    check(loaded.provider == "lm_studio" && loaded.base_url == "http://localhost:1234/v1" &&
+              loaded.model == "local-model",
+          "SQLite load preserves provider, base URL, and model metadata");
+    check(loaded.messages.size() == 3 && loaded.messages[1].content == "first prompt" &&
+              loaded.messages[1].images.size() == 1 &&
+              loaded.messages[1].images[0].base64_data == "base64-image",
+          "SQLite load preserves messages and image attachments");
+    check(loaded.usage_json.find("prompt_tokens") != std::string::npos,
+          "SQLite load preserves thread usage JSON");
+    check(loaded.compaction_events.size() == 1 &&
+              loaded.compaction_events[0].messages_compacted == 2,
+          "SQLite load preserves compaction events");
+
+    pkchat::chat::Session second = pkchat::chat::new_session(context);
+    second.messages.push_back({"user", "newest prompt"});
+    second.messages.push_back({"assistant", "newest answer"});
+    err = store.save_session(second);
+    check(err.ok(), "SQLite second chat session saves");
+
+    std::vector<pkchat::chat::ThreadSummary> threads;
+    err = store.list_threads(threads, 20);
+    check(err.ok(), "SQLite thread list query succeeds");
+    check(threads.size() == 2, "SQLite thread list returns saved threads");
+    check(!threads.empty() && threads[0].id == second.thread_id,
+          "SQLite thread list is newest thread first");
+    check(!threads.empty() && threads[0].last_provider == "lm_studio" &&
+              threads[0].last_model == "local-model" && threads[0].message_count == 2,
+          "SQLite thread summary includes provider, model, and message count");
+
+    err = store.soft_delete_thread(second.thread_id);
+    check(err.ok(), "SQLite soft delete succeeds");
+    threads.clear();
+    err = store.list_threads(threads, 20);
+    check(err.ok() && threads.size() == 1 && threads[0].id == session.thread_id,
+          "SQLite thread list hides soft-deleted threads");
+}
+
 void test_runtime_event_queue_and_job_cancel() {
     pkchat::runtime::EventQueue<int> queue;
     int value = 0;
@@ -3066,6 +3162,7 @@ int main() {
     test_lmstudio_shortcut_context();
     test_chat_session_json_round_trip();
     test_chat_session_rejects_corrupt_json();
+    test_chat_sqlite_store_round_trip_and_listing();
     test_runtime_event_queue_and_job_cancel();
     test_editor_piece_table_edits();
     test_editor_rectangular_rendering();

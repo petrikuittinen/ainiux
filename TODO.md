@@ -9,10 +9,9 @@
 
 ## Chat Persistence
 
-- Add SQLite3-backed local chat storage in profile `pkchat.db`, using WAL mode and indexes for thread listing, messages, attachments, usage, and compaction events.
-- Automatically save active chat threads and load the last active thread where appropriate.
-- Add TUI chat thread commands: `/new`, `/remove`, and `/list`.
-- Make `/list` show saved chat threads in the chat window, select with up/down plus Enter, cancel with Esc, and fully refresh the chat screen after either path.
+- Add focused integration coverage for SQLite-backed TUI chat storage in `~/.pkchat/pkchat.db`, including automatic save/load, `/new`, `/remove`, `/provider`, and `/list` picker behavior.
+- Harden SQLite autosave scheduling so an explicit JSON `/save` or slow file job can be followed by a deferred SQLite save instead of skipping that autosave.
+- Add recovery behavior when `app_state.last_thread_id` points at a deleted or missing thread.
 - Keep explicit JSON save/load as import/export compatibility, not the primary local chat library.
 - Add SQLite schema migrations, corruption handling, permission-denied tests, and leak checks for open/save/load/list/remove paths.
 

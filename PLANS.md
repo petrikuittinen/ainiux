@@ -57,7 +57,7 @@ Each milestone should leave the program usable. Do not create a long-lived pile 
 
 ## Current baseline
 
-Implementation status (2026-06-27): `pkchat` is at v0.78. The repository has the scriptable CLI, built-in provider registry and aliases, Chat Completions, text-only Responses API support, streaming SSE, credential lookup, JSON chat persistence, cancellable runtime jobs, REPL, full-screen TUI foundation, editor with selection, copy/cut/paste, grapheme-aware Unicode navigation and terminal cell-width rendering, and AI continue/auto-write (`Ctrl+Space`), request-only context policies, context-use estimates, bounded text/HTML/Markdown input, JPEG/PNG/GIF image input for Chat Completions, safe URL fetching, Markdown output conversion, automatic v0.6 system/user TOML-alike configuration loading, and concurrent JSONL benchmark execution. `--provider none` supports local conversion and editor workflows without a model endpoint. Standalone `--editor` accepts an optional startup path after a provider shortcut or base URL, creates a missing file before editing, prompts to save scratch buffers on quit, and asks for overwrite confirmation when saving to an existing path. Local `lmstudio`, `ollama`, `vllm`, and loopback base URLs auto-select the first `/v1/models` entry when `--model` is omitted.
+Implementation status (2026-06-28): `pkchat` is at v0.81. The repository has the scriptable CLI, built-in provider registry and aliases, Chat Completions, text-only Responses API support, streaming SSE, credential lookup, JSON chat import/export, SQLite-backed TUI chat persistence, cancellable runtime jobs, REPL, full-screen TUI foundation, editor with selection, copy/cut/paste, grapheme-aware Unicode navigation and terminal cell-width rendering, and AI continue/auto-write (`Ctrl+Space`), request-only context policies, context-use estimates, bounded text/HTML/Markdown input, JPEG/PNG/GIF image input for Chat Completions, safe URL fetching, Markdown output conversion, automatic v0.6 system/user TOML-alike configuration loading, and concurrent JSONL benchmark execution. `--provider none` supports local conversion and editor workflows without a model endpoint. Standalone `--editor` accepts an optional startup path after a provider shortcut or base URL, creates a missing file before editing, prompts to save scratch buffers on quit, and asks for overwrite confirmation when saving to an existing path. Local `lmstudio`, `ollama`, `vllm`, and loopback base URLs auto-select the first `/v1/models` entry when `--model` is omitted.
 
 Runtime defaults live in `cli::Options`, provider defaults live in `src/provider/`, and API keys are resolved while building the provider request context. Automatic system and user config files map into a base `cli::Options`, after which `main.cpp` parses CLI arguments over that base. `--no-config` can bypass the automatic user file while retaining system configuration, and `--debug` reports configuration discovery on `stderr`.
 
@@ -426,11 +426,11 @@ pkchat --new
 - [x] Add line-oriented REPL.
 - [x] Add prompt history for the session.
 - [x] Add `/save` and `/load`.
-- [ ] Add `/list` thread listing and picker.
-- [ ] Add `/new` to create a new chat thread.
-- [ ] Add `/provider` to switch the current chat thread's provider for future turns.
-- [ ] Add `/remove` to soft-delete the current chat thread after confirmation.
-- [ ] Add SQLite3-backed automatic chat persistence in `~/.pkchat/pkchat.db`.
+- [x] Add `/list` thread listing and picker.
+- [x] Add `/new` to create a new chat thread.
+- [x] Add `/provider` to switch the current chat thread's provider for future turns.
+- [x] Add `/remove` to soft-delete the current chat thread after confirmation.
+- [x] Add SQLite3-backed automatic chat persistence in `~/.pkchat/pkchat.db`.
 - [x] Add atomic save.
 - [x] Add corrupted chat-file handling.
 - [ ] Add config/profile support.
@@ -632,42 +632,42 @@ appears.
 
 ## SQLite persistence requirements
 
-- [ ] Link against `libsqlite3` from the Makefile without adding a package-manager requirement.
-- [ ] Add RAII wrappers for SQLite database handles, prepared statements, and transactions.
-- [ ] Create `~/.pkchat/pkchat.db` with WAL mode enabled.
-- [ ] Add v1 migrations and record applied schema versions.
-- [ ] Add indexes for latest-thread listing, provider/model filtering, transcript replay, attachments, usage, and compaction events.
-- [ ] Automatically create a thread when the first TUI message is sent and no thread exists.
-- [ ] Automatically append user/assistant/system messages and update thread metadata after successful turns.
-- [ ] Persist partial assistant content deliberately only when cancellation keeps the cancelled turn visible.
-- [ ] Automatically load the last active thread where appropriate.
-- [ ] Keep deletes deliberate: `/remove` must confirm and then soft-delete the current thread by setting `deleted_at`; hard-delete can be a later maintenance command.
+- [x] Link against `libsqlite3` from the Makefile without adding a package-manager requirement.
+- [x] Add RAII wrappers for SQLite database handles, prepared statements, and transactions.
+- [x] Create `~/.pkchat/pkchat.db` with WAL mode enabled.
+- [x] Add v1 migrations and record applied schema versions.
+- [x] Add indexes for latest-thread listing, provider/model filtering, transcript replay, attachments, usage, and compaction events.
+- [x] Automatically create a thread when the first TUI turn is saved and no thread exists.
+- [x] Automatically append user/assistant/system messages and update thread metadata after successful turns.
+- [x] Persist partial assistant content deliberately only when cancellation keeps the cancelled turn visible.
+- [x] Automatically load the last active thread where appropriate.
+- [x] Keep deletes deliberate: `/remove` must confirm and then soft-delete the current thread by setting `deleted_at`; hard-delete can be a later maintenance command.
 - [ ] Ensure SQLite errors include the database path and operation involved, without leaking credentials or local secrets.
 - [ ] Ensure all SQLite statements, handles, transactions, temporary strings, and per-row allocations are finalized or released on success, error, cancellation, and interrupted-stream paths.
 
 ## TUI chat thread commands
 
-- [ ] `/new [NAME]` creates a new empty chat thread and switches to it.
-- [ ] `/provider NAME` changes the current thread's provider context for future turns.
-- [ ] `/model MODEL` continues to change the current thread's model for future turns.
-- [ ] `/remove` asks for confirmation and soft-deletes the current chat thread.
-- [ ] `/list` runs the indexed thread-summary query synchronously, newest modified thread first.
-- [ ] `/list` opens a thread-picker view in the TUI, not a static transcript message.
-- [ ] In the picker, up/down changes selection, Enter loads the selected thread, and Esc cancels without changing the active chat.
-- [ ] After selecting a thread or cancelling the picker, the chat screen refreshes fully.
-- [ ] Selecting a thread restores its messages and last provider/model/base URL context; `/provider` and `/model` may override it before the next turn.
+- [x] `/new [NAME]` creates a new empty chat thread and switches to it.
+- [x] `/provider NAME` changes the current thread's provider context for future turns.
+- [x] `/model MODEL` continues to change the current thread's model for future turns.
+- [x] `/remove` asks for confirmation and soft-deletes the current chat thread.
+- [x] `/list` runs the indexed thread-summary query synchronously, newest modified thread first.
+- [x] `/list` opens a thread-picker view in the TUI, not a static transcript message.
+- [x] In the picker, up/down changes selection, Enter loads the selected thread, and Esc cancels without changing the active chat.
+- [x] After selecting a thread or cancelling the picker, the chat screen refreshes fully.
+- [x] Selecting a thread restores its messages and last provider/model/base URL context; `/provider` and `/model` may override it before the next turn.
 
 ## Acceptance criteria
 
 - [x] Explicit JSON chat files can be saved and loaded for compatibility/import-export.
-- [ ] TUI local storage opens or creates `~/.pkchat/pkchat.db` with WAL mode enabled.
-- [ ] Active chat threads are saved automatically after message changes.
-- [ ] The last active thread can be loaded automatically where appropriate.
-- [ ] `/new` creates and switches to a new chat thread.
-- [ ] `/list` lists saved threads newest-first and supports keyboard selection in TUI mode.
-- [ ] `/list` summary query is indexed and completes synchronously in normal local use without blocking on network or model work.
-- [ ] `/remove` soft-deletes the current thread after confirmation.
-- [ ] `/provider` and `/model` can change the provider/model used when resuming a thread.
+- [x] TUI local storage opens or creates `~/.pkchat/pkchat.db` with WAL mode enabled.
+- [x] Active chat threads are saved automatically after message changes.
+- [x] The last active thread can be loaded automatically where appropriate.
+- [x] `/new` creates and switches to a new chat thread.
+- [x] `/list` lists saved threads newest-first and supports keyboard selection in TUI mode.
+- [x] `/list` summary query is indexed and completes synchronously in normal local use without blocking on network or model work.
+- [x] `/remove` soft-deletes the current thread after confirmation.
+- [x] `/provider` and `/model` can change the provider/model used when resuming a thread.
 - [x] Corrupted JSON chat files produce a specific error without crashing.
 - [ ] Corrupted SQLite databases produce a specific error and recovery guidance.
 - [ ] Permission-denied writes produce a specific error.

@@ -19,6 +19,8 @@ Automatic system and user configuration files may select a credential environmen
 
 `--save-chat PATH` writes the transcript, provider name, base URL, model, settings, messages, usage, and compaction metadata. API keys and authorization headers are not saved. New chat files are written through a temporary file, fsynced where supported, renamed over the target, and created with mode `0600`.
 
+The TUI local chat library stores threads in `~/.pkchat/pkchat.db` using SQLite. The directory is created with mode `0700` and the database file with user-only permissions where supported. It stores prompts, responses, provider/base URL/model metadata, attachments, usage JSON, and compaction events, but not API keys, authorization headers, cookies, or configured key-file contents.
+
 
 ## Rendered HTML Output
 

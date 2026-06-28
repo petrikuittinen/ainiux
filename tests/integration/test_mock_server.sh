@@ -6,8 +6,10 @@ PORT="${PKCHAT_TEST_PORT:-18080}"
 MODEL="mock-model"
 SERVER_LOG="$ROOT/build/mock_server.log"
 EMPTY_CONFIG_HOME="$ROOT/build/empty-config-home"
+TEST_HOME="$ROOT/build/test-home"
 
-mkdir -p "$EMPTY_CONFIG_HOME"
+mkdir -p "$EMPTY_CONFIG_HOME" "$TEST_HOME"
+export HOME="$TEST_HOME"
 export XDG_CONFIG_HOME="$EMPTY_CONFIG_HOME"
 export XDG_CONFIG_DIRS="$ROOT/build/empty-system-config"
 

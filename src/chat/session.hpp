@@ -10,7 +10,9 @@
 namespace pkchat::chat {
 
 struct Session {
+    long long thread_id = 0;
     int schema_version = 1;
+    std::string name;
     std::string created_at;
     std::string updated_at;
     std::string provider;

@@ -36,6 +36,10 @@ The `none` provider profile represents an explicit model-offline state. It has n
 
 v0.2 stores explicit chat files via `--save-chat PATH` and `--load-chat PATH` before adding automatic XDG chat IDs. This keeps the early REPL scriptable and reviewable while still using the target schema fields: `schema_version`, timestamps, provider, base URL, model, settings, messages, attachments, usage, and compaction events. Saves use a temporary file, fsync, rename, and restrictive file permissions.
 
+## SQLite Chat Persistence
+
+The automatic local TUI chat library uses `libsqlite3` and stores its database at `~/.pkchat/pkchat.db`. SQLite is a standard system library on the target POSIX-like platforms and keeps the dependency smaller than adding a bespoke storage engine. The schema stores one row per message rather than one JSON transcript blob so thread listing, transcript replay, regeneration, attachments, usage records, and compaction events have stable identifiers and indexes. WAL mode is enabled for the local database, with short transactions and a short busy timeout so indexed `/list` queries can run synchronously without waiting indefinitely on a lock.
+
 ## Runtime Jobs
 
 v0.3 introduces `src/runtime/` with a small cancellation token, thread-safe event queue, and RAII `JobHandle`. The first users are the full-screen TUI foundation and cancellable provider requests. HTTP requests carry a cancellation token down to libcurl and abort through `CURLOPT_XFERINFOFUNCTION`, returning `PKCHAT_ERR_CANCELLED` instead of a generic transport error.
