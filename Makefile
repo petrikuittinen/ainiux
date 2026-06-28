@@ -31,6 +31,12 @@ COMMON_CONFIG_DIR := $(DESTDIR)$(SYSCONFDIR)/xdg/pkchat
 COMMON_CONFIG_PATH := $(COMMON_CONFIG_DIR)/config.conf
 BENCHMARK_DATA_DIR := $(DESTDIR)$(PREFIX)/share/pkchat/benchmarks
 BUILTIN_BENCHMARK_HEADER := $(GENERATED_DIR)/builtin_dataset.hpp
+BUILTIN_DATASET_PARTS := benchmarks/builtin/safety.jsonl \
+                         benchmarks/builtin/reasoning.jsonl \
+                         benchmarks/builtin/writing.jsonl \
+                         benchmarks/builtin/coding.jsonl \
+                         benchmarks/builtin/multi-turn.jsonl
+BUILTIN_DATASET := benchmarks/builtin.jsonl
 
 SRC := $(shell find src -name '*.cpp' | sort)
 APP_SRC := $(SRC)
@@ -64,7 +70,11 @@ $(OBJ_DIR)/%.o: %.cpp
 	@mkdir -p $(dir $@)
 	$(CXX) $(CXXFLAGS) -MMD -MP -c $< -o $@
 
-$(BUILTIN_BENCHMARK_HEADER): benchmarks/builtin.jsonl
+$(BUILTIN_DATASET): $(BUILTIN_DATASET_PARTS)
+	@cat $(BUILTIN_DATASET_PARTS) >$@.tmp
+	@mv $@.tmp $@
+
+$(BUILTIN_BENCHMARK_HEADER): $(BUILTIN_DATASET)
 	@mkdir -p $(dir $@)
 	@{ \
 		printf '%s\n' '#pragma once' 'namespace pkchat::benchmark {' \
@@ -74,7 +84,7 @@ $(BUILTIN_BENCHMARK_HEADER): benchmarks/builtin.jsonl
 	} >$@.tmp
 	@mv $@.tmp $@
 
-$(OBJ_DIR)/src/benchmark/benchmark.o: $(BUILTIN_BENCHMARK_HEADER)
+$(OBJ_DIR)/src/benchmark/dataset.o: $(BUILTIN_BENCHMARK_HEADER)
 
 -include $(DEP)
 
@@ -130,7 +140,7 @@ install: $(BIN) $(COMMON_CONFIG)
 		install -m 0644 "$(COMMON_CONFIG)" "$(COMMON_CONFIG_PATH)"; \
 	fi
 	install -d "$(BENCHMARK_DATA_DIR)"
-	install -m 0644 benchmarks/builtin.jsonl benchmarks/long-context.jsonl "$(BENCHMARK_DATA_DIR)"
+	install -m 0644 $(BUILTIN_DATASET) benchmarks/long-context.jsonl $(BUILTIN_DATASET_PARTS) "$(BENCHMARK_DATA_DIR)"
 
 clean:
 	rm -rf $(BUILD_DIR) $(BIN) $(IO_FAULT_BIN)
