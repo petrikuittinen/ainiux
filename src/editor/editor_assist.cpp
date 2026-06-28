@@ -819,4 +819,26 @@ std::string trim_assist_inplace_response(std::string text) {
     return trim_ascii_copy(std::move(text));
 }
 
+void strip_trailing_assist_close_tag_without_undo(EditorState& state) {
+    constexpr const char* kCloseTag = "</content>";
+    constexpr size_t kCloseTagLen = 10;
+    constexpr size_t kTailLookback = 10;
+    if (state.cursor == 0) {
+        return;
+    }
+    const size_t lookback = std::min(state.cursor, kTailLookback);
+    const std::string tail = state.text.range_text(state.cursor - lookback, lookback);
+    if (tail.size() < kCloseTagLen || tail.compare(tail.size() - kCloseTagLen, kCloseTagLen, kCloseTag) != 0) {
+        return;
+    }
+    const size_t erase_start = state.cursor - kCloseTagLen;
+    Error err = state.text.erase(erase_start, kCloseTagLen);
+    if (!err.ok()) {
+        return;
+    }
+    state.cursor = erase_start;
+    state.preferred_column = state.text.display_column_for_offset(state.cursor);
+    state.dirty = true;
+}
+
 }  // namespace pkchat::editor

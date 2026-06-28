@@ -98,6 +98,7 @@ void start_assist_job(const AiContinueContext& context,
                       runtime::EventQueue<ContinueEvent>& events,
                       runtime::JobHandle& job);
 std::string trim_assist_inplace_response(std::string text);
+void strip_trailing_assist_close_tag_without_undo(EditorState& state);
 
 class AssistStreamFilter {
    public:

@@ -136,6 +136,9 @@ int run_editor(const std::string& path,
                 set_assist_minibuffer(suffix);
             }
         } else {
+            if (assist_session.edit_kind == AssistEditKind::StreamInsert) {
+                strip_trailing_assist_close_tag_without_undo(state);
+            }
             if (commit_stream_undo && assist_session.saw_visible) {
                 state.finalize_stream_edit(assist_session.undo_before);
             }

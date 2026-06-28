@@ -552,6 +552,22 @@ void test_editor_assist_helpers() {
               "streamed assist output leaves untagged text unchanged");
     }
 
+    {
+        pkchat::editor::EditorState state = pkchat::editor::EditorState::from_text("hello</content>");
+        state.cursor = state.text.size();
+        pkchat::editor::strip_trailing_assist_close_tag_without_undo(state);
+        check(state.text.str() == "hello",
+              "streamed assist post-clear strips trailing close tag from buffer");
+        check(!state.can_undo(), "streamed assist post-clear does not create undo history");
+    }
+    {
+        pkchat::editor::EditorState state = pkchat::editor::EditorState::from_text("keep</content>tail");
+        state.cursor = state.text.size();
+        pkchat::editor::strip_trailing_assist_close_tag_without_undo(state);
+        check(state.text.str() == "keep</content>tail",
+              "streamed assist post-clear ignores close tag not at insertion tail");
+    }
+
     const pkchat::provider::RequestContext assist_context =
         pkchat::editor::assist_request_context(context, true);
     check(assist_context.suppress_streaming_reasoning,
