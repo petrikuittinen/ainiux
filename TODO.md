@@ -2,7 +2,6 @@
 
 ## Editor AI Commands
 
-- Add `/comment`, `/rewrite`, `/English`, `/Chinese`, and `/Finnish` editor commands using the existing AI-command flow.
 - Add `/regenerate` to repeat the previous AI command with the same command options where practical.
 - Ensure AI text mutations are one undoable editor operation so a separate preview panel is not required.
 - Nice-to-have: keep standalone editor input/navigation fully responsive while an AI assist request is active; cancellation remains the required behavior.

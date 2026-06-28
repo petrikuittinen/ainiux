@@ -25,12 +25,32 @@ constexpr const char* kDefaultAssistGrammarPrompt =
 constexpr const char* kDefaultAssistContinuePrompt = "Continue the text naturally from where it ends.";
 constexpr const char* kDefaultAssistFactPrompt =
     "Fact-check the text and add brief comments about any factual issues you find.";
+constexpr const char* kDefaultAssistCommentPrompt =
+    "Comment on how to improve the text. Give concise, actionable feedback. Do not rewrite "
+    "the text except for short examples where they make the feedback clearer.";
+constexpr const char* kDefaultAssistRewritePrompt =
+    "Rewrite the text to improve spelling, grammar, factual accuracy, and style while "
+    "preserving the intended meaning. Correct clear factual errors, but do not invent "
+    "details when the facts are uncertain.";
+constexpr const char* kDefaultAssistEnglishPrompt =
+    "Translate the text into English. Preserve meaning, structure, names, numbers, and "
+    "formatting where practical.";
+constexpr const char* kDefaultAssistChinesePrompt =
+    "Translate the text into Chinese. Use natural contemporary Chinese and preserve meaning, "
+    "structure, names, numbers, and formatting where practical.";
+constexpr const char* kDefaultAssistFinnishPrompt =
+    "Translate the text into Finnish. Preserve meaning, structure, names, numbers, and "
+    "formatting where practical.";
 constexpr const char* kContentOpenTag = "<content>";
 constexpr const char* kContentCloseTag = "</content>";
 
+char lower_ascii_char(char ch) {
+    return static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+}
+
 std::string lower_ascii_copy(std::string text) {
     for (char& ch : text) {
-        ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+        ch = lower_ascii_char(ch);
     }
     return text;
 }
@@ -60,7 +80,8 @@ std::string longest_common_prefix(const std::vector<std::string>& values) {
     for (size_t i = 1; i < values.size(); ++i) {
         size_t length = 0;
         const size_t limit = std::min(prefix.size(), values[i].size());
-        while (length < limit && prefix[length] == values[i][length]) {
+        while (length < limit &&
+               lower_ascii_char(prefix[length]) == lower_ascii_char(values[i][length])) {
             ++length;
         }
         prefix.resize(length);
@@ -268,6 +289,11 @@ EditorAssistConfig default_editor_assist_config() {
         {"/grammar", modes, kDefaultAssistGrammarPrompt},
         {"/continue", modes, kDefaultAssistContinuePrompt},
         {"/fact", modes, kDefaultAssistFactPrompt},
+        {"/comment", modes, kDefaultAssistCommentPrompt},
+        {"/rewrite", modes, kDefaultAssistRewritePrompt},
+        {"/English", modes, kDefaultAssistEnglishPrompt},
+        {"/Chinese", modes, kDefaultAssistChinesePrompt},
+        {"/Finnish", modes, kDefaultAssistFinnishPrompt},
     };
     return config;
 }
@@ -376,8 +402,10 @@ AssistCompletionResult complete_assist_command(std::string& input,
     state.candidates.clear();
 
     const std::string token = input;
+    const std::string normalized_token = lower_ascii_copy(token);
     for (const std::string& command : assist_command_completions(config)) {
-        if (command.compare(0, token.size(), token) == 0) {
+        const std::string normalized_command = lower_ascii_copy(command);
+        if (normalized_command.compare(0, normalized_token.size(), normalized_token) == 0) {
             state.candidates.push_back(command);
         }
     }

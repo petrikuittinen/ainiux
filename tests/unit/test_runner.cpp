@@ -1728,6 +1728,26 @@ void test_editor_assist_helpers() {
         pkchat::editor::find_assist_command(default_config, "/spell");
     check(default_spell != nullptr && default_spell->prompt.find("spelling") != std::string::npos,
           "default editor assist spell prompt is populated");
+    const pkchat::editor::EditorAssistCommand* default_comment =
+        pkchat::editor::find_assist_command(default_config, "/comment");
+    check(default_comment != nullptr && default_comment->prompt.find("improve the text") != std::string::npos,
+          "default editor assist comment prompt is populated");
+    const pkchat::editor::EditorAssistCommand* default_rewrite =
+        pkchat::editor::find_assist_command(default_config, "/rewrite");
+    check(default_rewrite != nullptr && default_rewrite->prompt.find("factual accuracy") != std::string::npos,
+          "default editor assist rewrite prompt is populated");
+    const pkchat::editor::EditorAssistCommand* default_english =
+        pkchat::editor::find_assist_command(default_config, "/English");
+    check(default_english != nullptr && default_english->prompt.find("English") != std::string::npos,
+          "default editor assist English prompt is populated");
+    const pkchat::editor::EditorAssistCommand* default_chinese =
+        pkchat::editor::find_assist_command(default_config, "/Chinese");
+    check(default_chinese != nullptr && default_chinese->prompt.find("Chinese") != std::string::npos,
+          "default editor assist Chinese prompt is populated");
+    const pkchat::editor::EditorAssistCommand* default_finnish =
+        pkchat::editor::find_assist_command(default_config, "/Finnish");
+    check(default_finnish != nullptr && default_finnish->prompt.find("Finnish") != std::string::npos,
+          "default editor assist Finnish prompt is populated");
 
     pkchat::editor::ParsedAssistCommand parsed =
         pkchat::editor::parse_assist_command("/spell all", default_config);
@@ -1760,6 +1780,31 @@ void test_editor_assist_helpers() {
               parsed.scope == pkchat::editor::AssistScope::Insert,
           "/fact insert parses");
 
+    parsed = pkchat::editor::parse_assist_command("/comment all", default_config);
+    check(parsed.ok && parsed.kind == pkchat::editor::AssistCommandKind::Configured &&
+              parsed.scope == pkchat::editor::AssistScope::All,
+          "/comment all parses");
+
+    parsed = pkchat::editor::parse_assist_command("/rewrite selection", default_config);
+    check(parsed.ok && parsed.kind == pkchat::editor::AssistCommandKind::Configured &&
+              parsed.scope == pkchat::editor::AssistScope::Selection,
+          "/rewrite selection parses");
+
+    parsed = pkchat::editor::parse_assist_command("/english insert", default_config);
+    check(parsed.ok && parsed.kind == pkchat::editor::AssistCommandKind::Configured &&
+              parsed.scope == pkchat::editor::AssistScope::Insert,
+          "/English parses case-insensitively");
+
+    parsed = pkchat::editor::parse_assist_command("/Chinese continue", default_config);
+    check(parsed.ok && parsed.kind == pkchat::editor::AssistCommandKind::Configured &&
+              parsed.scope == pkchat::editor::AssistScope::Continue,
+          "/Chinese continue parses");
+
+    parsed = pkchat::editor::parse_assist_command("/Finnish all", default_config);
+    check(parsed.ok && parsed.kind == pkchat::editor::AssistCommandKind::Configured &&
+              parsed.scope == pkchat::editor::AssistScope::All,
+          "/Finnish all parses");
+
     parsed = pkchat::editor::parse_assist_command("/prompt rewrite formally", default_config);
     check(parsed.ok && parsed.kind == pkchat::editor::AssistCommandKind::Prompt &&
               parsed.custom_prompt == "rewrite formally",
@@ -1778,14 +1823,16 @@ void test_editor_assist_helpers() {
     const std::vector<std::string> completions =
         pkchat::editor::assist_command_completions(default_config);
     check(!completions.empty() && completions.front() == "/spell", "assist completions include /spell");
-    for (const char* builtin : {"/spell", "/grammar", "/continue", "/fact"}) {
+    for (const char* builtin : {"/spell", "/grammar", "/continue", "/fact", "/comment", "/rewrite",
+                                "/English", "/Chinese", "/Finnish"}) {
         for (const char* mode : {"selection", "all", "continue", "insert"}) {
             const std::string variant = std::string(builtin) + " " + mode;
             check(std::find(completions.begin(), completions.end(), variant) != completions.end(),
                   std::string("builtin assist completions include ") + variant);
         }
     }
-    for (const char* builtin : {"/spell", "/grammar", "/continue", "/fact"}) {
+    for (const char* builtin : {"/spell", "/grammar", "/continue", "/fact", "/comment", "/rewrite",
+                                "/English", "/Chinese", "/Finnish"}) {
         const pkchat::editor::EditorAssistCommand* command =
             pkchat::editor::find_assist_command(default_config, builtin);
         check(command != nullptr && command->modes.size() == 4,
@@ -1820,6 +1867,17 @@ void test_editor_assist_helpers() {
     input = "/q";
     completion = pkchat::editor::complete_assist_command(input, completer, default_config);
     check(input == "/quit", "assist tab completion rematches /q after stale / cycle state");
+
+    input = "/en";
+    completer = pkchat::editor::AssistCompleterState{};
+    completion = pkchat::editor::complete_assist_command(input, completer, default_config);
+    check(completion.changed && input == "/English",
+          "assist tab completion matches capitalized commands case-insensitively");
+    input = "/c";
+    completer = pkchat::editor::AssistCompleterState{};
+    completion = pkchat::editor::complete_assist_command(input, completer, default_config);
+    check(!completion.changed && input == "/c" && completer.active,
+          "assist tab completion keeps ambiguous mixed-case /c prefix");
 
     pkchat::editor::EditorState state =
         pkchat::editor::EditorState::from_text("hello wrld");
