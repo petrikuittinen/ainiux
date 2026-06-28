@@ -4,6 +4,8 @@
 
 #include <cctype>
 #include <cstdlib>
+#include <iomanip>
+#include <sstream>
 
 namespace pkchat::editor {
 namespace {
@@ -58,11 +60,53 @@ AiContinueSettings ai_continue_settings_from_env() {
     return settings;
 }
 
-std::string continue_status_message(const std::string& model_name, const std::string& suffix) {
-    if (model_name.empty()) {
+std::string continue_status_message(const std::string& provider_name,
+                                    const std::string& model_name,
+                                    const std::string& suffix) {
+    if (provider_name.empty() && model_name.empty()) {
         return suffix;
     }
-    return "[" + model_name + "] " + suffix;
+    if (provider_name.empty()) {
+        return "[" + model_name + "] " + suffix;
+    }
+    if (model_name.empty()) {
+        return "[" + provider_name + " / model unknown] " + suffix;
+    }
+    return "[" + provider_name + " / " + model_name + "] " + suffix;
+}
+
+std::string continue_completion_status_suffix(const provider::ChatResult& result,
+                                              bool stream,
+                                              const std::string& state) {
+    std::ostringstream out;
+    out << state;
+    if (stream) {
+        out << " | TTFT ";
+        if (result.ttft_ms >= 0) {
+            out << result.ttft_ms << "ms";
+        } else {
+            out << "unknown";
+        }
+    } else {
+        out << " | Response " << result.total_ms << "ms";
+    }
+    out << " | ";
+    if (result.completion_tokens_estimated) {
+        out << "~";
+    }
+    out << std::fixed << std::setprecision(1) << provider::tokens_per_second(result, stream)
+        << " tok/s";
+    return out.str();
+}
+
+std::string continue_completion_status_message(const std::string& provider_name,
+                                               const std::string& model_name,
+                                               const provider::ChatResult& result,
+                                               bool stream,
+                                               const std::string& state) {
+    return continue_status_message(provider_name,
+                                   model_name,
+                                   continue_completion_status_suffix(result, stream, state));
 }
 
 bool editor_auto_selects_model(const provider::RequestContext& context) {

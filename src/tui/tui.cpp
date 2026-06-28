@@ -52,12 +52,58 @@ std::string ready_status() {
     return std::string("Pkchat v") + kVersion + " ready";
 }
 
-std::string generation_ready_status(const provider::ChatResult& result,
+namespace {
+
+std::string provider_model_status_label(const std::string& provider_name,
+                                        const std::string& model_name) {
+    if (provider_name.empty() && model_name.empty()) {
+        return "";
+    }
+    if (provider_name.empty()) {
+        return "[" + model_name + "]";
+    }
+    if (model_name.empty()) {
+        return "[" + provider_name + " / model unknown]";
+    }
+    return "[" + provider_name + " / " + model_name + "]";
+}
+
+std::string provider_model_status_label(const provider::RequestContext& context) {
+    return provider_model_status_label(context.profile.name, context.options.model);
+}
+
+std::string provider_model_status_label(const chat::Session& session) {
+    return provider_model_status_label(session.provider, session.model);
+}
+
+std::string provider_model_status_message(const std::string& label, const std::string& suffix) {
+    if (label.empty()) {
+        return suffix;
+    }
+    return label + " " + suffix;
+}
+
+std::string provider_model_status_message(const provider::RequestContext& context,
+                                          const std::string& suffix) {
+    return provider_model_status_message(provider_model_status_label(context), suffix);
+}
+
+}  // namespace
+
+std::string generation_ready_status(const std::string& provider_name,
+                                    const std::string& model_name,
+                                    const provider::ChatResult& result,
                                     bool stream,
                                     const std::vector<provider::Message>& messages,
                                     long long context_tokens) {
     std::ostringstream out;
-    out << (context_tokens > 0 ? std::string("Pkchat v") + kVersion : ready_status());
+    const std::string label = provider_model_status_label(provider_name, model_name);
+    if (label.empty()) {
+        out << (context_tokens > 0 ? std::string("Pkchat v") + kVersion + " ready"
+                                  : ready_status());
+    } else {
+        out << label;
+    }
     if (stream) {
         if (context_tokens > 0) {
             out << " | TTFT " << result.ttft_ms << "ms";
@@ -707,7 +753,8 @@ std::vector<StyledLine> history_lines_for_session(const chat::Session& session, 
             } else {
                 const ThinkingDisplay display = thinking_display_text(message.content, show_thinking_traces);
                 if (!show_thinking_traces && display.saw_thinking_tag && trim_ascii(display.text).empty()) {
-                    content = "thinking...";
+                    content = provider_model_status_message(provider_model_status_label(session),
+                                                            "thinking...");
                 } else {
                     content = display.text;
                 }
@@ -841,6 +888,7 @@ struct TuiEvent {
     editor::ContextualCompleter path_completer;
     editor::PathCompletionResult completion;
     size_t completion_generation = 0;
+    bool quiet_success = false;
 };
 
 std::string thread_picker_text(const std::vector<chat::ThreadSummary>& threads, size_t selected) {
@@ -1134,7 +1182,7 @@ int run(provider::RequestContext context, chat::Session session) {
     auto set_thinking_trace_mode = [&](bool show_traces) {
         show_thinking_traces = show_traces;
         if (!show_thinking_traces && pending_assistant_is_hidden_thinking()) {
-            status = "thinking...";
+            status = provider_model_status_message(context, "thinking...");
         } else {
             status = show_thinking_traces ? "Thinking traces shown" : "Thinking traces hidden";
         }
@@ -1193,18 +1241,22 @@ int run(provider::RequestContext context, chat::Session session) {
         pending_assistant = static_cast<size_t>(-1);
     };
 
-    auto start_save = [&](const std::string& path, chat::Session snapshot) {
+    auto start_save = [&](const std::string& path, chat::Session snapshot, bool quiet_success = false) {
         if (path.empty()) {
             return;
         }
         if (file_job.running()) {
-            status = "A file job is already running";
+            if (!quiet_success) {
+                status = "A file job is already running";
+            }
             return;
         }
-        file_job.start([path, snapshot = std::move(snapshot), &events](runtime::CancellationToken token) mutable {
+        file_job.start([path, snapshot = std::move(snapshot), quiet_success, &events](
+                           runtime::CancellationToken token) mutable {
             TuiEvent event;
             event.type = TuiEventType::SaveDone;
             event.text = path;
+            event.quiet_success = quiet_success;
             if (token.cancelled()) {
                 event.error = {ErrorCode::Cancelled, "save cancelled: " + path};
             } else {
@@ -1776,7 +1828,9 @@ int run(provider::RequestContext context, chat::Session session) {
                     if (pending_assistant != static_cast<size_t>(-1) && pending_assistant < session.messages.size()) {
                         session.messages[pending_assistant].content += event.text;
                     }
-                    status = pending_assistant_is_hidden_thinking() ? "thinking..." : "Streaming...";
+                    status = pending_assistant_is_hidden_thinking()
+                                 ? provider_model_status_message(context, "thinking...")
+                                 : provider_model_status_message(context, "streaming response ...");
                     break;
                 case TuiEventType::Done: {
                     model_job.join();
@@ -1809,10 +1863,13 @@ int run(provider::RequestContext context, chat::Session session) {
                     } else {
                         status = event.compacted
                                      ? event.compaction.notice
-                                     : generation_ready_status(event.chat, context.options.stream,
+                                     : generation_ready_status(context.profile.name,
+                                                               context.options.model,
+                                                               event.chat,
+                                                               context.options.stream,
                                                                session.messages,
                                                                context.options.context_tokens);
-                        start_save(context.options.save_chat_path, session);
+                        start_save(context.options.save_chat_path, session, true);
                         start_store_save();
                     }
                     break;
@@ -1840,7 +1897,13 @@ int run(provider::RequestContext context, chat::Session session) {
                 }
                 case TuiEventType::SaveDone:
                     file_job.join();
-                    status = event.error.ok() ? "Saved " + event.text : error_line(event.error);
+                    if (event.error.ok()) {
+                        if (!event.quiet_success) {
+                            status = "Saved " + event.text;
+                        }
+                    } else if (!event.quiet_success || event.error.code != ErrorCode::Cancelled) {
+                        status = error_line(event.error);
+                    }
                     break;
                 case TuiEventType::LoadDone:
                     file_job.join();

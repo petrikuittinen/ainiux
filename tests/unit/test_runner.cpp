@@ -2141,9 +2141,22 @@ void test_editor_ai_continue_helpers() {
     check(text.range_text(2, 4) == "cdef", "range_text returns a bounded substring");
     check(text.range_text(0, 100) == "abcdefghij", "range_text clamps to buffer size");
 
-    check(pkchat::editor::continue_status_message("gpt-test", "thinking... ESC to abort") ==
-              "[gpt-test] thinking... ESC to abort",
-          "continue status message includes model name");
+    check(pkchat::editor::continue_status_message("lm_studio", "gpt-test", "thinking... ESC to abort") ==
+              "[lm_studio / gpt-test] thinking... ESC to abort",
+          "continue status message includes provider and model name");
+
+    pkchat::provider::ChatResult continue_result;
+    continue_result.ttft_ms = 100;
+    continue_result.total_ms = 1100;
+    continue_result.completion_tokens = 20;
+    continue_result.completion_tokens_estimated = true;
+    check(pkchat::editor::continue_completion_status_message("lm_studio",
+                                                             "gpt-test",
+                                                             continue_result,
+                                                             true,
+                                                             "stopped and ready") ==
+              "[lm_studio / gpt-test] stopped and ready | TTFT 100ms | ~20.0 tok/s",
+          "continue completion status includes provider, model, TTFT, and estimated token throughput");
 
     pkchat::editor::EditorState state = pkchat::editor::EditorState::from_text("Once upon a ");
     state.cursor = state.text.size();
@@ -2643,13 +2656,17 @@ void test_tui_ready_and_generation_status() {
     result.completion_tokens = 20;
     result.completion_tokens_estimated = true;
 
-    const std::string streaming = pkchat::tui::generation_ready_status(result, true, {}, 0);
+    const std::string streaming =
+        pkchat::tui::generation_ready_status("lm_studio", "gpt-test", result, true, {}, 0);
+    check(streaming.find("[lm_studio / gpt-test]") == 0,
+          "TUI streaming completion status starts with provider and model");
     check(streaming.find("TTFT: 100 ms") != std::string::npos,
           "TUI streaming completion status displays time to first token");
     check(streaming.find("Token/s: 20.0 (estimated)") != std::string::npos,
           "TUI streaming completion status estimates throughput after the first token");
 
-    const std::string non_streaming = pkchat::tui::generation_ready_status(result, false, {}, 0);
+    const std::string non_streaming =
+        pkchat::tui::generation_ready_status("lm_studio", "gpt-test", result, false, {}, 0);
     check(non_streaming.find("Response: 1100 ms") != std::string::npos,
           "TUI non-streaming completion status reports response latency instead of TTFT");
     check(non_streaming.find("Token/s: 18.2 (estimated)") != std::string::npos,
@@ -2659,7 +2676,7 @@ void test_tui_ready_and_generation_status() {
     const std::vector<pkchat::provider::Message> messages = {
         {"user", "hi"}, {"assistant", "<think>x</think>ok"}};
     const std::string context_status =
-        pkchat::tui::generation_ready_status(result, true, messages, 100);
+        pkchat::tui::generation_ready_status("lm_studio", "gpt-test", result, true, messages, 100);
     check(context_status.find("TTFT 100ms | ~20.0 tok/s") != std::string::npos,
           "TUI context status uses compact timing and estimated-throughput notation");
     check(context_status.find("Context used: 25/100 (25.0%)") != std::string::npos,
@@ -2667,7 +2684,7 @@ void test_tui_ready_and_generation_status() {
 
     result.usage_json = "null";
     const std::string exhausted =
-        pkchat::tui::generation_ready_status(result, true, messages, 10);
+        pkchat::tui::generation_ready_status("lm_studio", "gpt-test", result, true, messages, 10);
     check(exhausted.find("Context used: 17/10 (170.0%)") != std::string::npos,
           "TUI context estimate reports usage beyond the configured window");
 }

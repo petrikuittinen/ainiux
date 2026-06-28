@@ -2389,6 +2389,7 @@ struct AssistSession {
     bool saw_visible = false;
     AssistEditKind edit_kind = AssistEditKind::StreamInsert;
     EditorSnapshot undo_before;
+    std::string provider_name;
     std::string model_name;
     size_t replace_start = 0;
     size_t replace_count = 0;
@@ -2404,6 +2405,7 @@ void clear_assist_session(AssistSession& session) {
     session.saw_visible = false;
     session.edit_kind = AssistEditKind::StreamInsert;
     session.undo_before = EditorSnapshot{};
+    session.provider_name.clear();
     session.model_name.clear();
     session.replace_start = 0;
     session.replace_count = 0;
@@ -2470,7 +2472,10 @@ int run_editor(const std::string& path,
     };
 
     auto set_assist_minibuffer = [&](const std::string& suffix) {
-        minibuffer_message(minibuffer, continue_status_message(assist_session.model_name, suffix));
+        minibuffer_message(minibuffer,
+                           continue_status_message(assist_session.provider_name,
+                                                   assist_session.model_name,
+                                                   suffix));
     };
 
     auto finish_assist_session = [&](const std::string& suffix,
@@ -2523,11 +2528,17 @@ int run_editor(const std::string& path,
                         assist_session.model_name = event.chat.model;
                     }
                     if (assist_session.edit_kind == AssistEditKind::ReplaceInPlace) {
-                        finish_assist_session("ready",
-                                              false,
-                                              trim_assist_inplace_response(event.chat.content));
+                        finish_assist_session(
+                            continue_completion_status_suffix(event.chat, assist_session.streaming, "ready"),
+                            false,
+                            trim_assist_inplace_response(event.chat.content));
                     } else {
-                        finish_assist_session("stopped and ready", true, std::nullopt);
+                        finish_assist_session(
+                            continue_completion_status_suffix(event.chat,
+                                                              assist_session.streaming,
+                                                              "stopped and ready"),
+                            true,
+                            std::nullopt);
                     }
                     return true;
                 case ContinueEventType::Error:
@@ -2585,6 +2596,7 @@ int run_editor(const std::string& path,
         assist_session.active = true;
         assist_session.streaming = execution.stream;
         assist_session.edit_kind = execution.edit_kind;
+        assist_session.provider_name = ai_continue->request.profile.name;
         assist_session.model_name = ai_continue->request.options.model;
         assist_session.replace_start = execution.replace_start;
         assist_session.replace_count = execution.replace_count;
