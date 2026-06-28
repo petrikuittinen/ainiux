@@ -1,0 +1,78 @@
+#include "http/test_http.hpp"
+#include "mock/slow_server.hpp"
+#include "support/test_support.hpp"
+#include "fetch/fetch.hpp"
+#include "http/http.hpp"
+#include <string>
+
+namespace pkchat::test::http {
+
+namespace {
+
+using pkchat::test::check;
+
+void test_http_slow_response_times_out() {
+    pkchat::test::mock::SlowHttpServer server;
+    check(server.start(3.0, 0.0, 1), "slow HTTP mock server starts");
+
+    pkchat::http::Request request;
+    request.url = server.base_url() + "/delay/3";
+    request.connect_timeout_seconds = 2;
+    request.timeout_seconds = 1;
+    pkchat::http::Result result = pkchat::http::perform(request, {});
+    check(!result.error.ok() && result.error.code == pkchat::ErrorCode::Timeout,
+          "HTTP transport times out on a slow local mock response");
+    check(result.error.message.find("timed out") != std::string::npos ||
+              result.error.message.find("Timeout") != std::string::npos,
+          "HTTP timeout error mentions timeout");
+}
+
+void test_http_slow_body_times_out() {
+    pkchat::test::mock::SlowHttpServer server;
+    check(server.start(0.0, 0.75, 8), "slow-body HTTP mock server starts");
+
+    pkchat::http::Request request;
+    request.url = server.base_url() + "/slow-body";
+    request.connect_timeout_seconds = 2;
+    request.timeout_seconds = 2;
+    pkchat::http::Result result = pkchat::http::perform(request, {});
+    check(!result.error.ok() && result.error.code == pkchat::ErrorCode::Timeout,
+          "HTTP transport times out while reading a slow chunked body");
+}
+
+void test_fetch_slow_html_times_out() {
+    pkchat::test::mock::SlowHttpServer server;
+    check(server.start(3.0, 0.0, 1), "slow HTTP mock server starts for fetch timeout");
+
+    pkchat::fetch::Options options;
+    options.connect_timeout_seconds = 2;
+    options.timeout_seconds = 1;
+    options.allow_private = true;
+    std::string body;
+    pkchat::Error err = pkchat::fetch::fetch_html(server.base_url() + "/delay/3", options, body);
+    check(!err.ok() && err.code == pkchat::ErrorCode::Timeout,
+          "URL fetch times out against a slow local mock response");
+}
+
+void test_http_connect_timeout_to_blackhole() {
+    pkchat::http::Request request;
+    request.url = "http://198.18.0.12:9/";
+    request.connect_timeout_seconds = 1;
+    request.timeout_seconds = 2;
+    pkchat::http::Result result = pkchat::http::perform(request, {});
+    check(!result.error.ok() &&
+              (result.error.code == pkchat::ErrorCode::Timeout ||
+               result.error.code == pkchat::ErrorCode::Connect),
+          "HTTP transport fails when connect to an unreachable TEST-NET address times out or is refused");
+}
+
+}  // namespace
+
+void run_network_faults() {
+    test_http_slow_response_times_out();
+    test_http_slow_body_times_out();
+    test_fetch_slow_html_times_out();
+    test_http_connect_timeout_to_blackhole();
+}
+
+}  // namespace pkchat::test::http

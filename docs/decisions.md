@@ -109,3 +109,17 @@ Benchmark input starts with JSONL because it is streamable, diffable, Unicode-sa
 Benchmark result output is JSONL. One record is emitted for each measured turn and a final summary reports token estimates, provider usage, timing/throughput aggregates, nearest-rank percentiles, scoring, and completed, failed, and cancelled case runs. File-backed output is closed and parsed line-by-line into a same-basename Markdown companion containing the same summary and result information; stdout-only execution does not create a report. This keeps JSONL authoritative and avoids retaining an unbounded speed-run result set in memory. Warmups use the same execution path but are not emitted or counted as measurements. Multi-turn history includes actual prior assistant output. A bounded worker pool supports concurrent finite runs and duration-driven speed load. Speed is exclusive because combining a timed load test with evaluation labels would make run counts ambiguous; quality and refusal labels may be combined and share one model response per case.
 
 `Ctrl+C` is handled by an async-signal-safe flag. A normal monitor thread converts that flag into the shared runtime cancellation token, so active libcurl calls use the existing cancellation path and all worker/timer threads are joined before exit. Human summaries remain on `stderr`, with table and CSV renderers sharing the same aggregate rows so JSONL `stdout` stays pipeline-safe. Optional dataset `expect` hooks support only byte-deterministic exact and substring checks after thinking-trace removal. Regex refusal/reasoning checks remain deferred until matching and false-positive semantics are specified; Parquet/Hugging Face Datasets input also remains deferred.
+
+## Version Metadata and Test Layout (v0.83)
+
+v0.83 moves version constants out of headers into `src/version/version.cpp` so `kVersion`, copyright, and license strings have one owned definition. `include/pkchat/version.hpp` keeps only the extern declarations.
+
+The unit-test driver was refactored from one large `tests/unit/test_runner.cpp` into per-module files under `tests/unit/<module>/`, each exposing a `run_all()` entry point. `test_runner` now only dispatches those suites. This keeps new tests close to the code they exercise and makes failures easier to locate.
+
+v0.83 also expands automated coverage and adds small mocks for faults that are awkward to reproduce portably:
+
+- `tests/mock_server/slow_http_mock.py` plus `tests/unit/mock/slow_server.cpp` for real local slow-response and chunked-body timeout tests.
+- `tests/mock/posix_io_mock.c`, preloaded with `LD_PRELOAD`, to simulate `ENOSPC` on write paths tagged with `mock-enospc`.
+- `tests/unit/io/test_io_faults.cpp` and `tests/unit/test_io_faults.cpp` for read-only permission failures (`chmod`) and the network/disk fault cases above.
+
+Environment-dependent fault tests run in a separate `build/test_io_faults` binary so the main `test_runner` stays fast and deterministic on every platform.

@@ -1,0 +1,116 @@
+#include "context/test_context.hpp"
+#include "support/test_support.hpp"
+#include "context/context.hpp"
+#include "provider/provider.hpp"
+#include <string>
+#include <vector>
+
+namespace pkchat::test::context {
+
+namespace {
+
+using pkchat::test::check;
+using pkchat::test::read_fixture;
+
+void test_context_policies_preserve_full_messages() {
+    std::vector<pkchat::provider::Message> messages = {
+        {"system", "system"},
+        {"user", std::string(400, 'a')},
+        {"assistant", std::string(400, 'b')},
+        {"user", std::string(400, 'c')},
+        {"assistant", std::string(400, 'd')},
+    };
+    const std::vector<pkchat::provider::Message> original = messages;
+    pkchat::context::PreparedMessages error = pkchat::context::prepare(messages, "error", 500);
+    check(!error.error.ok(), "error context policy rejects an oversized request");
+
+    pkchat::context::PreparedMessages truncated = pkchat::context::prepare(messages, "truncate-oldest", 500);
+    check(truncated.error.ok() && truncated.compacted, "truncate-oldest compacts provider messages");
+    check(truncated.event.messages_compacted > 0 && pkchat::context::estimated_text_bytes(truncated.messages) <= 500,
+          "truncate-oldest respects the configured text budget");
+    check(messages.size() == original.size() && messages[1].content == original[1].content,
+          "context preparation leaves the full source transcript unchanged");
+
+    pkchat::context::PreparedMessages summarized = pkchat::context::prepare(messages, "summarize-oldest", 600);
+    check(summarized.error.ok() && summarized.compacted, "summarize-oldest compacts provider messages");
+    check(pkchat::context::estimated_text_bytes(summarized.messages) <= 600,
+          "summarize-oldest respects the configured text budget");
+    bool summary_seen = false;
+    for (const pkchat::provider::Message& message : summarized.messages) {
+        summary_seen = summary_seen || message.content.find("Context summary of") != std::string::npos;
+    }
+    check(summary_seen, "summarize-oldest inserts a visible request-only summary");
+
+    pkchat::context::PreparedMessages middle = pkchat::context::prepare(messages, "summarize-middle", 1000);
+    check(middle.error.ok() && middle.compacted, "summarize-middle compacts middle provider messages");
+    check(middle.messages.back().content == messages.back().content,
+          "summarize-middle preserves the newest message");
+    pkchat::context::PreparedMessages automatic = pkchat::context::prepare(messages, "provider-auto", 1);
+    check(automatic.error.ok() && !automatic.compacted && automatic.messages.size() == messages.size(),
+          "provider-auto delegates context management without changing messages");
+
+    const std::vector<pkchat::provider::Message> visible_only = {
+        {"user", "question"}, {"assistant", "answer"}};
+    const std::vector<pkchat::provider::Message> with_thinking = {
+        {"user", "question"}, {"assistant", "<think>hidden reasoning tokens</think>\n\nanswer"}};
+    check(pkchat::context::estimated_text_tokens(with_thinking) >
+              pkchat::context::estimated_text_tokens(visible_only),
+          "context token estimate includes assistant thinking traces");
+
+    const std::vector<pkchat::provider::Message> unicode = {
+        {"user", "你好 مرحبا"}};
+    check(pkchat::context::estimated_text_tokens(unicode) > 0,
+          "context token estimate handles non-ASCII transcript text");
+}
+
+void test_context_numeric_and_unicode_edge_cases() {
+    check(pkchat::context::estimated_text_bytes({}) == 0,
+          "empty transcript has zero estimated text bytes");
+    check(pkchat::context::estimated_text_tokens({}) == 3,
+          "empty transcript uses the fixed request overhead token estimate");
+
+    pkchat::context::PreparedMessages empty =
+        pkchat::context::prepare({}, "truncate-oldest", 500);
+    check(empty.error.ok() && !empty.compacted && empty.messages.empty(),
+          "context preparation accepts an empty message list");
+
+    pkchat::context::PreparedMessages zero_budget = pkchat::context::prepare(
+        {{"user", "hello"}}, "truncate-oldest", 0);
+    check(zero_budget.error.ok() && !zero_budget.compacted,
+          "zero max-bytes budget skips compaction");
+
+    pkchat::context::PreparedMessages unknown = pkchat::context::prepare(
+        {{"user", std::string(1000, 'x')}}, "bogus-policy", 100);
+    check(!unknown.error.ok(), "unknown context policy is rejected once compaction is needed");
+    check(unknown.error.message.find("bogus-policy") != std::string::npos,
+          "unknown context policy error names the requested policy");
+
+    const std::vector<pkchat::provider::Message> ascii_only = {{"user", "hello"}};
+    const std::vector<pkchat::provider::Message> unicode_dense = {
+        {"user", u8"مرحبا 你好 👨‍👩‍👧‍👦"}};
+    check(pkchat::context::estimated_text_tokens(unicode_dense) >=
+              pkchat::context::estimated_text_tokens(ascii_only),
+          "Unicode-dense transcript token estimate is not smaller than ASCII text");
+
+    std::vector<pkchat::provider::Message> long_messages = {{"system", "stay"}};
+    for (int i = 0; i < 20; ++i) {
+        long_messages.push_back({"user", std::string(2000, 'z')});
+        long_messages.push_back({"assistant", std::string(2000, 'y')});
+    }
+    long_messages.push_back({"user", "final"});
+    pkchat::context::PreparedMessages long_text =
+        pkchat::context::prepare(long_messages, "truncate-oldest", 1000);
+    check(long_text.error.ok() && long_text.compacted &&
+              pkchat::context::estimated_text_bytes(long_text.messages) <= 1000 &&
+              long_text.messages.back().content == "final",
+          "very long transcript is compacted to the configured byte budget");
+}
+
+}  // namespace
+
+void run_all() {
+    test_context_policies_preserve_full_messages();
+    test_context_numeric_and_unicode_edge_cases();
+}
+
+}  // namespace pkchat::test::context

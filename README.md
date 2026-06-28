@@ -2,7 +2,7 @@
 
 `pkchat` is a fast, script-friendly command-line chat client for OpenAI and OpenAI-compatible APIs.
 
-Current status: v0.82 CLI with libcurl transport, cancellable runtime jobs, provider registry/profile aliases, `/v1/models`, `/v1/chat/completions`, text-only OpenAI Responses API support, local JPEG/PNG/GIF image input, interactive text/image attachments, request-only context policies, safe URL insertion, a simple REPL, a standalone `--editor` mode with selection, copy/cut/paste, grapheme-aware Unicode editing, and AI continue/editor commands, a full-screen non-blocking TUI foundation, SQLite-backed TUI chat threads, JSON chat import/export save/load, HTML-to-text/Markdown extraction, Markdown assistant-output rendering to HTML or plaintext, automatic system/user TOML-alike configuration loading, and a concurrent JSONL benchmark runner.
+Current status: v0.83 CLI with libcurl transport, cancellable runtime jobs, provider registry/profile aliases, `/v1/models`, `/v1/chat/completions`, text-only OpenAI Responses API support, local JPEG/PNG/GIF image input, interactive text/image attachments, request-only context policies, safe URL insertion, a simple REPL, a standalone `--editor` mode with selection, copy/cut/paste, grapheme-aware Unicode editing, and AI continue/editor commands, a full-screen non-blocking TUI foundation, SQLite-backed TUI chat threads, JSON chat import/export save/load, HTML-to-text/Markdown extraction, Markdown assistant-output rendering to HTML or plaintext, automatic system/user TOML-alike configuration loading, and a concurrent JSONL benchmark runner.
 
 ## Build
 
@@ -361,7 +361,26 @@ Run the full local suite:
 make test
 ```
 
-The integration test starts a local mock OpenAI-compatible server and verifies model listing, non-streaming chat, streaming chat, text-only Responses API calls, provider reasoning fields, JSON output, NDJSON output, Markdown-to-HTML/plaintext assistant rendering, complete HTML file output, chat save/load, REPL mode, explicit local input and HTML URL extraction with private-address blocking, configuration precedence/errors/diagnostics, input/fetched URL prompt context with system prompts, complete HTML file output from input Markdown, JSOND output aliases, and non-UTF-8 HTML rejection. Unit tests cover CLI parsing, provider registry aliases, capability reporting, Responses API endpoint selection and unsupported-feature errors, HTML conversion including malformed documents and UTF-8 validation, Markdown output rendering, the runtime event queue/job cancellation, `--chat`, legacy `--tui`, `--nocolors`, and `--editor` parsing, editor piece-table edits, rectangular panel rendering, editor word wrapping, editor vertical navigation modes, editor file round-trips, editor selection and clipboard copy/cut/paste preference, TUI layout sizing, TUI regeneration planning, thinking-trace display filtering, theme parsing, and WCAG contrast checks for TUI themes.
+`make test` runs unit tests, I/O and network fault tests, and one integration script against a local mock OpenAI-compatible server.
+
+### v0.83 test and refactor notes
+
+v0.83 refactors the codebase for easier maintenance and broader automated coverage:
+
+- Version metadata (`kVersion`, copyright, license name) lives in `src/version/version.cpp` with declarations in `include/pkchat/version.hpp`.
+- Unit tests are split from the old monolithic `tests/unit/test_runner.cpp` into module directories under `tests/unit/` (`cli/`, `provider/`, `editor/`, `http/`, `chat/`, and others). `test_runner` remains a thin driver.
+- Coverage now includes roughly **900+** unit assertions plus a separate `test_io_faults` binary for environment-dependent cases.
+- Mock infrastructure supports slow or timed-out HTTP (`tests/mock_server/slow_http_mock.py`), disk-full `ENOSPC` simulation (`tests/mock/posix_io_mock.c` via `LD_PRELOAD`), and permission-denied read-only paths.
+
+Useful test targets:
+
+```sh
+make test-unit          # unit tests + fault tests
+make test-unit-faults   # network slow/timeout, read-only, ENOSPC only
+make test-integration   # end-to-end mock-server script
+```
+
+The integration test verifies model listing, non-streaming and streaming chat, text-only Responses API calls, provider reasoning fields, JSON/NDJSON output, Markdown-to-HTML/plaintext assistant rendering, complete HTML file output, chat save/load, context compaction, REPL mode, benchmark modes, explicit local input and HTML URL extraction with private-address blocking, configuration precedence/errors/diagnostics, input and fetched URL prompt context, attachments and image input, and non-UTF-8 HTML rejection. Unit tests cover CLI parsing, provider registry aliases, capability reporting, Responses API endpoint selection, HTML and Markdown conversion, runtime cancellation, config loading, security redaction, fetch safety, chat persistence, editor piece-table and panel behavior, TUI layout and theme contrast, and additional Unicode, numeric, and file I/O edge cases.
 
 For leak and sanitizer checks:
 

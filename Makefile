@@ -1,5 +1,5 @@
 CXX ?= g++
-CXXFLAGS ?= -std=c++17 -Wall -Wextra -Wpedantic -Iinclude -Isrc
+CXXFLAGS ?= -std=c++17 -Wall -Wextra -Wpedantic -Iinclude -Isrc -Itests/unit
 LDFLAGS ?=
 LIBCURL_CFLAGS ?= $(shell pkg-config --cflags libcurl 2>/dev/null || curl-config --cflags 2>/dev/null)
 LIBCURL_LIBS ?= $(shell pkg-config --libs libcurl 2>/dev/null || curl-config --libs 2>/dev/null)
@@ -19,6 +19,13 @@ OPTIMIZED_LDFLAGS := $(LDFLAGS) -s
 OBJ_DIR := $(BUILD_DIR)/obj
 BIN := pkchat
 TEST_BIN := $(BUILD_DIR)/test_runner
+IO_FAULT_BIN := $(BUILD_DIR)/test_io_faults
+POSIX_IO_MOCK := $(BUILD_DIR)/posix_io_mock.so
+IO_FAULT_OBJ := $(OBJ_DIR)/tests/unit/test_io_faults.o \
+                $(OBJ_DIR)/tests/unit/io/test_io_faults.o \
+                $(OBJ_DIR)/tests/unit/mock/slow_server.o \
+                $(OBJ_DIR)/tests/unit/http/test_http_network.o \
+                $(OBJ_DIR)/tests/unit/support/test_support.o
 COMMON_CONFIG := config/pkchat.conf
 COMMON_CONFIG_DIR := $(DESTDIR)$(SYSCONFDIR)/xdg/pkchat
 COMMON_CONFIG_PATH := $(COMMON_CONFIG_DIR)/config.conf
@@ -30,11 +37,11 @@ APP_SRC := $(SRC)
 LIB_SRC := $(filter-out src/main.cpp,$(SRC))
 APP_OBJ := $(patsubst %.cpp,$(OBJ_DIR)/%.o,$(APP_SRC))
 LIB_OBJ := $(patsubst %.cpp,$(OBJ_DIR)/%.o,$(LIB_SRC))
-TEST_SRC := $(shell find tests/unit -name '*.cpp' | sort)
+TEST_SRC := $(filter-out tests/unit/test_io_faults.cpp tests/unit/io/test_io_faults.cpp tests/unit/mock/slow_server.cpp tests/unit/http/test_http_network.cpp,$(shell find tests/unit -name '*.cpp' | sort))
 TEST_OBJ := $(patsubst %.cpp,$(OBJ_DIR)/%.o,$(TEST_SRC))
 DEP := $(sort $(APP_OBJ:.o=.d) $(TEST_OBJ:.o=.d))
 
-.PHONY: all clean optimized test test-unit test-integration sanitize test-sanitize leak-check test-leak install
+.PHONY: all clean optimized test test-unit test-unit-faults test-integration sanitize test-sanitize leak-check test-leak install
 
 all: $(BIN)
 
@@ -43,6 +50,13 @@ $(BIN): $(APP_OBJ)
 
 $(TEST_BIN): $(LIB_OBJ) $(TEST_OBJ)
 	$(CXX) $(CXXFLAGS) $^ -o $@ $(LDFLAGS)
+
+$(IO_FAULT_BIN): $(LIB_OBJ) $(IO_FAULT_OBJ)
+	$(CXX) $(CXXFLAGS) $^ -o $@ $(LDFLAGS)
+
+$(POSIX_IO_MOCK): tests/mock/posix_io_mock.c
+	@mkdir -p $(dir $@)
+	$(CC) -shared -fPIC -Wall -Wextra -Wpedantic -o $@ $<
 
 $(OBJ_DIR)/%.o: %.cpp
 	@mkdir -p $(dir $@)
@@ -64,8 +78,14 @@ $(OBJ_DIR)/src/benchmark/benchmark.o: $(BUILTIN_BENCHMARK_HEADER)
 
 test: test-unit test-integration
 
-test-unit: $(TEST_BIN)
+test-unit: $(TEST_BIN) $(IO_FAULT_BIN) $(POSIX_IO_MOCK)
 	$(TEST_BIN)
+	$(IO_FAULT_BIN)
+	PKCHAT_MOCK_ENOSPC=1 LD_PRELOAD=$(abspath $(POSIX_IO_MOCK)) $(IO_FAULT_BIN) --enospc
+
+test-unit-faults: $(IO_FAULT_BIN) $(POSIX_IO_MOCK)
+	$(IO_FAULT_BIN)
+	PKCHAT_MOCK_ENOSPC=1 LD_PRELOAD=$(abspath $(POSIX_IO_MOCK)) $(IO_FAULT_BIN) --enospc
 
 test-integration: $(BIN)
 	tests/integration/test_mock_server.sh
@@ -105,4 +125,4 @@ install: $(BIN) $(COMMON_CONFIG)
 	install -m 0644 benchmarks/builtin.jsonl benchmarks/long-context.jsonl "$(BENCHMARK_DATA_DIR)"
 
 clean:
-	rm -rf $(BUILD_DIR) $(BIN)
+	rm -rf $(BUILD_DIR) $(BIN) $(IO_FAULT_BIN)

@@ -2,6 +2,8 @@
 
 namespace pkchat {
 
-constexpr const char* kVersion = "0.82";
+extern const char kVersion[];
+extern const char kCopyright[];
+extern const char kLicenseName[];
 
 }  // namespace pkchat
