@@ -110,6 +110,16 @@ Benchmark result output is JSONL. One record is emitted for each measured turn a
 
 `Ctrl+C` is handled by an async-signal-safe flag. A normal monitor thread converts that flag into the shared runtime cancellation token, so active libcurl calls use the existing cancellation path and all worker/timer threads are joined before exit. Human summaries remain on `stderr`, with table and CSV renderers sharing the same aggregate rows so JSONL `stdout` stays pipeline-safe. Optional dataset `expect` hooks support only byte-deterministic exact and substring checks after thinking-trace removal. Regex refusal/reasoning checks remain deferred until matching and false-positive semantics are specified; Parquet/Hugging Face Datasets input also remains deferred.
 
+## Application Module Split (v0.84)
+
+v0.84 splits the largest application sources into focused directories so CLI, editor, and TUI code can evolve independently while sharing the same provider, runtime, and chat layers:
+
+- `src/app/` owns non-interactive CLI orchestration formerly in `main.cpp` (`exit_codes`, `output`, `document_mode`, `benchmark_mode`, `chat_session`, `repl_mode`, `config_diagnostics`). `src/main.cpp` remains a thin entry point.
+- `src/editor/` owns the standalone `--editor` mode (`piece_table`, `editor_state`, `render`, `file_io`, `terminal_ui`, `run_editor`, `editor_assist`, and `detail/` Unicode helpers).
+- `src/tui/` owns the full-screen TUI (`layout`, `status`, `theme`, `thinking`, `terminal`, `input_handlers`, `run`, and `detail/` frame rendering).
+
+The benchmark built-in JSONL corpus is split into category files under `benchmarks/builtin/` (`coding.jsonl`, `multi-turn.jsonl`, `reasoning.jsonl`, `safety.jsonl`, `writing.jsonl`) so individual prompt sets can be maintained without editing one large file.
+
 ## Version Metadata and Test Layout (v0.83)
 
 v0.83 moves version constants out of headers into `src/version/version.cpp` so `kVersion`, copyright, and license strings have one owned definition. `include/pkchat/version.hpp` keeps only the extern declarations.

@@ -2,7 +2,7 @@
 
 `pkchat` is a fast, script-friendly command-line chat client for OpenAI and OpenAI-compatible APIs.
 
-Current status: v0.83 CLI with libcurl transport, cancellable runtime jobs, provider registry/profile aliases, `/v1/models`, `/v1/chat/completions`, text-only OpenAI Responses API support, local JPEG/PNG/GIF image input, interactive text/image attachments, request-only context policies, safe URL insertion, a simple REPL, a standalone `--editor` mode with selection, copy/cut/paste, grapheme-aware Unicode editing, and AI continue/editor commands, a full-screen non-blocking TUI foundation, SQLite-backed TUI chat threads, JSON chat import/export save/load, HTML-to-text/Markdown extraction, Markdown assistant-output rendering to HTML or plaintext, automatic system/user TOML-alike configuration loading, and a concurrent JSONL benchmark runner.
+Current status: v0.84 CLI with libcurl transport, cancellable runtime jobs, provider registry/profile aliases, `/v1/models`, `/v1/chat/completions`, text-only OpenAI Responses API support, local JPEG/PNG/GIF image input, interactive text/image attachments, request-only context policies, safe URL insertion, a simple REPL, a standalone `--editor` mode with selection, copy/cut/paste, grapheme-aware Unicode editing, and AI continue/editor commands, a full-screen non-blocking TUI foundation, SQLite-backed TUI chat threads, JSON chat import/export save/load, HTML-to-text/Markdown extraction, Markdown assistant-output rendering to HTML or plaintext, automatic system/user TOML-alike configuration loading, and a concurrent JSONL benchmark runner.
 
 ## Build
 
@@ -364,6 +364,17 @@ make test
 ```
 
 `make test` runs unit tests, I/O and network fault tests, and one integration script against a local mock OpenAI-compatible server.
+
+### v0.84 refactor notes
+
+v0.84 splits large source files into focused modules and adds integration-test and CI coverage:
+
+- `main.cpp` moves application orchestration into `src/app/` (`exit_codes`, `output`, `document_mode`, `benchmark_mode`, `chat_session`, `repl_mode`, `config_diagnostics`).
+- `editor.cpp` moves into `src/editor/` (`piece_table`, `editor_state`, `render`, `file_io`, `terminal_ui`, `run_editor`, and `detail/` helpers).
+- `tui.cpp` moves into `src/tui/` (`layout`, `status`, `theme`, `thinking`, `terminal`, `input_handlers`, and `detail/` render helpers).
+- The benchmark built-in JSONL dataset is split by category; see `docs/decisions.md` for layout details.
+- SQLite integration tests, Valgrind in CI, and `TESTING.md` document the expanded test matrix.
+- Streamed editor AI assist no longer leaves a leaked `</content>` close tag when the tag splits across SSE chunks.
 
 ### v0.83 test and refactor notes
 
