@@ -136,6 +136,42 @@ void test_chat_sqlite_store_round_trip_and_listing() {
           "SQLite thread list hides soft-deleted threads");
 }
 
+void test_chat_sqlite_missing_thread_and_corrupt_database() {
+    const std::string path = "build/unit-corrupt-pkchat.db";
+    std::filesystem::remove(path);
+    std::filesystem::remove(path + "-wal");
+    std::filesystem::remove(path + "-shm");
+
+    {
+        std::ofstream out(path, std::ios::binary | std::ios::trunc);
+        out << "not-a-sqlite-database";
+    }
+    pkchat::chat::SqliteStore corrupt_store;
+    pkchat::Error err = corrupt_store.open(path);
+    check(!err.ok(), "corrupt SQLite database open fails");
+
+    std::filesystem::remove(path);
+    pkchat::chat::SqliteStore store;
+    err = store.open(path);
+    check(err.ok(), "fresh SQLite database opens for missing-thread test");
+
+    pkchat::chat::Session missing;
+    err = store.load_session(424242, missing);
+    check(!err.ok() && err.code == pkchat::ErrorCode::FileRead &&
+              err.message.find("SQLite chat thread not found: 424242") != std::string::npos,
+          "missing SQLite thread reports a file-read error with thread id");
+
+    long long last_id = 0;
+    bool found = false;
+    err = store.set_last_thread_id(424242);
+    check(err.ok(), "SQLite last_thread_id can be set for recovery testing");
+    err = store.last_thread_id(last_id, found);
+    check(err.ok() && found && last_id == 424242, "SQLite last_thread_id round-trips");
+    err = store.load_session(last_id, missing);
+    check(!err.ok() && err.message.find("SQLite chat thread not found") != std::string::npos,
+          "stale last_thread_id target remains unloadable until caller recovers");
+}
+
 void test_chat_session_file_failures_and_unicode() {
     pkchat::chat::Session session;
     pkchat::Error err = pkchat::chat::load_session("build/missing-chat-session.json", session);
@@ -174,6 +210,7 @@ void run_all() {
     test_chat_session_rejects_corrupt_json();
     test_chat_session_file_failures_and_unicode();
     test_chat_sqlite_store_round_trip_and_listing();
+    test_chat_sqlite_missing_thread_and_corrupt_database();
 }
 
 }  // namespace pkchat::test::chat

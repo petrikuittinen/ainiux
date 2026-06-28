@@ -41,7 +41,9 @@ TEST_SRC := $(filter-out tests/unit/test_io_faults.cpp tests/unit/io/test_io_fau
 TEST_OBJ := $(patsubst %.cpp,$(OBJ_DIR)/%.o,$(TEST_SRC))
 DEP := $(sort $(APP_OBJ:.o=.d) $(TEST_OBJ:.o=.d))
 
-.PHONY: all clean optimized test test-unit test-unit-faults test-integration sanitize test-sanitize leak-check test-leak install
+VALGRIND ?= valgrind --error-exitcode=1 --leak-check=full --show-leak-kinds=definite,indirect --quiet
+
+.PHONY: all clean optimized test test-unit test-unit-faults test-integration test-integration-sqlite sanitize test-sanitize leak-check test-leak install
 
 all: $(BIN)
 
@@ -89,6 +91,10 @@ test-unit-faults: $(IO_FAULT_BIN) $(POSIX_IO_MOCK)
 
 test-integration: $(BIN)
 	tests/integration/test_mock_server.sh
+	tests/integration/test_sqlite_persistence.sh
+
+test-integration-sqlite: $(BIN)
+	tests/integration/test_sqlite_persistence.sh
 
 optimized:
 	$(MAKE) clean
@@ -102,9 +108,11 @@ test-sanitize:
 	$(MAKE) clean
 	$(MAKE) CXXFLAGS="$(CXXFLAGS) -O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer" LDFLAGS="$(LDFLAGS) -fsanitize=address,undefined" test
 
-leak-check: $(BIN)
+leak-check: $(BIN) $(TEST_BIN) $(IO_FAULT_BIN)
 	@if command -v valgrind >/dev/null 2>&1; then \
-		valgrind --leak-check=full --error-exitcode=1 ./$(BIN) --version >/dev/null; \
+		$(VALGRIND) ./$(TEST_BIN); \
+		$(VALGRIND) ./$(IO_FAULT_BIN); \
+		$(VALGRIND) ./$(BIN) --version >/dev/null; \
 	else \
 		echo "valgrind not found; running sanitizer build smoke test instead"; \
 		$(MAKE) test-sanitize; \

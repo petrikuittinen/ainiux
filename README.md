@@ -355,6 +355,8 @@ Supported key sources:
 
 ## Testing
 
+See [TESTING.md](TESTING.md) for targets, coverage scope, and mock details.
+
 Run the full local suite:
 
 ```sh
