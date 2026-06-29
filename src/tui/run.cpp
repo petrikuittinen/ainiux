@@ -6,6 +6,8 @@
 
 #include "app/app.hpp"
 #include "app/detail.hpp"
+#include "chat/settings.hpp"
+#include "pkchat/model_setting.hpp"
 #include "chat/sqlite_store.hpp"
 #include "cli/args.hpp"
 #include "context/context.hpp"
@@ -80,11 +82,16 @@ int run(provider::RequestContext context, chat::Session session) {
         if (!loaded.model.empty()) {
             next.model = loaded.model;
         }
+        Error settings_error = chat::apply_settings_json(next, loaded.settings_json);
+        if (!settings_error.ok()) {
+            return settings_error;
+        }
         provider::ContextResult rebuilt = provider::build_context(next);
         if (!rebuilt.error.ok()) {
             return rebuilt.error;
         }
         context = std::move(rebuilt.context);
+        show_thinking_traces = context.options.show_thinking_traces;
         return ok_error();
     };
 
@@ -94,6 +101,9 @@ int run(provider::RequestContext context, chat::Session session) {
         }
         if (mode == TuiMode::RemoveConfirm) {
             return remove_confirm_text(session);
+        }
+        if (mode == TuiMode::SystemEdit) {
+            return system_edit_text();
         }
         return help_text;
     };
@@ -110,8 +120,8 @@ int run(provider::RequestContext context, chat::Session session) {
                 chat::Session loaded;
                 Error load_error = sqlite_store.load_session(last_id, loaded);
                 if (load_error.ok()) {
-                    Error context_error = rebuild_context_from_session(loaded);
                     session = std::move(loaded);
+                    Error context_error = rebuild_context_from_session(session);
                     app::apply_system_prompt(session, context.options.system);
                     status = context_error.ok()
                                  ? "Loaded last thread: " + (session.name.empty() ? std::to_string(session.thread_id) : session.name)
@@ -134,15 +144,6 @@ int run(provider::RequestContext context, chat::Session session) {
         }
         const ThinkingDisplay display = thinking_display_text(session.messages[pending_assistant].content, false);
         return display.saw_thinking_tag && app::detail::trim_ascii(display.text).empty();
-    };
-
-    auto set_thinking_trace_mode = [&](bool show_traces) {
-        show_thinking_traces = show_traces;
-        if (!show_thinking_traces && pending_assistant_is_hidden_thinking()) {
-            status = provider_model_status_message(context, "thinking...");
-        } else {
-            status = show_thinking_traces ? "Thinking traces shown" : "Thinking traces hidden";
-        }
     };
 
     auto start_path_completion = [&]() {
@@ -296,6 +297,25 @@ int run(provider::RequestContext context, chat::Session session) {
             }
             events.push(std::move(event));
         });
+    };
+
+    auto persist_settings_change = [&](const std::string& message) {
+        app::refresh_session_metadata(session, context);
+        status = message;
+        start_store_save();
+    };
+
+    auto set_thinking_trace_mode = [&](bool show_traces) {
+        show_thinking_traces = show_traces;
+        context.options.show_thinking_traces = show_traces;
+        context.options.has_show_thinking_traces = true;
+        if (!show_thinking_traces && pending_assistant_is_hidden_thinking()) {
+            status = provider_model_status_message(context, "thinking...");
+        } else {
+            status = show_thinking_traces ? "Thinking traces shown" : "Thinking traces hidden";
+        }
+        app::refresh_session_metadata(session, context);
+        start_store_save();
     };
 
     auto start_insert = [&](const std::string& path) {
@@ -555,7 +575,10 @@ int run(provider::RequestContext context, chat::Session session) {
                     "/provider PROVIDER\n"
                     "/models\n"
                     "/model MODEL\n"
-                    "/system TEXT\n"
+                    "/system [TEXT]\n"
+                    "/setting NAME=VALUE\n"
+                    "/setting general|coding|instruct|creative\n"
+                    "/clone\n"
                     "/save [PATH]\n"
                     "/load PATH\n"
                     "/remove\n"
@@ -694,9 +717,91 @@ int run(provider::RequestContext context, chat::Session session) {
             start_store_save();
             return;
         }
-        if (text.rfind("/system", 0) == 0) {
-            app::replace_system_prompt(session, app::detail::trim_ascii(text.substr(7)));
-            status = "System prompt updated";
+        if (text == "/system" || text.rfind("/system ", 0) == 0) {
+            const std::string system_text = text.size() <= 7 ? "" : app::detail::trim_ascii(text.substr(7));
+            if (system_text.empty()) {
+                if (active_job != ActiveJob::None) {
+                    status = "Cannot edit system prompt while a model job is running";
+                    return;
+                }
+                input = editor::EditorState::from_text(chat::current_system_prompt(session));
+                input.set_undo_limit(input_undo_limit);
+                mode = TuiMode::SystemEdit;
+                status = "Editing system prompt";
+                return;
+            }
+            app::replace_system_prompt(session, system_text);
+            context.options.system = system_text;
+            persist_settings_change("System prompt updated");
+            return;
+        }
+        if (text == "/clone") {
+            if (active_job != ActiveJob::None) {
+                status = "Cannot clone a thread while a model job is running";
+                return;
+            }
+            chat::Session cloned = session;
+            cloned.thread_id = 0;
+            cloned.created_at = chat::current_timestamp_utc();
+            cloned.updated_at = cloned.created_at;
+            if (cloned.name.empty()) {
+                cloned.name = "Copy";
+            } else {
+                cloned.name += " (copy)";
+            }
+            session = std::move(cloned);
+            history_scroll = 0;
+            persist_settings_change("Cloned chat thread");
+            return;
+        }
+        if (text == "/setting" || text.rfind("/setting ", 0) == 0) {
+            const std::string requested = text.size() <= 8 ? "" : app::detail::trim_ascii(text.substr(8));
+            if (requested.empty()) {
+                status = chat::format_settings_summary(context.options) +
+                         ". Use /setting NAME=VALUE or /setting general|coding|instruct|creative";
+                return;
+            }
+            if (requested == "general" || requested == "coding" || requested == "instruct" ||
+                requested == "creative") {
+                if (context.options.model.empty()) {
+                    status = "Set a model with /model before applying a purpose preset";
+                    return;
+                }
+                const ModelSetting* preset =
+                    chat::find_model_setting(context.options.model, requested, context.options.model_settings);
+                if (preset == nullptr) {
+                    status = "No [Model-setting] preset for model " + context.options.model + " purpose " + requested;
+                    return;
+                }
+                Error preset_error = chat::apply_model_setting_preset(context.options, *preset);
+                if (!preset_error.ok()) {
+                    status = detail::error_line(preset_error);
+                    return;
+                }
+                if (!preset->default_system_prompt.empty()) {
+                    app::replace_system_prompt(session, preset->default_system_prompt);
+                    context.options.system = preset->default_system_prompt;
+                }
+                persist_settings_change("Applied " + requested + " settings for " + context.options.model);
+                return;
+            }
+            const size_t equals = requested.find('=');
+            if (equals == std::string::npos) {
+                status = "Usage: /setting NAME=VALUE or /setting general|coding|instruct|creative";
+                return;
+            }
+            const std::string name = app::detail::trim_ascii(requested.substr(0, equals));
+            const std::string value = app::detail::trim_ascii(requested.substr(equals + 1));
+            if (name.empty()) {
+                status = "Usage: /setting NAME=VALUE";
+                return;
+            }
+            Error setting_error = chat::apply_chat_setting(context.options, name, value);
+            if (!setting_error.ok()) {
+                status = setting_error.message;
+                return;
+            }
+            persist_settings_change("Updated " + name);
             return;
         }
         if (text == "/models") {
@@ -868,9 +973,9 @@ int run(provider::RequestContext context, chat::Session session) {
                         session = std::move(event.session);
                         pending_images.clear();
                         inflight_image_count = 0;
-                        app::refresh_session_metadata(session, context);
+                        Error context_error = rebuild_context_from_session(session);
                         history_scroll = 0;
-                        status = "Loaded " + event.text;
+                        status = context_error.ok() ? "Loaded " + event.text : detail::error_line(context_error);
                     } else {
                         status = detail::error_line(event.error);
                     }
@@ -1026,6 +1131,23 @@ int run(provider::RequestContext context, chat::Session session) {
                     }
                     status = "Press y to remove, n or Esc to cancel";
                     continue;
+                }
+                if (mode == TuiMode::SystemEdit) {
+                    if (ch == 27) {
+                        mode = TuiMode::Chat;
+                        input = new_input_editor();
+                        status = "System prompt edit cancelled";
+                        continue;
+                    }
+                    if (ch == '\r' || ch == '\n' || ch == 19) {
+                        const std::string system_text = input.text.str();
+                        app::replace_system_prompt(session, system_text);
+                        context.options.system = system_text;
+                        mode = TuiMode::Chat;
+                        input = new_input_editor();
+                        persist_settings_change("System prompt updated");
+                        continue;
+                    }
                 }
                 if (ch == '\t') {
                     start_path_completion();

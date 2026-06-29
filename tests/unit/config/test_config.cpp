@@ -157,10 +157,94 @@ void test_config_parses_supported_values() {
     check(nested != nullptr && nested->value.string == "value", "dotted config section parsed");
 }
 
+void test_config_applies_model_settings() {
+    pkchat::config::ParseResult parsed = pkchat::config::parse(
+        "[Model-setting]\n"
+        "model = Qwen3.6-*\n"
+        "purpose = coding\n"
+        "default_system_prompt = \"\"\n"
+        "temperature = 0.6\n"
+        "top_k = 20\n"
+        "top_p = 0.95\n"
+        "min_p = 0.0\n"
+        "repeat_penalty = 1.0\n"
+        "presence_penalty = 0.0\n",
+        "model-setting.conf");
+    check(parsed.error.ok(), "model-setting config parses");
+
+    pkchat::cli::Options options;
+    pkchat::Error err = pkchat::config::apply_document(parsed.document, options);
+    check(err.ok() && options.model_settings.size() == 1, "model-setting config applies");
+    const pkchat::ModelSetting& setting = options.model_settings.front();
+    check(setting.model == "Qwen3.6-*" && setting.purpose == "coding" &&
+              setting.default_system_prompt.empty() && setting.temperature == 0.6 && setting.top_k == 20 &&
+              setting.top_p == 0.95 && setting.min_p == 0.0 && setting.repeat_penalty == 1.0 &&
+              setting.presence_penalty == 0.0,
+          "model-setting values are stored");
+
+    pkchat::config::ParseResult override_config = pkchat::config::parse(
+        "[Model-setting]\n"
+        "model = Qwen3.6-*\n"
+        "purpose = coding\n"
+        "default_system_prompt = \"\"\n"
+        "temperature = 0.4\n"
+        "top_k = 10\n"
+        "top_p = 0.8\n"
+        "min_p = 0.0\n"
+        "repeat_penalty = 1.0\n"
+        "presence_penalty = 0.0\n",
+        "model-setting-override.conf");
+    options.model_settings.push_back({"Gemma-4-31B", "general", "", 1.0, 64, 0.95, 0.0, 1.0, 0.0});
+    err = pkchat::config::apply_document(override_config.document, options);
+    check(err.ok() && options.model_settings.size() == 2, "model-setting merge keeps other entries");
+    check(options.model_settings[0].model == "Qwen3.6-*" && options.model_settings[0].temperature == 0.4 &&
+              options.model_settings[0].top_k == 10 && options.model_settings[1].model == "Gemma-4-31B",
+          "model-setting merge replaces matching model and purpose in place");
+}
+
+void test_config_model_setting_thinking_budget() {
+    pkchat::config::ParseResult verbal = pkchat::config::parse(
+        "[Model-setting]\n"
+        "model = Qwen3.6-*\n"
+        "purpose = general\n"
+        "default_system_prompt = \"\"\n"
+        "temperature = 0.8\n"
+        "top_k = 20\n"
+        "top_p = 0.95\n"
+        "min_p = 0.0\n"
+        "repeat_penalty = 1.0\n"
+        "presence_penalty = 1.5\n"
+        "thinking_budget = high\n",
+        "model-setting-verbal-budget.conf");
+    pkchat::cli::Options options;
+    pkchat::Error err = pkchat::config::apply_document(verbal.document, options);
+    check(err.ok() && options.model_settings.size() == 1 &&
+              options.model_settings.front().thinking_budget == "high",
+          "model-setting config accepts verbal thinking_budget");
+
+    pkchat::config::ParseResult numeric = pkchat::config::parse(
+        "[Model-setting]\n"
+        "model = Qwen3.6-*\n"
+        "purpose = instruct\n"
+        "default_system_prompt = \"\"\n"
+        "temperature = 0.7\n"
+        "top_k = 20\n"
+        "top_p = 0.80\n"
+        "min_p = 0.0\n"
+        "repeat_penalty = 1.0\n"
+        "presence_penalty = 1.5\n"
+        "thinking_budget = 8192\n",
+        "model-setting-token-budget.conf");
+    err = pkchat::config::apply_document(numeric.document, options);
+    check(err.ok() && options.model_settings.size() == 2 &&
+              options.model_settings.back().thinking_budget == "8192",
+          "model-setting config accepts token thinking_budget");
+}
+
 void test_config_reads_common_template() {
     pkchat::config::ParseResult parsed = pkchat::config::read_file("config/pkchat.conf");
     check(parsed.error.ok(), "common config file parses");
-    check(parsed.document.entries.size() == 31, "common config has every expected setting");
+    check(parsed.document.entries.size() == 139, "common config has every expected setting");
 
     const pkchat::config::Entry* provider = parsed.document.find("provider");
     check(provider != nullptr && provider->value.is_string() && provider->value.string == "openai",
@@ -187,6 +271,11 @@ void test_config_reads_common_template() {
               options.editor_huge_file_size_warning == 1073741824LL &&
               options.editor_file_size_limit == -1,
           "common config maps to the built-in runtime defaults");
+    check(options.model_settings.size() == 12, "common config includes model-setting presets");
+    check(options.model_settings.front().model == "Qwen3.6-*" &&
+              options.model_settings.front().purpose == "creative" &&
+              options.model_settings.front().temperature == 1.0,
+          "common config model-setting presets preserve order and values");
 }
 
 void test_config_rejects_invalid_input() {
@@ -293,6 +382,8 @@ void test_config_empty_and_numeric_edge_cases() {
 
 void run_all() {
     test_config_applies_user_settings();
+    test_config_applies_model_settings();
+    test_config_model_setting_thinking_budget();
     test_config_empty_and_numeric_edge_cases();
     test_config_file_read_errors();
     test_config_parses_supported_values();

@@ -8,6 +8,7 @@
 #include "editor/editor.hpp"
 #include "editor/editor_prompts.hpp"
 #include "markdown/markdown.hpp"
+#include "pkchat/model_setting.hpp"
 
 namespace pkchat::cli {
 
@@ -79,6 +80,22 @@ struct Options {
     bool has_temperature = false;
     double top_p = 0.0;
     bool has_top_p = false;
+    int top_k = 0;
+    bool has_top_k = false;
+    double min_p = 0.0;
+    bool has_min_p = false;
+    double repeat_penalty = 1.0;
+    bool has_repeat_penalty = false;
+    double presence_penalty = 0.0;
+    bool has_presence_penalty = false;
+    bool enable_thinking = false;
+    bool has_enable_thinking = false;
+    std::string thinking_budget;
+    bool has_thinking_budget = false;
+    std::string chat_purpose;
+    bool has_chat_purpose = false;
+    bool has_context_tokens = false;
+    bool has_show_thinking_traces = false;
     int max_output_tokens = 0;
     bool has_max_output_tokens = false;
     long connect_timeout_seconds = 10;
@@ -100,6 +117,7 @@ struct Options {
 
     std::vector<std::string> headers;
     std::vector<std::string> attachment_paths;
+    std::vector<ModelSetting> model_settings;
 };
 
 struct ParseResult {

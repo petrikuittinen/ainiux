@@ -1,3 +1,4 @@
+#include "chat/settings.hpp"
 #include "provider/provider.hpp"
 
 #include <chrono>
@@ -235,6 +236,36 @@ Error validate_header(const std::string& header) {
 
 std::string strip_thinking_blocks_for_request(const std::string& content);
 
+void append_sampling_fields(std::ostringstream& json, const cli::Options& o) {
+    if (o.has_temperature) {
+        json << ",\"temperature\":" << o.temperature;
+    }
+    if (o.has_top_p) {
+        json << ",\"top_p\":" << o.top_p;
+    }
+    if (o.has_top_k) {
+        json << ",\"top_k\":" << o.top_k;
+    }
+    if (o.has_min_p) {
+        json << ",\"min_p\":" << o.min_p;
+    }
+    if (o.has_repeat_penalty) {
+        json << ",\"repeat_penalty\":" << o.repeat_penalty;
+    }
+    if (o.has_presence_penalty) {
+        json << ",\"presence_penalty\":" << o.presence_penalty;
+    }
+    if (o.has_max_output_tokens) {
+        json << ",\"max_tokens\":" << o.max_output_tokens;
+    }
+    if (o.has_enable_thinking) {
+        json << ",\"enable_thinking\":" << (o.enable_thinking ? "true" : "false");
+    }
+    if (o.has_thinking_budget) {
+        chat::append_thinking_budget_json(json, o.thinking_budget);
+    }
+}
+
 std::string build_chat_request_json(const RequestContext& context, const std::vector<Message>& messages) {
     const cli::Options& o = context.options;
     std::ostringstream json;
@@ -276,15 +307,7 @@ std::string build_chat_request_json(const RequestContext& context, const std::ve
     }
     json << "],";
     json << "\"stream\":" << (o.stream ? "true" : "false");
-    if (o.has_temperature) {
-        json << ",\"temperature\":" << o.temperature;
-    }
-    if (o.has_top_p) {
-        json << ",\"top_p\":" << o.top_p;
-    }
-    if (o.has_max_output_tokens) {
-        json << ",\"max_tokens\":" << o.max_output_tokens;
-    }
+    append_sampling_fields(json, o);
     json << "}";
     return json.str();
 }
@@ -357,9 +380,37 @@ std::string build_responses_request_json(const RequestContext& context, const st
         comma();
         out << "\"top_p\":" << o.top_p;
     }
+    if (o.has_top_k) {
+        comma();
+        out << "\"top_k\":" << o.top_k;
+    }
+    if (o.has_min_p) {
+        comma();
+        out << "\"min_p\":" << o.min_p;
+    }
+    if (o.has_repeat_penalty) {
+        comma();
+        out << "\"repeat_penalty\":" << o.repeat_penalty;
+    }
+    if (o.has_presence_penalty) {
+        comma();
+        out << "\"presence_penalty\":" << o.presence_penalty;
+    }
     if (o.has_max_output_tokens) {
         comma();
         out << "\"max_output_tokens\":" << o.max_output_tokens;
+    }
+    if (o.has_enable_thinking) {
+        comma();
+        out << "\"enable_thinking\":" << (o.enable_thinking ? "true" : "false");
+    }
+    if (o.has_thinking_budget) {
+        comma();
+        if (chat::thinking_budget_is_token_count(o.thinking_budget)) {
+            out << "\"thinking_budget\":" << o.thinking_budget;
+        } else {
+            out << "\"thinking_budget\":" << json::quote(o.thinking_budget);
+        }
     }
     out << "}";
     return out.str();

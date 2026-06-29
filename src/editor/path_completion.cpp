@@ -39,7 +39,9 @@ const std::vector<std::string>& chat_command_completions() {
         "/quit",
         "/remove",
         "/save ",
-        "/system ",
+        "/setting ",
+        "/system",
+        "/clone",
         "/theme ",
         "/thinking ",
     };

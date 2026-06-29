@@ -1,7 +1,9 @@
 #include "chat/test_chat.hpp"
 #include "support/test_support.hpp"
 #include "chat/session.hpp"
+#include "chat/settings.hpp"
 #include "chat/sqlite_store.hpp"
+#include "pkchat/model_setting.hpp"
 #include "json/json.hpp"
 #include <filesystem>
 #include <fstream>
@@ -23,8 +25,12 @@ void test_chat_session_json_round_trip() {
     context.options.stream = false;
     context.options.context_tokens = 65536;
     pkchat::chat::Session session = pkchat::chat::new_session(context);
+    check(session.settings_json.find("\"context_tokens\":null") != std::string::npos,
+          "configured context window is not stored as a thread override");
+    context.options.has_context_tokens = true;
+    session = pkchat::chat::new_session(context);
     check(session.settings_json.find("\"context_tokens\":65536") != std::string::npos,
-          "new chat settings preserve the configured context-window size");
+          "explicit context window override is persisted in settings_json");
     session.created_at = "2026-06-14T00:00:00Z";
     session.updated_at = session.created_at;
     session.messages.push_back({"user", "hello"});
@@ -203,6 +209,73 @@ void test_chat_session_file_failures_and_unicode() {
           "chat save to a missing parent directory reports a file-write error");
 }
 
+void test_chat_settings_helpers() {
+    check(pkchat::chat::model_pattern_matches("Qwen3.6-*", "Qwen3.6-35B-A3B"),
+          "model pattern wildcard matches a concrete model");
+    check(!pkchat::chat::model_pattern_matches("Qwen3.6-*", "Qwen3.5-4B"),
+          "model pattern wildcard rejects a different family");
+
+    const std::vector<pkchat::ModelSetting> presets = {
+        {"Qwen3.6-*", "coding", "", 0.6, 20, 0.95, 0.0, 1.0, 0.0},
+        {"Qwen3.6-35B-A3B", "coding", "", 0.4, 10, 0.8, 0.0, 1.0, 0.0},
+    };
+    const pkchat::ModelSetting* preset =
+        pkchat::chat::find_model_setting("Qwen3.6-35B-A3B", "coding", presets);
+    check(preset != nullptr && preset->temperature == 0.4,
+          "model preset lookup prefers the longest matching pattern");
+
+    pkchat::cli::Options options;
+    pkchat::Error err = pkchat::chat::apply_chat_setting(options, "temperature", "0.9");
+    check(err.ok() && options.has_temperature && options.temperature == 0.9,
+          "chat setting parser applies temperature");
+    err = pkchat::chat::apply_chat_setting(options, "thinking", "on");
+    check(err.ok() && options.has_enable_thinking && options.enable_thinking,
+          "chat setting parser applies thinking");
+    err = pkchat::chat::apply_chat_setting(options, "thinking_budget", "8192");
+    check(err.ok() && options.has_thinking_budget && options.thinking_budget == "8192" &&
+              pkchat::chat::thinking_budget_is_token_count(options.thinking_budget),
+          "chat setting parser applies numeric thinking_budget");
+    err = pkchat::chat::apply_chat_setting(options, "thinking_budget", "high");
+    check(err.ok() && options.thinking_budget == "high" &&
+              !pkchat::chat::thinking_budget_is_token_count(options.thinking_budget),
+          "chat setting parser applies verbal thinking_budget");
+
+    pkchat::cli::Options source;
+    source.has_top_k = true;
+    source.top_k = 40;
+    source.has_chat_purpose = true;
+    source.chat_purpose = "general";
+    source.has_thinking_budget = true;
+    source.thinking_budget = "medium";
+    const std::string encoded = pkchat::chat::settings_json_from_options(source);
+    pkchat::cli::Options loaded;
+    err = pkchat::chat::apply_settings_json(loaded, encoded);
+    check(err.ok() && loaded.has_top_k && loaded.top_k == 40 && loaded.has_chat_purpose &&
+              loaded.chat_purpose == "general" && loaded.has_thinking_budget &&
+              loaded.thinking_budget == "medium",
+          "chat settings JSON round-trips verbal thinking_budget");
+
+    source = pkchat::cli::Options{};
+    source.has_thinking_budget = true;
+    source.thinking_budget = "4096";
+    err = pkchat::chat::apply_settings_json(loaded, pkchat::chat::settings_json_from_options(source));
+    check(err.ok() && loaded.thinking_budget == "4096" &&
+              pkchat::chat::thinking_budget_is_token_count(loaded.thinking_budget),
+          "chat settings JSON round-trips numeric thinking_budget");
+
+    err = pkchat::chat::apply_chat_setting(options, "temperature", "NULL");
+    check(err.ok() && !options.has_temperature, "chat setting NULL clears temperature override");
+    options.has_temperature = true;
+    options.temperature = 0.9;
+    const std::string with_nulls = pkchat::chat::settings_json_from_options(options);
+    check(with_nulls.find("\"top_k\":null") != std::string::npos,
+          "chat settings JSON emits null for unset overrides");
+    pkchat::cli::Options cleared;
+    err = pkchat::chat::apply_settings_json(cleared, with_nulls);
+    check(err.ok() && cleared.has_temperature && cleared.temperature == 0.9 && !cleared.has_top_k,
+          "chat settings JSON null values clear overrides on load");
+}
+
 }  // namespace
 
 void run_all() {
@@ -211,6 +284,7 @@ void run_all() {
     test_chat_session_file_failures_and_unicode();
     test_chat_sqlite_store_round_trip_and_listing();
     test_chat_sqlite_missing_thread_and_corrupt_database();
+    test_chat_settings_helpers();
 }
 
 }  // namespace pkchat::test::chat

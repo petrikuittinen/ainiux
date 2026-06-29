@@ -1,9 +1,11 @@
 #include "config/config.hpp"
 
 #include "editor/editor_prompts.hpp"
+#include "pkchat/model_setting.hpp"
 
 #include <array>
 #include <cerrno>
+#include <optional>
 #include <cmath>
 #include <cstdlib>
 #include <filesystem>
@@ -379,7 +381,7 @@ class Parser {
     std::map<std::string, size_t> repeatable_section_current_instance_;
 
     static bool is_repeatable_section(const std::string& name) {
-        return name == "command";
+        return name == "command" || name == "Model-setting";
     }
 
     Error parse_line(const std::string& line,
@@ -707,6 +709,193 @@ void merge_assist_command(pkchat::editor::EditorAssistConfig& config, pkchat::ed
     config.commands.push_back(std::move(command));
 }
 
+void merge_model_setting(std::vector<ModelSetting>& settings, ModelSetting setting) {
+    for (ModelSetting& existing : settings) {
+        if (existing.model == setting.model && existing.purpose == setting.purpose) {
+            existing = std::move(setting);
+            return;
+        }
+    }
+    settings.push_back(std::move(setting));
+}
+
+Error apply_configured_model_settings(const Document& document, cli::Options& candidate) {
+    struct PartialModelSetting {
+        std::optional<std::string> model;
+        std::optional<std::string> purpose;
+        std::optional<std::string> default_system_prompt;
+        std::optional<double> temperature;
+        std::optional<int> top_k;
+        std::optional<double> top_p;
+        std::optional<double> min_p;
+        std::optional<double> repeat_penalty;
+        std::optional<double> presence_penalty;
+        std::optional<std::string> thinking_budget;
+        SourceLocation source;
+    };
+
+    std::map<size_t, PartialModelSetting> partial_settings;
+    for (const auto& item : document.entries) {
+        const std::string& name = item.first;
+        if (name.rfind("Model-setting.", 0) != 0) {
+            continue;
+        }
+        const std::string tail = name.substr(std::string("Model-setting.").size());
+        const size_t dot = tail.find('.');
+        if (dot == std::string::npos) {
+            continue;
+        }
+        size_t index = 0;
+        try {
+            index = static_cast<size_t>(std::stoul(tail.substr(0, dot)));
+        } catch (const std::exception&) {
+            continue;
+        }
+        const std::string key = tail.substr(dot + 1);
+        PartialModelSetting& partial = partial_settings[index];
+        if (partial.source.path.empty()) {
+            partial.source = item.second.source;
+        }
+        const Entry& entry = item.second;
+        if (key == "model") {
+            Error err = require_type(entry, Value::Type::String);
+            if (!err.ok()) {
+                return err;
+            }
+            if (entry.value.string.empty()) {
+                return schema_error(entry, "model must not be empty");
+            }
+            partial.model = entry.value.string;
+        } else if (key == "purpose") {
+            std::string purpose;
+            Error err = enum_string(entry, {"creative", "coding", "instruct", "general"}, purpose,
+                                    "creative, coding, instruct, or general");
+            if (!err.ok()) {
+                return err;
+            }
+            partial.purpose = std::move(purpose);
+        } else if (key == "default_system_prompt") {
+            Error err = require_type(entry, Value::Type::String);
+            if (!err.ok()) {
+                return err;
+            }
+            partial.default_system_prompt = entry.value.string;
+        } else if (key == "temperature") {
+            double value = 0.0;
+            Error err = numeric_double(entry, value);
+            if (!err.ok()) {
+                return err;
+            }
+            partial.temperature = value;
+        } else if (key == "top_k") {
+            int value = 0;
+            Error err = nonnegative_int(entry, value);
+            if (!err.ok()) {
+                return err;
+            }
+            partial.top_k = value;
+        } else if (key == "top_p") {
+            double value = 0.0;
+            Error err = numeric_double(entry, value);
+            if (!err.ok()) {
+                return err;
+            }
+            partial.top_p = value;
+        } else if (key == "min_p") {
+            double value = 0.0;
+            Error err = numeric_double(entry, value);
+            if (!err.ok()) {
+                return err;
+            }
+            partial.min_p = value;
+        } else if (key == "repeat_penalty") {
+            double value = 0.0;
+            Error err = numeric_double(entry, value);
+            if (!err.ok()) {
+                return err;
+            }
+            partial.repeat_penalty = value;
+        } else if (key == "presence_penalty") {
+            double value = 0.0;
+            Error err = numeric_double(entry, value);
+            if (!err.ok()) {
+                return err;
+            }
+            partial.presence_penalty = value;
+        } else if (key == "thinking_budget") {
+            if (entry.value.is_string()) {
+                if (entry.value.string.empty()) {
+                    return schema_error(entry, "thinking_budget must not be empty");
+                }
+                partial.thinking_budget = entry.value.string;
+            } else if (entry.value.is_integer()) {
+                if (entry.value.integer < 0) {
+                    return schema_error(entry, "thinking_budget token count must be non-negative");
+                }
+                partial.thinking_budget = std::to_string(entry.value.integer);
+            } else {
+                return schema_error(entry, "thinking_budget must be a token count or verbal label string");
+            }
+        } else {
+            return schema_error(entry,
+                                "unknown [Model-setting] key; expected model, purpose, "
+                                "default_system_prompt, temperature, top_k, top_p, min_p, "
+                                "repeat_penalty, presence_penalty, or thinking_budget");
+        }
+    }
+
+    for (const auto& item : partial_settings) {
+        const PartialModelSetting& partial = item.second;
+        const auto required_error = [&](const char* field) {
+            return Error{ErrorCode::Config,
+                         partial.source.path + ":" + std::to_string(partial.source.line) + ":" +
+                             std::to_string(partial.source.column) +
+                             ": invalid config setting [Model-setting]: " + field + " is required"};
+        };
+        if (!partial.model.has_value()) {
+            return required_error("model");
+        }
+        if (!partial.purpose.has_value()) {
+            return required_error("purpose");
+        }
+        if (!partial.default_system_prompt.has_value()) {
+            return required_error("default_system_prompt");
+        }
+        if (!partial.temperature.has_value()) {
+            return required_error("temperature");
+        }
+        if (!partial.top_k.has_value()) {
+            return required_error("top_k");
+        }
+        if (!partial.top_p.has_value()) {
+            return required_error("top_p");
+        }
+        if (!partial.min_p.has_value()) {
+            return required_error("min_p");
+        }
+        if (!partial.repeat_penalty.has_value()) {
+            return required_error("repeat_penalty");
+        }
+        if (!partial.presence_penalty.has_value()) {
+            return required_error("presence_penalty");
+        }
+        ModelSetting setting{*partial.model,
+                             *partial.purpose,
+                             *partial.default_system_prompt,
+                             *partial.temperature,
+                             *partial.top_k,
+                             *partial.top_p,
+                             *partial.min_p,
+                             *partial.repeat_penalty,
+                             *partial.presence_penalty};
+        if (partial.thinking_budget.has_value()) {
+            setting.thinking_budget = *partial.thinking_budget;
+        }
+        merge_model_setting(candidate.model_settings, std::move(setting));
+    }
+    return ok_error();
+}
+
 Error apply_configured_assist_commands(const Document& document, cli::Options& candidate) {
     struct PartialCommand {
         std::optional<std::string> string;
@@ -1006,6 +1195,8 @@ Error apply_document(const Document& document, cli::Options& options) {
             }
         } else if (name.rfind("command.", 0) == 0) {
             continue;
+        } else if (name.rfind("Model-setting.", 0) == 0) {
+            continue;
         } else if (name == "url_fetch.max_bytes") {
             err = nonnegative_long(entry, candidate.max_fetch_bytes);
         } else if (name == "url_fetch.allow_private_addresses") {
@@ -1025,6 +1216,10 @@ Error apply_document(const Document& document, cli::Options& options) {
         if (!err.ok()) {
             return err;
         }
+    }
+    Error model_setting_err = apply_configured_model_settings(document, candidate);
+    if (!model_setting_err.ok()) {
+        return model_setting_err;
     }
     Error command_err = apply_configured_assist_commands(document, candidate);
     if (!command_err.ok()) {

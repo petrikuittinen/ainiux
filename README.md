@@ -2,7 +2,7 @@
 
 `pkchat` is a fast, script-friendly command-line chat client for OpenAI and OpenAI-compatible APIs.
 
-Current status: v0.84 CLI with libcurl transport, cancellable runtime jobs, provider registry/profile aliases, `/v1/models`, `/v1/chat/completions`, text-only OpenAI Responses API support, local JPEG/PNG/GIF image input, interactive text/image attachments, request-only context policies, safe URL insertion, a simple REPL, a standalone `--editor` mode with selection, copy/cut/paste, grapheme-aware Unicode editing, and AI continue/editor commands, a full-screen non-blocking TUI foundation, SQLite-backed TUI chat threads, JSON chat import/export save/load, HTML-to-text/Markdown extraction, Markdown assistant-output rendering to HTML or plaintext, automatic system/user TOML-alike configuration loading, and a concurrent JSONL benchmark runner.
+Current status: v0.85 CLI with libcurl transport, cancellable runtime jobs, provider registry/profile aliases, `/v1/models`, `/v1/chat/completions`, text-only OpenAI Responses API support, local JPEG/PNG/GIF image input, interactive text/image attachments, request-only context policies, safe URL insertion, a simple REPL, a standalone `--editor` mode with selection, copy/cut/paste, grapheme-aware Unicode editing, and AI continue/editor commands, a full-screen non-blocking TUI foundation, SQLite-backed TUI chat threads, JSON chat import/export save/load, HTML-to-text/Markdown extraction, Markdown assistant-output rendering to HTML or plaintext, automatic system/user TOML-alike configuration loading, and a concurrent JSONL benchmark runner.
 
 ## Build
 
@@ -364,6 +364,10 @@ make test
 ```
 
 `make test` runs unit tests, I/O and network fault tests, and one integration script against a local mock OpenAI-compatible server.
+
+### v0.85 model settings notes
+
+v0.85 adds per-thread model settings with CLI flags (`--top-k`, `--min-p`, `--repeat-penalty`, `--presence-penalty`, `--thinking`, `--thinking-budget`, `--purpose`), repeatable `[Model-setting]` presets in `config/pkchat.conf`, TUI `/setting`, `/system`, and `/clone`, and SQLite persistence via `settings_json`. Unset overrides are stored as JSON `null` and use provider defaults; `/setting NAME=NULL` clears a thread override. `thinking_budget` accepts token counts (`8192`) or verbal labels (`high`).
 
 ### v0.84 refactor notes
 

@@ -11,6 +11,7 @@
 #include <sys/types.h>
 #include <unistd.h>
 
+#include "chat/settings.hpp"
 #include "json/json.hpp"
 
 namespace pkchat::chat {
@@ -148,23 +149,7 @@ Session new_session(const provider::RequestContext& context) {
     session.provider = context.profile.name;
     session.base_url = context.base_url;
     session.model = context.options.model;
-    std::ostringstream settings;
-    settings << "{";
-    settings << "\"stream\":" << (context.options.stream ? "true" : "false");
-    if (context.options.has_temperature) {
-        settings << ",\"temperature\":" << context.options.temperature;
-    }
-    if (context.options.has_top_p) {
-        settings << ",\"top_p\":" << context.options.top_p;
-    }
-    if (context.options.has_max_output_tokens) {
-        settings << ",\"max_output_tokens\":" << context.options.max_output_tokens;
-    }
-    if (context.options.context_tokens > 0) {
-        settings << ",\"context_tokens\":" << context.options.context_tokens;
-    }
-    settings << "}";
-    session.settings_json = settings.str();
+    session.settings_json = settings_json_from_options(context.options);
     return session;
 }
 

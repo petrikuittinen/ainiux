@@ -55,6 +55,10 @@ std::string remove_confirm_text(const chat::Session& session) {
     return out.str();
 }
 
+std::string system_edit_text() {
+    return "Editing system prompt.\nEnter saves, Esc cancels.";
+}
+
 std::string join_models_preview(const std::vector<std::string>& models) {
     if (models.empty()) {
         return "No models returned";

@@ -4,6 +4,7 @@
 #include <limits>
 #include <sstream>
 
+#include "chat/settings.hpp"
 #include "pkchat/version.hpp"
 
 namespace pkchat::cli {
@@ -13,7 +14,9 @@ namespace {
 bool needs_value(const std::string& opt) {
     static const char* with_values[] = {
         "-p", "--prompt", "--prompt-file", "-s", "--system", "--system-file", "-m", "--model", "-model",
-        "-t", "--temperature", "--top-p", "--max-output-tokens", "--format", "--output-format", "--output",
+        "-t", "--temperature", "--top-p", "--top-k", "--min-p", "--repeat-penalty", "--presence-penalty",
+        "--thinking", "--thinking-budget", "--purpose", "--max-output-tokens", "--format", "--output-format",
+        "--output",
         "--provider", "--profile", "--api", "--base-url", "--chat-url", "--models-url", "--responses-url",
         "--key-env", "--key-file", "-k", "--key", "--header", "--connect-timeout", "--timeout",
         "--proxy", "--fetch-url", "--input", "--attach", "--html-file", "--html-format",
@@ -297,6 +300,52 @@ ParseResult parse_args(int argc, char** argv, const Options& base_options) {
                     return {opts, err};
                 }
                 opts.has_top_p = true;
+            } else if (opt == "--top-k") {
+                Error err = parse_int(opt, value, opts.top_k);
+                if (!err.ok()) {
+                    return {opts, err};
+                }
+                if (opts.top_k < 0) {
+                    return {opts, {ErrorCode::BadArgs, "--top-k must be a non-negative integer"}};
+                }
+                opts.has_top_k = true;
+            } else if (opt == "--min-p") {
+                Error err = parse_double(opt, value, opts.min_p);
+                if (!err.ok()) {
+                    return {opts, err};
+                }
+                opts.has_min_p = true;
+            } else if (opt == "--repeat-penalty") {
+                Error err = parse_double(opt, value, opts.repeat_penalty);
+                if (!err.ok()) {
+                    return {opts, err};
+                }
+                opts.has_repeat_penalty = true;
+            } else if (opt == "--presence-penalty") {
+                Error err = parse_double(opt, value, opts.presence_penalty);
+                if (!err.ok()) {
+                    return {opts, err};
+                }
+                opts.has_presence_penalty = true;
+            } else if (opt == "--thinking") {
+                if (value == "on" || value == "true" || value == "1") {
+                    opts.enable_thinking = true;
+                } else if (value == "off" || value == "false" || value == "0") {
+                    opts.enable_thinking = false;
+                } else {
+                    return {opts, {ErrorCode::BadArgs, "--thinking must be on or off"}};
+                }
+                opts.has_enable_thinking = true;
+            } else if (opt == "--thinking-budget") {
+                Error err = pkchat::chat::apply_chat_setting(opts, "thinking_budget", value);
+                if (!err.ok()) {
+                    return {opts, err};
+                }
+            } else if (opt == "--purpose") {
+                if (value != "general" && value != "coding" && value != "instruct" && value != "creative") {
+                    return {opts, {ErrorCode::BadArgs, "--purpose must be general, coding, instruct, or creative"}};
+                }
+                opts.chat_purpose = value;
             } else if (opt == "--max-output-tokens") {
                 Error err = parse_int(opt, value, opts.max_output_tokens);
                 if (!err.ok()) {
@@ -551,6 +600,14 @@ Options:
   -m, --model, -model MODEL
   -t, --temperature FLOAT
       --top-p FLOAT
+      --top-k N
+      --min-p FLOAT
+      --repeat-penalty FLOAT
+      --presence-penalty FLOAT
+      --thinking on|off
+      --thinking-budget TOKENS|LABEL
+                                Token count (for example 8192) or a verbal label (for example high).
+      --purpose general|coding|instruct|creative
       --max-output-tokens N
       --stream | --no-stream
       --format text|json|ndjson|jsonl|jsond

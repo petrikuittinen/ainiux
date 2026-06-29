@@ -5,6 +5,8 @@
 #include <iostream>
 #include <utility>
 
+#include "chat/settings.hpp"
+#include "pkchat/model_setting.hpp"
 #include "context/context.hpp"
 #include "json/json.hpp"
 #include "markdown/markdown.hpp"
@@ -59,6 +61,7 @@ void refresh_session_metadata(chat::Session& session, const provider::RequestCon
     session.provider = context.profile.name;
     session.base_url = context.base_url;
     session.model = context.options.model;
+    session.settings_json = chat::settings_json_from_options(context.options);
 }
 
 void apply_system_prompt(chat::Session& session, const std::string& system) {
@@ -105,16 +108,23 @@ Error choose_default_model(provider::RequestContext& context) {
     if (context.profile.offline) {
         return ok_error();
     }
-    if (!context.options.model.empty()) {
-        return ok_error();
+    if (context.options.model.empty()) {
+        provider::ModelsResult models;
+        Error err = provider::list_models(context, models);
+        if (!err.ok()) {
+            return err;
+        }
+        if (!models.model_ids.empty()) {
+            context.options.model = models.model_ids.front();
+        }
     }
-    provider::ModelsResult models;
-    Error err = provider::list_models(context, models);
-    if (!err.ok()) {
-        return err;
-    }
-    if (!models.model_ids.empty()) {
-        context.options.model = models.model_ids.front();
+    if (!context.options.chat_purpose.empty() && !context.options.model.empty()) {
+        const ModelSetting* preset = chat::find_model_setting(context.options.model,
+                                                              context.options.chat_purpose,
+                                                              context.options.model_settings);
+        if (preset != nullptr) {
+            return chat::apply_model_setting_preset(context.options, *preset);
+        }
     }
     return ok_error();
 }
