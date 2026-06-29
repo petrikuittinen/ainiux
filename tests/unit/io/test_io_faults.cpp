@@ -23,6 +23,20 @@ void chmod_path(const std::string& path, std::filesystem::perms perms) {
     check(!error, "test fixture chmod succeeded: " + path);
 }
 
+class PermissionGuard {
+public:
+    PermissionGuard(std::string path, std::filesystem::perms perms) : path_(std::move(path)), perms_(perms) {}
+
+    ~PermissionGuard() {
+        std::error_code error;
+        std::filesystem::permissions(path_, perms_, error);
+    }
+
+private:
+    std::string path_;
+    std::filesystem::perms perms_;
+};
+
 pkchat::chat::Session make_session() {
     pkchat::provider::RequestContext context;
     context.profile.name = "custom_openai_chat";
@@ -38,7 +52,12 @@ pkchat::chat::Session make_session() {
 void test_readonly_chat_load_and_save() {
     const std::string dir = "build/mock-readonly-chat";
     const std::string path = dir + "/chat.json";
+    const auto restore_dir_perms = std::filesystem::perms::owner_all | std::filesystem::perms::group_all |
+                                   std::filesystem::perms::others_all;
+    const auto restore_file_perms = std::filesystem::perms::owner_read | std::filesystem::perms::owner_write;
     std::filesystem::create_directories(dir);
+    PermissionGuard dir_guard(dir, restore_dir_perms);
+    PermissionGuard file_guard(path, restore_file_perms);
     pkchat::chat::Session session = make_session();
     pkchat::Error err = pkchat::chat::save_session_atomic(path, session);
     check(err.ok(), "chat session saves before read-only fixture is applied");
@@ -50,21 +69,24 @@ void test_readonly_chat_load_and_save() {
               err.message.find("could not open chat file for reading") != std::string::npos,
           "permission-denied chat file load reports a file-read error");
 
-    chmod_path(path, std::filesystem::perms::owner_read | std::filesystem::perms::owner_write);
+    chmod_path(path, restore_file_perms);
     chmod_path(dir, std::filesystem::perms::owner_read | std::filesystem::perms::owner_exec |
                           std::filesystem::perms::group_read | std::filesystem::perms::group_exec |
                           std::filesystem::perms::others_read | std::filesystem::perms::others_exec);
     err = pkchat::chat::save_session_atomic(path, session);
     check(!err.ok() && err.code == pkchat::ErrorCode::FileWrite,
           "read-only directory blocks chat session save");
-    chmod_path(dir, std::filesystem::perms::owner_all | std::filesystem::perms::group_all |
-                          std::filesystem::perms::others_all);
 }
 
 void test_readonly_editor_load_and_save() {
     const std::string dir = "build/mock-readonly-editor";
     const std::string path = dir + "/notes.txt";
+    const auto restore_dir_perms = std::filesystem::perms::owner_all | std::filesystem::perms::group_all |
+                                   std::filesystem::perms::others_all;
+    const auto restore_file_perms = std::filesystem::perms::owner_read | std::filesystem::perms::owner_write;
     std::filesystem::create_directories(dir);
+    PermissionGuard dir_guard(dir, restore_dir_perms);
+    PermissionGuard file_guard(path, restore_file_perms);
     {
         std::ofstream output(path, std::ios::binary | std::ios::trunc);
         output << u8"你好";
@@ -77,7 +99,7 @@ void test_readonly_editor_load_and_save() {
               err.message.find("could not open editor file for reading") != std::string::npos,
           "permission-denied editor file load reports a file-read error");
 
-    chmod_path(path, std::filesystem::perms::owner_read | std::filesystem::perms::owner_write);
+    chmod_path(path, restore_file_perms);
     table = pkchat::editor::PieceTable::from_string("save me");
     chmod_path(dir, std::filesystem::perms::owner_read | std::filesystem::perms::owner_exec |
                           std::filesystem::perms::group_read | std::filesystem::perms::group_exec |
@@ -85,8 +107,6 @@ void test_readonly_editor_load_and_save() {
     err = pkchat::editor::save_file(dir + "/new-save.txt", table);
     check(!err.ok() && err.code == pkchat::ErrorCode::FileWrite,
           "read-only directory blocks editor save of a new file");
-    chmod_path(dir, std::filesystem::perms::owner_all | std::filesystem::perms::group_all |
-                          std::filesystem::perms::others_all);
 }
 
 void test_enospc_chat_save() {

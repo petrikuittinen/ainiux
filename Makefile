@@ -45,7 +45,8 @@ APP_OBJ := $(patsubst %.cpp,$(OBJ_DIR)/%.o,$(APP_SRC))
 LIB_OBJ := $(patsubst %.cpp,$(OBJ_DIR)/%.o,$(LIB_SRC))
 TEST_SRC := $(filter-out tests/unit/test_io_faults.cpp tests/unit/io/test_io_faults.cpp tests/unit/mock/slow_server.cpp tests/unit/http/test_http_network.cpp,$(shell find tests/unit -name '*.cpp' | sort))
 TEST_OBJ := $(patsubst %.cpp,$(OBJ_DIR)/%.o,$(TEST_SRC))
-DEP := $(sort $(APP_OBJ:.o=.d) $(TEST_OBJ:.o=.d))
+IO_FAULT_DEP := $(IO_FAULT_OBJ:.o=.d)
+DEP := $(sort $(APP_OBJ:.o=.d) $(TEST_OBJ:.o=.d) $(IO_FAULT_DEP))
 
 VALGRIND ?= valgrind --error-exitcode=1 --leak-check=full --show-leak-kinds=definite,indirect --quiet
 
