@@ -513,26 +513,72 @@ bool contains_think_tag(const std::string& text) {
     return false;
 }
 
+std::string normalize_provider_text(std::string text) {
+    std::string out;
+    out.reserve(text.size());
+    for (size_t i = 0; i < text.size(); ++i) {
+        const char ch = text[i];
+        if (ch == '\r') {
+            if (i + 1 < text.size() && text[i + 1] == '\n') {
+                out.push_back('\n');
+                ++i;
+            } else {
+                out.push_back('\n');
+            }
+            continue;
+        }
+        out.push_back(ch);
+    }
+    return out;
+}
+
+std::string reasoning_detail_type(const json::Value& item) {
+    const json::Value* type = item.get("type");
+    return type != nullptr && type->is_string() ? type->string : std::string();
+}
+
+std::string reasoning_detail_text_from_item(const json::Value& item) {
+    if (item.is_string()) {
+        return item.string;
+    }
+    const std::string type = reasoning_detail_type(item);
+    if (type == "reasoning.encrypted") {
+        return "";
+    }
+    if (const json::Value* text = item.get("text")) {
+        if (text->is_string()) {
+            return text->string;
+        }
+    }
+    if (const json::Value* summary = item.get("summary")) {
+        if (summary->is_string()) {
+            return summary->string;
+        }
+    }
+    return "";
+}
+
 void append_reasoning_details_text(const json::Value& details, std::string& out) {
     if (!details.is_array()) {
         return;
     }
+    std::string previous_type;
     for (const json::Value& item : details.array) {
-        std::string text;
-        if (item.is_string()) {
-            text = item.string;
-        } else if (const json::Value* value = item.get("text")) {
-            if (value->is_string()) {
-                text = value->string;
-            }
-        }
+        const std::string text = reasoning_detail_text_from_item(item);
         if (text.empty()) {
             continue;
         }
-        if (!out.empty() && out.back() != '\n') {
-            out.push_back('\n');
+        const std::string type = reasoning_detail_type(item);
+        const bool direct_concat = type == "reasoning.text";
+        if (!out.empty()) {
+            if (direct_concat && previous_type == "reasoning.text") {
+                // OpenRouter streams reasoning.text fragments without separators.
+            } else if (out.back() != '\n') {
+                out.push_back('\n');
+            }
         }
         out += text;
+        previous_type = type;
     }
 }
 
@@ -540,20 +586,23 @@ std::string reasoning_text_from_object(const json::Value& object) {
     std::string reasoning;
     if (const json::Value* value = object.get("reasoning_content")) {
         if (value->is_string()) {
-            reasoning += value->string;
+            reasoning = value->string;
         }
     }
     if (reasoning.empty()) {
         if (const json::Value* value = object.get("reasoning")) {
             if (value->is_string()) {
-                reasoning += value->string;
+                reasoning = value->string;
             }
         }
+    }
+    if (!reasoning.empty()) {
+        return normalize_provider_text(std::move(reasoning));
     }
     if (const json::Value* details = object.get("reasoning_details")) {
         append_reasoning_details_text(*details, reasoning);
     }
-    return reasoning;
+    return normalize_provider_text(std::move(reasoning));
 }
 
 std::string content_with_reasoning_trace(const std::string& reasoning, const std::string& content) {
@@ -709,7 +758,7 @@ Error parse_chat_json(const std::string& body, ChatResult& result) {
     const json::Value* content = message->get("content");
     std::string content_text;
     if (content != nullptr && content->is_string()) {
-        content_text = content->string;
+        content_text = normalize_provider_text(content->string);
     } else if (reasoning.empty()) {
         return {ErrorCode::ProviderSchema, "chat response did not contain choices[0].message.content"};
     }
@@ -1065,11 +1114,13 @@ class SseParser {
             }
             const json::Value* content = delta->get("content");
             if (content != nullptr && content->is_string() && !content->string.empty()) {
-                err = close_reasoning(on_delta, result.content, true);
+                const std::string content_text = normalize_provider_text(content->string);
+                const bool content_has_think_tag = contains_think_tag(content_text);
+                err = close_reasoning(on_delta, result.content, !content_has_think_tag);
                 if (!err.ok()) {
                     return err;
                 }
-                err = emit_text(content->string, on_delta, result.content, true);
+                err = emit_text(content_text, on_delta, result.content, true);
                 if (!err.ok()) {
                     return err;
                 }

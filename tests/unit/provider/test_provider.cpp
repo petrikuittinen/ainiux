@@ -149,6 +149,79 @@ void test_chat_sse_accepts_cr_only_event_boundaries() {
     check(streamed == "Hello world", "CR-only SSE stream forwards chat deltas");
 }
 
+void test_chat_sse_streaming_reasoning_content() {
+    const std::string body =
+        "data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"internal\"}}]}\n\n"
+        "data: {\"choices\":[{\"delta\":{\"reasoning_content\":\" trace\"}}]}\n\n"
+        "data: {\"choices\":[{\"delta\":{\"content\":\"Visible answer\"}}]}\n\n"
+        "data: [DONE]\n\n";
+    pkchat::provider::ChatResult result;
+    std::string streamed;
+    const pkchat::Error err = run_chat_stream_from_body(body, result, streamed);
+    check(err.ok(), "chat SSE parser streams reasoning_content deltas");
+    check(result.content == "<think>internal trace</think>\n\nVisible answer",
+          "reasoning_content stream wraps thinking before visible content");
+    check(streamed == result.content, "reasoning_content stream forwards wrapped output");
+}
+
+void test_chat_sse_openrouter_reasoning_details_text() {
+    const std::string body =
+        "data: {\"choices\":[{\"delta\":{\"reasoning_details\":[{\"type\":\"reasoning.text\",\"text\":\"Let\"}]}}]}\n\n"
+        "data: {\"choices\":[{\"delta\":{\"reasoning_details\":[{\"type\":\"reasoning.text\",\"text\":\" me\"}]}}]}\n\n"
+        "data: {\"choices\":[{\"delta\":{\"reasoning_details\":[{\"type\":\"reasoning.text\",\"text\":\" think\"}]}}]}\n\n"
+        "data: {\"choices\":[{\"delta\":{\"content\":\"Answer\"}}]}\n\n"
+        "data: [DONE]\n\n";
+    pkchat::provider::ChatResult result;
+    std::string streamed;
+    const pkchat::Error err = run_chat_stream_from_body(body, result, streamed);
+    check(err.ok(), "chat SSE parser streams OpenRouter reasoning.text details");
+    check(result.content == "<think>Let me think</think>\n\nAnswer",
+          "OpenRouter reasoning.text chunks concatenate without extra newlines");
+}
+
+void test_chat_sse_openrouter_reasoning_not_duplicated_with_details() {
+    const std::string body =
+        "data: {\"choices\":[{\"delta\":{\"reasoning\":\"shared\",\"reasoning_details\":[{\"type\":\"reasoning.text\",\"text\":\"shared\"}]}}]}\n\n"
+        "data: {\"choices\":[{\"delta\":{\"content\":\"Done\"}}]}\n\n"
+        "data: [DONE]\n\n";
+    pkchat::provider::ChatResult result;
+    std::string streamed;
+    const pkchat::Error err = run_chat_stream_from_body(body, result, streamed);
+    check(err.ok(), "chat SSE parser accepts OpenRouter reasoning and reasoning_details together");
+    check(result.content == "<think>shared</think>\n\nDone",
+          "OpenRouter reasoning string is preferred over duplicate reasoning_details text");
+}
+
+void test_chat_sse_openrouter_reasoning_summary_and_text() {
+    const std::string body =
+        "data: {\"choices\":[{\"delta\":{\"reasoning_details\":["
+        "{\"type\":\"reasoning.summary\",\"summary\":\"High level\"},"
+        "{\"type\":\"reasoning.text\",\"text\":\"Detailed trace\"}"
+        "]}}]}\n\n"
+        "data: {\"choices\":[{\"delta\":{\"content\":\"Final\"}}]}\n\n"
+        "data: [DONE]\n\n";
+    pkchat::provider::ChatResult result;
+    std::string streamed;
+    const pkchat::Error err = run_chat_stream_from_body(body, result, streamed);
+    check(err.ok(), "chat SSE parser accepts OpenRouter summary and text reasoning details");
+    check(result.content == "<think>High level\nDetailed trace</think>\n\nFinal",
+          "OpenRouter reasoning.summary and reasoning.text are separated by a newline");
+}
+
+void test_chat_sse_reasoning_normalizes_crlf() {
+    const std::string body =
+        "data: {\"choices\":[{\"delta\":{\"reasoning\":\"line1\\r\\nline2\\rmore\"}}]}\n\n"
+        "data: {\"choices\":[{\"delta\":{\"content\":\"OK\"}}]}\n\n"
+        "data: [DONE]\n\n";
+    pkchat::provider::ChatResult result;
+    std::string streamed;
+    const pkchat::Error err = run_chat_stream_from_body(body, result, streamed);
+    check(err.ok(), "chat SSE parser normalizes reasoning newlines");
+    check(result.content == "<think>line1\nline2\nmore</think>\n\nOK",
+          "reasoning text normalizes CRLF and lone CR to LF");
+    check(streamed == result.content, "normalized reasoning is forwarded to stream consumers");
+}
+
 void test_chat_sse_accepts_batched_json_data_lines() {
     const std::string body =
         "data: {\"choices\":[{\"delta\":{\"content\":\"Hello\"}}]}\n"
@@ -410,6 +483,11 @@ void test_provider_unicode_request_serialization() {
 
 void run_all() {
     test_chat_sse_accepts_cr_only_event_boundaries();
+    test_chat_sse_streaming_reasoning_content();
+    test_chat_sse_openrouter_reasoning_details_text();
+    test_chat_sse_openrouter_reasoning_not_duplicated_with_details();
+    test_chat_sse_openrouter_reasoning_summary_and_text();
+    test_chat_sse_reasoning_normalizes_crlf();
     test_chat_sse_accepts_batched_json_data_lines();
     test_explicit_chat_url_does_not_require_base_when_model_set();
     test_image_capability_detection();
