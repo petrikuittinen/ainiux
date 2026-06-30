@@ -113,6 +113,14 @@ EscapeResult handle_escape(editor::EditorState& input, const Layout& layout, int
             } else {
                 history_scroll = history_scroll_for_thread_end();
             }
+        } else if (!movement.shift && (movement.key == editor::MovementKey::PageUp ||
+                                       movement.key == editor::MovementKey::PageDown)) {
+            const int step = std::max(1, layout.history_rows / 2);
+            if (movement.key == editor::MovementKey::PageUp) {
+                history_scroll += step;
+            } else {
+                history_scroll -= step;
+            }
         } else {
             input.apply_movement(movement.key, layout.input_rect, movement.shift);
         }

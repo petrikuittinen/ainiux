@@ -58,7 +58,8 @@ std::string provider_model_status_message(const provider::RequestContext& contex
 }
 
 std::string ready_status() {
-    return std::string("Pkchat v") + kVersion + " ready";
+    return std::string("pkchat v") + kVersion +
+           ". TAB command/path /help Alt+enter newline PageUp/PageDown scroll";
 }
 
 std::string generation_ready_status(const std::string& provider_name,
@@ -70,7 +71,7 @@ std::string generation_ready_status(const std::string& provider_name,
     std::ostringstream out;
     const std::string label = provider_model_status_label(provider_name, model_name);
     if (label.empty()) {
-        out << (context_tokens > 0 ? std::string("Pkchat v") + kVersion + " ready" : ready_status());
+        out << ready_status();
     } else {
         out << label;
     }
@@ -119,6 +120,38 @@ RegenerationPlan regeneration_plan_for_session(const chat::Session& session) {
         }
     }
     return {};
+}
+
+bool last_unanswered_user_message(const chat::Session& session, std::size_t& index) {
+    for (std::size_t i = session.messages.size(); i > 0; --i) {
+        const std::size_t candidate = i - 1;
+        const std::string& role = session.messages[candidate].role;
+        if (role == "assistant") {
+            index = 0;
+            return false;
+        }
+        if (role == "user") {
+            index = candidate;
+            return true;
+        }
+    }
+    index = 0;
+    return false;
+}
+
+bool pop_last_chat_message(chat::Session& session, std::string& removed_role) {
+    for (std::size_t i = session.messages.size(); i > 0; --i) {
+        const std::size_t index = i - 1;
+        const std::string& role = session.messages[index].role;
+        if (role != "user" && role != "assistant") {
+            continue;
+        }
+        removed_role = role;
+        session.messages.erase(session.messages.begin() + static_cast<long>(index));
+        return true;
+    }
+    removed_role.clear();
+    return false;
 }
 
 }  // namespace pkchat::tui

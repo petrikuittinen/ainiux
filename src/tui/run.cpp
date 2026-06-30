@@ -1,6 +1,7 @@
 #include "tui/tui.hpp"
 #include "tui/events.hpp"
 #include "tui/input_handlers.hpp"
+#include "tui/session_load.hpp"
 #include "tui/terminal.hpp"
 #include "tui/detail/render.hpp"
 
@@ -29,6 +30,7 @@ namespace pkchat::tui {
 using detail::RenderStyle;
 
 int run(provider::RequestContext context, chat::Session session) {
+    const provider::RequestContext cli_context = context;
     TerminalSession terminal;
     Error err = terminal.enter();
     if (!err.ok()) {
@@ -57,6 +59,7 @@ int run(provider::RequestContext context, chat::Session session) {
     bool show_thinking_traces = context.options.show_thinking_traces;
     size_t pending_user = static_cast<size_t>(-1);
     size_t pending_assistant = static_cast<size_t>(-1);
+    bool pending_user_added_for_job = false;
     int history_scroll = 0;
     bool regenerate_after_cancel = false;
     std::string queued_regeneration_prompt;
@@ -70,29 +73,35 @@ int run(provider::RequestContext context, chat::Session session) {
     bool sqlite_available = false;
     std::string sqlite_path;
 
-    auto rebuild_context_from_session = [&](const chat::Session& loaded) {
-        cli::Options next = context.options;
-        if (!loaded.provider.empty()) {
-            next.provider = loaded.provider;
-        }
-        if (!loaded.base_url.empty()) {
-            next.base_url = loaded.base_url;
-            next.positional_url.clear();
-        }
-        if (!loaded.model.empty()) {
-            next.model = loaded.model;
-        }
-        Error settings_error = chat::apply_settings_json(next, loaded.settings_json);
-        if (!settings_error.ok()) {
-            return settings_error;
-        }
-        provider::ContextResult rebuilt = provider::build_context(next);
-        if (!rebuilt.error.ok()) {
-            return rebuilt.error;
-        }
-        context = std::move(rebuilt.context);
+    auto apply_loaded_session_context = [&](const chat::Session& loaded) {
+        Error context_error = apply_loaded_session_to_context(context, loaded);
         show_thinking_traces = context.options.show_thinking_traces;
-        return ok_error();
+        return context_error;
+    };
+
+    auto finish_loaded_session = [&](const std::string& loaded_label) {
+        pending_images.clear();
+        inflight_image_count = 0;
+        history_scroll = 0;
+        if (loaded_session_differs_from_cli(cli_context, session)) {
+            restore_cli_context(context, cli_context);
+            show_thinking_traces = context.options.show_thinking_traces;
+            mode = TuiMode::ModelConfirm;
+            status = loaded_label;
+            return;
+        }
+        Error context_error = apply_loaded_session_context(session);
+        status = context_error.ok() ? loaded_label : detail::error_line(context_error);
+    };
+
+    auto start_new_thread_from_cli = [&]() {
+        restore_cli_context(context, cli_context);
+        show_thinking_traces = context.options.show_thinking_traces;
+        session = chat::new_session(context);
+        pending_images.clear();
+        inflight_image_count = 0;
+        app::apply_system_prompt(session, context.options.system);
+        history_scroll = 0;
     };
 
     auto panel_text = [&]() {
@@ -101,6 +110,9 @@ int run(provider::RequestContext context, chat::Session session) {
         }
         if (mode == TuiMode::RemoveConfirm) {
             return remove_confirm_text(session);
+        }
+        if (mode == TuiMode::ModelConfirm) {
+            return model_confirm_text(cli_context, session);
         }
         if (mode == TuiMode::SystemEdit) {
             return system_edit_text();
@@ -121,11 +133,9 @@ int run(provider::RequestContext context, chat::Session session) {
                 Error load_error = sqlite_store.load_session(last_id, loaded);
                 if (load_error.ok()) {
                     session = std::move(loaded);
-                    Error context_error = rebuild_context_from_session(session);
                     app::apply_system_prompt(session, context.options.system);
-                    status = context_error.ok()
-                                 ? "Loaded last thread: " + (session.name.empty() ? std::to_string(session.thread_id) : session.name)
-                                 : detail::error_line(context_error);
+                    finish_loaded_session("Loaded last thread: " +
+                                          (session.name.empty() ? std::to_string(session.thread_id) : session.name));
                 } else {
                     status = detail::error_line(load_error);
                 }
@@ -183,11 +193,13 @@ int run(provider::RequestContext context, chat::Session session) {
         if (pending_assistant != static_cast<size_t>(-1) && pending_assistant < session.messages.size()) {
             session.messages.erase(session.messages.begin() + static_cast<long>(pending_assistant));
         }
-        if (pending_user != static_cast<size_t>(-1) && pending_user < session.messages.size()) {
+        if (pending_user_added_for_job && pending_user != static_cast<size_t>(-1) &&
+            pending_user < session.messages.size()) {
             session.messages.erase(session.messages.begin() + static_cast<long>(pending_user));
         }
         pending_user = static_cast<size_t>(-1);
         pending_assistant = static_cast<size_t>(-1);
+        pending_user_added_for_job = false;
     };
 
     auto keep_cancelled_turn = [&]() {
@@ -197,6 +209,7 @@ int run(provider::RequestContext context, chat::Session session) {
         }
         pending_user = static_cast<size_t>(-1);
         pending_assistant = static_cast<size_t>(-1);
+        pending_user_added_for_job = false;
     };
 
     auto start_save = [&](const std::string& path, chat::Session snapshot, bool quiet_success = false) {
@@ -430,16 +443,9 @@ int run(provider::RequestContext context, chat::Session session) {
         status = "Listing models...";
     };
 
-    auto start_turn = [&](const std::string& prompt) {
-        if (active_job != ActiveJob::None) {
-            status = "A model job is already running";
-            return;
-        }
+    auto start_assistant_response = [&]() {
         active_job = ActiveJob::Chat;
         history_scroll = 0;
-        pending_user = session.messages.size();
-        inflight_image_count = pending_images.size();
-        session.messages.push_back({"user", prompt, pending_images});
         pending_assistant = session.messages.size();
         session.messages.push_back({"assistant", ""});
 
@@ -458,7 +464,9 @@ int run(provider::RequestContext context, chat::Session session) {
             inflight_image_count = 0;
             return;
         }
-        session.messages[pending_user].images.clear();
+        if (pending_user != static_cast<size_t>(-1) && pending_user < session.messages.size()) {
+            session.messages[pending_user].images.clear();
+        }
         provider::RequestContext job_context = context;
         model_job.start([job_context, request_messages = std::move(prepared.messages),
                          compaction = std::move(prepared.event), compacted = prepared.compacted,
@@ -494,6 +502,34 @@ int run(provider::RequestContext context, chat::Session session) {
         status = "Waiting for response...";
     };
 
+    auto start_turn = [&](const std::string& prompt) {
+        if (active_job != ActiveJob::None) {
+            status = "A model job is already running";
+            return;
+        }
+        pending_user = session.messages.size();
+        pending_user_added_for_job = true;
+        inflight_image_count = pending_images.size();
+        session.messages.push_back({"user", prompt, pending_images});
+        start_assistant_response();
+    };
+
+    auto start_response_to_unanswered_user = [&]() {
+        if (active_job != ActiveJob::None) {
+            status = "A model job is already running";
+            return;
+        }
+        size_t user_index = 0;
+        if (!last_unanswered_user_message(session, user_index)) {
+            status = "No unanswered user message to respond to";
+            return;
+        }
+        pending_user = user_index;
+        pending_user_added_for_job = false;
+        inflight_image_count = 0;
+        start_assistant_response();
+    };
+
     auto clear_queued_regeneration = [&]() {
         regenerate_after_cancel = false;
         queued_regeneration_prompt.clear();
@@ -520,6 +556,22 @@ int run(provider::RequestContext context, chat::Session session) {
         clear_queued_regeneration();
         model_job.cancel();
         status = "Cancelling...";
+    };
+
+    auto pop_last_message = [&]() {
+        if (active_job != ActiveJob::None) {
+            status = "Cannot pop while a model job is running";
+            return;
+        }
+        std::string removed_role;
+        if (!pop_last_chat_message(session, removed_role)) {
+            status = "No user or assistant message to pop";
+            return;
+        }
+        history_scroll = 0;
+        status = "Popped last " + removed_role + " message";
+        start_save(context.options.save_chat_path, session, true);
+        start_store_save();
     };
 
     auto regenerate_last_turn = [&]() {
@@ -582,6 +634,8 @@ int run(provider::RequestContext context, chat::Session session) {
                     "/save [PATH]\n"
                     "/load PATH\n"
                     "/remove\n"
+                    "/pop\n"
+                    "/response\n"
                     "/insert PATH or /attach PATH (text or image)\n"
                     "/fetch URL\n"
                     "/theme [dark|light]\n"
@@ -671,12 +725,8 @@ int run(provider::RequestContext context, chat::Session session) {
                 status = "Cannot create a thread while a model job is running";
                 return;
             }
-            session = chat::new_session(context);
+            start_new_thread_from_cli();
             session.name = app::detail::trim_ascii(text.substr(4));
-            pending_images.clear();
-            inflight_image_count = 0;
-            app::apply_system_prompt(session, context.options.system);
-            history_scroll = 0;
             status = session.name.empty() ? "New chat thread" : "New chat thread: " + session.name;
             start_store_save();
             return;
@@ -843,6 +893,14 @@ int run(provider::RequestContext context, chat::Session session) {
             status = "Confirm removal with y or cancel with n/Esc";
             return;
         }
+        if (text == "/pop") {
+            pop_last_message();
+            return;
+        }
+        if (text == "/response") {
+            start_response_to_unanswered_user();
+            return;
+        }
         if (text == "/insert" || text.rfind("/insert ", 0) == 0 ||
             text == "/attach" || text.rfind("/attach ", 0) == 0) {
             start_insert(app::detail::trim_ascii(text.substr(7)));
@@ -920,6 +978,7 @@ int run(provider::RequestContext context, chat::Session session) {
                     inflight_image_count = 0;
                     pending_user = static_cast<size_t>(-1);
                     pending_assistant = static_cast<size_t>(-1);
+                    pending_user_added_for_job = false;
                     active_job = ActiveJob::None;
                     if (should_regenerate) {
                         start_queued_regeneration(regenerate_erase_from);
@@ -940,11 +999,12 @@ int run(provider::RequestContext context, chat::Session session) {
                 case TuiEventType::Error: {
                     model_job.join();
                     const bool should_regenerate = regenerate_after_cancel && event.error.code == ErrorCode::Cancelled;
+                    const size_t regenerate_erase_from = pending_user_added_for_job ? static_cast<size_t>(-1) : pending_user;
                     active_job = ActiveJob::None;
                     inflight_image_count = 0;
                     if (should_regenerate) {
                         rollback_pending_turn();
-                        start_queued_regeneration(static_cast<size_t>(-1));
+                        start_queued_regeneration(regenerate_erase_from);
                     } else {
                         clear_queued_regeneration();
                         if (event.error.code == ErrorCode::Cancelled) {
@@ -972,11 +1032,8 @@ int run(provider::RequestContext context, chat::Session session) {
                     file_job.join();
                     if (event.error.ok()) {
                         session = std::move(event.session);
-                        pending_images.clear();
-                        inflight_image_count = 0;
-                        Error context_error = rebuild_context_from_session(session);
-                        history_scroll = 0;
-                        status = context_error.ok() ? "Loaded " + event.text : detail::error_line(context_error);
+                        app::apply_system_prompt(session, context.options.system);
+                        finish_loaded_session("Loaded " + event.text);
                     } else {
                         status = detail::error_line(event.error);
                     }
@@ -998,14 +1055,9 @@ int run(provider::RequestContext context, chat::Session session) {
                     file_job.join();
                     if (event.error.ok()) {
                         session = std::move(event.session);
-                        pending_images.clear();
-                        inflight_image_count = 0;
-                        Error context_error = rebuild_context_from_session(session);
                         app::apply_system_prompt(session, context.options.system);
-                        history_scroll = 0;
-                        status = context_error.ok()
-                                     ? "Loaded thread: " + (session.name.empty() ? event.text : session.name)
-                                     : detail::error_line(context_error);
+                        finish_loaded_session("Loaded thread: " +
+                                              (session.name.empty() ? event.text : session.name));
                     } else {
                         status = detail::error_line(event.error);
                     }
@@ -1118,11 +1170,7 @@ int run(provider::RequestContext context, chat::Session session) {
                         Error remove_error = sqlite_store.soft_delete_thread(removed_thread_id);
                         if (remove_error.ok()) {
                             sqlite_store.set_last_thread_id(0);
-                            session = chat::new_session(context);
-                            pending_images.clear();
-                            inflight_image_count = 0;
-                            app::apply_system_prompt(session, context.options.system);
-                            history_scroll = 0;
+                            start_new_thread_from_cli();
                             status = "Removed thread " + std::to_string(removed_thread_id);
                         } else {
                             status = detail::error_line(remove_error);
@@ -1131,6 +1179,31 @@ int run(provider::RequestContext context, chat::Session session) {
                         continue;
                     }
                     status = "Press y to remove, n or Esc to cancel";
+                    continue;
+                }
+                if (mode == TuiMode::ModelConfirm) {
+                    if (ch == 17) {
+                        quit = true;
+                        continue;
+                    }
+                    if (ch == 27 || ch == 'n' || ch == 'N') {
+                        Error context_error = apply_loaded_session_context(session);
+                        mode = TuiMode::Chat;
+                        status = context_error.ok() ? "Using thread model: " + session.model
+                                                    : detail::error_line(context_error);
+                        start_store_save();
+                        continue;
+                    }
+                    if (ch == 'y' || ch == 'Y') {
+                        restore_cli_context(context, cli_context);
+                        show_thinking_traces = context.options.show_thinking_traces;
+                        app::refresh_session_metadata(session, context);
+                        mode = TuiMode::Chat;
+                        status = "Using command-line model: " + context.options.model;
+                        start_store_save();
+                        continue;
+                    }
+                    status = "Press y to use command-line model, n or Esc to keep thread model";
                     continue;
                 }
                 if (mode == TuiMode::SystemEdit) {
@@ -1199,6 +1272,10 @@ int run(provider::RequestContext context, chat::Session session) {
                 }
                 if (ch == 18) {
                     status = input.redo() ? "Redone" : "Nothing to redo";
+                    continue;
+                }
+                if (ch == 16 && mode == TuiMode::Chat) {
+                    pop_last_message();
                     continue;
                 }
                 if (ch == 20) {

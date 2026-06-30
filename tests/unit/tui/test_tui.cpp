@@ -3,6 +3,7 @@
 #include "output/thinking.hpp"
 #include "pkchat/version.hpp"
 #include "provider/provider.hpp"
+#include "tui/session_load.hpp"
 #include "tui/tui.hpp"
 #include <string>
 #include <vector>
@@ -37,8 +38,9 @@ void test_tui_layout_reserves_editor_input_panel() {
 }
 
 void test_tui_ready_and_generation_status() {
-    check(pkchat::tui::ready_status() == std::string("Pkchat v") + pkchat::kVersion + " ready",
-          "TUI ready status displays the current pkchat version");
+    check(pkchat::tui::ready_status() == std::string("pkchat v") + pkchat::kVersion +
+                                              ". TAB command/path /help Alt+enter newline PageUp/PageDown scroll",
+          "TUI ready status displays compact version and key hints");
 
     pkchat::provider::ChatResult result;
     result.ttft_ms = 100;
@@ -77,6 +79,45 @@ void test_tui_ready_and_generation_status() {
         pkchat::tui::generation_ready_status("lm_studio", "gpt-test", result, true, messages, 10);
     check(exhausted.find("Context used: 17/10 (170.0%)") != std::string::npos,
           "TUI context estimate reports usage beyond the configured window");
+}
+
+void test_tui_last_unanswered_user_message_requires_final_user() {
+    pkchat::chat::Session session;
+    std::size_t index = 42;
+    check(!pkchat::tui::last_unanswered_user_message(session, index),
+          "TUI response helper rejects empty sessions");
+
+    session.messages.push_back({"system", "stay concise"});
+    session.messages.push_back({"user", "first"});
+    check(pkchat::tui::last_unanswered_user_message(session, index) && index == 1,
+          "TUI response helper accepts a final user message");
+
+    session.messages.push_back({"assistant", "one"});
+    check(!pkchat::tui::last_unanswered_user_message(session, index),
+          "TUI response helper rejects user messages that already have assistant replies");
+}
+
+void test_tui_pop_last_chat_message_removes_user_or_assistant_only() {
+    pkchat::chat::Session session;
+    session.messages.push_back({"system", "stay concise"});
+    std::string removed_role;
+    check(!pkchat::tui::pop_last_chat_message(session, removed_role),
+          "TUI pop leaves system-only sessions unchanged");
+    check(session.messages.size() == 1 && removed_role.empty(),
+          "TUI pop reports no removed role for system-only sessions");
+
+    session.messages.push_back({"user", "first"});
+    session.messages.push_back({"assistant", "one"});
+    check(pkchat::tui::pop_last_chat_message(session, removed_role),
+          "TUI pop removes the last assistant message");
+    check(removed_role == "assistant" && session.messages.size() == 2 &&
+              session.messages.back().role == "user",
+          "TUI pop reports assistant and leaves the prior user message last");
+    check(pkchat::tui::pop_last_chat_message(session, removed_role),
+          "TUI pop removes the last user message");
+    check(removed_role == "user" && session.messages.size() == 1 &&
+              session.messages.back().role == "system",
+          "TUI pop reports user and preserves the system prompt");
 }
 
 void test_tui_regeneration_plan_uses_last_user_turn() {
@@ -191,9 +232,68 @@ void test_tui_provider_display_and_activity_status() {
           "TUI streaming activity status keeps indicator and text");
 }
 
+void test_tui_session_load_model_mismatch_detection() {
+    pkchat::provider::RequestContext cli_context;
+    cli_context.profile.name = "lm_studio";
+    cli_context.options.model = "qwen-local";
+
+    pkchat::chat::Session loaded;
+    loaded.provider = "openai";
+    loaded.model = "gpt-4";
+    check(pkchat::tui::loaded_session_differs_from_cli(cli_context, loaded),
+          "TUI session load detects provider and model mismatch against command line");
+
+    loaded.provider = "lm_studio";
+    loaded.model = "qwen-local";
+    check(!pkchat::tui::loaded_session_differs_from_cli(cli_context, loaded),
+          "TUI session load accepts matching provider and model");
+
+    loaded.provider = "lmstudio";
+    loaded.model = "other-model";
+    check(pkchat::tui::loaded_session_differs_from_cli(cli_context, loaded),
+          "TUI session load detects model mismatch for provider aliases");
+
+    cli_context.options.model.clear();
+    loaded.model = "other-model";
+    check(!pkchat::tui::loaded_session_differs_from_cli(cli_context, loaded),
+          "TUI session load skips model prompt when command line model is empty");
+}
+
+void test_tui_session_load_model_confirm_text() {
+    pkchat::provider::RequestContext cli_context;
+    cli_context.profile.name = "lm_studio";
+    cli_context.options.model = "qwen-local";
+
+    pkchat::chat::Session loaded;
+    loaded.provider = "openai";
+    loaded.model = "gpt-4";
+
+    const std::string prompt = pkchat::tui::model_confirm_text(cli_context, loaded);
+    check(prompt.find("Use new model? (yes, otherwise defaults to old model)") != std::string::npos,
+          "TUI model confirm prompt asks whether to use the command-line model");
+    check(prompt.find("gpt-4") != std::string::npos && prompt.find("qwen-local") != std::string::npos,
+          "TUI model confirm prompt shows thread and command-line models");
+}
+
+void test_tui_restore_cli_context() {
+    pkchat::provider::RequestContext cli_context;
+    cli_context.profile.name = "lm_studio";
+    cli_context.options.model = "cli-model";
+    cli_context.options.provider = "lm_studio";
+
+    pkchat::provider::RequestContext context = cli_context;
+    context.profile.name = "openai";
+    context.options.model = "thread-model";
+    context.options.provider = "openai";
+
+    pkchat::tui::restore_cli_context(context, cli_context);
+    check(context.profile.name == "lm_studio" && context.options.model == "cli-model",
+          "TUI restore_cli_context resets provider context to command-line defaults");
+}
+
 void test_tui_unicode_and_empty_status() {
-    check(pkchat::tui::ready_status().find("ready") != std::string::npos,
-          "TUI ready status reports ready state");
+    check(pkchat::tui::ready_status().find("pkchat v") == 0,
+          "TUI ready status starts with the pkchat version label");
     const std::string unicode_model = u8"模型-مرحبا-👨‍👩‍👧‍👦";
     pkchat::provider::ChatResult result;
     const std::string status = pkchat::tui::generation_ready_status(
@@ -212,10 +312,15 @@ void test_tui_unicode_and_empty_status() {
 
 void run_all() {
     test_tui_history_jump_helpers();
+    test_tui_session_load_model_mismatch_detection();
+    test_tui_session_load_model_confirm_text();
+    test_tui_restore_cli_context();
     test_tui_provider_display_and_activity_status();
     test_tui_unicode_and_empty_status();
     test_tui_layout_reserves_editor_input_panel();
     test_tui_ready_and_generation_status();
+    test_tui_last_unanswered_user_message_requires_final_user();
+    test_tui_pop_last_chat_message_removes_user_or_assistant_only();
     test_tui_regeneration_plan_uses_last_user_turn();
     test_tui_theme_parsing_and_contrast();
     test_tui_thinking_trace_display();

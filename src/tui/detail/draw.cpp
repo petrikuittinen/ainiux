@@ -387,6 +387,8 @@ const char* panel_title_for_mode(TuiMode mode) {
             return "Threads";
         case TuiMode::RemoveConfirm:
             return "Remove Thread";
+        case TuiMode::ModelConfirm:
+            return "Model";
         case TuiMode::SystemEdit:
             return "System Prompt";
         case TuiMode::Chat:

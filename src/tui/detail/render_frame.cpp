@@ -60,11 +60,7 @@ void render(const chat::Session& session,
     }
 
     draw_line(layout.status_row, cols, status, status_role_for_text(status), style);
-    draw_line(layout.input_label_row,
-              cols,
-              "Input  Tab command/path | Enter send | Alt+Enter newline | Alt+R regen | Ctrl+U undo | Ctrl+R redo | Ctrl+Q quit",
-              StyleRole::InputLabel,
-              style);
+    draw_line(layout.input_label_row, cols, "Input", StyleRole::InputLabel, style);
 
     for (int row = 0; row < layout.input_rect.height; ++row) {
         const std::string line = row < static_cast<int>(input_panel.lines.size())
