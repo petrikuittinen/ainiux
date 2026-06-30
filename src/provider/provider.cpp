@@ -9,6 +9,7 @@
 #include <iostream>
 #include <limits>
 #include <sstream>
+#include <utility>
 
 #include "json/json.hpp"
 #include "security/redact.hpp"
@@ -849,6 +850,72 @@ bool choice_stream_finished(const json::Value& choice) {
     return !finish_reason->string.empty();
 }
 
+bool find_sse_event_boundary(const std::string& buffer,
+                             size_t start,
+                             size_t& event_end,
+                             size_t& next_pos) {
+    size_t line_start = start;
+    while (line_start < buffer.size()) {
+        size_t line_end = line_start;
+        while (line_end < buffer.size() && buffer[line_end] != '\n' && buffer[line_end] != '\r') {
+            ++line_end;
+        }
+        if (line_end == buffer.size()) {
+            return false;
+        }
+
+        size_t after_line = line_end + 1;
+        if (buffer[line_end] == '\r' && after_line < buffer.size() && buffer[after_line] == '\n') {
+            ++after_line;
+        }
+        if (line_end == line_start) {
+            event_end = line_start;
+            next_pos = after_line;
+            return true;
+        }
+        line_start = after_line;
+    }
+    return false;
+}
+
+std::vector<std::string> collect_sse_data_lines(const std::string& event) {
+    std::vector<std::string> data_lines;
+    size_t pos = 0;
+    while (pos < event.size()) {
+        size_t line_end = pos;
+        while (line_end < event.size() && event[line_end] != '\n' && event[line_end] != '\r') {
+            ++line_end;
+        }
+        const std::string line = event.substr(pos, line_end - pos);
+        if (!line.empty() && line[0] != ':' && line.rfind("data:", 0) == 0) {
+            std::string value = line.substr(5);
+            if (!value.empty() && value.front() == ' ') {
+                value.erase(value.begin());
+            }
+            data_lines.push_back(std::move(value));
+        }
+        if (line_end == event.size()) {
+            break;
+        }
+        pos = line_end + 1;
+        if (event[line_end] == '\r' && pos < event.size() && event[pos] == '\n') {
+            ++pos;
+        }
+    }
+    return data_lines;
+}
+
+std::string join_sse_data_lines(const std::vector<std::string>& data_lines) {
+    std::string data;
+    for (const std::string& line : data_lines) {
+        if (!data.empty()) {
+            data.push_back('\n');
+        }
+        data += line;
+    }
+    return data;
+}
+
 class SseParser {
    public:
     explicit SseParser(bool suppress_streaming_reasoning = false)
@@ -858,19 +925,14 @@ class SseParser {
         buffer_ += chunk;
         size_t pos = 0;
         while (true) {
-            size_t sep = buffer_.find("\n\n", pos);
-            size_t sep_len = 2;
-            const size_t crlf_sep = buffer_.find("\r\n\r\n", pos);
-            if (crlf_sep != std::string::npos && (sep == std::string::npos || crlf_sep < sep)) {
-                sep = crlf_sep;
-                sep_len = 4;
-            }
-            if (sep == std::string::npos) {
+            size_t event_end = 0;
+            size_t next_pos = 0;
+            if (!find_sse_event_boundary(buffer_, pos, event_end, next_pos)) {
                 buffer_.erase(0, pos);
                 return ok_error();
             }
-            const std::string event = buffer_.substr(pos, sep - pos);
-            pos = sep + sep_len;
+            const std::string event = buffer_.substr(pos, event_end - pos);
+            pos = next_pos;
             Error err = process_event(event, on_delta, result, done);
             if (!err.ok() || done) {
                 buffer_.erase(0, pos);
@@ -943,27 +1005,28 @@ class SseParser {
                         const DeltaCallback& on_delta,
                         ChatResult& result,
                         bool& done) {
-        std::istringstream lines(event);
-        std::string line;
-        std::string data;
-        while (std::getline(lines, line)) {
-            if (!line.empty() && line.back() == '\r') {
-                line.pop_back();
-            }
-            if (line.empty() || line[0] == ':') {
-                continue;
-            }
-            if (line.rfind("data:", 0) == 0) {
-                std::string value = line.substr(5);
-                if (!value.empty() && value.front() == ' ') {
-                    value.erase(value.begin());
-                }
-                if (!data.empty()) {
-                    data.push_back('\n');
-                }
-                data += value;
+        const std::vector<std::string> data_lines = collect_sse_data_lines(event);
+        if (data_lines.empty()) {
+            return ok_error();
+        }
+        const std::string data = join_sse_data_lines(data_lines);
+        Error err = process_data(data, on_delta, result, done);
+        if (err.ok() || err.code != ErrorCode::SseParse || data_lines.size() == 1) {
+            return err;
+        }
+        for (const std::string& line : data_lines) {
+            err = process_data(line, on_delta, result, done);
+            if (!err.ok() || done) {
+                return err;
             }
         }
+        return ok_error();
+    }
+
+    Error process_data(const std::string& data,
+                       const DeltaCallback& on_delta,
+                       ChatResult& result,
+                       bool& done) {
         if (data.empty()) {
             return ok_error();
         }
@@ -1032,19 +1095,14 @@ class ResponsesSseParser {
         buffer_ += chunk;
         size_t pos = 0;
         while (true) {
-            size_t sep = buffer_.find("\n\n", pos);
-            size_t sep_len = 2;
-            const size_t crlf_sep = buffer_.find("\r\n\r\n", pos);
-            if (crlf_sep != std::string::npos && (sep == std::string::npos || crlf_sep < sep)) {
-                sep = crlf_sep;
-                sep_len = 4;
-            }
-            if (sep == std::string::npos) {
+            size_t event_end = 0;
+            size_t next_pos = 0;
+            if (!find_sse_event_boundary(buffer_, pos, event_end, next_pos)) {
                 buffer_.erase(0, pos);
                 return ok_error();
             }
-            const std::string event = buffer_.substr(pos, sep - pos);
-            pos = sep + sep_len;
+            const std::string event = buffer_.substr(pos, event_end - pos);
+            pos = next_pos;
             Error err = process_event(event, on_delta, result, done);
             if (!err.ok() || done) {
                 buffer_.erase(0, pos);
@@ -1118,27 +1176,28 @@ class ResponsesSseParser {
                         const DeltaCallback& on_delta,
                         ChatResult& result,
                         bool& done) {
-        std::istringstream lines(event);
-        std::string line;
-        std::string data;
-        while (std::getline(lines, line)) {
-            if (!line.empty() && line.back() == '\r') {
-                line.pop_back();
-            }
-            if (line.empty() || line[0] == ':') {
-                continue;
-            }
-            if (line.rfind("data:", 0) == 0) {
-                std::string value = line.substr(5);
-                if (!value.empty() && value.front() == ' ') {
-                    value.erase(value.begin());
-                }
-                if (!data.empty()) {
-                    data.push_back('\n');
-                }
-                data += value;
+        const std::vector<std::string> data_lines = collect_sse_data_lines(event);
+        if (data_lines.empty()) {
+            return ok_error();
+        }
+        const std::string data = join_sse_data_lines(data_lines);
+        Error err = process_data(data, on_delta, result, done);
+        if (err.ok() || err.code != ErrorCode::SseParse || data_lines.size() == 1) {
+            return err;
+        }
+        for (const std::string& line : data_lines) {
+            err = process_data(line, on_delta, result, done);
+            if (!err.ok() || done) {
+                return err;
             }
         }
+        return ok_error();
+    }
+
+    Error process_data(const std::string& data,
+                       const DeltaCallback& on_delta,
+                       ChatResult& result,
+                       bool& done) {
         if (data.empty()) {
             return ok_error();
         }

@@ -3,7 +3,15 @@
 #include "cli/args.hpp"
 #include "json/json.hpp"
 #include "provider/provider.hpp"
+
+#include <arpa/inet.h>
+#include <netinet/in.h>
+#include <sys/socket.h>
+#include <sys/time.h>
+#include <unistd.h>
+
 #include <string>
+#include <thread>
 #include <vector>
 
 namespace pkchat::test::provider {
@@ -12,6 +20,148 @@ namespace {
 
 using pkchat::test::check;
 using pkchat::test::read_fixture;
+
+class UniqueFd {
+   public:
+    explicit UniqueFd(int fd = -1) : fd_(fd) {}
+    ~UniqueFd() { reset(); }
+    UniqueFd(const UniqueFd&) = delete;
+    UniqueFd& operator=(const UniqueFd&) = delete;
+
+    int get() const { return fd_; }
+    int release() {
+        const int fd = fd_;
+        fd_ = -1;
+        return fd;
+    }
+    void reset(int next = -1) {
+        if (fd_ >= 0) {
+            close(fd_);
+        }
+        fd_ = next;
+    }
+
+   private:
+    int fd_ = -1;
+};
+
+bool send_all(int fd, const std::string& data) {
+    size_t offset = 0;
+    while (offset < data.size()) {
+#ifdef MSG_NOSIGNAL
+        const int flags = MSG_NOSIGNAL;
+#else
+        const int flags = 0;
+#endif
+        const ssize_t written = send(fd, data.data() + offset, data.size() - offset, flags);
+        if (written <= 0) {
+            return false;
+        }
+        offset += static_cast<size_t>(written);
+    }
+    return true;
+}
+
+pkchat::Error run_chat_stream_from_body(const std::string& body,
+                                        pkchat::provider::ChatResult& result,
+                                        std::string& streamed) {
+    UniqueFd listen_fd(socket(AF_INET, SOCK_STREAM, 0));
+    if (listen_fd.get() < 0) {
+        return {pkchat::ErrorCode::Internal, "could not create test server socket"};
+    }
+    const int yes = 1;
+    if (setsockopt(listen_fd.get(), SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(yes)) != 0) {
+        return {pkchat::ErrorCode::Internal, "could not configure test server socket reuse"};
+    }
+    timeval timeout{};
+    timeout.tv_sec = 5;
+    if (setsockopt(listen_fd.get(), SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout)) != 0) {
+        return {pkchat::ErrorCode::Internal, "could not configure test server socket timeout"};
+    }
+
+    sockaddr_in address{};
+    address.sin_family = AF_INET;
+    address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    address.sin_port = 0;
+    if (bind(listen_fd.get(), reinterpret_cast<sockaddr*>(&address), sizeof(address)) != 0) {
+        return {pkchat::ErrorCode::Internal, "could not bind test server socket"};
+    }
+    if (listen(listen_fd.get(), 1) != 0) {
+        return {pkchat::ErrorCode::Internal, "could not listen on test server socket"};
+    }
+    socklen_t length = sizeof(address);
+    if (getsockname(listen_fd.get(), reinterpret_cast<sockaddr*>(&address), &length) != 0) {
+        return {pkchat::ErrorCode::Internal, "could not inspect test server socket"};
+    }
+    const int port = ntohs(address.sin_port);
+    const int server_fd = listen_fd.release();
+    std::thread server([server_fd, body]() {
+        UniqueFd scoped_listen(server_fd);
+        UniqueFd client(accept(scoped_listen.get(), nullptr, nullptr));
+        if (client.get() < 0) {
+            return;
+        }
+        char request_buffer[1024] = {};
+        if (recv(client.get(), request_buffer, sizeof(request_buffer), 0) < 0) {
+            return;
+        }
+        const std::string response =
+            "HTTP/1.1 200 OK\r\n"
+            "Content-Type: text/event-stream\r\n"
+            "Connection: close\r\n"
+            "\r\n" +
+            body;
+        (void)send_all(client.get(), response);
+    });
+
+    pkchat::provider::RequestContext context;
+    context.profile.name = "custom_openai_chat";
+    context.profile.capabilities.chat_completions = true;
+    context.options.model = "mock-model";
+    context.options.stream = true;
+    context.options.connect_timeout_seconds = 2;
+    context.options.timeout_seconds = 5;
+    context.chat_url = "http://127.0.0.1:" + std::to_string(port) + "/v1/chat/completions";
+    context.api_kind = pkchat::provider::ApiKind::ChatCompletions;
+
+    pkchat::Error err = pkchat::provider::send_chat_messages(
+        context,
+        {{"user", "hello"}},
+        [&](const std::string& delta) {
+            streamed += delta;
+            return pkchat::ok_error();
+        },
+        result);
+    server.join();
+    return err;
+}
+
+void test_chat_sse_accepts_cr_only_event_boundaries() {
+    const std::string body =
+        "data: {\"choices\":[{\"delta\":{\"content\":\"Hello\"}}]}\r\r"
+        "data: {\"choices\":[{\"delta\":{\"content\":\" world\"}}]}\r\r"
+        "data: [DONE]\r\r";
+    pkchat::provider::ChatResult result;
+    std::string streamed;
+    const pkchat::Error err = run_chat_stream_from_body(body, result, streamed);
+    check(err.ok(), "chat SSE parser accepts CR-only event boundaries");
+    check(result.content == "Hello world", "CR-only SSE stream accumulates chat deltas");
+    check(streamed == "Hello world", "CR-only SSE stream forwards chat deltas");
+}
+
+void test_chat_sse_accepts_batched_json_data_lines() {
+    const std::string body =
+        "data: {\"choices\":[{\"delta\":{\"content\":\"Hello\"}}]}\n"
+        "data: {\"choices\":[{\"delta\":{\"content\":\" world\"}}]}\n"
+        "\n"
+        "data: [DONE]\n\n";
+    pkchat::provider::ChatResult result;
+    std::string streamed;
+    const pkchat::Error err = run_chat_stream_from_body(body, result, streamed);
+    check(err.ok(), "chat SSE parser accepts batched JSON data lines");
+    check(result.content == "Hello world", "batched JSON data lines accumulate chat deltas");
+    check(streamed == "Hello world", "batched JSON data lines forward chat deltas");
+}
 
 void test_explicit_chat_url_does_not_require_base_when_model_set() {
     const char* argv[] = {"pkchat", "--chat-url", "https://example.test/custom/chat", "-m", "model", "-p", "hello", "--header", "Authorization: Bearer test"};
@@ -259,6 +409,8 @@ void test_provider_unicode_request_serialization() {
 }  // namespace
 
 void run_all() {
+    test_chat_sse_accepts_cr_only_event_boundaries();
+    test_chat_sse_accepts_batched_json_data_lines();
     test_explicit_chat_url_does_not_require_base_when_model_set();
     test_image_capability_detection();
     test_lmstudio_context();
