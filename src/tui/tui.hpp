@@ -43,7 +43,15 @@ enum class StyleRole {
     Error,
     Status,
     InputLabel,
+    PanelTitle,
+    PanelBorder,
+    PanelHint,
+    PanelHighlight,
+    PanelBody,
 };
+
+constexpr const char kThinkingActivityIndicator[] = "\xe2\x97\x90 ";  // ◐
+constexpr const char kStreamingActivityIndicator[] = "\xe2\x96\xb8 ";  // ▸
 
 struct StylePair {
     Rgb foreground;
@@ -66,6 +74,9 @@ struct ThinkingDisplay {
 ThinkingDisplay thinking_display_text(const std::string& content, bool show_traces);
 std::string ready_status();
 std::string provider_model_status_message(const provider::RequestContext& context, const std::string& suffix);
+std::string provider_model_status_message(const provider::RequestContext& context,
+                                          const std::string& indicator,
+                                          const std::string& suffix);
 std::string generation_ready_status(const std::string& provider_name,
                                     const std::string& model_name,
                                     const provider::ChatResult& result,

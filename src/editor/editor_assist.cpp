@@ -343,6 +343,7 @@ std::vector<std::string> assist_command_completions(const EditorAssistConfig& co
             append_mode_completions(command, name, commands);
         }
     }
+    commands.push_back("/help");
     commands.push_back("/prompt ");
     commands.push_back("/quit");
     return commands;

@@ -63,16 +63,18 @@ AiContinueSettings ai_continue_settings_from_env() {
 std::string continue_status_message(const std::string& provider_name,
                                     const std::string& model_name,
                                     const std::string& suffix) {
-    if (provider_name.empty() && model_name.empty()) {
+    const std::string display_provider =
+        provider_name.empty() ? "" : provider::display_name_for_profile(provider_name);
+    if (display_provider.empty() && model_name.empty()) {
         return suffix;
     }
-    if (provider_name.empty()) {
+    if (display_provider.empty()) {
         return "[" + model_name + "] " + suffix;
     }
     if (model_name.empty()) {
-        return "[" + provider_name + " / model unknown] " + suffix;
+        return "[" + display_provider + " / model unknown] " + suffix;
     }
-    return "[" + provider_name + " / " + model_name + "] " + suffix;
+    return "[" + display_provider + " / " + model_name + "] " + suffix;
 }
 
 std::string continue_completion_status_suffix(const provider::ChatResult& result,

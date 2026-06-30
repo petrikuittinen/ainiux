@@ -1,4 +1,5 @@
 #include "tui/detail/render.hpp"
+#include "tui/events.hpp"
 #include "tui/tui.hpp"
 
 #include "app/detail.hpp"
@@ -178,27 +179,31 @@ StyleRole label_role_for_message(const std::string& role) {
 }
 
 std::string provider_model_status_label(const std::string& provider_name, const std::string& model_name) {
-    if (provider_name.empty() && model_name.empty()) {
+    const std::string display_provider =
+        provider_name.empty() ? "" : provider::display_name_for_profile(provider_name);
+    if (display_provider.empty() && model_name.empty()) {
         return "";
     }
-    if (provider_name.empty()) {
+    if (display_provider.empty()) {
         return "[" + model_name + "]";
     }
     if (model_name.empty()) {
-        return "[" + provider_name + " / model unknown]";
+        return "[" + display_provider + " / model unknown]";
     }
-    return "[" + provider_name + " / " + model_name + "]";
+    return "[" + display_provider + " / " + model_name + "]";
 }
 
 std::string provider_model_status_label(const chat::Session& session) {
     return provider_model_status_label(session.provider, session.model);
 }
 
-std::string provider_model_status_message(const std::string& label, const std::string& suffix) {
+std::string provider_model_status_message(const std::string& label,
+                                          const std::string& indicator,
+                                          const std::string& suffix) {
     if (label.empty()) {
-        return suffix;
+        return indicator + suffix;
     }
-    return label + " " + suffix;
+    return label + " " + indicator + suffix;
 }
 
 }  // namespace
@@ -347,7 +352,9 @@ std::vector<StyledLine> history_lines_for_session(const chat::Session& session, 
                 const ThinkingDisplay display = thinking_display_text(message.content, show_thinking_traces);
                 if (!show_thinking_traces && display.saw_thinking_tag &&
                     app::detail::trim_ascii(display.text).empty()) {
-                    content = provider_model_status_message(provider_model_status_label(session), "thinking...");
+                    content = provider_model_status_message(provider_model_status_label(session),
+                                                            kThinkingActivityIndicator,
+                                                            "thinking...");
                 } else {
                     content = display.text;
                 }
@@ -372,6 +379,93 @@ std::vector<StyledLine> history_lines_for_session(const chat::Session& session, 
         }
     }
     return history;
+}
+
+const char* panel_title_for_mode(TuiMode mode) {
+    switch (mode) {
+        case TuiMode::ThreadList:
+            return "Threads";
+        case TuiMode::RemoveConfirm:
+            return "Remove Thread";
+        case TuiMode::SystemEdit:
+            return "System Prompt";
+        case TuiMode::Chat:
+            return "Help";
+    }
+    return "Panel";
+}
+
+void append_panel_rule_line(std::vector<StyledLine>& lines, const std::string& title, int cols) {
+    StyledLine line;
+    line.segments.push_back({u8"── ", StyleRole::PanelBorder});
+    line.segments.push_back({title, StyleRole::PanelTitle});
+    std::string tail = " ";
+    int used = displayed_cells(u8"── ") + displayed_cells(title) + 1;
+    while (used < cols) {
+        tail += u8"─";
+        ++used;
+    }
+    line.segments.push_back({tail, StyleRole::PanelBorder});
+    lines.push_back(std::move(line));
+}
+
+void append_panel_fill_line(std::vector<StyledLine>& lines, int cols) {
+    std::string rule;
+    for (int i = 0; i < cols; ++i) {
+        rule += u8"─";
+    }
+    lines.push_back({{{rule, StyleRole::PanelBorder}}});
+}
+
+StyleRole panel_body_role_for_line(TuiMode mode, const std::string& line) {
+    if (mode == TuiMode::ThreadList &&
+        (line.rfind(u8"› ", 0) == 0 || line.rfind("> ", 0) == 0)) {
+        return StyleRole::PanelHighlight;
+    }
+    if (line.find("Press y") != std::string::npos || line.find("Enter saves") != std::string::npos ||
+        line.find("Enter opens") != std::string::npos || line.find("Esc cancel") != std::string::npos) {
+        return StyleRole::PanelHint;
+    }
+    return StyleRole::PanelBody;
+}
+
+std::vector<StyledLine> panel_lines_for_text(const std::string& text, TuiMode mode, int cols) {
+    std::vector<StyledLine> lines;
+    if (cols <= 0) {
+        return lines;
+    }
+
+    append_panel_rule_line(lines, panel_title_for_mode(mode), cols);
+
+    std::vector<std::string> content_lines;
+    size_t start = 0;
+    while (start <= text.size()) {
+        const size_t end = text.find('\n', start);
+        if (end == std::string::npos) {
+            content_lines.push_back(text.substr(start));
+            break;
+        }
+        content_lines.push_back(text.substr(start, end - start));
+        start = end + 1;
+    }
+
+    if (!content_lines.empty()) {
+        append_panel_fill_line(lines, cols);
+        for (const std::string& line : content_lines) {
+            const StyleRole role = panel_body_role_for_line(mode, line);
+            std::vector<std::vector<StyledSegment>> wrapped;
+            append_wrapped_segments(wrapped, plain_text_segments(line), cols);
+            for (std::vector<StyledSegment>& wrapped_line : wrapped) {
+                for (StyledSegment& segment : wrapped_line) {
+                    segment.role = role;
+                }
+                lines.push_back({std::move(wrapped_line)});
+            }
+        }
+        append_panel_fill_line(lines, cols);
+    }
+
+    return lines;
 }
 
 }  // namespace pkchat::tui::detail

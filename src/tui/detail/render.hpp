@@ -6,6 +6,7 @@
 #include "chat/session.hpp"
 #include "common.hpp"
 #include "editor/editor.hpp"
+#include "tui/events.hpp"
 #include "tui/tui.hpp"
 
 namespace pkchat::tui::detail {
@@ -37,6 +38,7 @@ void draw_line(int row, int cols, const std::string& text, StyleRole role, const
 std::string error_line(const Error& error);
 StyleRole status_role_for_text(const std::string& status);
 std::vector<StyledLine> history_lines_for_session(const chat::Session& session, int cols, bool show_thinking_traces);
+std::vector<StyledLine> panel_lines_for_text(const std::string& text, TuiMode mode, int cols);
 
 editor::EditorState empty_input_editor(size_t undo_limit);
 void set_status_from_error(const Error& err, std::string& status);
@@ -47,7 +49,8 @@ void render(const chat::Session& session,
             std::string& status,
             int& history_scroll,
             bool show_thinking_traces,
-            const std::string& help_text,
+            TuiMode mode,
+            const std::string& panel_text,
             const RenderStyle& style);
 
 }  // namespace pkchat::tui::detail

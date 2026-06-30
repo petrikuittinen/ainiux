@@ -2,6 +2,7 @@
 #include "editor/ai_continue.hpp"
 #include "editor/clipboard.hpp"
 #include "editor/editor_assist.hpp"
+#include "editor/editor_help.hpp"
 #include "editor/terminal_input.hpp"
 #include "editor/terminal_ui.hpp"
 #include "runtime/runtime.hpp"
@@ -22,6 +23,13 @@ Error ensure_empty_file(const std::string& path) {
     }
     return save_file(path, PieceTable::from_string(""));
 }
+
+struct HelpViewSession {
+    bool active = false;
+    EditorSnapshot saved;
+    std::string saved_path;
+    bool saved_dirty = false;
+};
 
 struct AssistSession {
     runtime::JobHandle job;
@@ -107,12 +115,54 @@ int run_editor(const std::string& path,
     AssistSession assist_session;
     AssistCompleterState assist_completer;
     PendingAssist pending_assist;
+    HelpViewSession help_view;
     TerminalSize last_size = terminal_size();
-    render_terminal(state, minibuffer);
+    render_terminal(state, minibuffer, help_view.active);
 
     auto assist_panel_rect = [&]() {
         const TerminalSize size = terminal_size();
         return Rect{1, 1, std::max(1, size.rows - 2), std::max(1, size.cols - 1)};
+    };
+
+    auto exit_help_view = [&]() {
+        if (!help_view.active) {
+            return;
+        }
+        state.restore_captured_state(help_view.saved);
+        state.path = help_view.saved_path;
+        state.dirty = help_view.saved_dirty;
+        help_view.active = false;
+        minibuffer_message(minibuffer, "Returned to editing");
+    };
+
+    auto enter_help_view = [&]() {
+        if (help_view.active) {
+            exit_help_view();
+            return;
+        }
+        if (assist_session.active) {
+            minibuffer_message(minibuffer, "Finish or cancel AI assist before opening help");
+            return;
+        }
+        std::string help_text;
+        Error help_error = load_editor_help_markdown(help_text);
+        if (!help_error.ok()) {
+            minibuffer_message(minibuffer, help_error.message);
+            return;
+        }
+        help_view.saved = state.capture_state();
+        help_view.saved_path = state.path;
+        help_view.saved_dirty = state.dirty;
+        help_view.active = true;
+        state.text = PieceTable::from_string(std::move(help_text));
+        state.cursor = 0;
+        state.preferred_column = 0;
+        state.scroll_line = 0;
+        state.scroll_column = 0;
+        state.dirty = false;
+        state.clear_selection();
+        state.clear_undo_history();
+        minibuffer_message(minibuffer, "Help (read-only) — Esc /help or Ctrl+Q to return");
     };
 
     auto set_assist_minibuffer = [&](const std::string& suffix) {
@@ -256,6 +306,11 @@ int run_editor(const std::string& path,
     };
 
     auto submit_assist_command = [&]() {
+        if (is_editor_help_command(minibuffer.input)) {
+            exit_assist_command_mode(minibuffer, assist_completer);
+            enter_help_view();
+            return;
+        }
         const ParsedAssistCommand parsed =
             parse_assist_command(minibuffer.input, ai_continue == nullptr ? default_editor_assist_config()
                                                                           : ai_continue->assist_config);
@@ -315,6 +370,77 @@ int run_editor(const std::string& path,
     };
 
     auto handle_key = [&](unsigned char ch) {
+        if (help_view.active) {
+            if (handle_minibuffer_key(state,
+                                      minibuffer,
+                                      ch,
+                                      quit,
+                                      last_search,
+                                      replace,
+                                      settings,
+                                      pending_load_path,
+                                      pending_quit_after_save,
+                                      pending_save)) {
+                return;
+            }
+            if (minibuffer.active && is_assist_minibuffer_action(minibuffer.action)) {
+                if (ch == 27 || ch == 7) {
+                    pending_assist = PendingAssist{};
+                    exit_assist_command_mode(minibuffer, assist_completer);
+                    return;
+                }
+                if (minibuffer.action == MinibufferAction::AssistCommand) {
+                    if (ch == '\t') {
+                        const AssistCompletionResult result = complete_assist_command(
+                            minibuffer.input,
+                            assist_completer,
+                            ai_continue == nullptr ? default_editor_assist_config() : ai_continue->assist_config);
+                        minibuffer.message = assist_completion_status(result);
+                        return;
+                    }
+                    if (ch == '\r' || ch == '\n') {
+                        submit_assist_command();
+                        return;
+                    }
+                    if (ch == 127 || ch == 8) {
+                        if (!minibuffer.input.empty()) {
+                            minibuffer.input.pop_back();
+                            assist_completer = AssistCompleterState{};
+                        }
+                        return;
+                    }
+                    if (ch >= 0x20U) {
+                        minibuffer.input.push_back(static_cast<char>(ch));
+                        assist_completer = AssistCompleterState{};
+                        return;
+                    }
+                    return;
+                }
+                return;
+            }
+            if (ch == 17) {
+                exit_help_view();
+                return;
+            }
+            if (ch == 27) {
+                const std::string sequence = read_escape_suffix();
+                if (!sequence.empty()) {
+                    std::string escape_status;
+                    dispatch_escape_sequence(state, sequence, escape_status, last_search);
+                    if (!escape_status.empty()) {
+                        minibuffer_message(minibuffer, escape_status);
+                    }
+                    return;
+                }
+                start_assist_command_mode(minibuffer, assist_completer);
+                return;
+            }
+            if (ch == 6 || ch == 8) {
+                start_minibuffer(minibuffer, MinibufferAction::Search, "Search: ", last_search);
+                return;
+            }
+            return;
+        }
         if (assist_session.active) {
             if (ch == 27) {
                 assist_session.job.cancel();
@@ -430,6 +556,10 @@ int run_editor(const std::string& path,
         }
 
         if (ch == 17) {
+            if (help_view.active) {
+                exit_help_view();
+                return;
+            }
             if (state.path.empty()) {
                 if (state.dirty || !state.text.empty()) {
                     start_minibuffer(minibuffer,
@@ -542,7 +672,7 @@ int run_editor(const std::string& path,
             if (current_size.rows != last_size.rows || current_size.cols != last_size.cols ||
                 assist_session.job.running() || assist_updated) {
                 last_size = current_size;
-                render_terminal(state, minibuffer);
+                render_terminal(state, minibuffer, help_view.active);
             }
             continue;
         }
@@ -566,7 +696,7 @@ int run_editor(const std::string& path,
         }
 
         last_size = terminal_size();
-        render_terminal(state, minibuffer);
+        render_terminal(state, minibuffer, help_view.active);
     }
     return 0;
 }

@@ -74,7 +74,8 @@ class TerminalSession {
 };
 
 TerminalSize terminal_size();
-void render_terminal(EditorState& state, const MinibufferState& minibuffer);
+void render_terminal(EditorState& state, const MinibufferState& minibuffer, bool help_view = false);
+std::string editor_status_line(const EditorState& state, bool help_view = false);
 void dispatch_escape_sequence(EditorState& state,
                               const std::string& sequence,
                               std::string& status,

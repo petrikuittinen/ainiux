@@ -310,7 +310,7 @@ int run(provider::RequestContext context, chat::Session session) {
         context.options.show_thinking_traces = show_traces;
         context.options.has_show_thinking_traces = true;
         if (!show_thinking_traces && pending_assistant_is_hidden_thinking()) {
-            status = provider_model_status_message(context, "thinking...");
+            status = provider_model_status_message(context, kThinkingActivityIndicator, "thinking...");
         } else {
             status = show_thinking_traces ? "Thinking traces shown" : "Thinking traces hidden";
         }
@@ -701,7 +701,7 @@ int run(provider::RequestContext context, chat::Session session) {
             }
             context = std::move(rebuilt.context);
             app::refresh_session_metadata(session, context);
-            status = "Provider set to " + context.profile.name;
+            status = "Provider set to " + provider::display_name_for_profile(context.profile.name);
             start_store_save();
             return;
         }
@@ -880,7 +880,7 @@ int run(provider::RequestContext context, chat::Session session) {
     }
 
     std::string visible_panel = panel_text();
-    detail::render(session, input, status, history_scroll, show_thinking_traces, visible_panel,
+    detail::render(session, input, status, history_scroll, show_thinking_traces, mode, visible_panel,
            detail::RenderStyle{theme, use_colors});
     while (!quit) {
         TuiEvent event;
@@ -891,8 +891,9 @@ int run(provider::RequestContext context, chat::Session session) {
                         session.messages[pending_assistant].content += event.text;
                     }
                     status = pending_assistant_is_hidden_thinking()
-                                 ? provider_model_status_message(context, "thinking...")
-                                 : provider_model_status_message(context, "streaming response ...");
+                                 ? provider_model_status_message(context, kThinkingActivityIndicator, "thinking...")
+                                 : provider_model_status_message(context, kStreamingActivityIndicator,
+                                                                 "streaming response ...");
                     break;
                 case TuiEventType::Done: {
                     model_job.join();
@@ -1238,7 +1239,7 @@ int run(provider::RequestContext context, chat::Session session) {
             }
         }
         visible_panel = panel_text();
-        detail::render(session, input, status, history_scroll, show_thinking_traces, visible_panel,
+        detail::render(session, input, status, history_scroll, show_thinking_traces, mode, visible_panel,
                detail::RenderStyle{theme, use_colors});
     }
 

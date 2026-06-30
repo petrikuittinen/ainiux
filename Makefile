@@ -31,6 +31,9 @@ COMMON_CONFIG_DIR := $(DESTDIR)$(SYSCONFDIR)/xdg/pkchat
 COMMON_CONFIG_PATH := $(COMMON_CONFIG_DIR)/config.conf
 BENCHMARK_DATA_DIR := $(DESTDIR)$(PREFIX)/share/pkchat/benchmarks
 BUILTIN_BENCHMARK_HEADER := $(GENERATED_DIR)/builtin_dataset.hpp
+EDITOR_HELP_SRC := docs/editor_help.md
+EDITOR_HELP_HEADER := $(GENERATED_DIR)/embedded_editor_help.hpp
+EDITOR_HELP_INSTALL := $(DESTDIR)$(PREFIX)/share/pkchat/editor_help.md
 BUILTIN_DATASET_PARTS := benchmarks/builtin/safety.jsonl \
                          benchmarks/builtin/reasoning.jsonl \
                          benchmarks/builtin/writing.jsonl \
@@ -87,6 +90,18 @@ $(BUILTIN_BENCHMARK_HEADER): $(BUILTIN_DATASET)
 
 $(OBJ_DIR)/src/benchmark/dataset.o: $(BUILTIN_BENCHMARK_HEADER)
 
+$(EDITOR_HELP_HEADER): $(EDITOR_HELP_SRC)
+	@mkdir -p $(dir $@)
+	@{ \
+		printf '%s\n' '#pragma once' 'namespace pkchat::editor {' \
+			'inline constexpr char kEditorHelpMarkdown[] = R"PKCHAT_HELP('; \
+		cat $<; \
+		printf '%s\n' ')PKCHAT_HELP";' '}  // namespace pkchat::editor'; \
+	} >$@.tmp
+	@mv $@.tmp $@
+
+$(OBJ_DIR)/src/editor/editor_help.o: $(EDITOR_HELP_HEADER)
+
 -include $(DEP)
 
 test: test-unit test-integration
@@ -131,7 +146,7 @@ leak-check: $(BIN) $(TEST_BIN) $(IO_FAULT_BIN)
 
 test-leak: leak-check
 
-install: $(BIN) $(COMMON_CONFIG)
+install: $(BIN) $(COMMON_CONFIG) $(EDITOR_HELP_SRC)
 	install -d "$(DESTDIR)$(PREFIX)/bin"
 	install -m 0755 $(BIN) "$(DESTDIR)$(PREFIX)/bin/$(BIN)"
 	install -d "$(COMMON_CONFIG_DIR)"
@@ -142,6 +157,8 @@ install: $(BIN) $(COMMON_CONFIG)
 	fi
 	install -d "$(BENCHMARK_DATA_DIR)"
 	install -m 0644 $(BUILTIN_DATASET) benchmarks/long-context.jsonl $(BUILTIN_DATASET_PARTS) "$(BENCHMARK_DATA_DIR)"
+	install -d "$(DESTDIR)$(PREFIX)/share/pkchat"
+	install -m 0644 "$(EDITOR_HELP_SRC)" "$(EDITOR_HELP_INSTALL)"
 
 clean:
 	rm -rf $(BUILD_DIR) $(BIN) $(IO_FAULT_BIN)

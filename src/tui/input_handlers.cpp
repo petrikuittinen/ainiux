@@ -3,6 +3,7 @@
 #include "tui/detail/render.hpp"
 
 #include "editor/selection.hpp"
+#include "provider/provider.hpp"
 #include "editor/terminal_input.hpp"
 
 #include <sstream>
@@ -19,16 +20,15 @@ bool is_escape_final(unsigned char ch) {
 
 std::string thread_picker_text(const std::vector<chat::ThreadSummary>& threads, size_t selected) {
     std::ostringstream out;
-    out << "Threads (newest first)\n";
-    out << "Enter opens, Esc cancels\n";
+    out << "Newest first · Enter opens · Esc cancels\n";
     for (size_t i = 0; i < threads.size(); ++i) {
         const chat::ThreadSummary& thread = threads[i];
-        out << (i == selected ? "> " : "  ");
+        out << (i == selected ? u8"› " : "  ");
         out << thread.name;
         if (!thread.last_provider.empty() || !thread.last_model.empty()) {
             out << " [";
             if (!thread.last_provider.empty()) {
-                out << thread.last_provider;
+                out << provider::display_name_for_profile(thread.last_provider);
             }
             if (!thread.last_model.empty()) {
                 if (!thread.last_provider.empty()) {
@@ -38,8 +38,8 @@ std::string thread_picker_text(const std::vector<chat::ThreadSummary>& threads, 
             }
             out << "]";
         }
-        out << " | " << thread.modified_at;
-        out << " | " << thread.message_count << " messages";
+        out << " · " << thread.modified_at;
+        out << " · " << thread.message_count << " msgs";
         if (i + 1 != threads.size()) {
             out << "\n";
         }
@@ -49,14 +49,13 @@ std::string thread_picker_text(const std::vector<chat::ThreadSummary>& threads, 
 
 std::string remove_confirm_text(const chat::Session& session) {
     std::ostringstream out;
-    out << "Remove current thread?\n";
     out << (session.name.empty() ? "New chat" : session.name) << "\n";
-    out << "Press y to remove, n or Esc to cancel.";
+    out << "Press y to remove · n or Esc to cancel";
     return out.str();
 }
 
 std::string system_edit_text() {
-    return "Editing system prompt.\nEnter saves, Esc cancels.";
+    return "Enter saves · Esc cancels";
 }
 
 std::string join_models_preview(const std::vector<std::string>& models) {

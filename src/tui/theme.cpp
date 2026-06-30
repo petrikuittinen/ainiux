@@ -46,6 +46,12 @@ StylePair style_pair_for(ThemeName theme, StyleRole role) {
     const Rgb error = dark ? Rgb{0xFC, 0xA5, 0xA5} : Rgb{0xB9, 0x1C, 0x1C};
     const Rgb status_bg = dark ? Rgb{0x1F, 0x29, 0x37} : Rgb{0xE5, 0xE7, 0xEB};
     const Rgb status_fg = dark ? Rgb{0xFF, 0xFF, 0xFF} : Rgb{0x11, 0x18, 0x27};
+    const Rgb panel_title = dark ? Rgb{0x7D, 0xD3, 0xFC} : Rgb{0x07, 0x59, 0x85};
+    const Rgb panel_border = dark ? Rgb{0xA8, 0xB8, 0xCA} : Rgb{0x4B, 0x55, 0x63};
+    const Rgb panel_hint = dark ? Rgb{0xB8, 0xC4, 0xD4} : Rgb{0x37, 0x47, 0x51};
+    const Rgb panel_highlight = dark ? Rgb{0xFD, 0xE6, 0x8A} : Rgb{0xB4, 0x53, 0x09};
+    const Rgb panel_body = dark ? Rgb{0xE6, 0xED, 0xF3} : Rgb{0x1F, 0x29, 0x37};
+    const Rgb panel_bg = dark ? Rgb{0x11, 0x17, 0x22} : Rgb{0xF3, 0xF4, 0xF6};
 
     switch (role) {
         case StyleRole::Text:
@@ -64,6 +70,16 @@ StylePair style_pair_for(ThemeName theme, StyleRole role) {
             return {status_fg, status_bg};
         case StyleRole::InputLabel:
             return {status_fg, status_bg};
+        case StyleRole::PanelTitle:
+            return {panel_title, panel_bg};
+        case StyleRole::PanelBorder:
+            return {panel_border, panel_bg};
+        case StyleRole::PanelHint:
+            return {panel_hint, panel_bg};
+        case StyleRole::PanelHighlight:
+            return {panel_highlight, panel_bg};
+        case StyleRole::PanelBody:
+            return {panel_body, panel_bg};
     }
     return {text, background};
 }

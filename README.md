@@ -2,7 +2,7 @@
 
 `pkchat` is a fast, script-friendly command-line chat client for OpenAI and OpenAI-compatible APIs.
 
-Current status: v0.85 CLI with libcurl transport, cancellable runtime jobs, provider registry/profile aliases, `/v1/models`, `/v1/chat/completions`, text-only OpenAI Responses API support, local JPEG/PNG/GIF image input, interactive text/image attachments, request-only context policies, safe URL insertion, a simple REPL, a standalone `--editor` mode with selection, copy/cut/paste, grapheme-aware Unicode editing, and AI continue/editor commands, a full-screen non-blocking TUI foundation, SQLite-backed TUI chat threads, JSON chat import/export save/load, HTML-to-text/Markdown extraction, Markdown assistant-output rendering to HTML or plaintext, automatic system/user TOML-alike configuration loading, and a concurrent JSONL benchmark runner.
+Current status: v0.86 CLI with libcurl transport, cancellable runtime jobs, provider registry/profile aliases, `/v1/models`, `/v1/chat/completions`, text-only OpenAI Responses API support, local JPEG/PNG/GIF image input, interactive text/image attachments, request-only context policies, safe URL insertion, a simple REPL, a standalone `--editor` mode with selection, copy/cut/paste, grapheme-aware Unicode editing, and AI continue/editor commands, a full-screen non-blocking TUI foundation, SQLite-backed TUI chat threads, JSON chat import/export save/load, HTML-to-text/Markdown extraction, Markdown assistant-output rendering to HTML or plaintext, automatic system/user TOML-alike configuration loading, and a concurrent JSONL benchmark runner.
 
 ## Build
 
@@ -364,6 +364,10 @@ make test
 ```
 
 `make test` runs unit tests, I/O and network fault tests, and one integration script against a local mock OpenAI-compatible server.
+
+### v0.86 UI polish and editor help
+
+v0.86 improves TUI readability with compact provider display names (`custom` instead of `custom_openai_chat`), styled panels for thread picker and `/help`, and `◐` / `▸` activity indicators for thinking and streaming. Standalone editor mode adds `docs/editor_help.md`, toggled with `Esc /help` (read-only); `Ctrl+Q` returns from help before quitting. The editor status line now shows `Ctrl+Q quit` and `Esc /help for help`.
 
 ### v0.85 model settings notes
 

@@ -6,6 +6,7 @@
 #include "editor/clipboard.hpp"
 #include "editor/editor.hpp"
 #include "editor/editor_assist.hpp"
+#include "editor/editor_help.hpp"
 #include "editor/path_completion.hpp"
 #include "editor/selection.hpp"
 #include "editor/terminal_input.hpp"
@@ -28,21 +29,21 @@ void test_editor_ai_continue_helpers() {
     check(text.range_text(2, 4) == "cdef", "range_text returns a bounded substring");
     check(text.range_text(0, 100) == "abcdefghij", "range_text clamps to buffer size");
 
-    check(pkchat::editor::continue_status_message("lm_studio", "gpt-test", "thinking... ESC to abort") ==
-              "[lm_studio / gpt-test] thinking... ESC to abort",
-          "continue status message includes provider and model name");
+    check(pkchat::editor::continue_status_message("custom_openai_chat", "gpt-test", "thinking... ESC to abort") ==
+              "[custom / gpt-test] thinking... ESC to abort",
+          "continue status message uses compact provider display names");
 
     pkchat::provider::ChatResult continue_result;
     continue_result.ttft_ms = 100;
     continue_result.total_ms = 1100;
     continue_result.completion_tokens = 20;
     continue_result.completion_tokens_estimated = true;
-    check(pkchat::editor::continue_completion_status_message("lm_studio",
+    check(pkchat::editor::continue_completion_status_message("custom_openai_chat",
                                                              "gpt-test",
                                                              continue_result,
                                                              true,
                                                              "stopped and ready") ==
-              "[lm_studio / gpt-test] stopped and ready | TTFT 100ms | ~20.0 tok/s",
+              "[custom / gpt-test] stopped and ready | TTFT 100ms | ~20.0 tok/s",
           "continue completion status includes provider, model, TTFT, and estimated token throughput");
 
     pkchat::editor::EditorState state = pkchat::editor::EditorState::from_text("Once upon a ");
@@ -1428,7 +1429,29 @@ void test_editor_file_io_failures() {
 
 }  // namespace
 
+void test_editor_help_document_and_command() {
+    std::string help_text;
+    pkchat::Error err = pkchat::editor::load_editor_help_markdown(help_text);
+    check(err.ok() && !help_text.empty(), "editor help document loads");
+    check(help_text.find("# pkchat Editor Help") != std::string::npos,
+          "editor help document contains the title heading");
+    check(help_text.find("Ctrl+Space") != std::string::npos,
+          "editor help document documents Ctrl+Space continue");
+    check(help_text.find("/spell") != std::string::npos && help_text.find("/help") != std::string::npos,
+          "editor help document lists slash commands");
+
+    check(pkchat::editor::is_editor_help_command("/help"), "editor /help command is recognized");
+    check(pkchat::editor::is_editor_help_command("  /HELP  "), "editor /help command is case-insensitive");
+    check(!pkchat::editor::is_editor_help_command("/helpful"), "editor help command rejects prefixes");
+
+    const std::vector<std::string> completions =
+        pkchat::editor::assist_command_completions(pkchat::editor::default_editor_assist_config());
+    check(std::find(completions.begin(), completions.end(), "/help") != completions.end(),
+          "assist command completions include /help");
+}
+
 void run_all() {
+    test_editor_help_document_and_command();
     test_editor_ai_continue_helpers();
     test_editor_file_io_failures();
     test_editor_assist_helpers();

@@ -30,7 +30,8 @@ void render(const chat::Session& session,
             std::string& status,
             int& history_scroll,
             bool show_thinking_traces,
-            const std::string& help_text,
+            TuiMode mode,
+            const std::string& panel_text,
             const RenderStyle& style) {
     const TuiSize terminal = terminal_size();
     const Layout layout = layout_for_terminal(terminal.rows, terminal.cols);
@@ -38,14 +39,10 @@ void render(const chat::Session& session,
 
     input.ensure_cursor_visible(layout.input_rect);
     const editor::RenderedPanel input_panel = input.render(layout.input_rect);
-    std::vector<StyledLine> history = history_lines_for_session(session, cols, show_thinking_traces);
-    if (!help_text.empty()) {
-        chat::Session help_session;
-        help_session.messages.push_back({"Help", help_text});
-        std::vector<StyledLine> help_lines = history_lines_for_session(help_session, cols, true);
-        history.insert(history.end(), std::make_move_iterator(help_lines.begin()),
-                       std::make_move_iterator(help_lines.end()));
-    }
+    const bool panel_active = mode != TuiMode::Chat || !panel_text.empty();
+    std::vector<StyledLine> history =
+        panel_active ? panel_lines_for_text(panel_text, mode, cols)
+                     : history_lines_for_session(session, cols, show_thinking_traces);
     const int max_history_scroll = std::max(0, static_cast<int>(history.size()) - layout.history_rows);
     history_scroll = std::min(std::max(0, history_scroll), max_history_scroll);
 
@@ -53,11 +50,12 @@ void render(const chat::Session& session,
 
     const int history_start = std::max(0, static_cast<int>(history.size()) - layout.history_rows - history_scroll);
     int printed = 0;
+    const StyleRole history_fill_role = panel_active ? StyleRole::PanelBorder : StyleRole::Text;
     for (int i = history_start; i < static_cast<int>(history.size()) && printed < layout.history_rows; ++i, ++printed) {
-        draw_line(layout.history_row + printed, cols, history[static_cast<size_t>(i)].segments, StyleRole::Text, style);
+        draw_line(layout.history_row + printed, cols, history[static_cast<size_t>(i)].segments, history_fill_role, style);
     }
     while (printed < layout.history_rows) {
-        draw_line(layout.history_row + printed, cols, "", StyleRole::Text, style);
+        draw_line(layout.history_row + printed, cols, "", history_fill_role, style);
         ++printed;
     }
 

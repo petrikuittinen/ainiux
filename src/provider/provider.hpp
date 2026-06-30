@@ -111,6 +111,7 @@ struct ContextResult {
 
 ContextResult build_context(const cli::Options& options);
 std::vector<Profile> built_in_profiles();
+std::string display_name_for_profile(const std::string& profile_name);
 Error validate_profile_name(const std::string& name);
 const Capabilities& capabilities_for(const RequestContext& context);
 Capabilities detected_capabilities_for(const RequestContext& context);

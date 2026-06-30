@@ -95,6 +95,10 @@ EditorSnapshot EditorState::capture_state() const {
     return snapshot();
 }
 
+void EditorState::restore_captured_state(const EditorSnapshot& snapshot) {
+    restore_snapshot(snapshot);
+}
+
 Error EditorState::replace(size_t pos, size_t count, const std::string& value) {
     if (pos > text.size()) {
         return {ErrorCode::BadArgs, "editor replace position is past the end of the buffer"};

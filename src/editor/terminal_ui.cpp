@@ -70,17 +70,25 @@ void TerminalSession::restore() {
         active_ = false;
 }
 
-std::string editor_status_line(const EditorState& state) {
+std::string editor_status_line(const EditorState& state, bool help_view) {
     std::ostringstream out;
-    out << (state.path.empty() ? "[scratch]" : state.path);
-    if (state.dirty) {
-        out << " *";
+    if (help_view) {
+        out << "Help (read-only)";
+    } else {
+        out << (state.path.empty() ? "[scratch]" : state.path);
+        if (state.dirty) {
+            out << " *";
+        }
+        out << "  Mode: Editor";
     }
     const size_t line = state.text.line_for_offset(state.cursor) + 1;
     const size_t column = state.text.display_column_for_offset(state.cursor) + 1;
-    out << "  Mode: Editor"
-        << "  Ln " << line << ", Col " << column
-        << "  Esc /command | Ctrl+Space continue | Ctrl+C copy | Ctrl+X cut | Ctrl+V paste | Ctrl+U undo | Ctrl+S save | Ctrl+Q quit";
+    out << "  Ln " << line << ", Col " << column;
+    if (help_view) {
+        out << "  Esc /help or Ctrl+Q to return";
+    } else {
+        out << "  Ctrl+Q quit  Esc /help for help";
+    }
     return out.str();
 }
 
@@ -619,7 +627,7 @@ bool handle_replace_key(EditorState& state,
     return true;
 }
 
-void render_terminal(EditorState& state, const MinibufferState& minibuffer) {
+void render_terminal(EditorState& state, const MinibufferState& minibuffer, bool help_view) {
     const TerminalSize size = terminal_size();
     const int rows = std::max(3, size.rows);
     const int cols = std::max(20, size.cols);
@@ -639,7 +647,7 @@ void render_terminal(EditorState& state, const MinibufferState& minibuffer) {
     const int status_row = rows - 1;
     const int minibuffer_row = rows;
     std::cout << "\x1b[" << status_row << ";1H\x1b[7m"
-              << pad_or_clip_ascii(editor_status_line(state), width) << "\x1b[0m\x1b[K";
+              << pad_or_clip_ascii(editor_status_line(state, help_view), width) << "\x1b[0m\x1b[K";
     std::cout << "\x1b[" << minibuffer_row << ";1H"
               << pad_or_clip_ascii(minibuffer_text(minibuffer), width) << "\x1b[K";
 

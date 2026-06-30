@@ -1683,4 +1683,16 @@ Error send_chat(const RequestContext& context, DeltaCallback on_delta, ChatResul
     return send_chat_messages(context, messages, on_delta, result, cancellation);
 }
 
+std::string display_name_for_profile(const std::string& profile_name) {
+    for (const Profile& profile : built_in_profiles()) {
+        if (profile.name == profile_name) {
+            if (!profile.aliases.empty()) {
+                return profile.aliases.front();
+            }
+            return profile.name;
+        }
+    }
+    return profile_name;
+}
+
 }  // namespace pkchat::provider

@@ -11,16 +11,18 @@ namespace pkchat::tui {
 namespace {
 
 std::string provider_model_status_label(const std::string& provider_name, const std::string& model_name) {
-    if (provider_name.empty() && model_name.empty()) {
+    const std::string display_provider =
+        provider_name.empty() ? "" : provider::display_name_for_profile(provider_name);
+    if (display_provider.empty() && model_name.empty()) {
         return "";
     }
-    if (provider_name.empty()) {
+    if (display_provider.empty()) {
         return "[" + model_name + "]";
     }
     if (model_name.empty()) {
-        return "[" + provider_name + " / model unknown]";
+        return "[" + display_provider + " / model unknown]";
     }
-    return "[" + provider_name + " / " + model_name + "]";
+    return "[" + display_provider + " / " + model_name + "]";
 }
 
 std::string provider_model_status_label(const provider::RequestContext& context) {
@@ -34,10 +36,25 @@ std::string provider_model_status_message(const std::string& label, const std::s
     return label + " " + suffix;
 }
 
+std::string provider_model_status_message(const std::string& label,
+                                          const std::string& indicator,
+                                          const std::string& suffix) {
+    if (label.empty()) {
+        return indicator + suffix;
+    }
+    return label + " " + indicator + suffix;
+}
+
 }  // namespace
 
 std::string provider_model_status_message(const provider::RequestContext& context, const std::string& suffix) {
     return provider_model_status_message(provider_model_status_label(context), suffix);
+}
+
+std::string provider_model_status_message(const provider::RequestContext& context,
+                                          const std::string& indicator,
+                                          const std::string& suffix) {
+    return provider_model_status_message(provider_model_status_label(context), indicator, suffix);
 }
 
 std::string ready_status() {

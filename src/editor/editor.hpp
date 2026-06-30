@@ -131,6 +131,7 @@ struct EditorState {
     Error insert_without_undo(const std::string& value);
     void finalize_stream_edit(const EditorSnapshot& before);
     EditorSnapshot capture_state() const;
+    void restore_captured_state(const EditorSnapshot& snapshot);
     Error replace(size_t pos, size_t count, const std::string& value);
     Error erase_before_cursor();
     Error erase_at_cursor();
