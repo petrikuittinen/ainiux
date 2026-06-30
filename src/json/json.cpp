@@ -4,6 +4,7 @@
 #include <cstdlib>
 #include <iomanip>
 #include <sstream>
+#include <utility>
 
 namespace pkchat::json {
 
@@ -29,7 +30,7 @@ namespace {
 
 class Parser {
    public:
-    explicit Parser(const std::string& input) : input_(input) {}
+    explicit Parser(const std::string& input, size_t offset = 0) : input_(input), pos_(offset) {}
 
     ParseResult run() {
         skip_ws();
@@ -43,6 +44,17 @@ class Parser {
             return {Value{}, fail("unexpected trailing JSON data")};
         }
         return {value, ok_error()};
+    }
+
+    ParsePrefixResult run_prefix() {
+        skip_ws();
+        Value value;
+        Error err = parse_value(value);
+        if (!err.ok()) {
+            return {Value{}, err, pos_};
+        }
+        skip_ws();
+        return {std::move(value), ok_error(), pos_};
     }
 
    private:
@@ -336,6 +348,10 @@ class Parser {
 }  // namespace
 
 ParseResult parse(const std::string& input) { return Parser(input).run(); }
+
+ParsePrefixResult parse_prefix(const std::string& input, size_t offset) {
+    return Parser(input, offset).run_prefix();
+}
 
 std::string escape_string(const std::string& input) {
     std::ostringstream out;

@@ -118,6 +118,15 @@ void test_chat_sqlite_store_round_trip_and_listing() {
               loaded.compaction_events[0].messages_compacted == 2,
           "SQLite load preserves compaction events");
 
+    session.messages.pop_back();
+    session.usage_json = "{\"prompt_tokens\":2,\"completion_tokens\":3,\"total_tokens\":5}";
+    err = store.save_session(session);
+    check(err.ok(), "SQLite chat session saves after assistant response is popped");
+    loaded = {};
+    err = store.load_session(session.thread_id, loaded);
+    check(err.ok() && loaded.messages.size() == 2 && loaded.messages.back().role == "user",
+          "SQLite save after assistant pop preserves remaining messages");
+
     pkchat::chat::Session second = pkchat::chat::new_session(context);
     second.messages.push_back({"user", "newest prompt"});
     second.messages.push_back({"assistant", "newest answer"});

@@ -148,6 +148,9 @@ bool pop_last_chat_message(chat::Session& session, std::string& removed_role) {
         }
         removed_role = role;
         session.messages.erase(session.messages.begin() + static_cast<long>(index));
+        if (removed_role == "assistant") {
+            session.usage_json = "{}";
+        }
         return true;
     }
     removed_role.clear();

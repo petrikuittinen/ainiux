@@ -965,6 +965,143 @@ std::string join_sse_data_lines(const std::vector<std::string>& data_lines) {
     return data;
 }
 
+bool is_ascii_ws(char ch) {
+    return ch == ' ' || ch == '\n' || ch == '\r' || ch == '\t';
+}
+
+void skip_ascii_ws(const std::string& text, size_t& pos) {
+    while (pos < text.size() && (is_ascii_ws(text[pos]) || text[pos] == '\x1e')) {
+        ++pos;
+    }
+}
+
+bool starts_with_at(const std::string& text, size_t pos, const std::string& prefix) {
+    return pos <= text.size() && text.compare(pos, prefix.size(), prefix) == 0;
+}
+
+std::string sanitized_payload_preview(const std::string& text, size_t pos, size_t limit) {
+    std::ostringstream out;
+    size_t emitted = 0;
+    for (size_t i = pos; i < text.size() && emitted < limit; ++i, ++emitted) {
+        const unsigned char ch = static_cast<unsigned char>(text[i]);
+        switch (ch) {
+            case '\n':
+                out << "\\n";
+                break;
+            case '\r':
+                out << "\\r";
+                break;
+            case '\t':
+                out << "\\t";
+                break;
+            case '\\':
+                out << "\\\\";
+                break;
+            case '"':
+                out << "\\\"";
+                break;
+            default:
+                if (ch < 0x20 || ch == 0x7f) {
+                    out << "\\x" << std::hex << std::setw(2) << std::setfill('0')
+                        << static_cast<int>(ch) << std::dec << std::setfill(' ');
+                } else {
+                    out << static_cast<char>(ch);
+                }
+                break;
+        }
+    }
+    if (pos + emitted < text.size()) {
+        out << "...";
+    }
+    return out.str();
+}
+
+void skip_to_next_line(const std::string& text, size_t& pos) {
+    while (pos < text.size() && text[pos] != '\n' && text[pos] != '\r') {
+        ++pos;
+    }
+    if (pos < text.size()) {
+        ++pos;
+        if (pos < text.size() && text[pos - 1] == '\r' && text[pos] == '\n') {
+            ++pos;
+        }
+    }
+}
+
+bool skip_leaked_sse_field_prefix(const std::string& text, size_t& pos) {
+    if (starts_with_at(text, pos, "data:")) {
+        pos += 5;
+        if (pos < text.size() && text[pos] == ' ') {
+            ++pos;
+        }
+        return true;
+    }
+    if (starts_with_at(text, pos, "event:") ||
+        starts_with_at(text, pos, "id:") ||
+        starts_with_at(text, pos, "retry:") ||
+        starts_with_at(text, pos, ":")) {
+        skip_to_next_line(text, pos);
+        return true;
+    }
+    return false;
+}
+
+void skip_sse_payload_separators(const std::string& text, size_t& pos) {
+    while (true) {
+        skip_ascii_ws(text, pos);
+        if (!skip_leaked_sse_field_prefix(text, pos)) {
+            return;
+        }
+    }
+}
+
+bool split_concatenated_sse_payloads(const std::string& data,
+                                     std::vector<std::string>& payloads,
+                                     size_t& failure_pos) {
+    payloads.clear();
+    size_t pos = 0;
+    while (true) {
+        skip_sse_payload_separators(data, pos);
+        if (pos >= data.size()) {
+            failure_pos = pos;
+            break;
+        }
+        if (starts_with_at(data, pos, "[DONE]")) {
+            payloads.emplace_back("[DONE]");
+            failure_pos = pos + 6;
+            return true;
+        }
+
+        const json::ParsePrefixResult parsed = json::parse_prefix(data, pos);
+        if (!parsed.error.ok() || parsed.consumed <= pos) {
+            failure_pos = parsed.consumed > 0 ? parsed.consumed : pos;
+            payloads.clear();
+            return false;
+        }
+        payloads.push_back(data.substr(pos, parsed.consumed - pos));
+        pos = parsed.consumed;
+    }
+    return !payloads.empty();
+}
+
+std::string sse_payload_tail_context(const std::string& data) {
+    json::ParsePrefixResult parsed = json::parse_prefix(data);
+    size_t pos = parsed.error.ok() ? parsed.consumed : 0;
+    skip_sse_payload_separators(data, pos);
+    if (pos >= data.size()) {
+        pos = parsed.error.ok() ? parsed.consumed : 0;
+    }
+    return "; SSE payload tail near byte " + std::to_string(pos) + ": \"" +
+           sanitized_payload_preview(data, pos, 96) + "\"";
+}
+
+Error sse_json_parse_error(const std::string& message, const std::string& data) {
+    return {ErrorCode::SseParse,
+            message + "; SSE payload bytes: " + std::to_string(data.size()) +
+                "; SSE payload head: \"" + sanitized_payload_preview(data, 0, 220) + "\"" +
+                sse_payload_tail_context(data)};
+}
+
 class SseParser {
    public:
     explicit SseParser(bool suppress_streaming_reasoning = false)
@@ -1059,17 +1196,50 @@ class SseParser {
             return ok_error();
         }
         const std::string data = join_sse_data_lines(data_lines);
-        Error err = process_data(data, on_delta, result, done);
-        if (err.ok() || err.code != ErrorCode::SseParse || data_lines.size() == 1) {
-            return err;
+        return process_payload(data, on_delta, result, done);
+    }
+
+    Error process_payload(const std::string& data,
+                          const DeltaCallback& on_delta,
+                          ChatResult& result,
+                          bool& done) {
+        std::vector<std::string> payloads;
+        size_t failure_pos = 0;
+        if (split_concatenated_sse_payloads(data, payloads, failure_pos)) {
+            Error err = ok_error();
+            for (const std::string& payload : payloads) {
+                err = process_data(payload, on_delta, result, done);
+                if (!err.ok() && err.code == ErrorCode::SseParse) {
+                    std::vector<std::string> nested_payloads;
+                    size_t nested_failure = 0;
+                    if (split_concatenated_sse_payloads(payload, nested_payloads, nested_failure) &&
+                        !(nested_payloads.size() == 1 && nested_payloads.front() == payload)) {
+                        err = ok_error();
+                        for (const std::string& nested : nested_payloads) {
+                            err = process_data(nested, on_delta, result, done);
+                            if (!err.ok() || done) {
+                                return err;
+                            }
+                        }
+                    }
+                }
+                if (!err.ok() || done) {
+                    return err;
+                }
+            }
+            return ok_error();
         }
-        for (const std::string& line : data_lines) {
-            err = process_data(line, on_delta, result, done);
-            if (!err.ok() || done) {
-                return err;
+
+        Error err = process_data(data, on_delta, result, done);
+        if (!err.ok() && err.code == ErrorCode::SseParse) {
+            if (data.size() > failure_pos) {
+                err.message += "; SSE payload tail near byte " + std::to_string(failure_pos) + ": \"" +
+                               sanitized_payload_preview(data, failure_pos, 96) + "\"";
+            } else {
+                err.message += sse_payload_tail_context(data);
             }
         }
-        return ok_error();
+        return err;
     }
 
     Error process_data(const std::string& data,
@@ -1089,7 +1259,7 @@ class SseParser {
         }
         json::ParseResult parsed = json::parse(data);
         if (!parsed.error.ok()) {
-            return {ErrorCode::SseParse, parsed.error.message};
+            return sse_json_parse_error(parsed.error.message, data);
         }
         if (const std::string provider_msg = provider_error_message(parsed.value); !provider_msg.empty()) {
             return {ErrorCode::ProviderSchema, "provider error: " + provider_msg};
@@ -1232,17 +1402,50 @@ class ResponsesSseParser {
             return ok_error();
         }
         const std::string data = join_sse_data_lines(data_lines);
-        Error err = process_data(data, on_delta, result, done);
-        if (err.ok() || err.code != ErrorCode::SseParse || data_lines.size() == 1) {
-            return err;
+        return process_payload(data, on_delta, result, done);
+    }
+
+    Error process_payload(const std::string& data,
+                          const DeltaCallback& on_delta,
+                          ChatResult& result,
+                          bool& done) {
+        std::vector<std::string> payloads;
+        size_t failure_pos = 0;
+        if (split_concatenated_sse_payloads(data, payloads, failure_pos)) {
+            Error err = ok_error();
+            for (const std::string& payload : payloads) {
+                err = process_data(payload, on_delta, result, done);
+                if (!err.ok() && err.code == ErrorCode::SseParse) {
+                    std::vector<std::string> nested_payloads;
+                    size_t nested_failure = 0;
+                    if (split_concatenated_sse_payloads(payload, nested_payloads, nested_failure) &&
+                        !(nested_payloads.size() == 1 && nested_payloads.front() == payload)) {
+                        err = ok_error();
+                        for (const std::string& nested : nested_payloads) {
+                            err = process_data(nested, on_delta, result, done);
+                            if (!err.ok() || done) {
+                                return err;
+                            }
+                        }
+                    }
+                }
+                if (!err.ok() || done) {
+                    return err;
+                }
+            }
+            return ok_error();
         }
-        for (const std::string& line : data_lines) {
-            err = process_data(line, on_delta, result, done);
-            if (!err.ok() || done) {
-                return err;
+
+        Error err = process_data(data, on_delta, result, done);
+        if (!err.ok() && err.code == ErrorCode::SseParse) {
+            if (data.size() > failure_pos) {
+                err.message += "; SSE payload tail near byte " + std::to_string(failure_pos) + ": \"" +
+                               sanitized_payload_preview(data, failure_pos, 96) + "\"";
+            } else {
+                err.message += sse_payload_tail_context(data);
             }
         }
-        return ok_error();
+        return err;
     }
 
     Error process_data(const std::string& data,
@@ -1262,7 +1465,7 @@ class ResponsesSseParser {
         }
         json::ParseResult parsed = json::parse(data);
         if (!parsed.error.ok()) {
-            return {ErrorCode::SseParse, parsed.error.message};
+            return sse_json_parse_error(parsed.error.message, data);
         }
         if (const std::string provider_msg = provider_error_message(parsed.value); !provider_msg.empty()) {
             return {ErrorCode::ProviderSchema, "provider error: " + provider_msg};

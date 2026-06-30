@@ -32,7 +32,14 @@ struct ParseResult {
     Error error;
 };
 
+struct ParsePrefixResult {
+    Value value;
+    Error error;
+    size_t consumed = 0;
+};
+
 ParseResult parse(const std::string& input);
+ParsePrefixResult parse_prefix(const std::string& input, size_t offset = 0);
 std::string escape_string(const std::string& input);
 std::string quote(const std::string& input);
 

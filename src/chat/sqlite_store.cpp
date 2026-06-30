@@ -147,6 +147,13 @@ class Statement {
         }
         return ok_error();
     }
+    Error bind_null(int index) {
+        const int rc = sqlite3_bind_null(stmt_, index);
+        if (rc != SQLITE_OK) {
+            return sqlite_error(db_, path_, "could not bind SQLite null", rc);
+        }
+        return ok_error();
+    }
     Error bind_text(int index, const std::string& value) {
         const int rc = sqlite3_bind_text(stmt_, index, value.c_str(), static_cast<int>(value.size()), SQLITE_TRANSIENT);
         if (rc != SQLITE_OK) {
@@ -642,7 +649,11 @@ Error SqliteStore::save_session(Session& session) {
             "VALUES(?1, ?2, ?3, ?4, ?5, ?6);");
         if (!err.ok()) return err;
         if (!(err = usage.bind_int64(1, session.thread_id)).ok()) return err;
-        if (!(err = usage.bind_int64(2, last_assistant_message_id)).ok()) return err;
+        if (last_assistant_message_id > 0) {
+            if (!(err = usage.bind_int64(2, last_assistant_message_id)).ok()) return err;
+        } else {
+            if (!(err = usage.bind_null(2)).ok()) return err;
+        }
         if (!(err = usage.bind_text(3, session.provider)).ok()) return err;
         if (!(err = usage.bind_text(4, session.model)).ok()) return err;
         if (!(err = usage.bind_text(5, session.usage_json)).ok()) return err;

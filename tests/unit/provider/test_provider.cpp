@@ -62,9 +62,10 @@ bool send_all(int fd, const std::string& data) {
     return true;
 }
 
-pkchat::Error run_chat_stream_from_body(const std::string& body,
-                                        pkchat::provider::ChatResult& result,
-                                        std::string& streamed) {
+pkchat::Error run_stream_from_body(const std::string& body,
+                                   pkchat::provider::ApiKind api_kind,
+                                   pkchat::provider::ChatResult& result,
+                                   std::string& streamed) {
     UniqueFd listen_fd(socket(AF_INET, SOCK_STREAM, 0));
     if (listen_fd.get() < 0) {
         return {pkchat::ErrorCode::Internal, "could not create test server socket"};
@@ -117,12 +118,14 @@ pkchat::Error run_chat_stream_from_body(const std::string& body,
     pkchat::provider::RequestContext context;
     context.profile.name = "custom_openai_chat";
     context.profile.capabilities.chat_completions = true;
+    context.profile.capabilities.responses_api = true;
     context.options.model = "mock-model";
     context.options.stream = true;
     context.options.connect_timeout_seconds = 2;
     context.options.timeout_seconds = 5;
     context.chat_url = "http://127.0.0.1:" + std::to_string(port) + "/v1/chat/completions";
-    context.api_kind = pkchat::provider::ApiKind::ChatCompletions;
+    context.responses_url = "http://127.0.0.1:" + std::to_string(port) + "/v1/responses";
+    context.api_kind = api_kind;
 
     pkchat::Error err = pkchat::provider::send_chat_messages(
         context,
@@ -134,6 +137,18 @@ pkchat::Error run_chat_stream_from_body(const std::string& body,
         result);
     server.join();
     return err;
+}
+
+pkchat::Error run_chat_stream_from_body(const std::string& body,
+                                        pkchat::provider::ChatResult& result,
+                                        std::string& streamed) {
+    return run_stream_from_body(body, pkchat::provider::ApiKind::ChatCompletions, result, streamed);
+}
+
+pkchat::Error run_responses_stream_from_body(const std::string& body,
+                                             pkchat::provider::ChatResult& result,
+                                             std::string& streamed) {
+    return run_stream_from_body(body, pkchat::provider::ApiKind::Responses, result, streamed);
 }
 
 void test_chat_sse_accepts_cr_only_event_boundaries() {
@@ -234,6 +249,96 @@ void test_chat_sse_accepts_batched_json_data_lines() {
     check(err.ok(), "chat SSE parser accepts batched JSON data lines");
     check(result.content == "Hello world", "batched JSON data lines accumulate chat deltas");
     check(streamed == "Hello world", "batched JSON data lines forward chat deltas");
+}
+
+void test_chat_sse_accepts_concatenated_json_payloads() {
+    const std::string body =
+        "data: {\"choices\":[{\"delta\":{\"content\":\"Hello\"}}]}{\"choices\":[{\"delta\":{\"content\":\" world\"}}]}\n\n"
+        "data: [DONE]\n\n";
+    pkchat::provider::ChatResult result;
+    std::string streamed;
+    const pkchat::Error err = run_chat_stream_from_body(body, result, streamed);
+    check(err.ok(), "chat SSE parser accepts concatenated JSON payloads");
+    check(result.content == "Hello world", "concatenated JSON payloads accumulate chat deltas");
+    check(streamed == "Hello world", "concatenated JSON payloads forward chat deltas");
+}
+
+void test_chat_sse_accepts_concatenated_reasoning_payloads() {
+    const std::string body =
+        "data: {\"choices\":[{\"delta\":{\"reasoning\":\"1+1 is addition.\"}}]}"
+        "{\"choices\":[{\"delta\":{\"content\":\"2\"}}]}\n\n"
+        "data: [DONE]\n\n";
+    pkchat::provider::ChatResult result;
+    std::string streamed;
+    const pkchat::Error err = run_chat_stream_from_body(body, result, streamed);
+    check(err.ok(), "chat SSE parser accepts concatenated reasoning JSON payloads");
+    check(result.content == "<think>1+1 is addition.</think>\n\n2",
+          "concatenated reasoning payloads preserve thinking and visible content");
+    check(streamed == result.content, "concatenated reasoning payloads forward wrapped thinking output");
+}
+
+void test_chat_sse_accepts_concatenated_payloads_with_leaked_data_prefixes() {
+    const std::string body =
+        "data: {\"choices\":[{\"delta\":{\"reasoning\":\"thinking\"}}]}"
+        "data: {\"choices\":[{\"delta\":{\"content\":\"done\"}}]}\n\n"
+        "data: [DONE]\n\n";
+    pkchat::provider::ChatResult result;
+    std::string streamed;
+    const pkchat::Error err = run_chat_stream_from_body(body, result, streamed);
+    check(err.ok(), "chat SSE parser accepts concatenated payloads with leaked data prefixes");
+    check(result.content == "<think>thinking</think>\n\ndone",
+          "leaked data-prefix payloads preserve reasoning and content");
+}
+
+void test_chat_sse_accepts_concatenated_payloads_with_sse_metadata_prefixes() {
+    const std::string body =
+        "data: {\"choices\":[{\"delta\":{\"content\":\"Hello\"}}]}"
+        "event: message\n"
+        "data: {\"choices\":[{\"delta\":{\"content\":\" world\"}}]}\n\n"
+        "data: [DONE]\n\n";
+    pkchat::provider::ChatResult result;
+    std::string streamed;
+    const pkchat::Error err = run_chat_stream_from_body(body, result, streamed);
+    check(err.ok(), "chat SSE parser accepts concatenated payloads with leaked SSE metadata");
+    check(result.content == "Hello world", "leaked SSE metadata payloads accumulate content");
+}
+
+void test_chat_sse_concatenated_payload_split_ignores_content_braces() {
+    const std::string body =
+        "data: {\"choices\":[{\"delta\":{\"content\":\"answer with {braces} and [brackets]\"}}]}"
+        "{\"choices\":[{\"delta\":{\"content\":\" done\"}}]}\n\n"
+        "data: [DONE]\n\n";
+    pkchat::provider::ChatResult result;
+    std::string streamed;
+    const pkchat::Error err = run_chat_stream_from_body(body, result, streamed);
+    check(err.ok(), "chat SSE concatenated payload split ignores braces inside content strings");
+    check(result.content == "answer with {braces} and [brackets] done",
+          "content braces are preserved while concatenated payloads are split");
+}
+
+void test_chat_sse_accepts_json_payload_immediately_followed_by_done() {
+    const std::string body =
+        "data: {\"choices\":[{\"delta\":{\"content\":\"2\"}}]}[DONE]ignored-after-done\n\n";
+    pkchat::provider::ChatResult result;
+    std::string streamed;
+    const pkchat::Error err = run_chat_stream_from_body(body, result, streamed);
+    check(err.ok(), "chat SSE parser accepts JSON payload immediately followed by DONE");
+    check(result.content == "2", "JSON plus DONE payload accumulates content");
+    check(streamed == "2", "JSON plus DONE payload forwards content");
+}
+
+void test_responses_sse_accepts_concatenated_json_payloads() {
+    const std::string body =
+        "data: {\"type\":\"response.output_text.delta\",\"delta\":\"Hello\"}"
+        "{\"type\":\"response.output_text.delta\",\"delta\":\" world\"}"
+        "{\"type\":\"response.completed\",\"response\":{\"model\":\"mock-model\",\"usage\":{\"input_tokens\":1,\"output_tokens\":2,\"total_tokens\":3}}}\n\n";
+    pkchat::provider::ChatResult result;
+    std::string streamed;
+    const pkchat::Error err = run_responses_stream_from_body(body, result, streamed);
+    check(err.ok(), "Responses SSE parser accepts concatenated JSON payloads");
+    check(result.content == "Hello world", "concatenated Responses payloads accumulate deltas");
+    check(streamed == "Hello world", "concatenated Responses payloads forward deltas");
+    check(result.total_tokens == 3, "concatenated Responses payloads preserve completion metadata");
 }
 
 void test_explicit_chat_url_does_not_require_base_when_model_set() {
@@ -489,6 +594,13 @@ void run_all() {
     test_chat_sse_openrouter_reasoning_summary_and_text();
     test_chat_sse_reasoning_normalizes_crlf();
     test_chat_sse_accepts_batched_json_data_lines();
+    test_chat_sse_accepts_concatenated_json_payloads();
+    test_chat_sse_accepts_concatenated_reasoning_payloads();
+    test_chat_sse_accepts_concatenated_payloads_with_leaked_data_prefixes();
+    test_chat_sse_accepts_concatenated_payloads_with_sse_metadata_prefixes();
+    test_chat_sse_concatenated_payload_split_ignores_content_braces();
+    test_chat_sse_accepts_json_payload_immediately_followed_by_done();
+    test_responses_sse_accepts_concatenated_json_payloads();
     test_explicit_chat_url_does_not_require_base_when_model_set();
     test_image_capability_detection();
     test_lmstudio_context();

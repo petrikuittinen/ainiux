@@ -108,11 +108,14 @@ void test_tui_pop_last_chat_message_removes_user_or_assistant_only() {
 
     session.messages.push_back({"user", "first"});
     session.messages.push_back({"assistant", "one"});
+    session.usage_json = "{\"prompt_tokens\":1,\"completion_tokens\":1,\"total_tokens\":2}";
     check(pkchat::tui::pop_last_chat_message(session, removed_role),
           "TUI pop removes the last assistant message");
     check(removed_role == "assistant" && session.messages.size() == 2 &&
               session.messages.back().role == "user",
           "TUI pop reports assistant and leaves the prior user message last");
+    check(session.usage_json == "{}",
+          "TUI pop clears stale usage metadata when removing an assistant response");
     check(pkchat::tui::pop_last_chat_message(session, removed_role),
           "TUI pop removes the last user message");
     check(removed_role == "user" && session.messages.size() == 1 &&
