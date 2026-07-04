@@ -3,25 +3,42 @@
 #include "pkchat/version.hpp"
 #include "provider/provider.hpp"
 
+#include <algorithm>
+
 
 namespace pkchat::tui {
 namespace {
 
-constexpr const char kThinkingFrames[] = {
-    '\xe2', '\x97', '\x90',  // ◐
-    '\xe2', '\x97', '\x93',  // ◓
-    '\xe2', '\x97', '\x91',  // ◑
-    '\xe2', '\x97', '\x92',  // ◒
+constexpr const char* kThinkingFrames[] = {
+    "\xe2\x97\x90",  // ◐
+    "\xe2\x97\x93",  // ◓
+    "\xe2\x97\x91",  // ◑
+    "\xe2\x97\x92",  // ◒
 };
 
-constexpr const char kStreamingFrames[][4] = {
+constexpr const char* kStreamingFrames[] = {
     "\xe2\x96\xb9",  // ▹
     "\xe2\x96\xb8",  // ▸
     "\xe2\x96\xba",  // ►
 };
 
-constexpr size_t kThinkingFrameCount = sizeof(kThinkingFrames) / 3;
+constexpr size_t kThinkingFrameCount = sizeof(kThinkingFrames) / sizeof(kThinkingFrames[0]);
 constexpr size_t kStreamingFrameCount = sizeof(kStreamingFrames) / sizeof(kStreamingFrames[0]);
+constexpr size_t kMaxActivityIndicatorWidth = 4;
+
+std::string rotated_activity_text(const char* const* symbols, size_t symbol_count, size_t frame) {
+    if (symbol_count == 0) {
+        return "";
+    }
+    const size_t width = std::min(symbol_count, kMaxActivityIndicatorWidth);
+    const size_t start = frame % symbol_count;
+    std::string out;
+    out.reserve(width * 3);
+    for (size_t i = 0; i < width; ++i) {
+        out += symbols[(start + i) % symbol_count];
+    }
+    return out;
+}
 
 void append_segment(std::vector<StyledSegment>& segments, std::string text, StyleRole role) {
     if (text.empty()) {
@@ -45,16 +62,26 @@ std::vector<StyledSegment> input_label_segments() {
 
 std::string activity_indicator_text(ActivityKind kind, size_t frame) {
     switch (kind) {
-        case ActivityKind::Thinking: {
-            const size_t index = (frame % kThinkingFrameCount) * 3;
-            return std::string(kThinkingFrames + index, 3);
-        }
+        case ActivityKind::Thinking:
+            return rotated_activity_text(kThinkingFrames, kThinkingFrameCount, frame);
         case ActivityKind::Streaming:
-            return kStreamingFrames[frame % kStreamingFrameCount];
+            return rotated_activity_text(kStreamingFrames, kStreamingFrameCount, frame);
         case ActivityKind::None:
             break;
     }
     return "";
+}
+
+size_t activity_indicator_width(ActivityKind kind) {
+    switch (kind) {
+        case ActivityKind::Thinking:
+            return std::min(kThinkingFrameCount, kMaxActivityIndicatorWidth);
+        case ActivityKind::Streaming:
+            return std::min(kStreamingFrameCount, kMaxActivityIndicatorWidth);
+        case ActivityKind::None:
+            break;
+    }
+    return 0;
 }
 
 StyleRole activity_indicator_role(ActivityKind kind) {

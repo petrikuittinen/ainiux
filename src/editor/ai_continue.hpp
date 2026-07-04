@@ -43,6 +43,8 @@ AiContinueSettings ai_continue_settings_from_env();
 std::string continue_status_message(const std::string& provider_name,
                                     const std::string& model_name,
                                     const std::string& suffix);
+
+std::string continue_status_label(const std::string& provider_name, const std::string& model_name);
 std::string continue_completion_status_suffix(const provider::ChatResult& result,
                                               bool stream,
                                               const std::string& state);

@@ -1,11 +1,14 @@
 #include "editor/terminal_ui.hpp"
 
+#include "editor/ai_continue.hpp"
 #include "editor/detail/editor_common.hpp"
+#include "editor/detail/unicode.hpp"
 #include "editor/detail/wrap.hpp"
 #include "editor/clipboard.hpp"
 #include "editor/editor_assist.hpp"
 #include "editor/selection.hpp"
 #include "editor/terminal_input.hpp"
+#include "tui/activity.hpp"
 
 #include <cerrno>
 #include <cstring>
@@ -98,6 +101,95 @@ std::string minibuffer_text(const MinibufferState& minibuffer) {
     }
     return minibuffer.message;
 }
+
+namespace {
+
+std::string activity_color_sequence(tui::ActivityKind kind) {
+    switch (kind) {
+        case tui::ActivityKind::Thinking:
+            return "\x1b[38;2;147;197;253m";
+        case tui::ActivityKind::Streaming:
+            return "\x1b[38;2;74;222;128m";
+        case tui::ActivityKind::None:
+            break;
+    }
+    return "";
+}
+
+int append_utf8_cells(std::string& out, const std::string& text, size_t& pos, int max_cells) {
+    int used = 0;
+    while (pos < text.size() && used < max_cells) {
+        const size_t width = detail::display_width_at(text, pos, 0);
+        if (width == 0) {
+            break;
+        }
+        size_t len = 1;
+        if ((static_cast<unsigned char>(text[pos]) & 0xF8U) == 0xF0U && pos + 3 < text.size()) {
+            len = 4;
+        } else if ((static_cast<unsigned char>(text[pos]) & 0xF0U) == 0xE0U && pos + 2 < text.size()) {
+            len = 3;
+        } else if ((static_cast<unsigned char>(text[pos]) & 0xE0U) == 0xC0U && pos + 1 < text.size()) {
+            len = 2;
+        }
+        out.append(text, pos, len);
+        pos += len;
+        used += static_cast<int>(width);
+    }
+    return used;
+}
+
+std::string editor_assist_minibuffer_line(const EditorAssistDisplay& assist, int width) {
+    if (width <= 0) {
+        return "";
+    }
+    const std::string label = continue_status_label(assist.provider_name, assist.model_name);
+    const std::string indicator = tui::activity_indicator_text(assist.kind, assist.frame);
+    const std::string color = activity_color_sequence(assist.kind);
+    const std::string reset = "\x1b[0m";
+
+    std::string out;
+    out.reserve(static_cast<size_t>(width) * 4);
+    int cells = 0;
+
+    auto append_plain = [&](const std::string& text) {
+        size_t pos = 0;
+        cells += append_utf8_cells(out, text, pos, width - cells);
+    };
+    auto append_indicator = [&]() {
+        if (cells >= width || indicator.empty()) {
+            return;
+        }
+        size_t pos = 0;
+        const int indicator_cells = static_cast<int>(tui::activity_indicator_width(assist.kind));
+        if (cells + indicator_cells > width) {
+            return;
+        }
+        if (!color.empty()) {
+            out += color;
+        }
+        cells += append_utf8_cells(out, indicator, pos, width - cells);
+        if (!color.empty()) {
+            out += reset;
+        }
+    };
+
+    append_plain(label);
+    if (!label.empty() && cells < width) {
+        append_plain(" ");
+    }
+    append_indicator();
+    if (!assist.suffix.empty() && cells < width) {
+        append_plain(" ");
+        append_plain(assist.suffix);
+    }
+    while (cells < width) {
+        out.push_back(' ');
+        ++cells;
+    }
+    return out;
+}
+
+}  // namespace
 
 void minibuffer_message(MinibufferState& minibuffer, std::string message) {
     minibuffer.active = false;
@@ -641,7 +733,10 @@ bool handle_replace_key(EditorState& state,
     return true;
 }
 
-void render_terminal(EditorState& state, const MinibufferState& minibuffer, bool help_view) {
+void render_terminal(EditorState& state,
+                     const MinibufferState& minibuffer,
+                     bool help_view,
+                     const EditorAssistDisplay* assist_display) {
     const TerminalSize size = terminal_size();
     const int rows = std::max(3, size.rows);
     const int cols = std::max(20, size.cols);
@@ -662,8 +757,13 @@ void render_terminal(EditorState& state, const MinibufferState& minibuffer, bool
     const int minibuffer_row = rows;
     std::cout << "\x1b[" << status_row << ";1H\x1b[7m"
               << pad_or_clip_ascii(editor_status_line(state, help_view), width) << "\x1b[0m\x1b[K";
-    std::cout << "\x1b[" << minibuffer_row << ";1H"
-              << pad_or_clip_ascii(minibuffer_text(minibuffer), width) << "\x1b[K";
+    const bool show_assist_activity = assist_display != nullptr && assist_display->active &&
+                                        assist_display->kind != tui::ActivityKind::None &&
+                                        !minibuffer.active;
+    const std::string minibuffer_line =
+        show_assist_activity ? editor_assist_minibuffer_line(*assist_display, width)
+                             : pad_or_clip_ascii(minibuffer_text(minibuffer), width);
+    std::cout << "\x1b[" << minibuffer_row << ";1H" << minibuffer_line << "\x1b[K";
 
     int cursor_row = panel.cursor.visible ? panel_rect.row + panel.cursor.row : panel_rect.row;
     int cursor_col = panel.cursor.visible ? panel_rect.col + panel.cursor.col : panel_rect.col;

@@ -6,6 +6,7 @@
 #include "editor/terminal_input.hpp"
 #include "editor/terminal_ui.hpp"
 #include "runtime/runtime.hpp"
+#include "tui/activity.hpp"
 
 #include <functional>
 #include <iostream>
@@ -42,6 +43,8 @@ struct AssistSession {
     EditorSnapshot undo_before;
     std::string provider_name;
     std::string model_name;
+    std::string status_suffix;
+    tui::ActivityKind activity_kind = tui::ActivityKind::None;
     size_t replace_start = 0;
     size_t replace_count = 0;
 };
@@ -58,6 +61,8 @@ void clear_assist_session(AssistSession& session) {
     session.undo_before = EditorSnapshot{};
     session.provider_name.clear();
     session.model_name.clear();
+    session.status_suffix.clear();
+    session.activity_kind = tui::ActivityKind::None;
     session.replace_start = 0;
     session.replace_count = 0;
 }
@@ -118,7 +123,19 @@ int run_editor(const std::string& path,
     PendingAssist pending_assist;
     HelpViewSession help_view;
     TerminalSize last_size = terminal_size();
-    render_terminal(state, minibuffer, help_view.active);
+    size_t activity_frame = 0;
+    EditorAssistDisplay assist_display;
+    auto refresh_assist_display = [&]() -> const EditorAssistDisplay* {
+        assist_display.active = assist_session.active;
+        assist_display.provider_name = assist_session.provider_name;
+        assist_display.model_name = assist_session.model_name;
+        assist_display.suffix = assist_session.status_suffix;
+        assist_display.kind = assist_session.activity_kind;
+        assist_display.frame = activity_frame;
+        return assist_display.active && assist_display.kind != tui::ActivityKind::None ? &assist_display
+                                                                                       : nullptr;
+    };
+    render_terminal(state, minibuffer, help_view.active, refresh_assist_display());
 
     auto assist_panel_rect = [&]() {
         const TerminalSize size = terminal_size();
@@ -166,6 +183,11 @@ int run_editor(const std::string& path,
         minibuffer_message(minibuffer, "Help (read-only) — Esc /help or Ctrl+Q to return");
     };
 
+    auto set_assist_activity = [&](tui::ActivityKind kind, const std::string& suffix) {
+        assist_session.activity_kind = kind;
+        assist_session.status_suffix = suffix;
+    };
+
     auto set_assist_minibuffer = [&](const std::string& suffix) {
         minibuffer_message(minibuffer,
                            continue_status_message(assist_session.provider_name,
@@ -205,13 +227,14 @@ int run_editor(const std::string& path,
             updated = true;
             switch (event.type) {
                 case ContinueEventType::Thinking:
-                    set_assist_minibuffer("thinking... ESC to abort");
+                    set_assist_activity(tui::ActivityKind::Thinking, "thinking... ESC to abort");
                     break;
                 case ContinueEventType::Writing:
-                    set_assist_minibuffer("writing. Press ESC to stop.");
+                    set_assist_activity(tui::ActivityKind::Streaming, "writing. Press ESC to stop.");
                     break;
                 case ContinueEventType::Delta:
                     assist_session.saw_visible = true;
+                    set_assist_activity(tui::ActivityKind::Streaming, "writing. Press ESC to stop.");
                     if (Error insert_error = state.insert_without_undo(event.text); !insert_error.ok()) {
                         assist_session.job.cancel();
                         assist_session.job.join();
@@ -303,7 +326,7 @@ int run_editor(const std::string& path,
         }
         state.clear_selection();
         start_assist_job(*ai_continue, execution.messages, execution.stream, assist_session.events, assist_session.job);
-        set_assist_minibuffer("thinking... ESC to abort");
+        set_assist_activity(tui::ActivityKind::Thinking, "thinking... ESC to abort");
     };
 
     auto submit_assist_command = [&]() {
@@ -673,14 +696,19 @@ int run_editor(const std::string& path,
 
     while (!quit) {
         const bool assist_updated = process_assist_events();
+        const bool assist_animating =
+            assist_session.active && assist_session.activity_kind != tui::ActivityKind::None;
+        if (assist_animating) {
+            ++activity_frame;
+        }
 
         TerminalInputEvent event;
         if (!read_terminal_input(event, 100)) {
             const TerminalSize current_size = terminal_size();
             if (current_size.rows != last_size.rows || current_size.cols != last_size.cols ||
-                assist_session.job.running() || assist_updated) {
+                assist_session.job.running() || assist_updated || assist_animating) {
                 last_size = current_size;
-                render_terminal(state, minibuffer, help_view.active);
+                render_terminal(state, minibuffer, help_view.active, refresh_assist_display());
             }
             continue;
         }
@@ -704,7 +732,7 @@ int run_editor(const std::string& path,
         }
 
         last_size = terminal_size();
-        render_terminal(state, minibuffer, help_view.active);
+        render_terminal(state, minibuffer, help_view.active, refresh_assist_display());
     }
     return 0;
 }

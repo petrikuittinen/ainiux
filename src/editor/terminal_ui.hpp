@@ -6,6 +6,7 @@
 
 #include "editor/editor.hpp"
 #include "editor/editor_assist.hpp"
+#include "tui/activity.hpp"
 
 namespace pkchat::editor {
 
@@ -59,6 +60,15 @@ struct PendingAssist {
     std::string custom_prompt;
 };
 
+struct EditorAssistDisplay {
+    bool active = false;
+    std::string provider_name;
+    std::string model_name;
+    std::string suffix;
+    tui::ActivityKind kind = tui::ActivityKind::None;
+    size_t frame = 0;
+};
+
 class TerminalSession {
    public:
     TerminalSession() = default;
@@ -75,7 +85,10 @@ class TerminalSession {
 };
 
 TerminalSize terminal_size();
-void render_terminal(EditorState& state, const MinibufferState& minibuffer, bool help_view = false);
+void render_terminal(EditorState& state,
+                     const MinibufferState& minibuffer,
+                     bool help_view = false,
+                     const EditorAssistDisplay* assist_display = nullptr);
 std::string editor_status_line(const EditorState& state, bool help_view = false);
 void dispatch_escape_sequence(EditorState& state,
                               const std::string& sequence,

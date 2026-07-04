@@ -77,6 +77,14 @@ std::string continue_status_message(const std::string& provider_name,
     return "[" + display_provider + " / " + model_name + "] " + suffix;
 }
 
+std::string continue_status_label(const std::string& provider_name, const std::string& model_name) {
+    std::string label = continue_status_message(provider_name, model_name, "");
+    while (!label.empty() && label.back() == ' ') {
+        label.pop_back();
+    }
+    return label;
+}
+
 std::string continue_completion_status_suffix(const provider::ChatResult& result,
                                               bool stream,
                                               const std::string& state) {

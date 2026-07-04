@@ -243,15 +243,27 @@ void test_tui_input_label_and_activity_indicators() {
         pkchat::tui::activity_indicator_text(pkchat::tui::ActivityKind::Thinking, 0);
     const std::string thinking_b =
         pkchat::tui::activity_indicator_text(pkchat::tui::ActivityKind::Thinking, 1);
-    check(!thinking_a.empty() && thinking_a != thinking_b,
-          "TUI thinking activity indicator animates across frames");
+    const std::string thinking_c =
+        pkchat::tui::activity_indicator_text(pkchat::tui::ActivityKind::Thinking, 2);
+    check(!thinking_a.empty() && thinking_a != thinking_b && thinking_b != thinking_c &&
+              thinking_c != thinking_a,
+          "TUI thinking activity indicator rotates across frames");
+    check(pkchat::tui::activity_indicator_width(pkchat::tui::ActivityKind::Thinking) <= 4,
+          "TUI thinking activity indicator stays within four cells");
 
     const std::string streaming_a =
         pkchat::tui::activity_indicator_text(pkchat::tui::ActivityKind::Streaming, 0);
     const std::string streaming_b =
         pkchat::tui::activity_indicator_text(pkchat::tui::ActivityKind::Streaming, 1);
-    check(!streaming_a.empty() && streaming_a != streaming_b,
-          "TUI streaming activity indicator animates across frames");
+    const std::string streaming_c =
+        pkchat::tui::activity_indicator_text(pkchat::tui::ActivityKind::Streaming, 2);
+    const std::string streaming_loop =
+        pkchat::tui::activity_indicator_text(pkchat::tui::ActivityKind::Streaming, 3);
+    check(streaming_a != streaming_b && streaming_b != streaming_c && streaming_c != streaming_a,
+          "TUI streaming activity indicator rotates across three frames");
+    check(streaming_loop == streaming_a, "TUI streaming activity indicator loops after three frames");
+    check(pkchat::tui::activity_indicator_width(pkchat::tui::ActivityKind::Streaming) == 3,
+          "TUI streaming activity indicator uses three cells");
     check(streaming_a != thinking_a, "TUI streaming and thinking indicators differ");
 
     pkchat::chat::Session session;
@@ -270,8 +282,11 @@ void test_tui_input_label_and_activity_indicators() {
     check(thinking_segments.size() >= 3, "TUI thinking activity status uses styled segments");
     check(thinking_segments[0].text.find("custom") != std::string::npos,
           "TUI thinking activity status keeps provider label");
-    check(thinking_segments[1].role == pkchat::tui::StyleRole::ThinkingActivity,
+    check(thinking_segments.size() >= 3 &&
+              thinking_segments[2].role == pkchat::tui::StyleRole::ThinkingActivity,
           "TUI thinking activity status colors the indicator");
+    check(!thinking_segments[2].text.empty(),
+          "TUI thinking activity status renders a rotating indicator");
 }
 
 void test_tui_provider_display_and_activity_status() {
