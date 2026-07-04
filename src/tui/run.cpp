@@ -1,3 +1,4 @@
+#include "tui/activity.hpp"
 #include "tui/tui.hpp"
 #include "tui/events.hpp"
 #include "tui/input_handlers.hpp"
@@ -327,7 +328,7 @@ int run(provider::RequestContext context, chat::Session session) {
         context.options.show_thinking_traces = show_traces;
         context.options.has_show_thinking_traces = true;
         if (!show_thinking_traces && pending_assistant_is_hidden_thinking()) {
-            status = provider_model_status_message(context, kThinkingActivityIndicator, "thinking...");
+            status = "Thinking...";
         } else {
             status = show_thinking_traces ? "Thinking traces shown" : "Thinking traces hidden";
         }
@@ -964,8 +965,10 @@ int run(provider::RequestContext context, chat::Session session) {
     }
 
     std::string visible_panel = panel_text();
+    size_t render_frame = 0;
+    ActivityKind activity_kind = ActivityKind::None;
     detail::render(session, input, status, history_scroll, show_thinking_traces, mode, visible_panel,
-           detail::RenderStyle{theme, use_colors});
+                   activity_kind, render_frame, detail::RenderStyle{theme, use_colors});
     while (!quit) {
         TuiEvent event;
         while (events.try_pop(event)) {
@@ -974,10 +977,6 @@ int run(provider::RequestContext context, chat::Session session) {
                     if (pending_assistant != static_cast<size_t>(-1) && pending_assistant < session.messages.size()) {
                         session.messages[pending_assistant].content += event.text;
                     }
-                    status = pending_assistant_is_hidden_thinking()
-                                 ? provider_model_status_message(context, kThinkingActivityIndicator, "thinking...")
-                                 : provider_model_status_message(context, kStreamingActivityIndicator,
-                                                                 "streaming response ...");
                     break;
                 case TuiEventType::Done: {
                     model_job.join();
@@ -1378,8 +1377,13 @@ int run(provider::RequestContext context, chat::Session session) {
             }
         }
         visible_panel = panel_text();
+        activity_kind = active_job == ActiveJob::Chat
+                            ? activity_kind_for_pending_assistant(session, pending_assistant,
+                                                                  show_thinking_traces)
+                            : ActivityKind::None;
+        ++render_frame;
         detail::render(session, input, status, history_scroll, show_thinking_traces, mode, visible_panel,
-               detail::RenderStyle{theme, use_colors});
+                       activity_kind, render_frame, detail::RenderStyle{theme, use_colors});
     }
 
     model_job.cancel();

@@ -1,0 +1,34 @@
+#pragma once
+
+#include <cstddef>
+#include <string>
+#include <vector>
+
+#include "chat/session.hpp"
+#include "tui/tui.hpp"
+
+namespace pkchat::tui {
+
+std::string input_label_text();
+std::vector<StyledSegment> input_label_segments();
+
+std::string activity_indicator_text(ActivityKind kind, size_t frame);
+StyleRole activity_indicator_role(ActivityKind kind);
+
+std::vector<StyledSegment> activity_status_segments(const std::string& label,
+                                                    ActivityKind kind,
+                                                    size_t frame,
+                                                    const std::string& suffix);
+
+std::vector<StyledSegment> activity_placeholder_segments(const std::string& label,
+                                                         ActivityKind kind,
+                                                         size_t frame,
+                                                         const std::string& suffix);
+
+ActivityKind activity_kind_for_pending_assistant(const chat::Session& session,
+                                                 size_t pending_assistant_index,
+                                                 bool show_thinking_traces);
+
+std::string session_status_label(const chat::Session& session);
+
+}  // namespace pkchat::tui

@@ -2,6 +2,7 @@
 
 #include "editor/editor.hpp"
 
+#include <cctype>
 #include <deque>
 #include <iostream>
 #include <sys/select.h>
@@ -47,6 +48,37 @@ void push_bytes_front(const std::string& bytes) {
     }
 }
 
+bool parse_positive_int(const std::string& text, int& out) {
+    if (text.empty()) {
+        return false;
+    }
+    int value = 0;
+    for (char ch : text) {
+        if (!std::isdigit(static_cast<unsigned char>(ch))) {
+            return false;
+        }
+        value = value * 10 + (ch - '0');
+    }
+    out = value;
+    return true;
+}
+
+bool is_ctrl_modifier(int modifier) {
+    return modifier == 5 || modifier == 6 || modifier == 7 || modifier == 8;
+}
+
+bool ctrl_byte_from_codepoint(int codepoint, unsigned char& out) {
+    if (codepoint >= 1 && codepoint <= 26) {
+        out = static_cast<unsigned char>(codepoint);
+        return true;
+    }
+    if (codepoint >= 97 && codepoint <= 122) {
+        out = static_cast<unsigned char>(codepoint - 96);
+        return true;
+    }
+    return false;
+}
+
 bool read_bracketed_paste_body(std::string& out) {
     out.clear();
     static constexpr char kEnd[] = "\x1b[201~";
@@ -67,7 +99,47 @@ bool read_bracketed_paste_body(std::string& out) {
     return false;
 }
 
+bool csi_sequence_complete(const std::string& sequence) {
+    if (sequence.empty()) {
+        return false;
+    }
+    const char last = sequence.back();
+    return last == 'u' || last == '~' || (last >= 'A' && last <= 'Z') || (last >= 'a' && last <= 'z');
+}
+
 }  // namespace
+
+bool decode_control_key_sequence(const std::string& sequence, unsigned char& out) {
+    if (sequence.size() >= 4 && sequence[0] == '[' && sequence.back() == 'u') {
+        const size_t semi = sequence.find(';');
+        if (semi != std::string::npos && semi > 1) {
+            int codepoint = 0;
+            int modifier = 0;
+            if (!parse_positive_int(sequence.substr(1, semi - 1), codepoint) ||
+                !parse_positive_int(sequence.substr(semi + 1, sequence.size() - semi - 2), modifier) ||
+                !is_ctrl_modifier(modifier)) {
+                return false;
+            }
+            return ctrl_byte_from_codepoint(codepoint, out);
+        }
+    }
+    if (sequence.size() >= 6 && sequence[0] == '[' && sequence.back() == '~' &&
+        sequence.rfind(';') != std::string::npos) {
+        const size_t semi = sequence.rfind(';');
+        const size_t prev_semi = sequence.rfind(';', semi == 0 ? 0 : semi - 1);
+        if (prev_semi != std::string::npos && prev_semi + 1 < semi && semi + 1 < sequence.size() - 1) {
+            int modifier = 0;
+            int key = 0;
+            if (!parse_positive_int(sequence.substr(prev_semi + 1, semi - prev_semi - 1), modifier) ||
+                !parse_positive_int(sequence.substr(semi + 1, sequence.size() - semi - 2), key) ||
+                !is_ctrl_modifier(modifier)) {
+                return false;
+            }
+            return ctrl_byte_from_codepoint(key, out);
+        }
+    }
+    return false;
+}
 
 void clear_terminal_input_queue() {
     g_input_queue.clear();
@@ -124,12 +196,22 @@ bool read_terminal_input(TerminalInputEvent& out, int timeout_ms) {
             out.text = std::move(pasted);
             return true;
         }
-        if (!is_bracketed_paste_prefix(after_esc)) {
-            push_bytes_front(after_esc);
-            out.type = TerminalInputType::Byte;
-            out.byte = 27;
-            return true;
+        if (is_bracketed_paste_prefix(after_esc)) {
+            continue;
         }
+        if (csi_sequence_complete(after_esc)) {
+            break;
+        }
+        if (after_esc.size() > 32) {
+            break;
+        }
+    }
+
+    unsigned char decoded = 0;
+    if (decode_control_key_sequence(after_esc, decoded)) {
+        out.type = TerminalInputType::Byte;
+        out.byte = decoded;
+        return true;
     }
 
     if (!after_esc.empty()) {

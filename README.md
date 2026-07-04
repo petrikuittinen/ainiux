@@ -97,7 +97,7 @@ A matching `string` replaces a built-in command; new strings add commands. Confi
 
 ### Editor Controls
 
-`Ctrl+S` saves, `Ctrl+O` loads, `Ctrl+F` searches, `Ctrl+H` replaces, `Ctrl+Q` quits (with save prompts when needed), `Ctrl+C`/`Ctrl+X`/`Ctrl+V` copy/cut/paste, `Ctrl+K` kills to end of line, `Ctrl+U`/`Ctrl+R` undo/redo, arrows move, `Shift` plus arrows / `PageUp`/`PageDown` / `Home`/`End` extend selection, and `Tab` completion is disabled in standalone editor mode.
+`Ctrl+S` saves, `Ctrl+W` save as, `Ctrl+O` loads, `Ctrl+F` searches, `Ctrl+H` replaces, `Ctrl+Q` quits (with save prompts when needed), `Ctrl+C`/`Ctrl+X`/`Ctrl+V` copy/cut/paste, `Ctrl+K` kills to end of line, `Ctrl+U`/`Ctrl+R` undo/redo, arrows move, `Shift` plus arrows / `PageUp`/`PageDown` / `Home`/`End` extend selection, and `Tab` completion is disabled in standalone editor mode.
 
 ## Benchmarks
 

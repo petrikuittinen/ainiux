@@ -1,3 +1,4 @@
+#include "tui/activity.hpp"
 #include "tui/detail/render.hpp"
 #include "tui/events.hpp"
 #include "tui/tui.hpp"
@@ -178,34 +179,6 @@ StyleRole label_role_for_message(const std::string& role) {
     return StyleRole::Muted;
 }
 
-std::string provider_model_status_label(const std::string& provider_name, const std::string& model_name) {
-    const std::string display_provider =
-        provider_name.empty() ? "" : provider::display_name_for_profile(provider_name);
-    if (display_provider.empty() && model_name.empty()) {
-        return "";
-    }
-    if (display_provider.empty()) {
-        return "[" + model_name + "]";
-    }
-    if (model_name.empty()) {
-        return "[" + display_provider + " / model unknown]";
-    }
-    return "[" + display_provider + " / " + model_name + "]";
-}
-
-std::string provider_model_status_label(const chat::Session& session) {
-    return provider_model_status_label(session.provider, session.model);
-}
-
-std::string provider_model_status_message(const std::string& label,
-                                          const std::string& indicator,
-                                          const std::string& suffix) {
-    if (label.empty()) {
-        return indicator + suffix;
-    }
-    return label + " " + indicator + suffix;
-}
-
 }  // namespace
 
 TuiSize terminal_size() {
@@ -338,31 +311,68 @@ StyleRole status_role_for_text(const std::string& status) {
     return StyleRole::Status;
 }
 
-std::vector<StyledLine> history_lines_for_session(const chat::Session& session, int cols, bool show_thinking_traces) {
+std::vector<StyledLine> history_lines_for_session(const chat::Session& session,
+                                                  int cols,
+                                                  bool show_thinking_traces,
+                                                  ActivityKind activity_kind,
+                                                  size_t activity_frame) {
     std::vector<StyledLine> history;
     const int min_content_width = 8;
-    for (const provider::Message& message : session.messages) {
+    for (size_t message_index = 0; message_index < session.messages.size(); ++message_index) {
+        const provider::Message& message = session.messages[message_index];
         const std::string prefix = message_label(message.role) + ": ";
         const StyleRole label_role = label_role_for_message(message.role);
+        const bool is_last_message = message_index + 1 == session.messages.size();
         std::string content = message.content;
         if (message.role == "assistant") {
             if (message.content.empty()) {
-                content = "(waiting...)";
+                if (!is_last_message || activity_kind == ActivityKind::None) {
+                    content = "(waiting...)";
+                } else {
+                    content.clear();
+                }
             } else {
                 const ThinkingDisplay display = thinking_display_text(message.content, show_thinking_traces);
                 if (!show_thinking_traces && display.saw_thinking_tag &&
                     app::detail::trim_ascii(display.text).empty()) {
-                    content = provider_model_status_message(provider_model_status_label(session),
-                                                            kThinkingActivityIndicator,
-                                                            "thinking...");
+                    content.clear();
                 } else {
                     content = display.text;
                 }
             }
         }
-        std::vector<StyledSegment> content_segments = plain_text_segments(content);
-        if (message.role == "assistant" && show_thinking_traces) {
-            content_segments = visible_thinking_trace_segments(content);
+        const bool show_thinking_placeholder =
+            message.role == "assistant" && content.empty() && activity_kind == ActivityKind::Thinking &&
+            is_last_message;
+        const bool show_streaming_placeholder =
+            message.role == "assistant" && content.empty() && activity_kind == ActivityKind::Streaming &&
+            is_last_message;
+        const bool show_streaming_indicator =
+            message.role == "assistant" && !content.empty() && activity_kind == ActivityKind::Streaming &&
+            is_last_message;
+        std::vector<StyledSegment> content_segments;
+        if (show_thinking_placeholder) {
+            content_segments =
+                activity_placeholder_segments(session_status_label(session), ActivityKind::Thinking,
+                                              activity_frame, "thinking...");
+        } else if (show_streaming_placeholder) {
+            content_segments =
+                activity_placeholder_segments(session_status_label(session), ActivityKind::Streaming,
+                                              activity_frame, "streaming response ...");
+        } else {
+            content_segments = plain_text_segments(content);
+            if (message.role == "assistant" && show_thinking_traces) {
+                content_segments = visible_thinking_trace_segments(content);
+            }
+            if (show_streaming_indicator) {
+                std::vector<StyledSegment> prefixed;
+                prefixed.push_back(
+                    {activity_indicator_text(ActivityKind::Streaming, activity_frame),
+                     StyleRole::StreamingActivity});
+                prefixed.push_back({" ", StyleRole::Text});
+                prefixed.insert(prefixed.end(), content_segments.begin(), content_segments.end());
+                content_segments = std::move(prefixed);
+            }
         }
         std::vector<std::vector<StyledSegment>> wrapped;
         append_wrapped_segments(wrapped, content_segments,

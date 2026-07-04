@@ -24,6 +24,7 @@ Arrow keys, `Page Up`/`Page Down`, `Home`, and `End` scroll the help document.
 | Key | Action |
 |-----|--------|
 | `Ctrl+S` | Save (prompts for path on scratch buffers) |
+| `Ctrl+W` | Save as (prompts for path; asks before overwriting an existing file) |
 | `Ctrl+O` | Load another file |
 | `Ctrl+F` | Search (exact substring) |
 | `Ctrl+H` | Replace (search, then replace each match) |

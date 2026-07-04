@@ -16,15 +16,6 @@ struct RenderStyle {
     bool colors = true;
 };
 
-struct StyledSegment {
-    std::string text;
-    StyleRole role = StyleRole::Text;
-};
-
-struct StyledLine {
-    std::vector<StyledSegment> segments;
-};
-
 struct TuiSize {
     int rows = 24;
     int cols = 80;
@@ -37,7 +28,11 @@ void draw_line(int row, int cols, const std::string& text, StyleRole role, const
 
 std::string error_line(const Error& error);
 StyleRole status_role_for_text(const std::string& status);
-std::vector<StyledLine> history_lines_for_session(const chat::Session& session, int cols, bool show_thinking_traces);
+std::vector<StyledLine> history_lines_for_session(const chat::Session& session,
+                                                  int cols,
+                                                  bool show_thinking_traces,
+                                                  ActivityKind activity_kind = ActivityKind::None,
+                                                  size_t activity_frame = 0);
 std::vector<StyledLine> panel_lines_for_text(const std::string& text, TuiMode mode, int cols);
 
 editor::EditorState empty_input_editor(size_t undo_limit);
@@ -51,6 +46,8 @@ void render(const chat::Session& session,
             bool show_thinking_traces,
             TuiMode mode,
             const std::string& panel_text,
+            ActivityKind activity_kind,
+            size_t activity_frame,
             const RenderStyle& style);
 
 }  // namespace pkchat::tui::detail

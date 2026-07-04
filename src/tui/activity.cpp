@@ -1,0 +1,138 @@
+#include "tui/activity.hpp"
+
+#include "pkchat/version.hpp"
+#include "provider/provider.hpp"
+
+
+namespace pkchat::tui {
+namespace {
+
+constexpr const char kThinkingFrames[] = {
+    '\xe2', '\x97', '\x90',  // ◐
+    '\xe2', '\x97', '\x93',  // ◓
+    '\xe2', '\x97', '\x91',  // ◑
+    '\xe2', '\x97', '\x92',  // ◒
+};
+
+constexpr const char kStreamingFrames[][4] = {
+    "\xe2\x96\xb9",  // ▹
+    "\xe2\x96\xb8",  // ▸
+    "\xe2\x96\xba",  // ►
+};
+
+constexpr size_t kThinkingFrameCount = sizeof(kThinkingFrames) / 3;
+constexpr size_t kStreamingFrameCount = sizeof(kStreamingFrames) / sizeof(kStreamingFrames[0]);
+
+void append_segment(std::vector<StyledSegment>& segments, std::string text, StyleRole role) {
+    if (text.empty()) {
+        return;
+    }
+    segments.push_back({std::move(text), role});
+}
+
+}  // namespace
+
+std::string input_label_text() {
+    return std::string("Pkchat v") + kVersion + " input:";
+}
+
+std::vector<StyledSegment> input_label_segments() {
+    return {
+        {"Pkchat", StyleRole::PanelTitle},
+        {std::string(" v") + kVersion + " input:", StyleRole::InputLabel},
+    };
+}
+
+std::string activity_indicator_text(ActivityKind kind, size_t frame) {
+    switch (kind) {
+        case ActivityKind::Thinking: {
+            const size_t index = (frame % kThinkingFrameCount) * 3;
+            return std::string(kThinkingFrames + index, 3);
+        }
+        case ActivityKind::Streaming:
+            return kStreamingFrames[frame % kStreamingFrameCount];
+        case ActivityKind::None:
+            break;
+    }
+    return "";
+}
+
+StyleRole activity_indicator_role(ActivityKind kind) {
+    switch (kind) {
+        case ActivityKind::Thinking:
+            return StyleRole::ThinkingActivity;
+        case ActivityKind::Streaming:
+            return StyleRole::StreamingActivity;
+        case ActivityKind::None:
+            break;
+    }
+    return StyleRole::Muted;
+}
+
+std::vector<StyledSegment> activity_status_segments(const std::string& label,
+                                                            ActivityKind kind,
+                                                            size_t frame,
+                                                            const std::string& suffix) {
+    std::vector<StyledSegment> segments;
+    if (!label.empty()) {
+        append_segment(segments, label, StyleRole::Status);
+        append_segment(segments, " ", StyleRole::Status);
+    }
+    append_segment(segments, activity_indicator_text(kind, frame), activity_indicator_role(kind));
+    append_segment(segments, " ", StyleRole::Status);
+    append_segment(segments, suffix, StyleRole::Status);
+    return segments;
+}
+
+std::vector<StyledSegment> activity_placeholder_segments(const std::string& label,
+                                                                 ActivityKind kind,
+                                                                 size_t frame,
+                                                                 const std::string& suffix) {
+    std::vector<StyledSegment> segments;
+    if (!label.empty()) {
+        append_segment(segments, label, StyleRole::Muted);
+        append_segment(segments, " ", StyleRole::Muted);
+    }
+    append_segment(segments, activity_indicator_text(kind, frame), activity_indicator_role(kind));
+    append_segment(segments, " ", StyleRole::Muted);
+    append_segment(segments, suffix, StyleRole::Muted);
+    return segments;
+}
+
+std::string session_status_label(const chat::Session& session) {
+    const std::string display_provider =
+        session.provider.empty() ? "" : provider::display_name_for_profile(session.provider);
+    if (display_provider.empty() && session.model.empty()) {
+        return "";
+    }
+    if (display_provider.empty()) {
+        return "[" + session.model + "]";
+    }
+    if (session.model.empty()) {
+        return "[" + display_provider + " / model unknown]";
+    }
+    return "[" + display_provider + " / " + session.model + "]";
+}
+
+ActivityKind activity_kind_for_pending_assistant(const chat::Session& session,
+                                                 size_t pending_assistant_index,
+                                                 bool show_thinking_traces) {
+    if (pending_assistant_index == static_cast<size_t>(-1) ||
+        pending_assistant_index >= session.messages.size()) {
+        return ActivityKind::None;
+    }
+    const provider::Message& message = session.messages[pending_assistant_index];
+    if (message.role != "assistant") {
+        return ActivityKind::None;
+    }
+    const ThinkingDisplay display = thinking_display_text(message.content, show_thinking_traces);
+    if (!show_thinking_traces && display.saw_thinking_tag && display.text.empty()) {
+        return ActivityKind::Thinking;
+    }
+    if (!message.content.empty()) {
+        return ActivityKind::Streaming;
+    }
+    return ActivityKind::Streaming;
+}
+
+}  // namespace pkchat::tui

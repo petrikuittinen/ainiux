@@ -3,6 +3,7 @@
 #include "output/thinking.hpp"
 #include "pkchat/version.hpp"
 #include "provider/provider.hpp"
+#include "tui/activity.hpp"
 #include "tui/session_load.hpp"
 #include "tui/tui.hpp"
 #include <string>
@@ -179,6 +180,8 @@ void test_tui_theme_parsing_and_contrast() {
         pkchat::tui::StyleRole::Error,
         pkchat::tui::StyleRole::Status,
         pkchat::tui::StyleRole::InputLabel,
+        pkchat::tui::StyleRole::ThinkingActivity,
+        pkchat::tui::StyleRole::StreamingActivity,
         pkchat::tui::StyleRole::PanelTitle,
         pkchat::tui::StyleRole::PanelBorder,
         pkchat::tui::StyleRole::PanelHint,
@@ -230,25 +233,50 @@ void test_tui_thinking_trace_display() {
     check(hidden.text == "Before  after", "TUI thinking notrace preserves visible text around a trace");
 }
 
+void test_tui_input_label_and_activity_indicators() {
+    const std::string label = pkchat::tui::input_label_text();
+    check(label.find("Pkchat v") == 0, "TUI input label starts with Pkchat branding");
+    check(label.find(pkchat::kVersion) != std::string::npos, "TUI input label includes the current version");
+    check(label.find("input:") != std::string::npos, "TUI input label ends with input prompt");
+
+    const std::string thinking_a =
+        pkchat::tui::activity_indicator_text(pkchat::tui::ActivityKind::Thinking, 0);
+    const std::string thinking_b =
+        pkchat::tui::activity_indicator_text(pkchat::tui::ActivityKind::Thinking, 1);
+    check(!thinking_a.empty() && thinking_a != thinking_b,
+          "TUI thinking activity indicator animates across frames");
+
+    const std::string streaming_a =
+        pkchat::tui::activity_indicator_text(pkchat::tui::ActivityKind::Streaming, 0);
+    const std::string streaming_b =
+        pkchat::tui::activity_indicator_text(pkchat::tui::ActivityKind::Streaming, 1);
+    check(!streaming_a.empty() && streaming_a != streaming_b,
+          "TUI streaming activity indicator animates across frames");
+    check(streaming_a != thinking_a, "TUI streaming and thinking indicators differ");
+
+    pkchat::chat::Session session;
+    session.messages.push_back({"user", "hello"});
+    session.messages.push_back({"assistant", "<think>hidden</think>"});
+    check(pkchat::tui::activity_kind_for_pending_assistant(session, 1, false) ==
+              pkchat::tui::ActivityKind::Thinking,
+          "TUI activity helper reports thinking for hidden trace-only output");
+    session.messages.back().content = "Visible answer";
+    check(pkchat::tui::activity_kind_for_pending_assistant(session, 1, false) ==
+              pkchat::tui::ActivityKind::Streaming,
+          "TUI activity helper reports streaming once visible answer text arrives");
+
+    const auto thinking_segments = pkchat::tui::activity_status_segments(
+        "[custom / Qwen3.6-35B]", pkchat::tui::ActivityKind::Thinking, 0, "thinking...");
+    check(thinking_segments.size() >= 3, "TUI thinking activity status uses styled segments");
+    check(thinking_segments[0].text.find("custom") != std::string::npos,
+          "TUI thinking activity status keeps provider label");
+    check(thinking_segments[1].role == pkchat::tui::StyleRole::ThinkingActivity,
+          "TUI thinking activity status colors the indicator");
+}
+
 void test_tui_provider_display_and_activity_status() {
     check(pkchat::provider::display_name_for_profile("custom_openai_chat") == "custom",
           "TUI provider display name shortens custom_openai_chat to custom");
-
-    pkchat::provider::RequestContext context;
-    context.profile.name = "custom_openai_chat";
-    context.options.model = "Qwen3.6-35B";
-    const std::string thinking =
-        pkchat::tui::provider_model_status_message(context, pkchat::tui::kThinkingActivityIndicator, "thinking...");
-    check(thinking.find("[custom / Qwen3.6-35B]") == 0 &&
-              thinking.find(pkchat::tui::kThinkingActivityIndicator) != std::string::npos &&
-              thinking.find("thinking...") != std::string::npos,
-          "TUI thinking activity status keeps label, indicator, and text");
-
-    const std::string streaming = pkchat::tui::provider_model_status_message(
-        context, pkchat::tui::kStreamingActivityIndicator, "streaming response ...");
-    check(streaming.find(pkchat::tui::kStreamingActivityIndicator) != std::string::npos &&
-              streaming.find("streaming response ...") != std::string::npos,
-          "TUI streaming activity status keeps indicator and text");
 }
 
 void test_tui_session_load_model_mismatch_detection() {
@@ -334,6 +362,7 @@ void run_all() {
     test_tui_session_load_model_mismatch_detection();
     test_tui_session_load_model_confirm_text();
     test_tui_restore_cli_context();
+    test_tui_input_label_and_activity_indicators();
     test_tui_provider_display_and_activity_status();
     test_tui_unicode_and_empty_status();
     test_tui_layout_reserves_editor_input_panel();

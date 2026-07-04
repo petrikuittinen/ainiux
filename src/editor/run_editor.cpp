@@ -7,6 +7,7 @@
 #include "editor/terminal_ui.hpp"
 #include "runtime/runtime.hpp"
 
+#include <functional>
 #include <iostream>
 #include <optional>
 #include <unistd.h>
@@ -369,7 +370,16 @@ int run_editor(const std::string& path,
                      std::nullopt);
     };
 
-    auto handle_key = [&](unsigned char ch) {
+    auto trigger_save = [&]() {
+        if (state.path.empty()) {
+            start_minibuffer(minibuffer, MinibufferAction::SaveFile, "Save file: ");
+        } else {
+            request_save_editor_to_path(state, state.path, minibuffer, true, false, quit, pending_save);
+        }
+    };
+
+    std::function<void(unsigned char)> handle_key;
+    handle_key = [&](unsigned char ch) {
         if (help_view.active) {
             if (handle_minibuffer_key(state,
                                       minibuffer,
@@ -425,6 +435,11 @@ int run_editor(const std::string& path,
             if (ch == 27) {
                 const std::string sequence = read_escape_suffix();
                 if (!sequence.empty()) {
+                    unsigned char decoded = 0;
+                    if (decode_control_key_sequence(sequence, decoded)) {
+                        handle_key(decoded);
+                        return;
+                    }
                     std::string escape_status;
                     dispatch_escape_sequence(state, sequence, escape_status, last_search);
                     if (!escape_status.empty()) {
@@ -603,25 +618,20 @@ int run_editor(const std::string& path,
         } else if (ch == 0) {
             start_continue();
         } else if (ch == 19) {
-            const std::string target = save_as.empty() ? state.path : save_as;
-            if (target.empty()) {
-                start_minibuffer(minibuffer, MinibufferAction::SaveFile, "Save file: ");
-            } else {
-                const bool update_path = save_as.empty() || state.path.empty();
-                request_save_editor_to_path(state,
-                                            target,
-                                            minibuffer,
-                                            update_path,
-                                            false,
-                                            quit,
-                                            pending_save);
-            }
+            trigger_save();
+        } else if (ch == 23) {
+            start_minibuffer(minibuffer, MinibufferAction::SaveAsFile, "Save as: ", state.path);
         } else if (ch == '\t') {
             minibuffer_message(minibuffer, "Tab completion is disabled in editor mode");
         } else if (ch == 27) {
             if (!minibuffer.active && !replace.active && !assist_session.active) {
                 const std::string sequence = read_escape_suffix();
                 if (!sequence.empty()) {
+                    unsigned char decoded = 0;
+                    if (decode_control_key_sequence(sequence, decoded)) {
+                        handle_key(decoded);
+                        return;
+                    }
                     std::string escape_status;
                     dispatch_escape_sequence(state, sequence, escape_status, last_search);
                     if (!escape_status.empty()) {

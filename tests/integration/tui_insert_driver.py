@@ -59,7 +59,7 @@ def verify_editor_minibuffer(binary, target_path, save_path):
         if b"Save file:" not in save_prompt:
             raise RuntimeError("editor Ctrl+S did not open the minibuffer save prompt")
         save_result = send(master, save_path + "\r", 0.2)
-        if b"overwrite it (yes/no)" in save_result:
+        if b"Press y to overwrite" in save_result:
             send(master, "y", 0.2)
         quit_result = send(master, "\x11", 0.2)
         if b"save before quit? (y/n)" in quit_result:

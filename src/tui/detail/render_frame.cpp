@@ -1,5 +1,8 @@
+#include "tui/activity.hpp"
 #include "tui/detail/render.hpp"
 #include "tui/tui.hpp"
+
+
 
 #include <iostream>
 #include <utility>
@@ -32,6 +35,8 @@ void render(const chat::Session& session,
             bool show_thinking_traces,
             TuiMode mode,
             const std::string& panel_text,
+            ActivityKind activity_kind,
+            size_t activity_frame,
             const RenderStyle& style) {
     const TuiSize terminal = terminal_size();
     const Layout layout = layout_for_terminal(terminal.rows, terminal.cols);
@@ -42,7 +47,8 @@ void render(const chat::Session& session,
     const bool panel_active = mode != TuiMode::Chat || !panel_text.empty();
     std::vector<StyledLine> history =
         panel_active ? panel_lines_for_text(panel_text, mode, cols)
-                     : history_lines_for_session(session, cols, show_thinking_traces);
+                     : history_lines_for_session(session, cols, show_thinking_traces, activity_kind,
+                                                 activity_frame);
     const int max_history_scroll = std::max(0, static_cast<int>(history.size()) - layout.history_rows);
     history_scroll = std::min(std::max(0, history_scroll), max_history_scroll);
 
@@ -59,8 +65,17 @@ void render(const chat::Session& session,
         ++printed;
     }
 
-    draw_line(layout.status_row, cols, status, status_role_for_text(status), style);
-    draw_line(layout.input_label_row, cols, "Input", StyleRole::InputLabel, style);
+    if (activity_kind != ActivityKind::None && mode == TuiMode::Chat && !panel_active) {
+        const std::string label = session_status_label(session);
+        const std::string suffix =
+            activity_kind == ActivityKind::Thinking ? "thinking..." : "streaming response ...";
+        draw_line(layout.status_row, cols,
+                  activity_status_segments(label, activity_kind, activity_frame, suffix),
+                  StyleRole::Status, style);
+    } else {
+        draw_line(layout.status_row, cols, status, status_role_for_text(status), style);
+    }
+    draw_line(layout.input_label_row, cols, input_label_segments(), StyleRole::InputLabel, style);
 
     for (int row = 0; row < layout.input_rect.height; ++row) {
         const std::string line = row < static_cast<int>(input_panel.lines.size())

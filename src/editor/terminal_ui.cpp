@@ -43,7 +43,7 @@ Error TerminalSession::enter() {
 
         termios raw = original_;
         raw.c_lflag &= static_cast<tcflag_t>(~(ECHO | ICANON | IEXTEN | ISIG));
-        raw.c_iflag &= static_cast<tcflag_t>(~(IXON | ICRNL | BRKINT));
+        raw.c_iflag &= static_cast<tcflag_t>(~(IXON | IXOFF | ICRNL | BRKINT));
         raw.c_oflag &= static_cast<tcflag_t>(~OPOST);
         raw.c_cc[VMIN] = 0;
         raw.c_cc[VTIME] = 0;
@@ -157,11 +157,14 @@ bool needs_overwrite_confirm(const std::string& target, const std::string& curre
     if (!editor_target_exists(target)) {
         return false;
     }
-    return current_path.empty() || target != current_path;
+    if (!current_path.empty() && target == current_path) {
+        return false;
+    }
+    return true;
 }
 
 std::string overwrite_prompt_message(const std::string& path) {
-    return path + " exists. Do you want to overwrite it (yes/no) ? ";
+    return path + " exists. Press y to overwrite or any other key to cancel: ";
 }
 
 void save_editor_to_path(EditorState& state,
@@ -350,6 +353,14 @@ void submit_minibuffer(EditorState& state,
         pending_quit_after_save = false;
         return;
     }
+    if (action == MinibufferAction::SaveAsFile) {
+        if (value.empty()) {
+            minibuffer.prompt = "Save as (path required): ";
+            return;
+        }
+        request_save_editor_to_path(state, value, minibuffer, true, false, quit, pending_save);
+        return;
+    }
     if (action == MinibufferAction::LoadFile) {
         if (value.empty()) {
             minibuffer.prompt = "Load file (path required): ";
@@ -432,13 +443,10 @@ void submit_minibuffer(EditorState& state,
                 quit = true;
             }
             pending_quit_after_save = false;
-        } else if (no_answer(value) || value.empty()) {
+        } else {
             pending_save = PendingSaveRequest{};
             pending_quit_after_save = false;
             minibuffer_message(minibuffer, "Save cancelled");
-        } else {
-            minibuffer.prompt = "Type y or n: ";
-            minibuffer.input.clear();
         }
         return;
     }
@@ -487,10 +495,28 @@ bool handle_minibuffer_key(EditorState& state,
         }
         return true;
     }
+    if (ch == 19 || ch == 23) {
+        return false;
+    }
+    if (minibuffer.action == MinibufferAction::ConfirmOverwrite) {
+        if (ch == 'y' || ch == 'Y' || ch == 19) {
+            const PendingSaveRequest request = pending_save;
+            pending_save = PendingSaveRequest{};
+            save_editor_to_path(state, request.path, minibuffer, request.update_path);
+            if (request.quit_after_save && !state.dirty) {
+                quit = true;
+            }
+            pending_quit_after_save = false;
+        } else {
+            pending_save = PendingSaveRequest{};
+            pending_quit_after_save = false;
+            minibuffer_message(minibuffer, "Save cancelled");
+        }
+        return true;
+    }
     if (minibuffer.action == MinibufferAction::ConfirmQuit ||
         minibuffer.action == MinibufferAction::ConfirmLoad ||
-        minibuffer.action == MinibufferAction::ConfirmSaveOnQuit ||
-        minibuffer.action == MinibufferAction::ConfirmOverwrite) {
+        minibuffer.action == MinibufferAction::ConfirmSaveOnQuit) {
         if (ch == 'y' || ch == 'Y') {
             if (minibuffer.action == MinibufferAction::ConfirmQuit) {
                 quit = true;
@@ -498,17 +524,9 @@ bool handle_minibuffer_key(EditorState& state,
                 const std::string path = pending_load_path;
                 pending_load_path.clear();
                 load_editor_from_path(state, path, settings, minibuffer);
-            } else if (minibuffer.action == MinibufferAction::ConfirmSaveOnQuit) {
+            } else {
                 pending_quit_after_save = true;
                 start_minibuffer(minibuffer, MinibufferAction::SaveFile, "Save file: ");
-            } else {
-                const PendingSaveRequest request = pending_save;
-                pending_save = PendingSaveRequest{};
-                save_editor_to_path(state, request.path, minibuffer, request.update_path);
-                if (request.quit_after_save && !state.dirty) {
-                    quit = true;
-                }
-                pending_quit_after_save = false;
             }
         } else if (ch == 'n' || ch == 'N') {
             if (minibuffer.action == MinibufferAction::ConfirmLoad) {
@@ -516,10 +534,6 @@ bool handle_minibuffer_key(EditorState& state,
                 minibuffer_message(minibuffer, "Load cancelled");
             } else if (minibuffer.action == MinibufferAction::ConfirmSaveOnQuit) {
                 quit = true;
-            } else if (minibuffer.action == MinibufferAction::ConfirmOverwrite) {
-                pending_save = PendingSaveRequest{};
-                pending_quit_after_save = false;
-                minibuffer_message(minibuffer, "Save cancelled");
             } else {
                 minibuffer_message(minibuffer, "Quit cancelled");
             }

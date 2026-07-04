@@ -52,6 +52,8 @@ StylePair style_pair_for(ThemeName theme, StyleRole role) {
     const Rgb panel_highlight = dark ? Rgb{0xFD, 0xE6, 0x8A} : Rgb{0xB4, 0x53, 0x09};
     const Rgb panel_body = dark ? Rgb{0xE6, 0xED, 0xF3} : Rgb{0x1F, 0x29, 0x37};
     const Rgb panel_bg = dark ? Rgb{0x11, 0x17, 0x22} : Rgb{0xF3, 0xF4, 0xF6};
+    const Rgb thinking_activity = dark ? Rgb{0x93, 0xC5, 0xFD} : Rgb{0x1D, 0x4E, 0x8A};
+    const Rgb streaming_activity = dark ? Rgb{0x4A, 0xDE, 0x80} : Rgb{0x05, 0x8C, 0x42};
 
     switch (role) {
         case StyleRole::Text:
@@ -70,6 +72,10 @@ StylePair style_pair_for(ThemeName theme, StyleRole role) {
             return {status_fg, status_bg};
         case StyleRole::InputLabel:
             return {status_fg, status_bg};
+        case StyleRole::ThinkingActivity:
+            return {thinking_activity, background};
+        case StyleRole::StreamingActivity:
+            return {streaming_activity, background};
         case StyleRole::PanelTitle:
             return {panel_title, panel_bg};
         case StyleRole::PanelBorder:

@@ -17,6 +17,7 @@ struct TerminalSize {
 enum class MinibufferAction {
     None,
     SaveFile,
+    SaveAsFile,
     LoadFile,
     Search,
     ReplaceSearch,
@@ -108,6 +109,9 @@ bool handle_replace_key(EditorState& state,
                         MinibufferState& minibuffer,
                         ReplaceSession& replace,
                         unsigned char ch);
+
+bool needs_overwrite_confirm(const std::string& target, const std::string& current_path);
+std::string overwrite_prompt_message(const std::string& path);
 
 void request_save_editor_to_path(EditorState& state,
                                  const std::string& path,

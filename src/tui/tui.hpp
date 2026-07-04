@@ -10,6 +10,8 @@
 
 namespace pkchat::tui {
 
+enum class ActivityKind { None, Thinking, Streaming };
+
 struct Layout {
     int rows = 24;
     int cols = 80;
@@ -43,6 +45,8 @@ enum class StyleRole {
     Error,
     Status,
     InputLabel,
+    ThinkingActivity,
+    StreamingActivity,
     PanelTitle,
     PanelBorder,
     PanelHint,
@@ -50,8 +54,14 @@ enum class StyleRole {
     PanelBody,
 };
 
-constexpr const char kThinkingActivityIndicator[] = "\xe2\x97\x90 ";  // ◐
-constexpr const char kStreamingActivityIndicator[] = "\xe2\x96\xb8 ";  // ▸
+struct StyledSegment {
+    std::string text;
+    StyleRole role = StyleRole::Text;
+};
+
+struct StyledLine {
+    std::vector<StyledSegment> segments;
+};
 
 struct StylePair {
     Rgb foreground;

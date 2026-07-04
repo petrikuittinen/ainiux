@@ -10,6 +10,7 @@
 #include "editor/path_completion.hpp"
 #include "editor/selection.hpp"
 #include "editor/terminal_input.hpp"
+#include "editor/terminal_ui.hpp"
 #include <algorithm>
 #include <filesystem>
 #include <fstream>
@@ -1476,6 +1477,42 @@ void test_editor_file_io_failures() {
 
 }  // namespace
 
+void test_editor_control_key_sequence_decode() {
+    unsigned char decoded = 0;
+    check(pkchat::editor::decode_control_key_sequence("[19;5u", decoded) && decoded == 19,
+          "editor decodes kitty-style Ctrl+S");
+    check(pkchat::editor::decode_control_key_sequence("[27;5;19~", decoded) && decoded == 19,
+          "editor decodes xterm modifyOtherKeys Ctrl+S");
+    check(pkchat::editor::decode_control_key_sequence("[23;5u", decoded) && decoded == 23,
+          "editor decodes kitty-style Ctrl+W");
+    check(!pkchat::editor::decode_control_key_sequence("[A", decoded),
+          "editor ignores arrow-key escape sequences");
+}
+
+void test_editor_save_as_overwrite_helpers() {
+    const std::string existing = "build/pkchat-editor-save-as-existing.txt";
+    std::ofstream out(existing, std::ios::trunc);
+    check(static_cast<bool>(out), "editor save-as overwrite fixture is created");
+    out << "existing";
+    out.close();
+
+    check(!pkchat::editor::needs_overwrite_confirm("build/pkchat-editor-save-as-missing.txt", "scratch.txt"),
+          "editor save-as skips overwrite confirm for a new path");
+    check(pkchat::editor::needs_overwrite_confirm(existing, "scratch.txt"),
+          "editor save-as requires overwrite confirm when the target file exists");
+    check(!pkchat::editor::needs_overwrite_confirm(existing, existing),
+          "editor save skips overwrite confirm when saving to the current path");
+    check(pkchat::editor::needs_overwrite_confirm(existing, ""),
+          "editor save requires overwrite confirm when saving to an existing path from scratch");
+
+    const std::string prompt = pkchat::editor::overwrite_prompt_message(existing);
+    check(prompt.find(existing) != std::string::npos, "editor overwrite prompt names the target path");
+    check(prompt.find("Press y to overwrite") != std::string::npos,
+          "editor overwrite prompt explains y to overwrite");
+    check(prompt.find("any other key to cancel") != std::string::npos,
+          "editor overwrite prompt explains other keys cancel");
+}
+
 void test_editor_help_document_and_command() {
     std::string help_text;
     pkchat::Error err = pkchat::editor::load_editor_help_markdown(help_text);
@@ -1484,6 +1521,8 @@ void test_editor_help_document_and_command() {
           "editor help document contains the title heading");
     check(help_text.find("Ctrl+Space") != std::string::npos,
           "editor help document documents Ctrl+Space continue");
+    check(help_text.find("Ctrl+W") != std::string::npos,
+          "editor help document documents Ctrl+W save as");
     check(help_text.find("/spell") != std::string::npos && help_text.find("/help") != std::string::npos,
           "editor help document lists slash commands");
 
@@ -1498,6 +1537,8 @@ void test_editor_help_document_and_command() {
 }
 
 void run_all() {
+    test_editor_control_key_sequence_decode();
+    test_editor_save_as_overwrite_helpers();
     test_editor_help_document_and_command();
     test_editor_ai_continue_helpers();
     test_editor_file_io_failures();
