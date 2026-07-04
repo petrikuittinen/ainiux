@@ -887,10 +887,8 @@ Error apply_configured_model_settings(const Document& document, cli::Options& ca
                              *partial.top_p,
                              *partial.min_p,
                              *partial.repeat_penalty,
-                             *partial.presence_penalty};
-        if (partial.thinking_budget.has_value()) {
-            setting.thinking_budget = *partial.thinking_budget;
-        }
+                             *partial.presence_penalty,
+                             partial.thinking_budget.value_or("")};
         merge_model_setting(candidate.model_settings, std::move(setting));
     }
     return ok_error();

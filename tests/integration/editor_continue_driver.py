@@ -66,7 +66,7 @@ def main():
         output.extend(drain(master, 1.0))
 
         # Move cursor to end of buffer, then trigger AI continue.
-        output.extend(send(master, b"\x05"))  # Ctrl+E
+        output.extend(send(master, b"\x1b[4;3~"))  # Alt+End
         output.extend(send(master, b"\x00"))  # Ctrl+Space
 
         deadline = time.time() + 180.0

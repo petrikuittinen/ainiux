@@ -592,9 +592,7 @@ int run_editor(const std::string& path,
         } else if (ch == 18) {
             minibuffer_message(minibuffer, state.redo() ? "Redone" : "Nothing to redo");
         } else if (ch == 1) {
-            state.move_home();
-        } else if (ch == 5) {
-            state.move_end();
+            state.select_all();
         } else if (ch == 11) {
             Error kill_error = state.kill_to_line_end();
             if (!kill_error.ok()) {

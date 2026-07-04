@@ -770,15 +770,62 @@ void test_editor_kill_to_line_end() {
 
 void test_editor_movement_sequence_parse() {
     pkchat::editor::MovementKeyEvent event;
-    check(pkchat::editor::parse_movement_sequence("[D", event) && !event.shift &&
+    check(pkchat::editor::parse_movement_sequence("[D", event) && !event.shift && !event.alt &&
               event.key == pkchat::editor::MovementKey::Left,
           "left arrow sequence parses");
-    check(pkchat::editor::parse_movement_sequence("[1;2C", event) && event.shift &&
+    check(pkchat::editor::parse_movement_sequence("[1;2C", event) && event.shift && !event.alt &&
               event.key == pkchat::editor::MovementKey::Right,
           "shift right arrow sequence parses");
-    check(pkchat::editor::parse_movement_sequence("[5;2~", event) && event.shift &&
+    check(pkchat::editor::parse_movement_sequence("[5;2~", event) && event.shift && !event.alt &&
               event.key == pkchat::editor::MovementKey::PageUp,
           "shift page up sequence parses");
+    check(pkchat::editor::parse_movement_sequence("[1;3H", event) && !event.shift && event.alt &&
+              event.key == pkchat::editor::MovementKey::Home,
+          "alt home sequence parses");
+    check(pkchat::editor::parse_movement_sequence("[1;3F", event) && !event.shift && event.alt &&
+              event.key == pkchat::editor::MovementKey::End,
+          "alt end sequence parses");
+    check(pkchat::editor::parse_movement_sequence("[1;3~", event) && !event.shift && event.alt &&
+              event.key == pkchat::editor::MovementKey::Home,
+          "alt home tilde sequence parses");
+    check(pkchat::editor::parse_movement_sequence("[4;3~", event) && !event.shift && event.alt &&
+              event.key == pkchat::editor::MovementKey::End,
+          "alt end tilde sequence parses");
+}
+
+void test_editor_select_all() {
+    pkchat::editor::EditorState state =
+        pkchat::editor::EditorState::from_text("alpha\nbeta\ngamma");
+    state.cursor = state.text.offset_for_line_column(1, 2);
+
+    state.select_all();
+    check(state.selection.has_range(), "select all creates a range selection");
+    check(state.selection.start() == 0, "select all starts at the beginning of the buffer");
+    check(state.selection.end() == state.text.size(), "select all ends at the end of the buffer");
+    check(state.cursor == state.text.size(), "select all moves the cursor to the end of the buffer");
+    check(state.selected_text() == "alpha\nbeta\ngamma", "select all selects the full buffer");
+}
+
+void test_editor_line_home_end_navigation() {
+    pkchat::editor::EditorState state =
+        pkchat::editor::EditorState::from_text("alpha\nbeta\ngamma");
+    state.cursor = state.text.offset_for_line_column(1, 2);
+    const pkchat::editor::Rect rect{1, 1, 10, 40};
+
+    state.apply_movement(pkchat::editor::MovementKey::Home, rect, false, false);
+    check(state.cursor == state.text.line_start(1), "editor Home moves to the beginning of the current line");
+    check(state.preferred_column == 0, "editor Home resets the preferred column to the line start");
+
+    state.apply_movement(pkchat::editor::MovementKey::End, rect, false, false);
+    check(state.cursor == state.text.line_start(1) + state.text.line_length(1),
+          "editor End moves to the end of the current line");
+
+    state.apply_movement(pkchat::editor::MovementKey::Home, rect, false, true);
+    check(state.cursor == 0, "editor Alt+Home moves to the beginning of the buffer");
+    check(state.scroll_line == 0, "editor Alt+Home scrolls to the top of the buffer");
+
+    state.apply_movement(pkchat::editor::MovementKey::End, rect, false, true);
+    check(state.cursor == state.text.size(), "editor Alt+End moves to the end of the buffer");
 }
 
 void test_editor_page_navigation() {
@@ -1458,6 +1505,8 @@ void run_all() {
     test_editor_contextual_completion_modes();
     test_editor_file_round_trip();
     test_editor_home_end_navigation();
+    test_editor_select_all();
+    test_editor_line_home_end_navigation();
     test_editor_invalid_utf8_rendering_is_sanitized();
     test_editor_kill_to_line_end();
     test_editor_movement_sequence_parse();

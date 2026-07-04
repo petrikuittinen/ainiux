@@ -37,6 +37,7 @@ enum class MovementKey {
 struct MovementKeyEvent {
     MovementKey key = MovementKey::Left;
     bool shift = false;
+    bool alt = false;
     bool recognized = false;
 };
 

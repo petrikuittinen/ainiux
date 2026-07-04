@@ -15,9 +15,14 @@ namespace pkchat::tui {
 std::string thread_picker_text(const std::vector<chat::ThreadSummary>& threads, size_t selected);
 std::string remove_confirm_text(const chat::Session& session);
 std::string system_edit_text();
+std::string history_edit_text();
 std::string join_models_preview(const std::vector<std::string>& models);
 
-EscapeResult handle_escape(editor::EditorState& input, const Layout& layout, int& history_scroll, std::string& status);
+EscapeResult handle_escape(editor::EditorState& input,
+                           const Layout& layout,
+                           int& history_scroll,
+                           std::string& status,
+                           bool input_only_movement = false);
 
 bool handle_thread_picker_escape(std::vector<chat::ThreadSummary>& threads,
                                  size_t& selected,

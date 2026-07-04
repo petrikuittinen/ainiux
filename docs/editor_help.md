@@ -41,15 +41,20 @@ Replace mode after `Ctrl+H`: `Space` replaces match, `s` skips, `a` replaces all
 | `Ctrl+K` | Kill to end of line |
 | `Ctrl+U` | Undo |
 | `Ctrl+R` | Redo |
-| `Ctrl+A` / `Home` | Beginning of line |
-| `Ctrl+E` / `End` | End of line |
+| `Ctrl+A` | Select all (entire buffer) |
+| `Home` | Beginning of line |
+| `End` | End of line |
+| `Alt+Home` | Beginning of buffer |
+| `Alt+End` | End of buffer |
 | `Backspace` | Delete before cursor |
 | `Delete` (`Esc [3~`) | Delete at cursor |
 | `Enter` | New line |
 
 ## Selection
 
-Hold `Shift` while using arrow keys, `Page Up`/`Page Down`, or `Home`/`End` to extend the selection. Selected text is highlighted in reverse video.
+Hold `Shift` while using arrow keys, `Page Up`/`Page Down`, `Home`/`End`, or `Alt+Home`/`Alt+End` to extend the selection. Selected text is highlighted in reverse video.
+
+`Ctrl+E` is not used in standalone editor mode. In chat TUI mode, `Ctrl+E` copies the last user or assistant message into the input for editing; `Enter` saves and a bare `Esc` cancels.
 
 ## AI continue (`Ctrl+Space`)
 

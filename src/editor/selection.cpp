@@ -11,8 +11,16 @@ bool parse_arrow_body(const std::string& body, MovementKeyEvent& out) {
     const char letter = body.back();
     std::string prefix = body.size() > 1 ? body.substr(0, body.size() - 1) : std::string();
     bool shift = false;
+    bool alt = false;
     if (prefix == "1;2") {
         shift = true;
+        prefix.clear();
+    } else if (prefix == "1;3") {
+        alt = true;
+        prefix.clear();
+    } else if (prefix == "1;4") {
+        shift = true;
+        alt = true;
         prefix.clear();
     } else if (!prefix.empty()) {
         return false;
@@ -44,6 +52,7 @@ bool parse_arrow_body(const std::string& body, MovementKeyEvent& out) {
 
     out.key = movement;
     out.shift = shift;
+    out.alt = alt;
     out.recognized = true;
     return true;
 }
@@ -54,7 +63,15 @@ bool parse_tilde_body(const std::string& body, MovementKeyEvent& out) {
     }
     std::string inner = body.substr(0, body.size() - 1);
     bool shift = false;
-    if (inner.size() >= 2 && inner.compare(inner.size() - 2, 2, ";2") == 0) {
+    bool alt = false;
+    if (inner.size() >= 2 && inner.compare(inner.size() - 2, 2, ";4") == 0) {
+        shift = true;
+        alt = true;
+        inner.erase(inner.size() - 2);
+    } else if (inner.size() >= 2 && inner.compare(inner.size() - 2, 2, ";3") == 0) {
+        alt = true;
+        inner.erase(inner.size() - 2);
+    } else if (inner.size() >= 2 && inner.compare(inner.size() - 2, 2, ";2") == 0) {
         shift = true;
         inner.erase(inner.size() - 2);
     }
@@ -74,6 +91,7 @@ bool parse_tilde_body(const std::string& body, MovementKeyEvent& out) {
 
     out.key = movement;
     out.shift = shift;
+    out.alt = alt;
     out.recognized = true;
     return true;
 }

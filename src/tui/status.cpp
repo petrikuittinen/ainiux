@@ -139,6 +139,19 @@ bool last_unanswered_user_message(const chat::Session& session, std::size_t& ind
     return false;
 }
 
+bool last_editable_chat_message(const chat::Session& session, std::size_t& index) {
+    for (std::size_t i = session.messages.size(); i > 0; --i) {
+        const std::size_t candidate = i - 1;
+        const std::string& role = session.messages[candidate].role;
+        if (role == "user" || role == "assistant") {
+            index = candidate;
+            return true;
+        }
+    }
+    index = 0;
+    return false;
+}
+
 bool pop_last_chat_message(chat::Session& session, std::string& removed_role) {
     for (std::size_t i = session.messages.size(); i > 0; --i) {
         const std::size_t index = i - 1;

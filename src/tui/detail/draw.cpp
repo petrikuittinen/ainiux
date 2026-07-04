@@ -391,6 +391,8 @@ const char* panel_title_for_mode(TuiMode mode) {
             return "Model";
         case TuiMode::SystemEdit:
             return "System Prompt";
+        case TuiMode::HistoryEdit:
+            return "Edit Message";
         case TuiMode::Chat:
             return "Help";
     }

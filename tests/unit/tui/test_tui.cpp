@@ -97,6 +97,22 @@ void test_tui_last_unanswered_user_message_requires_final_user() {
           "TUI response helper rejects user messages that already have assistant replies");
 }
 
+void test_tui_last_editable_chat_message_finds_last_user_or_assistant() {
+    pkchat::chat::Session session;
+    session.messages.push_back({"system", "stay concise"});
+    std::size_t index = 0;
+    check(!pkchat::tui::last_editable_chat_message(session, index),
+          "TUI history edit helper rejects system-only sessions");
+
+    session.messages.push_back({"user", "first"});
+    session.messages.push_back({"assistant", "one"});
+    check(pkchat::tui::last_editable_chat_message(session, index) && index == 2,
+          "TUI history edit helper selects the last assistant message");
+    session.messages.push_back({"user", "second"});
+    check(pkchat::tui::last_editable_chat_message(session, index) && index == 3,
+          "TUI history edit helper selects the last user message");
+}
+
 void test_tui_pop_last_chat_message_removes_user_or_assistant_only() {
     pkchat::chat::Session session;
     session.messages.push_back({"system", "stay concise"});
@@ -323,6 +339,7 @@ void run_all() {
     test_tui_layout_reserves_editor_input_panel();
     test_tui_ready_and_generation_status();
     test_tui_last_unanswered_user_message_requires_final_user();
+    test_tui_last_editable_chat_message_finds_last_user_or_assistant();
     test_tui_pop_last_chat_message_removes_user_or_assistant_only();
     test_tui_regeneration_plan_uses_last_user_turn();
     test_tui_theme_parsing_and_contrast();

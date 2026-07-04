@@ -58,6 +58,10 @@ std::string system_edit_text() {
     return "Enter saves · Esc cancels";
 }
 
+std::string history_edit_text() {
+    return "Enter saves · Esc cancels";
+}
+
 std::string join_models_preview(const std::vector<std::string>& models) {
     if (models.empty()) {
         return "No models returned";
@@ -74,7 +78,11 @@ std::string join_models_preview(const std::vector<std::string>& models) {
     return out;
 }
 
-EscapeResult handle_escape(editor::EditorState& input, const Layout& layout, int& history_scroll, std::string& status) {
+EscapeResult handle_escape(editor::EditorState& input,
+                           const Layout& layout,
+                           int& history_scroll,
+                           std::string& status,
+                           bool input_only_movement) {
     unsigned char ch = 0;
     if (!editor::read_terminal_byte(ch, 25)) {
         return EscapeResult::Unhandled;
@@ -106,8 +114,10 @@ EscapeResult handle_escape(editor::EditorState& input, const Layout& layout, int
 
     editor::MovementKeyEvent movement;
     if (editor::parse_movement_sequence(sequence, movement)) {
-        if (!movement.shift && (movement.key == editor::MovementKey::Home ||
-                                movement.key == editor::MovementKey::End)) {
+        if (input_only_movement) {
+            input.apply_movement(movement.key, layout.input_rect, movement.shift, movement.alt);
+        } else if (!movement.shift && !movement.alt && (movement.key == editor::MovementKey::Home ||
+                                                        movement.key == editor::MovementKey::End)) {
             if (movement.key == editor::MovementKey::Home) {
                 history_scroll = history_scroll_for_thread_beginning();
             } else {
@@ -122,7 +132,7 @@ EscapeResult handle_escape(editor::EditorState& input, const Layout& layout, int
                 history_scroll -= step;
             }
         } else {
-            input.apply_movement(movement.key, layout.input_rect, movement.shift);
+            input.apply_movement(movement.key, layout.input_rect, movement.shift, movement.alt);
         }
         return EscapeResult::Handled;
     }

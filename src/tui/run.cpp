@@ -67,6 +67,7 @@ int run(provider::RequestContext context, chat::Session session) {
     size_t inflight_image_count = 0;
     std::string help_text;
     TuiMode mode = TuiMode::Chat;
+    size_t history_edit_index = static_cast<size_t>(-1);
     std::vector<chat::ThreadSummary> thread_picker_threads;
     size_t thread_picker_selected = 0;
     chat::SqliteStore sqlite_store;
@@ -116,6 +117,9 @@ int run(provider::RequestContext context, chat::Session session) {
         }
         if (mode == TuiMode::SystemEdit) {
             return system_edit_text();
+        }
+        if (mode == TuiMode::HistoryEdit) {
+            return history_edit_text();
         }
         return help_text;
     };
@@ -556,6 +560,28 @@ int run(provider::RequestContext context, chat::Session session) {
         clear_queued_regeneration();
         model_job.cancel();
         status = "Cancelling...";
+    };
+
+    auto start_history_edit = [&]() {
+        if (active_job != ActiveJob::None) {
+            status = "Cannot edit history while a job is running";
+            return;
+        }
+        if (mode != TuiMode::Chat) {
+            return;
+        }
+        size_t index = 0;
+        if (!last_editable_chat_message(session, index)) {
+            status = "No user or assistant message to edit";
+            return;
+        }
+        input = editor::EditorState::from_text(session.messages[index].content);
+        input.set_undo_limit(input_undo_limit);
+        input.mode = editor::EditorMode::Chat;
+        input.vertical_movement = editor::VerticalMovementMode::VisualRow;
+        history_edit_index = index;
+        mode = TuiMode::HistoryEdit;
+        status = "Editing last " + session.messages[index].role + " message";
     };
 
     auto pop_last_message = [&]() {
@@ -1208,9 +1234,14 @@ int run(provider::RequestContext context, chat::Session session) {
                 }
                 if (mode == TuiMode::SystemEdit) {
                     if (ch == 27) {
-                        mode = TuiMode::Chat;
-                        input = new_input_editor();
-                        status = "System prompt edit cancelled";
+                        const detail::TuiSize screen = detail::terminal_size();
+                        const EscapeResult escape_result = handle_escape(
+                            input, layout_for_terminal(screen.rows, screen.cols), history_scroll, status, true);
+                        if (escape_result == EscapeResult::Unhandled) {
+                            mode = TuiMode::Chat;
+                            input = new_input_editor();
+                            status = "System prompt edit cancelled";
+                        }
                         continue;
                     }
                     if (ch == '\r' || ch == '\n' || ch == 19) {
@@ -1220,6 +1251,37 @@ int run(provider::RequestContext context, chat::Session session) {
                         mode = TuiMode::Chat;
                         input = new_input_editor();
                         persist_settings_change("System prompt updated");
+                        continue;
+                    }
+                }
+                if (mode == TuiMode::HistoryEdit) {
+                    if (ch == 27) {
+                        const detail::TuiSize screen = detail::terminal_size();
+                        const EscapeResult escape_result = handle_escape(
+                            input, layout_for_terminal(screen.rows, screen.cols), history_scroll, status, true);
+                        if (escape_result == EscapeResult::Unhandled) {
+                            mode = TuiMode::Chat;
+                            history_edit_index = static_cast<size_t>(-1);
+                            input = new_input_editor();
+                            status = "Message edit cancelled";
+                        }
+                        continue;
+                    }
+                    if (ch == '\r' || ch == '\n' || ch == 19) {
+                        if (history_edit_index < session.messages.size()) {
+                            const std::string role = session.messages[history_edit_index].role;
+                            session.messages[history_edit_index].content = input.text.str();
+                            if (role == "assistant") {
+                                session.usage_json = "{}";
+                            }
+                            history_scroll = 0;
+                            start_save(context.options.save_chat_path, session, true);
+                            start_store_save();
+                            status = "Updated " + role + " message";
+                        }
+                        mode = TuiMode::Chat;
+                        history_edit_index = static_cast<size_t>(-1);
+                        input = new_input_editor();
                         continue;
                     }
                 }
@@ -1287,11 +1349,11 @@ int run(provider::RequestContext context, chat::Session session) {
                     continue;
                 }
                 if (ch == 1) {
-                    input.move_home();
+                    input.select_all();
                     continue;
                 }
-                if (ch == 5) {
-                    input.move_end();
+                if (ch == 5 && mode == TuiMode::Chat) {
+                    start_history_edit();
                     continue;
                 }
                 if (ch == 11) {

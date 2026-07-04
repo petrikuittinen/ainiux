@@ -147,12 +147,13 @@ struct EditorState {
     bool search_previous(const std::string& needle);
     Error replace_all_from(size_t start, const std::string& needle, const std::string& value, size_t& replacements);
     void clear_selection();
+    void select_all();
     size_t selection_end_exclusive() const;
     std::string selected_text() const;
     Error copy_selection(Clipboard& clipboard);
     Error cut_selection(Clipboard& clipboard);
     Error paste(Clipboard& clipboard);
-    void apply_movement(MovementKey key, const Rect& rect, bool extend_selection);
+    void apply_movement(MovementKey key, const Rect& rect, bool extend_selection, bool alt = false);
     void move_left();
     void move_right();
     void move_up();
@@ -165,6 +166,8 @@ struct EditorState {
     void move_down_visual(const Rect& rect);
     void move_home();
     void move_end();
+    void move_line_home();
+    void move_line_end();
     Error kill_to_line_end();
     void ensure_cursor_visible(const Rect& rect);
     RenderedPanel render(const Rect& rect) const;

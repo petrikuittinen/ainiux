@@ -691,7 +691,7 @@ void dispatch_escape_sequence(EditorState& state,
     if (parse_movement_sequence(sequence, movement)) {
         const TerminalSize size = terminal_size();
         const Rect panel_rect{1, 1, std::max(1, size.rows - 2), std::max(1, size.cols - 1)};
-        state.apply_movement(movement.key, panel_rect, movement.shift);
+        state.apply_movement(movement.key, panel_rect, movement.shift, movement.alt);
         return;
     }
 

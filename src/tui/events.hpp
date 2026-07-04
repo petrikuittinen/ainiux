@@ -28,7 +28,7 @@ enum class TuiEventType {
 };
 
 enum class ActiveJob { None, Chat, Models };
-enum class TuiMode { Chat, ThreadList, RemoveConfirm, ModelConfirm, SystemEdit };
+enum class TuiMode { Chat, ThreadList, RemoveConfirm, ModelConfirm, SystemEdit, HistoryEdit };
 
 struct TuiEvent {
     TuiEventType type = TuiEventType::Delta;

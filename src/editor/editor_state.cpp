@@ -349,6 +349,13 @@ void EditorState::clear_selection() {
     selection.clear(cursor);
 }
 
+void EditorState::select_all() {
+    selection.anchor = 0;
+    selection.active = text.size();
+    cursor = text.size();
+    update_preferred_column(*this);
+}
+
 size_t EditorState::selection_end_exclusive() const {
     return selection_end_exclusive_for(selection, text, cursor);
 }
@@ -417,7 +424,7 @@ void EditorState::finish_movement(bool extend_selection) {
     }
 }
 
-void EditorState::apply_movement(MovementKey key, const Rect& rect, bool extend_selection) {
+void EditorState::apply_movement(MovementKey key, const Rect& rect, bool extend_selection, bool alt) {
     begin_movement(extend_selection);
     switch (key) {
         case MovementKey::Left:
@@ -439,10 +446,18 @@ void EditorState::apply_movement(MovementKey key, const Rect& rect, bool extend_
             page_down(rect);
             break;
         case MovementKey::Home:
-            move_home();
+            if (alt) {
+                move_home();
+            } else {
+                move_line_home();
+            }
             break;
         case MovementKey::End:
-            move_end();
+            if (alt) {
+                move_end();
+            } else {
+                move_line_end();
+            }
             break;
     }
     finish_movement(extend_selection);
@@ -557,6 +572,20 @@ void EditorState::move_home() {
 
 void EditorState::move_end() {
     cursor = text.size();
+    update_preferred_column(*this);
+    selection.clear(cursor);
+}
+
+void EditorState::move_line_home() {
+    const size_t line = text.line_for_offset(cursor);
+    cursor = text.line_start(line);
+    update_preferred_column(*this);
+    selection.clear(cursor);
+}
+
+void EditorState::move_line_end() {
+    const size_t line = text.line_for_offset(cursor);
+    cursor = text.line_start(line) + text.line_length(line);
     update_preferred_column(*this);
     selection.clear(cursor);
 }
