@@ -10,6 +10,38 @@ namespace {
 using pkchat::test::check;
 using pkchat::test::read_fixture;
 
+void test_llm_typical_html_to_markdown_fixture() {
+    const std::string input = read_fixture("tests/fixtures/llm_typical.html");
+    const std::string output = pkchat::html::convert(input, pkchat::html::OutputFormat::Markdown);
+
+    check(output.find("# LLM Typical HTML Fixture") != std::string::npos,
+          "llm_typical HTML converts the title heading");
+    check(output.find("**bold**") != std::string::npos && output.find("*italic*") != std::string::npos &&
+              output.find("***bold italic***") != std::string::npos,
+          "llm_typical HTML converts bold, italic, and bold-italic");
+    check(output.find("`inline code`") != std::string::npos && output.find("~~strikethrough~~") != std::string::npos,
+          "llm_typical HTML converts inline code and strikethrough");
+    check(output.find("[a link](https://example.com/path?q=1)") != std::string::npos,
+          "llm_typical HTML converts links");
+    check(output.find("---") != std::string::npos,
+          "llm_typical HTML converts horizontal rules");
+    check(output.find("> Block quote first line") != std::string::npos &&
+              output.find("> Block quote second line") != std::string::npos,
+          "llm_typical HTML converts block quotes");
+    check(output.find("- unordered alpha") != std::string::npos &&
+              output.find("1. ordered one") != std::string::npos,
+          "llm_typical HTML converts ordered and unordered lists");
+    check(output.find("| Feature | Sample |") != std::string::npos &&
+              output.find("| **Bold** | *Italic* |") != std::string::npos &&
+              output.find("| `code` | ~~strike~~ |") != std::string::npos,
+          "llm_typical HTML converts tables with inline formatting");
+    check(output.find("```python") != std::string::npos &&
+              output.find("def greet(name)") != std::string::npos,
+          "llm_typical HTML converts fenced code blocks");
+    check(output.find("😀 🚀 ✅") != std::string::npos,
+          "llm_typical HTML preserves emoji");
+}
+
 void test_comprehensive_html_to_markdown_fixture() {
     const std::string input = read_fixture("tests/fixtures/comprehensive.html");
     const std::string output = pkchat::html::convert(input, pkchat::html::OutputFormat::Markdown);
@@ -152,6 +184,7 @@ void test_html_empty_unicode_and_format_parsing() {
 }  // namespace
 
 void run_all() {
+    test_llm_typical_html_to_markdown_fixture();
     test_comprehensive_html_to_markdown_fixture();
     test_html_empty_unicode_and_format_parsing();
     test_html_large_ignored_blocks();

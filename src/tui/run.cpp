@@ -1211,7 +1211,8 @@ int run(provider::RequestContext context, chat::Session session) {
                         quit = true;
                         continue;
                     }
-                    if (ch == 27 || ch == 'n' || ch == 'N') {
+                    const bool model_confirm_shortcut = input.text.empty();
+                    if (model_confirm_shortcut && (ch == 27 || ch == 'n' || ch == 'N')) {
                         Error context_error = apply_loaded_session_context(session);
                         mode = TuiMode::Chat;
                         status = context_error.ok() ? "Using thread model: " + session.model
@@ -1219,7 +1220,7 @@ int run(provider::RequestContext context, chat::Session session) {
                         start_store_save();
                         continue;
                     }
-                    if (ch == 'y' || ch == 'Y') {
+                    if (model_confirm_shortcut && (ch == 'y' || ch == 'Y')) {
                         restore_cli_context(context, cli_context);
                         show_thinking_traces = context.options.show_thinking_traces;
                         app::refresh_session_metadata(session, context);
@@ -1228,8 +1229,10 @@ int run(provider::RequestContext context, chat::Session session) {
                         start_store_save();
                         continue;
                     }
-                    status = "Press y to use command-line model, n or Esc to keep thread model";
-                    continue;
+                    if (model_confirm_shortcut && ch != '/' && ch != '\r' && ch != '\n' && ch < 32) {
+                        status = "Press y to use command-line model, n or Esc to keep thread model";
+                        continue;
+                    }
                 }
                 if (mode == TuiMode::SystemEdit) {
                     if (ch == 27) {

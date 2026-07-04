@@ -55,6 +55,39 @@ bool is_tag_boundary(char ch) {
     return ch == '>' || ch == '/' || std::isspace(static_cast<unsigned char>(ch));
 }
 
+bool starts_with(const std::string& text, const std::string& prefix) {
+    return text.rfind(prefix, 0) == 0;
+}
+
+std::string trim_ascii(std::string text) {
+    while (!text.empty() && std::isspace(static_cast<unsigned char>(text.front()))) {
+        text.erase(text.begin());
+    }
+    while (!text.empty() && std::isspace(static_cast<unsigned char>(text.back()))) {
+        text.pop_back();
+    }
+    return text;
+}
+
+std::string first_word(const std::string& text) {
+    const std::string stripped = trim_ascii(text);
+    size_t end = 0;
+    while (end < stripped.size() && !std::isspace(static_cast<unsigned char>(stripped[end]))) {
+        ++end;
+    }
+    return stripped.substr(0, end);
+}
+
+std::string trim_capture_text(std::string text) {
+    while (!text.empty() && (text.front() == '\n' || text.front() == '\r' || text.front() == ' ')) {
+        text.erase(text.begin());
+    }
+    while (!text.empty() && (text.back() == '\n' || text.back() == '\r' || text.back() == ' ')) {
+        text.pop_back();
+    }
+    return text;
+}
+
 bool ignored_block_at(const std::string& input, size_t pos, const std::string& name, size_t& next_pos) {
     if (pos >= input.size() || input[pos] != '<') {
         return false;
@@ -223,6 +256,18 @@ class Writer {
    public:
     explicit Writer(OutputFormat format) : format_(format) {}
 
+    void begin_capture() { capture_depth_ += 1; }
+
+    std::string end_capture() {
+        if (capture_depth_ == 0) {
+            return "";
+        }
+        --capture_depth_;
+        return std::move(capture_buffer_);
+    }
+
+    bool capturing() const { return capture_depth_ > 0; }
+
     void append_text(const std::string& raw) {
         const std::string decoded = decode_entities(raw);
         std::string normalized;
@@ -235,13 +280,13 @@ class Writer {
             flush_pending_space();
             normalized.clear();
             normalized.push_back(static_cast<char>(ch));
-            out_ += format_ == OutputFormat::Markdown ? markdown_escape_text(normalized) : normalized;
+            append_formatted_text(normalized);
         }
     }
 
     void append_raw(const std::string& text) {
         pending_space_ = false;
-        out_ += text;
+        write_output(text);
     }
 
     void newline() {
@@ -272,60 +317,96 @@ class Writer {
     void heading_prefix(int level) {
         blank_line();
         if (format_ == OutputFormat::Markdown) {
-            out_ += std::string(static_cast<size_t>(level), '#') + " ";
+            write_output(std::string(static_cast<size_t>(level), '#') + " ");
         }
     }
 
     void open_strong() {
         flush_pending_space();
         if (format_ == OutputFormat::Markdown) {
-            out_ += "**";
+            write_output("**");
         }
+        strong_depth_ += 1;
     }
 
     void close_strong() {
+        if (strong_depth_ > 0) {
+            --strong_depth_;
+        }
         if (format_ == OutputFormat::Markdown) {
             trim_trailing_spaces();
-            out_ += "**";
+            write_output("**");
         }
     }
 
     void open_emphasis() {
         flush_pending_space();
         if (format_ == OutputFormat::Markdown) {
-            out_ += "*";
+            write_output("*");
         }
+        emphasis_depth_ += 1;
     }
 
     void close_emphasis() {
+        if (emphasis_depth_ > 0) {
+            --emphasis_depth_;
+        }
         if (format_ == OutputFormat::Markdown) {
             trim_trailing_spaces();
-            out_ += "*";
+            write_output("*");
+        }
+    }
+
+    void open_strikethrough() {
+        flush_pending_space();
+        if (format_ == OutputFormat::Markdown) {
+            write_output("~~");
+        }
+    }
+
+    void close_strikethrough() {
+        if (format_ == OutputFormat::Markdown) {
+            trim_trailing_spaces();
+            write_output("~~");
+        }
+    }
+
+    void open_code() {
+        flush_pending_space();
+        if (format_ == OutputFormat::Markdown) {
+            write_output("`");
+        }
+    }
+
+    void close_code() {
+        if (format_ == OutputFormat::Markdown) {
+            trim_trailing_spaces();
+            write_output("`");
         }
     }
 
     void open_underline() {
         flush_pending_space();
         if (format_ == OutputFormat::Markdown) {
-            out_ += "++";
+            write_output("++");
         }
     }
 
     void close_underline() {
         if (format_ == OutputFormat::Markdown) {
             trim_trailing_spaces();
-            out_ += "++";
+            write_output("++");
         }
     }
 
     void append_image(const std::string& src, const std::string& alt) {
         flush_pending_space();
         if (format_ == OutputFormat::Markdown) {
-            out_ += "![" + markdown_escape_text(alt) + "](" + markdown_escape_url(src) + ")";
+            write_output("![" + markdown_escape_text(alt) + "](" + markdown_escape_url(src) + ")");
         } else {
-            out_ += alt;
+            write_output(alt);
             if (!src.empty()) {
-                out_ += " (" + src + ")";
+                write_output(" (" + src + ")");
             }
         }
     }
@@ -334,7 +415,7 @@ class Writer {
         flush_pending_space();
         links_.push_back(href);
         if (format_ == OutputFormat::Markdown) {
-            out_ += "[";
+            write_output("[");
         }
     }
 
@@ -346,17 +427,103 @@ class Writer {
         links_.pop_back();
         if (href.empty()) {
             if (format_ == OutputFormat::Markdown) {
-                out_ += "]";
+                write_output("]");
             }
             return;
         }
         if (format_ == OutputFormat::Markdown) {
             trim_trailing_spaces();
-            out_ += "](" + markdown_escape_url(href) + ")";
+            write_output("](" + markdown_escape_url(href) + ")");
         } else {
             trim_trailing_spaces();
-            out_ += " (" + href + ")";
+            write_output(" (" + href + ")");
         }
+    }
+
+    void append_horizontal_rule() {
+        blank_line();
+        if (format_ == OutputFormat::Markdown) {
+            write_output("---");
+        }
+        newline();
+        blank_line();
+    }
+
+    void append_fenced_code(const std::string& code, const std::string& language) {
+        blank_line();
+        if (format_ == OutputFormat::Markdown) {
+            write_output("```" + language);
+            newline();
+            write_output(code);
+            if (!code.empty() && code.back() != '\n') {
+                newline();
+            }
+            write_output("```");
+        } else {
+            write_output(code);
+            if (!code.empty() && code.back() != '\n') {
+                newline();
+            }
+        }
+        newline();
+        blank_line();
+    }
+
+    void append_blockquote_lines(const std::string& text) {
+        blank_line();
+        const std::vector<std::string> lines = split_lines(trim_capture_text(text));
+        for (const std::string& line : lines) {
+            if (trim_ascii(line).empty()) {
+                continue;
+            }
+            if (format_ == OutputFormat::Markdown) {
+                write_output("> " + line);
+            } else {
+                write_output(line);
+            }
+            newline();
+        }
+        blank_line();
+    }
+
+    void append_markdown_table(const std::vector<std::vector<std::string>>& rows) {
+        if (rows.empty()) {
+            return;
+        }
+        blank_line();
+        if (format_ != OutputFormat::Markdown) {
+            for (const std::vector<std::string>& row : rows) {
+                for (size_t i = 0; i < row.size(); ++i) {
+                    if (i != 0) {
+                        write_output("\t");
+                    }
+                    write_output(row[i]);
+                }
+                newline();
+            }
+            blank_line();
+            return;
+        }
+        size_t columns = 0;
+        for (const std::vector<std::string>& row : rows) {
+            columns = std::max(columns, row.size());
+        }
+        for (size_t row_index = 0; row_index < rows.size(); ++row_index) {
+            write_output("|");
+            for (size_t col = 0; col < columns; ++col) {
+                const std::string cell = col < rows[row_index].size() ? rows[row_index][col] : "";
+                write_output(" " + cell + " |");
+            }
+            newline();
+            if (row_index == 0) {
+                write_output("|");
+                for (size_t col = 0; col < columns; ++col) {
+                    write_output(" --- |");
+                }
+                newline();
+            }
+        }
+        blank_line();
     }
 
     std::string finish() {
@@ -380,23 +547,62 @@ class Writer {
    private:
     OutputFormat format_;
     std::string out_;
+    std::string capture_buffer_;
     std::vector<std::string> links_;
     bool pending_space_ = false;
+    int capture_depth_ = 0;
+    int strong_depth_ = 0;
+    int emphasis_depth_ = 0;
+
+    static std::vector<std::string> split_lines(const std::string& input) {
+        std::vector<std::string> lines;
+        size_t start = 0;
+        while (start <= input.size()) {
+            const size_t end = input.find('\n', start);
+            std::string line = end == std::string::npos ? input.substr(start) : input.substr(start, end - start);
+            if (!line.empty() && line.back() == '\r') {
+                line.pop_back();
+            }
+            lines.push_back(line);
+            if (end == std::string::npos) {
+                break;
+            }
+            start = end + 1;
+        }
+        if (lines.empty()) {
+            lines.push_back("");
+        }
+        return lines;
+    }
+
+    void append_formatted_text(const std::string& text) {
+        write_output(format_ == OutputFormat::Markdown ? markdown_escape_text(text) : text);
+    }
+
+    void write_output(const std::string& text) {
+        if (capture_depth_ > 0) {
+            capture_buffer_ += text;
+            return;
+        }
+        out_ += text;
+    }
 
     bool needs_space_before_text() const {
-        return !out_.empty() && out_.back() != '\n' && out_.back() != ' ';
+        const std::string& target = capture_depth_ > 0 ? capture_buffer_ : out_;
+        return !target.empty() && target.back() != '\n' && target.back() != ' ';
     }
 
     void flush_pending_space() {
         if (pending_space_ && needs_space_before_text()) {
-            out_.push_back(' ');
+            write_output(" ");
         }
         pending_space_ = false;
     }
 
     void trim_trailing_spaces() {
-        while (!out_.empty() && out_.back() == ' ') {
-            out_.pop_back();
+        std::string& target = capture_depth_ > 0 ? capture_buffer_ : out_;
+        while (!target.empty() && target.back() == ' ') {
+            target.pop_back();
         }
     }
 };
@@ -404,8 +610,15 @@ class Writer {
 bool is_block_tag(const std::string& name) {
     return name == "p" || name == "div" || name == "section" || name == "article" || name == "main" ||
            name == "header" || name == "footer" || name == "nav" || name == "ul" || name == "ol" ||
-           name == "blockquote" || name == "pre" || name == "table" || name == "tr";
+           name == "blockquote" || name == "pre" || name == "table" || name == "tr" || name == "thead" ||
+           name == "tbody" || name == "tfoot" || name == "h1" || name == "h2" || name == "h3" ||
+           name == "h4" || name == "h5" || name == "h6";
 }
+
+struct TableState {
+    std::vector<std::vector<std::string>> rows;
+    std::vector<std::string> current_row;
+};
 
 }  // namespace
 
@@ -538,12 +751,23 @@ std::string convert(const std::string& input, OutputFormat format) {
         size_t next_number = 1;
     };
     std::vector<ListState> lists;
+    std::vector<TableState> tables;
+    size_t pre_depth = 0;
+    std::string pre_language;
+    size_t blockquote_depth = 0;
+    size_t code_depth = 0;
+    size_t cell_depth = 0;
     size_t pos = 0;
     for (; it != end; ++it) {
         const std::smatch& match = *it;
         const size_t tag_pos = static_cast<size_t>(match.position());
         if (tag_pos > pos) {
-            writer.append_text(cleaned.substr(pos, tag_pos - pos));
+            const std::string text = cleaned.substr(pos, tag_pos - pos);
+            if (pre_depth > 0) {
+                writer.append_raw(text);
+            } else {
+                writer.append_text(text);
+            }
         }
         const std::string tag = match.str();
         const std::string name = tag_name(tag);
@@ -553,22 +777,86 @@ std::string convert(const std::string& input, OutputFormat format) {
             pos = tag_pos + tag.size();
             continue;
         }
+        if (pre_depth > 0) {
+            if (!closing && name == "code" && pre_language.empty()) {
+                const std::string class_name = first_word(attribute_value(tag, "class"));
+                if (starts_with(class_name, "language-")) {
+                    pre_language = class_name.substr(9);
+                } else {
+                    pre_language = class_name;
+                }
+            } else if (closing && name == "pre") {
+                --pre_depth;
+                std::string code = writer.end_capture();
+                while (!code.empty() && (code.back() == '\n' || code.back() == '\r')) {
+                    code.pop_back();
+                }
+                writer.append_fenced_code(code, pre_language);
+                pre_language.clear();
+            }
+            pos = tag_pos + tag.size();
+            continue;
+        }
         if (!closing) {
             const int level = heading_level(name);
             if (level != 0) {
                 writer.heading_prefix(level);
             } else if (name == "br") {
                 writer.newline();
+            } else if (name == "hr") {
+                writer.append_horizontal_rule();
             } else if (name == "strong" || name == "b") {
                 writer.open_strong();
             } else if (name == "em" || name == "i" || name == "italic") {
                 writer.open_emphasis();
+            } else if (name == "del" || name == "s" || name == "strike") {
+                writer.open_strikethrough();
+            } else if (name == "code") {
+                if (code_depth == 0) {
+                    writer.open_code();
+                }
+                ++code_depth;
+            } else if (name == "pre") {
+                writer.begin_capture();
+                ++pre_depth;
+                pre_language = first_word(attribute_value(tag, "class"));
+                if (starts_with(pre_language, "language-")) {
+                    pre_language = pre_language.substr(9);
+                }
+            } else if (name == "blockquote") {
+                if (blockquote_depth == 0) {
+                    writer.begin_capture();
+                }
+                ++blockquote_depth;
             } else if (name == "u") {
                 writer.open_underline();
             } else if (name == "a") {
                 writer.open_link(attribute_value(tag, "href"));
             } else if (name == "img") {
                 writer.append_image(attribute_value(tag, "src"), attribute_value(tag, "alt"));
+            } else if (name == "table") {
+                writer.blank_line();
+                tables.push_back(TableState{});
+            } else if (name == "tr") {
+                if (!tables.empty()) {
+                    if (cell_depth > 0) {
+                        tables.back().current_row.push_back(trim_capture_text(writer.end_capture()));
+                        cell_depth = 0;
+                    }
+                    if (!tables.back().current_row.empty()) {
+                        tables.back().rows.push_back(tables.back().current_row);
+                    }
+                    tables.back().current_row.clear();
+                }
+            } else if (name == "th" || name == "td") {
+                if (!tables.empty()) {
+                    if (cell_depth > 0) {
+                        tables.back().current_row.push_back(trim_capture_text(writer.end_capture()));
+                        --cell_depth;
+                    }
+                    writer.begin_capture();
+                    ++cell_depth;
+                }
             } else if (name == "ul" || name == "ol") {
                 writer.blank_line();
                 lists.push_back({name == "ol", 1});
@@ -582,7 +870,7 @@ std::string convert(const std::string& input, OutputFormat format) {
                         writer.append_raw("- ");
                     }
                 }
-            } else if (is_block_tag(name)) {
+            } else if (is_block_tag(name) && blockquote_depth == 0) {
                 writer.blank_line();
             }
             if (self_closing && name == "a") {
@@ -595,10 +883,43 @@ std::string convert(const std::string& input, OutputFormat format) {
                 writer.close_strong();
             } else if (name == "em" || name == "i" || name == "italic") {
                 writer.close_emphasis();
+            } else if (name == "del" || name == "s" || name == "strike") {
+                writer.close_strikethrough();
+            } else if (name == "code") {
+                if (code_depth > 0) {
+                    --code_depth;
+                }
+                if (code_depth == 0) {
+                    writer.close_code();
+                }
+            } else if (name == "blockquote") {
+                if (blockquote_depth > 0) {
+                    --blockquote_depth;
+                }
+                if (blockquote_depth == 0) {
+                    writer.append_blockquote_lines(writer.end_capture());
+                }
+            } else if (name == "p" && blockquote_depth > 0) {
+                writer.append_raw("\n");
             } else if (name == "u") {
                 writer.close_underline();
             } else if (name == "a") {
                 writer.close_link();
+            } else if (name == "th" || name == "td") {
+                if (!tables.empty() && cell_depth > 0) {
+                    --cell_depth;
+                    tables.back().current_row.push_back(trim_capture_text(writer.end_capture()));
+                }
+            } else if (name == "tr") {
+                if (!tables.empty() && !tables.back().current_row.empty()) {
+                    tables.back().rows.push_back(tables.back().current_row);
+                    tables.back().current_row.clear();
+                }
+            } else if (name == "table") {
+                if (!tables.empty()) {
+                    writer.append_markdown_table(tables.back().rows);
+                    tables.pop_back();
+                }
             } else if (name == "li") {
                 writer.newline();
             } else if (name == "ul" || name == "ol") {
@@ -606,14 +927,39 @@ std::string convert(const std::string& input, OutputFormat format) {
                     lists.pop_back();
                 }
                 writer.blank_line();
-            } else if (is_block_tag(name)) {
+            } else if (is_block_tag(name) && blockquote_depth == 0) {
                 writer.blank_line();
             }
         }
         pos = tag_pos + tag.size();
     }
     if (pos < cleaned.size()) {
-        writer.append_text(cleaned.substr(pos));
+        const std::string text = cleaned.substr(pos);
+        if (pre_depth > 0) {
+            writer.append_raw(text);
+        } else {
+            writer.append_text(text);
+        }
+    }
+    if (pre_depth > 0) {
+        pre_depth = 0;
+        std::string code = writer.end_capture();
+        while (!code.empty() && (code.back() == '\n' || code.back() == '\r')) {
+            code.pop_back();
+        }
+        writer.append_fenced_code(code, pre_language);
+    }
+    if (blockquote_depth > 0) {
+        blockquote_depth = 0;
+        writer.append_blockquote_lines(writer.end_capture());
+    }
+    if (!tables.empty()) {
+        if (!tables.back().current_row.empty()) {
+            tables.back().rows.push_back(tables.back().current_row);
+            tables.back().current_row.clear();
+        }
+        writer.append_markdown_table(tables.back().rows);
+        tables.clear();
     }
     return writer.finish();
 }

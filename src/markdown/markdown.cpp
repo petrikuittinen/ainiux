@@ -231,6 +231,35 @@ std::string render_inline(const std::string& input, RenderMode mode, int depth =
             }
         }
 
+        if (input.compare(i, 3, "***") == 0 || input.compare(i, 3, "___") == 0) {
+            const std::string marker = input.substr(i, 3);
+            const size_t close = input.find(marker, i + 3);
+            if (close != std::string::npos) {
+                const std::string body = render_inline(input.substr(i + 3, close - i - 3), mode, depth + 1);
+                if (mode == RenderMode::Html) {
+                    out += "<strong><em>" + body + "</em></strong>";
+                } else {
+                    out += body;
+                }
+                i = close + 3;
+                continue;
+            }
+        }
+
+        if (input.compare(i, 2, "~~") == 0) {
+            const size_t close = input.find("~~", i + 2);
+            if (close != std::string::npos) {
+                const std::string body = render_inline(input.substr(i + 2, close - i - 2), mode, depth + 1);
+                if (mode == RenderMode::Html) {
+                    out += "<del>" + body + "</del>";
+                } else {
+                    out += body;
+                }
+                i = close + 2;
+                continue;
+            }
+        }
+
         if (input.compare(i, 2, "![") == 0) {
             const size_t label_end = find_matching_square_bracket(input, i + 1);
             if (label_end != std::string::npos && input.compare(label_end, 2, "](") == 0) {
@@ -492,7 +521,14 @@ std::string first_word(const std::string& text) {
 }
 
 bool is_indented_code_line(const std::string& line) {
-    return leading_spaces(line) >= 4;
+    if (leading_spaces(line) < 4) {
+        return false;
+    }
+    ListMarker marker;
+    if (parse_list_marker(line, marker)) {
+        return false;
+    }
+    return true;
 }
 
 std::string remove_code_indent(const std::string& line) {
@@ -510,6 +546,47 @@ std::string remove_code_indent(const std::string& line) {
         }
     }
     return line.substr(pos);
+}
+
+bool is_horizontal_rule(const std::string& line) {
+    const std::string stripped = trim(line);
+    if (stripped.size() < 3) {
+        return false;
+    }
+    const char marker = stripped[0];
+    if (marker != '-' && marker != '*' && marker != '_') {
+        return false;
+    }
+    return std::all_of(stripped.begin(), stripped.end(), [&](char ch) { return ch == marker; });
+}
+
+bool parse_blockquote_marker(const std::string& line, std::string& text) {
+    std::string left = ltrim(line);
+    if (left.empty() || left[0] != '>') {
+        return false;
+    }
+    left.erase(left.begin());
+    left = ltrim(left);
+    text = left;
+    return true;
+}
+
+bool line_has_hard_break(const std::string& line) {
+    std::string raw = line;
+    if (!raw.empty() && raw.back() == '\r') {
+        raw.pop_back();
+    }
+    return raw.size() >= 2 && raw[raw.size() - 1] == ' ' && raw[raw.size() - 2] == ' ';
+}
+
+std::string strip_hard_break_suffix(std::string line) {
+    if (!line.empty() && line.back() == '\r') {
+        line.pop_back();
+    }
+    while (line.size() >= 2 && line.back() == ' ' && line[line.size() - 2] == ' ') {
+        line.pop_back();
+    }
+    return rtrim(std::move(line));
 }
 
 bool is_raw_html_block(const std::string& line) {
@@ -566,6 +643,20 @@ class BlockRenderer {
                 continue;
             }
 
+            if (is_horizontal_rule(lines[i])) {
+                close_lists();
+                emit_horizontal_rule();
+                ++i;
+                continue;
+            }
+
+            std::string blockquote_text;
+            if (parse_blockquote_marker(lines[i], blockquote_text)) {
+                close_lists();
+                emit_blockquote(lines, i);
+                continue;
+            }
+
             if (is_table_start(lines, i)) {
                 close_lists();
                 emit_table(lines, i);
@@ -608,6 +699,35 @@ class BlockRenderer {
                     "</h" + std::to_string(level) + ">\n";
         } else {
             append_plain_line(out_, render_inline(text, mode_));
+        }
+    }
+
+    void emit_horizontal_rule() {
+        if (mode_ == RenderMode::Html) {
+            out_ += "<hr>\n";
+        } else {
+            append_plain_line(out_, "---");
+        }
+    }
+
+    void emit_blockquote(const std::vector<std::string>& lines, size_t& index) {
+        if (mode_ == RenderMode::Html) {
+            out_ += "<blockquote>\n";
+        }
+        while (index < lines.size()) {
+            std::string text;
+            if (!parse_blockquote_marker(lines[index], text)) {
+                break;
+            }
+            if (mode_ == RenderMode::Html) {
+                out_ += "<p>" + render_inline(text, mode_) + "</p>\n";
+            } else {
+                append_plain_line(out_, "> " + render_inline(text, mode_));
+            }
+            ++index;
+        }
+        if (mode_ == RenderMode::Html) {
+            out_ += "</blockquote>\n";
         }
     }
 
@@ -735,8 +855,13 @@ class BlockRenderer {
         }
     }
 
+    struct ParagraphPart {
+        std::string text;
+        bool hard_break_after = false;
+    };
+
     void emit_paragraph(const std::vector<std::string>& lines, size_t& index) {
-        std::string paragraph;
+        std::vector<ParagraphPart> parts;
         while (index < lines.size()) {
             const std::string stripped = trim(lines[index]);
             if (stripped.empty()) {
@@ -747,24 +872,39 @@ class BlockRenderer {
             int header_level = 0;
             std::string header_text;
             ListMarker list;
+            std::string blockquote_text;
             if (parse_fence_open(lines[index], fence, info) || is_indented_code_line(lines[index]) ||
-                parse_header(lines[index], header_level, header_text) || is_table_start(lines, index) ||
+                parse_header(lines[index], header_level, header_text) || is_horizontal_rule(lines[index]) ||
+                parse_blockquote_marker(lines[index], blockquote_text) || is_table_start(lines, index) ||
                 parse_list_marker(lines[index], list) || is_raw_html_block(lines[index])) {
                 break;
             }
-            if (!paragraph.empty()) {
-                paragraph.push_back(' ');
-            }
-            paragraph += stripped;
+            ParagraphPart part;
+            part.text = strip_hard_break_suffix(lines[index]);
+            part.hard_break_after = line_has_hard_break(lines[index]);
+            parts.push_back(std::move(part));
             ++index;
         }
-        if (paragraph.empty()) {
+        if (parts.empty()) {
             return;
         }
         if (mode_ == RenderMode::Html) {
-            out_ += "<p>" + render_inline(paragraph, mode_) + "</p>\n";
+            std::string paragraph;
+            for (size_t part_index = 0; part_index < parts.size(); ++part_index) {
+                if (part_index != 0) {
+                    if (parts[part_index - 1].hard_break_after) {
+                        paragraph += "<br>";
+                    } else {
+                        paragraph.push_back(' ');
+                    }
+                }
+                paragraph += render_inline(parts[part_index].text, mode_);
+            }
+            out_ += "<p>" + paragraph + "</p>\n";
         } else {
-            append_plain_line(out_, render_inline(paragraph, mode_));
+            for (const ParagraphPart& part : parts) {
+                append_plain_line(out_, render_inline(part.text, mode_));
+            }
         }
     }
 

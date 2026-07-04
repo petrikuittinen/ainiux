@@ -1,0 +1,29 @@
+<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 3.2//EN">
+<html>
+<head>
+<meta charset=utf-8>
+<title>Broken HTML Fixture</title>
+</head>
+<body>
+<h1>Broken HTML Fixture
+<p>Paragraph with <strong>bold text and <em>italic never closed</strong> trailing text.</p>
+<p>Link with bad quotes: <a href="https://example.com/broken?q=1&lang=en>broken link</a> after link.</p>
+<p>Image with misquoted attributes: <img src="photo.png alt=missing quote> after image.</p>
+<p><strnog>misspelled bold</strnog> and <emphasis>unknown italic tag</emphasis> stay readable.</p>
+<ul>
+<li>first open item
+<li>second item without closing previous
+<ol>
+<li>nested ordered
+<li>another nested without close
+</ol>
+<li>back in outer list
+</ul>
+<table>
+<tr><th>Header A<th>Header B
+<tr><td>Cell 1<td>Cell 2
+</table>
+<pre><code>function broken() {
+  return "no closing pre tag";
+</body>
+</html>

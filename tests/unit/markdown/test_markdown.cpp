@@ -11,6 +11,39 @@ namespace {
 using pkchat::test::check;
 using pkchat::test::read_fixture;
 
+void test_llm_typical_markdown_to_html_fixture() {
+    const std::string input = read_fixture("tests/fixtures/llm_typical.md");
+    const std::string html = pkchat::markdown::to_html_fragment(input);
+
+    check(html.find("<h1>LLM Typical Markdown Fixture</h1>") != std::string::npos,
+          "llm_typical Markdown converts the title heading");
+    check(html.find("<strong>bold</strong>") != std::string::npos &&
+              html.find("<em>italic</em>") != std::string::npos &&
+              html.find("<strong><em>bold italic</em></strong>") != std::string::npos,
+          "llm_typical Markdown converts bold, italic, and bold-italic");
+    check(html.find("<code>inline code</code>") != std::string::npos &&
+              html.find("<del>strikethrough</del>") != std::string::npos,
+          "llm_typical Markdown converts inline code and strikethrough");
+    check(html.find(R"PK(<a href="https://example.com/path?q=1">a link</a>)PK") != std::string::npos,
+          "llm_typical Markdown converts links");
+    check(html.find("<br>") != std::string::npos,
+          "llm_typical Markdown converts hard line breaks");
+    check(html.find("<hr>") != std::string::npos,
+          "llm_typical Markdown converts horizontal rules");
+    check(html.find("<blockquote>") != std::string::npos &&
+              html.find("Block quote first line") != std::string::npos,
+          "llm_typical Markdown converts block quotes");
+    check(html.find("<ul>") != std::string::npos && html.find("<ol>") != std::string::npos,
+          "llm_typical Markdown converts ordered and unordered lists");
+    check(html.find("<table>") != std::string::npos &&
+              html.find("<td><strong>Bold</strong></td>") != std::string::npos,
+          "llm_typical Markdown converts tables with inline formatting");
+    check(html.find(R"PK(<pre><code class="language-python">)PK") != std::string::npos,
+          "llm_typical Markdown converts fenced code blocks");
+    check(html.find("😀 🚀 ✅") != std::string::npos,
+          "llm_typical Markdown preserves emoji");
+}
+
 void test_comprehensive_markdown_to_html_fixture() {
     const std::string input = read_fixture("tests/fixtures/comprehensive.md");
     const std::string output = pkchat::markdown::to_html_document(input);
@@ -134,6 +167,7 @@ void test_markdown_empty_unicode_and_format_parsing() {
 }  // namespace
 
 void run_all() {
+    test_llm_typical_markdown_to_html_fixture();
     test_comprehensive_markdown_to_html_fixture();
     test_markdown_empty_unicode_and_format_parsing();
     test_markdown_html_rendering();
