@@ -51,6 +51,32 @@ void test_google_html_parser_fixture() {
           "Google /url?q= links are decoded");
 }
 
+void test_google_modern_html_parser_fixture() {
+    const std::string html = read_fixture("tests/fixtures/google_search_modern.html");
+    std::vector<pkchat::search::SearchResult> results;
+    pkchat::Error err = pkchat::search::parse_google_search_html(html, 5, results);
+    check(err.ok(), "Google modern HTML fixture parses successfully");
+    check(results.size() == 3, "Google modern HTML fixture returns three results");
+    check(results[0].title == "Modern Google Result Title", "Google modern nested h3 title is extracted");
+    check(results[0].url == "https://example.com/article", "Google modern /url?q= link is decoded");
+    check(results[0].snippet.find("modern layout") != std::string::npos,
+          "Google modern snippet is extracted");
+    check(results[1].title == "Direct Link Result", "Google aria-label title is used when present");
+    check(results[1].url == "https://direct.example.com/page", "Google direct https link is preserved");
+    check(results[2].title == "Sibling Title Before Link", "Google sibling h3 title is extracted");
+    check(results[2].url == "https://sibling.example.com/path", "Google sibling /url?q= link is decoded");
+}
+
+void test_google_blocked_html_parser() {
+    const std::string html = read_fixture("tests/fixtures/google_search_blocked.html");
+    std::vector<pkchat::search::SearchResult> results;
+    pkchat::Error err = pkchat::search::parse_google_search_html(html, 3, results);
+    check(!err.ok() && err.code == pkchat::ErrorCode::ProviderSchema,
+          "Google blocked HTML is rejected");
+    check(err.message.find("JavaScript-only") != std::string::npos,
+          "Google blocked HTML error mentions JavaScript-only page");
+}
+
 void test_tavily_parser_fixture() {
     const std::string body = read_fixture("tests/fixtures/tavily_search.json");
     std::vector<pkchat::search::SearchResult> results;
@@ -76,8 +102,8 @@ void test_format_context_message() {
         pkchat::search::format_context_message("pkchat", response);
     check(message.find("Web search results for: pkchat") != std::string::npos,
           "search context message includes query");
-    check(message.find("Provider: duckduckgo") != std::string::npos,
-          "search context message includes provider");
+    check(message.find("Provider:") == std::string::npos,
+          "search context message does not duplicate provider line");
     check(message.find("URL: https://example.com") != std::string::npos,
           "search context message includes result URL");
 }
@@ -88,6 +114,8 @@ void run_all() {
     test_duckduckgo_parser_fixture();
     test_duckduckgo_empty_abstract_uses_related_topics();
     test_google_html_parser_fixture();
+    test_google_modern_html_parser_fixture();
+    test_google_blocked_html_parser();
     test_tavily_parser_fixture();
     test_search_rejects_empty_query();
     test_format_context_message();

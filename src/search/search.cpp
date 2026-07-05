@@ -282,7 +282,6 @@ Options options_for(const cli::Options& cli_options) {
 std::string format_context_message(const std::string& query, const SearchResponse& response) {
     std::ostringstream out;
     out << "Web search results for: " << query << "\n";
-    out << "Provider: " << response.provider_used << "\n\n";
     for (size_t i = 0; i < response.results.size(); ++i) {
         const SearchResult& item = response.results[i];
         out << (i + 1) << ". " << item.title << "\n";
@@ -454,12 +453,197 @@ Error parse_searxng_response(const std::string& body, int max_results, std::vect
     return ok_error();
 }
 
-Error parse_google_search_html(const std::string& html, int max_results, std::vector<SearchResult>& results) {
-    results.clear();
-    if (max_results <= 0) {
-        return {ErrorCode::BadArgs, "max web search results must be greater than zero"};
-    }
+namespace {
 
+int hex_nibble(char ch) {
+    if (ch >= '0' && ch <= '9') {
+        return ch - '0';
+    }
+    if (ch >= 'a' && ch <= 'f') {
+        return ch - 'a' + 10;
+    }
+    if (ch >= 'A' && ch <= 'F') {
+        return ch - 'A' + 10;
+    }
+    return -1;
+}
+
+std::string percent_decode(const std::string& input) {
+    std::string out;
+    out.reserve(input.size());
+    for (size_t i = 0; i < input.size(); ++i) {
+        if (input[i] == '%' && i + 2 < input.size()) {
+            const int hi = hex_nibble(input[i + 1]);
+            const int lo = hex_nibble(input[i + 2]);
+            if (hi >= 0 && lo >= 0) {
+                out.push_back(static_cast<char>((hi << 4) | lo));
+                i += 2;
+                continue;
+            }
+        }
+        out.push_back(input[i] == '+' ? ' ' : input[i]);
+    }
+    return out;
+}
+
+std::string extract_attribute(const std::string& tag, const char* name) {
+    const std::string quoted = std::string(name) + "=\"";
+    const size_t pos = tag.find(quoted);
+    if (pos == std::string::npos) {
+        return {};
+    }
+    const size_t start = pos + quoted.size();
+    const size_t end = tag.find('"', start);
+    if (end == std::string::npos) {
+        return {};
+    }
+    return tag.substr(start, end - start);
+}
+
+std::string normalize_google_href(std::string href) {
+    href = decode_html_entities(std::move(href));
+    if (href.rfind("/url?", 0) == 0 || href.find("q=") != std::string::npos) {
+        const size_t q_pos = href.find("q=");
+        if (q_pos != std::string::npos) {
+            const size_t start = q_pos + 2;
+            const size_t amp = href.find('&', start);
+            href = href.substr(start, amp == std::string::npos ? std::string::npos : amp - start);
+        }
+    }
+    return percent_decode(href);
+}
+
+bool is_valid_google_result_url(const std::string& url) {
+    if (url.empty() || url[0] == '#') {
+        return false;
+    }
+    if (url.rfind("javascript:", 0) == 0 || url.rfind("/search", 0) == 0) {
+        return false;
+    }
+    if (url.find("google.com/search") != std::string::npos ||
+        url.find("webcache.googleusercontent") != std::string::npos ||
+        url.find("accounts.google") != std::string::npos ||
+        url.find("support.google") != std::string::npos ||
+        url.find("policies.google") != std::string::npos ||
+        url.find("maps.google") != std::string::npos) {
+        return false;
+    }
+    return url.rfind("http://", 0) == 0 || url.rfind("https://", 0) == 0;
+}
+
+bool google_html_looks_blocked(const std::string& html) {
+    if (html.find("enablejs") != std::string::npos) {
+        return true;
+    }
+    if (html.find("consent.google.com") != std::string::npos) {
+        return true;
+    }
+    if (html.find("sorry.google.com") != std::string::npos) {
+        return true;
+    }
+    if (html.find("unusual traffic") != std::string::npos) {
+        return true;
+    }
+    if (html.find("SG_REL") != std::string::npos) {
+        return true;
+    }
+    if (html.find("Please enable JavaScript") != std::string::npos) {
+        return true;
+    }
+    if (html.find("Our systems have detected") != std::string::npos) {
+        return true;
+    }
+    if (html.find("<noscript>") != std::string::npos && html.find("/url?q=") == std::string::npos &&
+        html.find("<h3") == std::string::npos) {
+        return true;
+    }
+    return false;
+}
+
+std::string extract_snippet_near(const std::string& html, size_t anchor_pos) {
+    const size_t window_end = std::min(html.size(), anchor_pos + 1600);
+    const std::string window = html.substr(anchor_pos, window_end - anchor_pos);
+    const std::string markers[] = {"VwiC3b", "yXK7lf", "MUxGbd", "IsZvec", "st", "aCOpRe"};
+    for (const std::string& marker : markers) {
+        const std::string class_needle = "class=\"" + marker;
+        size_t marker_pos = window.find(class_needle);
+        if (marker_pos == std::string::npos) {
+            marker_pos = window.find(marker + " ");
+            if (marker_pos == std::string::npos) {
+                continue;
+            }
+        }
+        const size_t search_from = marker_pos;
+        const size_t gt = window.find('>', search_from);
+        const size_t close = window.find("</", gt == std::string::npos ? search_from : gt);
+        if (gt != std::string::npos && close != std::string::npos && close > gt) {
+            return decode_html_entities(strip_tags(window.substr(gt + 1, close - gt - 1)));
+        }
+    }
+    return {};
+}
+
+std::string href_from_anchor_at(const std::string& html, size_t anchor_open) {
+    const size_t tag_end = html.find('>', anchor_open);
+    if (tag_end == std::string::npos) {
+        return {};
+    }
+    const std::string tag = html.substr(anchor_open, tag_end - anchor_open + 1);
+    return extract_attribute(tag, "href");
+}
+
+std::string aria_label_from_anchor_at(const std::string& html, size_t anchor_open) {
+    const size_t tag_end = html.find('>', anchor_open);
+    if (tag_end == std::string::npos) {
+        return {};
+    }
+    const std::string tag = html.substr(anchor_open, tag_end - anchor_open + 1);
+    return extract_attribute(tag, "aria-label");
+}
+
+std::string nearest_anchor_href(const std::string& html, size_t center, size_t backward, size_t forward) {
+    const size_t start = center > backward ? center - backward : 0;
+    const size_t end = std::min(html.size(), center + forward);
+    std::string best;
+    size_t best_distance = static_cast<size_t>(-1);
+
+    size_t pos = start;
+    while (pos < end) {
+        const size_t anchor_open = html.find("<a ", pos);
+        if (anchor_open == std::string::npos || anchor_open >= end) {
+            break;
+        }
+        const std::string href = href_from_anchor_at(html, anchor_open);
+        if (!href.empty()) {
+            const size_t distance = anchor_open > center ? anchor_open - center : center - anchor_open;
+            if (distance < best_distance) {
+                best_distance = distance;
+                best = href;
+            }
+        }
+        const size_t tag_end = html.find('>', anchor_open);
+        pos = tag_end == std::string::npos ? anchor_open + 3 : tag_end + 1;
+    }
+    return best;
+}
+
+void append_google_result(std::vector<SearchResult>& results,
+                          int max_results,
+                          std::string url,
+                          std::string title,
+                          std::string snippet) {
+    url = normalize_google_href(std::move(url));
+    if (!is_valid_google_result_url(url)) {
+        return;
+    }
+    SearchResult item;
+    item.url = url;
+    item.title = decode_html_entities(trim_ascii(std::move(title)));
+    item.snippet = decode_html_entities(trim_ascii(std::move(snippet)));
+    append_unique_result(results, std::move(item), max_results);
+}
+
+void parse_google_h3_results(const std::string& html, int max_results, std::vector<SearchResult>& results) {
     size_t pos = 0;
     while (pos < html.size() && results.size() < static_cast<size_t>(max_results)) {
         const size_t h3_open = html.find("<h3", pos);
@@ -470,61 +654,142 @@ Error parse_google_search_html(const std::string& html, int max_results, std::ve
         if (h3_close == std::string::npos) {
             break;
         }
+        std::string title = strip_tags(html.substr(h3_open, h3_close + 5 - h3_open));
+        if (title.empty()) {
+            pos = h3_close + 5;
+            continue;
+        }
+
+        std::string href;
+        std::string aria_label;
         const size_t anchor_open = html.rfind("<a ", h3_open);
-        if (anchor_open == std::string::npos || h3_open - anchor_open > 512) {
-            pos = h3_close + 5;
-            continue;
-        }
-        const size_t href_pos = html.find("href=\"", anchor_open);
-        if (href_pos == std::string::npos || href_pos > h3_open) {
-            pos = h3_close + 5;
-            continue;
-        }
-        const size_t href_start = href_pos + 6;
-        const size_t href_end = html.find('"', href_start);
-        if (href_end == std::string::npos) {
-            pos = h3_close + 5;
-            continue;
-        }
-        std::string url = html.substr(href_start, href_end - href_start);
-        if (url.rfind("/url?", 0) == 0) {
-            const size_t q_pos = url.find("q=");
-            const size_t amp = url.find('&', q_pos == std::string::npos ? 0 : q_pos + 2);
-            if (q_pos != std::string::npos) {
-                url = url.substr(q_pos + 2, amp == std::string::npos ? std::string::npos : amp - q_pos - 2);
+        if (anchor_open != std::string::npos && h3_open - anchor_open <= 4096) {
+            const size_t anchor_close = html.find("</a>", h3_close);
+            if (anchor_close != std::string::npos) {
+                href = href_from_anchor_at(html, anchor_open);
+                aria_label = aria_label_from_anchor_at(html, anchor_open);
             }
         }
-        if (url.empty() || url[0] == '#' || url.rfind("javascript:", 0) == 0) {
+        if (href.empty()) {
+            href = nearest_anchor_href(html, h3_close, 4096, 2048);
+        }
+        if (href.empty()) {
             pos = h3_close + 5;
             continue;
         }
+        if (!aria_label.empty()) {
+            title = aria_label;
+        }
 
-        SearchResult item;
-        item.url = decode_html_entities(url);
-        item.title = decode_html_entities(strip_tags(html.substr(h3_open, h3_close + 5 - h3_open)));
+        const std::string snippet = extract_snippet_near(html, h3_close);
+        append_google_result(results, max_results, href, title, snippet);
+        pos = h3_close + 5;
+    }
+}
 
-        const size_t snippet_window_end = std::min(html.size(), h3_close + 1200);
-        const std::string window = html.substr(h3_close + 5, snippet_window_end - h3_close - 5);
-        std::string snippet;
-        const std::string markers[] = {"VwiC3b", "yXK7lf", "MUxGbd", "st"};
-        for (const std::string& marker : markers) {
-            const std::string needle = "class=\"" + marker;
-            const size_t marker_pos = window.find(needle);
-            if (marker_pos != std::string::npos) {
-                const size_t gt = window.find('>', marker_pos);
-                const size_t close = window.find("</", gt == std::string::npos ? marker_pos : gt);
-                if (gt != std::string::npos && close != std::string::npos && close > gt) {
-                    snippet = decode_html_entities(strip_tags(window.substr(gt + 1, close - gt - 1)));
-                    break;
+void parse_google_url_redirects(const std::string& html, int max_results, std::vector<SearchResult>& results) {
+    size_t pos = 0;
+    while (pos < html.size() && results.size() < static_cast<size_t>(max_results)) {
+        const size_t url_pos = html.find("/url?q=", pos);
+        if (url_pos == std::string::npos) {
+            break;
+        }
+        const size_t href_start = url_pos;
+        size_t href_end = html.find('"', href_start);
+        if (href_end == std::string::npos) {
+            const size_t amp = html.find('&', href_start);
+            href_end = amp == std::string::npos ? html.size() : amp;
+        }
+        std::string href = html.substr(href_start, href_end - href_start);
+
+        std::string title;
+        const size_t window_start = url_pos > 2048 ? url_pos - 2048 : 0;
+        const size_t window_end = std::min(html.size(), url_pos + 2048);
+        const size_t h3_before = html.rfind("<h3", url_pos);
+        if (h3_before != std::string::npos && h3_before >= window_start) {
+            const size_t h3_close = html.find("</h3>", h3_before);
+            if (h3_close != std::string::npos && h3_close < window_end) {
+                title = strip_tags(html.substr(h3_before, h3_close + 5 - h3_before));
+            }
+        }
+        if (title.empty()) {
+            const size_t h3_after = html.find("<h3", url_pos);
+            if (h3_after != std::string::npos && h3_after < window_end) {
+                const size_t h3_close = html.find("</h3>", h3_after);
+                if (h3_close != std::string::npos) {
+                    title = strip_tags(html.substr(h3_after, h3_close + 5 - h3_after));
                 }
             }
         }
-        item.snippet = snippet;
-        append_unique_result(results, std::move(item), max_results);
-        pos = h3_close + 5;
+        if (title.empty()) {
+            const size_t anchor_open = html.rfind("<a ", url_pos);
+            if (anchor_open != std::string::npos && anchor_open >= window_start) {
+                title = aria_label_from_anchor_at(html, anchor_open);
+            }
+        }
+
+        const std::string snippet = extract_snippet_near(html, url_pos);
+        append_google_result(results, max_results, href, title, snippet);
+        pos = url_pos + 7;
+    }
+}
+
+void parse_google_anchor_results(const std::string& html, int max_results, std::vector<SearchResult>& results) {
+    size_t pos = 0;
+    while (pos < html.size() && results.size() < static_cast<size_t>(max_results)) {
+        const size_t anchor_open = html.find("<a ", pos);
+        if (anchor_open == std::string::npos) {
+            break;
+        }
+        const size_t tag_end = html.find('>', anchor_open);
+        if (tag_end == std::string::npos) {
+            break;
+        }
+        const std::string href = href_from_anchor_at(html, anchor_open);
+        const std::string normalized = normalize_google_href(href);
+        if (!is_valid_google_result_url(normalized)) {
+            pos = tag_end + 1;
+            continue;
+        }
+
+        std::string title = aria_label_from_anchor_at(html, anchor_open);
+        const size_t anchor_close = html.find("</a>", tag_end);
+        if (title.empty() && anchor_close != std::string::npos) {
+            title = strip_tags(html.substr(tag_end + 1, anchor_close - tag_end - 1));
+        }
+        if (title.empty()) {
+            pos = tag_end + 1;
+            continue;
+        }
+
+        const std::string snippet = extract_snippet_near(html, tag_end);
+        append_google_result(results, max_results, href, title, snippet);
+        pos = tag_end + 1;
+    }
+}
+
+}  // namespace
+
+Error parse_google_search_html(const std::string& html, int max_results, std::vector<SearchResult>& results) {
+    results.clear();
+    if (max_results <= 0) {
+        return {ErrorCode::BadArgs, "max web search results must be greater than zero"};
+    }
+
+    parse_google_h3_results(html, max_results, results);
+    if (results.size() < static_cast<size_t>(max_results)) {
+        parse_google_url_redirects(html, max_results, results);
+    }
+    if (results.size() < static_cast<size_t>(max_results)) {
+        parse_google_anchor_results(html, max_results, results);
     }
 
     if (results.empty()) {
+        if (google_html_looks_blocked(html)) {
+            return {ErrorCode::ProviderSchema,
+                    "Google returned a JavaScript-only or consent page; try --web-search-provider duckduckgo "
+                    "or an API-based provider"};
+        }
         return {ErrorCode::ProviderSchema, "could not parse Google search results from HTML"};
     }
     return ok_error();
@@ -655,8 +920,11 @@ Error search_google_html(const std::string& query,
                          runtime::CancellationToken cancellation) {
     http::Request request = base_request(options);
     request.method = "GET";
-    request.url = "https://www.google.com/search?q=" + url_encode(query) + "&hl=en";
-    request.headers.push_back("Accept: text/html,application/xhtml+xml");
+    request.url = "https://www.google.com/search?q=" + url_encode(query) + "&hl=en&gbv=1";
+    request.headers.push_back("Accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8");
+    request.headers.push_back("Accept-Language: en-US,en;q=0.9");
+    request.headers.push_back("Cookie: CONSENT=YES+; SOCS=CAI");
+    request.follow_redirects = true;
     request.cancellation = cancellation;
     http::Response response;
     Error err = perform_http(request, {}, response);
@@ -772,7 +1040,7 @@ Error search(const std::string& query,
         if (try_provider(*entry)) {
             return ok_error();
         }
-        if (entry->needs_credentials) {
+        if (entry->needs_credentials || provider_name == "google") {
             for (const ProviderEntry* fallback : {find_provider("duckduckgo"), find_provider("google")}) {
                 if (fallback != nullptr && fallback != entry && try_provider(*fallback)) {
                     return ok_error();

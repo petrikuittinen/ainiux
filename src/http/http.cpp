@@ -372,6 +372,12 @@ Result perform(const Request& request, const std::vector<std::string>& secrets) 
         err = setopt_long(curl, CURLOPT_SSL_VERIFYHOST, 0L);
         if (!err.ok()) return {{}, err};
     }
+    if (request.follow_redirects) {
+        err = setopt_long(curl, CURLOPT_FOLLOWLOCATION, 1L);
+        if (!err.ok()) return {{}, err};
+        err = setopt_long(curl, CURLOPT_MAXREDIRS, 5L);
+        if (!err.ok()) return {{}, err};
+    }
     if (headers.get() != nullptr) {
         err = setopt_ptr(curl, CURLOPT_HTTPHEADER, headers.get());
         if (!err.ok()) return {{}, err};
