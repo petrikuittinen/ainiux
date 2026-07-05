@@ -13,6 +13,7 @@
 #include "json/json.hpp"
 #include "pkchat/version.hpp"
 #include "provider/provider.hpp"
+#include "search/search.hpp"
 #include "tui/tui.hpp"
 
 namespace {
@@ -98,11 +99,27 @@ int main(int argc, char** argv) {
         }
         return pkchat::app::run_document_extract(options, *out);
     }
+    if (pkchat::app::has_search_source(options) && !pkchat::app::wants_search_prompt_context(options)) {
+        std::ofstream out_file;
+        pkchat::Error output_error;
+        std::ostream* out = pkchat::app::output_stream(options, out_file, output_error);
+        if (!output_error.ok()) {
+            pkchat::app::print_error(output_error);
+            return pkchat::app::exit_code_for(output_error.code);
+        }
+        return pkchat::app::run_search_extract(options, *out);
+    }
     if (pkchat::app::wants_document_prompt_context(options) &&
         (options.editor || options.repl || options.tui || options.list_models)) {
         pkchat::app::print_error({pkchat::ErrorCode::BadArgs,
                                   "--fetch-url/--input prompt context currently supports non-interactive "
                                   "prompt mode only"});
+        return pkchat::app::exit_code_for(pkchat::ErrorCode::BadArgs);
+    }
+    if (pkchat::app::wants_search_prompt_context(options) &&
+        (options.editor || options.repl || options.tui || options.list_models)) {
+        pkchat::app::print_error({pkchat::ErrorCode::BadArgs,
+                                  "--search prompt context currently supports non-interactive prompt mode only"});
         return pkchat::app::exit_code_for(pkchat::ErrorCode::BadArgs);
     }
     if (options.rendered_output_format_explicit && options.format != pkchat::cli::OutputFormat::Text) {
@@ -386,6 +403,22 @@ int main(int argc, char** argv) {
 
     if (!fetched_context_message.empty()) {
         session.messages.push_back({"user", fetched_context_message});
+    }
+    if (pkchat::app::wants_search_prompt_context(context.options)) {
+        pkchat::search::SearchResponse search_response;
+        pkchat::Error search_err =
+            pkchat::search::search(context.options.search_query, pkchat::search::options_for(context.options),
+                                   search_response);
+        if (!search_err.ok()) {
+            pkchat::app::print_error(search_err);
+            return pkchat::app::exit_code_for(search_err.code);
+        }
+        if (!context.options.quiet) {
+            std::cerr << "Web search provider: " << search_response.provider_used << " ("
+                      << search_response.results.size() << " results)\n";
+        }
+        session.messages.push_back(
+            {"user", pkchat::app::search_context_message(context.options, search_response)});
     }
     for (std::string& message : attachment_context_messages) {
         session.messages.push_back({"user", std::move(message)});

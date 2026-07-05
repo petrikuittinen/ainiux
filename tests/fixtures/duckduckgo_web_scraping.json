@@ -1,0 +1,12 @@
+{
+  "Heading": "Web scraping",
+  "AbstractSource": "Wikipedia",
+  "AbstractURL": "https://en.wikipedia.org/wiki/Web_scraping",
+  "Abstract": "Web scraping, web harvesting, or web data extraction is data scraping used for extracting data from websites.",
+  "RelatedTopics": [
+    {
+      "Text": "Data scraping - general technique",
+      "FirstURL": "https://duckduckgo.com/Data_scraping"
+    }
+  ]
+}

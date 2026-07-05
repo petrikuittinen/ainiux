@@ -98,6 +98,14 @@ PDF and DOCX remain unsupported binary types. Bidirectional PDF/Markdown and DOC
 
 The same loader now backs TUI `/insert PATH` and its `/attach PATH` synonym in a runtime file job. Text becomes visible context immediately. Images are capability-checked and queued for exactly the next model turn without entering saved JSON. `/fetch URL` uses the file-job slot and delivers converted Markdown through the event queue. Workers check cancellation and never mutate the chat session directly.
 
+## Web Search First Slice
+
+v0.88 adds a separate `src/search/` module for explicit web search. Search is never inferred from prompt text. CLI `--search QUERY` can run standalone (printing ranked results) or insert a user-context message before `-p`/`--prompt`, matching the fetch/input context pattern. REPL `/search`, TUI `/search`, and editor `Esc /search` reuse the same formatter and provider chain.
+
+Provider selection is client-side and independent from LLM provider profiles. Configured API providers are tried when credentials or base URLs exist: Tavily, Firecrawl, Exa, and Searxng. `provider = auto` tries configured API providers first, then falls back to DuckDuckGo Instant Answer and Google HTML parsing when keys are absent or a provider fails. Results are capped by `web_search.max_results` (default 3), overridable through `--max-web-search-results` or `MAXIMUM_WEB_SEARCH_RESULTS`.
+
+The module reuses the existing libcurl HTTP wrapper. Google HTML parsing is intentionally fragile and treated as a best-effort fallback. DuckDuckGo may return only related topics when the instant abstract is empty. Follow-up work may add richer page fetching, provider capability probing, and tighter HTML-parser hardening.
+
 ## Request-Only Context Policies
 
 `--max-context-bytes N` enables a conservative text-byte budget. The `error`, `truncate-oldest`, `summarize-oldest`, `summarize-middle`, and `provider-auto` policies operate on a temporary provider request vector. Summaries are bounded deterministic extracts and do not make nested model calls. The full `Session::messages` transcript remains unchanged, while successful compactions append structured `compaction_events` containing the policy, estimated byte counts, affected-message count, timestamp, and notice. This is explicitly a byte estimate and is not presented as an exact provider token count.

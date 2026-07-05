@@ -244,7 +244,7 @@ void test_config_model_setting_thinking_budget() {
 void test_config_reads_common_template() {
     pkchat::config::ParseResult parsed = pkchat::config::read_file("config/pkchat.conf");
     check(parsed.error.ok(), "common config file parses");
-    check(parsed.document.entries.size() == 139, "common config has every expected setting");
+    check(parsed.document.entries.size() == 146, "common config has every expected setting");
 
     const pkchat::config::Entry* provider = parsed.document.find("provider");
     check(provider != nullptr && provider->value.is_string() && provider->value.string == "openai",
@@ -267,6 +267,7 @@ void test_config_reads_common_template() {
     check(err.ok(), "every common config setting passes schema validation");
     check(options.provider == "openai" && options.stream && options.tui_theme == "dark" &&
               !options.show_thinking_traces && !options.allow_private_url_fetch &&
+              options.max_web_search_results == 3 && options.web_search_provider == "auto" &&
               options.editor_undo_limit == 5 &&
               options.editor_huge_file_size_warning == 1073741824LL &&
               options.editor_file_size_limit == -1,

@@ -17,6 +17,7 @@
 #include "editor/path_completion.hpp"
 #include "editor/terminal_input.hpp"
 #include "fetch/fetch.hpp"
+#include "search/search.hpp"
 #include "input/input.hpp"
 #include "runtime/runtime.hpp"
 
@@ -430,6 +431,30 @@ int run(provider::RequestContext context, chat::Session session) {
         status = "Fetching " + url + "...";
     };
 
+    auto start_search = [&](const std::string& query) {
+        if (file_job.running()) {
+            status = "A file job is already running";
+            return;
+        }
+        if (query.empty()) {
+            status = "Usage: /search QUERY";
+            return;
+        }
+        search::Options options = search::options_for(context.options);
+        file_job.start([query, options, &events](runtime::CancellationToken token) mutable {
+            TuiEvent event;
+            event.type = TuiEventType::SearchDone;
+            event.text = query;
+            search::SearchResponse response;
+            event.error = search::search(query, options, response, token);
+            if (event.error.ok()) {
+                event.inserted_message = {"user", search::format_context_message(query, response)};
+            }
+            events.push(std::move(event));
+        });
+        status = "Searching " + query + "...";
+    };
+
     auto start_models = [&]() {
         if (active_job != ActiveJob::None) {
             status = "A model job is already running";
@@ -665,6 +690,7 @@ int run(provider::RequestContext context, chat::Session session) {
                     "/response\n"
                     "/insert PATH or /attach PATH (text or image)\n"
                     "/fetch URL\n"
+                    "/search QUERY\n"
                     "/theme [dark|light]\n"
                     "/thinking [trace|notrace]";
                 status = "Help shown; /help hides it";
@@ -937,6 +963,10 @@ int run(provider::RequestContext context, chat::Session session) {
             start_fetch(app::detail::trim_ascii(text.substr(6)));
             return;
         }
+        if (text == "/search" || text.rfind("/search ", 0) == 0) {
+            start_search(app::detail::trim_ascii(text.substr(7)));
+            return;
+        }
         status = "Unknown command: " + text;
     };
 
@@ -1107,6 +1137,16 @@ int run(provider::RequestContext context, chat::Session session) {
                         session.messages.push_back(std::move(event.inserted_message));
                         history_scroll = 0;
                         status = "Fetched and inserted " + event.text;
+                    } else {
+                        status = detail::error_line(event.error);
+                    }
+                    break;
+                case TuiEventType::SearchDone:
+                    file_job.join();
+                    if (event.error.ok()) {
+                        session.messages.push_back(std::move(event.inserted_message));
+                        history_scroll = 0;
+                        status = "Inserted web search results for " + event.text;
                     } else {
                         status = detail::error_line(event.error);
                     }

@@ -23,6 +23,7 @@ enum class TuiEventType {
     StoreLoadDone,
     InsertDone,
     FetchDone,
+    SearchDone,
     ModelsDone,
     CompletionDone,
 };

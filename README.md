@@ -2,7 +2,7 @@
 
 `pkchat` is a fast, script-friendly command-line chat client for OpenAI and OpenAI-compatible APIs.
 
-Current status: v0.87 CLI with libcurl transport, cancellable runtime jobs, provider registry/profile aliases, `/v1/models`, `/v1/chat/completions`, text-only OpenAI Responses API support, local JPEG/PNG/GIF image input, interactive text/image attachments, request-only context policies, safe URL insertion, a simple REPL, a standalone `--editor` mode with selection, copy/cut/paste, grapheme-aware Unicode editing, and AI continue/editor commands, a full-screen non-blocking TUI foundation, SQLite-backed TUI chat threads, JSON chat import/export save/load, HTML-to-text/Markdown extraction, Markdown assistant-output rendering to HTML or plaintext, automatic system/user TOML-alike configuration loading, and a concurrent JSONL benchmark runner.
+Current status: v0.88 CLI with libcurl transport, cancellable runtime jobs, provider registry/profile aliases, `/v1/models`, `/v1/chat/completions`, text-only OpenAI Responses API support, local JPEG/PNG/GIF image input, interactive text/image attachments, request-only context policies, safe URL insertion, web search with API providers and keyless fallbacks, a simple REPL, a standalone `--editor` mode with selection, copy/cut/paste, grapheme-aware Unicode editing, and AI continue/editor commands, a full-screen non-blocking TUI foundation, SQLite-backed TUI chat threads, JSON chat import/export save/load, HTML-to-text/Markdown extraction, Markdown assistant-output rendering to HTML or plaintext, automatic system/user TOML-alike configuration loading, and a concurrent JSONL benchmark runner.
 
 ## Build
 
@@ -229,10 +229,11 @@ Offline mode uses the `none` provider (alias `offline`) and requires no model en
 ./pkchat --provider none --input page.html --output-format md
 ./pkchat --provider none --input notes.md --output-format html --output notes.html
 ./pkchat --provider none --fetch-url https://example.com/article --output-format md
+./pkchat --provider none --search "web scraping" --output-format plaintext
 printf '/quit\n' | ./pkchat --provider none --repl --quiet
 ```
 
-The `none` provider never sends model requests or lists models. REPL and TUI modes can still run local commands such as `/insert`, `/fetch`, `/save`, and `/load`, but entering a chat prompt returns an unsupported-feature error until an OpenAI-compatible provider is selected. Model endpoint overrides are rejected with `--provider none` so offline mode cannot accidentally contact one. Explicit `--fetch-url` and `/fetch` operations still access their requested URL and retain the normal URL-fetch safety checks.
+The `none` provider never sends model requests or lists models. REPL and TUI modes can still run local commands such as `/insert`, `/fetch`, `/search`, `/save`, and `/load`, but entering a chat prompt returns an unsupported-feature error until an OpenAI-compatible provider is selected. Model endpoint overrides are rejected with `--provider none` so offline mode cannot accidentally contact one. Explicit `--fetch-url` and `/fetch` operations still access their requested URL and retain the normal URL-fetch safety checks.
 
 Prompt and system files:
 
@@ -261,6 +262,8 @@ Input extraction and URL context:
 ./pkchat --input notes.md --output-format html --output notes.html
 ./pkchat --input notes.txt --output-format jsond
 ./pkchat --fetch-url https://example.com/article --output-format md
+./pkchat --search "web scraping" --output-format plaintext
+./pkchat http://localhost:30000 -p "Summarize" --search "latest news"
 ./pkchat http://localhost:30000 -p "Tee yhteenveto" --fetch-url https://yle.fi/uutiset/lyhyesti/74-20232138
 ./pkchat http://localhost:30000 -s "Vastaa suomeksi" -p "Tee yhteenveto" --input page.html
 ./pkchat http://localhost:30000 -p "Describe this image" --input photo.png
@@ -273,11 +276,22 @@ generate-report | ./pkchat --input stdin --output-format html --output stdout
 
 `--input PATH` classifies extensions case-insensitively. It reads local `.txt`, `.md`/`.markdown`, and `.html`/`.htm` documents, or attaches `.png`, `.jpg`, `.jpeg`, and `.gif` images. Document inputs can be extracted without a model; image inputs require `-p`/`--prompt` and non-interactive Chat Completions mode. Images are signature-checked, capped at 20 MiB by default (`--max-image-bytes N`), base64-encoded into an OpenAI-compatible `image_url` data URL, and released after the request. Saved chat JSON keeps the prompt but does not embed image bytes. Provider profiles and recognized vision-model names are checked in the default `--image-capability auto` mode. Compatible unknown/custom models require `--image-capability allow`; `deny` disables image input. WebP input is disabled because common tested vision models do not decode it reliably, and `.webm` is a video container rather than an image.
 
-`--input` and `--fetch-url` by themselves are explicit document extraction modes: they print converted content to `stdout` and do not contact a model. In standalone extraction, `--output-format md|html|plaintext|json|jsond|ndjson` controls the output; `html` writes a fragment to `stdout` or a complete HTML document with `--output PATH`. When a document input is combined with `-p`/`--prompt` or `--prompt-file` in non-interactive CLI mode, `pkchat` sends the extracted input as a separate user-context message before the final prompt, while any `-s`/`--system` or `--system-file` remains the system prompt. The older `--html-file` option remains accepted as a compatibility alias for local HTML input.
+`--input` and `--fetch-url` by themselves are explicit document extraction modes: they print converted content to `stdout` and do not contact a model. `--search QUERY` by itself prints ranked web search results to `stdout`; combined with `-p`/`--prompt`, it inserts the results as a user-context message before the final prompt. In standalone extraction, `--output-format md|html|plaintext|json|jsond|ndjson` controls the output; `html` writes a fragment to `stdout` or a complete HTML document with `--output PATH`. When a document input is combined with `-p`/`--prompt` or `--prompt-file` in non-interactive CLI mode, `pkchat` sends the extracted input as a separate user-context message before the final prompt, while any `-s`/`--system` or `--system-file` remains the system prompt. The older `--html-file` option remains accepted as a compatibility alias for local HTML input.
 
-`--attach PATH` is repeatable and adds UTF-8 `.txt`, `.md`, or `.html` context files and PNG/JPEG/GIF images before the final non-interactive prompt. REPL and TUI `/insert PATH` and `/attach PATH` insert text context immediately or queue images for exactly the next prompt; TUI file work is cancellable. `/fetch URL` fetches, validates, converts, and inserts HTML through the same cancellable TUI job and URL safety policy as `--fetch-url`. Local document reads default to a 1 MiB per-file limit; change it with `--max-input-bytes N`. Oversized, unreadable, binary, invalid UTF-8, PDF, DOCX, and unsupported-extension inputs fail with specific errors. PDF and MS Word input/output conversion is deferred.
+`--attach PATH` is repeatable and adds UTF-8 `.txt`, `.md`, or `.html` context files and PNG/JPEG/GIF images before the final non-interactive prompt. REPL and TUI `/insert PATH` and `/attach PATH` insert text context immediately or queue images for exactly the next prompt; TUI file work is cancellable. `/fetch URL` fetches, validates, converts, and inserts HTML through the same cancellable TUI job and URL safety policy as `--fetch-url`. `/search QUERY` runs a web search and inserts ranked title/URL/snippet results through the same cancellable job model. Local document reads default to a 1 MiB per-file limit; change it with `--max-input-bytes N`. Oversized, unreadable, binary, invalid UTF-8, PDF, DOCX, and unsupported-extension inputs fail with specific errors. PDF and MS Word input/output conversion is deferred.
 
 For pipelines, `--input stdin` and `--attach stdin` read bounded UTF-8 plaintext from standard input. A command may select stdin only once, so these cannot be combined with another stdin-consuming option such as `--prompt-file -` or `--key-stdin`. `--output stdout` writes to standard output and is equivalent to omitting `--output`; status and errors remain on standard error.
+
+Web search:
+
+```sh
+./pkchat --provider none --search "web scraping"
+./pkchat --search "pkchat" --web-search-provider duckduckgo
+./pkchat http://localhost:30000 -p "Summarize the findings" --search "latest AI news"
+./pkchat --search "term" --max-web-search-results 5
+```
+
+`--search QUERY` is explicit and never triggered from text inside a prompt. With `provider = auto` (the default), pkchat tries configured API providers in order when keys or base URLs are available: Tavily (`TAVILY_API_KEY`), Firecrawl (`FIRECRAWL_API_KEY`), Exa (`EXA_API_KEY` or `EXA_BASE_URL`), and Searxng (`SEARXNG_BASE_URL` or `web_search.searxng_base_url`). When no API provider is configured, or when the selected provider fails, pkchat falls back to DuckDuckGo Instant Answer and then Google HTML result parsing. Results are ranked title/URL/snippet blocks capped by `MAXIMUM_WEB_SEARCH_RESULTS` (default 3). Override the cap with `--max-web-search-results N`, config `web_search.max_results`, or the `MAXIMUM_WEB_SEARCH_RESULTS` environment variable. REPL/TUI `/search QUERY` and editor `Esc /search QUERY` insert the same formatted context. Local Searxng/Exa installs on loopback require `--allow-private-url-fetch`.
 
 Context control is opt-in through `--max-context-bytes N`. `--context-policy error` is the default; `truncate-oldest`, `summarize-oldest`, and `summarize-middle` create a bounded request copy, while `provider-auto` sends the full transcript for provider-side handling. Local summaries are deterministic extracts, not extra model calls. Saved chat messages are never compacted: each compaction is recorded in `compaction_events`, and notices state that the full transcript remains on disk. The byte estimate is a transport-independent guard, not a provider token count.
 
@@ -294,7 +308,7 @@ Interactive REPL and chat files:
 ./pkchat --load-chat chat.json -p "Continue from the saved chat"
 ```
 
-In REPL mode, commands include `/help`, `/quit`, `/save PATH`, `/load PATH`, `/insert PATH`, `/attach PATH`, `/fetch URL`, `/clear`, `/system TEXT`, and `/model MODEL`. Prompts and status are written to `stderr`; assistant replies remain on `stdout`.
+In REPL mode, commands include `/help`, `/quit`, `/save PATH`, `/load PATH`, `/insert PATH`, `/attach PATH`, `/fetch URL`, `/search QUERY`, `/clear`, `/system TEXT`, and `/model MODEL`. Prompts and status are written to `stderr`; assistant replies remain on `stdout`.
 
 Standalone multiline editor:
 
@@ -314,7 +328,7 @@ Full-screen chat TUI foundation:
 ./pkchat --chat lmstudio
 ```
 
-The TUI also runs `/insert`, `/attach`, and `/fetch` through cancellable runtime jobs. `/help` toggles a persistent, scrollable command panel that is not sent to the provider or saved.
+The TUI also runs `/insert`, `/attach`, `/fetch`, and `/search` through cancellable runtime jobs. `/help` toggles a persistent, scrollable command panel that is not sent to the provider or saved.
 
 In non-interactive `-p`/`--prompt` mode, model thinking traces are written only to standard error. Standard output contains only the visible answer, including with streaming, JSON, NDJSON, rendered output, and `--output stdout`, so it is safe to pipe into another command. Saved chat files retain the full assistant response, including thinking traces.
 
@@ -364,6 +378,10 @@ make test
 ```
 
 `make test` runs unit tests, I/O and network fault tests, and one integration script against a local mock OpenAI-compatible server.
+
+### v0.88 web search
+
+v0.88 adds web search through `--search QUERY`, REPL/TUI `/search QUERY`, and editor `Esc /search QUERY`. API providers include Tavily, Firecrawl, Exa, and Searxng; keyless fallbacks use DuckDuckGo Instant Answer and Google HTML parsing. Configure defaults in `[web_search]` inside `config/pkchat.conf`.
 
 ### v0.87 editor and chat keybindings
 

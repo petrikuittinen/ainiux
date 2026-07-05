@@ -1200,6 +1200,29 @@ Error apply_document(const Document& document, cli::Options& options) {
         } else if (name == "url_fetch.allow_private_addresses") {
             err = require_type(entry, Value::Type::Boolean);
             if (err.ok()) candidate.allow_private_url_fetch = entry.value.boolean;
+        } else if (name == "web_search.max_results") {
+            err = nonnegative_int(entry, candidate.max_web_search_results);
+            if (err.ok() && candidate.max_web_search_results <= 0) {
+                err = schema_error(entry, "web_search.max_results expects a positive integer");
+            }
+        } else if (name == "web_search.provider") {
+            err = require_type(entry, Value::Type::String);
+            if (err.ok()) candidate.web_search_provider = entry.value.string;
+        } else if (name == "web_search.tavily_key_env") {
+            err = require_type(entry, Value::Type::String);
+            if (err.ok()) candidate.tavily_key_env = entry.value.string;
+        } else if (name == "web_search.firecrawl_key_env") {
+            err = require_type(entry, Value::Type::String);
+            if (err.ok()) candidate.firecrawl_key_env = entry.value.string;
+        } else if (name == "web_search.exa_key_env") {
+            err = require_type(entry, Value::Type::String);
+            if (err.ok()) candidate.exa_key_env = entry.value.string;
+        } else if (name == "web_search.exa_base_url") {
+            err = require_type(entry, Value::Type::String);
+            if (err.ok()) candidate.exa_base_url = entry.value.string;
+        } else if (name == "web_search.searxng_base_url") {
+            err = require_type(entry, Value::Type::String);
+            if (err.ok()) candidate.searxng_base_url = entry.value.string;
         } else if (name == "tui.colors") {
             err = require_type(entry, Value::Type::Boolean);
             if (err.ok()) candidate.no_colors = !entry.value.boolean;

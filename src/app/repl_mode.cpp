@@ -7,6 +7,7 @@
 
 #include "fetch/fetch.hpp"
 #include "input/input.hpp"
+#include "search/search.hpp"
 
 namespace pkchat::app {
 
@@ -16,7 +17,7 @@ using InputKind = input::Kind;
 
 void print_repl_help() {
     std::cerr << "Commands: /help, /quit, /exit, /save [PATH], /load PATH, /insert PATH, /attach PATH, "
-                 "/fetch URL, /clear, /system TEXT, /model MODEL\n";
+                 "/fetch URL, /search QUERY, /clear, /system TEXT, /model MODEL\n";
 }
 
 }  // namespace
@@ -214,6 +215,25 @@ int run_repl(provider::RequestContext context, chat::Session session, std::ostre
                 session.messages.push_back({"user", input::text_context_message(fetched)});
                 if (!context.options.quiet) {
                     std::cerr << "Fetched and inserted URL: " << url << "\n";
+                }
+                continue;
+            }
+            if (text == "/search" || text.rfind("/search ", 0) == 0) {
+                const std::string query = detail::trim_ascii(text.substr(7));
+                if (query.empty()) {
+                    std::cerr << "Usage: /search QUERY\n";
+                    continue;
+                }
+                search::SearchResponse response;
+                Error err = search::search(query, search::options_for(context.options), response);
+                if (!err.ok()) {
+                    print_error(err);
+                    continue;
+                }
+                session.messages.push_back({"user", search::format_context_message(query, response)});
+                if (!context.options.quiet) {
+                    std::cerr << "Inserted web search results from " << response.provider_used << ": "
+                              << query << "\n";
                 }
                 continue;
             }

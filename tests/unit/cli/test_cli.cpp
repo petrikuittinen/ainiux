@@ -108,6 +108,18 @@ void test_cli_help_displays_version() {
           "CLI help heading displays the current pkchat version");
 }
 
+void test_cli_web_search_parse() {
+    const char* argv[] = {"pkchat", "--search", "web scraping", "--web-search-provider", "duckduckgo",
+                          "--max-web-search-results", "5", "-p", "summarize"};
+    pkchat::cli::ParseResult parsed = pkchat::cli::parse_args(9, const_cast<char**>(argv));
+    check(parsed.error.ok(), "web search args parse");
+    check(parsed.options.search_query == "web scraping", "web search query parsed");
+    check(parsed.options.web_search_provider == "duckduckgo", "web search provider parsed");
+    check(parsed.options.max_web_search_results == 5, "web search max results parsed");
+    check(parsed.options.max_web_search_results_explicit, "web search max results marked explicit");
+    check(parsed.options.prompt == "summarize", "web search prompt parsed");
+}
+
 void test_cli_html_extract_parse() {
     const char* argv[] = {"pkchat", "--fetch-url", "https://example.com/page", "--html-format", "markdown",
                           "--max-fetch-bytes", "123", "--allow-private-url-fetch", "--output", "page.md"};
@@ -276,6 +288,7 @@ void run_all() {
     test_cli_context_token_parse();
     test_cli_editor_parse();
     test_cli_help_displays_version();
+    test_cli_web_search_parse();
     test_cli_html_extract_parse();
     test_cli_output_format_parse();
     test_cli_parse();

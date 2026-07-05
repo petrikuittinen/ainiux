@@ -345,6 +345,7 @@ std::vector<std::string> assist_command_completions(const EditorAssistConfig& co
     }
     commands.push_back("/help");
     commands.push_back("/prompt ");
+    commands.push_back("/search ");
     commands.push_back("/quit");
     return commands;
 }
@@ -461,6 +462,16 @@ ParsedAssistCommand parse_assist_command(const std::string& line, const EditorAs
         parsed.kind = AssistCommandKind::Quit;
         if (!remainder.empty()) {
             parsed.error_message = "/quit does not take arguments";
+            return parsed;
+        }
+        parsed.ok = true;
+        return parsed;
+    }
+    if (command == "search") {
+        parsed.kind = AssistCommandKind::WebSearch;
+        parsed.custom_prompt = remainder;
+        if (parsed.custom_prompt.empty()) {
+            parsed.error_message = "/search requires a search term";
             return parsed;
         }
         parsed.ok = true;

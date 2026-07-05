@@ -19,8 +19,9 @@ bool needs_value(const std::string& opt) {
         "--output",
         "--provider", "--profile", "--api", "--base-url", "--chat-url", "--models-url", "--responses-url",
         "--key-env", "--key-file", "-k", "--key", "--header", "--connect-timeout", "--timeout",
-        "--proxy", "--fetch-url", "--input", "--attach", "--html-file", "--html-format",
-        "--max-fetch-bytes", "--max-input-bytes", "--max-image-bytes", "--max-context-bytes",
+        "--proxy", "--fetch-url", "--search", "--web-search-provider", "--input", "--attach",
+        "--html-file", "--html-format", "--max-fetch-bytes", "--max-web-search-results",
+        "--max-input-bytes", "--max-image-bytes", "--max-context-bytes",
         "--context", "--context-policy", "--image-capability",
         "--save-chat", "--load-chat", "--dataset", "--category", "--case",
         "--runs", "--warmup", "--limit", "--mode", "--concurrency", "--duration",
@@ -424,6 +425,10 @@ ParseResult parse_args(int argc, char** argv, const Options& base_options) {
                 opts.proxy = value;
             } else if (opt == "--fetch-url") {
                 opts.fetch_url = value;
+            } else if (opt == "--search") {
+                opts.search_query = value;
+            } else if (opt == "--web-search-provider") {
+                opts.web_search_provider = value;
             } else if (opt == "--input") {
                 opts.input_path = value;
             } else if (opt == "--attach") {
@@ -440,6 +445,14 @@ ParseResult parse_args(int argc, char** argv, const Options& base_options) {
                 if (!err.ok()) {
                     return {opts, err};
                 }
+            } else if (opt == "--max-web-search-results") {
+                long parsed = 0;
+                Error err = parse_long(opt, value, parsed);
+                if (!err.ok() || parsed <= 0) {
+                    return {opts, {ErrorCode::BadArgs, "--max-web-search-results expects an integer greater than zero"}};
+                }
+                opts.max_web_search_results = static_cast<int>(parsed);
+                opts.max_web_search_results_explicit = true;
             } else if (opt == "--max-input-bytes") {
                 Error err = parse_long(opt, value, opts.max_input_bytes);
                 if (!err.ok()) {
@@ -559,6 +572,7 @@ Usage:
   pkchat [BASE_URL|PROFILE] --editor [PATH] [--output PATH]
   pkchat --input PATH [--output-format md|html|plaintext|json|jsond] [--output PATH]
   pkchat --fetch-url URL [--output-format md|html|plaintext|json|jsond] [--output PATH]
+  pkchat --search QUERY [--output-format md|html|plaintext|json|jsond] [--output PATH]
   pkchat --benchmark [--dataset FILE] [--mode MODE] [--provider NAME] [-m MODEL]
   pkchat benchmark [--dataset FILE] [--mode MODE] [--provider NAME] [-m MODEL]
 
@@ -573,6 +587,8 @@ Examples:
   pkchat http://localhost:1234/v1 --editor draft.md
   pkchat --provider none --input page.html --output-format md
   pkchat --provider none --fetch-url https://example.com --output-format md
+  pkchat --provider none --search "web scraping" --output-format plaintext
+  pkchat http://localhost:8000 -p "Summarize" --search "latest news"
   pkchat openrouter -model MODEL -i
   pkchat lmstudio -i
   pkchat --chat lmstudio
@@ -622,6 +638,13 @@ Options:
       --attach PATH             Add text/Markdown/HTML or PNG/JPEG/GIF; repeatable;
                                 'stdin' reads UTF-8 plaintext from standard input.
       --fetch-url URL           Fetch HTML for extraction, or as prompt context with -p.
+      --search QUERY            Run a web search and use results as prompt context with -p.
+      --web-search-provider NAME
+                                auto, tavily, firecrawl, exa, searxng, duckduckgo, or google.
+      --max-web-search-results N
+                                Maximum ranked web search hits to include; default 3.
+                                Override with config web_search.max_results or
+                                MAXIMUM_WEB_SEARCH_RESULTS.
       --dataset PATH            Benchmark JSONL dataset; default 'builtin'.
       --mode MODE               speed, long-context, quality, refusals; comma-separated.
       --concurrency N           Concurrent benchmark requests; default 1, maximum 256.

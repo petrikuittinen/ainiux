@@ -44,6 +44,20 @@ Defaults:
 
 Resolved IPv4 and IPv6 addresses are checked in libcurl's socket-open callback before a connection is created, so a public-looking hostname cannot connect to a private result. URL fetching through `--proxy` is refused without `--allow-private-url-fetch`, because the client cannot verify target DNS performed by a proxy. The override deliberately disables both literal and resolved-address blocking.
 
+## Web Search
+
+Web search is explicit through `--search QUERY`, REPL `/search QUERY`, TUI `/search QUERY`, and editor `Esc /search QUERY`. It is never triggered from URLs or search terms found inside prompt text alone.
+
+Defaults:
+
+- result cap: 3 unless `web_search.max_results`, `--max-web-search-results`, or `MAXIMUM_WEB_SEARCH_RESULTS` overrides it
+- provider order: configured API providers when keys/base URLs exist, then DuckDuckGo Instant Answer, then Google HTML parsing
+- credentials: API keys come from environment variables or config `*_key_env` names; do not store secrets in config files
+- network: uses the same libcurl transport, timeouts, and proxy settings as other HTTP features
+- local installs: Searxng/Exa on loopback require `--allow-private-url-fetch`, matching URL-fetch private-address policy
+
+Search results are untrusted third-party text. They are inserted as user-context messages and should be treated as external input by both users and models. Google HTML fallback parsing may break when result markup changes.
+
 ## Local Image Input
 
 Image input is explicit through `--input IMAGE` or repeated `--attach IMAGE` combined with a prompt. Supported endings are matched case-insensitively and file signatures must match PNG, JPEG, or GIF before data is sent. The default 20 MiB input cap limits both binary reads and subsequent base64 growth; use `--max-image-bytes N` to lower it for constrained environments. WebP input is disabled because tested vision endpoints did not handle it reliably.

@@ -8,6 +8,7 @@
 #include "html/html.hpp"
 #include "json/json.hpp"
 #include "markdown/markdown.hpp"
+#include "search/search.hpp"
 
 namespace pkchat::app {
 
@@ -236,8 +237,16 @@ bool has_document_source(const cli::Options& options) {
     return !options.fetch_url.empty() || !options.input_path.empty() || !options.html_file.empty();
 }
 
+bool has_search_source(const cli::Options& options) {
+    return !options.search_query.empty();
+}
+
 bool wants_document_prompt_context(const cli::Options& options) {
     return has_document_source(options) && (!options.prompt.empty() || !options.prompt_file.empty());
+}
+
+bool wants_search_prompt_context(const cli::Options& options) {
+    return has_search_source(options) && (!options.prompt.empty() || !options.prompt_file.empty());
 }
 
 Error validate_stdin_sources(const cli::Options& options) {
@@ -394,6 +403,38 @@ int run_document_extract(const cli::Options& options, std::ostream& out) {
             << json::quote(markdown::output_format_name(document.output_format)) << "}\n";
     } else {
         out << document.converted;
+    }
+    return 0;
+}
+
+std::string search_context_message(const cli::Options& options, const search::SearchResponse& response) {
+    return search::format_context_message(options.search_query, response);
+}
+
+int run_search_extract(const cli::Options& options, std::ostream& out) {
+    search::SearchResponse response;
+    Error err = search::search(options.search_query, search::options_for(options), response);
+    if (!err.ok()) {
+        print_error(err);
+        return exit_code_for(err.code);
+    }
+    if (!options.quiet) {
+        std::cerr << "Web search provider: " << response.provider_used << " ("
+                  << response.results.size() << " results)\n";
+    }
+    const std::string formatted = search::format_plaintext_output(options.search_query, response);
+    if (options.format == cli::OutputFormat::Json) {
+        out << "{"
+            << "\"query\":" << json::quote(options.search_query) << ","
+            << "\"provider\":" << json::quote(response.provider_used) << ","
+            << "\"content\":" << json::quote(formatted)
+            << "}\n";
+    } else if (options.format == cli::OutputFormat::Ndjson) {
+        out << "{\"event\":\"start\",\"query\":" << json::quote(options.search_query) << "}\n";
+        out << "{\"event\":\"content\",\"text\":" << json::quote(formatted) << "}\n";
+        out << "{\"event\":\"done\",\"provider\":" << json::quote(response.provider_used) << "}\n";
+    } else {
+        out << formatted;
     }
     return 0;
 }

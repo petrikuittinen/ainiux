@@ -10,6 +10,7 @@
 #include "common.hpp"
 #include "config/config.hpp"
 #include "fetch/fetch.hpp"
+#include "search/search.hpp"
 #include "input/input.hpp"
 #include "markdown/markdown.hpp"
 #include "provider/provider.hpp"
@@ -30,7 +31,9 @@ struct LoadedDocument {
 };
 
 bool has_document_source(const cli::Options& options);
+bool has_search_source(const cli::Options& options);
 bool wants_document_prompt_context(const cli::Options& options);
+bool wants_search_prompt_context(const cli::Options& options);
 
 Error validate_stdin_sources(const cli::Options& options);
 Error local_input_type_for_options(const cli::Options& options, input::FileType& type);
@@ -43,6 +46,8 @@ std::string document_context_message(const LoadedDocument& document);
 fetch::Options fetch_options_for(const cli::Options& options);
 
 int run_document_extract(const cli::Options& options, std::ostream& out);
+int run_search_extract(const cli::Options& options, std::ostream& out);
+std::string search_context_message(const cli::Options& options, const search::SearchResponse& response);
 int run_benchmark_mode(const cli::Options& options);
 
 void refresh_session_metadata(chat::Session& session, const provider::RequestContext& context);

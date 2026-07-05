@@ -28,6 +28,7 @@ const std::vector<std::string>& chat_command_completions() {
         "/clear",
         "/exit",
         "/fetch ",
+        "/search ",
         "/help",
         "/insert ",
         "/list",

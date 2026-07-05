@@ -6,6 +6,7 @@
 #include "editor/terminal_input.hpp"
 #include "editor/terminal_ui.hpp"
 #include "runtime/runtime.hpp"
+#include "search/search.hpp"
 #include "tui/activity.hpp"
 
 #include <functional>
@@ -371,6 +372,28 @@ int run_editor(const std::string& path,
             pending_assist = PendingAssist{};
             exit_assist_command_mode(minibuffer, assist_completer);
             quit = true;
+            return;
+        }
+        if (parsed.kind == AssistCommandKind::WebSearch) {
+            search::Options search_options =
+                ai_continue == nullptr ? search::default_options()
+                                       : search::options_for(ai_continue->request.options);
+            search::SearchResponse response;
+            Error search_error = search::search(parsed.custom_prompt, search_options, response);
+            if (!search_error.ok()) {
+                minibuffer_message(minibuffer, search_error.message);
+                return;
+            }
+            const std::string text = search::format_context_message(parsed.custom_prompt, response);
+            Error insert_error = state.insert(text + "\n");
+            if (!insert_error.ok()) {
+                minibuffer_message(minibuffer, insert_error.message);
+                return;
+            }
+            pending_assist = PendingAssist{};
+            exit_assist_command_mode(minibuffer, assist_completer);
+            minibuffer_message(minibuffer,
+                               "Inserted web search results from " + response.provider_used);
             return;
         }
         start_assist(parsed.kind, parsed.command_index, parsed.scope, parsed.custom_prompt, std::nullopt);

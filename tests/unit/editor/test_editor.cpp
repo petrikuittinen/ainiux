@@ -238,6 +238,14 @@ void test_editor_assist_helpers() {
     parsed = pkchat::editor::parse_assist_command("/prompt", default_config);
     check(!parsed.ok, "bare /prompt is rejected");
 
+    parsed = pkchat::editor::parse_assist_command("/search pkchat cli", default_config);
+    check(parsed.ok && parsed.kind == pkchat::editor::AssistCommandKind::WebSearch,
+          "/search parses with query");
+    check(parsed.custom_prompt == "pkchat cli", "/search stores the query text");
+
+    parsed = pkchat::editor::parse_assist_command("/search", default_config);
+    check(!parsed.ok, "bare /search is rejected");
+
     parsed = pkchat::editor::parse_assist_command("/quit", default_config);
     check(parsed.ok && parsed.kind == pkchat::editor::AssistCommandKind::Quit, "/quit parses");
 

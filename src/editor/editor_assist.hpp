@@ -19,6 +19,7 @@ enum class AssistCommandKind {
     Configured,
     Prompt,
     Quit,
+    WebSearch,
 };
 
 enum class AssistScope {

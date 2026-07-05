@@ -15,6 +15,7 @@
 #include "output/test_output.hpp"
 #include "provider/test_provider.hpp"
 #include "runtime/test_runtime.hpp"
+#include "search/test_search.hpp"
 #include "security/test_security.hpp"
 #include "support/test_support.hpp"
 #include "tui/test_tui.hpp"
@@ -28,6 +29,7 @@ int main() {
     pkchat::test::context::run_all();
     pkchat::test::http::run_all();
     pkchat::test::fetch::run_all();
+    pkchat::test::search::run_all();
     pkchat::test::html::run_all();
     pkchat::test::markdown::run_all();
     pkchat::test::provider::run_all();

@@ -57,6 +57,13 @@ struct Options {
     std::string key;
     std::string output_path;
     std::string fetch_url;
+    std::string search_query;
+    std::string web_search_provider = "auto";
+    std::string tavily_key_env;
+    std::string firecrawl_key_env;
+    std::string exa_key_env;
+    std::string exa_base_url;
+    std::string searxng_base_url;
     std::string input_path;
     std::string html_file;
     std::string html_format = "markdown";
@@ -101,6 +108,8 @@ struct Options {
     long connect_timeout_seconds = 10;
     long timeout_seconds = 0;
     long max_fetch_bytes = 1048576;
+    int max_web_search_results = 3;
+    bool max_web_search_results_explicit = false;
     long max_input_bytes = 1048576;
     long max_image_bytes = 20971520;
     long max_context_bytes = 0;
