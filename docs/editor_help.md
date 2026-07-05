@@ -88,6 +88,7 @@ Press **`Esc`** to open the command minibuffer (`Command:`). Type a slash comman
 | `/Chinese` | Translate to Chinese |
 | `/Finnish` | Translate to Finnish |
 | `/prompt TEXT` | Custom one-shot AI task |
+| `/regenerate` | Repeat the previous AI command with the same command options |
 | `/save` | Save (same as `Ctrl+S`) |
 | `/saveas [PATH]` | Save as (same as `Ctrl+Shift+S`; `Tab` completes paths after the command) |
 | `/find` | Search (same as `Ctrl+F`) |

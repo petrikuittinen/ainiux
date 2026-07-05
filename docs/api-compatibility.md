@@ -20,6 +20,28 @@ Implemented text-only support is available with `--api responses`, `--responses`
 
 Current Responses support maps `output_text` and streaming `response.output_text.delta` into the same internal assistant message/delta model used by Chat Completions. Reasoning summary deltas are rendered as `<think>...</think>` blocks when providers emit them. Images, files, tools, provider-side context management, and capability probing are not implemented yet.
 
+## Reasoning And Thinking Controls
+
+`--thinking on|off` and `--thinking-budget TOKENS|LABEL` are translated in `src/provider/` before a request is sent. The mapping is provider-profile based, so strict APIs do not receive the old generic `enable_thinking` and `thinking_budget` fields unless that is their documented shape or the endpoint is explicitly local/custom.
+
+```text
+profile/API                 outgoing request fields
+openai chat                 reasoning_effort: LABEL
+openai responses            reasoning: { effort: LABEL }
+openrouter                  reasoning: { effort: LABEL } or { max_tokens: TOKENS }
+gemini                      reasoning_effort: LABEL, or extra_body.google.thinking_config.thinking_budget for numeric budgets
+qwen, dashscope             enable_thinking plus numeric thinking_budget
+deepseek                    thinking: { type: enabled|disabled } plus reasoning_effort: high|max
+xai                         reasoning_effort: LABEL
+custom/local fallback       enable_thinking and thinking_budget, preserving previous generic behavior
+```
+
+Numeric budgets are preserved where the provider documents token-budget control: OpenRouter `reasoning.max_tokens`, Gemini `extra_body.google.thinking_config.thinking_budget`, and Qwen/DashScope `thinking_budget`. For effort-only APIs, numeric budgets are mapped onto a deterministic scale: `0 -> none`, `<=1024 -> low`, `<=8192 -> medium`, `<=24576 -> high`, and larger values to `xhigh` where supported. Qwen/DashScope verbal labels are converted back to approximate token budgets on the same scale.
+
+Provider-specific limits still apply. For example, Gemini can disable thinking only on some models, DeepSeek maps lower efforts to `high`, and some OpenAI models only support a subset of effort values. `pkchat` does not yet perform live model capability probing for reasoning controls.
+
+Anthropic's built-in profile uses Anthropic's OpenAI SDK compatibility endpoint, which Anthropic documents as mainly for testing/comparison. Native Claude extended/adaptive thinking is not implemented because `pkchat` does not yet have a native Anthropic Messages adapter.
+
 ## Built-In Profiles
 
 ```text

@@ -351,6 +351,7 @@ std::vector<std::string> assist_command_completions(const EditorAssistConfig& co
     commands.push_back("/replace");
     commands.push_back("/open ");
     commands.push_back("/prompt ");
+    commands.push_back("/regenerate");
     commands.push_back("/search ");
     commands.push_back("/quit");
     return commands;
@@ -545,6 +546,15 @@ ParsedAssistCommand parse_assist_command(const std::string& line, const EditorAs
         parsed.custom_prompt = remainder;
         if (parsed.custom_prompt.empty()) {
             parsed.error_message = "/prompt requires a custom prompt";
+            return parsed;
+        }
+        parsed.ok = true;
+        return parsed;
+    }
+    if (command == "regenerate") {
+        parsed.kind = AssistCommandKind::Regenerate;
+        if (!remainder.empty()) {
+            parsed.error_message = "/regenerate does not take arguments";
             return parsed;
         }
         parsed.ok = true;

@@ -12,6 +12,7 @@
 
 #include <string>
 #include <thread>
+#include <utility>
 #include <vector>
 
 namespace pkchat::test::provider {
@@ -20,6 +21,70 @@ namespace {
 
 using pkchat::test::check;
 using pkchat::test::read_fixture;
+
+pkchat::json::Value serialized_request_json(pkchat::provider::RequestContext context) {
+    context.options.model = context.options.model.empty() ? "mock-model" : context.options.model;
+    context.options.stream = false;
+    const std::string request =
+        pkchat::provider::serialize_request(context, {{"user", "hello"}});
+    pkchat::json::ParseResult parsed = pkchat::json::parse(request);
+    check(parsed.error.ok(), "provider request serialization returns valid JSON");
+    return std::move(parsed.value);
+}
+
+const pkchat::json::Value* field(const pkchat::json::Value& value, const std::string& name) {
+    return value.get(name);
+}
+
+const pkchat::json::Value* field(const pkchat::json::Value* value, const std::string& name) {
+    return value == nullptr ? nullptr : value->get(name);
+}
+
+void check_string_field(const pkchat::json::Value& value,
+                        const std::string& name,
+                        const std::string& expected,
+                        const std::string& message) {
+    const pkchat::json::Value* actual = field(value, name);
+    check(actual != nullptr && actual->is_string() && actual->string == expected, message);
+}
+
+void check_string_field(const pkchat::json::Value* value,
+                        const std::string& name,
+                        const std::string& expected,
+                        const std::string& message) {
+    const pkchat::json::Value* actual = field(value, name);
+    check(actual != nullptr && actual->is_string() && actual->string == expected, message);
+}
+
+void check_number_field(const pkchat::json::Value& value,
+                        const std::string& name,
+                        double expected,
+                        const std::string& message) {
+    const pkchat::json::Value* actual = field(value, name);
+    check(actual != nullptr && actual->type == pkchat::json::Value::Type::Number &&
+              actual->number == expected,
+          message);
+}
+
+void check_number_field(const pkchat::json::Value* value,
+                        const std::string& name,
+                        double expected,
+                        const std::string& message) {
+    const pkchat::json::Value* actual = field(value, name);
+    check(actual != nullptr && actual->type == pkchat::json::Value::Type::Number &&
+              actual->number == expected,
+          message);
+}
+
+void check_bool_field(const pkchat::json::Value& value,
+                      const std::string& name,
+                      bool expected,
+                      const std::string& message) {
+    const pkchat::json::Value* actual = field(value, name);
+    check(actual != nullptr && actual->type == pkchat::json::Value::Type::Bool &&
+              actual->boolean == expected,
+          message);
+}
 
 class UniqueFd {
    public:
@@ -568,6 +633,148 @@ void test_provider_responses_unsupported_and_override() {
     check(pkchat::provider::capabilities_for(override_ctx.context).responses_api, "Responses override reports capability");
 }
 
+void test_provider_reasoning_request_compatibility() {
+    pkchat::provider::RequestContext context;
+    context.options.has_thinking_budget = true;
+    context.options.thinking_budget = "high";
+
+    context.profile.name = "openai";
+    context.api_kind = pkchat::provider::ApiKind::ChatCompletions;
+    pkchat::json::Value request = serialized_request_json(context);
+    check_string_field(request,
+                       "reasoning_effort",
+                       "high",
+                       "OpenAI Chat uses reasoning_effort for verbal thinking budgets");
+    check(field(request, "enable_thinking") == nullptr && field(request, "thinking_budget") == nullptr,
+          "OpenAI Chat does not receive generic thinking fields");
+
+    context.api_kind = pkchat::provider::ApiKind::Responses;
+    context.options.thinking_budget = "4096";
+    request = serialized_request_json(context);
+    const pkchat::json::Value* reasoning = field(request, "reasoning");
+    check(reasoning != nullptr && reasoning->is_object(), "OpenAI Responses emits a reasoning object");
+    check_string_field(reasoning,
+                       "effort",
+                       "medium",
+                       "OpenAI Responses maps numeric budgets to reasoning effort");
+    check(field(request, "thinking_budget") == nullptr,
+          "OpenAI Responses does not receive generic thinking_budget");
+
+    context = pkchat::provider::RequestContext{};
+    context.profile.name = "openrouter";
+    context.options.has_thinking_budget = true;
+    context.options.thinking_budget = "2048";
+    request = serialized_request_json(context);
+    reasoning = field(request, "reasoning");
+    check(reasoning != nullptr && reasoning->is_object(), "OpenRouter emits unified reasoning object");
+    check_number_field(reasoning,
+                       "max_tokens",
+                       2048.0,
+                       "OpenRouter preserves numeric thinking budgets as reasoning.max_tokens");
+    check(field(request, "reasoning_effort") == nullptr,
+          "OpenRouter does not receive top-level reasoning_effort");
+
+    context.options.thinking_budget = "xhigh";
+    request = serialized_request_json(context);
+    reasoning = field(request, "reasoning");
+    check_string_field(reasoning,
+                       "effort",
+                       "xhigh",
+                       "OpenRouter preserves effort labels in reasoning.effort");
+
+    context = pkchat::provider::RequestContext{};
+    context.profile.name = "gemini";
+    context.options.has_thinking_budget = true;
+    context.options.thinking_budget = "8192";
+    request = serialized_request_json(context);
+    const pkchat::json::Value* extra_body = field(request, "extra_body");
+    const pkchat::json::Value* google = field(extra_body, "google");
+    const pkchat::json::Value* thinking_config = field(google, "thinking_config");
+    check_number_field(thinking_config,
+                       "thinking_budget",
+                       8192.0,
+                       "Gemini preserves numeric thinking budgets in extra_body.google.thinking_config");
+    check(field(request, "reasoning_effort") == nullptr,
+          "Gemini numeric budget does not also emit reasoning_effort");
+
+    context.options.thinking_budget = "xhigh";
+    request = serialized_request_json(context);
+    check_string_field(request,
+                       "reasoning_effort",
+                       "high",
+                       "Gemini maps over-high effort labels to its highest OpenAI-compatible effort");
+
+    context = pkchat::provider::RequestContext{};
+    context.profile.name = "qwen";
+    context.options.has_thinking_budget = true;
+    context.options.thinking_budget = "high";
+    request = serialized_request_json(context);
+    check_bool_field(request, "enable_thinking", true, "Qwen thinking budget enables thinking");
+    check_number_field(request,
+                       "thinking_budget",
+                       24576.0,
+                       "Qwen maps verbal thinking budgets to documented token-budget scale");
+
+    context.profile.name = "dashscope";
+    context.options.thinking_budget = "1024";
+    request = serialized_request_json(context);
+    check_bool_field(request, "enable_thinking", true, "DashScope numeric budget enables thinking");
+    check_number_field(request, "thinking_budget", 1024.0, "DashScope preserves numeric thinking_budget");
+
+    context = pkchat::provider::RequestContext{};
+    context.profile.name = "deepseek";
+    context.options.has_enable_thinking = true;
+    context.options.enable_thinking = false;
+    request = serialized_request_json(context);
+    const pkchat::json::Value* thinking = field(request, "thinking");
+    check_string_field(thinking,
+                       "type",
+                       "disabled",
+                       "DeepSeek maps thinking off to thinking.type disabled");
+    check(field(request, "reasoning_effort") == nullptr,
+          "DeepSeek disabled thinking omits reasoning_effort");
+
+    context.options.enable_thinking = true;
+    context.options.has_thinking_budget = true;
+    context.options.thinking_budget = "medium";
+    request = serialized_request_json(context);
+    thinking = field(request, "thinking");
+    check_string_field(thinking,
+                       "type",
+                       "enabled",
+                       "DeepSeek maps enabled thinking to thinking.type enabled");
+    check_string_field(request,
+                       "reasoning_effort",
+                       "high",
+                       "DeepSeek maps low/medium-compatible efforts to high");
+
+    context = pkchat::provider::RequestContext{};
+    context.profile.name = "xai";
+    context.options.has_thinking_budget = true;
+    context.options.thinking_budget = "xhigh";
+    request = serialized_request_json(context);
+    check_string_field(request,
+                       "reasoning_effort",
+                       "high",
+                       "xAI maps xhigh to the highest documented Grok effort");
+
+    context = pkchat::provider::RequestContext{};
+    context.profile.name = "custom_openai_chat";
+    context.options.has_enable_thinking = true;
+    context.options.enable_thinking = true;
+    context.options.has_thinking_budget = true;
+    context.options.thinking_budget = "high";
+    request = serialized_request_json(context);
+    check_bool_field(request,
+                     "enable_thinking",
+                     true,
+                     "custom OpenAI-compatible endpoints keep generic enable_thinking");
+    check_string_field(request,
+                       "thinking_budget",
+                       "high",
+                       "custom OpenAI-compatible endpoints preserve verbal thinking_budget");
+}
+
 void test_provider_unicode_request_serialization() {
     pkchat::provider::RequestContext context;
     context.options.model = "mock-model";
@@ -612,6 +819,7 @@ void run_all() {
     test_provider_capabilities_and_responses_context();
     test_provider_registry_resolves_added_profiles();
     test_provider_responses_unsupported_and_override();
+    test_provider_reasoning_request_compatibility();
 }
 
 }  // namespace pkchat::test::provider

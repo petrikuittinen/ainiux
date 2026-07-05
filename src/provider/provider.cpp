@@ -4,6 +4,7 @@
 #include <chrono>
 #include <cctype>
 #include <cstdlib>
+#include <exception>
 #include <fstream>
 #include <iomanip>
 #include <iostream>
@@ -237,6 +238,291 @@ Error validate_header(const std::string& header) {
 
 std::string strip_thinking_blocks_for_request(const std::string& content);
 
+enum class ReasoningWireFormat {
+    None,
+    GenericThinking,
+    OpenAiChatEffort,
+    OpenAiResponsesReasoning,
+    OpenRouterReasoning,
+    GeminiOpenAi,
+    QwenThinking,
+    DeepSeekThinking,
+    XaiReasoningEffort,
+};
+
+std::string lower_ascii_copy(std::string text) {
+    for (char& ch : text) {
+        ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+    }
+    return text;
+}
+
+long long parse_reasoning_token_budget(const std::string& value) {
+    if (!chat::thinking_budget_is_token_count(value)) {
+        return -1;
+    }
+    try {
+        return std::stoll(value);
+    } catch (const std::exception&) {
+        return -1;
+    }
+}
+
+std::string normalize_reasoning_effort(std::string value) {
+    value = lower_ascii_copy(trim_ascii(std::move(value)));
+    if (value == "off" || value == "false" || value == "disabled" || value == "disable" ||
+        value == "no") {
+        return "none";
+    }
+    if (value == "on" || value == "true" || value == "enabled" || value == "enable" ||
+        value == "yes") {
+        return "medium";
+    }
+    return value;
+}
+
+std::string effort_from_token_budget(long long tokens) {
+    if (tokens <= 0) {
+        return "none";
+    }
+    if (tokens <= 1024) {
+        return "low";
+    }
+    if (tokens <= 8192) {
+        return "medium";
+    }
+    if (tokens <= 24576) {
+        return "high";
+    }
+    return "xhigh";
+}
+
+long long token_budget_from_effort(const std::string& effort) {
+    if (effort == "none") {
+        return 0;
+    }
+    if (effort == "minimal" || effort == "low") {
+        return 1024;
+    }
+    if (effort == "medium") {
+        return 8192;
+    }
+    if (effort == "high") {
+        return 24576;
+    }
+    if (effort == "xhigh" || effort == "max") {
+        return 32768;
+    }
+    return -1;
+}
+
+std::string reasoning_effort_from_options(const cli::Options& o) {
+    if (o.has_thinking_budget) {
+        const long long tokens = parse_reasoning_token_budget(o.thinking_budget);
+        if (tokens >= 0) {
+            return effort_from_token_budget(tokens);
+        }
+        return normalize_reasoning_effort(o.thinking_budget);
+    }
+    if (o.has_enable_thinking) {
+        return o.enable_thinking ? "medium" : "none";
+    }
+    return "";
+}
+
+ReasoningWireFormat reasoning_wire_format_for(const RequestContext& context) {
+    const std::string profile = lower_alias(context.profile.name);
+    if (profile == "none" || context.profile.offline) {
+        return ReasoningWireFormat::None;
+    }
+    if (profile == "openai") {
+        return context.api_kind == ApiKind::Responses ? ReasoningWireFormat::OpenAiResponsesReasoning
+                                                      : ReasoningWireFormat::OpenAiChatEffort;
+    }
+    if (profile == "openrouter") {
+        return ReasoningWireFormat::OpenRouterReasoning;
+    }
+    if (profile == "gemini") {
+        return ReasoningWireFormat::GeminiOpenAi;
+    }
+    if (profile == "qwen" || profile == "dashscope") {
+        return ReasoningWireFormat::QwenThinking;
+    }
+    if (profile == "deepseek") {
+        return ReasoningWireFormat::DeepSeekThinking;
+    }
+    if (profile == "xai") {
+        return ReasoningWireFormat::XaiReasoningEffort;
+    }
+    if (profile.empty() || profile == "custom_openai_chat" || profile == "lm_studio" ||
+        profile == "ollama" || profile == "vllm" || profile == "llamacpp") {
+        return ReasoningWireFormat::GenericThinking;
+    }
+    return ReasoningWireFormat::None;
+}
+
+std::string openai_effort_value(std::string effort) {
+    if (effort == "max") {
+        return "xhigh";
+    }
+    return effort;
+}
+
+std::string gemini_effort_value(std::string effort) {
+    if (effort == "xhigh" || effort == "max") {
+        return "high";
+    }
+    return effort;
+}
+
+std::string xai_effort_value(std::string effort) {
+    if (effort == "minimal") {
+        return "low";
+    }
+    if (effort == "xhigh" || effort == "max") {
+        return "high";
+    }
+    return effort;
+}
+
+std::string deepseek_effort_value(std::string effort) {
+    if (effort == "xhigh" || effort == "max") {
+        return "max";
+    }
+    if (effort == "none") {
+        return "none";
+    }
+    return "high";
+}
+
+std::string append_pair(std::string fields, const std::string& key, const std::string& value_json) {
+    if (!fields.empty()) {
+        fields += ",";
+    }
+    fields += json::quote(key);
+    fields += ":";
+    fields += value_json;
+    return fields;
+}
+
+std::string qwen_reasoning_fields_json(const cli::Options& o) {
+    std::string fields;
+    const std::string effort = reasoning_effort_from_options(o);
+    const long long explicit_tokens =
+        o.has_thinking_budget ? parse_reasoning_token_budget(o.thinking_budget) : -1;
+
+    if (o.has_enable_thinking || o.has_thinking_budget) {
+        bool enabled = true;
+        if (o.has_enable_thinking) {
+            enabled = o.enable_thinking;
+        }
+        if (effort == "none" || explicit_tokens == 0) {
+            enabled = false;
+        }
+        fields = append_pair(fields, "enable_thinking", enabled ? "true" : "false");
+    }
+
+    if (explicit_tokens > 0) {
+        fields = append_pair(fields, "thinking_budget", std::to_string(explicit_tokens));
+    } else if (explicit_tokens < 0 && !effort.empty()) {
+        const long long mapped_tokens = token_budget_from_effort(effort);
+        if (mapped_tokens > 0) {
+            fields = append_pair(fields, "thinking_budget", std::to_string(mapped_tokens));
+        }
+    }
+    return fields;
+}
+
+std::string generic_reasoning_fields_json(const cli::Options& o) {
+    std::string fields;
+    if (o.has_enable_thinking) {
+        fields = append_pair(fields, "enable_thinking", o.enable_thinking ? "true" : "false");
+    }
+    if (o.has_thinking_budget) {
+        if (chat::thinking_budget_is_token_count(o.thinking_budget)) {
+            fields = append_pair(fields, "thinking_budget", o.thinking_budget);
+        } else {
+            fields = append_pair(fields, "thinking_budget", json::quote(o.thinking_budget));
+        }
+    }
+    return fields;
+}
+
+std::string reasoning_fields_json(const RequestContext& context) {
+    const cli::Options& o = context.options;
+    if (!o.has_enable_thinking && !o.has_thinking_budget) {
+        return "";
+    }
+
+    const ReasoningWireFormat format = reasoning_wire_format_for(context);
+    const std::string effort = reasoning_effort_from_options(o);
+    const long long tokens =
+        o.has_thinking_budget ? parse_reasoning_token_budget(o.thinking_budget) : -1;
+    std::string fields;
+
+    switch (format) {
+        case ReasoningWireFormat::None:
+            return "";
+        case ReasoningWireFormat::GenericThinking:
+            return generic_reasoning_fields_json(o);
+        case ReasoningWireFormat::OpenAiChatEffort:
+            if (!effort.empty()) {
+                fields = append_pair(fields, "reasoning_effort", json::quote(openai_effort_value(effort)));
+            }
+            return fields;
+        case ReasoningWireFormat::OpenAiResponsesReasoning:
+            if (!effort.empty()) {
+                fields = append_pair(fields,
+                                     "reasoning",
+                                     "{\"effort\":" + json::quote(openai_effort_value(effort)) + "}");
+            }
+            return fields;
+        case ReasoningWireFormat::OpenRouterReasoning:
+            if (tokens == 0 || effort == "none") {
+                fields = append_pair(fields, "reasoning", "{\"effort\":\"none\"}");
+            } else if (tokens > 0) {
+                fields = append_pair(fields, "reasoning", "{\"max_tokens\":" + std::to_string(tokens) + "}");
+            } else if (!effort.empty()) {
+                fields = append_pair(fields, "reasoning", "{\"effort\":" + json::quote(effort) + "}");
+            } else if (o.has_enable_thinking && o.enable_thinking) {
+                fields = append_pair(fields, "reasoning", "{\"enabled\":true}");
+            }
+            return fields;
+        case ReasoningWireFormat::GeminiOpenAi:
+            if (tokens > 0) {
+                fields = append_pair(fields,
+                                     "extra_body",
+                                     "{\"google\":{\"thinking_config\":{\"thinking_budget\":" +
+                                         std::to_string(tokens) + "}}}");
+            } else if (!effort.empty()) {
+                fields =
+                    append_pair(fields, "reasoning_effort", json::quote(gemini_effort_value(effort)));
+            }
+            return fields;
+        case ReasoningWireFormat::QwenThinking:
+            return qwen_reasoning_fields_json(o);
+        case ReasoningWireFormat::DeepSeekThinking: {
+            if (effort == "none" || tokens == 0 || (o.has_enable_thinking && !o.enable_thinking)) {
+                fields = append_pair(fields, "thinking", "{\"type\":\"disabled\"}");
+                return fields;
+            }
+            fields = append_pair(fields, "thinking", "{\"type\":\"enabled\"}");
+            if (!effort.empty()) {
+                fields = append_pair(fields,
+                                     "reasoning_effort",
+                                     json::quote(deepseek_effort_value(effort)));
+            }
+            return fields;
+        }
+        case ReasoningWireFormat::XaiReasoningEffort:
+            if (!effort.empty()) {
+                fields = append_pair(fields, "reasoning_effort", json::quote(xai_effort_value(effort)));
+            }
+            return fields;
+    }
+    return "";
+}
+
 void append_sampling_fields(std::ostringstream& json, const cli::Options& o) {
     if (o.has_temperature) {
         json << ",\"temperature\":" << o.temperature;
@@ -258,12 +544,6 @@ void append_sampling_fields(std::ostringstream& json, const cli::Options& o) {
     }
     if (o.has_max_output_tokens) {
         json << ",\"max_tokens\":" << o.max_output_tokens;
-    }
-    if (o.has_enable_thinking) {
-        json << ",\"enable_thinking\":" << (o.enable_thinking ? "true" : "false");
-    }
-    if (o.has_thinking_budget) {
-        chat::append_thinking_budget_json(json, o.thinking_budget);
     }
 }
 
@@ -309,6 +589,10 @@ std::string build_chat_request_json(const RequestContext& context, const std::ve
     json << "],";
     json << "\"stream\":" << (o.stream ? "true" : "false");
     append_sampling_fields(json, o);
+    const std::string reasoning_fields = reasoning_fields_json(context);
+    if (!reasoning_fields.empty()) {
+        json << "," << reasoning_fields;
+    }
     json << "}";
     return json.str();
 }
@@ -401,17 +685,10 @@ std::string build_responses_request_json(const RequestContext& context, const st
         comma();
         out << "\"max_output_tokens\":" << o.max_output_tokens;
     }
-    if (o.has_enable_thinking) {
+    const std::string reasoning_fields = reasoning_fields_json(context);
+    if (!reasoning_fields.empty()) {
         comma();
-        out << "\"enable_thinking\":" << (o.enable_thinking ? "true" : "false");
-    }
-    if (o.has_thinking_budget) {
-        comma();
-        if (chat::thinking_budget_is_token_count(o.thinking_budget)) {
-            out << "\"thinking_budget\":" << o.thinking_budget;
-        } else {
-            out << "\"thinking_budget\":" << json::quote(o.thinking_budget);
-        }
+        out << reasoning_fields;
     }
     out << "}";
     return out.str();
@@ -1859,6 +2136,11 @@ long long reported_total_tokens(const ChatResult& result) {
     return input + output;
 }
 
+std::string serialize_request(const RequestContext& context, const std::vector<Message>& messages) {
+    return context.api_kind == ApiKind::Responses ? build_responses_request_json(context, messages)
+                                                  : build_chat_request_json(context, messages);
+}
+
 std::string serialize_chat_request(const RequestContext& context, const std::vector<Message>& messages) {
     return build_chat_request_json(context, messages);
 }
@@ -1926,8 +2208,7 @@ Error send_chat_messages(const RequestContext& context,
 
     const std::string url = active_request_url(context);
     http::Request req = base_http_request(context, "POST", url, cancellation);
-    req.body = context.api_kind == ApiKind::Responses ? build_responses_request_json(context, messages)
-                                                      : serialize_chat_request(context, messages);
+    req.body = serialize_request(context, messages);
     SseParser chat_parser(context.suppress_streaming_reasoning);
     ResponsesSseParser responses_parser(context.suppress_streaming_reasoning);
     bool done = false;

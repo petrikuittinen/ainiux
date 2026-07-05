@@ -50,6 +50,15 @@ struct AssistSession {
     size_t replace_count = 0;
 };
 
+struct StoredAssistCommand {
+    bool valid = false;
+    AssistCommandKind kind = AssistCommandKind::Unknown;
+    size_t command_index = 0;
+    std::optional<AssistScope> scope;
+    std::string custom_prompt;
+    std::optional<AssistPromptMode> prompt_mode;
+};
+
 void clear_assist_session(AssistSession& session) {
     session.job.join();
     ContinueEvent event;
@@ -120,6 +129,7 @@ int run_editor(const std::string& path,
     ReplaceSession replace;
     std::string pending_load_path;
     AssistSession assist_session;
+    StoredAssistCommand last_assist_command;
     AssistCompleterState assist_completer;
     PendingAssist pending_assist;
     HelpViewSession help_view;
@@ -312,6 +322,15 @@ int run_editor(const std::string& path,
             return;
         }
 
+        if (kind == AssistCommandKind::Configured || kind == AssistCommandKind::Prompt) {
+            last_assist_command.valid = true;
+            last_assist_command.kind = kind;
+            last_assist_command.command_index = command_index;
+            last_assist_command.scope = scope;
+            last_assist_command.custom_prompt = custom_prompt;
+            last_assist_command.prompt_mode = prompt_mode;
+        }
+
         pending_assist = PendingAssist{};
         exit_assist_command_mode(minibuffer, assist_completer);
         clear_assist_session(assist_session);
@@ -412,6 +431,18 @@ int run_editor(const std::string& path,
             pending_assist.kind = parsed.kind;
             pending_assist.custom_prompt = parsed.custom_prompt;
             start_minibuffer(minibuffer, MinibufferAction::AssistPromptMode, assist_prompt_mode_message());
+            return;
+        }
+        if (parsed.kind == AssistCommandKind::Regenerate) {
+            if (!last_assist_command.valid) {
+                minibuffer_message(minibuffer, "No previous AI command to regenerate");
+                return;
+            }
+            start_assist(last_assist_command.kind,
+                         last_assist_command.command_index,
+                         last_assist_command.scope,
+                         last_assist_command.custom_prompt,
+                         last_assist_command.prompt_mode);
             return;
         }
         if (parsed.kind == AssistCommandKind::Quit) {

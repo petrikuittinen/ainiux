@@ -2,7 +2,6 @@
 
 ## Editor AI Commands
 
-- Add `/regenerate` to repeat the previous AI command with the same command options where practical.
 - Ensure AI text mutations are one undoable editor operation so a separate preview panel is not required.
 - Nice-to-have: keep standalone editor input/navigation fully responsive while an AI assist request is active; cancellation remains the required behavior.
 - Harden the standalone editor with resize tests, multi-panel tests, scroll commands, search, and full Unicode grapheme/cell-width handling.
@@ -18,6 +17,9 @@
 ## Provider And API Hardening
 
 - Continue v0.4 provider work: provider capability probing, provider-specific error normalization, broader Responses API schema coverage, and adapter docs/tests for real providers.
+- Add live reasoning/thinking capability probing or model metadata so unsupported effort labels and token budgets can be rejected before a provider request.
+- Add a native Anthropic Messages adapter before exposing Claude extended/adaptive thinking settings; the OpenAI-compatible Anthropic profile remains a testing/comparison path.
+- Preserve provider reasoning state needed by future agentic tool loops, including OpenAI Responses reasoning items, OpenRouter signed reasoning details, DeepSeek reasoning content around tool calls, and Anthropic thinking signatures.
 - Add provider-reported context limits and improve token estimation.
 - Add Responses API image input support.
 - Expand JSON handling behind the existing facade or vendor a reviewed JSON library.

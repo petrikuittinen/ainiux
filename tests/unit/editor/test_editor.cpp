@@ -238,6 +238,13 @@ void test_editor_assist_helpers() {
     parsed = pkchat::editor::parse_assist_command("/prompt", default_config);
     check(!parsed.ok, "bare /prompt is rejected");
 
+    parsed = pkchat::editor::parse_assist_command("/regenerate", default_config);
+    check(parsed.ok && parsed.kind == pkchat::editor::AssistCommandKind::Regenerate,
+          "/regenerate parses");
+
+    parsed = pkchat::editor::parse_assist_command("/regenerate now", default_config);
+    check(!parsed.ok, "/regenerate rejects arguments");
+
     parsed = pkchat::editor::parse_assist_command("/search pkchat cli", default_config);
     check(parsed.ok && parsed.kind == pkchat::editor::AssistCommandKind::WebSearch,
           "/search parses with query");
@@ -256,6 +263,8 @@ void test_editor_assist_helpers() {
     const std::vector<std::string> completions =
         pkchat::editor::assist_command_completions(default_config);
     check(!completions.empty() && completions.front() == "/spell", "assist completions include /spell");
+    check(std::find(completions.begin(), completions.end(), "/regenerate") != completions.end(),
+          "assist completions include /regenerate");
     for (const char* builtin : {"/spell", "/grammar", "/continue", "/fact", "/comment", "/rewrite",
                                 "/English", "/Chinese", "/Finnish"}) {
         for (const char* mode : {"selection", "all", "continue", "insert"}) {
@@ -1541,6 +1550,8 @@ void test_editor_help_document_and_command() {
           "editor help document documents /saveas slash command");
     check(help_text.find("/spell") != std::string::npos && help_text.find("/help") != std::string::npos,
           "editor help document lists slash commands");
+    check(help_text.find("/regenerate") != std::string::npos,
+          "editor help document documents /regenerate");
 
     check(pkchat::editor::is_editor_help_command("/help"), "editor /help command is recognized");
     check(pkchat::editor::is_editor_help_command("  /HELP  "), "editor /help command is case-insensitive");

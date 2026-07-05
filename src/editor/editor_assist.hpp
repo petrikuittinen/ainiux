@@ -20,6 +20,7 @@ enum class AssistCommandKind {
     Configured,
     Prompt,
     Quit,
+    Regenerate,
     WebSearch,
 };
 

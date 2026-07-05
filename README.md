@@ -2,7 +2,7 @@
 
 `pkchat` is a fast, script-friendly command-line chat client for OpenAI and OpenAI-compatible APIs.
 
-Current status: v0.88 CLI with libcurl transport, cancellable runtime jobs, provider registry/profile aliases, `/v1/models`, `/v1/chat/completions`, text-only OpenAI Responses API support, local JPEG/PNG/GIF image input, interactive text/image attachments, request-only context policies, safe URL insertion, web search with API providers and keyless fallbacks, a simple REPL, a standalone `--editor` mode with selection, copy/cut/paste, grapheme-aware Unicode editing, and AI continue/editor commands, a full-screen non-blocking TUI foundation, SQLite-backed TUI chat threads, JSON chat import/export save/load, HTML-to-text/Markdown extraction, Markdown assistant-output rendering to HTML or plaintext, automatic system/user TOML-alike configuration loading, and a concurrent JSONL benchmark runner.
+Current status: v0.88 CLI with libcurl transport, cancellable runtime jobs, provider registry/profile aliases, `/v1/models`, `/v1/chat/completions`, text-only OpenAI Responses API support, provider-specific reasoning/thinking request compatibility, local JPEG/PNG/GIF image input, interactive text/image attachments, request-only context policies, safe URL insertion, web search with API providers and keyless fallbacks, a simple REPL, a standalone `--editor` mode with selection, copy/cut/paste, grapheme-aware Unicode editing, and AI continue/editor commands, a full-screen non-blocking TUI foundation, SQLite-backed TUI chat threads, JSON chat import/export save/load, HTML-to-text/Markdown extraction, Markdown assistant-output rendering to HTML or plaintext, automatic system/user TOML-alike configuration loading, and a concurrent JSONL benchmark runner.
 
 ## Build
 
@@ -80,7 +80,7 @@ With a configured provider and model, the editor can run one-shot AI tasks from 
 | `c` / `continue` | continue | Up to `MAX_AI_CONTINUE_READ` characters immediately before the cursor (default 4096) | Stream new text after the cursor |
 | `i` / `insert` | insert | Selected text | Stream new text after the cursor |
 
-Built-in commands are `/spell`, `/grammar`, `/continue`, `/fact`, `/comment`, `/rewrite`, `/English`, `/Chinese`, and `/Finnish`. Each supports all four modes above. `/comment` comments on how to improve the text, `/rewrite` rewrites for spelling, grammar, facts, and style, and the language commands translate. Type `Esc` to open the command minibuffer, enter a command such as `/spell`, and pkchat prompts for a mode when one is omitted. `Tab` completes commands and mode variants. `/prompt YOUR TASK` runs a custom one-shot prompt and accepts the same modes (`c`, `i`, `s`, `a`). `/quit` leaves command mode.
+Built-in commands are `/spell`, `/grammar`, `/continue`, `/fact`, `/comment`, `/rewrite`, `/English`, `/Chinese`, and `/Finnish`. Each supports all four modes above. `/comment` comments on how to improve the text, `/rewrite` rewrites for spelling, grammar, facts, and style, and the language commands translate. Type `Esc` to open the command minibuffer, enter a command such as `/spell`, and pkchat prompts for a mode when one is omitted. `Tab` completes commands and mode variants. `/prompt YOUR TASK` runs a custom one-shot prompt and accepts the same modes (`c`, `i`, `s`, `a`). `/regenerate` repeats the previous AI command with the same command options where the current buffer state allows it. `/quit` leaves command mode.
 
 `Ctrl+Space` runs `/continue` in **continue** mode: it sends the tail-before-cursor context, streams visible continuation text at the cursor up to `MAX_AI_CONTINUE_TOKENS` (default 32768), hides thinking traces from the buffer, and shows `[MODEL] thinking... ESC to abort` / `[MODEL] writing. Press ESC to stop.` / `[MODEL] stopped and ready` in the minibuffer. `Esc` cancels an in-flight request but keeps any text already streamed into the buffer. For `lmstudio`, `ollama`, `vllm`, and loopback `http://localhost...` / `http://127.0.0.1...` endpoints, pkchat uses the first model from `/v1/models` when `--model` is omitted; cloud providers still require an explicit model.
 
@@ -221,6 +221,18 @@ Complete built-in provider list:
 | `custom_openai_chat` | `custom` | user supplied | `PKCHAT_API_KEY` (optional) |
 
 The model-backed profiles share the same OpenAI-compatible chat adapter where possible, with endpoint paths and key defaults coming from the registry. Provider names and aliases are case-insensitive; hyphens and underscores are interchangeable.
+
+Reasoning and thinking controls:
+
+```sh
+./pkchat --provider openai --thinking-budget high -m MODEL -p "Solve carefully"
+./pkchat --provider openrouter --thinking-budget 4096 -m MODEL -p "Solve carefully"
+./pkchat --provider gemini --thinking-budget high -m MODEL -p "Solve carefully"
+./pkchat --provider qwen --thinking-budget 8192 -m qwen-plus -p "Solve carefully"
+./pkchat --provider deepseek --thinking off -m MODEL -p "Answer directly"
+```
+
+`--thinking on|off` and `--thinking-budget TOKENS|LABEL` are translated by the provider layer into each profile's documented request shape. OpenAI Chat uses `reasoning_effort`, OpenAI Responses uses `reasoning.effort`, OpenRouter uses `reasoning.effort` or `reasoning.max_tokens`, Gemini preserves numeric budgets through `extra_body.google.thinking_config.thinking_budget`, Qwen/DashScope use `enable_thinking` and `thinking_budget`, DeepSeek uses `thinking.type` plus its supported effort labels, and xAI uses `reasoning_effort`. Custom and local OpenAI-compatible endpoints retain the older generic `enable_thinking` / `thinking_budget` fields. See [docs/api-compatibility.md](docs/api-compatibility.md) for the mapping and current limitations.
 
 Offline mode uses the `none` provider (alias `offline`) and requires no model endpoint or API key:
 
@@ -379,6 +391,10 @@ make test
 
 `make test` runs unit tests, I/O and network fault tests, and one integration script against a local mock OpenAI-compatible server.
 
+### Unreleased reasoning compatibility
+
+`--thinking` and `--thinking-budget` now pass through a provider compatibility layer instead of using one generic wire shape for every endpoint. This covers OpenAI Chat/Responses, OpenRouter, Gemini, Qwen/DashScope, DeepSeek, xAI, and the custom/local fallback path. Native Anthropic extended thinking and preservation of provider reasoning state for future agentic tool loops remain follow-up work.
+
 ### v0.88 web search
 
 v0.88 adds web search through `--search QUERY`, REPL/TUI `/search QUERY`, and editor `Esc /search QUERY`. API providers include Tavily, Firecrawl, Exa, and Searxng; keyless fallbacks use DuckDuckGo Instant Answer and Google HTML parsing. Configure defaults in `[web_search]` inside `config/pkchat.conf`.
@@ -393,7 +409,7 @@ v0.86 improves TUI readability with compact provider display names (`custom` ins
 
 ### v0.85 model settings notes
 
-v0.85 adds per-thread model settings with CLI flags (`--top-k`, `--min-p`, `--repeat-penalty`, `--presence-penalty`, `--thinking`, `--thinking-budget`, `--purpose`), repeatable `[Model-setting]` presets in `config/pkchat.conf`, TUI `/setting`, `/system`, and `/clone`, and SQLite persistence via `settings_json`. Unset overrides are stored as JSON `null` and use provider defaults; `/setting NAME=NULL` clears a thread override. `thinking_budget` accepts token counts (`8192`) or verbal labels (`high`).
+v0.85 adds per-thread model settings with CLI flags (`--top-k`, `--min-p`, `--repeat-penalty`, `--presence-penalty`, `--thinking`, `--thinking-budget`, `--purpose`), repeatable `[Model-setting]` presets in `config/pkchat.conf`, TUI `/setting`, `/system`, and `/clone`, and SQLite persistence via `settings_json`. Unset overrides are stored as JSON `null` and use provider defaults; `/setting NAME=NULL` clears a thread override. `thinking_budget` accepts token counts (`8192`) or verbal labels (`high`) and is translated to the active provider's request format when a model call is serialized.
 
 ### v0.84 refactor notes
 

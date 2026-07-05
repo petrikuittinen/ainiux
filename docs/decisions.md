@@ -31,6 +31,8 @@ Responses API support is a sibling adapter selected with `--api responses`, `--r
 
 The `none` provider profile represents an explicit model-offline state. It has no base URL, endpoint paths, credentials, or model capabilities. Provider transport entry points reject model listing and chat before constructing an HTTP request, and endpoint overrides are invalid with this profile. This lets editor, conversion, explicit URL fetching, and local REPL/TUI commands run without inventing a dummy OpenAI-compatible endpoint. URL fetching remains a separate explicit network operation governed by its own safety policy.
 
+Reasoning and thinking request controls are translated inside `src/provider/` rather than emitted as one generic pair of fields for every endpoint. `--thinking` and `--thinking-budget` remain the user-facing controls, but request serialization maps them to OpenAI Chat `reasoning_effort`, OpenAI Responses `reasoning.effort`, OpenRouter `reasoning`, Gemini OpenAI-compatible `reasoning_effort` or `extra_body.google.thinking_config.thinking_budget`, Qwen/DashScope `enable_thinking` and `thinking_budget`, DeepSeek `thinking.type` plus `reasoning_effort`, and xAI `reasoning_effort`. Local/custom OpenAI-compatible profiles retain the generic `enable_thinking` and `thinking_budget` fallback because those endpoints often accept experimental llama.cpp/Qwen-style fields. Provider capability probing, native Anthropic extended thinking, and preservation of signed/opaque reasoning state for future agentic tool loops are deferred.
+
 
 ## JSON Chat Persistence
 
