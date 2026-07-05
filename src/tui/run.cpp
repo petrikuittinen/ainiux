@@ -68,6 +68,7 @@ int run(provider::RequestContext context, chat::Session session) {
     std::vector<provider::ImageInput> pending_images;
     size_t inflight_image_count = 0;
     std::string help_text;
+    std::string settings_text;
     TuiMode mode = TuiMode::Chat;
     size_t history_edit_index = static_cast<size_t>(-1);
     std::vector<chat::ThreadSummary> thread_picker_threads;
@@ -123,7 +124,29 @@ int run(provider::RequestContext context, chat::Session session) {
         if (mode == TuiMode::HistoryEdit) {
             return history_edit_text();
         }
-        return help_text;
+        if (!help_text.empty()) {
+            return help_text;
+        }
+        return settings_text;
+    };
+
+    auto panel_title = [&]() -> const char* {
+        if (mode != TuiMode::Chat) {
+            return nullptr;
+        }
+        if (!help_text.empty()) {
+            return "Help";
+        }
+        if (!settings_text.empty()) {
+            return "Settings";
+        }
+        return nullptr;
+    };
+
+    auto refresh_settings_panel_if_visible = [&]() {
+        if (!settings_text.empty()) {
+            settings_text = chat::format_settings_panel(context.options);
+        }
     };
 
     Error sqlite_open_error = sqlite_store.open_default();
@@ -335,6 +358,7 @@ int run(provider::RequestContext context, chat::Session session) {
         }
         app::refresh_session_metadata(session, context);
         start_store_save();
+        refresh_settings_panel_if_visible();
     };
 
     auto start_insert = [&](const std::string& path) {
@@ -670,6 +694,7 @@ int run(provider::RequestContext context, chat::Session session) {
         }
         if (text == "/help") {
             if (help_text.empty()) {
+                settings_text.clear();
                 help_text =
                     "/help (hide/show this panel)\n"
                     "/quit or /exit\n"
@@ -681,12 +706,14 @@ int run(provider::RequestContext context, chat::Session session) {
                     "/models\n"
                     "/model MODEL\n"
                     "/system [TEXT]\n"
+                    "/setting (hide/show current settings)\n"
                     "/setting NAME=VALUE\n"
                     "/setting general|coding|instruct|creative\n"
                     "/clone\n"
                     "/save [PATH]\n"
                     "/load PATH\n"
                     "/remove\n"
+                    "/remove-empty\n"
                     "/pop\n"
                     "/response\n"
                     "/insert PATH or /attach PATH (text or image)\n"
@@ -865,8 +892,15 @@ int run(provider::RequestContext context, chat::Session session) {
         if (text == "/setting" || text.rfind("/setting ", 0) == 0) {
             const std::string requested = text.size() <= 8 ? "" : app::detail::trim_ascii(text.substr(8));
             if (requested.empty()) {
-                status = chat::format_settings_summary(context.options) +
-                         ". Use /setting NAME=VALUE or /setting general|coding|instruct|creative";
+                if (settings_text.empty()) {
+                    help_text.clear();
+                    settings_text = chat::format_settings_panel(context.options);
+                    status = "Settings shown; /setting hides them";
+                } else {
+                    settings_text.clear();
+                    status = "Settings hidden";
+                }
+                history_scroll = 0;
                 return;
             }
             if (requested == "general" || requested == "coding" || requested == "instruct" ||
@@ -891,6 +925,7 @@ int run(provider::RequestContext context, chat::Session session) {
                     context.options.system = preset->default_system_prompt;
                 }
                 persist_settings_change("Applied " + requested + " settings for " + context.options.model);
+                refresh_settings_panel_if_visible();
                 return;
             }
             const size_t equals = requested.find('=');
@@ -910,6 +945,7 @@ int run(provider::RequestContext context, chat::Session session) {
                 return;
             }
             persist_settings_change("Updated " + name);
+            refresh_settings_panel_if_visible();
             return;
         }
         if (text == "/models") {
@@ -949,6 +985,40 @@ int run(provider::RequestContext context, chat::Session session) {
             }
             mode = TuiMode::RemoveConfirm;
             status = "Confirm removal with y or cancel with n/Esc";
+            return;
+        }
+        if (text == "/remove-empty") {
+            if (!sqlite_available) {
+                status = "SQLite persistence is unavailable";
+                return;
+            }
+            if (active_job != ActiveJob::None) {
+                status = "Cannot remove empty threads while a model job is running";
+                return;
+            }
+            long long deleted_count = 0;
+            bool current_removed = false;
+            Error remove_error =
+                sqlite_store.soft_delete_empty_threads(deleted_count, session.thread_id, current_removed);
+            if (!remove_error.ok()) {
+                status = detail::error_line(remove_error);
+                return;
+            }
+            if (current_removed) {
+                sqlite_store.set_last_thread_id(0);
+                start_new_thread_from_cli();
+            }
+            if (deleted_count == 0) {
+                status = "No empty threads to remove";
+            } else if (deleted_count == 1) {
+                status = current_removed ? "Removed 1 empty thread and started a new chat"
+                                         : "Removed 1 empty thread";
+            } else {
+                status = current_removed
+                             ? "Removed " + std::to_string(deleted_count) +
+                                   " empty threads and started a new chat"
+                             : "Removed " + std::to_string(deleted_count) + " empty threads";
+            }
             return;
         }
         if (text == "/pop") {
@@ -1003,7 +1073,7 @@ int run(provider::RequestContext context, chat::Session session) {
     size_t render_frame = 0;
     ActivityKind activity_kind = ActivityKind::None;
     detail::render(session, input, status, history_scroll, show_thinking_traces, mode, visible_panel,
-                   activity_kind, render_frame, detail::RenderStyle{theme, use_colors});
+                   activity_kind, render_frame, detail::RenderStyle{theme, use_colors}, panel_title());
     while (!quit) {
         TuiEvent event;
         while (events.try_pop(event)) {
@@ -1431,7 +1501,7 @@ int run(provider::RequestContext context, chat::Session session) {
                             : ActivityKind::None;
         ++render_frame;
         detail::render(session, input, status, history_scroll, show_thinking_traces, mode, visible_panel,
-                       activity_kind, render_frame, detail::RenderStyle{theme, use_colors});
+                       activity_kind, render_frame, detail::RenderStyle{theme, use_colors}, panel_title());
     }
 
     model_job.cancel();

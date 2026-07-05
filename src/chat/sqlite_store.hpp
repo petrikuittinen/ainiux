@@ -47,6 +47,9 @@ class SqliteStore {
     Error last_thread_id(long long& thread_id, bool& found);
     Error set_last_thread_id(long long thread_id);
     Error soft_delete_thread(long long thread_id);
+    Error soft_delete_empty_threads(long long& deleted_count,
+                                    long long watch_thread_id,
+                                    bool& watch_thread_deleted);
 
    private:
     sqlite3* db_ = nullptr;

@@ -21,6 +21,7 @@ std::string settings_json_from_options(const cli::Options& options);
 Error apply_settings_json(cli::Options& options, const std::string& settings_json);
 std::string current_system_prompt(const Session& session);
 std::string format_settings_summary(const cli::Options& options);
+std::string format_settings_panel(const cli::Options& options);
 bool thinking_budget_is_token_count(const std::string& value);
 void append_thinking_budget_json(std::ostringstream& out, const std::string& value);
 

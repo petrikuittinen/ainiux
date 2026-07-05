@@ -443,13 +443,17 @@ StyleRole panel_body_role_for_line(TuiMode mode, const std::string& line) {
     return StyleRole::PanelBody;
 }
 
-std::vector<StyledLine> panel_lines_for_text(const std::string& text, TuiMode mode, int cols) {
+std::vector<StyledLine> panel_lines_for_text(const std::string& text,
+                                             TuiMode mode,
+                                             int cols,
+                                             const char* title_override) {
     std::vector<StyledLine> lines;
     if (cols <= 0) {
         return lines;
     }
 
-    append_panel_rule_line(lines, panel_title_for_mode(mode), cols);
+    const char* title = title_override != nullptr ? title_override : panel_title_for_mode(mode);
+    append_panel_rule_line(lines, title, cols);
 
     std::vector<std::string> content_lines;
     size_t start = 0;

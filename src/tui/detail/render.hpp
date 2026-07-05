@@ -33,7 +33,10 @@ std::vector<StyledLine> history_lines_for_session(const chat::Session& session,
                                                   bool show_thinking_traces,
                                                   ActivityKind activity_kind = ActivityKind::None,
                                                   size_t activity_frame = 0);
-std::vector<StyledLine> panel_lines_for_text(const std::string& text, TuiMode mode, int cols);
+std::vector<StyledLine> panel_lines_for_text(const std::string& text,
+                                               TuiMode mode,
+                                               int cols,
+                                               const char* title_override = nullptr);
 
 editor::EditorState empty_input_editor(size_t undo_limit);
 void set_status_from_error(const Error& err, std::string& status);
@@ -48,6 +51,7 @@ void render(const chat::Session& session,
             const std::string& panel_text,
             ActivityKind activity_kind,
             size_t activity_frame,
-            const RenderStyle& style);
+            const RenderStyle& style,
+            const char* panel_title_override = nullptr);
 
 }  // namespace pkchat::tui::detail

@@ -605,4 +605,30 @@ std::string format_settings_summary(const cli::Options& options) {
     return out.str();
 }
 
+std::string format_settings_panel(const cli::Options& options) {
+    std::ostringstream out;
+    out << "/setting (hide/show this panel)\n";
+    auto append = [&](const char* name, const std::string& value) { out << name << '=' << value << '\n'; };
+    append("stream", options.stream_explicit ? (options.stream ? "on" : "off") : "");
+    append("temperature", options.has_temperature ? std::to_string(options.temperature) : "");
+    append("top_p", options.has_top_p ? std::to_string(options.top_p) : "");
+    append("top_k", options.has_top_k ? std::to_string(options.top_k) : "");
+    append("min_p", options.has_min_p ? std::to_string(options.min_p) : "");
+    append("repeat_penalty", options.has_repeat_penalty ? std::to_string(options.repeat_penalty) : "");
+    append("presence_penalty",
+           options.has_presence_penalty ? std::to_string(options.presence_penalty) : "");
+    append("max_tokens", options.has_max_output_tokens ? std::to_string(options.max_output_tokens) : "");
+    append("thinking", options.has_enable_thinking ? (options.enable_thinking ? "on" : "off") : "");
+    append("thinking_budget", options.has_thinking_budget ? options.thinking_budget : "");
+    append("show_thinking_traces",
+           options.has_show_thinking_traces ? (options.show_thinking_traces ? "trace" : "notrace") : "");
+    append("purpose", options.has_chat_purpose ? options.chat_purpose : "");
+    append("context_tokens", options.has_context_tokens ? std::to_string(options.context_tokens) : "");
+    std::string text = out.str();
+    if (!text.empty() && text.back() == '\n') {
+        text.pop_back();
+    }
+    return text;
+}
+
 }  // namespace pkchat::chat

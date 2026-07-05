@@ -815,4 +815,65 @@ Error SqliteStore::soft_delete_thread(long long thread_id) {
     return ok_error();
 }
 
+Error SqliteStore::soft_delete_empty_threads(long long& deleted_count,
+                                             long long watch_thread_id,
+                                             bool& watch_thread_deleted) {
+    deleted_count = 0;
+    watch_thread_deleted = false;
+    if (db_ == nullptr) {
+        return {ErrorCode::Internal, "SQLite database is not open"};
+    }
+
+    std::vector<long long> thread_ids;
+    Statement select(db_, path_);
+    Error err = select.prepare(
+        "SELECT t.id FROM threads t "
+        "WHERE t.deleted_at IS NULL AND NOT EXISTS ("
+        "SELECT 1 FROM messages m WHERE m.thread_id = t.id AND m.role IN ('user', 'assistant')"
+        ");");
+    if (!err.ok()) {
+        return err;
+    }
+    while (true) {
+        const int rc = select.step();
+        if (rc == SQLITE_DONE) {
+            break;
+        }
+        if (rc != SQLITE_ROW) {
+            return sqlite_error(db_, path_, "could not list empty SQLite threads", rc);
+        }
+        thread_ids.push_back(select.column_int64(0));
+    }
+
+    if (thread_ids.empty()) {
+        return ok_error();
+    }
+
+    const std::string now = current_timestamp_utc();
+    for (long long thread_id : thread_ids) {
+        Statement stmt(db_, path_);
+        err = stmt.prepare(
+            "UPDATE threads SET deleted_at = ?1, modified_at = ?1 WHERE id = ?2 AND deleted_at IS NULL;");
+        if (!err.ok()) {
+            return err;
+        }
+        if (!(err = stmt.bind_text(1, now)).ok()) {
+            return err;
+        }
+        if (!(err = stmt.bind_int64(2, thread_id)).ok()) {
+            return err;
+        }
+        if (!(err = stmt.step_done("could not delete empty SQLite thread")).ok()) {
+            return err;
+        }
+        if (sqlite3_changes(db_) > 0) {
+            ++deleted_count;
+            if (thread_id == watch_thread_id) {
+                watch_thread_deleted = true;
+            }
+        }
+    }
+    return ok_error();
+}
+
 }  // namespace pkchat::chat

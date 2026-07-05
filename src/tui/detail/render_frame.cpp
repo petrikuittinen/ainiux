@@ -37,7 +37,8 @@ void render(const chat::Session& session,
             const std::string& panel_text,
             ActivityKind activity_kind,
             size_t activity_frame,
-            const RenderStyle& style) {
+            const RenderStyle& style,
+            const char* panel_title_override) {
     const TuiSize terminal = terminal_size();
     const Layout layout = layout_for_terminal(terminal.rows, terminal.cols);
     const int cols = layout.cols;
@@ -46,7 +47,7 @@ void render(const chat::Session& session,
     const editor::RenderedPanel input_panel = input.render(layout.input_rect);
     const bool panel_active = mode != TuiMode::Chat || !panel_text.empty();
     std::vector<StyledLine> history =
-        panel_active ? panel_lines_for_text(panel_text, mode, cols)
+        panel_active ? panel_lines_for_text(panel_text, mode, cols, panel_title_override)
                      : history_lines_for_session(session, cols, show_thinking_traces, activity_kind,
                                                  activity_frame);
     const int max_history_scroll = std::max(0, static_cast<int>(history.size()) - layout.history_rows);

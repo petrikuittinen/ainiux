@@ -1585,7 +1585,7 @@ void test_editor_help_document_and_command() {
 
     check(pkchat::editor::editor_assist_path_prefix_length("/open build/") == 6,
           "editor assist path mode starts after /open");
-    check(pkchat::editor::editor_assist_path_prefix_length("/saveas foo") == 9,
+    check(pkchat::editor::editor_assist_path_prefix_length("/saveas foo") == 8,
           "editor assist path mode starts after /saveas");
     check(pkchat::editor::editor_assist_path_prefix_length("/open") == std::string::npos,
           "editor assist path mode requires a separator after /open");
@@ -1623,9 +1623,10 @@ void test_editor_assist_path_completion() {
 }
 
 void test_editor_missing_file_error_message() {
-    pkchat::editor::FileLoadCheck check;
+    pkchat::editor::FileLoadCheck load_check;
     pkchat::editor::EditorSettings settings;
-    pkchat::Error err = pkchat::editor::check_load_file_size("this_file_doesnt_exist.txt", settings, check);
+    pkchat::Error err =
+        pkchat::editor::check_load_file_size("this_file_doesnt_exist.txt", settings, load_check);
     check(!err.ok() && err.message == "file not found: this_file_doesnt_exist.txt",
           "editor missing file load reports file not found");
 }

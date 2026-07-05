@@ -283,6 +283,80 @@ void test_chat_settings_helpers() {
     err = pkchat::chat::apply_settings_json(cleared, with_nulls);
     check(err.ok() && cleared.has_temperature && cleared.temperature == 0.9 && !cleared.has_top_k,
           "chat settings JSON null values clear overrides on load");
+
+    const std::string panel = pkchat::chat::format_settings_panel(options);
+    check(panel.find("temperature=0.9") != std::string::npos &&
+              panel.find("thinking=on") != std::string::npos &&
+              panel.find("thinking_budget=high") != std::string::npos &&
+              panel.find("top_k=") != std::string::npos &&
+              panel.find("top_k=40") == std::string::npos,
+          "chat settings panel shows set values and empty unset fields");
+
+    pkchat::cli::Options empty_panel_options;
+    const std::string empty_panel = pkchat::chat::format_settings_panel(empty_panel_options);
+    check(empty_panel.find("temperature=\n") != std::string::npos &&
+              empty_panel.find("purpose=\n") != std::string::npos &&
+              empty_panel.find("default") == std::string::npos,
+          "chat settings panel leaves unset fields empty");
+}
+
+void test_chat_sqlite_remove_empty_threads() {
+    const std::string path = "build/unit-pkchat-empty-threads.db";
+    std::filesystem::remove(path);
+    std::filesystem::remove(path + "-wal");
+    std::filesystem::remove(path + "-shm");
+
+    pkchat::chat::SqliteStore store;
+    pkchat::Error err = store.open(path);
+    check(err.ok(), "SQLite empty-thread cleanup store opens");
+
+    pkchat::provider::RequestContext context;
+    context.profile.name = "lm_studio";
+    context.base_url = "http://localhost:1234/v1";
+    context.options.model = "local-model";
+
+    pkchat::chat::Session system_only = pkchat::chat::new_session(context);
+    system_only.messages.push_back({"system", "Be concise"});
+    err = store.save_session(system_only);
+    check(err.ok(), "SQLite system-only thread saves");
+
+    pkchat::chat::Session no_messages = pkchat::chat::new_session(context);
+    err = store.save_session(no_messages);
+    check(err.ok(), "SQLite messageless thread saves");
+
+    pkchat::chat::Session with_user = pkchat::chat::new_session(context);
+    with_user.messages.push_back({"user", "hello"});
+    with_user.messages.push_back({"assistant", "hi"});
+    err = store.save_session(with_user);
+    check(err.ok(), "SQLite user thread saves");
+
+    long long deleted_count = 0;
+    bool current_removed = false;
+    err = store.soft_delete_empty_threads(deleted_count, with_user.thread_id, current_removed);
+    check(err.ok() && deleted_count == 2 && !current_removed,
+          "SQLite empty-thread cleanup removes system-only and messageless threads");
+
+    std::vector<pkchat::chat::ThreadSummary> threads;
+    err = store.list_threads(threads, 20);
+    check(err.ok() && threads.size() == 1 && threads[0].id == with_user.thread_id,
+          "SQLite empty-thread cleanup keeps threads with user or assistant messages");
+
+    current_removed = false;
+    deleted_count = 0;
+    err = store.soft_delete_empty_threads(deleted_count, system_only.thread_id, current_removed);
+    check(err.ok() && deleted_count == 0 && !current_removed,
+          "SQLite empty-thread cleanup is idempotent when nothing remains");
+
+    pkchat::chat::Session another_empty = pkchat::chat::new_session(context);
+    another_empty.messages.push_back({"system", "Another system prompt"});
+    err = store.save_session(another_empty);
+    check(err.ok(), "SQLite second system-only thread saves");
+
+    deleted_count = 0;
+    current_removed = false;
+    err = store.soft_delete_empty_threads(deleted_count, another_empty.thread_id, current_removed);
+    check(err.ok() && deleted_count == 1 && current_removed,
+          "SQLite empty-thread cleanup reports when the watched thread is removed");
 }
 
 }  // namespace
@@ -292,6 +366,7 @@ void run_all() {
     test_chat_session_rejects_corrupt_json();
     test_chat_session_file_failures_and_unicode();
     test_chat_sqlite_store_round_trip_and_listing();
+    test_chat_sqlite_remove_empty_threads();
     test_chat_sqlite_missing_thread_and_corrupt_database();
     test_chat_settings_helpers();
 }
