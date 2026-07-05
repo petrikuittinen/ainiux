@@ -1491,8 +1491,14 @@ void test_editor_control_key_sequence_decode() {
           "editor decodes kitty-style Ctrl+S");
     check(pkchat::editor::decode_control_key_sequence("[27;5;19~", decoded) && decoded == 19,
           "editor decodes xterm modifyOtherKeys Ctrl+S");
-    check(pkchat::editor::decode_control_key_sequence("[23;5u", decoded) && decoded == 23,
-          "editor decodes kitty-style Ctrl+W");
+    check(pkchat::editor::decode_control_key_sequence("[83;5u", decoded) &&
+              decoded == pkchat::editor::editor_key_save_as(),
+          "editor decodes kitty-style Ctrl+Shift+S as save-as");
+    check(pkchat::editor::decode_control_key_sequence("[115;5u", decoded) &&
+              decoded == pkchat::editor::editor_key_save_as(),
+          "editor decodes kitty-style Ctrl+Shift+s as save-as");
+    check(!pkchat::editor::decode_control_key_sequence("[23;5u", decoded),
+          "editor no longer maps Ctrl+W to save-as");
     check(!pkchat::editor::decode_control_key_sequence("[A", decoded),
           "editor ignores arrow-key escape sequences");
 }
@@ -1529,8 +1535,10 @@ void test_editor_help_document_and_command() {
           "editor help document contains the title heading");
     check(help_text.find("Ctrl+Space") != std::string::npos,
           "editor help document documents Ctrl+Space continue");
-    check(help_text.find("Ctrl+W") != std::string::npos,
-          "editor help document documents Ctrl+W save as");
+    check(help_text.find("Ctrl+Shift+S") != std::string::npos,
+          "editor help document documents Ctrl+Shift+S save as");
+    check(help_text.find("/saveas") != std::string::npos,
+          "editor help document documents /saveas slash command");
     check(help_text.find("/spell") != std::string::npos && help_text.find("/help") != std::string::npos,
           "editor help document lists slash commands");
 
@@ -1542,12 +1550,92 @@ void test_editor_help_document_and_command() {
         pkchat::editor::assist_command_completions(pkchat::editor::default_editor_assist_config());
     check(std::find(completions.begin(), completions.end(), "/help") != completions.end(),
           "assist command completions include /help");
+    check(std::find(completions.begin(), completions.end(), "/save") != completions.end(),
+          "assist command completions include /save");
+    check(std::find(completions.begin(), completions.end(), "/open ") != completions.end(),
+          "assist command completions include /open");
+
+    pkchat::editor::ParsedEditorSlashCommand slash =
+        pkchat::editor::parse_editor_slash_command("/save");
+    check(slash.command == pkchat::editor::EditorSlashCommand::Save && slash.path.empty(),
+          "editor /save slash command is recognized");
+    slash = pkchat::editor::parse_editor_slash_command("/SAVEAS");
+    check(slash.command == pkchat::editor::EditorSlashCommand::SaveAs && slash.path.empty(),
+          "editor /saveas slash command is case-insensitive");
+    slash = pkchat::editor::parse_editor_slash_command("/open build/unit-editor.txt");
+    check(slash.command == pkchat::editor::EditorSlashCommand::Open &&
+              slash.path == "build/unit-editor.txt",
+          "editor /open PATH preserves the path argument");
+    slash = pkchat::editor::parse_editor_slash_command("/saveas out/new.txt");
+    check(slash.command == pkchat::editor::EditorSlashCommand::SaveAs &&
+              slash.path == "out/new.txt",
+          "editor /saveas PATH preserves the path argument");
+    slash = pkchat::editor::parse_editor_slash_command("/find");
+    check(slash.command == pkchat::editor::EditorSlashCommand::Find,
+          "editor /find slash command is recognized");
+    slash = pkchat::editor::parse_editor_slash_command("/replace");
+    check(slash.command == pkchat::editor::EditorSlashCommand::Replace,
+          "editor /replace slash command is recognized");
+    slash = pkchat::editor::parse_editor_slash_command("/open");
+    check(slash.command == pkchat::editor::EditorSlashCommand::Open && slash.path.empty(),
+          "editor bare /open slash command is recognized");
+    slash = pkchat::editor::parse_editor_slash_command("/save extra words");
+    check(slash.command == pkchat::editor::EditorSlashCommand::None,
+          "editor file slash commands reject multi-token path arguments");
+
+    check(pkchat::editor::editor_assist_path_prefix_length("/open build/") == 6,
+          "editor assist path mode starts after /open");
+    check(pkchat::editor::editor_assist_path_prefix_length("/saveas foo") == 9,
+          "editor assist path mode starts after /saveas");
+    check(pkchat::editor::editor_assist_path_prefix_length("/open") == std::string::npos,
+          "editor assist path mode requires a separator after /open");
+    check(pkchat::editor::editor_assist_path_prefix_length("/search query") == std::string::npos,
+          "editor assist path mode ignores non-file commands");
+}
+
+void test_editor_assist_path_completion() {
+    const std::string directory = "build/pkchat-assist-path-completion";
+    std::error_code filesystem_error;
+    std::filesystem::create_directories(directory, filesystem_error);
+    check(!filesystem_error, "assist path completion fixture directory is created");
+
+    const std::string file = directory + "/target.txt";
+    std::ofstream fixture(file, std::ios::binary | std::ios::trunc);
+    fixture << "ok";
+    check(static_cast<bool>(fixture), "assist path completion fixture file is written");
+
+    pkchat::editor::AssistCompleterState completer;
+    std::string input = "/open " + directory + "/tar";
+    pkchat::editor::AssistCompletionResult result =
+        pkchat::editor::complete_assist_command(input, completer, pkchat::editor::default_editor_assist_config());
+    check(result.kind == pkchat::editor::CompletionKind::Path && result.error.ok() &&
+              result.match_count == 1,
+          "assist path completion finds a unique file after /open");
+    check(input == "/open " + file, "assist path completion completes /open PATH");
+
+    completer = pkchat::editor::AssistCompleterState{};
+    input = "/search " + directory + "/tar";
+    result = pkchat::editor::complete_assist_command(input, completer, pkchat::editor::default_editor_assist_config());
+    check(result.kind == pkchat::editor::CompletionKind::Command,
+          "assist tab completion stays in command mode for /search");
+    check(input == "/search " + directory + "/tar",
+          "assist tab completion does not complete paths for /search");
+}
+
+void test_editor_missing_file_error_message() {
+    pkchat::editor::FileLoadCheck check;
+    pkchat::editor::EditorSettings settings;
+    pkchat::Error err = pkchat::editor::check_load_file_size("this_file_doesnt_exist.txt", settings, check);
+    check(!err.ok() && err.message == "file not found: this_file_doesnt_exist.txt",
+          "editor missing file load reports file not found");
 }
 
 void run_all() {
     test_editor_control_key_sequence_decode();
     test_editor_save_as_overwrite_helpers();
     test_editor_help_document_and_command();
+    test_editor_assist_path_completion();
+    test_editor_missing_file_error_message();
     test_editor_ai_continue_helpers();
     test_editor_file_io_failures();
     test_editor_assist_helpers();

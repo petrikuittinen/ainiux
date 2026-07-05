@@ -330,11 +330,57 @@ int run_editor(const std::string& path,
         set_assist_activity(tui::ActivityKind::Thinking, "thinking... ESC to abort");
     };
 
+    auto trigger_save = [&]() {
+        if (state.path.empty()) {
+            start_minibuffer(minibuffer, MinibufferAction::SaveFile, "Save file: ");
+        } else {
+            request_save_editor_to_path(state, state.path, minibuffer, true, false, quit, pending_save);
+        }
+    };
+
     auto submit_assist_command = [&]() {
         if (is_editor_help_command(minibuffer.input)) {
             exit_assist_command_mode(minibuffer, assist_completer);
             enter_help_view();
             return;
+        }
+        const ParsedEditorSlashCommand slash = parse_editor_slash_command(minibuffer.input);
+        switch (slash.command) {
+            case EditorSlashCommand::Save:
+                pending_assist = PendingAssist{};
+                exit_assist_command_mode(minibuffer, assist_completer);
+                trigger_save();
+                return;
+            case EditorSlashCommand::SaveAs:
+                pending_assist = PendingAssist{};
+                exit_assist_command_mode(minibuffer, assist_completer);
+                if (slash.path.empty()) {
+                    start_minibuffer(minibuffer, MinibufferAction::SaveAsFile, "Save as: ", state.path);
+                } else {
+                    request_save_editor_to_path(state, slash.path, minibuffer, true, false, quit, pending_save);
+                }
+                return;
+            case EditorSlashCommand::Find:
+                pending_assist = PendingAssist{};
+                exit_assist_command_mode(minibuffer, assist_completer);
+                start_minibuffer(minibuffer, MinibufferAction::Search, "Search: ", last_search);
+                return;
+            case EditorSlashCommand::Replace:
+                pending_assist = PendingAssist{};
+                exit_assist_command_mode(minibuffer, assist_completer);
+                start_minibuffer(minibuffer, MinibufferAction::ReplaceSearch, "Replace search: ", last_search);
+                return;
+            case EditorSlashCommand::Open:
+                pending_assist = PendingAssist{};
+                exit_assist_command_mode(minibuffer, assist_completer);
+                if (slash.path.empty()) {
+                    start_minibuffer(minibuffer, MinibufferAction::LoadFile, "Load file: ");
+                } else {
+                    request_load_editor_from_path(state, slash.path, settings, minibuffer, pending_load_path);
+                }
+                return;
+            case EditorSlashCommand::None:
+                break;
         }
         const ParsedAssistCommand parsed =
             parse_assist_command(minibuffer.input, ai_continue == nullptr ? default_editor_assist_config()
@@ -414,14 +460,6 @@ int run_editor(const std::string& path,
                      AssistScope::Continue,
                      "",
                      std::nullopt);
-    };
-
-    auto trigger_save = [&]() {
-        if (state.path.empty()) {
-            start_minibuffer(minibuffer, MinibufferAction::SaveFile, "Save file: ");
-        } else {
-            request_save_editor_to_path(state, state.path, minibuffer, true, false, quit, pending_save);
-        }
     };
 
     std::function<void(unsigned char)> handle_key;
@@ -665,7 +703,7 @@ int run_editor(const std::string& path,
             start_continue();
         } else if (ch == 19) {
             trigger_save();
-        } else if (ch == 23) {
+        } else if (ch == editor_key_save_as()) {
             start_minibuffer(minibuffer, MinibufferAction::SaveAsFile, "Save as: ", state.path);
         } else if (ch == '\t') {
             minibuffer_message(minibuffer, "Tab completion is disabled in editor mode");

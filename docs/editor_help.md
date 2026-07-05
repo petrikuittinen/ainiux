@@ -24,7 +24,7 @@ Arrow keys, `Page Up`/`Page Down`, `Home`, and `End` scroll the help document.
 | Key | Action |
 |-----|--------|
 | `Ctrl+S` | Save (prompts for path on scratch buffers) |
-| `Ctrl+W` | Save as (prompts for path; asks before overwriting an existing file) |
+| `Ctrl+Shift+S` | Save as (prompts for path; asks before overwriting an existing file) |
 | `Ctrl+O` | Load another file |
 | `Ctrl+F` | Search (exact substring) |
 | `Ctrl+H` | Replace (search, then replace each match) |
@@ -88,6 +88,11 @@ Press **`Esc`** to open the command minibuffer (`Command:`). Type a slash comman
 | `/Chinese` | Translate to Chinese |
 | `/Finnish` | Translate to Finnish |
 | `/prompt TEXT` | Custom one-shot AI task |
+| `/save` | Save (same as `Ctrl+S`) |
+| `/saveas [PATH]` | Save as (same as `Ctrl+Shift+S`; `Tab` completes paths after the command) |
+| `/find` | Search (same as `Ctrl+F`) |
+| `/replace` | Replace (same as `Ctrl+H`) |
+| `/open [PATH]` | Open file (same as `Ctrl+O`; `Tab` completes paths after the command) |
 | `/help` | Toggle this help view |
 | `/quit` | Quit the editor |
 

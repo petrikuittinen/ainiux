@@ -1,5 +1,6 @@
 #include "editor/editor_assist.hpp"
 
+#include "editor/editor_help.hpp"
 #include "editor/editor_prompts.hpp"
 #include "output/thinking.hpp"
 
@@ -344,6 +345,11 @@ std::vector<std::string> assist_command_completions(const EditorAssistConfig& co
         }
     }
     commands.push_back("/help");
+    commands.push_back("/save");
+    commands.push_back("/saveas ");
+    commands.push_back("/find");
+    commands.push_back("/replace");
+    commands.push_back("/open ");
     commands.push_back("/prompt ");
     commands.push_back("/search ");
     commands.push_back("/quit");
@@ -353,6 +359,18 @@ std::vector<std::string> assist_command_completions(const EditorAssistConfig& co
 std::string assist_completion_status(const AssistCompletionResult& result) {
     if (!result.handled) {
         return "Tab completion is not active here";
+    }
+    if (result.kind == CompletionKind::Path) {
+        PathCompletionResult path_result;
+        path_result.error = result.error;
+        path_result.kind = CompletionKind::Path;
+        path_result.match_count = result.match_count;
+        path_result.choice_index = result.choice_index;
+        path_result.value = result.value;
+        path_result.changed = result.changed;
+        path_result.cycling = result.cycling;
+        path_result.handled = true;
+        return path_completion_status(path_result);
     }
     if (!result.error.ok()) {
         return result.error.message;
@@ -371,11 +389,56 @@ std::string assist_completion_status(const AssistCompletionResult& result) {
     return std::to_string(result.match_count) + " commands match; Tab again to cycle";
 }
 
+AssistCompletionResult complete_assist_path(std::string& input,
+                                            size_t path_prefix_len,
+                                            PathCompleter& path_completer) {
+    AssistCompletionResult result;
+    result.handled = true;
+    result.kind = CompletionKind::Path;
+
+    const std::string prefix = input.substr(0, path_prefix_len);
+    const std::string path_token = input.substr(path_prefix_len);
+    EditorState temp = EditorState::from_text(path_token);
+    temp.cursor = path_token.size();
+
+    PathCompletionResult path_result = path_completer.complete(temp);
+    result.error = path_result.error;
+    result.match_count = path_result.match_count;
+    result.choice_index = path_result.choice_index;
+    result.cycling = path_result.cycling;
+    const std::string completed_path = temp.text.str();
+    result.changed = completed_path != path_token;
+    input = prefix + completed_path;
+    result.value = completed_path;
+    return result;
+}
+
+bool assist_path_can_cycle(const std::string& input, size_t path_prefix_len, PathCompleter& path_completer) {
+    const std::string path_token = input.substr(path_prefix_len);
+    EditorState temp = EditorState::from_text(path_token);
+    temp.cursor = path_token.size();
+    return path_completer.can_cycle(temp);
+}
+
 AssistCompletionResult complete_assist_command(std::string& input,
                                                AssistCompleterState& state,
                                                const EditorAssistConfig& config) {
     AssistCompletionResult result;
     result.handled = true;
+
+    const size_t path_prefix_len = editor_assist_path_prefix_length(input);
+    if (path_prefix_len != std::string::npos) {
+        state.active = false;
+        state.next_choice = 0;
+        state.applied_value.clear();
+        state.candidates.clear();
+        if (assist_path_can_cycle(input, path_prefix_len, state.path_completer)) {
+            return complete_assist_path(input, path_prefix_len, state.path_completer);
+        }
+        state.path_completer.reset();
+        return complete_assist_path(input, path_prefix_len, state.path_completer);
+    }
+    state.path_completer.reset();
 
     if (state.active) {
         if (input == state.applied_value) {

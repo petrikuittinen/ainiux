@@ -587,7 +587,7 @@ bool handle_minibuffer_key(EditorState& state,
         }
         return true;
     }
-    if (ch == 19 || ch == 23) {
+    if (ch == 19 || ch == editor_key_save_as()) {
         return false;
     }
     if (minibuffer.action == MinibufferAction::ConfirmOverwrite) {

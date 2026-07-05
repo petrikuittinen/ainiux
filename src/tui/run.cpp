@@ -674,6 +674,7 @@ int run(provider::RequestContext context, chat::Session session) {
                     "/help (hide/show this panel)\n"
                     "/quit or /exit\n"
                     "/clear\n"
+                    "/edit\n"
                     "/list\n"
                     "/new [NAME]\n"
                     "/provider PROVIDER\n"
@@ -738,6 +739,10 @@ int run(provider::RequestContext context, chat::Session session) {
             if (!use_colors) {
                 status += " (colors disabled by --nocolors)";
             }
+            return;
+        }
+        if (text == "/edit") {
+            start_history_edit();
             return;
         }
         if (text == "/clear") {

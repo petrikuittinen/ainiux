@@ -17,8 +17,14 @@ Error check_load_file_size(const std::string& path, const EditorSettings& settin
     check = {};
     std::error_code filesystem_error;
     const std::filesystem::file_status status = std::filesystem::status(path, filesystem_error);
-    if (filesystem_error || !std::filesystem::exists(status)) {
-        return {ErrorCode::FileRead, "could not inspect editor file before loading: " + path};
+    if (filesystem_error) {
+        if (filesystem_error == std::errc::no_such_file_or_directory) {
+            return {ErrorCode::FileRead, "file not found: " + path};
+        }
+        return {ErrorCode::FileRead, "could not access file: " + path};
+    }
+    if (!std::filesystem::exists(status)) {
+        return {ErrorCode::FileRead, "file not found: " + path};
     }
     if (!std::filesystem::is_regular_file(status)) {
         return {ErrorCode::FileRead, "editor path is not a regular file: " + path};

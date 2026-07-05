@@ -67,7 +67,12 @@ bool is_ctrl_modifier(int modifier) {
     return modifier == 5 || modifier == 6 || modifier == 7 || modifier == 8;
 }
 
+bool has_shift_modifier(int modifier) { return (modifier & 1) != 0; }
+
 bool ctrl_byte_from_codepoint(int codepoint, unsigned char& out) {
+    if (codepoint == 23) {
+        return false;
+    }
     if (codepoint >= 1 && codepoint <= 26) {
         out = static_cast<unsigned char>(codepoint);
         return true;
@@ -119,6 +124,10 @@ bool decode_control_key_sequence(const std::string& sequence, unsigned char& out
                 !parse_positive_int(sequence.substr(semi + 1, sequence.size() - semi - 2), modifier) ||
                 !is_ctrl_modifier(modifier)) {
                 return false;
+            }
+            if (has_shift_modifier(modifier) && (codepoint == 'S' || codepoint == 's')) {
+                out = editor_key_save_as();
+                return true;
             }
             return ctrl_byte_from_codepoint(codepoint, out);
         }

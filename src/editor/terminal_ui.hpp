@@ -134,6 +134,12 @@ void request_save_editor_to_path(EditorState& state,
                                  bool& quit,
                                  PendingSaveRequest& pending_save);
 
+void request_load_editor_from_path(EditorState& state,
+                                   const std::string& path,
+                                   const EditorSettings& settings,
+                                   MinibufferState& minibuffer,
+                                   std::string& pending_load_path);
+
 std::string read_escape_suffix();
 
 }  // namespace pkchat::editor

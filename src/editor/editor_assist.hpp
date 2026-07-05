@@ -9,6 +9,7 @@
 #include "editor/ai_continue.hpp"
 #include "editor/editor.hpp"
 #include "editor/editor_prompts.hpp"
+#include "editor/path_completion.hpp"
 #include "provider/provider.hpp"
 #include "runtime/runtime.hpp"
 
@@ -62,6 +63,7 @@ struct AssistExecution {
 
 struct AssistCompletionResult {
     Error error;
+    CompletionKind kind = CompletionKind::Command;
     size_t match_count = 0;
     size_t choice_index = 0;
     std::string value;
@@ -75,6 +77,7 @@ struct AssistCompleterState {
     size_t next_choice = 0;
     std::string applied_value;
     std::vector<std::string> candidates;
+    PathCompleter path_completer;
 };
 
 std::vector<std::string> assist_command_completions(const EditorAssistConfig& config);
