@@ -687,15 +687,12 @@ void test_provider_reasoning_request_compatibility() {
     context.options.has_thinking_budget = true;
     context.options.thinking_budget = "8192";
     request = serialized_request_json(context);
-    const pkchat::json::Value* extra_body = field(request, "extra_body");
-    const pkchat::json::Value* google = field(extra_body, "google");
-    const pkchat::json::Value* thinking_config = field(google, "thinking_config");
-    check_number_field(thinking_config,
-                       "thinking_budget",
-                       8192.0,
-                       "Gemini preserves numeric thinking budgets in extra_body.google.thinking_config");
-    check(field(request, "reasoning_effort") == nullptr,
-          "Gemini numeric budget does not also emit reasoning_effort");
+    check_string_field(request,
+                       "reasoning_effort",
+                       "medium",
+                       "Gemini maps numeric thinking budgets to documented OpenAI-compatible reasoning_effort");
+    check(field(request, "extra_body") == nullptr,
+          "Gemini default compatibility path does not mix reasoning_effort with native thinking_config");
 
     context.options.thinking_budget = "xhigh";
     request = serialized_request_json(context);
@@ -703,6 +700,36 @@ void test_provider_reasoning_request_compatibility() {
                        "reasoning_effort",
                        "high",
                        "Gemini maps over-high effort labels to its highest OpenAI-compatible effort");
+
+    context = pkchat::provider::RequestContext{};
+    context.profile.name = "anthropic";
+    context.options.has_thinking_budget = true;
+    context.options.thinking_budget = "2048";
+    request = serialized_request_json(context);
+    const pkchat::json::Value* thinking = field(request, "thinking");
+    check_string_field(thinking,
+                       "type",
+                       "enabled",
+                       "Anthropic Claude OpenAI compatibility uses thinking.type enabled");
+    check_number_field(thinking,
+                       "budget_tokens",
+                       2048.0,
+                       "Anthropic Claude preserves numeric thinking budgets as budget_tokens");
+    check(field(request, "reasoning_effort") == nullptr && field(request, "enable_thinking") == nullptr,
+          "Anthropic Claude does not receive OpenAI or generic thinking controls");
+
+    context.options.thinking_budget = "high";
+    request = serialized_request_json(context);
+    thinking = field(request, "thinking");
+    const pkchat::json::Value* output_config = field(request, "output_config");
+    check_string_field(thinking,
+                       "type",
+                       "adaptive",
+                       "Anthropic Claude maps verbal budgets to adaptive thinking");
+    check_string_field(output_config,
+                       "effort",
+                       "high",
+                       "Anthropic Claude carries verbal effort in output_config");
 
     context = pkchat::provider::RequestContext{};
     context.profile.name = "qwen";
@@ -726,7 +753,7 @@ void test_provider_reasoning_request_compatibility() {
     context.options.has_enable_thinking = true;
     context.options.enable_thinking = false;
     request = serialized_request_json(context);
-    const pkchat::json::Value* thinking = field(request, "thinking");
+    thinking = field(request, "thinking");
     check_string_field(thinking,
                        "type",
                        "disabled",
@@ -747,6 +774,52 @@ void test_provider_reasoning_request_compatibility() {
                        "reasoning_effort",
                        "high",
                        "DeepSeek maps low/medium-compatible efforts to high");
+
+    context = pkchat::provider::RequestContext{};
+    context.profile.name = "moonshot";
+    context.options.model = "kimi-k2.6";
+    context.options.has_enable_thinking = true;
+    context.options.enable_thinking = false;
+    request = serialized_request_json(context);
+    thinking = field(request, "thinking");
+    check_string_field(thinking,
+                       "type",
+                       "disabled",
+                       "Kimi K2.6 maps thinking off to thinking.type disabled");
+    check(field(request, "reasoning_effort") == nullptr && field(request, "thinking_budget") == nullptr,
+          "Kimi K2.6 does not receive unsupported effort or token-budget fields");
+
+    context.options.model = "kimi-k2.7-code";
+    context.options.enable_thinking = true;
+    request = serialized_request_json(context);
+    check(field(request, "thinking") == nullptr,
+          "Kimi K2.7 code omits thinking parameter because the model is always thinking");
+
+    context = pkchat::provider::RequestContext{};
+    context.profile.name = "zai";
+    context.options.model = "glm-5.2";
+    context.options.has_thinking_budget = true;
+    context.options.thinking_budget = "xhigh";
+    request = serialized_request_json(context);
+    thinking = field(request, "thinking");
+    check_string_field(thinking,
+                       "type",
+                       "enabled",
+                       "GLM-5.2 enables thinking when reasoning effort is requested");
+    check_string_field(request,
+                       "reasoning_effort",
+                       "max",
+                       "GLM-5.2 maps xhigh to max reasoning effort");
+
+    context.options.thinking_budget = "none";
+    request = serialized_request_json(context);
+    thinking = field(request, "thinking");
+    check_string_field(thinking,
+                       "type",
+                       "disabled",
+                       "GLM-5.2 maps none to disabled thinking");
+    check(field(request, "reasoning_effort") == nullptr,
+          "GLM-5.2 does not send reasoning_effort when thinking is disabled");
 
     context = pkchat::provider::RequestContext{};
     context.profile.name = "xai";
@@ -773,6 +846,20 @@ void test_provider_reasoning_request_compatibility() {
                        "thinking_budget",
                        "high",
                        "custom OpenAI-compatible endpoints preserve verbal thinking_budget");
+
+    context.options.model = "deepseek-v4-pro";
+    request = serialized_request_json(context);
+    thinking = field(request, "thinking");
+    check_string_field(thinking,
+                       "type",
+                       "enabled",
+                       "custom endpoints with a DeepSeek V4 model use DeepSeek thinking fields");
+    check_string_field(request,
+                       "reasoning_effort",
+                       "high",
+                       "custom endpoints with a DeepSeek V4 model map verbal budgets to DeepSeek reasoning_effort");
+    check(field(request, "enable_thinking") == nullptr && field(request, "thinking_budget") == nullptr,
+          "custom DeepSeek V4 model detection suppresses generic thinking fields");
 }
 
 void test_provider_unicode_request_serialization() {

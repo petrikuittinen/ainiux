@@ -102,11 +102,99 @@ class Handler(BaseHTTPRequestHandler):
                     image_count += 1
         return "".join(text), image_count
 
+    def _fail_validation(self, message):
+        self._send(400, json.dumps({"error": {"message": message}}))
+        return False
+
+    def _forbid_fields(self, request, fields, label):
+        for name in fields:
+            if name in request:
+                return self._fail_validation(f"{label}: unexpected {name}")
+        return True
+
+    def _validate_request_shape(self, request, last, responses=False):
+        if responses:
+            if last != "expect-openai-responses-reasoning":
+                return True
+            if request.get("reasoning") != {"effort": "medium"}:
+                return self._fail_validation("openai responses: expected reasoning.effort=medium")
+            return self._forbid_fields(
+                request,
+                ["reasoning_effort", "thinking", "enable_thinking", "thinking_budget"],
+                "openai responses",
+            )
+
+        if last == "expect-openai-chat-reasoning":
+            if request.get("reasoning_effort") != "high":
+                return self._fail_validation("openai chat: expected reasoning_effort=high")
+            return self._forbid_fields(
+                request,
+                ["reasoning", "thinking", "enable_thinking", "thinking_budget"],
+                "openai chat",
+            )
+        if last == "expect-anthropic-thinking":
+            if request.get("thinking") != {"type": "enabled", "budget_tokens": 2048}:
+                return self._fail_validation("anthropic: expected thinking enabled with budget_tokens=2048")
+            return self._forbid_fields(
+                request,
+                ["reasoning", "reasoning_effort", "enable_thinking", "thinking_budget"],
+                "anthropic",
+            )
+        if last == "expect-gemini-reasoning":
+            if request.get("reasoning_effort") != "medium":
+                return self._fail_validation("gemini: expected reasoning_effort=medium")
+            return self._forbid_fields(
+                request,
+                ["reasoning", "extra_body", "thinking", "enable_thinking", "thinking_budget"],
+                "gemini",
+            )
+        if last == "expect-kimi-thinking":
+            if request.get("thinking") != {"type": "disabled"}:
+                return self._fail_validation("kimi: expected thinking disabled")
+            return self._forbid_fields(
+                request,
+                ["reasoning", "reasoning_effort", "enable_thinking", "thinking_budget"],
+                "kimi",
+            )
+        if last == "expect-deepseek-v4-thinking":
+            if request.get("thinking") != {"type": "enabled"}:
+                return self._fail_validation("deepseek: expected thinking enabled")
+            if request.get("reasoning_effort") != "max":
+                return self._fail_validation("deepseek: expected reasoning_effort=max")
+            return self._forbid_fields(
+                request,
+                ["reasoning", "enable_thinking", "thinking_budget"],
+                "deepseek",
+            )
+        if last == "expect-qwen-thinking":
+            if request.get("enable_thinking") is not True:
+                return self._fail_validation("qwen: expected enable_thinking=true")
+            if request.get("thinking_budget") != 24576:
+                return self._fail_validation("qwen: expected thinking_budget=24576")
+            return self._forbid_fields(
+                request,
+                ["reasoning", "reasoning_effort", "thinking"],
+                "qwen",
+            )
+        if last == "expect-glm-thinking":
+            if request.get("thinking") != {"type": "enabled"}:
+                return self._fail_validation("glm: expected thinking enabled")
+            if request.get("reasoning_effort") != "max":
+                return self._fail_validation("glm: expected reasoning_effort=max")
+            return self._forbid_fields(
+                request,
+                ["reasoning", "enable_thinking", "thinking_budget"],
+                "glm",
+            )
+        return True
+
     def _handle_responses(self, request):
         if request.get("model") == "":
             self._send(400, json.dumps({"error": {"message": "empty model field"}}))
             return
         last = self._responses_last_input(request)
+        if not self._validate_request_shape(request, last, responses=True):
+            return
         reply = "Hello"
         if last == "model?":
             reply = request.get("model", "<missing>")
@@ -114,6 +202,8 @@ class Handler(BaseHTTPRequestHandler):
             reply = "Visible answer"
         elif last == "markdown":
             reply = "# Mock Title\n\nHello **bold** and [docs](https://example.com/docs)."
+        elif last == "expect-openai-responses-reasoning":
+            reply = "request-ok"
 
         if request.get("stream"):
             self.send_response(200)
@@ -175,6 +265,8 @@ class Handler(BaseHTTPRequestHandler):
             return
         messages = request.get("messages", [])
         last, image_count = self._chat_last_input(request)
+        if not self._validate_request_shape(request, last):
+            return
         url_context_seen = any(
             isinstance(message, dict)
             and isinstance(message.get("content"), str)
@@ -249,6 +341,8 @@ class Handler(BaseHTTPRequestHandler):
                 if isinstance(message, dict) and message.get("role") == "assistant":
                     reply = message.get("content", "")
                     break
+        elif last.startswith("expect-") and last.endswith(("-reasoning", "-thinking")):
+            reply = "request-ok"
 
         if request.get("stream"):
             self.send_response(200)

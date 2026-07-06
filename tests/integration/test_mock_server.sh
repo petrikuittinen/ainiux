@@ -529,6 +529,39 @@ test "$responses_stream" = "Hello"
 responses_json=$("$ROOT/pkchat" "$BASE" --quiet --api responses --no-stream -m "$MODEL" -p "hello" --format json)
 printf '%s' "$responses_json" | grep '"content":"Hello"' >/dev/null
 
+shape_openai=$("$ROOT/pkchat" --provider openai --base-url "$BASE" --quiet --no-stream \
+    -m "$MODEL" --thinking-budget high -p "expect-openai-chat-reasoning" \
+    --header "Authorization: Bearer test")
+test "$shape_openai" = "request-ok"
+shape_openai_responses=$("$ROOT/pkchat" --provider openai --base-url "$BASE" --quiet \
+    --api responses --no-stream -m "$MODEL" --thinking-budget 4096 \
+    -p "expect-openai-responses-reasoning" --header "Authorization: Bearer test")
+test "$shape_openai_responses" = "request-ok"
+shape_anthropic=$("$ROOT/pkchat" --provider anthropic --base-url "$BASE" --quiet \
+    --no-stream -m "claude-sonnet-4-6" --thinking-budget 2048 \
+    -p "expect-anthropic-thinking" --header "Authorization: Bearer test")
+test "$shape_anthropic" = "request-ok"
+shape_gemini=$("$ROOT/pkchat" --provider gemini --base-url "$BASE" --quiet --no-stream \
+    -m "gemini-3.5-flash" --thinking-budget 4096 -p "expect-gemini-reasoning" \
+    --header "Authorization: Bearer test")
+test "$shape_gemini" = "request-ok"
+shape_kimi=$("$ROOT/pkchat" --provider moonshot --base-url "$BASE" --quiet --no-stream \
+    -m "kimi-k2.6" --thinking off -p "expect-kimi-thinking" \
+    --header "Authorization: Bearer test")
+test "$shape_kimi" = "request-ok"
+shape_deepseek=$("$ROOT/pkchat" --provider deepseek --base-url "$BASE" --quiet \
+    --no-stream -m "deepseek-v4-pro" --thinking-budget xhigh \
+    -p "expect-deepseek-v4-thinking" --header "Authorization: Bearer test")
+test "$shape_deepseek" = "request-ok"
+shape_qwen=$("$ROOT/pkchat" --provider qwen --base-url "$BASE" --quiet --no-stream \
+    -m "qwen3.7-plus" --thinking-budget high -p "expect-qwen-thinking" \
+    --header "Authorization: Bearer test")
+test "$shape_qwen" = "request-ok"
+shape_glm=$("$ROOT/pkchat" --provider zai --base-url "$BASE" --quiet --no-stream \
+    -m "glm-5.2" --thinking-budget xhigh -p "expect-glm-thinking" \
+    --header "Authorization: Bearer test")
+test "$shape_glm" = "request-ok"
+
 reasoning_trace='<think>internal trace</think>'
 reasoning_err="$ROOT/build/reasoning.err"
 reasoning_reply=$("$ROOT/pkchat" "$BASE" --quiet --no-stream -m "$MODEL" -p "reasoning" 2>"$reasoning_err")

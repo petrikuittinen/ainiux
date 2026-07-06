@@ -18,7 +18,7 @@
 
 - Continue v0.4 provider work: provider capability probing, provider-specific error normalization, broader Responses API schema coverage, and adapter docs/tests for real providers.
 - Add live reasoning/thinking capability probing or model metadata so unsupported effort labels and token budgets can be rejected before a provider request.
-- Add a native Anthropic Messages adapter before exposing Claude extended/adaptive thinking settings; the OpenAI-compatible Anthropic profile remains a testing/comparison path.
+- Add a native Anthropic Messages adapter for full Claude extended/adaptive thinking behavior, signatures, output configuration validation, and preserved reasoning state; the OpenAI-compatible Anthropic profile only maps request-side thinking controls.
 - Preserve provider reasoning state needed by future agentic tool loops, including OpenAI Responses reasoning items, OpenRouter signed reasoning details, DeepSeek reasoning content around tool calls, and Anthropic thinking signatures.
 - Add provider-reported context limits and improve token estimation.
 - Add Responses API image input support.

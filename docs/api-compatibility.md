@@ -29,18 +29,21 @@ profile/API                 outgoing request fields
 openai chat                 reasoning_effort: LABEL
 openai responses            reasoning: { effort: LABEL }
 openrouter                  reasoning: { effort: LABEL } or { max_tokens: TOKENS }
-gemini                      reasoning_effort: LABEL, or extra_body.google.thinking_config.thinking_budget for numeric budgets
+gemini                      reasoning_effort: LABEL
+anthropic                   thinking: { type: enabled|disabled|adaptive } plus output_config.effort
+moonshot/kimi               thinking: { type: enabled|disabled }, omitted for always-thinking K2.7 models
 qwen, dashscope             enable_thinking plus numeric thinking_budget
 deepseek                    thinking: { type: enabled|disabled } plus reasoning_effort: high|max
+zai/glm                     thinking: { type: enabled|disabled } plus reasoning_effort: high|max
 xai                         reasoning_effort: LABEL
-custom/local fallback       enable_thinking and thinking_budget, preserving previous generic behavior
+custom/local fallback       enable_thinking and thinking_budget unless a known model family is detected
 ```
 
-Numeric budgets are preserved where the provider documents token-budget control: OpenRouter `reasoning.max_tokens`, Gemini `extra_body.google.thinking_config.thinking_budget`, and Qwen/DashScope `thinking_budget`. For effort-only APIs, numeric budgets are mapped onto a deterministic scale: `0 -> none`, `<=1024 -> low`, `<=8192 -> medium`, `<=24576 -> high`, and larger values to `xhigh` where supported. Qwen/DashScope verbal labels are converted back to approximate token budgets on the same scale.
+Numeric budgets are preserved where the provider documents token-budget control: OpenRouter `reasoning.max_tokens`, Anthropic `thinking.budget_tokens`, and Qwen/DashScope `thinking_budget`. For effort-only APIs, numeric budgets are mapped onto a deterministic scale: `0 -> none`, `<=1024 -> low`, `<=8192 -> medium`, `<=24576 -> high`, and larger values to `xhigh` where supported. Qwen/DashScope verbal labels are converted back to approximate token budgets on the same scale.
 
-Provider-specific limits still apply. For example, Gemini can disable thinking only on some models, DeepSeek maps lower efforts to `high`, and some OpenAI models only support a subset of effort values. `pkchat` does not yet perform live model capability probing for reasoning controls.
+Provider-specific limits still apply. For example, Gemini can disable thinking only on some models, Kimi K2.7 models always think and reject a `thinking` override, DeepSeek V4 and GLM-5.2 map lower efforts to `high`, and some OpenAI models only support a subset of effort values. `pkchat` does not yet perform live model capability probing for reasoning controls.
 
-Anthropic's built-in profile uses Anthropic's OpenAI SDK compatibility endpoint, which Anthropic documents as mainly for testing/comparison. Native Claude extended/adaptive thinking is not implemented because `pkchat` does not yet have a native Anthropic Messages adapter.
+Anthropic's built-in profile uses Anthropic's OpenAI SDK compatibility endpoint, which Anthropic documents as mainly for testing/comparison. It maps request-side `thinking` controls, but native Claude Messages support is still needed for full extended/adaptive thinking behavior, signatures, and preserved reasoning state.
 
 ## Built-In Profiles
 

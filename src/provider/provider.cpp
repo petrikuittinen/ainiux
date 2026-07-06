@@ -241,12 +241,15 @@ std::string strip_thinking_blocks_for_request(const std::string& content);
 enum class ReasoningWireFormat {
     None,
     GenericThinking,
+    AnthropicThinking,
     OpenAiChatEffort,
     OpenAiResponsesReasoning,
     OpenRouterReasoning,
     GeminiOpenAi,
+    KimiThinking,
     QwenThinking,
     DeepSeekThinking,
+    ZaiThinking,
     XaiReasoningEffort,
 };
 
@@ -330,8 +333,12 @@ std::string reasoning_effort_from_options(const cli::Options& o) {
     return "";
 }
 
+bool text_contains_any(const std::string& text, const std::vector<std::string>& needles);
+std::string context_model_and_urls(const RequestContext& context);
+
 ReasoningWireFormat reasoning_wire_format_for(const RequestContext& context) {
     const std::string profile = lower_alias(context.profile.name);
+    const std::string model_and_urls = context_model_and_urls(context);
     if (profile == "none" || context.profile.offline) {
         return ReasoningWireFormat::None;
     }
@@ -342,8 +349,14 @@ ReasoningWireFormat reasoning_wire_format_for(const RequestContext& context) {
     if (profile == "openrouter") {
         return ReasoningWireFormat::OpenRouterReasoning;
     }
+    if (profile == "anthropic") {
+        return ReasoningWireFormat::AnthropicThinking;
+    }
     if (profile == "gemini") {
         return ReasoningWireFormat::GeminiOpenAi;
+    }
+    if (profile == "moonshot") {
+        return ReasoningWireFormat::KimiThinking;
     }
     if (profile == "qwen" || profile == "dashscope") {
         return ReasoningWireFormat::QwenThinking;
@@ -351,8 +364,29 @@ ReasoningWireFormat reasoning_wire_format_for(const RequestContext& context) {
     if (profile == "deepseek") {
         return ReasoningWireFormat::DeepSeekThinking;
     }
+    if (profile == "zai") {
+        return ReasoningWireFormat::ZaiThinking;
+    }
     if (profile == "xai") {
         return ReasoningWireFormat::XaiReasoningEffort;
+    }
+    if (text_contains_any(model_and_urls, {"api.anthropic.com", "claude-"})) {
+        return ReasoningWireFormat::AnthropicThinking;
+    }
+    if (text_contains_any(model_and_urls, {"generativelanguage.googleapis.com", "gemini-"})) {
+        return ReasoningWireFormat::GeminiOpenAi;
+    }
+    if (text_contains_any(model_and_urls, {"api.moonshot.ai", "platform.kimi.ai", "kimi-k2", "kimi_k2"})) {
+        return ReasoningWireFormat::KimiThinking;
+    }
+    if (text_contains_any(model_and_urls, {"dashscope", "maas.aliyuncs.com", "qwen3.7", "qwen3.6"})) {
+        return ReasoningWireFormat::QwenThinking;
+    }
+    if (text_contains_any(model_and_urls, {"api.deepseek.com", "deepseek-v4", "deepseek_v4"})) {
+        return ReasoningWireFormat::DeepSeekThinking;
+    }
+    if (text_contains_any(model_and_urls, {"api.z.ai", "glm-5.2", "glm_5.2", "zai-org/glm-5.2"})) {
+        return ReasoningWireFormat::ZaiThinking;
     }
     if (profile.empty() || profile == "custom_openai_chat" || profile == "lm_studio" ||
         profile == "ollama" || profile == "vllm" || profile == "llamacpp") {
@@ -395,6 +429,29 @@ std::string deepseek_effort_value(std::string effort) {
     return "high";
 }
 
+std::string anthropic_effort_value(std::string effort) {
+    if (effort == "minimal") {
+        return "low";
+    }
+    if (effort == "none") {
+        return "";
+    }
+    return effort;
+}
+
+std::string zai_effort_value(std::string effort) {
+    if (effort == "xhigh" || effort == "max") {
+        return "max";
+    }
+    if (effort == "low" || effort == "medium") {
+        return "high";
+    }
+    if (effort == "minimal" || effort == "none") {
+        return "none";
+    }
+    return effort;
+}
+
 std::string append_pair(std::string fields, const std::string& key, const std::string& value_json) {
     if (!fields.empty()) {
         fields += ",";
@@ -403,6 +460,26 @@ std::string append_pair(std::string fields, const std::string& key, const std::s
     fields += ":";
     fields += value_json;
     return fields;
+}
+
+bool text_contains_any(const std::string& text, const std::vector<std::string>& needles) {
+    for (const std::string& needle : needles) {
+        if (text.find(needle) != std::string::npos) {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool kimi_model_has_forced_thinking(const std::string& model) {
+    const std::string text = lower_ascii_copy(model);
+    return text.find("kimi-k2.7") != std::string::npos ||
+           text.find("kimi_k2.7") != std::string::npos;
+}
+
+std::string context_model_and_urls(const RequestContext& context) {
+    return lower_ascii_copy(context.options.model + " " + context.base_url + " " +
+                            context.chat_url + " " + context.responses_url);
 }
 
 std::string qwen_reasoning_fields_json(const cli::Options& o) {
@@ -429,6 +506,61 @@ std::string qwen_reasoning_fields_json(const cli::Options& o) {
         if (mapped_tokens > 0) {
             fields = append_pair(fields, "thinking_budget", std::to_string(mapped_tokens));
         }
+    }
+    return fields;
+}
+
+std::string anthropic_reasoning_fields_json(const cli::Options& o) {
+    const std::string effort = reasoning_effort_from_options(o);
+    const long long explicit_tokens =
+        o.has_thinking_budget ? parse_reasoning_token_budget(o.thinking_budget) : -1;
+    std::string fields;
+
+    if (explicit_tokens == 0 || effort == "none" || (o.has_enable_thinking && !o.enable_thinking)) {
+        return append_pair(fields, "thinking", "{\"type\":\"disabled\"}");
+    }
+    if (explicit_tokens > 0) {
+        return append_pair(fields,
+                           "thinking",
+                           "{\"type\":\"enabled\",\"budget_tokens\":" +
+                               std::to_string(explicit_tokens) + "}");
+    }
+
+    fields = append_pair(fields, "thinking", "{\"type\":\"adaptive\"}");
+    const std::string claude_effort = anthropic_effort_value(effort.empty() ? "medium" : effort);
+    if (!claude_effort.empty()) {
+        fields = append_pair(fields, "output_config", "{\"effort\":" + json::quote(claude_effort) + "}");
+    }
+    return fields;
+}
+
+std::string kimi_reasoning_fields_json(const RequestContext& context) {
+    const cli::Options& o = context.options;
+    if (kimi_model_has_forced_thinking(o.model)) {
+        return "";
+    }
+
+    const std::string effort = reasoning_effort_from_options(o);
+    const long long explicit_tokens =
+        o.has_thinking_budget ? parse_reasoning_token_budget(o.thinking_budget) : -1;
+    if (explicit_tokens == 0 || effort == "none" || (o.has_enable_thinking && !o.enable_thinking)) {
+        return "\"thinking\":{\"type\":\"disabled\"}";
+    }
+    return "\"thinking\":{\"type\":\"enabled\"}";
+}
+
+std::string zai_reasoning_fields_json(const cli::Options& o) {
+    const std::string effort = reasoning_effort_from_options(o);
+    const long long explicit_tokens =
+        o.has_thinking_budget ? parse_reasoning_token_budget(o.thinking_budget) : -1;
+    std::string fields;
+
+    if (explicit_tokens == 0 || effort == "none" || (o.has_enable_thinking && !o.enable_thinking)) {
+        return append_pair(fields, "thinking", "{\"type\":\"disabled\"}");
+    }
+    fields = append_pair(fields, "thinking", "{\"type\":\"enabled\"}");
+    if (!effort.empty()) {
+        fields = append_pair(fields, "reasoning_effort", json::quote(zai_effort_value(effort)));
     }
     return fields;
 }
@@ -465,6 +597,8 @@ std::string reasoning_fields_json(const RequestContext& context) {
             return "";
         case ReasoningWireFormat::GenericThinking:
             return generic_reasoning_fields_json(o);
+        case ReasoningWireFormat::AnthropicThinking:
+            return anthropic_reasoning_fields_json(o);
         case ReasoningWireFormat::OpenAiChatEffort:
             if (!effort.empty()) {
                 fields = append_pair(fields, "reasoning_effort", json::quote(openai_effort_value(effort)));
@@ -489,16 +623,13 @@ std::string reasoning_fields_json(const RequestContext& context) {
             }
             return fields;
         case ReasoningWireFormat::GeminiOpenAi:
-            if (tokens > 0) {
-                fields = append_pair(fields,
-                                     "extra_body",
-                                     "{\"google\":{\"thinking_config\":{\"thinking_budget\":" +
-                                         std::to_string(tokens) + "}}}");
-            } else if (!effort.empty()) {
+            if (!effort.empty()) {
                 fields =
                     append_pair(fields, "reasoning_effort", json::quote(gemini_effort_value(effort)));
             }
             return fields;
+        case ReasoningWireFormat::KimiThinking:
+            return kimi_reasoning_fields_json(context);
         case ReasoningWireFormat::QwenThinking:
             return qwen_reasoning_fields_json(o);
         case ReasoningWireFormat::DeepSeekThinking: {
@@ -514,6 +645,8 @@ std::string reasoning_fields_json(const RequestContext& context) {
             }
             return fields;
         }
+        case ReasoningWireFormat::ZaiThinking:
+            return zai_reasoning_fields_json(o);
         case ReasoningWireFormat::XaiReasoningEffort:
             if (!effort.empty()) {
                 fields = append_pair(fields, "reasoning_effort", json::quote(xai_effort_value(effort)));

@@ -228,11 +228,14 @@ Reasoning and thinking controls:
 ./pkchat --provider openai --thinking-budget high -m MODEL -p "Solve carefully"
 ./pkchat --provider openrouter --thinking-budget 4096 -m MODEL -p "Solve carefully"
 ./pkchat --provider gemini --thinking-budget high -m MODEL -p "Solve carefully"
+./pkchat --provider anthropic --thinking-budget 2048 -m claude-sonnet-4-6 -p "Solve carefully"
+./pkchat --provider moonshot --thinking off -m kimi-k2.6 -p "Answer directly"
 ./pkchat --provider qwen --thinking-budget 8192 -m qwen-plus -p "Solve carefully"
-./pkchat --provider deepseek --thinking off -m MODEL -p "Answer directly"
+./pkchat --provider deepseek --thinking-budget xhigh -m deepseek-v4-pro -p "Solve carefully"
+./pkchat --provider zai --thinking-budget xhigh -m glm-5.2 -p "Solve carefully"
 ```
 
-`--thinking on|off` and `--thinking-budget TOKENS|LABEL` are translated by the provider layer into each profile's documented request shape. OpenAI Chat uses `reasoning_effort`, OpenAI Responses uses `reasoning.effort`, OpenRouter uses `reasoning.effort` or `reasoning.max_tokens`, Gemini preserves numeric budgets through `extra_body.google.thinking_config.thinking_budget`, Qwen/DashScope use `enable_thinking` and `thinking_budget`, DeepSeek uses `thinking.type` plus its supported effort labels, and xAI uses `reasoning_effort`. Custom and local OpenAI-compatible endpoints retain the older generic `enable_thinking` / `thinking_budget` fields. See [docs/api-compatibility.md](docs/api-compatibility.md) for the mapping and current limitations.
+`--thinking on|off` and `--thinking-budget TOKENS|LABEL` are translated by the provider layer into each profile's documented request shape. OpenAI Chat uses `reasoning_effort`, OpenAI Responses uses `reasoning.effort`, OpenRouter uses `reasoning.effort` or `reasoning.max_tokens`, Gemini uses `reasoning_effort`, Anthropic Claude uses `thinking` with `output_config` for adaptive efforts, Kimi K2.x uses `thinking.type` where the model allows it, Qwen/DashScope use `enable_thinking` and `thinking_budget`, DeepSeek V4 and GLM-5.2 use `thinking.type` plus their supported `reasoning_effort` labels, and xAI uses `reasoning_effort`. Custom and local OpenAI-compatible endpoints retain generic `enable_thinking` / `thinking_budget` fields unless model or URL detection selects a known family. See [docs/api-compatibility.md](docs/api-compatibility.md) for the mapping and current limitations.
 
 Offline mode uses the `none` provider (alias `offline`) and requires no model endpoint or API key:
 
@@ -393,7 +396,7 @@ make test
 
 ### Unreleased reasoning compatibility
 
-`--thinking` and `--thinking-budget` now pass through a provider compatibility layer instead of using one generic wire shape for every endpoint. This covers OpenAI Chat/Responses, OpenRouter, Gemini, Qwen/DashScope, DeepSeek, xAI, and the custom/local fallback path. Native Anthropic extended thinking and preservation of provider reasoning state for future agentic tool loops remain follow-up work.
+`--thinking` and `--thinking-budget` now pass through a provider compatibility layer instead of using one generic wire shape for every endpoint. This covers OpenAI Chat/Responses, OpenRouter, Gemini, Anthropic Claude through its OpenAI-compatible endpoint, Kimi K2.x, Qwen/DashScope, DeepSeek V4, GLM-5.2/Z.AI, xAI, and the custom/local fallback path. Native Anthropic Messages support and preservation of provider reasoning state for future agentic tool loops remain follow-up work.
 
 ### v0.88 web search
 
