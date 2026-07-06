@@ -307,6 +307,26 @@ void test_tui_selectable_provider_ids() {
           "TUI provider picker includes lm_studio");
 }
 
+void test_tui_chat_startup_status() {
+    pkchat::provider::RequestContext offline;
+    offline.profile.offline = true;
+    check(pkchat::tui::chat_startup_status(offline).find("/provider") != std::string::npos,
+          "TUI startup status prompts for provider when offline");
+
+    pkchat::provider::RequestContext missing_model;
+    missing_model.profile.name = "lm_studio";
+    check(pkchat::tui::chat_startup_status(missing_model).find("/model") != std::string::npos,
+          "TUI startup status prompts for model when provider is configured");
+
+    pkchat::provider::RequestContext ready;
+    ready.profile.name = "lm_studio";
+    ready.options.model = "qwen-local";
+    const std::string ready_status = pkchat::tui::chat_startup_status(ready);
+    check(ready_status.find("/provider") != std::string::npos &&
+              ready_status.find("/list") != std::string::npos,
+          "TUI startup status reminds about provider changes and thread list when ready");
+}
+
 void test_tui_provider_and_model_picker_text() {
     const std::vector<std::string> providers = {"lm_studio", "openai"};
     const std::string provider_text = pkchat::tui::provider_picker_text(providers, 1);
@@ -407,6 +427,7 @@ void run_all() {
     test_tui_input_label_and_activity_indicators();
     test_tui_provider_display_and_activity_status();
     test_tui_selectable_provider_ids();
+    test_tui_chat_startup_status();
     test_tui_provider_and_model_picker_text();
     test_tui_unicode_and_empty_status();
     test_tui_layout_reserves_editor_input_panel();

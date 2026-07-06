@@ -1,5 +1,6 @@
 #include "editor/editor.hpp"
 #include "editor/ai_continue.hpp"
+#include "editor/editor_ai_setup.hpp"
 #include "editor/clipboard.hpp"
 #include "editor/detail/editor_common.hpp"
 #include "editor/editor_assist.hpp"
@@ -9,6 +10,7 @@
 #include "runtime/runtime.hpp"
 #include "search/search.hpp"
 #include "tui/activity.hpp"
+#include "tui/input_handlers.hpp"
 
 #include <algorithm>
 #include <functional>
@@ -62,6 +64,11 @@ struct StoredAssistCommand {
     std::optional<AssistPromptMode> prompt_mode;
 };
 
+struct EditorModelsEvent {
+    Error error;
+    std::vector<std::string> models;
+};
+
 void clear_assist_session(AssistSession& session) {
     session.job.join();
     ContinueEvent event;
@@ -85,7 +92,8 @@ void clear_assist_session(AssistSession& session) {
 int run_editor(const std::string& path,
                const std::string& save_as,
                const EditorSettings& settings,
-               const AiContinueContext* ai_continue) {
+               std::optional<AiContinueContext> ai_continue,
+               const EditorAssistConfig& assist_config) {
     EditorState state;
     state.set_undo_limit(settings.undo_limit);
     state.path = path.empty() ? save_as : path;
@@ -130,7 +138,7 @@ int run_editor(const std::string& path,
     bool pending_quit_after_save = false;
     PendingSaveRequest pending_save;
     MinibufferState minibuffer;
-    minibuffer.message = status;
+    minibuffer.message = editor_startup_status(ai_continue);
     std::string last_search;
     ReplaceSession replace;
     std::string pending_load_path;
@@ -142,6 +150,13 @@ int run_editor(const std::string& path,
     bool buffer_list_active = false;
     size_t buffer_list_selected = 0;
     EditorState buffer_list_view;
+    bool picker_list_active = false;
+    bool picker_for_provider = false;
+    std::vector<std::string> picker_items;
+    size_t picker_selected = 0;
+    EditorState picker_view;
+    runtime::JobHandle model_list_job;
+    runtime::EventQueue<EditorModelsEvent> model_events;
     bool pending_close_confirm = false;
     TerminalSize last_size = terminal_size();
     size_t activity_frame = 0;
@@ -184,7 +199,24 @@ int run_editor(const std::string& path,
         buffer_list_view.clear_undo_history();
     };
 
+    auto refresh_picker_view = [&]() {
+        const std::string text =
+            picker_for_provider ? tui::provider_picker_text(picker_items, picker_selected)
+                                : tui::model_picker_text(picker_items, picker_selected);
+        picker_view = EditorState::from_text(text);
+        picker_view.path = picker_for_provider ? "[providers]" : "[models]";
+        const size_t selected_line = std::min(picker_selected + 1, picker_view.text.line_count() - 1);
+        picker_view.cursor = picker_view.text.line_start(selected_line);
+        picker_view.dirty = false;
+        picker_view.clear_undo_history();
+    };
+
     auto render_editor = [&]() {
+        if (picker_list_active) {
+            refresh_picker_view();
+            render_terminal(picker_view, minibuffer, false, nullptr);
+            return;
+        }
         if (buffer_list_active) {
             refresh_buffer_list_view();
             render_terminal(buffer_list_view, minibuffer, false, nullptr);
@@ -418,6 +450,183 @@ int run_editor(const std::string& path,
         }
     };
 
+    auto refresh_ai_status = [&]() {
+        minibuffer_message(minibuffer, editor_startup_status(ai_continue));
+    };
+
+    auto open_provider_picker = [&]() {
+        if (assist_session.active) {
+            minibuffer_message(minibuffer, "Finish or cancel AI assist before changing provider");
+            return;
+        }
+        if (help_view.active) {
+            exit_help_view();
+        }
+        picker_items = tui::selectable_provider_ids();
+        picker_selected = 0;
+        picker_for_provider = true;
+        picker_list_active = true;
+        buffer_list_active = false;
+        minibuffer_message(minibuffer,
+                           picker_items.empty() ? "No providers available"
+                                                : "Selected provider 1/" +
+                                                      std::to_string(picker_items.size()));
+    };
+
+    auto start_model_list = [&]() {
+        if (!editor_ai_has_provider(ai_continue)) {
+            minibuffer_message(minibuffer, editor_no_provider_message());
+            return;
+        }
+        if (model_list_job.running()) {
+            minibuffer_message(minibuffer, "Model list is already loading");
+            return;
+        }
+        provider::RequestContext job_context = ai_continue->request;
+        model_list_job.start([job_context, &model_events](runtime::CancellationToken token) mutable {
+            EditorModelsEvent event;
+            provider::ModelsResult models;
+            event.error = provider::list_models(job_context, models, token);
+            event.models = std::move(models.model_ids);
+            model_events.push(std::move(event));
+        });
+        minibuffer_message(minibuffer, "Loading models...");
+    };
+
+    auto open_model_picker = [&](std::vector<std::string> models) {
+        if (assist_session.active) {
+            minibuffer_message(minibuffer, "Finish or cancel AI assist before changing model");
+            return;
+        }
+        if (help_view.active) {
+            exit_help_view();
+        }
+        picker_items = std::move(models);
+        picker_selected = 0;
+        picker_for_provider = false;
+        picker_list_active = true;
+        buffer_list_active = false;
+        minibuffer_message(minibuffer,
+                           picker_items.empty()
+                               ? "No models returned"
+                               : "Selected model 1/" + std::to_string(picker_items.size()));
+    };
+
+    auto handle_provider_command = [&](const std::string& target) {
+        if (target.empty()) {
+            open_provider_picker();
+            return;
+        }
+        Error apply_error = apply_editor_provider_target(ai_continue, assist_config, target);
+        if (!apply_error.ok()) {
+            minibuffer_message(minibuffer, apply_error.message);
+            return;
+        }
+        refresh_ai_status();
+    };
+
+    auto handle_model_command = [&](const std::string& model_name) {
+        if (model_name.empty()) {
+            if (!editor_ai_has_provider(ai_continue)) {
+                minibuffer_message(minibuffer, editor_no_provider_message());
+                return;
+            }
+            start_model_list();
+            return;
+        }
+        Error apply_error = apply_editor_model(ai_continue, model_name);
+        if (!apply_error.ok()) {
+            minibuffer_message(minibuffer, apply_error.message);
+            return;
+        }
+        refresh_ai_status();
+    };
+
+    auto cancel_picker_list = [&]() {
+        picker_list_active = false;
+        picker_items.clear();
+        picker_selected = 0;
+        minibuffer_message(minibuffer,
+                           picker_for_provider ? "Provider selection cancelled"
+                                               : "Model selection cancelled");
+    };
+
+    auto handle_picker_list_escape = [&]() {
+        const std::string sequence = read_escape_suffix();
+        if (sequence.empty()) {
+            cancel_picker_list();
+            return;
+        }
+        MovementKeyEvent movement;
+        if (parse_movement_sequence(sequence, movement) && !picker_items.empty()) {
+            picker_selected =
+                move_editor_buffer_selection(picker_selected, picker_items.size(), movement.key);
+            const std::string label = picker_for_provider ? "Selected provider" : "Selected model";
+            minibuffer_message(minibuffer,
+                               label + " " + std::to_string(picker_selected + 1) + "/" +
+                                   std::to_string(picker_items.size()));
+            return;
+        }
+        cancel_picker_list();
+    };
+
+    auto confirm_picker_selection = [&]() {
+        if (picker_selected >= picker_items.size()) {
+            return;
+        }
+        if (picker_for_provider) {
+            const std::string provider_name = picker_items[picker_selected];
+            picker_list_active = false;
+            picker_items.clear();
+            picker_selected = 0;
+            Error apply_error = apply_editor_provider_target(ai_continue, assist_config, provider_name);
+            if (!apply_error.ok()) {
+                minibuffer_message(minibuffer, apply_error.message);
+                return;
+            }
+            refresh_ai_status();
+            if (editor_ai_has_provider(ai_continue) && ai_continue->request.options.model.empty()) {
+                start_model_list();
+            }
+            return;
+        }
+        Error apply_error = apply_editor_model(ai_continue, picker_items[picker_selected]);
+        picker_list_active = false;
+        picker_items.clear();
+        picker_selected = 0;
+        if (!apply_error.ok()) {
+            minibuffer_message(minibuffer, apply_error.message);
+            return;
+        }
+        refresh_ai_status();
+    };
+
+    auto require_ai_provider = [&]() -> bool {
+        if (!editor_ai_has_provider(ai_continue)) {
+            minibuffer_message(minibuffer, editor_no_provider_message());
+            return false;
+        }
+        return true;
+    };
+
+    auto process_model_events = [&]() -> bool {
+        EditorModelsEvent event;
+        if (!model_events.try_pop(event)) {
+            return false;
+        }
+        model_list_job.join();
+        if (!event.error.ok()) {
+            minibuffer_message(minibuffer, event.error.message);
+            return true;
+        }
+        if (event.models.empty()) {
+            minibuffer_message(minibuffer, "No models returned");
+            return true;
+        }
+        open_model_picker(std::move(event.models));
+        return true;
+    };
+
     auto handle_open_minibuffer_key = [&](unsigned char ch) -> bool {
         if (!minibuffer.active ||
             (minibuffer.action != MinibufferAction::LoadFile &&
@@ -582,9 +791,7 @@ int run_editor(const std::string& path,
         if (minibuffer.active && !is_assist_minibuffer_action(minibuffer.action)) {
             return;
         }
-        if (ai_continue == nullptr) {
-            minibuffer_message(minibuffer,
-                               "AI assist requires a provider; use --provider lmstudio -m MODEL");
+        if (!require_ai_provider()) {
             return;
         }
         Error validation = validate_continue_request(*ai_continue);
@@ -623,7 +830,8 @@ int run_editor(const std::string& path,
             assist_session.undo_before = state.capture_state();
         }
         state.clear_selection();
-        start_assist_job(*ai_continue, execution.messages, execution.stream, assist_session.events, assist_session.job);
+        start_assist_job(*ai_continue, execution.messages, execution.stream, assist_session.events,
+                         assist_session.job);
         set_assist_activity(tui::ActivityKind::Thinking, "thinking... ESC to abort");
     };
 
@@ -694,21 +902,33 @@ int run_editor(const std::string& path,
             case EditorSlashCommand::None:
                 break;
         }
-        const ParsedAssistCommand parsed =
-            parse_assist_command(minibuffer.input, ai_continue == nullptr ? default_editor_assist_config()
-                                                                          : ai_continue->assist_config);
+        const std::string command_line = trim_ascii_copy(minibuffer.input);
+        if (command_line == "/provider" || command_line.rfind("/provider ", 0) == 0) {
+            pending_assist = PendingAssist{};
+            exit_assist_command_mode(minibuffer, assist_completer);
+            handle_provider_command(command_line.size() <= 9 ? "" : trim_ascii_copy(command_line.substr(9)));
+            return;
+        }
+        if (command_line == "/model" || command_line.rfind("/model ", 0) == 0) {
+            pending_assist = PendingAssist{};
+            exit_assist_command_mode(minibuffer, assist_completer);
+            handle_model_command(command_line.size() <= 6 ? "" : trim_ascii_copy(command_line.substr(6)));
+            return;
+        }
+        const ParsedAssistCommand parsed = parse_assist_command(
+            minibuffer.input, ai_continue.has_value() ? ai_continue->assist_config : assist_config);
         if (!parsed.ok) {
             minibuffer_message(minibuffer, parsed.error_message);
             return;
         }
         if (parsed.kind == AssistCommandKind::Configured) {
-            const EditorAssistConfig& assist_config =
-                ai_continue == nullptr ? default_editor_assist_config() : ai_continue->assist_config;
-            if (parsed.command_index >= assist_config.commands.size()) {
+            const EditorAssistConfig& active_assist_config =
+                ai_continue.has_value() ? ai_continue->assist_config : assist_config;
+            if (parsed.command_index >= active_assist_config.commands.size()) {
                 minibuffer_message(minibuffer, "Configured assist command index is out of range");
                 return;
             }
-            const EditorAssistCommand& command = assist_config.commands[parsed.command_index];
+            const EditorAssistCommand& command = active_assist_config.commands[parsed.command_index];
             if (assist_command_requires_scope(command) && !parsed.scope.has_value()) {
                 pending_assist.kind = AssistCommandKind::Configured;
                 pending_assist.command_index = parsed.command_index;
@@ -746,8 +966,8 @@ int run_editor(const std::string& path,
         }
         if (parsed.kind == AssistCommandKind::WebSearch) {
             search::Options search_options =
-                ai_continue == nullptr ? search::default_options()
-                                       : search::options_for(ai_continue->request.options);
+                ai_continue.has_value() ? search::options_for(ai_continue->request.options)
+                                        : search::default_options();
             search::SearchResponse response;
             Error search_error = search::search(parsed.custom_prompt, search_options, response);
             if (!search_error.ok()) {
@@ -770,7 +990,7 @@ int run_editor(const std::string& path,
     };
 
     auto start_continue = [&]() {
-        if (ai_continue == nullptr) {
+        if (!require_ai_provider()) {
             return;
         }
         const std::optional<size_t> command_index =
@@ -812,7 +1032,7 @@ int run_editor(const std::string& path,
                         const AssistCompletionResult result = complete_assist_command(
                             minibuffer.input,
                             assist_completer,
-                            ai_continue == nullptr ? default_editor_assist_config() : ai_continue->assist_config);
+                            ai_continue.has_value() ? ai_continue->assist_config : assist_config);
                         minibuffer.message = assist_completion_status(result);
                         return;
                     }
@@ -871,6 +1091,21 @@ int run_editor(const std::string& path,
             }
             return;
         }
+        if (picker_list_active) {
+            if (ch == 17) {
+                quit = true;
+                return;
+            }
+            if (ch == 27) {
+                handle_picker_list_escape();
+                return;
+            }
+            if (ch == '\r' || ch == '\n') {
+                confirm_picker_selection();
+                return;
+            }
+            return;
+        }
         if (buffer_list_active) {
             if (ch == 17) {
                 quit = true;
@@ -911,7 +1146,7 @@ int run_editor(const std::string& path,
                     const AssistCompletionResult result = complete_assist_command(
                         minibuffer.input,
                         assist_completer,
-                        ai_continue == nullptr ? default_editor_assist_config() : ai_continue->assist_config);
+                        ai_continue.has_value() ? ai_continue->assist_config : assist_config);
                     minibuffer.message = assist_completion_status(result);
                     return;
                 }
@@ -1119,6 +1354,10 @@ int run_editor(const std::string& path,
     };
 
     auto handle_paste = [&](const std::string& terminal_text) {
+        if (picker_list_active) {
+            minibuffer_message(minibuffer, "Choose an item or press Esc to cancel");
+            return;
+        }
         if (buffer_list_active) {
             minibuffer_message(minibuffer, "Choose a buffer or press Esc to cancel");
             return;
@@ -1133,6 +1372,7 @@ int run_editor(const std::string& path,
 
     while (!quit) {
         const bool assist_updated = process_assist_events();
+        const bool model_updated = process_model_events();
         const bool assist_animating =
             assist_session.active && assist_session.activity_kind != tui::ActivityKind::None;
         if (assist_animating) {
@@ -1143,7 +1383,8 @@ int run_editor(const std::string& path,
         if (!read_terminal_input(event, 100)) {
             const TerminalSize current_size = terminal_size();
             if (current_size.rows != last_size.rows || current_size.cols != last_size.cols ||
-                assist_session.job.running() || assist_updated || assist_animating) {
+                assist_session.job.running() || model_list_job.running() || assist_updated ||
+                model_updated || assist_animating) {
                 last_size = current_size;
                 render_editor();
             }

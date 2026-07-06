@@ -163,25 +163,6 @@ int run(provider::RequestContext context, chat::Session session) {
     if (sqlite_open_error.ok()) {
         sqlite_available = true;
         sqlite_path = sqlite_store.path();
-        if (context.options.load_chat_path.empty() && app::detail::trim_ascii(context.options.prompt).empty()) {
-            long long last_id = 0;
-            bool found_last = false;
-            Error last_error = sqlite_store.last_thread_id(last_id, found_last);
-            if (last_error.ok() && found_last) {
-                chat::Session loaded;
-                Error load_error = sqlite_store.load_session(last_id, loaded);
-                if (load_error.ok()) {
-                    session = std::move(loaded);
-                    app::apply_system_prompt(session, context.options.system);
-                    finish_loaded_session("Loaded last thread: " +
-                                          (session.name.empty() ? std::to_string(session.thread_id) : session.name));
-                } else {
-                    status = detail::error_line(load_error);
-                }
-            } else if (!last_error.ok()) {
-                status = detail::error_line(last_error);
-            }
-        }
     } else {
         status = "SQLite persistence unavailable: " + sqlite_open_error.message;
     }
@@ -538,16 +519,36 @@ int run(provider::RequestContext context, chat::Session session) {
                                       : "Selected provider 1/" + std::to_string(picker_items.size());
     };
 
-    auto begin_interactive_setup = [&]() {
-        if (mode != TuiMode::Chat) {
+    auto refresh_startup_status = [&]() {
+        status = chat_startup_status(context);
+    };
+
+    auto remove_empty_thread_on_exit = [&]() {
+        if (!sqlite_available || chat::session_has_chat_messages(session)) {
             return;
         }
-        if (provider::tui_needs_startup_provider_selection(cli_context.options) && session.provider.empty()) {
-            open_provider_picker(true);
+        if (file_job.running()) {
+            file_job.join();
+        }
+        TuiEvent event;
+        while (events.try_pop(event)) {
+            if (event.type == TuiEventType::StoreSaveDone && event.error.ok() &&
+                (session.thread_id == 0 || session.thread_id == event.session.thread_id)) {
+                session.thread_id = event.session.thread_id;
+            }
+        }
+        if (session.thread_id <= 0) {
             return;
         }
-        if (context.options.model.empty() && !context.profile.offline) {
-            start_models(ModelsRequestPurpose::Picker);
+        Error remove_error = sqlite_store.soft_delete_thread(session.thread_id);
+        if (!remove_error.ok()) {
+            return;
+        }
+        long long last_id = 0;
+        bool found_last = false;
+        if (sqlite_store.last_thread_id(last_id, found_last).ok() && found_last &&
+            last_id == session.thread_id) {
+            sqlite_store.set_last_thread_id(0);
         }
     };
 
@@ -879,7 +880,7 @@ int run(provider::RequestContext context, chat::Session session) {
             if (!apply_selected_provider(provider_name)) {
                 return;
             }
-            status = "Provider set to " + provider::display_name_for_profile(context.profile.name);
+            refresh_startup_status();
             start_store_save();
             return;
         }
@@ -895,7 +896,7 @@ int run(provider::RequestContext context, chat::Session session) {
             }
             context.options.model = model;
             session.model = model;
-            status = "Model set to " + model;
+            refresh_startup_status();
             start_store_save();
             return;
         }
@@ -1112,7 +1113,7 @@ int run(provider::RequestContext context, chat::Session session) {
         start_turn(raw);
     };
 
-    begin_interactive_setup();
+    refresh_startup_status();
 
     if (!app::detail::trim_ascii(context.options.prompt).empty()) {
         start_turn(context.options.prompt);
@@ -1371,8 +1372,7 @@ int run(provider::RequestContext context, chat::Session session) {
                                     picker_items.clear();
                                     picker_selected = 0;
                                     mode = TuiMode::Chat;
-                                    status = "Provider set to " +
-                                             provider::display_name_for_profile(context.profile.name);
+                                    refresh_startup_status();
                                     start_store_save();
                                     start_models(ModelsRequestPurpose::Picker);
                                 }
@@ -1382,7 +1382,7 @@ int run(provider::RequestContext context, chat::Session session) {
                                 picker_items.clear();
                                 picker_selected = 0;
                                 mode = TuiMode::Chat;
-                                status = "Model set to " + context.options.model;
+                                refresh_startup_status();
                                 start_store_save();
                             }
                         }
@@ -1624,11 +1624,12 @@ int run(provider::RequestContext context, chat::Session session) {
     }
 
     model_job.cancel();
-    file_job.cancel();
     completion_job.cancel();
     model_job.join();
-    file_job.join();
     completion_job.join();
+    remove_empty_thread_on_exit();
+    file_job.cancel();
+    file_job.join();
     return 0;
 }
 

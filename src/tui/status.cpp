@@ -62,6 +62,16 @@ std::string ready_status() {
            ". TAB command/path /help Alt+enter newline PageUp/PageDown scroll";
 }
 
+std::string chat_startup_status(const provider::RequestContext& context) {
+    if (context.profile.offline) {
+        return "Select a provider with /provider, then choose a model with /model";
+    }
+    if (context.options.model.empty()) {
+        return "Choose a model with /model · Change provider with /provider";
+    }
+    return "Change provider with /provider · Open saved threads with /list";
+}
+
 std::string generation_ready_status(const std::string& provider_name,
                                     const std::string& model_name,
                                     const provider::ChatResult& result,

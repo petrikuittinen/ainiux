@@ -2497,6 +2497,19 @@ void apply_tui_startup_default(cli::Options& options) {
     options.provider = "none";
 }
 
+bool editor_needs_local_only_default(const cli::Options& options) {
+    return options.editor && !options.provider_explicit && options.positional_url.empty() &&
+           options.base_url.empty() && options.chat_url.empty() && options.models_url.empty() &&
+           options.responses_url.empty() && options.model.empty();
+}
+
+void apply_editor_startup_default(cli::Options& options) {
+    if (!editor_needs_local_only_default(options)) {
+        return;
+    }
+    options.provider = "none";
+}
+
 void apply_editor_offline_default(cli::Options& options) {
     if (!options.editor || editor_has_configured_model_endpoint(options)) {
         return;

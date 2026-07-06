@@ -300,6 +300,18 @@ void test_chat_settings_helpers() {
           "chat settings panel leaves unset fields empty");
 }
 
+void test_chat_session_has_chat_messages() {
+    pkchat::chat::Session session;
+    check(!pkchat::chat::session_has_chat_messages(session),
+          "chat session helper treats an empty session as non-chat");
+    session.messages.push_back({"system", "Be concise"});
+    check(!pkchat::chat::session_has_chat_messages(session),
+          "chat session helper ignores system-only sessions");
+    session.messages.push_back({"user", "hello"});
+    check(pkchat::chat::session_has_chat_messages(session),
+          "chat session helper detects user messages");
+}
+
 void test_chat_sqlite_remove_empty_threads() {
     const std::string path = "build/unit-pkchat-empty-threads.db";
     std::filesystem::remove(path);
@@ -365,6 +377,7 @@ void run_all() {
     test_chat_session_json_round_trip();
     test_chat_session_rejects_corrupt_json();
     test_chat_session_file_failures_and_unicode();
+    test_chat_session_has_chat_messages();
     test_chat_sqlite_store_round_trip_and_listing();
     test_chat_sqlite_remove_empty_threads();
     test_chat_sqlite_missing_thread_and_corrupt_database();

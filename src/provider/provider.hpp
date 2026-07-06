@@ -118,8 +118,10 @@ struct ContextResult {
 
 ContextResult build_context(const cli::Options& options);
 bool tui_needs_startup_provider_selection(const cli::Options& options);
+bool editor_needs_local_only_default(const cli::Options& options);
 bool looks_like_api_url(const std::string& text);
 void apply_provider_target(cli::Options& options, const std::string& target);
+void apply_editor_startup_default(cli::Options& options);
 void apply_editor_offline_default(cli::Options& options);
 void apply_tui_startup_default(cli::Options& options);
 std::string format_models_markdown(const std::string& provider_name,

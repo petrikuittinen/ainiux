@@ -1,5 +1,6 @@
 #include "editor/ai_continue.hpp"
 
+#include "editor/editor_ai_setup.hpp"
 #include "editor/editor_assist.hpp"
 
 #include <cctype>
@@ -156,11 +157,10 @@ Error resolve_editor_default_model(AiContinueContext& context) {
 
 Error validate_continue_request(const AiContinueContext& context) {
     if (context.request.profile.offline) {
-        return {ErrorCode::UnsupportedFeature,
-                "AI continue requires a provider; use --provider lmstudio or similar"};
+        return {ErrorCode::UnsupportedFeature, editor_no_provider_message()};
     }
     if (context.request.options.model.empty()) {
-        return {ErrorCode::BadArgs, "AI continue requires --model for this provider"};
+        return {ErrorCode::BadArgs, editor_no_model_message()};
     }
     return ok_error();
 }

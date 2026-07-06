@@ -1,5 +1,6 @@
 #include <fstream>
 #include <iostream>
+#include <optional>
 #include <utility>
 #include <vector>
 
@@ -191,6 +192,7 @@ int main(int argc, char** argv) {
         editor_settings.undo_limit = static_cast<size_t>(options.editor_undo_limit);
         editor_settings.huge_file_size_warning = options.editor_huge_file_size_warning;
         editor_settings.file_size_limit = options.editor_file_size_limit;
+        pkchat::provider::apply_editor_startup_default(options);
         pkchat::provider::apply_editor_offline_default(options);
         pkchat::provider::ContextResult context_result = pkchat::provider::build_context(options);
         if (!context_result.error.ok()) {
@@ -198,26 +200,29 @@ int main(int argc, char** argv) {
             return pkchat::app::exit_code_for(context_result.error.code);
         }
         pkchat::provider::RequestContext editor_context = std::move(context_result.context);
-        pkchat::editor::AiContinueContext ai_continue;
-        const pkchat::editor::AiContinueContext* ai_continue_ptr = nullptr;
+        std::optional<pkchat::editor::AiContinueContext> ai_continue;
         if (!editor_context.profile.offline) {
-            ai_continue.request = std::move(editor_context);
-            ai_continue.settings = pkchat::editor::ai_continue_settings_from_env();
-            ai_continue.assist_config = options.editor_assist_config;
+            pkchat::editor::AiContinueContext configured;
+            configured.request = std::move(editor_context);
+            configured.settings = pkchat::editor::ai_continue_settings_from_env();
+            configured.assist_config = options.editor_assist_config;
             const bool auto_select_model = options.model.empty();
-            pkchat::Error model_err = pkchat::editor::resolve_editor_default_model(ai_continue);
+            pkchat::Error model_err = pkchat::editor::resolve_editor_default_model(configured);
             if (!model_err.ok()) {
                 pkchat::app::print_error(model_err);
                 return pkchat::app::exit_code_for(model_err.code);
             }
             if (auto_select_model && !options.quiet) {
-                std::cerr << "Editor model: " << ai_continue.request.options.model
-                          << " (first model from " << ai_continue.request.models_url << ")\n";
+                std::cerr << "Editor model: " << configured.request.options.model
+                          << " (first model from " << configured.request.models_url << ")\n";
             }
-            ai_continue_ptr = &ai_continue;
+            ai_continue = std::move(configured);
         }
-        return pkchat::editor::run_editor(options.editor_path, options.output_path, editor_settings,
-                                          ai_continue_ptr);
+        return pkchat::editor::run_editor(options.editor_path,
+                                            options.output_path,
+                                            editor_settings,
+                                            std::move(ai_continue),
+                                            options.editor_assist_config);
     }
     if (!options.key.empty() && !options.quiet) {
         std::cerr << "Warning: command line API keys may be visible to other local users; prefer --key-env, "

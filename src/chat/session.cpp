@@ -142,6 +142,15 @@ std::string current_timestamp_utc() {
     return buffer;
 }
 
+bool session_has_chat_messages(const Session& session) {
+    for (const provider::Message& message : session.messages) {
+        if (message.role == "user" || message.role == "assistant") {
+            return true;
+        }
+    }
+    return false;
+}
+
 Session new_session(const provider::RequestContext& context) {
     Session session;
     session.created_at = current_timestamp_utc();

@@ -190,7 +190,7 @@ def scenario_seed_alpha(binary, base, model, home_dir):
         conn.close()
 
 
-def scenario_reload_last(binary, base, model, home_dir):
+def scenario_fresh_start(binary, base, model, home_dir):
     transcript = run_tui(
         binary,
         base,
@@ -198,8 +198,10 @@ def scenario_reload_last(binary, base, model, home_dir):
         home_dir,
         [("/quit\r", 0.2)],
     )
-    if b"Loaded last thread" not in transcript and b"Loaded last thread: Alpha" not in transcript:
-        raise RuntimeError("expected TUI startup to reload the last SQLite thread")
+    if b"Loaded last thread" in transcript:
+        raise RuntimeError("expected TUI startup to begin a fresh thread instead of reloading the last one")
+    if b"/list" not in transcript:
+        raise RuntimeError("expected configured startup status to mention /list")
 
 
 def scenario_beta_and_list_load(binary, base, model, home_dir):
@@ -346,7 +348,7 @@ def main():
 
     scenarios = {
         "seed-alpha": scenario_seed_alpha,
-        "reload-last": scenario_reload_last,
+        "fresh-start": scenario_fresh_start,
         "beta-list-load": scenario_beta_and_list_load,
         "provider-update": scenario_provider_update,
         "remove": scenario_remove_thread,

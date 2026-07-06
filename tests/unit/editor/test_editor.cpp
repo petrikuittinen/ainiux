@@ -3,6 +3,7 @@
 #include "cli/args.hpp"
 #include "config/config.hpp"
 #include "editor/ai_continue.hpp"
+#include "editor/editor_ai_setup.hpp"
 #include "editor/clipboard.hpp"
 #include "editor/editor.hpp"
 #include "editor/editor_assist.hpp"
@@ -140,6 +141,63 @@ void test_editor_ai_continue_helpers() {
         unsetenv("MAX_AI_CONTINUE_TOKENS");
     }
 #endif
+}
+
+void test_editor_ai_setup_helpers() {
+    check(pkchat::editor::editor_no_provider_message() ==
+              "No provider chosen. Use /provider to choose one",
+          "editor no-provider message mentions /provider");
+    check(pkchat::editor::editor_no_model_message() == "No model chosen. Use /model to choose one",
+          "editor no-model message mentions /model");
+
+    std::optional<pkchat::editor::AiContinueContext> no_context;
+    check(!pkchat::editor::editor_ai_has_provider(no_context), "missing context has no provider");
+    check(!pkchat::editor::editor_ai_ready(no_context), "missing context is not AI-ready");
+    check(pkchat::editor::editor_startup_status(no_context).find("/provider") != std::string::npos,
+          "startup status without context mentions /provider");
+
+    const char* none_argv[] = {"pkchat", "--provider", "none", "--editor"};
+    pkchat::cli::ParseResult none_parsed = pkchat::cli::parse_args(4, const_cast<char**>(none_argv));
+    check(none_parsed.error.ok(), "none provider editor args parse for ai setup");
+    pkchat::provider::ContextResult none_context = pkchat::provider::build_context(none_parsed.options);
+    check(none_context.error.ok(), "none provider context builds for ai setup");
+    pkchat::editor::AiContinueContext offline_continue;
+    offline_continue.request = none_context.context;
+    check(!pkchat::editor::editor_ai_has_provider(offline_continue),
+          "offline provider is not considered chosen");
+    check(pkchat::editor::editor_startup_status(offline_continue).find("Local editor") != std::string::npos,
+          "offline startup status mentions local editor");
+
+    const char* lm_model_argv[] = {"pkchat", "lmstudio", "-m", "mock-model", "--editor"};
+    pkchat::cli::ParseResult lm_model_parsed = pkchat::cli::parse_args(5, const_cast<char**>(lm_model_argv));
+    check(lm_model_parsed.error.ok(), "lmstudio editor args parse for ai setup");
+    pkchat::provider::ContextResult ready_context = pkchat::provider::build_context(lm_model_parsed.options);
+    check(ready_context.error.ok(), "lmstudio provider context builds for ai setup");
+    pkchat::editor::AiContinueContext ready_continue;
+    ready_continue.request = ready_context.context;
+    ready_continue.assist_config = pkchat::editor::default_editor_assist_config();
+    check(pkchat::editor::editor_ai_has_provider(ready_continue), "configured provider is chosen");
+    ready_continue.request.options.model = "mock-model";
+    check(pkchat::editor::editor_ai_ready(ready_continue), "provider with model is AI-ready");
+    check(pkchat::editor::editor_startup_status(ready_continue).find("AI ready") != std::string::npos,
+          "ready startup status mentions AI ready");
+
+    std::optional<pkchat::editor::AiContinueContext> created;
+    pkchat::editor::EditorAssistConfig assist_config = pkchat::editor::default_editor_assist_config();
+    check(pkchat::editor::ensure_editor_ai_context(created, assist_config).ok(),
+          "ensure_editor_ai_context creates offline context");
+    check(created.has_value(), "ensure_editor_ai_context populates optional");
+    check(!pkchat::editor::editor_ai_has_provider(created), "created default context stays offline");
+
+    check(pkchat::editor::apply_editor_model(created, "mock-model").code ==
+              pkchat::ErrorCode::UnsupportedFeature,
+          "apply_editor_model requires a provider first");
+    check(pkchat::editor::apply_editor_provider_target(created, assist_config, "openai").ok(),
+          "apply_editor_provider_target can switch to openai");
+    check(pkchat::editor::editor_ai_has_provider(created), "openai provider is active after apply");
+    check(pkchat::editor::apply_editor_model(created, "gpt-test").ok(),
+          "apply_editor_model succeeds after provider is chosen");
+    check(created->request.options.model == "gpt-test", "apply_editor_model stores model name");
 }
 
 void test_editor_assist_helpers() {
@@ -1581,6 +1639,10 @@ void test_editor_help_document_and_command() {
           "assist command completions include /list");
     check(std::find(completions.begin(), completions.end(), "/close") != completions.end(),
           "assist command completions include /close");
+    check(std::find(completions.begin(), completions.end(), "/provider ") != completions.end(),
+          "assist command completions include /provider");
+    check(std::find(completions.begin(), completions.end(), "/model ") != completions.end(),
+          "assist command completions include /model");
 
     pkchat::editor::ParsedEditorSlashCommand slash =
         pkchat::editor::parse_editor_slash_command("/save");
@@ -1725,6 +1787,7 @@ void run_all() {
     test_editor_missing_file_error_message();
     test_editor_buffer_list_helpers();
     test_editor_ai_continue_helpers();
+    test_editor_ai_setup_helpers();
     test_editor_file_io_failures();
     test_editor_assist_helpers();
     test_editor_contextual_completion_modes();

@@ -4,6 +4,8 @@
 #include <cstdint>
 #include <iosfwd>
 #include <optional>
+
+#include "editor/editor_prompts.hpp"
 #include <string>
 #include <vector>
 
@@ -203,7 +205,8 @@ Error save_file(const std::string& path, const PieceTable& text);
 
 int run_editor(const std::string& path,
                const std::string& save_as,
-               const EditorSettings& settings = {},
-               const AiContinueContext* ai_continue = nullptr);
+               const EditorSettings& settings,
+               std::optional<AiContinueContext> ai_continue,
+               const EditorAssistConfig& assist_config);
 
 }  // namespace pkchat::editor

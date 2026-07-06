@@ -643,6 +643,29 @@ void test_tui_startup_provider_selection_helpers() {
           "positional chat provider shortcut skips startup provider selection");
 }
 
+void test_editor_startup_local_only_default() {
+    pkchat::cli::Options bare_editor;
+    bare_editor.editor = true;
+    check(pkchat::provider::editor_needs_local_only_default(bare_editor),
+          "bare editor requests local-only startup without provider or model");
+
+    pkchat::provider::apply_editor_startup_default(bare_editor);
+    check(bare_editor.provider == "none", "bare editor startup default uses offline provider");
+
+    pkchat::cli::Options with_model;
+    with_model.editor = true;
+    with_model.model = "gpt-test";
+    check(!pkchat::provider::editor_needs_local_only_default(with_model),
+          "editor with an explicit model keeps AI configuration enabled");
+
+    pkchat::cli::Options with_provider;
+    with_provider.editor = true;
+    with_provider.provider = "openai";
+    with_provider.provider_explicit = true;
+    check(!pkchat::provider::editor_needs_local_only_default(with_provider),
+          "editor with an explicit provider keeps AI configuration enabled");
+}
+
 void test_editor_defaults_offline_without_credentials() {
     ScopedUnsetenv unset_openai("OPENAI_API_KEY");
     ScopedUnsetenv unset_pkchat("PKCHAT_API_KEY");
@@ -651,6 +674,7 @@ void test_editor_defaults_offline_without_credentials() {
     pkchat::cli::ParseResult parsed = pkchat::cli::parse_args(2, const_cast<char**>(argv));
     check(parsed.error.ok(), "bare editor args parse");
     pkchat::cli::Options options = parsed.options;
+    pkchat::provider::apply_editor_startup_default(options);
     pkchat::provider::apply_editor_offline_default(options);
     check(options.provider == "none", "bare editor switches to offline provider without credentials");
     pkchat::provider::ContextResult context = pkchat::provider::build_context(options);
@@ -1069,6 +1093,7 @@ void run_all() {
     test_models_markdown_format();
     test_apply_provider_target_accepts_custom_url();
     test_tui_startup_provider_selection_helpers();
+    test_editor_startup_local_only_default();
     test_editor_defaults_offline_without_credentials();
     test_none_provider_allows_an_empty_endpoint();
     test_openai_context_allows_missing_model();
