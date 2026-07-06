@@ -320,6 +320,34 @@ int run_editor(const std::string& path,
         open_buffer_from_path(open_path);
     };
 
+    auto new_empty_buffer = [&]() {
+        if (assist_session.active) {
+            minibuffer_message(minibuffer, "Finish or cancel AI assist before creating buffers");
+            return;
+        }
+        if (help_view.active) {
+            exit_help_view();
+        }
+        sync_active_buffer();
+        EditorState next;
+        next.set_undo_limit(settings.undo_limit);
+        next.text = PieceTable::from_string("");
+        next.path.clear();
+        next.dirty = false;
+        next.clear_selection();
+        next.clear_undo_history();
+        buffers.push_back(next);
+        active_buffer = buffers.size() - 1;
+        state = next;
+        buffer_list_active = false;
+        buffer_list_selected = active_buffer;
+        pending_close_confirm = false;
+        minibuffer_message(minibuffer,
+                           "New buffer " + std::to_string(active_buffer + 1) + "/" +
+                               std::to_string(buffers.size()) + ": " +
+                               editor_buffer_display_name(state, active_buffer));
+    };
+
     auto enter_buffer_list = [&]() {
         if (assist_session.active) {
             minibuffer_message(minibuffer, "Finish or cancel AI assist before listing buffers");
@@ -647,6 +675,11 @@ int run_editor(const std::string& path,
                 } else {
                     request_open_buffer_from_path(slash.path);
                 }
+                return;
+            case EditorSlashCommand::New:
+                pending_assist = PendingAssist{};
+                exit_assist_command_mode(minibuffer, assist_completer);
+                new_empty_buffer();
                 return;
             case EditorSlashCommand::List:
                 pending_assist = PendingAssist{};
@@ -1026,6 +1059,8 @@ int run_editor(const std::string& path,
             if (!kill_error.ok()) {
                 minibuffer_message(minibuffer, kill_error.message);
             }
+        } else if (ch == 14) {
+            new_empty_buffer();
         } else if (ch == 15) {
             start_minibuffer(minibuffer, MinibufferAction::LoadFile, "Open file: ");
         } else if (ch == 0) {

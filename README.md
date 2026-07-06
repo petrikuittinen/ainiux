@@ -2,7 +2,7 @@
 
 `pkchat` is a fast, script-friendly command-line chat client for OpenAI and OpenAI-compatible APIs.
 
-Current status: v0.88 CLI with libcurl transport, cancellable runtime jobs, provider registry/profile aliases, `/v1/models`, `/v1/chat/completions`, text-only OpenAI Responses API support, provider-specific reasoning/thinking request compatibility, local JPEG/PNG/GIF image input, interactive text/image attachments, request-only context policies, safe URL insertion, web search with API providers and keyless fallbacks, a simple REPL, a standalone `--editor` mode with selection, copy/cut/paste, grapheme-aware Unicode editing, and AI continue/editor commands, a full-screen non-blocking TUI foundation, SQLite-backed TUI chat threads, JSON chat import/export save/load, HTML-to-text/Markdown extraction, Markdown assistant-output rendering to HTML or plaintext, automatic system/user TOML-alike configuration loading, and a concurrent JSONL benchmark runner.
+Current status: v0.89 CLI with libcurl transport, cancellable runtime jobs, provider registry/profile aliases, `/v1/models`, `/v1/chat/completions`, text-only OpenAI Responses API support, provider-specific reasoning/thinking request compatibility, local JPEG/PNG/GIF image input, interactive text/image attachments, request-only context policies, safe URL insertion, web search with API providers and keyless fallbacks, a simple REPL, a standalone `--editor` mode with multiple file buffers, selection, copy/cut/paste across buffers, grapheme-aware Unicode editing, and AI continue/editor commands, a full-screen non-blocking TUI foundation, SQLite-backed TUI chat threads, JSON chat import/export save/load, HTML-to-text/Markdown extraction, Markdown assistant-output rendering to HTML or plaintext, automatic system/user TOML-alike configuration loading, and a concurrent JSONL benchmark runner.
 
 ## Build
 
@@ -97,7 +97,7 @@ A matching `string` replaces a built-in command; new strings add commands. Confi
 
 ### Editor Controls
 
-`Ctrl+S` saves, `Ctrl+Shift+S` saves as, `Ctrl+O` opens another file buffer, `Ctrl+L` or `/list` opens the buffer picker, `Ctrl+W` or `/close` closes the active buffer with a discard prompt when modified, `Ctrl+F` searches, `Ctrl+H` replaces, `Ctrl+Q` quits (with save prompts when needed), `Ctrl+C`/`Ctrl+X`/`Ctrl+V` copy/cut/paste across buffers, `Ctrl+K` kills to end of line, `Ctrl+U`/`Ctrl+R` undo/redo, arrows move, `Shift` plus arrows / `PageUp`/`PageDown` / `Home`/`End` extend selection, and `Tab` completion is disabled in standalone editor mode.
+`Ctrl+S` saves, `Ctrl+Shift+S` saves as, `Ctrl+O` opens another file buffer, `Ctrl+N` or `/new` opens a new empty buffer, `Ctrl+L` or `/list` opens the buffer picker, `Ctrl+W` or `/close` closes the active buffer with a discard prompt when modified, `Ctrl+F` searches, `Ctrl+H` replaces, `Ctrl+Q` quits (with save prompts when needed), `Ctrl+C`/`Ctrl+X`/`Ctrl+V` copy/cut/paste across buffers, `Ctrl+K` kills to end of line, `Ctrl+U`/`Ctrl+R` undo/redo, arrows move, `Shift` plus arrows / `PageUp`/`PageDown` / `Home`/`End` extend selection, and `Tab` completion is disabled in standalone editor mode.
 
 ## Benchmarks
 
@@ -394,9 +394,9 @@ make test
 
 `make test` runs unit tests, I/O and network fault tests, and one integration script against a local mock OpenAI-compatible server.
 
-### Unreleased reasoning compatibility
+### v0.89 reasoning compatibility and editor buffers
 
-`--thinking` and `--thinking-budget` now pass through a provider compatibility layer instead of using one generic wire shape for every endpoint. This covers OpenAI Chat/Responses, OpenRouter, Gemini, Anthropic Claude through its OpenAI-compatible endpoint, Kimi K2.x, Qwen/DashScope, DeepSeek V4, GLM-5.2/Z.AI, xAI, and the custom/local fallback path. Native Anthropic Messages support and preservation of provider reasoning state for future agentic tool loops remain follow-up work.
+v0.89 expands `--thinking` and `--thinking-budget` through a provider compatibility layer instead of using one generic wire shape for every endpoint. This covers OpenAI Chat/Responses, OpenRouter, Gemini, Anthropic Claude through its OpenAI-compatible endpoint, Kimi K2.x, Qwen/DashScope, DeepSeek V4, GLM-5.2/Z.AI, xAI, and the custom/local fallback path. It also adds multiple standalone editor buffers: `Ctrl+O` opens files into buffers, `Ctrl+N` or `/new` opens a new empty buffer, `Ctrl+L` or `/list` switches buffers, and `Ctrl+W` or `/close` closes the active buffer with discard prompts. Native Anthropic Messages support and preservation of provider reasoning state for future agentic tool loops remain follow-up work.
 
 ### v0.88 web search
 

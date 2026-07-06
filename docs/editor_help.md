@@ -1,4 +1,4 @@
-# pkchat Editor Help
+# pkchat Editor Help v0.89
 
 Standalone editor mode (`pkchat --editor [PATH]`) is a multiline text editor with Unicode-aware navigation, search/replace, and optional AI assist when a provider and model are configured.
 
@@ -26,6 +26,7 @@ Arrow keys, `Page Up`/`Page Down`, `Home`, and `End` scroll the help document.
 | `Ctrl+S` | Save (prompts for path on scratch buffers) |
 | `Ctrl+Shift+S` | Save as (prompts for path; asks before overwriting an existing file) |
 | `Ctrl+O` | Open another file buffer |
+| `Ctrl+N` | Open a new empty buffer |
 | `Ctrl+L` | List open buffers; Enter chooses and Esc cancels |
 | `Ctrl+W` | Close the active buffer; prompts before discarding modifications |
 | `Ctrl+F` | Search (exact substring) |
@@ -96,6 +97,7 @@ Press **`Esc`** to open the command minibuffer (`Command:`). Type a slash comman
 | `/find` | Search (same as `Ctrl+F`) |
 | `/replace` | Replace (same as `Ctrl+H`) |
 | `/open [PATH]` | Open file (same as `Ctrl+O`; `Tab` completes paths after the command) |
+| `/new` | Open a new empty editor buffer (same as `Ctrl+N`) |
 | `/list` | List open editor buffers (same as `Ctrl+L`; Enter chooses, Esc cancels) |
 | `/close` | Close the active editor buffer (same as `Ctrl+W`; prompts if modified) |
 | `/help` | Toggle this help view |

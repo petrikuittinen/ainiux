@@ -1496,6 +1496,8 @@ void test_editor_file_io_failures() {
 
 void test_editor_control_key_sequence_decode() {
     unsigned char decoded = 0;
+    check(pkchat::editor::decode_control_key_sequence("[110;5u", decoded) && decoded == 14,
+          "editor decodes kitty-style Ctrl+N as new-buffer");
     check(pkchat::editor::decode_control_key_sequence("[19;5u", decoded) && decoded == 19,
           "editor decodes kitty-style Ctrl+S");
     check(pkchat::editor::decode_control_key_sequence("[27;5;19~", decoded) && decoded == 19,
@@ -1546,12 +1548,16 @@ void test_editor_help_document_and_command() {
           "editor help document documents Ctrl+Space continue");
     check(help_text.find("Ctrl+Shift+S") != std::string::npos,
           "editor help document documents Ctrl+Shift+S save as");
+    check(help_text.find("Ctrl+N") != std::string::npos,
+          "editor help document documents Ctrl+N new buffer");
     check(help_text.find("/saveas") != std::string::npos,
           "editor help document documents /saveas slash command");
     check(help_text.find("/spell") != std::string::npos && help_text.find("/help") != std::string::npos,
           "editor help document lists slash commands");
     check(help_text.find("/regenerate") != std::string::npos,
           "editor help document documents /regenerate");
+    check(help_text.find("/new") != std::string::npos,
+          "editor help document documents /new");
     check(help_text.find("/list") != std::string::npos,
           "editor help document documents /list");
     check(help_text.find("/close") != std::string::npos,
@@ -1569,6 +1575,8 @@ void test_editor_help_document_and_command() {
           "assist command completions include /save");
     check(std::find(completions.begin(), completions.end(), "/open ") != completions.end(),
           "assist command completions include /open");
+    check(std::find(completions.begin(), completions.end(), "/new") != completions.end(),
+          "assist command completions include /new");
     check(std::find(completions.begin(), completions.end(), "/list") != completions.end(),
           "assist command completions include /list");
     check(std::find(completions.begin(), completions.end(), "/close") != completions.end(),
@@ -1598,6 +1606,12 @@ void test_editor_help_document_and_command() {
     slash = pkchat::editor::parse_editor_slash_command("/open");
     check(slash.command == pkchat::editor::EditorSlashCommand::Open && slash.path.empty(),
           "editor bare /open slash command is recognized");
+    slash = pkchat::editor::parse_editor_slash_command("/new");
+    check(slash.command == pkchat::editor::EditorSlashCommand::New && slash.path.empty(),
+          "editor /new slash command is recognized");
+    slash = pkchat::editor::parse_editor_slash_command("/new name");
+    check(slash.command == pkchat::editor::EditorSlashCommand::None,
+          "editor /new rejects arguments");
     slash = pkchat::editor::parse_editor_slash_command("/list");
     check(slash.command == pkchat::editor::EditorSlashCommand::List && slash.path.empty(),
           "editor /list slash command is recognized");
@@ -1672,6 +1686,9 @@ void test_editor_buffer_list_helpers() {
     second.cursor = second.text.size();
     buffers.push_back(second);
 
+    pkchat::editor::EditorState scratch;
+    buffers.push_back(scratch);
+
     const std::string rendered = pkchat::editor::editor_buffer_list_text(buffers, 1);
     check(rendered.find("Buffers - Enter opens - Esc cancels") != std::string::npos,
           "editor buffer list includes chooser instructions");
@@ -1679,6 +1696,8 @@ void test_editor_buffer_list_helpers() {
           "editor buffer list renders an inactive clean file");
     check(rendered.find("> file2.txt * - Ln 2, Col 7") != std::string::npos,
           "editor buffer list marks selected dirty file");
+    check(rendered.find("  [scratch 3] - Ln 1, Col 1") != std::string::npos,
+          "editor buffer list renders scratch buffers with stable labels");
 
     check(pkchat::editor::move_editor_buffer_selection(1, buffers.size(), pkchat::editor::MovementKey::Up) == 0,
           "editor buffer list moves selection up");
@@ -1686,7 +1705,7 @@ void test_editor_buffer_list_helpers() {
           "editor buffer list moves selection down");
     check(pkchat::editor::move_editor_buffer_selection(1, buffers.size(), pkchat::editor::MovementKey::Home) == 0,
           "editor buffer list home selects first buffer");
-    check(pkchat::editor::move_editor_buffer_selection(0, buffers.size(), pkchat::editor::MovementKey::End) == 1,
+    check(pkchat::editor::move_editor_buffer_selection(0, buffers.size(), pkchat::editor::MovementKey::End) == 2,
           "editor buffer list end selects last buffer");
 
     pkchat::editor::Clipboard clipboard;

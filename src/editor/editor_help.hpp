@@ -13,6 +13,7 @@ enum class EditorSlashCommand {
     Find,
     Replace,
     Open,
+    New,
     List,
     Close,
 };

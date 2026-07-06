@@ -108,6 +108,17 @@ def main():
         output.extend(send(master, "y"))
         require_seen(output, "Closed buffer", "closing modified buffer after confirmation")
 
+        output.extend(send(master, "\x0e"))  # Ctrl+N new empty buffer
+        require_seen(output, "New buffer", "creating a new empty buffer")
+        output.extend(send(master, "scratch text"))
+        output.extend(send(master, "\x0c"))  # Ctrl+L buffer list
+        require_seen(output, "[scratch", "listing new scratch buffer")
+        output.extend(send(master, "\r"))
+        output.extend(send(master, "\x17"))  # Ctrl+W close modified scratch
+        require_seen(output, "Buffer modified; close anyway?", "prompting before closing scratch")
+        output.extend(send(master, "y"))
+        require_seen(output, "Closed buffer", "closing scratch buffer")
+
         output.extend(send(master, "\x11"))  # Ctrl+Q quit
         process.wait(timeout=10)
     finally:
