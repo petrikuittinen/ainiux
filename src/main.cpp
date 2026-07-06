@@ -191,6 +191,7 @@ int main(int argc, char** argv) {
         editor_settings.undo_limit = static_cast<size_t>(options.editor_undo_limit);
         editor_settings.huge_file_size_warning = options.editor_huge_file_size_warning;
         editor_settings.file_size_limit = options.editor_file_size_limit;
+        pkchat::provider::apply_editor_offline_default(options);
         pkchat::provider::ContextResult context_result = pkchat::provider::build_context(options);
         if (!context_result.error.ok()) {
             pkchat::app::print_error(context_result.error);
@@ -371,9 +372,7 @@ int main(int argc, char** argv) {
             }
             *out << "]}\n";
         } else {
-            for (const std::string& id : models.model_ids) {
-                *out << id << "\n";
-            }
+            *out << pkchat::provider::format_models_markdown(context.profile.name, context.models_url, models);
         }
         return 0;
     }

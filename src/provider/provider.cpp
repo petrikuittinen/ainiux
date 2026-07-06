@@ -2,8 +2,11 @@
 #include "provider/provider.hpp"
 
 #include <chrono>
+#include <cmath>
 #include <cctype>
 #include <cstdlib>
+#include <ctime>
+#include <set>
 #include <exception>
 #include <fstream>
 #include <iomanip>
@@ -1089,6 +1092,296 @@ std::string strip_thinking_blocks_for_request(const std::string& content) {
     return out;
 }
 
+bool unwrap_model_object_key(const std::string& key) {
+    return key == "meta" || key == "details";
+}
+
+bool parse_integral_string(const std::string& text, long long& out) {
+    if (text.empty()) {
+        return false;
+    }
+    std::size_t index = 0;
+    try {
+        out = std::stoll(text, &index);
+    } catch (...) {
+        return false;
+    }
+    return index == text.size();
+}
+
+std::string format_with_thousands(long long value) {
+    const bool negative = value < 0;
+    unsigned long long magnitude = static_cast<unsigned long long>(negative ? -value : value);
+    std::string digits = std::to_string(magnitude);
+    std::string formatted;
+    formatted.reserve(digits.size() + digits.size() / 3 + 1);
+    if (negative) {
+        formatted.push_back('-');
+    }
+    for (std::size_t i = 0; i < digits.size(); ++i) {
+        if (i != 0 && (digits.size() - i) % 3 == 0) {
+            formatted.push_back(',');
+        }
+        formatted.push_back(digits[i]);
+    }
+    return formatted;
+}
+
+std::string format_token_count_value(const std::string& raw) {
+    long long tokens = 0;
+    if (!parse_integral_string(raw, tokens) || tokens < 0) {
+        return raw;
+    }
+    return format_with_thousands(tokens) + " tokens";
+}
+
+std::string format_parameter_count_value(const std::string& raw) {
+    long long params = 0;
+    if (!parse_integral_string(raw, params) || params < 0) {
+        return raw;
+    }
+    const double billion = 1'000'000'000.0;
+    const double million = 1'000'000.0;
+    const double thousand = 1'000.0;
+    std::ostringstream ss;
+    ss << std::fixed;
+    if (params >= static_cast<long long>(billion)) {
+        ss << std::setprecision(1) << static_cast<double>(params) / billion << "B";
+    } else if (params >= static_cast<long long>(million)) {
+        ss << std::setprecision(1) << static_cast<double>(params) / million << "M";
+    } else if (params >= static_cast<long long>(thousand)) {
+        ss << std::setprecision(1) << static_cast<double>(params) / thousand << "K";
+    } else {
+        return format_with_thousands(params);
+    }
+    return ss.str();
+}
+
+std::string format_byte_size_value(const std::string& raw) {
+    long long bytes = 0;
+    if (!parse_integral_string(raw, bytes) || bytes < 0) {
+        return raw;
+    }
+    const double gib = 1024.0 * 1024.0 * 1024.0;
+    const double mib = 1024.0 * 1024.0;
+    const double kib = 1024.0;
+    std::ostringstream ss;
+    ss << std::fixed;
+    if (bytes >= static_cast<long long>(gib)) {
+        ss << std::setprecision(2) << static_cast<double>(bytes) / gib << " GiB";
+    } else if (bytes >= static_cast<long long>(mib)) {
+        ss << std::setprecision(2) << static_cast<double>(bytes) / mib << " MiB";
+    } else if (bytes >= static_cast<long long>(kib)) {
+        ss << std::setprecision(1) << static_cast<double>(bytes) / kib << " KiB";
+    } else {
+        return format_with_thousands(bytes) + " B";
+    }
+    return ss.str();
+}
+
+std::string model_attribute_display(const json::Value& value) {
+    switch (value.type) {
+        case json::Value::Type::String:
+            return value.string;
+        case json::Value::Type::Bool:
+            return value.boolean ? "true" : "false";
+        case json::Value::Type::Number: {
+            const double whole = std::floor(value.number);
+            if (value.number == whole && whole >= 0.0 &&
+                whole <= static_cast<double>(std::numeric_limits<long long>::max())) {
+                return std::to_string(static_cast<long long>(whole));
+            }
+            std::ostringstream ss;
+            ss << value.number;
+            return ss.str();
+        }
+        default:
+            return "";
+    }
+}
+
+std::string format_model_created_value(const std::string& value) {
+    if (value.empty()) {
+        return value;
+    }
+    bool digits_only = true;
+    for (char ch : value) {
+        if (ch < '0' || ch > '9') {
+            digits_only = false;
+            break;
+        }
+    }
+    if (!digits_only) {
+        return value;
+    }
+    long long seconds = 0;
+    try {
+        seconds = std::stoll(value);
+    } catch (...) {
+        return value;
+    }
+    if (seconds <= 0) {
+        return value;
+    }
+    const std::time_t timestamp = static_cast<std::time_t>(seconds);
+    std::tm utc{};
+    if (gmtime_r(&timestamp, &utc) == nullptr) {
+        return value;
+    }
+    char buffer[32] = {};
+    if (std::strftime(buffer, sizeof(buffer), "%Y-%m-%d %H:%M:%S UTC", &utc) == 0) {
+        return value;
+    }
+    return std::string(buffer) + " (" + value + ")";
+}
+
+void flatten_model_value(const std::string& key, const json::Value& value, std::map<std::string, std::string>& out) {
+    if (value.is_object()) {
+        const bool unwrap = unwrap_model_object_key(key);
+        for (const auto& entry : value.object) {
+            if (unwrap) {
+                flatten_model_value(entry.first, entry.second, out);
+            } else if (key.empty()) {
+                flatten_model_value(entry.first, entry.second, out);
+            } else {
+                flatten_model_value(key + "." + entry.first, entry.second, out);
+            }
+        }
+        return;
+    }
+    if (value.is_array()) {
+        if (key.empty()) {
+            return;
+        }
+        std::vector<std::string> parts;
+        for (const json::Value& item : value.array) {
+            if (item.is_string()) {
+                if (!item.string.empty()) {
+                    parts.push_back(item.string);
+                }
+            } else {
+                const std::string display = model_attribute_display(item);
+                if (!display.empty()) {
+                    parts.push_back(display);
+                }
+            }
+        }
+        if (!parts.empty()) {
+            std::ostringstream joined;
+            for (std::size_t i = 0; i < parts.size(); ++i) {
+                if (i != 0) {
+                    joined << ", ";
+                }
+                joined << parts[i];
+            }
+            out.emplace(key, joined.str());
+        }
+        return;
+    }
+    const std::string display = model_attribute_display(value);
+    if (!display.empty() && !key.empty()) {
+        out.emplace(key, display);
+    }
+}
+
+std::string format_model_attribute_value(const std::string& key, const std::string& raw) {
+    if (key == "created") {
+        return format_model_created_value(raw);
+    }
+    if (key == "n_ctx" || key == "n_ctx_train" || key == "context_length" || key == "max_model_len" ||
+        key == "max_context_length" || key == "max_tokens") {
+        return format_token_count_value(raw);
+    }
+    if (key == "n_params" || key == "parameter_count") {
+        return format_parameter_count_value(raw);
+    }
+    if (key == "size") {
+        return format_byte_size_value(raw);
+    }
+    if (key == "n_vocab" || key == "n_embd") {
+        long long value = 0;
+        if (parse_integral_string(raw, value) && value >= 0) {
+            return format_with_thousands(value);
+        }
+    }
+    return raw;
+}
+
+std::string markdown_table_cell(const std::string& text) {
+    std::string output;
+    output.reserve(text.size());
+    for (char ch : text) {
+        if (ch == '|') {
+            output += "\\|";
+        } else if (ch == '\n') {
+            output += "<br>";
+        } else if (ch != '\r') {
+            output.push_back(ch);
+        }
+    }
+    return output;
+}
+
+std::string model_attribute_heading(const std::string& key) {
+    if (key == "id") {
+        return "ID";
+    }
+    if (key == "owned_by") {
+        return "Owned by";
+    }
+    if (key == "created") {
+        return "Created";
+    }
+    if (key == "n_ctx" || key == "context_length" || key == "max_model_len" || key == "max_context_length") {
+        return "Context";
+    }
+    if (key == "n_ctx_train") {
+        return "Train context";
+    }
+    if (key == "n_params" || key == "parameter_count") {
+        return "Parameters";
+    }
+    if (key == "n_vocab") {
+        return "Vocab";
+    }
+    if (key == "n_embd") {
+        return "Embedding dim";
+    }
+    if (key == "size") {
+        return "Model size";
+    }
+    if (key == "aliases") {
+        return "Aliases";
+    }
+    if (key == "capabilities") {
+        return "Capabilities";
+    }
+    if (key == "architecture") {
+        return "Architecture";
+    }
+    if (key == "modality") {
+        return "Modality";
+    }
+    std::string heading;
+    heading.reserve(key.size());
+    bool capitalize_next = true;
+    for (char ch : key) {
+        if (ch == '_') {
+            heading.push_back(' ');
+            capitalize_next = true;
+            continue;
+        }
+        if (capitalize_next && ch >= 'a' && ch <= 'z') {
+            heading.push_back(static_cast<char>(ch - 'a' + 'A'));
+            capitalize_next = false;
+            continue;
+        }
+        heading.push_back(ch);
+        capitalize_next = false;
+    }
+    return heading;
+}
+
 Error parse_models_json(const std::string& body, ModelsResult& result) {
     json::ParseResult parsed = json::parse(body);
     if (!parsed.error.ok()) {
@@ -1101,11 +1394,25 @@ Error parse_models_json(const std::string& body, ModelsResult& result) {
     if (data == nullptr || !data->is_array()) {
         return {ErrorCode::ProviderSchema, "models response did not contain a data array"};
     }
+    result.models.clear();
+    result.model_ids.clear();
     for (const json::Value& item : data->array) {
         const json::Value* id = item.get("id");
-        if (id != nullptr && id->is_string()) {
-            result.model_ids.push_back(id->string);
+        if (id == nullptr || !id->is_string() || id->string.empty()) {
+            continue;
         }
+        ModelInfo info;
+        info.id = id->string;
+        if (item.is_object()) {
+            for (const auto& entry : item.object) {
+                if (entry.first == "id") {
+                    continue;
+                }
+                flatten_model_value(entry.first, entry.second, info.attributes);
+            }
+        }
+        result.model_ids.push_back(info.id);
+        result.models.push_back(std::move(info));
     }
     return ok_error();
 }
@@ -2147,6 +2454,115 @@ ContextResult build_context(const cli::Options& input_options) {
     return {context, ok_error()};
 }
 
+bool editor_has_configured_model_endpoint(const cli::Options& options) {
+    if (options.provider_explicit) {
+        return true;
+    }
+    if (!options.positional_url.empty() || !options.base_url.empty() || !options.chat_url.empty() ||
+        !options.models_url.empty() || !options.responses_url.empty()) {
+        return true;
+    }
+    Profile profile;
+    return find_profile(options.provider, profile) && profile.offline;
+}
+
+void apply_editor_offline_default(cli::Options& options) {
+    if (!options.editor || editor_has_configured_model_endpoint(options)) {
+        return;
+    }
+    Profile profile;
+    if (!find_profile(options.provider, profile) || !profile.requires_bearer_key) {
+        return;
+    }
+    if (!resolve_key(options, profile).empty() || has_authorization_header(options.headers)) {
+        return;
+    }
+    options.provider = "none";
+}
+
+std::string format_models_markdown(const std::string& provider_name,
+                                   const std::string& models_url,
+                                   const ModelsResult& result) {
+    std::ostringstream out;
+    out << "# Models\n\n";
+    out << "**Provider:** " << markdown_table_cell(provider_name) << "\n";
+    if (!models_url.empty()) {
+        out << "**Endpoint:** " << markdown_table_cell(models_url) << "\n";
+    }
+    out << "\n";
+    if (result.models.empty()) {
+        out << "_No models returned._\n";
+        return out.str();
+    }
+
+    static const std::vector<std::string> preferred_columns = {
+        "object",
+        "owned_by",
+        "n_ctx",
+        "context_length",
+        "max_model_len",
+        "max_context_length",
+        "n_ctx_train",
+        "n_params",
+        "parameter_count",
+        "size",
+        "n_vocab",
+        "n_embd",
+        "capabilities",
+        "aliases",
+        "architecture",
+        "modality",
+        "created",
+        "parent",
+        "root",
+    };
+    std::set<std::string> attribute_columns;
+    for (const ModelInfo& model : result.models) {
+        for (const auto& entry : model.attributes) {
+            attribute_columns.insert(entry.first);
+        }
+    }
+    std::vector<std::string> columns;
+    columns.reserve(1 + attribute_columns.size());
+    columns.push_back("id");
+    for (const std::string& key : preferred_columns) {
+        if (attribute_columns.erase(key) > 0) {
+            columns.push_back(key);
+        }
+    }
+    for (const std::string& key : attribute_columns) {
+        columns.push_back(key);
+    }
+
+    out << "|";
+    for (const std::string& column : columns) {
+        out << " " << model_attribute_heading(column) << " |";
+    }
+    out << "\n|";
+    for (size_t i = 0; i < columns.size(); ++i) {
+        out << " --- |";
+    }
+    out << "\n";
+
+    for (const ModelInfo& model : result.models) {
+        out << "|";
+        for (const std::string& column : columns) {
+            std::string value;
+            if (column == "id") {
+                value = model.id;
+            } else {
+                const auto it = model.attributes.find(column);
+                if (it != model.attributes.end()) {
+                    value = format_model_attribute_value(column, it->second);
+                }
+            }
+            out << " " << markdown_table_cell(value) << " |";
+        }
+        out << "\n";
+    }
+    return out.str();
+}
+
 std::vector<Profile> built_in_profiles() {
     return profile_registry();
 }
@@ -2276,6 +2692,10 @@ std::string serialize_request(const RequestContext& context, const std::vector<M
 
 std::string serialize_chat_request(const RequestContext& context, const std::vector<Message>& messages) {
     return build_chat_request_json(context, messages);
+}
+
+Error parse_models_response(const std::string& body, ModelsResult& result) {
+    return parse_models_json(body, result);
 }
 
 Error list_models(const RequestContext& context, ModelsResult& result, runtime::CancellationToken cancellation) {

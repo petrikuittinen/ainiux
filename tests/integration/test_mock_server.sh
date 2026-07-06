@@ -490,7 +490,8 @@ grep 'HTML extraction expects UTF-8 input' "$legacy_err" >/dev/null
 grep 'charset conversion is not implemented yet' "$legacy_err" >/dev/null
 
 models=$("$ROOT/pkchat" --list-models "$BASE" --quiet)
-test "$models" = "$MODEL"
+printf '%s' "$models" | grep -F "| $MODEL |" >/dev/null
+printf '%s' "$models" | grep -F "**Provider:**" >/dev/null
 
 reply=$("$ROOT/pkchat" "$BASE" --quiet --no-stream -m "$MODEL" -p "hello")
 test "$reply" = "Hello"

@@ -384,9 +384,11 @@ ParseResult parse_args(int argc, char** argv, const Options& base_options) {
                 opts.load_chat_path = value;
             } else if (opt == "--provider") {
                 opts.provider = value;
+                opts.provider_explicit = true;
             } else if (opt == "--profile") {
                 opts.profile = value;
                 opts.provider = value;
+                opts.provider_explicit = true;
             } else if (opt == "--api") {
                 if (value == "chat" || value == "chat_completions" || value == "chat-completions") {
                     opts.api = "chat";

@@ -10,6 +10,8 @@
 #include <sys/time.h>
 #include <unistd.h>
 
+#include <cstdlib>
+#include <optional>
 #include <string>
 #include <thread>
 #include <utility>
@@ -505,6 +507,127 @@ void test_none_provider_allows_an_empty_endpoint() {
           "none provider rejects model endpoint overrides");
 }
 
+void test_parse_models_response_llamacpp_meta() {
+    const std::string body = R"json({
+      "object": "list",
+      "data": [{
+        "id": "Gemma-4-26B-A4B",
+        "aliases": ["Gemma-4-26B-A4B"],
+        "object": "model",
+        "created": 1783363072,
+        "owned_by": "llamacpp",
+        "meta": {
+          "n_vocab": 262144,
+          "n_ctx": 131072,
+          "n_ctx_train": 262144,
+          "n_embd": 2816,
+          "n_params": 25233142046,
+          "size": 14233222264
+        }
+      }]
+    })json";
+    pkchat::provider::ModelsResult result;
+    pkchat::Error err = pkchat::provider::parse_models_response(body, result);
+    check(err.ok(), "llama-server models JSON parses");
+    check(result.model_ids.size() == 1 && result.model_ids.front() == "Gemma-4-26B-A4B",
+          "llama-server models JSON preserves model id");
+    check(!result.models.empty(), "llama-server models JSON stores model info");
+    const auto& attrs = result.models.front().attributes;
+    check(attrs.at("n_ctx") == "131072", "llama-server meta.n_ctx is flattened");
+    check(attrs.at("n_ctx_train") == "262144", "llama-server meta.n_ctx_train is flattened");
+    check(attrs.at("n_params") == "25233142046", "llama-server meta.n_params is flattened");
+
+    const std::string markdown = pkchat::provider::format_models_markdown(
+        "custom_openai_chat", "http://localhost:30000/v1/models", result);
+    check(markdown.find("| Context |") != std::string::npos, "llama-server markdown includes context column");
+    check(markdown.find("131,072 tokens") != std::string::npos,
+          "llama-server markdown formats runtime context length");
+    check(markdown.find("262,144 tokens") != std::string::npos,
+          "llama-server markdown formats training context length");
+    check(markdown.find("25.2B") != std::string::npos, "llama-server markdown formats parameter count");
+    check(markdown.find("13.26 GiB") != std::string::npos, "llama-server markdown formats model size");
+}
+
+void test_models_markdown_format() {
+    pkchat::provider::ModelsResult result;
+    pkchat::provider::ModelInfo first;
+    first.id = "mock-model";
+    first.attributes = {{"object", "model"}, {"owned_by", "mock"}, {"created", "1686935002"}};
+    result.models.push_back(first);
+    result.model_ids.push_back("mock-model");
+
+    const std::string markdown = pkchat::provider::format_models_markdown(
+        "lm_studio", "http://localhost:1234/v1/models", result);
+    check(markdown.find("# Models") != std::string::npos, "models markdown includes heading");
+    check(markdown.find("**Provider:** lm_studio") != std::string::npos,
+          "models markdown includes provider label");
+    check(markdown.find("**Endpoint:** http://localhost:1234/v1/models") != std::string::npos,
+          "models markdown includes endpoint label");
+    check(markdown.find("| ID | Object | Owned by | Created |") != std::string::npos,
+          "models markdown includes expected table columns");
+    check(markdown.find("| mock-model | model | mock |") != std::string::npos,
+          "models markdown includes model row values");
+    check(markdown.find("2023-06-16 17:03:22 UTC (1686935002)") != std::string::npos,
+          "models markdown formats created timestamps readably");
+
+    pkchat::provider::ModelsResult empty;
+    const std::string empty_markdown =
+        pkchat::provider::format_models_markdown("openai", "https://api.openai.com/v1/models", empty);
+    check(empty_markdown.find("_No models returned._") != std::string::npos,
+          "models markdown reports an empty model list");
+}
+
+class ScopedUnsetenv {
+   public:
+    explicit ScopedUnsetenv(std::string name) : name_(std::move(name)) {
+        const char* previous = std::getenv(name_.c_str());
+        if (previous != nullptr) {
+            previous_value_ = previous;
+        }
+        unsetenv(name_.c_str());
+    }
+
+    ~ScopedUnsetenv() {
+        if (previous_value_.has_value()) {
+            setenv(name_.c_str(), previous_value_->c_str(), 1);
+        } else {
+            unsetenv(name_.c_str());
+        }
+    }
+
+   private:
+    std::string name_;
+    std::optional<std::string> previous_value_;
+};
+
+void test_editor_defaults_offline_without_credentials() {
+    ScopedUnsetenv unset_openai("OPENAI_API_KEY");
+    ScopedUnsetenv unset_pkchat("PKCHAT_API_KEY");
+
+    const char* argv[] = {"pkchat", "--editor"};
+    pkchat::cli::ParseResult parsed = pkchat::cli::parse_args(2, const_cast<char**>(argv));
+    check(parsed.error.ok(), "bare editor args parse");
+    pkchat::cli::Options options = parsed.options;
+    pkchat::provider::apply_editor_offline_default(options);
+    check(options.provider == "none", "bare editor switches to offline provider without credentials");
+    pkchat::provider::ContextResult context = pkchat::provider::build_context(options);
+    check(context.error.ok() && context.context.profile.offline,
+          "bare editor context builds offline without API credentials");
+
+    const char* explicit_argv[] = {"pkchat", "--provider", "openai", "--editor"};
+    pkchat::cli::ParseResult explicit_parsed =
+        pkchat::cli::parse_args(4, const_cast<char**>(explicit_argv));
+    check(explicit_parsed.error.ok(), "explicit openai editor args parse");
+    pkchat::cli::Options explicit_options = explicit_parsed.options;
+    pkchat::provider::apply_editor_offline_default(explicit_options);
+    check(explicit_options.provider == "openai",
+          "explicit provider editor keeps the requested provider without credentials");
+    pkchat::provider::ContextResult explicit_context =
+        pkchat::provider::build_context(explicit_options);
+    check(explicit_context.error.code == pkchat::ErrorCode::Config,
+          "explicit openai editor still requires credentials");
+}
+
 void test_openai_context_allows_missing_model() {
     const char* argv[] = {"pkchat", "--provider", "openai", "-p", "hello", "--header", "Authorization: Bearer test"};
     pkchat::cli::ParseResult parsed = pkchat::cli::parse_args(7, const_cast<char**>(argv));
@@ -899,6 +1022,9 @@ void run_all() {
     test_image_capability_detection();
     test_lmstudio_context();
     test_lmstudio_shortcut_context();
+    test_parse_models_response_llamacpp_meta();
+    test_models_markdown_format();
+    test_editor_defaults_offline_without_credentials();
     test_none_provider_allows_an_empty_endpoint();
     test_openai_context_allows_missing_model();
     test_openrouter_shortcut_context();

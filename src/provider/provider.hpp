@@ -1,6 +1,7 @@
 #pragma once
 
 #include <functional>
+#include <map>
 #include <string>
 #include <utility>
 #include <vector>
@@ -98,7 +99,13 @@ struct ChatResult {
     long long first_body_ms = -1;
 };
 
+struct ModelInfo {
+    std::string id;
+    std::map<std::string, std::string> attributes;
+};
+
 struct ModelsResult {
+    std::vector<ModelInfo> models;
     std::vector<std::string> model_ids;
 };
 
@@ -110,6 +117,11 @@ struct ContextResult {
 };
 
 ContextResult build_context(const cli::Options& options);
+void apply_editor_offline_default(cli::Options& options);
+std::string format_models_markdown(const std::string& provider_name,
+                                   const std::string& models_url,
+                                   const ModelsResult& result);
+Error parse_models_response(const std::string& body, ModelsResult& result);
 std::vector<Profile> built_in_profiles();
 std::string display_name_for_profile(const std::string& profile_name);
 Error validate_profile_name(const std::string& name);

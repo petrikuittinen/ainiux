@@ -46,6 +46,7 @@ struct Options {
     std::string system_file;
     std::string model;
     std::string provider = "openai";
+    bool provider_explicit = false;
     std::string profile;
     std::string api = "chat";
     std::string base_url;
