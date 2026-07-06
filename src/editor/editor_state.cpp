@@ -9,10 +9,12 @@
 
 namespace pkchat::editor {
 
+using detail::WrapSegment;
 using detail::WrappedLocation;
 using detail::cursor_in_wrapped_line;
 using detail::offset_for_wrapped_location;
 using detail::selection_end_exclusive_for;
+using detail::wrap_line_segments;
 using detail::wrapped_location_for_offset;
 using detail::wrapped_row_count;
 
@@ -449,14 +451,14 @@ void EditorState::apply_movement(MovementKey key, const Rect& rect, bool extend_
             if (alt) {
                 move_home();
             } else {
-                move_line_home();
+                move_line_home(rect);
             }
             break;
         case MovementKey::End:
             if (alt) {
                 move_end();
             } else {
-                move_line_end();
+                move_line_end(rect);
             }
             break;
     }
@@ -576,16 +578,24 @@ void EditorState::move_end() {
     selection.clear(cursor);
 }
 
-void EditorState::move_line_home() {
-    const size_t line = text.line_for_offset(cursor);
-    cursor = text.line_start(line);
+void EditorState::move_line_home(const Rect& rect) {
+    const size_t width = static_cast<size_t>(std::max(1, rect.width));
+    const WrappedLocation location = wrapped_location_for_offset(text, cursor, width);
+    const std::string line_text_value = text.line_text(location.line);
+    const std::vector<WrapSegment> segments = wrap_line_segments(line_text_value, width);
+    const WrapSegment& segment = segments[std::min(location.segment, segments.size() - 1)];
+    cursor = text.line_start(location.line) + segment.start;
     update_preferred_column(*this);
     selection.clear(cursor);
 }
 
-void EditorState::move_line_end() {
-    const size_t line = text.line_for_offset(cursor);
-    cursor = text.line_start(line) + text.line_length(line);
+void EditorState::move_line_end(const Rect& rect) {
+    const size_t width = static_cast<size_t>(std::max(1, rect.width));
+    const WrappedLocation location = wrapped_location_for_offset(text, cursor, width);
+    const std::string line_text_value = text.line_text(location.line);
+    const std::vector<WrapSegment> segments = wrap_line_segments(line_text_value, width);
+    const WrapSegment& segment = segments[std::min(location.segment, segments.size() - 1)];
+    cursor = text.line_start(location.line) + segment.end;
     update_preferred_column(*this);
     selection.clear(cursor);
 }

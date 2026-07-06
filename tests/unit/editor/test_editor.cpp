@@ -904,6 +904,26 @@ void test_editor_line_home_end_navigation() {
     check(state.cursor == state.text.size(), "editor Alt+End moves to the end of the buffer");
 }
 
+void test_editor_wrapped_line_home_end_navigation() {
+    pkchat::editor::EditorState state =
+        pkchat::editor::EditorState::from_text("abcdefghij\nXYZ");
+    const pkchat::editor::Rect rect{1, 1, 10, 4};
+    state.cursor = state.text.line_start(0) + 6;
+
+    state.apply_movement(pkchat::editor::MovementKey::Home, rect, false, false);
+    check(state.cursor == state.text.line_start(0) + 4,
+          "editor Home moves to the beginning of the current wrapped row");
+
+    state.apply_movement(pkchat::editor::MovementKey::End, rect, false, false);
+    check(state.cursor == state.text.line_start(0) + 8,
+          "editor End moves to the end of the current wrapped row");
+
+    state.cursor = state.text.line_start(0) + 2;
+    state.apply_movement(pkchat::editor::MovementKey::End, rect, false, false);
+    check(state.cursor == state.text.line_start(0) + 4,
+          "editor End on the first wrapped row stops at that row boundary");
+}
+
 void test_editor_page_navigation() {
     pkchat::editor::EditorState state =
         pkchat::editor::EditorState::from_text("zero\none\ntwo\nthree\nfour\nfive");
@@ -1795,6 +1815,7 @@ void run_all() {
     test_editor_home_end_navigation();
     test_editor_select_all();
     test_editor_line_home_end_navigation();
+    test_editor_wrapped_line_home_end_navigation();
     test_editor_invalid_utf8_rendering_is_sanitized();
     test_editor_kill_to_line_end();
     test_editor_movement_sequence_parse();
