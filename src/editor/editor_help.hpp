@@ -13,6 +13,8 @@ enum class EditorSlashCommand {
     Find,
     Replace,
     Open,
+    List,
+    Close,
 };
 
 struct ParsedEditorSlashCommand {

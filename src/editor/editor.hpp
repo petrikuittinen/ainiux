@@ -185,6 +185,10 @@ struct EditorState {
     size_t undo_limit_ = kDefaultUndoLimit;
 };
 
+std::string editor_buffer_display_name(const EditorState& state, size_t index);
+std::string editor_buffer_list_text(const std::vector<EditorState>& buffers, size_t selected);
+size_t move_editor_buffer_selection(size_t selected, size_t count, MovementKey key);
+
 RenderedPanel render_panel(const PieceTable& text,
                            const Rect& rect,
                            size_t cursor,

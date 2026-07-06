@@ -58,7 +58,7 @@ The HTTP transport uses libcurl through RAII wrappers in `src/http/`. Build flag
 
 ## Editor Mode
 
-`pkchat --editor` is a standalone multiline file editor and the same component powers the TUI chat input panel. It uses a piece-table buffer, grapheme-aware Unicode navigation, soft wrap, rectangular panel rendering, bounded undo/redo, and a status line plus one-line minibuffer for prompts.
+`pkchat --editor` is a standalone multiline file editor and the same component powers the TUI chat input panel. It uses piece-table edit buffers, grapheme-aware Unicode navigation, soft wrap, rectangular panel rendering, bounded undo/redo, and a status line plus one-line minibuffer for prompts.
 
 ```sh
 ./pkchat --editor notes.txt
@@ -97,7 +97,7 @@ A matching `string` replaces a built-in command; new strings add commands. Confi
 
 ### Editor Controls
 
-`Ctrl+S` saves, `Ctrl+W` save as, `Ctrl+O` loads, `Ctrl+F` searches, `Ctrl+H` replaces, `Ctrl+Q` quits (with save prompts when needed), `Ctrl+C`/`Ctrl+X`/`Ctrl+V` copy/cut/paste, `Ctrl+K` kills to end of line, `Ctrl+U`/`Ctrl+R` undo/redo, arrows move, `Shift` plus arrows / `PageUp`/`PageDown` / `Home`/`End` extend selection, and `Tab` completion is disabled in standalone editor mode.
+`Ctrl+S` saves, `Ctrl+Shift+S` saves as, `Ctrl+O` opens another file buffer, `Ctrl+L` or `/list` opens the buffer picker, `Ctrl+W` or `/close` closes the active buffer with a discard prompt when modified, `Ctrl+F` searches, `Ctrl+H` replaces, `Ctrl+Q` quits (with save prompts when needed), `Ctrl+C`/`Ctrl+X`/`Ctrl+V` copy/cut/paste across buffers, `Ctrl+K` kills to end of line, `Ctrl+U`/`Ctrl+R` undo/redo, arrows move, `Shift` plus arrows / `PageUp`/`PageDown` / `Home`/`End` extend selection, and `Tab` completion is disabled in standalone editor mode.
 
 ## Benchmarks
 

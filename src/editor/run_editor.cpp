@@ -1,6 +1,7 @@
 #include "editor/editor.hpp"
 #include "editor/ai_continue.hpp"
 #include "editor/clipboard.hpp"
+#include "editor/detail/editor_common.hpp"
 #include "editor/editor_assist.hpp"
 #include "editor/editor_help.hpp"
 #include "editor/terminal_input.hpp"
@@ -9,9 +10,11 @@
 #include "search/search.hpp"
 #include "tui/activity.hpp"
 
+#include <algorithm>
 #include <functional>
 #include <iostream>
 #include <optional>
+#include <vector>
 #include <unistd.h>
 
 namespace pkchat::editor {
@@ -112,6 +115,9 @@ int run_editor(const std::string& path,
         }
         status = "New file";
     }
+    std::vector<EditorState> buffers;
+    buffers.push_back(state);
+    size_t active_buffer = 0;
 
     TerminalSession terminal;
     Error err = terminal.enter();
@@ -133,6 +139,10 @@ int run_editor(const std::string& path,
     AssistCompleterState assist_completer;
     PendingAssist pending_assist;
     HelpViewSession help_view;
+    bool buffer_list_active = false;
+    size_t buffer_list_selected = 0;
+    EditorState buffer_list_view;
+    bool pending_close_confirm = false;
     TerminalSize last_size = terminal_size();
     size_t activity_frame = 0;
     EditorAssistDisplay assist_display;
@@ -146,7 +156,43 @@ int run_editor(const std::string& path,
         return assist_display.active && assist_display.kind != tui::ActivityKind::None ? &assist_display
                                                                                        : nullptr;
     };
-    render_terminal(state, minibuffer, help_view.active, refresh_assist_display());
+
+    auto sync_active_buffer = [&]() {
+        if (!help_view.active && active_buffer < buffers.size()) {
+            buffers[active_buffer] = state;
+        }
+    };
+
+    auto selected_buffer_status = [&]() {
+        return "Selected buffer " + std::to_string(buffer_list_selected + 1) + "/" +
+               std::to_string(buffers.size());
+    };
+
+    auto refresh_buffer_list_view = [&]() {
+        sync_active_buffer();
+        if (buffers.empty()) {
+            buffers.push_back(EditorState{});
+            buffers.back().set_undo_limit(settings.undo_limit);
+            active_buffer = 0;
+        }
+        buffer_list_selected = std::min(buffer_list_selected, buffers.size() - 1);
+        buffer_list_view = EditorState::from_text(editor_buffer_list_text(buffers, buffer_list_selected));
+        buffer_list_view.path = "[buffers]";
+        const size_t selected_line = std::min(buffer_list_selected + 1, buffer_list_view.text.line_count() - 1);
+        buffer_list_view.cursor = buffer_list_view.text.line_start(selected_line);
+        buffer_list_view.dirty = false;
+        buffer_list_view.clear_undo_history();
+    };
+
+    auto render_editor = [&]() {
+        if (buffer_list_active) {
+            refresh_buffer_list_view();
+            render_terminal(buffer_list_view, minibuffer, false, nullptr);
+            return;
+        }
+        render_terminal(state, minibuffer, help_view.active, refresh_assist_display());
+    };
+    render_editor();
 
     auto assist_panel_rect = [&]() {
         const TerminalSize size = terminal_size();
@@ -192,6 +238,210 @@ int run_editor(const std::string& path,
         state.clear_selection();
         state.clear_undo_history();
         minibuffer_message(minibuffer, "Help (read-only) — Esc /help or Ctrl+Q to return");
+    };
+
+    auto activate_buffer = [&](size_t index) {
+        if (index >= buffers.size()) {
+            return;
+        }
+        sync_active_buffer();
+        active_buffer = index;
+        state = buffers[active_buffer];
+        buffer_list_active = false;
+        buffer_list_selected = active_buffer;
+        minibuffer_message(minibuffer,
+                           "Opened buffer " + std::to_string(active_buffer + 1) + "/" +
+                               std::to_string(buffers.size()) + ": " +
+                               editor_buffer_display_name(state, active_buffer));
+    };
+
+    auto find_open_buffer = [&](const std::string& path) -> std::optional<size_t> {
+        if (path.empty()) {
+            return std::nullopt;
+        }
+        sync_active_buffer();
+        for (size_t i = 0; i < buffers.size(); ++i) {
+            if (buffers[i].path == path) {
+                return i;
+            }
+        }
+        return std::nullopt;
+    };
+
+    auto open_buffer_from_path = [&](const std::string& open_path) {
+        if (const std::optional<size_t> existing = find_open_buffer(open_path)) {
+            activate_buffer(*existing);
+            return;
+        }
+        PieceTable loaded;
+        Error load_error = load_file(open_path, settings, loaded);
+        if (!load_error.ok()) {
+            minibuffer_message(minibuffer, load_error.message);
+            return;
+        }
+        sync_active_buffer();
+        EditorState next;
+        next.set_undo_limit(settings.undo_limit);
+        next.text = std::move(loaded);
+        next.path = open_path;
+        next.cursor = 0;
+        next.preferred_column = 0;
+        next.scroll_line = 0;
+        next.scroll_column = 0;
+        next.dirty = false;
+        next.clear_selection();
+        next.clear_undo_history();
+        buffers.push_back(next);
+        active_buffer = buffers.size() - 1;
+        state = next;
+        buffer_list_selected = active_buffer;
+        minibuffer_message(minibuffer, "Opened " + open_path);
+    };
+
+    auto request_open_buffer_from_path = [&](const std::string& open_path) {
+        if (const std::optional<size_t> existing = find_open_buffer(open_path)) {
+            activate_buffer(*existing);
+            return;
+        }
+        FileLoadCheck check;
+        Error check_error = check_load_file_size(open_path, settings, check);
+        if (!check_error.ok()) {
+            minibuffer_message(minibuffer, check_error.message);
+            return;
+        }
+        if (check.should_warn) {
+            pending_load_path = open_path;
+            start_minibuffer(minibuffer,
+                             MinibufferAction::ConfirmLoad,
+                             "Warning: " + open_path + " is " + std::to_string(check.size) +
+                                 " bytes; open anyway? (y/n) ");
+            return;
+        }
+        open_buffer_from_path(open_path);
+    };
+
+    auto enter_buffer_list = [&]() {
+        if (assist_session.active) {
+            minibuffer_message(minibuffer, "Finish or cancel AI assist before listing buffers");
+            return;
+        }
+        if (help_view.active) {
+            exit_help_view();
+        }
+        sync_active_buffer();
+        buffer_list_selected = std::min(active_buffer, buffers.empty() ? size_t{0} : buffers.size() - 1);
+        buffer_list_active = true;
+        pending_close_confirm = false;
+        minibuffer_message(minibuffer, selected_buffer_status());
+    };
+
+    auto cancel_buffer_list = [&]() {
+        buffer_list_active = false;
+        buffer_list_selected = active_buffer;
+        minibuffer_message(minibuffer, "Buffer list cancelled");
+    };
+
+    auto close_active_buffer = [&](bool force) {
+        if (assist_session.active) {
+            minibuffer_message(minibuffer, "Finish or cancel AI assist before closing buffers");
+            return;
+        }
+        if (help_view.active) {
+            exit_help_view();
+        }
+        if (!force && state.dirty) {
+            pending_close_confirm = true;
+            minibuffer_message(minibuffer, "Buffer modified; close anyway? (y/n) ");
+            return;
+        }
+        pending_close_confirm = false;
+        if (buffers.size() <= 1) {
+            buffers.clear();
+            state = EditorState{};
+            state.set_undo_limit(settings.undo_limit);
+            buffers.push_back(state);
+            active_buffer = 0;
+            buffer_list_selected = 0;
+            minibuffer_message(minibuffer, "Closed buffer; opened scratch buffer");
+            return;
+        }
+        buffers.erase(buffers.begin() + static_cast<std::ptrdiff_t>(active_buffer));
+        active_buffer = std::min(active_buffer, buffers.size() - 1);
+        state = buffers[active_buffer];
+        buffer_list_selected = active_buffer;
+        minibuffer_message(minibuffer,
+                           "Closed buffer; active " + std::to_string(active_buffer + 1) + "/" +
+                               std::to_string(buffers.size()) + ": " +
+                               editor_buffer_display_name(state, active_buffer));
+    };
+
+    auto handle_buffer_list_escape = [&]() {
+        const std::string sequence = read_escape_suffix();
+        if (sequence.empty()) {
+            cancel_buffer_list();
+            return;
+        }
+        MovementKeyEvent movement;
+        if (parse_movement_sequence(sequence, movement)) {
+            buffer_list_selected =
+                move_editor_buffer_selection(buffer_list_selected, buffers.size(), movement.key);
+            minibuffer_message(minibuffer, selected_buffer_status());
+            return;
+        }
+    };
+
+    auto handle_open_minibuffer_key = [&](unsigned char ch) -> bool {
+        if (!minibuffer.active ||
+            (minibuffer.action != MinibufferAction::LoadFile &&
+             minibuffer.action != MinibufferAction::ConfirmLoad)) {
+            return false;
+        }
+        if (ch == 27 || ch == 7) {
+            pending_load_path.clear();
+            minibuffer_message(minibuffer, "Open cancelled");
+            return true;
+        }
+        if (ch == 19 || ch == editor_key_save_as()) {
+            return false;
+        }
+        if (minibuffer.action == MinibufferAction::ConfirmLoad) {
+            if (ch == 'y' || ch == 'Y') {
+                const std::string path_to_open = pending_load_path;
+                pending_load_path.clear();
+                open_buffer_from_path(path_to_open);
+            } else if (ch == 'n' || ch == 'N') {
+                pending_load_path.clear();
+                minibuffer_message(minibuffer, "Open cancelled");
+            } else {
+                minibuffer.prompt = "Type y or n: ";
+                minibuffer.input.clear();
+            }
+            return true;
+        }
+        if (ch == '\r' || ch == '\n') {
+            const std::string open_path = trim_ascii_copy(minibuffer.input);
+            if (open_path.empty()) {
+                minibuffer.prompt = "Open file (path required): ";
+                return true;
+            }
+            request_open_buffer_from_path(open_path);
+            return true;
+        }
+        if (ch == 127 || ch == 8) {
+            if (!minibuffer.input.empty()) {
+                minibuffer.input.pop_back();
+            }
+            return true;
+        }
+        if (ch == '\t') {
+            minibuffer.prompt = "Tab completion disabled; enter path: ";
+            return true;
+        }
+        if (ch >= 0x20U) {
+            minibuffer.input.push_back(static_cast<char>(ch));
+            return true;
+        }
+        return true;
     };
 
     auto set_assist_activity = [&](tui::ActivityKind kind, const std::string& suffix) {
@@ -393,10 +643,20 @@ int run_editor(const std::string& path,
                 pending_assist = PendingAssist{};
                 exit_assist_command_mode(minibuffer, assist_completer);
                 if (slash.path.empty()) {
-                    start_minibuffer(minibuffer, MinibufferAction::LoadFile, "Load file: ");
+                    start_minibuffer(minibuffer, MinibufferAction::LoadFile, "Open file: ");
                 } else {
-                    request_load_editor_from_path(state, slash.path, settings, minibuffer, pending_load_path);
+                    request_open_buffer_from_path(slash.path);
                 }
+                return;
+            case EditorSlashCommand::List:
+                pending_assist = PendingAssist{};
+                exit_assist_command_mode(minibuffer, assist_completer);
+                enter_buffer_list();
+                return;
+            case EditorSlashCommand::Close:
+                pending_assist = PendingAssist{};
+                exit_assist_command_mode(minibuffer, assist_completer);
+                close_active_buffer(false);
                 return;
             case EditorSlashCommand::None:
                 break;
@@ -578,6 +838,35 @@ int run_editor(const std::string& path,
             }
             return;
         }
+        if (buffer_list_active) {
+            if (ch == 17) {
+                quit = true;
+                return;
+            }
+            if (ch == 27) {
+                handle_buffer_list_escape();
+                return;
+            }
+            if (ch == '\r' || ch == '\n') {
+                activate_buffer(buffer_list_selected);
+                return;
+            }
+            return;
+        }
+        if (pending_close_confirm) {
+            if (ch == 'y' || ch == 'Y') {
+                close_active_buffer(true);
+            } else if (ch == 27 || ch == 'n' || ch == 'N') {
+                if (ch == 27) {
+                    read_escape_suffix();
+                }
+                pending_close_confirm = false;
+                minibuffer_message(minibuffer, "Close cancelled");
+            } else {
+                minibuffer_message(minibuffer, "Type y or n: ");
+            }
+            return;
+        }
         if (minibuffer.active && is_assist_minibuffer_action(minibuffer.action)) {
             if (ch == 27 || ch == 7) {
                 pending_assist = PendingAssist{};
@@ -669,7 +958,8 @@ int run_editor(const std::string& path,
             }
             return;
         }
-        if (handle_minibuffer_key(state,
+        if (handle_open_minibuffer_key(ch) ||
+            handle_minibuffer_key(state,
                                   minibuffer,
                                   ch,
                                   quit,
@@ -690,7 +980,15 @@ int run_editor(const std::string& path,
                 exit_help_view();
                 return;
             }
-            if (state.path.empty()) {
+            sync_active_buffer();
+            const bool modified_buffers = std::any_of(buffers.begin(), buffers.end(), [](const EditorState& buffer) {
+                return buffer.dirty;
+            });
+            if (buffers.size() > 1 && modified_buffers) {
+                start_minibuffer(minibuffer,
+                                 MinibufferAction::ConfirmQuit,
+                                 "Modified buffers exist; quit anyway? (y/n) ");
+            } else if (state.path.empty()) {
                 if (state.dirty || !state.text.empty()) {
                     start_minibuffer(minibuffer,
                                      MinibufferAction::ConfirmSaveOnQuit,
@@ -729,11 +1027,15 @@ int run_editor(const std::string& path,
                 minibuffer_message(minibuffer, kill_error.message);
             }
         } else if (ch == 15) {
-            start_minibuffer(minibuffer, MinibufferAction::LoadFile, "Load file: ");
+            start_minibuffer(minibuffer, MinibufferAction::LoadFile, "Open file: ");
         } else if (ch == 0) {
             start_continue();
         } else if (ch == 19) {
             trigger_save();
+        } else if (ch == 12) {
+            enter_buffer_list();
+        } else if (ch == 23) {
+            close_active_buffer(false);
         } else if (ch == editor_key_save_as()) {
             start_minibuffer(minibuffer, MinibufferAction::SaveAsFile, "Save as: ", state.path);
         } else if (ch == '\t') {
@@ -782,6 +1084,14 @@ int run_editor(const std::string& path,
     };
 
     auto handle_paste = [&](const std::string& terminal_text) {
+        if (buffer_list_active) {
+            minibuffer_message(minibuffer, "Choose a buffer or press Esc to cancel");
+            return;
+        }
+        if (pending_close_confirm) {
+            minibuffer_message(minibuffer, "Type y or n: ");
+            return;
+        }
         Error paste_error = paste_with_clipboard_preference(state, shared_clipboard(), terminal_text);
         minibuffer_message(minibuffer, paste_error.ok() ? "Pasted" : paste_error.message);
     };
@@ -800,7 +1110,7 @@ int run_editor(const std::string& path,
             if (current_size.rows != last_size.rows || current_size.cols != last_size.cols ||
                 assist_session.job.running() || assist_updated || assist_animating) {
                 last_size = current_size;
-                render_terminal(state, minibuffer, help_view.active, refresh_assist_display());
+                render_editor();
             }
             continue;
         }
@@ -824,8 +1134,9 @@ int run_editor(const std::string& path,
         }
 
         last_size = terminal_size();
-        render_terminal(state, minibuffer, help_view.active, refresh_assist_display());
+        render_editor();
     }
+    sync_active_buffer();
     return 0;
 }
 

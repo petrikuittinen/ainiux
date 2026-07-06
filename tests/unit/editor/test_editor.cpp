@@ -1506,8 +1506,8 @@ void test_editor_control_key_sequence_decode() {
     check(pkchat::editor::decode_control_key_sequence("[115;5u", decoded) &&
               decoded == pkchat::editor::editor_key_save_as(),
           "editor decodes kitty-style Ctrl+Shift+s as save-as");
-    check(!pkchat::editor::decode_control_key_sequence("[23;5u", decoded),
-          "editor no longer maps Ctrl+W to save-as");
+    check(pkchat::editor::decode_control_key_sequence("[23;5u", decoded) && decoded == 23,
+          "editor decodes kitty-style Ctrl+W as close-buffer");
     check(!pkchat::editor::decode_control_key_sequence("[A", decoded),
           "editor ignores arrow-key escape sequences");
 }
@@ -1552,6 +1552,10 @@ void test_editor_help_document_and_command() {
           "editor help document lists slash commands");
     check(help_text.find("/regenerate") != std::string::npos,
           "editor help document documents /regenerate");
+    check(help_text.find("/list") != std::string::npos,
+          "editor help document documents /list");
+    check(help_text.find("/close") != std::string::npos,
+          "editor help document documents /close");
 
     check(pkchat::editor::is_editor_help_command("/help"), "editor /help command is recognized");
     check(pkchat::editor::is_editor_help_command("  /HELP  "), "editor /help command is case-insensitive");
@@ -1565,6 +1569,10 @@ void test_editor_help_document_and_command() {
           "assist command completions include /save");
     check(std::find(completions.begin(), completions.end(), "/open ") != completions.end(),
           "assist command completions include /open");
+    check(std::find(completions.begin(), completions.end(), "/list") != completions.end(),
+          "assist command completions include /list");
+    check(std::find(completions.begin(), completions.end(), "/close") != completions.end(),
+          "assist command completions include /close");
 
     pkchat::editor::ParsedEditorSlashCommand slash =
         pkchat::editor::parse_editor_slash_command("/save");
@@ -1590,6 +1598,15 @@ void test_editor_help_document_and_command() {
     slash = pkchat::editor::parse_editor_slash_command("/open");
     check(slash.command == pkchat::editor::EditorSlashCommand::Open && slash.path.empty(),
           "editor bare /open slash command is recognized");
+    slash = pkchat::editor::parse_editor_slash_command("/list");
+    check(slash.command == pkchat::editor::EditorSlashCommand::List && slash.path.empty(),
+          "editor /list slash command is recognized");
+    slash = pkchat::editor::parse_editor_slash_command("/close");
+    check(slash.command == pkchat::editor::EditorSlashCommand::Close && slash.path.empty(),
+          "editor /close slash command is recognized");
+    slash = pkchat::editor::parse_editor_slash_command("/close file.txt");
+    check(slash.command == pkchat::editor::EditorSlashCommand::None,
+          "editor /close rejects arguments");
     slash = pkchat::editor::parse_editor_slash_command("/save extra words");
     check(slash.command == pkchat::editor::EditorSlashCommand::None,
           "editor file slash commands reject multi-token path arguments");
@@ -1642,12 +1659,52 @@ void test_editor_missing_file_error_message() {
           "editor missing file load reports file not found");
 }
 
+void test_editor_buffer_list_helpers() {
+    std::vector<pkchat::editor::EditorState> buffers;
+    pkchat::editor::EditorState first = pkchat::editor::EditorState::from_text("alpha");
+    first.path = "file1.txt";
+    first.cursor = first.text.size();
+    buffers.push_back(first);
+
+    pkchat::editor::EditorState second = pkchat::editor::EditorState::from_text("beta\nsecond");
+    second.path = "file2.txt";
+    second.dirty = true;
+    second.cursor = second.text.size();
+    buffers.push_back(second);
+
+    const std::string rendered = pkchat::editor::editor_buffer_list_text(buffers, 1);
+    check(rendered.find("Buffers - Enter opens - Esc cancels") != std::string::npos,
+          "editor buffer list includes chooser instructions");
+    check(rendered.find("  file1.txt - Ln 1, Col 6") != std::string::npos,
+          "editor buffer list renders an inactive clean file");
+    check(rendered.find("> file2.txt * - Ln 2, Col 7") != std::string::npos,
+          "editor buffer list marks selected dirty file");
+
+    check(pkchat::editor::move_editor_buffer_selection(1, buffers.size(), pkchat::editor::MovementKey::Up) == 0,
+          "editor buffer list moves selection up");
+    check(pkchat::editor::move_editor_buffer_selection(0, buffers.size(), pkchat::editor::MovementKey::Down) == 1,
+          "editor buffer list moves selection down");
+    check(pkchat::editor::move_editor_buffer_selection(1, buffers.size(), pkchat::editor::MovementKey::Home) == 0,
+          "editor buffer list home selects first buffer");
+    check(pkchat::editor::move_editor_buffer_selection(0, buffers.size(), pkchat::editor::MovementKey::End) == 1,
+          "editor buffer list end selects last buffer");
+
+    pkchat::editor::Clipboard clipboard;
+    first.select_all();
+    check(first.copy_selection(clipboard).ok(), "editor copies from one buffer");
+    second.cursor = second.text.size();
+    check(second.paste(clipboard).ok(), "editor pastes copied text into another buffer");
+    check(second.text.str() == "beta\nsecondalpha",
+          "editor clipboard content is independent of the source buffer");
+}
+
 void run_all() {
     test_editor_control_key_sequence_decode();
     test_editor_save_as_overwrite_helpers();
     test_editor_help_document_and_command();
     test_editor_assist_path_completion();
     test_editor_missing_file_error_message();
+    test_editor_buffer_list_helpers();
     test_editor_ai_continue_helpers();
     test_editor_file_io_failures();
     test_editor_assist_helpers();

@@ -25,7 +25,9 @@ Arrow keys, `Page Up`/`Page Down`, `Home`, and `End` scroll the help document.
 |-----|--------|
 | `Ctrl+S` | Save (prompts for path on scratch buffers) |
 | `Ctrl+Shift+S` | Save as (prompts for path; asks before overwriting an existing file) |
-| `Ctrl+O` | Load another file |
+| `Ctrl+O` | Open another file buffer |
+| `Ctrl+L` | List open buffers; Enter chooses and Esc cancels |
+| `Ctrl+W` | Close the active buffer; prompts before discarding modifications |
 | `Ctrl+F` | Search (exact substring) |
 | `Ctrl+H` | Replace (search, then replace each match) |
 | `Ctrl+Q` | Quit |
@@ -94,6 +96,8 @@ Press **`Esc`** to open the command minibuffer (`Command:`). Type a slash comman
 | `/find` | Search (same as `Ctrl+F`) |
 | `/replace` | Replace (same as `Ctrl+H`) |
 | `/open [PATH]` | Open file (same as `Ctrl+O`; `Tab` completes paths after the command) |
+| `/list` | List open editor buffers (same as `Ctrl+L`; Enter chooses, Esc cancels) |
+| `/close` | Close the active editor buffer (same as `Ctrl+W`; prompts if modified) |
 | `/help` | Toggle this help view |
 | `/quit` | Quit the editor |
 

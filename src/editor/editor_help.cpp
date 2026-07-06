@@ -41,6 +41,12 @@ EditorSlashCommand command_from_token(const std::string& command_token) {
     if (command_token == "open") {
         return EditorSlashCommand::Open;
     }
+    if (command_token == "list") {
+        return EditorSlashCommand::List;
+    }
+    if (command_token == "close") {
+        return EditorSlashCommand::Close;
+    }
     return EditorSlashCommand::None;
 }
 
@@ -129,6 +135,10 @@ ParsedEditorSlashCommand parse_editor_slash_command(const std::string& line) {
     }
     if (path_start < trimmed.size()) {
         const std::string path = trim_ascii_copy(trimmed.substr(path_start));
+        if (parsed.command == EditorSlashCommand::List || parsed.command == EditorSlashCommand::Close) {
+            parsed.command = EditorSlashCommand::None;
+            return parsed;
+        }
         if (path.find(' ') != std::string::npos || path.find('\t') != std::string::npos) {
             parsed.command = EditorSlashCommand::None;
             return parsed;

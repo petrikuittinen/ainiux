@@ -70,9 +70,6 @@ bool is_ctrl_modifier(int modifier) {
 bool has_shift_modifier(int modifier) { return (modifier & 1) != 0; }
 
 bool ctrl_byte_from_codepoint(int codepoint, unsigned char& out) {
-    if (codepoint == 23) {
-        return false;
-    }
     if (codepoint >= 1 && codepoint <= 26) {
         out = static_cast<unsigned char>(codepoint);
         return true;
