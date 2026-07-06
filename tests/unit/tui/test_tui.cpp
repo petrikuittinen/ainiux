@@ -4,8 +4,10 @@
 #include "pkchat/version.hpp"
 #include "provider/provider.hpp"
 #include "tui/activity.hpp"
+#include "tui/input_handlers.hpp"
 #include "tui/session_load.hpp"
 #include "tui/tui.hpp"
+#include <algorithm>
 #include <string>
 #include <vector>
 
@@ -294,6 +296,31 @@ void test_tui_provider_display_and_activity_status() {
           "TUI provider display name shortens custom_openai_chat to custom");
 }
 
+void test_tui_selectable_provider_ids() {
+    const std::vector<std::string> providers = pkchat::tui::selectable_provider_ids();
+    check(!providers.empty(), "TUI provider picker includes at least one provider");
+    check(std::find(providers.begin(), providers.end(), "none") == providers.end(),
+          "TUI provider picker excludes the offline none profile");
+    check(std::find(providers.begin(), providers.end(), "custom_openai_chat") == providers.end(),
+          "TUI provider picker excludes custom_openai_chat without a base URL");
+    check(std::find(providers.begin(), providers.end(), "lm_studio") != providers.end(),
+          "TUI provider picker includes lm_studio");
+}
+
+void test_tui_provider_and_model_picker_text() {
+    const std::vector<std::string> providers = {"lm_studio", "openai"};
+    const std::string provider_text = pkchat::tui::provider_picker_text(providers, 1);
+    check(provider_text.find("Enter select") != std::string::npos,
+          "TUI provider picker text documents Enter selection");
+    check(provider_text.find(u8"› openai") != std::string::npos,
+          "TUI provider picker highlights the selected provider");
+
+    const std::vector<std::string> models = {"alpha", "beta"};
+    const std::string model_text = pkchat::tui::model_picker_text(models, 0);
+    check(model_text.find(u8"› alpha") != std::string::npos,
+          "TUI model picker highlights the selected model");
+}
+
 void test_tui_session_load_model_mismatch_detection() {
     pkchat::provider::RequestContext cli_context;
     cli_context.profile.name = "lm_studio";
@@ -379,6 +406,8 @@ void run_all() {
     test_tui_restore_cli_context();
     test_tui_input_label_and_activity_indicators();
     test_tui_provider_display_and_activity_status();
+    test_tui_selectable_provider_ids();
+    test_tui_provider_and_model_picker_text();
     test_tui_unicode_and_empty_status();
     test_tui_layout_reserves_editor_input_panel();
     test_tui_ready_and_generation_status();

@@ -2466,6 +2466,37 @@ bool editor_has_configured_model_endpoint(const cli::Options& options) {
     return find_profile(options.provider, profile) && profile.offline;
 }
 
+bool tui_needs_startup_provider_selection(const cli::Options& options) {
+    return options.tui && !options.provider_explicit && options.positional_url.empty() &&
+           options.base_url.empty() && options.chat_url.empty() && options.models_url.empty() &&
+           options.responses_url.empty();
+}
+
+bool looks_like_api_url(const std::string& text) {
+    return text.rfind("http://", 0) == 0 || text.rfind("https://", 0) == 0;
+}
+
+void apply_provider_target(cli::Options& options, const std::string& target) {
+    options.positional_url.clear();
+    options.base_url.clear();
+    options.chat_url.clear();
+    options.models_url.clear();
+    options.responses_url.clear();
+    if (looks_like_api_url(target)) {
+        options.positional_url = target;
+        options.provider = "openai";
+        return;
+    }
+    options.provider = target;
+}
+
+void apply_tui_startup_default(cli::Options& options) {
+    if (!tui_needs_startup_provider_selection(options)) {
+        return;
+    }
+    options.provider = "none";
+}
+
 void apply_editor_offline_default(cli::Options& options) {
     if (!options.editor || editor_has_configured_model_endpoint(options)) {
         return;

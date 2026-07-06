@@ -600,6 +600,49 @@ class ScopedUnsetenv {
     std::optional<std::string> previous_value_;
 };
 
+void test_apply_provider_target_accepts_custom_url() {
+    pkchat::cli::Options options;
+    options.tui = true;
+    options.provider = "lm_studio";
+    options.model = "local-model";
+    pkchat::provider::apply_provider_target(options, "http://localhost:30000");
+    check(options.positional_url == "http://localhost:30000",
+          "provider target helper stores custom API URLs as positional endpoints");
+    check(options.provider == "openai",
+          "provider target helper keeps the default openai placeholder for custom URL routing");
+    check(options.base_url.empty(), "provider target helper clears stale base URLs");
+
+    pkchat::provider::ContextResult context = pkchat::provider::build_context(options);
+    check(context.error.ok(), "custom URL provider target builds a chat context");
+    check(context.context.profile.name == "custom_openai_chat",
+          "custom URL provider target selects the custom OpenAI-compatible profile");
+    check(context.context.base_url.find("localhost:30000") != std::string::npos,
+          "custom URL provider target normalizes the requested endpoint");
+}
+
+void test_tui_startup_provider_selection_helpers() {
+    pkchat::cli::Options bare_chat;
+    bare_chat.tui = true;
+    check(pkchat::provider::tui_needs_startup_provider_selection(bare_chat),
+          "bare chat UI requests startup provider selection");
+
+    pkchat::provider::apply_tui_startup_default(bare_chat);
+    check(bare_chat.provider == "none", "bare chat UI startup default uses offline provider until selection");
+
+    pkchat::cli::Options explicit_provider;
+    explicit_provider.tui = true;
+    explicit_provider.provider = "openai";
+    explicit_provider.provider_explicit = true;
+    check(!pkchat::provider::tui_needs_startup_provider_selection(explicit_provider),
+          "explicit chat provider skips startup provider selection");
+
+    pkchat::cli::Options positional_provider;
+    positional_provider.tui = true;
+    positional_provider.positional_url = "lmstudio";
+    check(!pkchat::provider::tui_needs_startup_provider_selection(positional_provider),
+          "positional chat provider shortcut skips startup provider selection");
+}
+
 void test_editor_defaults_offline_without_credentials() {
     ScopedUnsetenv unset_openai("OPENAI_API_KEY");
     ScopedUnsetenv unset_pkchat("PKCHAT_API_KEY");
@@ -1024,6 +1067,8 @@ void run_all() {
     test_lmstudio_shortcut_context();
     test_parse_models_response_llamacpp_meta();
     test_models_markdown_format();
+    test_apply_provider_target_accepts_custom_url();
+    test_tui_startup_provider_selection_helpers();
     test_editor_defaults_offline_without_credentials();
     test_none_provider_allows_an_empty_endpoint();
     test_openai_context_allows_missing_model();

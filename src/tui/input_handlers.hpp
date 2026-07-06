@@ -12,6 +12,12 @@
 
 namespace pkchat::tui {
 
+std::vector<std::string> selectable_provider_ids();
+std::string list_picker_text(const std::string& hint,
+                             const std::vector<std::string>& items,
+                             size_t selected);
+std::string provider_picker_text(const std::vector<std::string>& provider_ids, size_t selected);
+std::string model_picker_text(const std::vector<std::string>& models, size_t selected);
 std::string thread_picker_text(const std::vector<chat::ThreadSummary>& threads, size_t selected);
 std::string remove_confirm_text(const chat::Session& session);
 std::string system_edit_text();
@@ -23,6 +29,13 @@ EscapeResult handle_escape(editor::EditorState& input,
                            int& history_scroll,
                            std::string& status,
                            bool input_only_movement = false);
+
+enum class PickerEscapeResult { Navigated, Cancelled };
+
+PickerEscapeResult handle_list_picker_escape(size_t item_count,
+                                             size_t& selected,
+                                             std::string& status,
+                                             const std::string& selection_label);
 
 bool handle_thread_picker_escape(std::vector<chat::ThreadSummary>& threads,
                                  size_t& selected,

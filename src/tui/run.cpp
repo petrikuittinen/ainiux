@@ -73,6 +73,10 @@ int run(provider::RequestContext context, chat::Session session) {
     size_t history_edit_index = static_cast<size_t>(-1);
     std::vector<chat::ThreadSummary> thread_picker_threads;
     size_t thread_picker_selected = 0;
+    std::vector<std::string> picker_items;
+    size_t picker_selected = 0;
+    bool picker_cancel_quits = false;
+    ModelsRequestPurpose models_request_purpose = ModelsRequestPurpose::Preview;
     chat::SqliteStore sqlite_store;
     bool sqlite_available = false;
     std::string sqlite_path;
@@ -111,6 +115,12 @@ int run(provider::RequestContext context, chat::Session session) {
     auto panel_text = [&]() {
         if (mode == TuiMode::ThreadList) {
             return thread_picker_text(thread_picker_threads, thread_picker_selected);
+        }
+        if (mode == TuiMode::ProviderList) {
+            return provider_picker_text(picker_items, picker_selected);
+        }
+        if (mode == TuiMode::ModelList) {
+            return model_picker_text(picker_items, picker_selected);
         }
         if (mode == TuiMode::RemoveConfirm) {
             return remove_confirm_text(session);
@@ -479,11 +489,12 @@ int run(provider::RequestContext context, chat::Session session) {
         status = "Searching " + query + "...";
     };
 
-    auto start_models = [&]() {
+    auto start_models = [&](ModelsRequestPurpose purpose = ModelsRequestPurpose::Preview) {
         if (active_job != ActiveJob::None) {
             status = "A model job is already running";
             return;
         }
+        models_request_purpose = purpose;
         active_job = ActiveJob::Models;
         provider::RequestContext job_context = context;
         model_job.start([job_context, &events](runtime::CancellationToken token) mutable {
@@ -494,7 +505,50 @@ int run(provider::RequestContext context, chat::Session session) {
             event.models = std::move(models.model_ids);
             events.push(std::move(event));
         });
-        status = "Listing models...";
+        status = purpose == ModelsRequestPurpose::Picker ? "Loading models..." : "Listing models...";
+    };
+
+    auto apply_selected_provider = [&](const std::string& provider_target) -> bool {
+        cli::Options next = context.options;
+        provider::apply_provider_target(next, provider_target);
+        provider::ContextResult rebuilt = provider::build_context(next);
+        if (!rebuilt.error.ok()) {
+            status = detail::error_line(rebuilt.error);
+            return false;
+        }
+        context = std::move(rebuilt.context);
+        show_thinking_traces = context.options.show_thinking_traces;
+        app::refresh_session_metadata(session, context);
+        return true;
+    };
+
+    auto open_provider_picker = [&](bool cancel_quits) {
+        if (active_job != ActiveJob::None) {
+            status = "Cannot change provider while a model job is running";
+            return;
+        }
+        picker_items = selectable_provider_ids();
+        picker_selected = 0;
+        picker_cancel_quits = cancel_quits;
+        mode = TuiMode::ProviderList;
+        history_scroll = 0;
+        help_text.clear();
+        settings_text.clear();
+        status = picker_items.empty() ? "No providers available"
+                                      : "Selected provider 1/" + std::to_string(picker_items.size());
+    };
+
+    auto begin_interactive_setup = [&]() {
+        if (mode != TuiMode::Chat) {
+            return;
+        }
+        if (provider::tui_needs_startup_provider_selection(cli_context.options) && session.provider.empty()) {
+            open_provider_picker(true);
+            return;
+        }
+        if (context.options.model.empty() && !context.profile.offline) {
+            start_models(ModelsRequestPurpose::Picker);
+        }
     };
 
     auto start_assistant_response = [&]() {
@@ -702,9 +756,9 @@ int run(provider::RequestContext context, chat::Session session) {
                     "/edit\n"
                     "/list\n"
                     "/new [NAME]\n"
-                    "/provider PROVIDER\n"
+                    "/provider [PROVIDER]\n"
                     "/models\n"
-                    "/model MODEL\n"
+                    "/model [MODEL]\n"
                     "/system [TEXT]\n"
                     "/setting (hide/show current settings)\n"
                     "/setting NAME=VALUE\n"
@@ -819,23 +873,12 @@ int run(provider::RequestContext context, chat::Session session) {
         if (text == "/provider" || text.rfind("/provider ", 0) == 0) {
             const std::string provider_name = app::detail::trim_ascii(text.substr(9));
             if (provider_name.empty()) {
-                status = "Usage: /provider PROVIDER";
+                open_provider_picker(false);
                 return;
             }
-            cli::Options next = context.options;
-            next.provider = provider_name;
-            next.positional_url.clear();
-            next.base_url.clear();
-            next.chat_url.clear();
-            next.models_url.clear();
-            next.responses_url.clear();
-            provider::ContextResult rebuilt = provider::build_context(next);
-            if (!rebuilt.error.ok()) {
-                status = detail::error_line(rebuilt.error);
+            if (!apply_selected_provider(provider_name)) {
                 return;
             }
-            context = std::move(rebuilt.context);
-            app::refresh_session_metadata(session, context);
             status = "Provider set to " + provider::display_name_for_profile(context.profile.name);
             start_store_save();
             return;
@@ -843,7 +886,11 @@ int run(provider::RequestContext context, chat::Session session) {
         if (text == "/model" || text.rfind("/model ", 0) == 0) {
             const std::string model = app::detail::trim_ascii(text.substr(6));
             if (model.empty()) {
-                status = "Usage: /model MODEL";
+                if (context.profile.offline) {
+                    status = "Select a provider with /provider first";
+                    return;
+                }
+                start_models(ModelsRequestPurpose::Picker);
                 return;
             }
             context.options.model = model;
@@ -1065,6 +1112,8 @@ int run(provider::RequestContext context, chat::Session session) {
         start_turn(raw);
     };
 
+    begin_interactive_setup();
+
     if (!app::detail::trim_ascii(context.options.prompt).empty()) {
         start_turn(context.options.prompt);
     }
@@ -1229,7 +1278,26 @@ int run(provider::RequestContext context, chat::Session session) {
                 case TuiEventType::ModelsDone:
                     model_job.join();
                     active_job = ActiveJob::None;
-                    status = event.error.ok() ? join_models_preview(event.models) : detail::error_line(event.error);
+                    if (models_request_purpose == ModelsRequestPurpose::Picker) {
+                        models_request_purpose = ModelsRequestPurpose::Preview;
+                        if (!event.error.ok()) {
+                            status = detail::error_line(event.error);
+                        } else if (event.models.empty()) {
+                            status = "No models returned";
+                        } else {
+                            picker_items = std::move(event.models);
+                            picker_selected = 0;
+                            picker_cancel_quits = false;
+                            mode = TuiMode::ModelList;
+                            history_scroll = 0;
+                            help_text.clear();
+                            settings_text.clear();
+                            status = "Selected model 1/" + std::to_string(picker_items.size());
+                        }
+                    } else {
+                        status = event.error.ok() ? join_models_preview(event.models)
+                                                  : detail::error_line(event.error);
+                    }
                     break;
                 case TuiEventType::CompletionDone:
                     completion_job.join();
@@ -1271,6 +1339,57 @@ int run(provider::RequestContext context, chat::Session session) {
                     continue;
                 }
                 const unsigned char ch = event.byte;
+                if (mode == TuiMode::ProviderList || mode == TuiMode::ModelList) {
+                    if (ch == 17) {
+                        quit = true;
+                        continue;
+                    }
+                    if (ch == 27) {
+                        const std::string selection_label =
+                            mode == TuiMode::ProviderList ? "Selected provider" : "Selected model";
+                        const PickerEscapeResult result = handle_list_picker_escape(
+                            picker_items.size(), picker_selected, status, selection_label);
+                        if (result == PickerEscapeResult::Cancelled) {
+                            const bool provider_picker = mode == TuiMode::ProviderList;
+                            picker_items.clear();
+                            picker_selected = 0;
+                            if (picker_cancel_quits) {
+                                quit = true;
+                            } else {
+                                mode = TuiMode::Chat;
+                            }
+                            status = provider_picker ? "Provider selection cancelled"
+                                                     : "Model selection cancelled";
+                        }
+                        continue;
+                    }
+                    if (ch == '\r' || ch == '\n') {
+                        if (picker_selected < picker_items.size()) {
+                            if (mode == TuiMode::ProviderList) {
+                                const std::string provider_name = picker_items[picker_selected];
+                                if (apply_selected_provider(provider_name)) {
+                                    picker_items.clear();
+                                    picker_selected = 0;
+                                    mode = TuiMode::Chat;
+                                    status = "Provider set to " +
+                                             provider::display_name_for_profile(context.profile.name);
+                                    start_store_save();
+                                    start_models(ModelsRequestPurpose::Picker);
+                                }
+                            } else {
+                                context.options.model = picker_items[picker_selected];
+                                session.model = context.options.model;
+                                picker_items.clear();
+                                picker_selected = 0;
+                                mode = TuiMode::Chat;
+                                status = "Model set to " + context.options.model;
+                                start_store_save();
+                            }
+                        }
+                        continue;
+                    }
+                    continue;
+                }
                 if (mode == TuiMode::ThreadList) {
                     if (ch == 17) {
                         quit = true;

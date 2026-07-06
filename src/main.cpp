@@ -248,6 +248,7 @@ int main(int argc, char** argv) {
         }
     }
 
+    pkchat::provider::apply_tui_startup_default(options);
     pkchat::provider::ContextResult context_result = pkchat::provider::build_context(options);
     if (!context_result.error.ok()) {
         pkchat::app::print_error(context_result.error);
@@ -380,7 +381,9 @@ int main(int argc, char** argv) {
     if (!loaded_session) {
         session = pkchat::chat::new_session(context);
     }
-    if (!model_chosen) {
+    const bool defer_tui_model_selection =
+        context.options.tui && context.options.model.empty() && !context.profile.offline;
+    if (!model_chosen && !defer_tui_model_selection) {
         pkchat::Error model_err = pkchat::app::choose_default_model(context);
         if (!model_err.ok()) {
             pkchat::app::print_error(model_err);

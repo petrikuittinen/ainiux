@@ -50,12 +50,36 @@ void render(const chat::Session& session,
         panel_active ? panel_lines_for_text(panel_text, mode, cols, panel_title_override)
                      : history_lines_for_session(session, cols, show_thinking_traces, activity_kind,
                                                  activity_frame);
+    const bool picker_top_aligned = mode == TuiMode::ThreadList || mode == TuiMode::ProviderList ||
+                                    mode == TuiMode::ModelList;
     const int max_history_scroll = std::max(0, static_cast<int>(history.size()) - layout.history_rows);
     history_scroll = std::min(std::max(0, history_scroll), max_history_scroll);
 
+    if (picker_top_aligned) {
+        int highlighted_line = -1;
+        for (size_t i = 0; i < history.size(); ++i) {
+            if (!history[i].segments.empty() &&
+                history[i].segments.front().role == StyleRole::PanelHighlight) {
+                highlighted_line = static_cast<int>(i);
+                break;
+            }
+        }
+        if (highlighted_line >= 0) {
+            if (highlighted_line < history_scroll) {
+                history_scroll = highlighted_line;
+            } else if (highlighted_line >= history_scroll + layout.history_rows) {
+                history_scroll = highlighted_line - layout.history_rows + 1;
+            }
+        }
+        history_scroll = std::min(std::max(0, history_scroll), max_history_scroll);
+    }
+
     std::cout << "\x1b[?25l";
 
-    const int history_start = std::max(0, static_cast<int>(history.size()) - layout.history_rows - history_scroll);
+    const int history_start =
+        picker_top_aligned
+            ? history_scroll
+            : std::max(0, static_cast<int>(history.size()) - layout.history_rows - history_scroll);
     int printed = 0;
     const StyleRole history_fill_role = panel_active ? StyleRole::PanelBorder : StyleRole::Text;
     for (int i = history_start; i < static_cast<int>(history.size()) && printed < layout.history_rows; ++i, ++printed) {

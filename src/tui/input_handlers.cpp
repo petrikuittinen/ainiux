@@ -18,6 +18,45 @@ bool is_escape_final(unsigned char ch) {
 
 }  // namespace
 
+std::vector<std::string> selectable_provider_ids() {
+    std::vector<std::string> providers;
+    for (const provider::Profile& profile : provider::built_in_profiles()) {
+        if (profile.offline || profile.name == "custom_openai_chat") {
+            continue;
+        }
+        providers.push_back(profile.name);
+    }
+    return providers;
+}
+
+std::string list_picker_text(const std::string& hint,
+                             const std::vector<std::string>& items,
+                             size_t selected) {
+    std::ostringstream out;
+    out << hint << "\n";
+    for (size_t i = 0; i < items.size(); ++i) {
+        out << (i == selected ? u8"› " : "  ");
+        out << items[i];
+        if (i + 1 != items.size()) {
+            out << "\n";
+        }
+    }
+    return out.str();
+}
+
+std::string provider_picker_text(const std::vector<std::string>& provider_ids, size_t selected) {
+    std::vector<std::string> labels;
+    labels.reserve(provider_ids.size());
+    for (const std::string& provider_id : provider_ids) {
+        labels.push_back(provider::display_name_for_profile(provider_id));
+    }
+    return list_picker_text("↑↓ move · Enter select · Esc cancel", labels, selected);
+}
+
+std::string model_picker_text(const std::vector<std::string>& models, size_t selected) {
+    return list_picker_text("↑↓ move · Enter select · Esc cancel", models, selected);
+}
+
 std::string thread_picker_text(const std::vector<chat::ThreadSummary>& threads, size_t selected) {
     std::ostringstream out;
     out << "Newest first · Enter opens · Esc cancels\n";
@@ -143,15 +182,13 @@ EscapeResult handle_escape(editor::EditorState& input,
     return EscapeResult::Handled;
 }
 
-bool handle_thread_picker_escape(std::vector<chat::ThreadSummary>& threads,
-                                 size_t& selected,
-                                 TuiMode& mode,
-                                 std::string& status) {
+PickerEscapeResult handle_list_picker_escape(size_t item_count,
+                                             size_t& selected,
+                                             std::string& status,
+                                             const std::string& selection_label) {
     unsigned char ch = 0;
     if (!editor::read_terminal_byte(ch, 25)) {
-        mode = TuiMode::Chat;
-        status = "Thread list cancelled";
-        return true;
+        return PickerEscapeResult::Cancelled;
     }
     std::string sequence;
     if (ch == '[' || ch == 'O') {
@@ -163,14 +200,12 @@ bool handle_thread_picker_escape(std::vector<chat::ThreadSummary>& threads,
             }
         }
     } else {
-        mode = TuiMode::Chat;
-        status = "Thread list cancelled";
-        return true;
+        return PickerEscapeResult::Cancelled;
     }
 
     editor::MovementKeyEvent movement;
-    if (!editor::parse_movement_sequence(sequence, movement) || threads.empty()) {
-        return true;
+    if (!editor::parse_movement_sequence(sequence, movement) || item_count == 0) {
+        return PickerEscapeResult::Cancelled;
     }
     switch (movement.key) {
         case editor::MovementKey::Up:
@@ -179,7 +214,7 @@ bool handle_thread_picker_escape(std::vector<chat::ThreadSummary>& threads,
             }
             break;
         case editor::MovementKey::Down:
-            if (selected + 1 < threads.size()) {
+            if (selected + 1 < item_count) {
                 ++selected;
             }
             break;
@@ -187,19 +222,32 @@ bool handle_thread_picker_escape(std::vector<chat::ThreadSummary>& threads,
             selected = selected > 10 ? selected - 10 : 0;
             break;
         case editor::MovementKey::PageDown:
-            selected = std::min(threads.size() - 1, selected + 10);
+            selected = std::min(item_count - 1, selected + 10);
             break;
         case editor::MovementKey::Home:
             selected = 0;
             break;
         case editor::MovementKey::End:
-            selected = threads.size() - 1;
+            selected = item_count - 1;
             break;
         case editor::MovementKey::Left:
         case editor::MovementKey::Right:
             break;
     }
-    status = "Selected thread " + std::to_string(selected + 1) + "/" + std::to_string(threads.size());
+    status = selection_label + " " + std::to_string(selected + 1) + "/" + std::to_string(item_count);
+    return PickerEscapeResult::Navigated;
+}
+
+bool handle_thread_picker_escape(std::vector<chat::ThreadSummary>& threads,
+                                 size_t& selected,
+                                 TuiMode& mode,
+                                 std::string& status) {
+    const PickerEscapeResult result =
+        handle_list_picker_escape(threads.size(), selected, status, "Selected thread");
+    if (result == PickerEscapeResult::Cancelled) {
+        mode = TuiMode::Chat;
+        status = "Thread list cancelled";
+    }
     return true;
 }
 
