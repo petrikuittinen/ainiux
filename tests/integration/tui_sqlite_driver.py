@@ -213,7 +213,7 @@ def scenario_beta_and_list_load(binary, base, model, home_dir):
         [
             ("/new Beta\r", 0.5),
             ("sqlite-save-two\r", 1.0),
-            ("/list\r", 0.5),
+            ("\x0c", 0.5),  # Ctrl+L thread list
             ("\x1b[B", 0.3),
             ("\r", 1.5),
             ("/quit\r", 0.2),

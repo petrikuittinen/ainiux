@@ -492,6 +492,7 @@ int run(provider::RequestContext context, chat::Session session) {
     auto apply_selected_provider = [&](const std::string& provider_target) -> bool {
         cli::Options next = context.options;
         provider::apply_provider_target(next, provider_target);
+        next.model.clear();
         provider::ContextResult rebuilt = provider::build_context(next);
         if (!rebuilt.error.ok()) {
             status = detail::error_line(rebuilt.error);
@@ -705,6 +706,30 @@ int run(provider::RequestContext context, chat::Session session) {
         start_store_save();
     };
 
+    auto start_thread_list = [&]() {
+        if (!sqlite_available) {
+            status = "SQLite persistence is unavailable";
+            return;
+        }
+        if (active_job != ActiveJob::None) {
+            status = "Cannot list threads while a model job is running";
+            return;
+        }
+        Error list_error = sqlite_store.list_threads(thread_picker_threads, 200);
+        if (!list_error.ok()) {
+            status = detail::error_line(list_error);
+            return;
+        }
+        if (thread_picker_threads.empty()) {
+            status = "No saved chat threads";
+            return;
+        }
+        thread_picker_selected = 0;
+        mode = TuiMode::ThreadList;
+        history_scroll = 0;
+        status = "Selected thread 1/" + std::to_string(thread_picker_threads.size());
+    };
+
     auto regenerate_last_turn = [&]() {
         if (active_job == ActiveJob::Models) {
             status = "Cannot regenerate while listing models";
@@ -755,7 +780,7 @@ int run(provider::RequestContext context, chat::Session session) {
                     "/quit or /exit\n"
                     "/clear\n"
                     "/edit\n"
-                    "/list\n"
+                    "/list (Ctrl+L)\n"
                     "/new [NAME]\n"
                     "/provider [PROVIDER]\n"
                     "/models\n"
@@ -837,27 +862,7 @@ int run(provider::RequestContext context, chat::Session session) {
             return;
         }
         if (text == "/list") {
-            if (!sqlite_available) {
-                status = "SQLite persistence is unavailable";
-                return;
-            }
-            if (active_job != ActiveJob::None) {
-                status = "Cannot list threads while a model job is running";
-                return;
-            }
-            Error list_error = sqlite_store.list_threads(thread_picker_threads, 200);
-            if (!list_error.ok()) {
-                status = detail::error_line(list_error);
-                return;
-            }
-            if (thread_picker_threads.empty()) {
-                status = "No saved chat threads";
-                return;
-            }
-            thread_picker_selected = 0;
-            mode = TuiMode::ThreadList;
-            history_scroll = 0;
-            status = "Selected thread 1/" + std::to_string(thread_picker_threads.size());
+            start_thread_list();
             return;
         }
         if (text == "/new" || text.rfind("/new ", 0) == 0) {
@@ -880,8 +885,8 @@ int run(provider::RequestContext context, chat::Session session) {
             if (!apply_selected_provider(provider_name)) {
                 return;
             }
-            refresh_startup_status();
             start_store_save();
+            start_models(ModelsRequestPurpose::Picker);
             return;
         }
         if (text == "/model" || text.rfind("/model ", 0) == 0) {
@@ -896,7 +901,7 @@ int run(provider::RequestContext context, chat::Session session) {
             }
             context.options.model = model;
             session.model = model;
-            refresh_startup_status();
+            status = provider_model_status_message(context, "ready");
             start_store_save();
             return;
         }
@@ -1372,7 +1377,8 @@ int run(provider::RequestContext context, chat::Session session) {
                                     picker_items.clear();
                                     picker_selected = 0;
                                     mode = TuiMode::Chat;
-                                    refresh_startup_status();
+                                    status = "Provider set to " +
+                                             provider::display_name_for_profile(context.profile.name);
                                     start_store_save();
                                     start_models(ModelsRequestPurpose::Picker);
                                 }
@@ -1382,7 +1388,7 @@ int run(provider::RequestContext context, chat::Session session) {
                                 picker_items.clear();
                                 picker_selected = 0;
                                 mode = TuiMode::Chat;
-                                refresh_startup_status();
+                                status = provider_model_status_message(context, "ready");
                                 start_store_save();
                             }
                         }
@@ -1590,6 +1596,10 @@ int run(provider::RequestContext context, chat::Session session) {
                 }
                 if (ch == 5 && mode == TuiMode::Chat) {
                     start_history_edit();
+                    continue;
+                }
+                if (ch == 12 && mode == TuiMode::Chat) {
+                    start_thread_list();
                     continue;
                 }
                 if (ch == 11) {
