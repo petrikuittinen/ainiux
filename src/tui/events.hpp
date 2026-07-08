@@ -64,7 +64,6 @@ struct TuiEvent {
 enum class EscapeResult {
     Unhandled,
     Handled,
-    Regenerate,
 };
 
 }  // namespace pkchat::tui

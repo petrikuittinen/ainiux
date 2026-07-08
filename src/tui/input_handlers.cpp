@@ -221,9 +221,6 @@ EscapeResult handle_escape(editor::EditorState& input,
             return EscapeResult::Handled;
         }
     } else {
-        if (ch == 'r' || ch == 'R') {
-            return EscapeResult::Regenerate;
-        }
         if (ch >= 32 || ch == '\t') {
             detail::insert_input(input, std::string(1, static_cast<char>(ch)), status);
         }

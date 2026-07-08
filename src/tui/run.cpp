@@ -1556,9 +1556,7 @@ int run(provider::RequestContext context, chat::Session session) {
                     const detail::TuiSize screen = detail::terminal_size();
                     const EscapeResult escape_result =
                         handle_escape(input, layout_for_terminal(screen.rows, screen.cols), history_scroll, status);
-                    if (escape_result == EscapeResult::Regenerate) {
-                        regenerate_last_turn();
-                    } else if (escape_result == EscapeResult::Unhandled) {
+                    if (escape_result == EscapeResult::Unhandled) {
                         if (active_job != ActiveJob::None) {
                             cancel_active_request();
                         } else if (file_job.running()) {

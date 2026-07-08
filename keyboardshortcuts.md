@@ -42,7 +42,6 @@ Bracketed terminal paste (middle-click or Shift+Insert in many terminals) is als
 | `Ctrl+R` | Regenerate last answer (resend last user prompt) |
 | `Ctrl+T` | Toggle thinking-trace display (`/thinking trace` / `notrace`) |
 | `Ctrl+L` | Open saved-thread picker (`/list`) |
-| `Esc` then `R` / `Alt+R` | Regenerate last answer (alternate binding) |
 
 Use `/pop` to remove the last user or assistant message.
 

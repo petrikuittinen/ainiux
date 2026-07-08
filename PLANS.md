@@ -817,7 +817,6 @@ Ctrl+R               redo editor/input edit
 Ctrl+F               search with a minibuffer prompt in editor mode
 Ctrl+H               search and replace with minibuffer prompts in editor mode
 F3/Shift+F3          search next/previous in editor mode
-Alt+R                regenerate last answer in chat mode
 Ctrl+Q               quit chat/editor mode
 Ctrl+C               copy selection in chat/editor input
 Ctrl+X               cut selection in chat/editor input
