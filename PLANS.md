@@ -48,7 +48,8 @@ v0.5  Context management, attachments, and safe URL fetching
 v0.6  System and user TOML-alike configuration files
 v0.7  Benchmark mode
 v0.8  AI-assisted editor
-v0.9  Local OpenAI-compatible server mode; browser web UI postponed
+v0.9  Benchmark cutoff mode, codebase refactor, and TUI/CLI polish
+v0.90 Local OpenAI-compatible server mode; browser web UI postponed
 v1.0  Local agent mode with sandbox/approval design
 v1.1  Image generation from CLI, REPL, TUI, and future server/web surfaces
 ```
@@ -57,7 +58,7 @@ Each milestone should leave the program usable. Do not create a long-lived pile 
 
 ## Current baseline
 
-Implementation status (2026-07-06): `pkchat` is at v0.89. The repository has the scriptable CLI, built-in provider registry and aliases, Chat Completions, text-only Responses API support, streaming SSE, provider-specific reasoning/thinking request compatibility, credential lookup, JSON chat import/export, SQLite-backed TUI chat persistence, cancellable runtime jobs, REPL, full-screen TUI foundation, editor with multiple file buffers, selection, copy/cut/paste across buffers, grapheme-aware Unicode navigation and terminal cell-width rendering, and AI continue/auto-write (`Ctrl+Space`), request-only context policies, context-use estimates, bounded text/HTML/Markdown input, JPEG/PNG/GIF image input for Chat Completions, safe URL fetching, Markdown output conversion, automatic v0.6 system/user TOML-alike configuration loading, and concurrent JSONL benchmark execution. `--provider none` supports local conversion and editor workflows without a model endpoint. Standalone `--editor` accepts an optional startup path after a provider shortcut or base URL, creates a missing file before editing, prompts to save scratch buffers on quit, and asks for overwrite confirmation when saving to an existing path. Local `lmstudio`, `ollama`, `vllm`, and loopback base URLs auto-select the first `/v1/models` entry when `--model` is omitted.
+Implementation status (2026-07-08): `pkchat` is at v0.90. Active development targets the v0.9 milestone (benchmark cutoff mode, codebase refactor, and TUI/CLI polish) before local OpenAI-compatible server mode. The repository has the scriptable CLI, built-in provider registry and aliases, Chat Completions, text-only Responses API support, streaming SSE, provider-specific reasoning/thinking request compatibility, credential lookup, JSON chat import/export, SQLite-backed TUI chat persistence, cancellable runtime jobs, REPL, full-screen TUI foundation, editor with multiple file buffers, selection, copy/cut/paste across buffers, grapheme-aware Unicode navigation and terminal cell-width rendering, and AI continue/auto-write (`Ctrl+Space`), request-only context policies, context-use estimates, bounded text/HTML/Markdown input, JPEG/PNG/GIF image input for Chat Completions, safe URL fetching, Markdown output conversion, automatic v0.6 system/user TOML-alike configuration loading, and concurrent JSONL benchmark execution. `--provider none` supports local conversion and editor workflows without a model endpoint. Standalone `--editor` accepts an optional startup path after a provider shortcut or base URL, creates a missing file before editing, prompts to save scratch buffers on quit, and asks for overwrite confirmation when saving to an existing path. Local `lmstudio`, `ollama`, `vllm`, and loopback base URLs auto-select the first `/v1/models` entry when `--model` is omitted.
 
 Runtime defaults live in `cli::Options`, provider defaults live in `src/provider/`, and API keys are resolved while building the provider request context. Automatic system and user config files map into a base `cli::Options`, after which `main.cpp` parses CLI arguments over that base. `--no-config` can bypass the automatic user file while retaining system configuration, and `--debug` reports configuration discovery on `stderr`.
 
@@ -66,6 +67,8 @@ Implementation note (2026-06-30, v0.86): TUI panels for thread picker, help, and
 Implementation note (2026-07-05, v0.88): Web search is available through `--search QUERY`, REPL/TUI `/search QUERY`, and editor `Esc /search QUERY`. Providers include Tavily, Firecrawl, Exa, Searxng, with DuckDuckGo Instant Answer and Google HTML fallbacks when API keys are absent. `MAXIMUM_WEB_SEARCH_RESULTS` defaults to 3 via config, CLI, or environment.
 
 Implementation note (2026-07-06, v0.89): `--thinking` and `--thinking-budget` now pass through a provider compatibility layer for OpenAI Chat/Responses, OpenRouter, Gemini, Anthropic Claude through its OpenAI-compatible endpoint, Kimi K2.x, Qwen/DashScope, DeepSeek V4, GLM-5.2/Z.AI, xAI, and custom/local OpenAI-compatible fallback profiles. Standalone editor mode supports multiple file buffers, `/new`, `/list`, `/close`, and matching `Ctrl+N`, `Ctrl+L`, and `Ctrl+W` shortcuts. Native Anthropic Messages support, live model capability probing, and preservation of opaque reasoning state for future agentic tool loops remain open.
+
+Implementation note (2026-07-08, v0.90): Chat and editor keyboard shortcuts were unified (`Ctrl+Z`/`Ctrl+U` undo, `Ctrl+Y` redo, `Ctrl+Home`/`Ctrl+End` buffer bounds, `PageUp`/`PageDown` in-input paging). Chat mode adds `Ctrl+R` regenerate, `Ctrl+B`/`Ctrl+D` history scroll, and `Alt+Home`/`Alt+End` jump; `Ctrl+D` quit-empty and `Ctrl+P` pop were removed. v0.9 focuses on benchmark cutoff mode, codebase refactor, and broader TUI/CLI polish before local server mode in v0.90.
 
 Implementation note (2026-07-04, v0.87): `Ctrl+A` selects the entire editor or chat input buffer. `Home`/`End` move to the current line; `Alt+Home`/`Alt+End` jump to buffer start/end. `Ctrl+E` is unused in standalone editor mode. Chat TUI `Ctrl+E` copies the last user or assistant message into the input for editing, with `Enter` to save and a bare `Esc` to cancel; escape-sequence parsing during edit no longer treats arrow keys as cancel.
 
@@ -1771,7 +1774,133 @@ Do not make AI assistance modal-only if it blocks cancellation. Editing responsi
 ---
 
 
-# v0.9 - Local OpenAI-compatible server mode
+# v0.9 - Benchmark cutoff mode, codebase refactor, and TUI/CLI polish
+
+## Goal
+
+Make `pkchat` leaner, easier to use daily, and better at model evaluation before starting local server mode in v0.90. This milestone is about quality and maintainability, not new product surfaces.
+
+Work in three parallel tracks. Each track should stay test-backed and avoid breaking script-friendly CLI behavior.
+
+## Track 1 - Benchmark refresh and cutoff mode
+
+Refresh the built-in benchmark corpus and add a dedicated mode for estimating model knowledge cutoff dates.
+
+### Built-in dataset refresh
+
+- [ ] Review and update the embedded built-in JSONL corpus for current events, stale trivia, and weak rubrics.
+- [ ] Add more safety cases and clearer `reference_answer` / `assessment_criteria` coverage where gaps remain.
+- [ ] Add dated factual prompts designed to bracket a model's knowledge cutoff (recent events, product releases, policy changes, and time-sensitive trivia).
+- [ ] Tag cutoff-oriented cases distinctly so results can be reported separately from speed, quality, and refusal aggregates.
+- [ ] Keep dataset validation, listing, and category filtering working for the updated corpus.
+
+### Cutoff benchmark mode
+
+Command shape:
+
+```sh
+pkchat --benchmark --mode cutoff --provider openai -m MODEL
+pkchat --benchmark --dataset builtin --mode cutoff,speed --output results/
+pkchat benchmark --mode cutoff --runs 3 --provider lm_studio -m MODEL
+```
+
+Requirements:
+
+- [ ] Add `cutoff` to benchmark mode parsing alongside existing `speed`, `long-context`, `quality`, and `refusals` labels.
+- [ ] Run only cutoff-tagged built-in cases unless the dataset explicitly marks additional cutoff cases.
+- [ ] Ask each case in a way that elicits either a confident answer, an explicit uncertainty/refusal, or a stated knowledge-limit date when the model can provide one.
+- [ ] Record per-case outcomes: answered correctly, answered incorrectly, refused/unknown, or claimed knowledge beyond the bracketed date.
+- [ ] Produce a separate cutoff summary in stderr, Markdown report, and JSONL/CSV artifacts; do not fold cutoff inference into speed or quality headline numbers.
+- [ ] Estimate a likely knowledge cutoff window from case outcomes and show the reasoning plainly (for example: "last confidently correct event: 2024-11; first confidently wrong event: 2025-03").
+- [ ] Keep cutoff runs cancellable and free of per-run allocation leaks.
+
+### Tests and acceptance criteria
+
+- [ ] Unit tests for `cutoff` mode parsing and cutoff-case filtering.
+- [ ] Unit tests for cutoff summary/window inference from representative result sets.
+- [ ] Integration test against a mock provider with fixed dated answers.
+- [ ] Updated built-in dataset passes `--validate-dataset` and `--list-cases`.
+- [ ] Cutoff results are reported separately from other benchmark aggregates.
+- [ ] Leak-check repeated cutoff runs where supported.
+
+## Track 2 - Codebase refactor and DRY cleanup
+
+Reduce total code size and repetition without changing user-visible behavior unless the simplification fixes a real bug.
+
+### Refactor principles
+
+- [ ] Prefer deleting unused code, dead options, and unreachable branches over commenting them out.
+- [ ] Merge duplicate helpers for CLI parsing, error formatting, URL handling, JSON field extraction, provider request shaping, and terminal input parsing.
+- [ ] Keep provider-specific logic inside `src/provider/`; do not spread dialect assumptions through CLI, TUI, editor, or benchmark layers.
+- [ ] Preserve explicit ownership and RAII; refactors must not introduce leaks or hidden global state.
+- [ ] Make changes incrementally by module (`src/cli/`, `src/app/`, `src/tui/`, `src/editor/`, `src/benchmark/`, `src/http/`, `src/runtime/`) with tests run after each coherent slice.
+- [ ] Document any non-obvious deletions or consolidations briefly in `docs/decisions.md` when behavior boundaries move.
+
+### Likely cleanup targets
+
+- [ ] Remove or fold unused command-line flags, config keys, and provider stubs that no longer map to runtime behavior.
+- [ ] Collapse repetitive stderr error builders into shared helpers with stable exit codes.
+- [ ] Reduce oversized translation units by extracting only where it removes duplication or improves testability.
+- [ ] Simplify benchmark dataset loading/reporting paths that repeat JSONL validation or summary formatting.
+- [ ] Remove stale compatibility shims left over from pre-v0.8 editor/TUI splits once tests prove they are unused.
+
+### Tests and acceptance criteria
+
+- [ ] Existing unit and integration suites pass after each refactor slice.
+- [ ] No regression in stdout/stderr separation, exit codes, credential redaction, or cancellation behavior.
+- [ ] Measured reduction in duplicated logic or line count in touched modules, without sacrificing clarity.
+- [ ] Sanitizer and leak-check targets still pass for touched paths where available.
+
+## Track 3 - Text UI, CLI, editor, and chat polish
+
+Improve everyday usability and responsiveness across non-browser surfaces.
+
+### CLI and REPL
+
+- [ ] Tighten common error messages so they state what failed, what was tried, and the next step.
+- [ ] Improve `--help` grouping and examples for chat, editor, benchmark, config, and provider shortcuts.
+- [ ] Make frequent script paths faster to type: sensible defaults, clearer `--quiet` behavior, and better validation before network I/O.
+- [ ] Polish REPL slash-command discoverability and confirmation flows for destructive actions.
+
+### Chat TUI
+
+- [ ] Continue keyboard-shortcut consistency between chat and editor; document terminal-specific fallbacks (`Ctrl+B`/`Ctrl+D` when Alt+Page keys are blocked).
+- [ ] Improve chat history scrolling, jump-to-top/bottom behavior, and status-line hints for active provider/model/thinking state.
+- [ ] Reduce friction in thread picker, `/list`, `/clone`, `/setting`, `/system`, and message-edit flows.
+- [ ] Keep the UI responsive during streaming, save/load, search, and slow provider calls.
+
+### Editor TUI
+
+- [ ] Polish buffer list/switch/close flows, save prompts, and AI-assist status feedback.
+- [ ] Improve in-editor help text and slash-command naming consistency with chat mode where concepts overlap.
+- [ ] Keep selection, undo/redo, page movement, and Unicode-aware rendering reliable during resize and streaming assist output.
+
+### Cross-surface UX rules
+
+- [ ] Status and progress belong on `stderr`; `stdout` stays reserved for requested output.
+- [ ] Destructive actions require explicit confirmation or a documented override flag.
+- [ ] Keyboard shortcuts, slash commands, and help docs must agree.
+- [ ] Do not add browser or local-server UI in this milestone.
+
+### Tests and acceptance criteria
+
+- [ ] Unit tests for any new parsing/help/status behavior.
+- [ ] TUI integration tests cover chat history scroll/jump shortcuts and editor buffer workflows touched by polish work.
+- [ ] README, `keyboardshortcuts.md`, and `docs/editor_help.md` reflect final v0.9 bindings and commands.
+- [ ] A regular local workflow (open chat, switch thread, edit/resend, open editor, save, run a short benchmark) feels faster and needs fewer unexplained retries.
+
+## Milestone acceptance criteria
+
+- [ ] Built-in benchmark questions are updated and validated.
+- [ ] `--mode cutoff` works end-to-end and reports knowledge-cutoff findings separately from other benchmark metrics.
+- [ ] Refactor slices reduce duplication or dead code without behavior regressions.
+- [ ] CLI, REPL, chat TUI, and editor TUI are more consistent and easier to use for daily work.
+- [ ] Tests, sanitizer checks, and leak checks pass for touched paths where tooling is available.
+
+---
+
+
+# v0.90 - Local OpenAI-compatible server mode
 
 ## Goal
 
