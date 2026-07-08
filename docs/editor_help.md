@@ -43,8 +43,8 @@ Replace mode after `Ctrl+H`: `Space` replaces match, `s` skips, `a` replaces all
 | `Ctrl+X` | Cut selection |
 | `Ctrl+V` | Paste (internal clipboard, then terminal paste) |
 | `Ctrl+K` | Kill to end of line |
-| `Ctrl+U` | Undo |
-| `Ctrl+R` | Redo |
+| `Ctrl+Z` or `Ctrl+U` | Undo |
+| `Ctrl+R` or `Ctrl+Y` | Redo |
 | `Ctrl+A` | Select all (entire buffer) |
 | `Home` | Beginning of line |
 | `End` | End of line |
@@ -151,6 +151,13 @@ With a provider but no model, editing still works; AI commands report **No model
 - `undo_limit` — undo depth (default 5)
 - `huge_file_size_warning` — confirm before loading huge files (default 1 GiB)
 - `file_size_limit` — optional hard load cap
+- `auto-save-mode` — `on`/`off` (default `on`)
+- `auto-save-postfix` — suffix appended to the file name for backup copies (default `~`)
+- `auto-save-threshold` — auto-save after this many changed bytes (default `300`)
+- `auto-save-timeout` — auto-save after this many idle seconds when changes are pending (default `30`)
+- `auto-save-size-limit` — skip auto-save above this buffer size; supports `k`/`M`/`G`/`T` suffixes (default `10M`)
+
+When you open a file whose auto-save backup (for example `notes.txt~`) is newer than the saved file, pkchat asks whether to recover the backup instead. At startup this prompt appears on stderr before the editor UI; when opening another file in the editor, the minibuffer asks `y` to recover or `n` to load the saved file.
 
 Repeatable `[command]` blocks add or override slash commands. See `README.md` for examples.
 

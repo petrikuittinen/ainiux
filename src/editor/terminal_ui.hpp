@@ -24,6 +24,7 @@ enum class MinibufferAction {
     ReplaceSearch,
     ReplaceWith,
     ConfirmLoad,
+    ConfirmAutosaveRecovery,
     ConfirmQuit,
     ConfirmSaveOnQuit,
     ConfirmOverwrite,
@@ -36,6 +37,11 @@ struct PendingSaveRequest {
     std::string path;
     bool update_path = true;
     bool quit_after_save = false;
+};
+
+struct PendingAutosaveRecovery {
+    std::string path;
+    std::string autosave_path;
 };
 
 struct MinibufferState {
@@ -107,6 +113,17 @@ void start_minibuffer(MinibufferState& minibuffer,
 
 bool confirm_huge_load_before_terminal(const std::string& path, const FileLoadCheck& check);
 
+void recover_editor_from_autosave(EditorState& state,
+                                  const std::string& path,
+                                  const std::string& autosave_path,
+                                  const EditorSettings& settings,
+                                  MinibufferState& minibuffer);
+
+bool offer_autosave_recovery_before_load(const std::string& path,
+                                         const EditorSettings& settings,
+                                         MinibufferState& minibuffer,
+                                         PendingAutosaveRecovery& pending);
+
 bool handle_minibuffer_key(EditorState& state,
                            MinibufferState& minibuffer,
                            unsigned char ch,
@@ -116,7 +133,8 @@ bool handle_minibuffer_key(EditorState& state,
                            const EditorSettings& settings,
                            std::string& pending_load_path,
                            bool& pending_quit_after_save,
-                           PendingSaveRequest& pending_save);
+                           PendingSaveRequest& pending_save,
+                           PendingAutosaveRecovery& pending_autosave_recovery);
 
 bool handle_replace_key(EditorState& state,
                         MinibufferState& minibuffer,
@@ -132,13 +150,15 @@ void request_save_editor_to_path(EditorState& state,
                                  bool update_path,
                                  bool quit_after_save,
                                  bool& quit,
-                                 PendingSaveRequest& pending_save);
+                                 PendingSaveRequest& pending_save,
+                                 const EditorSettings& settings);
 
 void request_load_editor_from_path(EditorState& state,
                                    const std::string& path,
                                    const EditorSettings& settings,
                                    MinibufferState& minibuffer,
-                                   std::string& pending_load_path);
+                                   std::string& pending_load_path,
+                                   PendingAutosaveRecovery& pending_autosave_recovery);
 
 std::string read_escape_suffix();
 

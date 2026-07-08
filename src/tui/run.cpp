@@ -1584,11 +1584,11 @@ int run(provider::RequestContext context, chat::Session session) {
                     status = paste_error.ok() ? "Pasted" : paste_error.message;
                     continue;
                 }
-                if (ch == 21) {
+                if (editor::is_editor_undo_key(ch)) {
                     status = input.undo() ? "Undone" : "Nothing to undo";
                     continue;
                 }
-                if (ch == 18) {
+                if (editor::is_editor_redo_key(ch)) {
                     status = input.redo() ? "Redone" : "Nothing to redo";
                     continue;
                 }

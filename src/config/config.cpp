@@ -1,5 +1,6 @@
 #include "config/config.hpp"
 
+#include "editor/autosave.hpp"
 #include "editor/editor_prompts.hpp"
 #include "pkchat/model_setting.hpp"
 
@@ -521,6 +522,24 @@ Error editor_file_size_limit(const Entry& entry, long long& output) {
     return ok_error();
 }
 
+Error auto_save_byte_size(const Entry& entry, long long& output) {
+    if (entry.value.is_integer()) {
+        if (entry.value.integer < 0) {
+            return schema_error(entry, "expected a non-negative byte size");
+        }
+        output = entry.value.integer;
+        return ok_error();
+    }
+    if (!entry.value.is_string()) {
+        return schema_error(entry, "expected an integer or byte size such as 10M");
+    }
+    Error err = pkchat::editor::parse_byte_size(entry.value.string, output);
+    if (!err.ok()) {
+        return schema_error(entry, err.message);
+    }
+    return ok_error();
+}
+
 Error numeric_double(const Entry& entry, double& output) {
     if (entry.value.is_float()) {
         output = entry.value.floating;
@@ -625,6 +644,26 @@ std::string lower_config_ascii(std::string text) {
         ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
     }
     return text;
+}
+
+Error auto_save_mode(const Entry& entry, bool& output) {
+    if (entry.value.is_boolean()) {
+        output = entry.value.boolean;
+        return ok_error();
+    }
+    if (!entry.value.is_string()) {
+        return schema_error(entry, "expected boolean or on/off");
+    }
+    const std::string value = lower_config_ascii(trim_config_ascii(entry.value.string));
+    if (value == "on" || value == "yes" || value == "true") {
+        output = true;
+        return ok_error();
+    }
+    if (value == "off" || value == "no" || value == "false") {
+        output = false;
+        return ok_error();
+    }
+    return schema_error(entry, "expected on, off, true, false, yes, or no");
 }
 
 pkchat::editor::EditorAssistCommand* find_assist_command_by_name(pkchat::editor::EditorAssistConfig& config,
@@ -1156,6 +1195,23 @@ Error apply_document(const Document& document, cli::Options& options) {
             err = nonnegative_long_long(entry, candidate.editor_huge_file_size_warning);
         } else if (name == "editor.file_size_limit") {
             err = editor_file_size_limit(entry, candidate.editor_file_size_limit);
+        } else if (name == "editor.auto-save-mode") {
+            err = auto_save_mode(entry, candidate.editor_auto_save_mode);
+        } else if (name == "editor.auto-save-postfix") {
+            err = require_type(entry, Value::Type::String);
+            if (err.ok()) {
+                candidate.editor_auto_save_postfix = entry.value.string;
+            }
+        } else if (name == "editor.auto-save-threshold") {
+            int threshold = 0;
+            err = nonnegative_int(entry, threshold);
+            if (err.ok()) {
+                candidate.editor_auto_save_threshold = static_cast<size_t>(threshold);
+            }
+        } else if (name == "editor.auto-save-timeout") {
+            err = nonnegative_int(entry, candidate.editor_auto_save_timeout_seconds);
+        } else if (name == "editor.auto-save-size-limit") {
+            err = auto_save_byte_size(entry, candidate.editor_auto_save_size_limit);
         } else if (name == "editor.assist_behavior") {
             err = require_type(entry, Value::Type::String);
             if (err.ok()) candidate.editor_assist_config.behavior_rules = entry.value.string;

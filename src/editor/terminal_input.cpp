@@ -228,6 +228,14 @@ bool read_terminal_input(TerminalInputEvent& out, int timeout_ms) {
     return true;
 }
 
+bool is_editor_undo_key(unsigned char ch) {
+    return ch == 21 || ch == 26;
+}
+
+bool is_editor_redo_key(unsigned char ch) {
+    return ch == 18 || ch == 25;
+}
+
 Error paste_with_clipboard_preference(EditorState& state,
                                       Clipboard& clipboard,
                                       const std::string& terminal_paste_text) {

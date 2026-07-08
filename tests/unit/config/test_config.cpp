@@ -244,7 +244,7 @@ void test_config_model_setting_thinking_budget() {
 void test_config_reads_common_template() {
     pkchat::config::ParseResult parsed = pkchat::config::read_file("config/pkchat.conf");
     check(parsed.error.ok(), "common config file parses");
-    check(parsed.document.entries.size() == 146, "common config has every expected setting");
+    check(parsed.document.entries.size() == 151, "common config has every expected setting");
 
     const pkchat::config::Entry* provider = parsed.document.find("provider");
     check(provider != nullptr && provider->value.is_string() && provider->value.string == "openai",
@@ -270,7 +270,10 @@ void test_config_reads_common_template() {
               options.max_web_search_results == 3 && options.web_search_provider == "auto" &&
               options.editor_undo_limit == 5 &&
               options.editor_huge_file_size_warning == 1073741824LL &&
-              options.editor_file_size_limit == -1,
+              options.editor_file_size_limit == -1 && options.editor_auto_save_mode &&
+              options.editor_auto_save_postfix == "~" && options.editor_auto_save_threshold == 300 &&
+              options.editor_auto_save_timeout_seconds == 30 &&
+              options.editor_auto_save_size_limit == 10LL * 1024LL * 1024LL,
           "common config maps to the built-in runtime defaults");
     check(options.model_settings.size() == 12, "common config includes model-setting presets");
     check(options.model_settings.front().model == "Qwen3.6-*" &&

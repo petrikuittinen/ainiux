@@ -1,3 +1,4 @@
+#include "editor/autosave.hpp"
 #include "editor/terminal_ui.hpp"
 
 #include "editor/ai_continue.hpp"
@@ -232,6 +233,7 @@ void reset_editor_buffer(EditorState& state, PieceTable text, std::string path) 
     state.scroll_column = 0;
     state.path = std::move(path);
     state.dirty = false;
+    state.reset_autosave_pending();
     state.clear_undo_history();
     state.clear_selection();
 }
@@ -262,10 +264,13 @@ std::string overwrite_prompt_message(const std::string& path) {
 void save_editor_to_path(EditorState& state,
                          const std::string& path,
                          MinibufferState& minibuffer,
-                         bool update_path) {
+                         bool update_path,
+                         const EditorSettings& settings) {
     Error save_error = save_file(path, state.text);
     if (save_error.ok()) {
         state.dirty = false;
+        state.reset_autosave_pending();
+        remove_autosave_file(path, settings);
         if (update_path) {
             state.path = path;
         }
@@ -281,7 +286,8 @@ void request_save_editor_to_path(EditorState& state,
                                  bool update_path,
                                  bool quit_after_save,
                                  bool& quit,
-                                 PendingSaveRequest& pending_save) {
+                                 PendingSaveRequest& pending_save,
+                                 const EditorSettings& settings) {
     if (needs_overwrite_confirm(path, state.path)) {
         pending_save.path = path;
         pending_save.update_path = update_path;
@@ -291,7 +297,7 @@ void request_save_editor_to_path(EditorState& state,
                          overwrite_prompt_message(path));
         return;
     }
-    save_editor_to_path(state, path, minibuffer, update_path);
+    save_editor_to_path(state, path, minibuffer, update_path, settings);
     if (quit_after_save && !state.dirty) {
         quit = true;
     }
@@ -323,11 +329,44 @@ void load_editor_from_path(EditorState& state,
     }
 }
 
+void recover_editor_from_autosave(EditorState& state,
+                                  const std::string& path,
+                                  const std::string& autosave_path,
+                                  const EditorSettings& settings,
+                                  MinibufferState& minibuffer) {
+    PieceTable loaded;
+    Error load_error = load_file(autosave_path, settings, loaded);
+    if (load_error.ok()) {
+        reset_editor_buffer(state, std::move(loaded), path);
+        state.dirty = true;
+        minibuffer_message(minibuffer, "Recovered auto-save from " + autosave_path);
+    } else {
+        minibuffer_message(minibuffer, load_error.message);
+    }
+}
+
+bool offer_autosave_recovery_before_load(const std::string& path,
+                                         const EditorSettings& settings,
+                                         MinibufferState& minibuffer,
+                                         PendingAutosaveRecovery& pending) {
+    const AutosaveRecoveryOffer offer = check_autosave_recovery_offer(path, settings);
+    if (!offer.should_offer) {
+        return false;
+    }
+    pending.path = path;
+    pending.autosave_path = offer.autosave_path;
+    start_minibuffer(minibuffer,
+                     MinibufferAction::ConfirmAutosaveRecovery,
+                     autosave_recovery_prompt_message(path, offer.autosave_path) + " (y/n) ");
+    return true;
+}
+
 void request_load_editor_from_path(EditorState& state,
                                    const std::string& path,
                                    const EditorSettings& settings,
                                    MinibufferState& minibuffer,
-                                   std::string& pending_load_path) {
+                                   std::string& pending_load_path,
+                                   PendingAutosaveRecovery& pending_autosave_recovery) {
     FileLoadCheck check;
     Error err = check_load_file_size(path, settings, check);
     if (!err.ok()) {
@@ -339,6 +378,9 @@ void request_load_editor_from_path(EditorState& state,
         start_minibuffer(minibuffer,
                          MinibufferAction::ConfirmLoad,
                          file_size_warning_message(path, check.size) + "; load anyway? (y/n) ");
+        return;
+    }
+    if (offer_autosave_recovery_before_load(path, settings, minibuffer, pending_autosave_recovery)) {
         return;
     }
     load_editor_from_path(state, path, settings, minibuffer);
@@ -422,7 +464,8 @@ void submit_minibuffer(EditorState& state,
                        const EditorSettings& settings,
                        std::string& pending_load_path,
                        bool& pending_quit_after_save,
-                       PendingSaveRequest& pending_save) {
+                       PendingSaveRequest& pending_save,
+                       PendingAutosaveRecovery& pending_autosave_recovery) {
     const MinibufferAction action = minibuffer.action;
     const std::string value = trim_ascii_copy(minibuffer.input);
     const std::string raw_value = minibuffer.input;
@@ -438,7 +481,8 @@ void submit_minibuffer(EditorState& state,
                                     true,
                                     pending_quit_after_save,
                                     quit,
-                                    pending_save);
+                                    pending_save,
+                                    settings);
         if (!pending_save.path.empty()) {
             return;
         }
@@ -450,7 +494,7 @@ void submit_minibuffer(EditorState& state,
             minibuffer.prompt = "Save as (path required): ";
             return;
         }
-        request_save_editor_to_path(state, value, minibuffer, true, false, quit, pending_save);
+        request_save_editor_to_path(state, value, minibuffer, true, false, quit, pending_save, settings);
         return;
     }
     if (action == MinibufferAction::LoadFile) {
@@ -458,7 +502,12 @@ void submit_minibuffer(EditorState& state,
             minibuffer.prompt = "Load file (path required): ";
             return;
         }
-        request_load_editor_from_path(state, value, settings, minibuffer, pending_load_path);
+        request_load_editor_from_path(state,
+                                      value,
+                                      settings,
+                                      minibuffer,
+                                      pending_load_path,
+                                      pending_autosave_recovery);
         return;
     }
     if (action == MinibufferAction::Search) {
@@ -493,11 +542,32 @@ void submit_minibuffer(EditorState& state,
         if (yes_answer(value)) {
             const std::string path = pending_load_path;
             pending_load_path.clear();
+            if (offer_autosave_recovery_before_load(path, settings, minibuffer, pending_autosave_recovery)) {
+                return;
+            }
             load_editor_from_path(state, path, settings, minibuffer);
         } else if (no_answer(value) || value.empty()) {
             pending_load_path.clear();
             minibuffer_message(minibuffer, "Load cancelled");
         } else {
+            minibuffer.prompt = "Type y or n: ";
+            minibuffer.input.clear();
+        }
+        return;
+    }
+    if (action == MinibufferAction::ConfirmAutosaveRecovery) {
+        const PendingAutosaveRecovery recovery = pending_autosave_recovery;
+        pending_autosave_recovery = PendingAutosaveRecovery{};
+        if (yes_answer(value)) {
+            recover_editor_from_autosave(state,
+                                         recovery.path,
+                                         recovery.autosave_path,
+                                         settings,
+                                         minibuffer);
+        } else if (no_answer(value) || value.empty()) {
+            load_editor_from_path(state, recovery.path, settings, minibuffer);
+        } else {
+            pending_autosave_recovery = recovery;
             minibuffer.prompt = "Type y or n: ";
             minibuffer.input.clear();
         }
@@ -530,7 +600,7 @@ void submit_minibuffer(EditorState& state,
         if (yes_answer(value)) {
             const PendingSaveRequest request = pending_save;
             pending_save = PendingSaveRequest{};
-            save_editor_to_path(state, request.path, minibuffer, request.update_path);
+            save_editor_to_path(state, request.path, minibuffer, request.update_path, settings);
             if (request.quit_after_save && !state.dirty) {
                 quit = true;
             }
@@ -554,7 +624,8 @@ bool handle_minibuffer_key(EditorState& state,
                            const EditorSettings& settings,
                            std::string& pending_load_path,
                            bool& pending_quit_after_save,
-                           PendingSaveRequest& pending_save) {
+                           PendingSaveRequest& pending_save,
+                           PendingAutosaveRecovery& pending_autosave_recovery) {
     if (!minibuffer.active) {
         return false;
     }
@@ -564,6 +635,7 @@ bool handle_minibuffer_key(EditorState& state,
     if (ch == 27 || ch == 7) {
         replace = ReplaceSession{};
         pending_load_path.clear();
+        pending_autosave_recovery = PendingAutosaveRecovery{};
         pending_quit_after_save = false;
         pending_save = PendingSaveRequest{};
         minibuffer_message(minibuffer, "Minibuffer cancelled");
@@ -578,7 +650,8 @@ bool handle_minibuffer_key(EditorState& state,
                           settings,
                           pending_load_path,
                           pending_quit_after_save,
-                          pending_save);
+                          pending_save,
+                          pending_autosave_recovery);
         return true;
     }
     if (ch == 127 || ch == 8) {
@@ -594,7 +667,7 @@ bool handle_minibuffer_key(EditorState& state,
         if (ch == 'y' || ch == 'Y' || ch == 19) {
             const PendingSaveRequest request = pending_save;
             pending_save = PendingSaveRequest{};
-            save_editor_to_path(state, request.path, minibuffer, request.update_path);
+            save_editor_to_path(state, request.path, minibuffer, request.update_path, settings);
             if (request.quit_after_save && !state.dirty) {
                 quit = true;
             }
@@ -603,6 +676,23 @@ bool handle_minibuffer_key(EditorState& state,
             pending_save = PendingSaveRequest{};
             pending_quit_after_save = false;
             minibuffer_message(minibuffer, "Save cancelled");
+        }
+        return true;
+    }
+    if (minibuffer.action == MinibufferAction::ConfirmAutosaveRecovery) {
+        const PendingAutosaveRecovery recovery = pending_autosave_recovery;
+        pending_autosave_recovery = PendingAutosaveRecovery{};
+        if (ch == 'y' || ch == 'Y') {
+            recover_editor_from_autosave(state,
+                                         recovery.path,
+                                         recovery.autosave_path,
+                                         settings,
+                                         minibuffer);
+        } else if (ch == 'n' || ch == 'N') {
+            load_editor_from_path(state, recovery.path, settings, minibuffer);
+        } else {
+            pending_autosave_recovery = recovery;
+            minibuffer.prompt = "Type y or n: ";
         }
         return true;
     }
@@ -615,6 +705,9 @@ bool handle_minibuffer_key(EditorState& state,
             } else if (minibuffer.action == MinibufferAction::ConfirmLoad) {
                 const std::string path = pending_load_path;
                 pending_load_path.clear();
+                if (offer_autosave_recovery_before_load(path, settings, minibuffer, pending_autosave_recovery)) {
+                    return true;
+                }
                 load_editor_from_path(state, path, settings, minibuffer);
             } else {
                 pending_quit_after_save = true;

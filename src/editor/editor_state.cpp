@@ -49,6 +49,20 @@ void EditorState::remember_undo(EditorSnapshot snapshot) {
     undo_stack_.push_back(std::move(snapshot));
 }
 
+size_t EditorState::autosave_pending_bytes() const {
+    return autosave_pending_bytes_;
+}
+
+void EditorState::record_autosave_change(size_t bytes) {
+    if (bytes > 0) {
+        autosave_pending_bytes_ += bytes;
+    }
+}
+
+void EditorState::reset_autosave_pending() {
+    autosave_pending_bytes_ = 0;
+}
+
 Error EditorState::insert(const std::string& value) {
     if (value.empty()) {
         return ok_error();
@@ -69,6 +83,7 @@ Error EditorState::insert(const std::string& value) {
     remember_undo(std::move(before));
     cursor += value.size();
     dirty = true;
+    record_autosave_change(value.size());
     update_preferred_column(*this);
     return ok_error();
 }
@@ -90,6 +105,10 @@ Error EditorState::insert_without_undo(const std::string& value) {
 void EditorState::finalize_stream_edit(const EditorSnapshot& before) {
     if (snapshot().content != before.content || cursor != before.cursor) {
         remember_undo(before);
+        const size_t before_size = before.content.size();
+        const size_t after_size = text.size();
+        record_autosave_change(after_size >= before_size ? after_size - before_size
+                                                         : before_size - after_size);
     }
 }
 
@@ -126,6 +145,7 @@ Error EditorState::replace(size_t pos, size_t count, const std::string& value) {
     cursor = pos + value.size();
     selection.clear(cursor);
     dirty = true;
+    record_autosave_change(count + value.size());
     update_preferred_column(*this);
     return ok_error();
 }
@@ -145,13 +165,15 @@ Error EditorState::erase_before_cursor() {
     }
     EditorSnapshot before = snapshot();
     const size_t previous = text.previous_char_offset(cursor);
-    Error err = text.erase(previous, cursor - previous);
+    const size_t deleted = cursor - previous;
+    Error err = text.erase(previous, deleted);
     if (!err.ok()) {
         return err;
     }
     remember_undo(std::move(before));
     cursor = previous;
     dirty = true;
+    record_autosave_change(deleted);
     update_preferred_column(*this);
     return ok_error();
 }
@@ -162,12 +184,14 @@ Error EditorState::erase_at_cursor() {
     }
     EditorSnapshot before = snapshot();
     const size_t next = text.next_char_offset(cursor);
-    Error err = text.erase(cursor, next - cursor);
+    const size_t deleted = next - cursor;
+    Error err = text.erase(cursor, deleted);
     if (!err.ok()) {
         return err;
     }
     remember_undo(std::move(before));
     dirty = true;
+    record_autosave_change(deleted);
     update_preferred_column(*this);
     return ok_error();
 }
@@ -182,7 +206,10 @@ bool EditorState::undo() {
     redo_stack_.push_back(snapshot());
     const EditorSnapshot target = std::move(undo_stack_.back());
     undo_stack_.pop_back();
+    const size_t before_size = text.size();
     restore_snapshot(target);
+    const size_t after_size = text.size();
+    record_autosave_change(after_size >= before_size ? after_size - before_size : before_size - after_size);
     dirty = true;
     return true;
 }
@@ -197,7 +224,10 @@ bool EditorState::redo() {
     undo_stack_.push_back(snapshot());
     const EditorSnapshot target = std::move(redo_stack_.back());
     redo_stack_.pop_back();
+    const size_t before_size = text.size();
     restore_snapshot(target);
+    const size_t after_size = text.size();
+    record_autosave_change(after_size >= before_size ? after_size - before_size : before_size - after_size);
     dirty = true;
     return true;
 }
@@ -343,6 +373,7 @@ Error EditorState::replace_all_from(size_t start,
     remember_undo(std::move(before));
     cursor = std::min(cursor_after_last_replacement, text.size());
     dirty = true;
+    record_autosave_change(replacements * (needle.size() + value.size()));
     update_preferred_column(*this);
     return ok_error();
 }
@@ -613,6 +644,7 @@ Error EditorState::kill_to_line_end() {
         }
         remember_undo(std::move(before));
         dirty = true;
+        record_autosave_change(end - cursor);
         update_preferred_column(*this);
         return ok_error();
     }
@@ -632,6 +664,7 @@ Error EditorState::kill_to_line_end() {
     remember_undo(std::move(before));
     cursor = std::min(erase_pos, text.size());
     dirty = true;
+    record_autosave_change(1);
     update_preferred_column(*this);
     return ok_error();
 }

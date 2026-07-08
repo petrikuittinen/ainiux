@@ -35,6 +35,9 @@ Error paste_with_clipboard_preference(EditorState& state,
                                       Clipboard& clipboard,
                                       const std::string& terminal_paste_text);
 
+bool is_editor_undo_key(unsigned char ch);
+bool is_editor_redo_key(unsigned char ch);
+
 void publish_terminal_clipboard(const std::string& text);
 
 }  // namespace pkchat::editor

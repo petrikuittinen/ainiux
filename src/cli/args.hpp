@@ -117,6 +117,11 @@ struct Options {
     int editor_undo_limit = static_cast<int>(pkchat::editor::kDefaultUndoLimit);
     long long editor_huge_file_size_warning = pkchat::editor::kDefaultHugeFileSizeWarningBytes;
     long long editor_file_size_limit = pkchat::editor::kNoEditorFileSizeLimit;
+    bool editor_auto_save_mode = true;
+    std::string editor_auto_save_postfix = pkchat::editor::kDefaultAutoSavePostfix;
+    size_t editor_auto_save_threshold = pkchat::editor::kDefaultAutoSaveThreshold;
+    int editor_auto_save_timeout_seconds = pkchat::editor::kDefaultAutoSaveTimeoutSeconds;
+    long long editor_auto_save_size_limit = pkchat::editor::kDefaultAutoSaveSizeLimit;
     pkchat::editor::EditorAssistConfig editor_assist_config = pkchat::editor::default_editor_assist_config();
     long long context_tokens = 0;
     int benchmark_runs = 1;

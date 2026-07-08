@@ -192,6 +192,11 @@ int main(int argc, char** argv) {
         editor_settings.undo_limit = static_cast<size_t>(options.editor_undo_limit);
         editor_settings.huge_file_size_warning = options.editor_huge_file_size_warning;
         editor_settings.file_size_limit = options.editor_file_size_limit;
+        editor_settings.auto_save_mode = options.editor_auto_save_mode;
+        editor_settings.auto_save_postfix = options.editor_auto_save_postfix;
+        editor_settings.auto_save_threshold = options.editor_auto_save_threshold;
+        editor_settings.auto_save_timeout_seconds = options.editor_auto_save_timeout_seconds;
+        editor_settings.auto_save_size_limit = options.editor_auto_save_size_limit;
         pkchat::provider::apply_editor_startup_default(options);
         pkchat::provider::apply_editor_offline_default(options);
         pkchat::provider::ContextResult context_result = pkchat::provider::build_context(options);

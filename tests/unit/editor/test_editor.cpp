@@ -3,6 +3,7 @@
 #include "cli/args.hpp"
 #include "config/config.hpp"
 #include "editor/ai_continue.hpp"
+#include "editor/autosave.hpp"
 #include "editor/editor_ai_setup.hpp"
 #include "editor/clipboard.hpp"
 #include "editor/editor.hpp"
@@ -1268,6 +1269,130 @@ void test_editor_selection_and_clipboard() {
     check(state.text.str() == "alpha alpha gammaalpha", "paste replaces selected range");
 }
 
+void test_editor_autosave() {
+    long long parsed = 0;
+    check(pkchat::editor::parse_byte_size("10M", parsed).ok() && parsed == 10LL * 1024LL * 1024LL,
+          "editor auto-save byte size parses megabytes");
+    check(pkchat::editor::parse_byte_size("512k", parsed).ok() && parsed == 512LL * 1024LL,
+          "editor auto-save byte size parses kilobytes");
+    check(pkchat::editor::parse_byte_size("2G", parsed).ok() && parsed == 2LL * 1024LL * 1024LL * 1024LL,
+          "editor auto-save byte size parses gigabytes");
+    check(pkchat::editor::parse_byte_size("1T", parsed).ok() &&
+              parsed == 1024LL * 1024LL * 1024LL * 1024LL,
+          "editor auto-save byte size parses terabytes");
+
+    check(pkchat::editor::autosave_path_for("notes.txt", "~") == "notes.txt~",
+          "editor auto-save path appends postfix to the file name");
+
+    pkchat::editor::EditorSettings settings;
+    settings.auto_save_mode = true;
+    settings.auto_save_threshold = 300;
+    settings.auto_save_timeout_seconds = 30;
+
+    pkchat::editor::EditorState state = pkchat::editor::EditorState::from_text("alpha");
+    state.path = "build/autosave-source.txt";
+    state.dirty = true;
+    state.record_autosave_change(299);
+    const auto idle_short = std::chrono::seconds(5);
+    check(!pkchat::editor::evaluate_autosave(state, settings, idle_short).should_save,
+          "editor auto-save waits until the change threshold is reached");
+    state.record_autosave_change(1);
+    check(pkchat::editor::evaluate_autosave(state, settings, idle_short).threshold_met,
+          "editor auto-save threshold triggers when enough bytes changed");
+    state.reset_autosave_pending();
+    state.record_autosave_change(10);
+    const auto idle_long = std::chrono::seconds(31);
+    check(pkchat::editor::evaluate_autosave(state, settings, idle_long).timeout_met,
+          "editor auto-save timeout triggers after idle time with pending changes");
+
+    settings.auto_save_size_limit = 4;
+    state.text = pkchat::editor::PieceTable::from_string("12345");
+    state.dirty = true;
+    state.record_autosave_change(5);
+    std::string skip_message;
+    check(!pkchat::editor::perform_autosave(state, settings, skip_message).ok() &&
+              skip_message.find("auto_save_size_limit") != std::string::npos,
+          "editor auto-save skips buffers above the configured size limit");
+
+    settings.auto_save_size_limit = pkchat::editor::kDefaultAutoSaveSizeLimit;
+    state.text = pkchat::editor::PieceTable::from_string("autosave payload");
+    state.dirty = true;
+    state.record_autosave_change(100);
+    std::string autosave_message;
+    check(pkchat::editor::perform_autosave(state, settings, autosave_message).ok(),
+          "editor auto-save writes the backup file");
+    check(state.dirty, "editor auto-save does not clear the dirty flag");
+    check(state.autosave_pending_bytes() == 0, "editor auto-save clears pending byte counter");
+    check(autosave_message.find("build/autosave-source.txt~") != std::string::npos,
+          "editor auto-save reports the backup path");
+
+    pkchat::editor::PieceTable backup;
+    check(pkchat::editor::load_file("build/autosave-source.txt~", backup).ok() &&
+              backup.str() == "autosave payload",
+          "editor auto-save backup file contains the current buffer");
+
+    pkchat::editor::remove_autosave_file(state.path, settings);
+    check(!std::filesystem::exists("build/autosave-source.txt~"),
+          "editor auto-save backup is removed after an explicit save cleanup");
+
+    pkchat::config::ParseResult parsed_config = pkchat::config::parse(
+        "[editor]\nauto-save-mode = off\nauto-save-postfix = \"#\"\nauto-save-threshold = 128\n"
+        "auto-save-timeout = 12\nauto-save-size-limit = 2M\n",
+        "autosave.conf");
+    check(parsed_config.error.ok(), "editor auto-save config parses");
+    pkchat::cli::Options options;
+    pkchat::Error err = pkchat::config::apply_document(parsed_config.document, options);
+    check(err.ok() && !options.editor_auto_save_mode && options.editor_auto_save_postfix == "#" &&
+              options.editor_auto_save_threshold == 128 &&
+              options.editor_auto_save_timeout_seconds == 12 &&
+              options.editor_auto_save_size_limit == 2LL * 1024LL * 1024LL,
+          "editor auto-save config settings apply");
+
+    const std::string main_path = "build/autosave-recovery-main.txt";
+    const std::string backup_path = "build/autosave-recovery-main.txt~";
+    {
+        std::ofstream main_file(main_path, std::ios::trunc);
+        main_file << "saved yesterday";
+        std::ofstream backup_file(backup_path, std::ios::trunc);
+        backup_file << "unsaved today";
+    }
+    const auto main_time = std::filesystem::last_write_time(main_path);
+    std::filesystem::last_write_time(backup_path, main_time + std::filesystem::file_time_type::clock::now().time_since_epoch() -
+                                                         main_time.time_since_epoch() +
+                                                         std::filesystem::file_time_type::duration{3600});
+
+    pkchat::editor::EditorSettings recovery_settings;
+    const pkchat::editor::AutosaveRecoveryOffer offer =
+        pkchat::editor::check_autosave_recovery_offer(main_path, recovery_settings);
+    check(offer.should_offer && offer.autosave_path == backup_path,
+          "editor auto-save recovery is offered when backup is newer");
+
+    recovery_settings.auto_save_mode = false;
+    check(!pkchat::editor::check_autosave_recovery_offer(main_path, recovery_settings).should_offer,
+          "editor auto-save recovery is disabled when auto-save mode is off");
+
+    const std::string prompt =
+        pkchat::editor::autosave_recovery_prompt_message(main_path, backup_path);
+    check(prompt.find(main_path) != std::string::npos && prompt.find(backup_path) != std::string::npos,
+          "editor auto-save recovery prompt names both files");
+}
+
+void test_editor_undo_redo_key_bindings() {
+    check(pkchat::editor::is_editor_undo_key(26), "Ctrl+Z is an editor undo key");
+    check(pkchat::editor::is_editor_undo_key(21), "Ctrl+U is an editor undo key");
+    check(!pkchat::editor::is_editor_undo_key(18), "Ctrl+R is not an editor undo key");
+
+    check(pkchat::editor::is_editor_redo_key(18), "Ctrl+R is an editor redo key");
+    check(pkchat::editor::is_editor_redo_key(25), "Ctrl+Y is an editor redo key");
+    check(!pkchat::editor::is_editor_redo_key(26), "Ctrl+Z is not an editor redo key");
+
+    unsigned char decoded = 0;
+    check(pkchat::editor::decode_control_key_sequence("[26;5u", decoded) && decoded == 26,
+          "kitty Ctrl+Z sequence decodes to undo key");
+    check(pkchat::editor::decode_control_key_sequence("[18;5u", decoded) && decoded == 18,
+          "kitty Ctrl+R sequence decodes to redo key");
+}
+
 void test_editor_undo_redo() {
     pkchat::editor::EditorState state = pkchat::editor::EditorState::from_text("alpha");
     state.cursor = state.text.size();
@@ -1317,6 +1442,15 @@ void test_editor_undo_redo() {
     limited.set_undo_limit(0);
     check(limited.insert("z").ok(), "editor zero undo limit still allows edits");
     check(!limited.can_undo(), "editor zero undo limit stores no undo entries");
+
+    pkchat::editor::EditorState paste_state = pkchat::editor::EditorState::from_text("hello");
+    paste_state.cursor = paste_state.text.size();
+    pkchat::editor::Clipboard clipboard;
+    clipboard.set(" world");
+    check(paste_state.paste(clipboard).ok(), "editor paste succeeds");
+    check(paste_state.text.str() == "hello world", "editor paste appends clipboard text");
+    check(paste_state.undo(), "editor paste is undoable");
+    check(paste_state.text.str() == "hello", "editor undo restores text before paste");
 }
 
 void test_editor_unicode_combining_sequence_wraps_on_grapheme_boundary() {
@@ -1903,6 +2037,8 @@ void run_all() {
     test_editor_search_navigation();
     test_editor_search_replace();
     test_editor_selection_and_clipboard();
+    test_editor_autosave();
+    test_editor_undo_redo_key_bindings();
     test_editor_undo_redo();
     test_editor_unicode_combining_sequence_wraps_on_grapheme_boundary();
     test_editor_unicode_display_columns_and_offsets();

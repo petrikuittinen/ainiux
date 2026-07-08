@@ -1,6 +1,6 @@
 # pkchat keyboard shortcuts
 
-Current bindings as implemented in `src/tui/run.cpp`, `src/tui/input_handlers.cpp`, `src/editor/run_editor.cpp`, and `docs/editor_help.md`.
+Current bindings as implemented in `src/tui/run.cpp`, `src/tui/input_handlers.cpp`, `src/editor/run_editor.cpp`, `src/editor/terminal_input.cpp`, and `docs/editor_help.md`.
 
 ---
 
@@ -27,11 +27,13 @@ Current bindings as implemented in `src/tui/run.cpp`, `src/tui/input_handlers.cp
 | `Ctrl+X` | Cut selection |
 | `Ctrl+V` | Paste (internal clipboard, then bracketed terminal paste) |
 | `Ctrl+K` | Kill from cursor to end of line |
-| `Ctrl+U` | Undo |
-| `Ctrl+R` | Redo |
+| `Ctrl+Z` or `Ctrl+U` | Undo last edit (typing, delete, cut, paste) |
+| `Ctrl+R` or `Ctrl+Y` | Redo |
 | `Backspace` | Delete before cursor |
 | `Delete` | Delete at cursor |
 | `Tab` | Slash-command completion (start of first line) or path completion after `/insert`, `/attach`, `/save`, `/load` |
+
+Bracketed terminal paste (middle-click or Shift+Insert in many terminals) is also undoable with `Ctrl+Z` / `Ctrl+U`.
 
 ### Chat-specific actions
 
@@ -61,6 +63,7 @@ Current bindings as implemented in `src/tui/run.cpp`, `src/tui/input_handlers.cp
 - `Enter` or `Ctrl+S` — save
 - Bare `Esc` — cancel
 - Arrow/`Home`/`End`/etc. — edit the buffer (not history scroll)
+- `Ctrl+Z`/`Ctrl+U`, `Ctrl+R`/`Ctrl+Y`, copy/cut/paste — same as normal input editing
 
 **Thread list** (`Ctrl+L` / `/list`):
 
@@ -111,12 +114,15 @@ Current bindings as implemented in `src/tui/run.cpp`, `src/tui/input_handlers.cp
 |----------|--------|
 | `Ctrl+C` / `Ctrl+X` / `Ctrl+V` | Copy / cut / paste |
 | `Ctrl+K` | Kill to end of line |
-| `Ctrl+U` / `Ctrl+R` | Undo / redo |
+| `Ctrl+Z` or `Ctrl+U` | Undo last edit (typing, delete, cut, paste) |
+| `Ctrl+R` or `Ctrl+Y` | Redo |
 | `Ctrl+A` | Select all |
 | `Backspace` | Delete before cursor |
 | `Delete` | Delete at cursor |
 | `Enter` | Insert newline |
 | `Tab` | Disabled (“Tab completion is disabled in editor mode”) |
+
+Bracketed terminal paste is undoable with `Ctrl+Z` / `Ctrl+U`.
 
 ### AI assist (provider + model configured)
 
@@ -186,9 +192,16 @@ Also: `/provider`, `/model`, `/search QUERY`
 
 ### Shared (same behavior in both)
 
-`Ctrl+Q`, `Ctrl+C`, `Ctrl+X`, `Ctrl+V`, `Ctrl+K`, `Ctrl+U`, `Ctrl+A`, `Backspace`, `Delete`, bracketed paste, `Shift`+movement for selection, `Alt+Home`/`Alt+End` for buffer bounds.
+`Ctrl+Q`, `Ctrl+C`, `Ctrl+X`, `Ctrl+V`, `Ctrl+K`, `Ctrl+A`, `Backspace`, `Delete`, bracketed paste, `Shift`+movement for selection, `Alt+Home`/`Alt+End` for buffer bounds.
 
-**Note on `Ctrl+R`:** in both modes it is **redo**. Regenerate in chat is **`Esc`+`R`** or **`Alt+R`**, not `Ctrl+R`.
+**Undo / redo (both modes):**
+
+| Primary | Alternate | Action |
+|---------|-----------|--------|
+| `Ctrl+Z` | `Ctrl+U` | Undo |
+| `Ctrl+R` | `Ctrl+Y` | Redo |
+
+**Note on redo vs regenerate:** `Ctrl+R` and `Ctrl+Y` are **redo** in both modes. Regenerate in chat is **`Esc`+`R`** or **`Alt+R`**, not `Ctrl+R`.
 
 ### Slash-command UX differs
 

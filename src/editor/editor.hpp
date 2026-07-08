@@ -44,11 +44,20 @@ struct EditorSnapshot {
 constexpr size_t kDefaultUndoLimit = 5;
 constexpr long long kDefaultHugeFileSizeWarningBytes = 1024LL * 1024LL * 1024LL;
 constexpr long long kNoEditorFileSizeLimit = -1;
+constexpr size_t kDefaultAutoSaveThreshold = 300;
+constexpr int kDefaultAutoSaveTimeoutSeconds = 30;
+constexpr long long kDefaultAutoSaveSizeLimit = 10LL * 1024LL * 1024LL;
+constexpr const char* kDefaultAutoSavePostfix = "~";
 
 struct EditorSettings {
     size_t undo_limit = kDefaultUndoLimit;
     long long huge_file_size_warning = kDefaultHugeFileSizeWarningBytes;
     long long file_size_limit = kNoEditorFileSizeLimit;
+    bool auto_save_mode = true;
+    std::string auto_save_postfix = kDefaultAutoSavePostfix;
+    size_t auto_save_threshold = kDefaultAutoSaveThreshold;
+    int auto_save_timeout_seconds = kDefaultAutoSaveTimeoutSeconds;
+    long long auto_save_size_limit = kDefaultAutoSaveSizeLimit;
 };
 
 struct AiContinueContext;
@@ -173,6 +182,9 @@ struct EditorState {
     Error kill_to_line_end();
     void ensure_cursor_visible(const Rect& rect);
     RenderedPanel render(const Rect& rect) const;
+    size_t autosave_pending_bytes() const;
+    void record_autosave_change(size_t bytes);
+    void reset_autosave_pending();
 
    private:
     void begin_movement(bool extend_selection);
@@ -185,6 +197,7 @@ struct EditorState {
     std::vector<EditorSnapshot> undo_stack_;
     std::vector<EditorSnapshot> redo_stack_;
     size_t undo_limit_ = kDefaultUndoLimit;
+    size_t autosave_pending_bytes_ = 0;
 };
 
 std::string editor_buffer_display_name(const EditorState& state, size_t index);
