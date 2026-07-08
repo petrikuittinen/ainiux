@@ -25,7 +25,7 @@ std::string editor_startup_status(const std::optional<AiContinueContext>& contex
         return "Local editor · Use /provider and /model to enable AI features";
     }
     if (!editor_ai_ready(context)) {
-        return "Choose a model with /model · Change provider with /provider";
+        return "Choose a model with /model";
     }
     return "AI ready · Change provider with /provider or model with /model";
 }
@@ -64,9 +64,6 @@ Error apply_editor_provider_target(std::optional<AiContinueContext>& context,
         return rebuilt.error;
     }
     context->request = std::move(rebuilt.context);
-    if (context->request.options.model.empty() && editor_auto_selects_model(context->request)) {
-        return resolve_editor_default_model(*context);
-    }
     return ok_error();
 }
 

@@ -206,16 +206,8 @@ int main(int argc, char** argv) {
             configured.request = std::move(editor_context);
             configured.settings = pkchat::editor::ai_continue_settings_from_env();
             configured.assist_config = options.editor_assist_config;
-            const bool auto_select_model = options.model.empty();
-            pkchat::Error model_err = pkchat::editor::resolve_editor_default_model(configured);
-            if (!model_err.ok()) {
-                pkchat::app::print_error(model_err);
-                return pkchat::app::exit_code_for(model_err.code);
-            }
-            if (auto_select_model && !options.quiet) {
-                std::cerr << "Editor model: " << configured.request.options.model
-                          << " (first model from " << configured.request.models_url << ")\n";
-            }
+            // Defer model selection when --model is omitted, like --chat TUI mode.
+            // AI assist stays disabled until the user picks a model with /model.
             ai_continue = std::move(configured);
         }
         return pkchat::editor::run_editor(options.editor_path,

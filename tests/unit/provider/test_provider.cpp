@@ -664,6 +664,12 @@ void test_editor_startup_local_only_default() {
     with_provider.provider_explicit = true;
     check(!pkchat::provider::editor_needs_local_only_default(with_provider),
           "editor with an explicit provider keeps AI configuration enabled");
+
+    pkchat::cli::Options configured_provider;
+    configured_provider.editor = true;
+    configured_provider.provider = "openrouter";
+    check(!pkchat::provider::editor_needs_local_only_default(configured_provider),
+          "editor with a configured online provider keeps AI configuration enabled");
 }
 
 void test_editor_defaults_offline_without_credentials() {
@@ -693,6 +699,13 @@ void test_editor_defaults_offline_without_credentials() {
         pkchat::provider::build_context(explicit_options);
     check(explicit_context.error.code == pkchat::ErrorCode::Config,
           "explicit openai editor still requires credentials");
+
+    pkchat::cli::Options configured_openrouter;
+    configured_openrouter.editor = true;
+    configured_openrouter.provider = "openrouter";
+    pkchat::provider::apply_editor_offline_default(configured_openrouter);
+    check(configured_openrouter.provider == "openrouter",
+          "configured openrouter editor keeps provider without credentials");
 }
 
 void test_openai_context_allows_missing_model() {

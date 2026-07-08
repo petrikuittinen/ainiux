@@ -14,7 +14,7 @@ std::string editor_buffer_display_name(const EditorState& state, size_t index) {
 
 std::string editor_buffer_list_text(const std::vector<EditorState>& buffers, size_t selected) {
     std::ostringstream out;
-    out << "Buffers - Enter opens - Esc cancels\n";
+    out << "Buffers - Enter opens - N new - Esc cancels\n";
     for (size_t i = 0; i < buffers.size(); ++i) {
         const EditorState& buffer = buffers[i];
         out << (i == selected ? "> " : "  ");

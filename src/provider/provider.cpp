@@ -2463,7 +2463,7 @@ bool editor_has_configured_model_endpoint(const cli::Options& options) {
         return true;
     }
     Profile profile;
-    return find_profile(options.provider, profile) && profile.offline;
+    return find_profile(options.provider, profile) && !profile.offline;
 }
 
 bool tui_needs_startup_provider_selection(const cli::Options& options) {
@@ -2498,9 +2498,18 @@ void apply_tui_startup_default(cli::Options& options) {
 }
 
 bool editor_needs_local_only_default(const cli::Options& options) {
-    return options.editor && !options.provider_explicit && options.positional_url.empty() &&
-           options.base_url.empty() && options.chat_url.empty() && options.models_url.empty() &&
-           options.responses_url.empty() && options.model.empty();
+    if (!options.editor || options.provider_explicit || !options.positional_url.empty() ||
+        !options.base_url.empty() || !options.chat_url.empty() || !options.models_url.empty() ||
+        !options.responses_url.empty() || !options.model.empty()) {
+        return false;
+    }
+    if (options.provider != "openai") {
+        Profile profile;
+        if (find_profile(options.provider, profile) && !profile.offline) {
+            return false;
+        }
+    }
+    return true;
 }
 
 void apply_editor_startup_default(cli::Options& options) {

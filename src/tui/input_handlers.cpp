@@ -59,7 +59,7 @@ std::string model_picker_text(const std::vector<std::string>& models, size_t sel
 
 std::string thread_picker_text(const std::vector<chat::ThreadSummary>& threads, size_t selected) {
     std::ostringstream out;
-    out << "Newest first · Enter opens · Esc cancels\n";
+    out << "Newest first · Enter opens · N new · Esc cancels\n";
     for (size_t i = 0; i < threads.size(); ++i) {
         const chat::ThreadSummary& thread = threads[i];
         out << (i == selected ? u8"› " : "  ");

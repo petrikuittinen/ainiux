@@ -586,6 +586,7 @@ Examples:
   pkchat --provider lmstudio --list-models
   pkchat --provider none --editor notes.txt
   pkchat lmstudio --editor notes.txt
+  pkchat openrouter --editor notes.txt
   pkchat http://localhost:1234/v1 --editor draft.md
   pkchat --provider none --input page.html --output-format md
   pkchat --provider none --fetch-url https://example.com --output-format md
@@ -635,6 +636,9 @@ Options:
       --chat                    Start the full-screen non-blocking terminal chat.
       --nocolors                Disable TUI color styling.
       --editor [PATH]           Start the standalone multiline editor; PATH is the file to open.
+                                A provider shortcut/profile may precede --editor without -m/--model;
+                                choose a model inside the editor with /model (like --chat).
+                                Use --provider none for offline local editing.
       --input PATH              Read text/Markdown/HTML, or attach PNG/JPEG/GIF with -p;
                                 'stdin' reads UTF-8 plaintext from standard input.
       --attach PATH             Add text/Markdown/HTML or PNG/JPEG/GIF; repeatable;

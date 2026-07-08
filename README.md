@@ -71,6 +71,8 @@ A provider shortcut or base URL may precede `--editor` without changing the file
 
 ### Editor AI Assist
 
+A provider shortcut or profile may precede `--editor` without a model, matching `--chat` startup: the editor opens immediately and the minibuffer shows **Choose a model with /model**. Use `Esc` then `/model` (or the model picker) to select a model; AI assist stays disabled until then. `pkchat --provider none --editor` and plain `pkchat --editor` run offline as local editors.
+
 With a configured provider and model, the editor can run one-shot AI tasks from the minibuffer or continue writing at the cursor.
 
 | Key / trigger | Name | Input sent to the model | Output |
@@ -82,7 +84,7 @@ With a configured provider and model, the editor can run one-shot AI tasks from 
 
 Built-in commands are `/spell`, `/grammar`, `/continue`, `/fact`, `/comment`, `/rewrite`, `/English`, `/Chinese`, and `/Finnish`. Each supports all four modes above. `/comment` comments on how to improve the text, `/rewrite` rewrites for spelling, grammar, facts, and style, and the language commands translate. Type `Esc` to open the command minibuffer, enter a command such as `/spell`, and pkchat prompts for a mode when one is omitted. `Tab` completes commands and mode variants. `/prompt YOUR TASK` runs a custom one-shot prompt and accepts the same modes (`c`, `i`, `s`, `a`). `/regenerate` repeats the previous AI command with the same command options where the current buffer state allows it. `/quit` leaves command mode.
 
-`Ctrl+Space` runs `/continue` in **continue** mode: it sends the tail-before-cursor context, streams visible continuation text at the cursor up to `MAX_AI_CONTINUE_TOKENS` (default 32768), hides thinking traces from the buffer, and shows `[MODEL] thinking... ESC to abort` / `[MODEL] writing. Press ESC to stop.` / `[MODEL] stopped and ready` in the minibuffer. `Esc` cancels an in-flight request but keeps any text already streamed into the buffer. For `lmstudio`, `ollama`, `vllm`, and loopback `http://localhost...` / `http://127.0.0.1...` endpoints, pkchat uses the first model from `/v1/models` when `--model` is omitted; cloud providers still require an explicit model.
+`Ctrl+Space` runs `/continue` in **continue** mode: it sends the tail-before-cursor context, streams visible continuation text at the cursor up to `MAX_AI_CONTINUE_TOKENS` (default 32768), hides thinking traces from the buffer, and shows `[MODEL] thinking... ESC to abort` / `[MODEL] writing. Press ESC to stop.` / `[MODEL] stopped and ready` in the minibuffer. `Esc` cancels an in-flight request but keeps any text already streamed into the buffer. Editor mode does not auto-select a model at startup; choose one with `/model` after `pkchat openrouter --editor`, `pkchat lmstudio --editor`, or similar. Provider/model pickers are also available through `Esc` then `/provider` or `/model`.
 
 Custom commands use repeatable `[command]` blocks in config:
 

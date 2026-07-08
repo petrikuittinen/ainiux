@@ -730,6 +730,18 @@ int run(provider::RequestContext context, chat::Session session) {
         status = "Selected thread 1/" + std::to_string(thread_picker_threads.size());
     };
 
+    auto start_new_chat_thread = [&](const std::string& name = "") -> bool {
+        if (active_job != ActiveJob::None) {
+            status = "Cannot create a thread while a model job is running";
+            return false;
+        }
+        start_new_thread_from_cli();
+        session.name = app::detail::trim_ascii(name);
+        status = session.name.empty() ? "New chat thread" : "New chat thread: " + session.name;
+        start_store_save();
+        return true;
+    };
+
     auto regenerate_last_turn = [&]() {
         if (active_job == ActiveJob::Models) {
             status = "Cannot regenerate while listing models";
@@ -780,7 +792,7 @@ int run(provider::RequestContext context, chat::Session session) {
                     "/quit or /exit\n"
                     "/clear\n"
                     "/edit\n"
-                    "/list (Ctrl+L)\n"
+                    "/list (Ctrl+L; N new thread)\n"
                     "/new [NAME]\n"
                     "/provider [PROVIDER]\n"
                     "/models\n"
@@ -866,14 +878,7 @@ int run(provider::RequestContext context, chat::Session session) {
             return;
         }
         if (text == "/new" || text.rfind("/new ", 0) == 0) {
-            if (active_job != ActiveJob::None) {
-                status = "Cannot create a thread while a model job is running";
-                return;
-            }
-            start_new_thread_from_cli();
-            session.name = app::detail::trim_ascii(text.substr(4));
-            status = session.name.empty() ? "New chat thread" : "New chat thread: " + session.name;
-            start_store_save();
+            start_new_chat_thread(text.size() <= 4 ? "" : text.substr(4));
             return;
         }
         if (text == "/provider" || text.rfind("/provider ", 0) == 0) {
@@ -1415,6 +1420,15 @@ int run(provider::RequestContext context, chat::Session session) {
                             thread_picker_threads.clear();
                             thread_picker_selected = 0;
                             start_store_load(thread_id);
+                        }
+                        continue;
+                    }
+                    if (ch == 'n' || ch == 'N') {
+                        if (start_new_chat_thread()) {
+                            mode = TuiMode::Chat;
+                            thread_picker_threads.clear();
+                            thread_picker_selected = 0;
+                            history_scroll = 0;
                         }
                         continue;
                     }

@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cstring>
 #include <utility>
 
 namespace pkchat::editor {
@@ -44,6 +45,67 @@ constexpr const char* kDefaultAssistFinnishPrompt =
     "formatting where practical.";
 constexpr const char* kContentOpenTag = "<content>";
 constexpr const char* kContentCloseTag = "</content>";
+constexpr const char* kAssistTrailingArtifacts[] = {
+    "</content></tool_call>",
+    "</content>",
+    "</tool_call>",
+};
+constexpr size_t kAssistStreamHoldbackLen = 22;
+
+size_t assist_stream_holdback_length(const std::string& text) {
+    size_t hold = 0;
+    const size_t max_len = std::min(text.size(), kAssistStreamHoldbackLen);
+    for (size_t len = 1; len <= max_len; ++len) {
+        const std::string tail = text.substr(text.size() - len);
+        for (const char* artifact : kAssistTrailingArtifacts) {
+            const size_t artifact_len = std::strlen(artifact);
+            if (len <= artifact_len && std::strncmp(artifact, tail.c_str(), len) == 0) {
+                hold = len;
+                break;
+            }
+        }
+    }
+    return hold;
+}
+
+bool is_assist_ascii_space(unsigned char ch) {
+    return ch == ' ' || ch == '\t' || ch == '\r' || ch == '\n';
+}
+
+std::string trim_assist_response_edges(std::string text) {
+    while (!text.empty() && is_assist_ascii_space(static_cast<unsigned char>(text.front()))) {
+        text.erase(text.begin());
+    }
+    while (!text.empty() && is_assist_ascii_space(static_cast<unsigned char>(text.back()))) {
+        text.pop_back();
+    }
+    return text;
+}
+
+std::string strip_assist_response_artifacts(std::string text) {
+    text = trim_assist_response_edges(std::move(text));
+    const std::string open = kContentOpenTag;
+    if (text.rfind(open, 0) == 0) {
+        text.erase(0, open.size());
+        text = trim_assist_response_edges(std::move(text));
+    }
+    for (;;) {
+        text = trim_assist_response_edges(std::move(text));
+        bool stripped = false;
+        for (const char* artifact : kAssistTrailingArtifacts) {
+            const size_t len = std::strlen(artifact);
+            if (text.size() >= len && text.compare(text.size() - len, len, artifact) == 0) {
+                text.erase(text.size() - len);
+                stripped = true;
+                break;
+            }
+        }
+        if (!stripped) {
+            break;
+        }
+    }
+    return text;
+}
 
 char lower_ascii_char(char ch) {
     return static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
@@ -164,19 +226,7 @@ std::vector<provider::Message> build_messages(const AiContinueContext& context,
 }
 
 std::string strip_assist_content_tags(std::string text) {
-    text = trim_ascii_copy(std::move(text));
-    const std::string open = kContentOpenTag;
-    const std::string close = kContentCloseTag;
-    if (text.rfind(open, 0) == 0) {
-        text.erase(0, open.size());
-        text = trim_ascii_copy(std::move(text));
-    }
-    if (text.size() >= close.size() &&
-        text.compare(text.size() - close.size(), close.size(), close) == 0) {
-        text.erase(text.size() - close.size());
-        text = trim_ascii_copy(std::move(text));
-    }
-    return text;
+    return strip_assist_response_artifacts(trim_ascii_copy(std::move(text)));
 }
 
 void push_visible_delta(runtime::EventQueue<ContinueEvent>& events, const std::string& visible) {
@@ -192,37 +242,22 @@ void push_visible_delta(runtime::EventQueue<ContinueEvent>& events, const std::s
 }  // namespace
 
 std::string AssistStreamFilter::strip_trailing_close_tag(std::string text) const {
-    auto trim_edges = [](std::string value) {
-        auto is_ws = [](unsigned char ch) {
-            return ch == ' ' || ch == '\t' || ch == '\r' || ch == '\n';
-        };
-        while (!value.empty() && is_ws(static_cast<unsigned char>(value.front()))) {
-            value.erase(value.begin());
-        }
-        while (!value.empty() && is_ws(static_cast<unsigned char>(value.back()))) {
-            value.pop_back();
-        }
-        return value;
-    };
-    text = trim_edges(std::move(text));
-    if (text.size() >= close_tag_.size() &&
-        text.compare(text.size() - close_tag_.size(), close_tag_.size(), close_tag_) == 0) {
-        text.erase(text.size() - close_tag_.size());
-        text = trim_edges(std::move(text));
-    }
-    return text;
+    return strip_assist_response_artifacts(std::move(text));
 }
 
 std::string AssistStreamFilter::emit_with_holdback(std::string chunk) {
     std::string combined = holdback_ + chunk;
     holdback_.clear();
-    if (combined.size() > close_tag_.size()) {
-        holdback_ = combined.substr(combined.size() - close_tag_.size());
-        combined.resize(combined.size() - close_tag_.size());
-        return combined;
+    if (strip_assist_response_artifacts(combined).empty()) {
+        holdback_ = std::move(combined);
+        return "";
     }
-    holdback_ = std::move(combined);
-    return "";
+    const size_t hold_len = assist_stream_holdback_length(combined);
+    if (hold_len > 0) {
+        holdback_ = combined.substr(combined.size() - hold_len);
+        combined.resize(combined.size() - hold_len);
+    }
+    return combined;
 }
 
 std::string AssistStreamFilter::feed(const std::string& chunk) {
@@ -910,19 +945,17 @@ std::string trim_assist_inplace_response(std::string text) {
 }
 
 void strip_trailing_assist_close_tag_without_undo(EditorState& state) {
-    constexpr const char* kCloseTag = "</content>";
-    constexpr size_t kCloseTagLen = 10;
-    constexpr size_t kTailLookback = 10;
     if (state.cursor == 0) {
         return;
     }
-    const size_t lookback = std::min(state.cursor, kTailLookback);
-    const std::string tail = state.text.range_text(state.cursor - lookback, lookback);
-    if (tail.size() < kCloseTagLen || tail.compare(tail.size() - kCloseTagLen, kCloseTagLen, kCloseTag) != 0) {
+    const std::string prefix = state.text.range_text(0, state.cursor);
+    const std::string stripped = strip_assist_response_artifacts(prefix);
+    if (stripped.size() >= prefix.size()) {
         return;
     }
-    const size_t erase_start = state.cursor - kCloseTagLen;
-    Error err = state.text.erase(erase_start, kCloseTagLen);
+    const size_t erase_len = prefix.size() - stripped.size();
+    const size_t erase_start = state.cursor - erase_len;
+    Error err = state.text.erase(erase_start, erase_len);
     if (!err.ok()) {
         return;
     }

@@ -198,6 +198,49 @@ void test_editor_ai_setup_helpers() {
     check(pkchat::editor::apply_editor_model(created, "gpt-test").ok(),
           "apply_editor_model succeeds after provider is chosen");
     check(created->request.options.model == "gpt-test", "apply_editor_model stores model name");
+
+    const char* openrouter_argv[] = {"pkchat", "openrouter", "--editor"};
+    pkchat::cli::ParseResult openrouter_parsed =
+        pkchat::cli::parse_args(3, const_cast<char**>(openrouter_argv));
+    check(openrouter_parsed.error.ok(), "openrouter editor args without model parse");
+    pkchat::provider::ContextResult openrouter_context =
+        pkchat::provider::build_context(openrouter_parsed.options);
+    check(openrouter_context.error.ok(), "openrouter provider context builds without model");
+    check(openrouter_context.context.options.model.empty(),
+          "openrouter editor startup leaves model empty");
+    pkchat::editor::AiContinueContext openrouter_continue;
+    openrouter_continue.request = openrouter_context.context;
+    check(pkchat::editor::editor_ai_has_provider(openrouter_continue),
+          "openrouter editor startup has provider");
+    check(!pkchat::editor::editor_ai_ready(openrouter_continue),
+          "openrouter editor startup is not AI-ready without model");
+    const std::string openrouter_startup_status =
+        pkchat::editor::editor_startup_status(openrouter_continue);
+    check(openrouter_startup_status.find("/model") != std::string::npos,
+          "openrouter editor startup status mentions /model");
+    check(openrouter_startup_status == "Choose a model with /model",
+          "openrouter editor startup status does not ask for /provider");
+
+    const char* lm_no_model_argv[] = {"pkchat", "lmstudio", "--editor"};
+    pkchat::cli::ParseResult lm_no_model_parsed =
+        pkchat::cli::parse_args(3, const_cast<char**>(lm_no_model_argv));
+    check(lm_no_model_parsed.error.ok(), "lmstudio editor args without model parse for deferral");
+    pkchat::provider::ContextResult lm_no_model_context =
+        pkchat::provider::build_context(lm_no_model_parsed.options);
+    check(lm_no_model_context.error.ok(), "lmstudio provider context builds without model for deferral");
+    check(lm_no_model_context.context.options.model.empty(),
+          "lmstudio editor startup leaves model empty");
+    pkchat::editor::AiContinueContext lm_no_model_continue;
+    lm_no_model_continue.request = lm_no_model_context.context;
+    check(pkchat::editor::editor_ai_has_provider(lm_no_model_continue),
+          "lmstudio editor startup has provider");
+    check(!pkchat::editor::editor_ai_ready(lm_no_model_continue),
+          "lmstudio editor startup is not AI-ready without model");
+    std::optional<pkchat::editor::AiContinueContext> deferred_provider;
+    check(pkchat::editor::apply_editor_provider_target(deferred_provider, assist_config, "lmstudio").ok(),
+          "/provider lmstudio succeeds without contacting the model endpoint");
+    check(deferred_provider.has_value() && deferred_provider->request.options.model.empty(),
+          "/provider lmstudio leaves model empty for /model selection");
 }
 
 void test_editor_assist_helpers() {
@@ -596,6 +639,12 @@ void test_editor_assist_helpers() {
           "in-place assist responses leave untagged output unchanged");
     check(pkchat::editor::trim_assist_inplace_response("continued text</content>") == "continued text",
           "in-place assist responses strip trailing close tag without open tag");
+    check(pkchat::editor::trim_assist_inplace_response("continued text</content></tool_call>") ==
+              "continued text",
+          "in-place assist responses strip trailing tool-call wrapper artifacts");
+    check(pkchat::editor::trim_assist_inplace_response("continued text</content></tool_call>  \n") ==
+              "continued text",
+          "in-place assist responses strip trailing wrapper artifacts with whitespace");
 
     {
         pkchat::editor::AssistStreamFilter stream_filter;
@@ -628,6 +677,21 @@ void test_editor_assist_helpers() {
         check(streamed == "plain",
               "streamed assist output leaves untagged text unchanged");
     }
+    {
+        pkchat::editor::AssistStreamFilter stream_filter;
+        std::string streamed = stream_filter.feed("continued text</content></tool_call>");
+        streamed += stream_filter.finish();
+        check(streamed == "continued text",
+              "streamed assist output strips trailing tool-call wrapper artifacts");
+    }
+    {
+        pkchat::editor::AssistStreamFilter stream_filter;
+        std::string streamed = stream_filter.feed("continued text</content></tool_cal");
+        streamed += stream_filter.feed("l>  ");
+        streamed += stream_filter.finish();
+        check(streamed == "continued text",
+              "streamed assist output strips split tool-call wrapper artifacts");
+    }
 
     {
         pkchat::editor::EditorState state = pkchat::editor::EditorState::from_text("hello</content>");
@@ -643,6 +707,14 @@ void test_editor_assist_helpers() {
         pkchat::editor::strip_trailing_assist_close_tag_without_undo(state);
         check(state.text.str() == "keep</content>tail",
               "streamed assist post-clear ignores close tag not at insertion tail");
+    }
+    {
+        pkchat::editor::EditorState state =
+            pkchat::editor::EditorState::from_text("hello</content></tool_call>  ");
+        state.cursor = state.text.size();
+        pkchat::editor::strip_trailing_assist_close_tag_without_undo(state);
+        check(state.text.str() == "hello",
+              "streamed assist post-clear strips trailing tool-call wrapper artifacts");
     }
 
     const pkchat::provider::RequestContext assist_context =
@@ -1640,6 +1712,10 @@ void test_editor_help_document_and_command() {
           "editor help document documents /list");
     check(help_text.find("/close") != std::string::npos,
           "editor help document documents /close");
+    check(help_text.find("Choose a model with /model") != std::string::npos,
+          "editor help document documents deferred model selection");
+    check(help_text.find("/provider") != std::string::npos && help_text.find("/model") != std::string::npos,
+          "editor help document documents /provider and /model");
 
     check(pkchat::editor::is_editor_help_command("/help"), "editor /help command is recognized");
     check(pkchat::editor::is_editor_help_command("  /HELP  "), "editor /help command is case-insensitive");
@@ -1772,7 +1848,7 @@ void test_editor_buffer_list_helpers() {
     buffers.push_back(scratch);
 
     const std::string rendered = pkchat::editor::editor_buffer_list_text(buffers, 1);
-    check(rendered.find("Buffers - Enter opens - Esc cancels") != std::string::npos,
+    check(rendered.find("Buffers - Enter opens - N new - Esc cancels") != std::string::npos,
           "editor buffer list includes chooser instructions");
     check(rendered.find("  file1.txt - Ln 1, Col 6") != std::string::npos,
           "editor buffer list renders an inactive clean file");

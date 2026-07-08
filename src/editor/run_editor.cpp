@@ -1119,6 +1119,10 @@ int run_editor(const std::string& path,
                 activate_buffer(buffer_list_selected);
                 return;
             }
+            if (ch == 'n' || ch == 'N') {
+                new_empty_buffer();
+                return;
+            }
             return;
         }
         if (pending_close_confirm) {

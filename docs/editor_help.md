@@ -60,9 +60,24 @@ Hold `Shift` while using arrow keys, `Page Up`/`Page Down`, `Home`/`End`, or `Al
 
 `Ctrl+E` is not used in standalone editor mode. In chat TUI mode, `Ctrl+E` copies the last user or assistant message into the input for editing; `Enter` saves and a bare `Esc` cancels.
 
+## Provider and model
+
+Start the editor with a provider shortcut or profile, then choose a model inside the editor — the same flow as `--chat`:
+
+```text
+pkchat openrouter --editor notes.txt
+pkchat lmstudio --editor draft.md
+```
+
+When a provider is set but no model is chosen yet, the minibuffer shows **Choose a model with /model**. File editing still works; AI commands stay disabled until a model is selected.
+
+Use `Esc` then `/provider` or `/model` to change provider or model. `/provider` with no argument opens a provider picker; `/model` with no argument loads `/v1/models` and opens a model picker.
+
+`pkchat --provider none --editor` (or plain `pkchat --editor`) runs as a local editor with no network access. Use `/provider` and `/model` later to enable AI assist.
+
 ## AI continue (`Ctrl+Space`)
 
-Requires a configured provider and model (`pkchat --provider lmstudio -m MODEL --editor file.txt`, or a base URL before `--editor`).
+Requires a configured provider **and** model. If either is missing, `Ctrl+Space` and other AI commands report what to configure next.
 
 `Ctrl+Space` runs **`/continue`** in **continue** mode:
 
@@ -70,8 +85,6 @@ Requires a configured provider and model (`pkchat --provider lmstudio -m MODEL -
 2. Streams new text after the cursor (thinking traces stay out of the buffer)
 3. Shows status in the minibuffer: `thinking...`, `writing.`, `stopped and ready`
 4. `Esc` during generation cancels the request but keeps text already streamed
-
-Local endpoints (`lmstudio`, `ollama`, `vllm`, loopback URLs) can auto-pick the first model from `/v1/models` when `--model` is omitted.
 
 ## Slash commands (`Esc` then type command)
 
@@ -100,6 +113,8 @@ Press **`Esc`** to open the command minibuffer (`Command:`). Type a slash comman
 | `/new` | Open a new empty editor buffer (same as `Ctrl+N`) |
 | `/list` | List open editor buffers (same as `Ctrl+L`; Enter chooses, Esc cancels) |
 | `/close` | Close the active editor buffer (same as `Ctrl+W`; prompts if modified) |
+| `/provider [NAME]` | Change provider (picker when omitted) |
+| `/model [MODEL]` | Change model (picker when omitted) |
 | `/help` | Toggle this help view |
 | `/quit` | Quit the editor |
 
@@ -123,9 +138,11 @@ Examples:
 
 `Esc` or `Ctrl+G` cancels the command minibuffer without running a command.
 
-## Provider without AI
+## Local editing without AI
 
-Editor mode works without a model. File editing, search, replace, undo, and clipboard still work. AI commands and `Ctrl+Space` report that a provider is required.
+`pkchat --provider none --editor` and plain `pkchat --editor` work offline. File editing, search, replace, undo, and clipboard still work. AI commands and `Ctrl+Space` report that a provider is required until `/provider` and `/model` are configured.
+
+With a provider but no model, editing still works; AI commands report **No model chosen. Use /model to choose one**.
 
 ## Configuration
 
