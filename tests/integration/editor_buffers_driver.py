@@ -93,7 +93,7 @@ def main():
         output.extend(send(master, "\r"))
         require_seen(output, "file2.txt", "switching to second buffer")
 
-        output.extend(send(master, "\x1b[4;3~"))  # Alt+End
+        output.extend(send(master, "\x1b[4;5~"))  # Ctrl+End
         output.extend(send(master, "\x16"))  # Ctrl+V paste shared clipboard
         require_seen(output, "Pasted", "pasting into second buffer")
         output.extend(send(master, "\x13"))  # Ctrl+S save

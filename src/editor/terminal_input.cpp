@@ -12,6 +12,7 @@ namespace pkchat::editor {
 namespace {
 
 std::deque<unsigned char> g_input_queue;
+bool g_pending_escape_alt_meta = false;
 
 bool is_bracketed_paste_prefix(const std::string& text) {
     static constexpr char kStart[] = "[200~";
@@ -149,6 +150,17 @@ bool decode_control_key_sequence(const std::string& sequence, unsigned char& out
 
 void clear_terminal_input_queue() {
     g_input_queue.clear();
+    g_pending_escape_alt_meta = false;
+}
+
+void push_terminal_input_bytes(const std::string& bytes) {
+    push_bytes_front(bytes);
+}
+
+bool consume_pending_escape_alt_meta() {
+    const bool pending = g_pending_escape_alt_meta;
+    g_pending_escape_alt_meta = false;
+    return pending;
 }
 
 bool read_terminal_byte(unsigned char& out, int timeout_ms) {
@@ -221,7 +233,13 @@ bool read_terminal_input(TerminalInputEvent& out, int timeout_ms) {
     }
 
     if (!after_esc.empty()) {
-        push_bytes_front(after_esc);
+        if (after_esc.size() >= 2 && static_cast<unsigned char>(after_esc[0]) == 27 &&
+            (after_esc[1] == '[' || after_esc[1] == 'O')) {
+            g_pending_escape_alt_meta = true;
+            push_bytes_front(after_esc.substr(1));
+        } else {
+            push_bytes_front(after_esc);
+        }
     }
     out.type = TerminalInputType::Byte;
     out.byte = 27;
@@ -233,7 +251,7 @@ bool is_editor_undo_key(unsigned char ch) {
 }
 
 bool is_editor_redo_key(unsigned char ch) {
-    return ch == 18 || ch == 25;
+    return ch == 25;
 }
 
 Error paste_with_clipboard_preference(EditorState& state,

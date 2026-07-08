@@ -1592,8 +1592,8 @@ int run(provider::RequestContext context, chat::Session session) {
                     status = input.redo() ? "Redone" : "Nothing to redo";
                     continue;
                 }
-                if (ch == 16 && mode == TuiMode::Chat) {
-                    pop_last_message();
+                if (ch == 18 && mode == TuiMode::Chat) {
+                    regenerate_last_turn();
                     continue;
                 }
                 if (ch == 20) {
@@ -1618,10 +1618,6 @@ int run(provider::RequestContext context, chat::Session session) {
                 }
                 if (ch == 11) {
                     detail::set_status_from_error(input.kill_to_line_end(), status);
-                    continue;
-                }
-                if (ch == 4 && input.text.empty()) {
-                    quit = true;
                     continue;
                 }
                 if (ch == 127 || ch == 8) {

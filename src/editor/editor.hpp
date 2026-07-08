@@ -164,7 +164,11 @@ struct EditorState {
     Error copy_selection(Clipboard& clipboard);
     Error cut_selection(Clipboard& clipboard);
     Error paste(Clipboard& clipboard);
-    void apply_movement(MovementKey key, const Rect& rect, bool extend_selection, bool alt = false);
+    void apply_movement(MovementKey key,
+                        const Rect& rect,
+                        bool extend_selection,
+                        bool alt = false,
+                        bool ctrl = false);
     void move_left();
     void move_right();
     void move_up();

@@ -44,19 +44,19 @@ Replace mode after `Ctrl+H`: `Space` replaces match, `s` skips, `a` replaces all
 | `Ctrl+V` | Paste (internal clipboard, then terminal paste) |
 | `Ctrl+K` | Kill to end of line |
 | `Ctrl+Z` or `Ctrl+U` | Undo |
-| `Ctrl+R` or `Ctrl+Y` | Redo |
+| `Ctrl+Y` | Redo |
 | `Ctrl+A` | Select all (entire buffer) |
 | `Home` | Beginning of line |
 | `End` | End of line |
-| `Alt+Home` | Beginning of buffer |
-| `Alt+End` | End of buffer |
+| `Ctrl+Home` | Beginning of buffer |
+| `Ctrl+End` | End of buffer |
 | `Backspace` | Delete before cursor |
 | `Delete` (`Esc [3~`) | Delete at cursor |
 | `Enter` | New line |
 
 ## Selection
 
-Hold `Shift` while using arrow keys, `Page Up`/`Page Down`, `Home`/`End`, or `Alt+Home`/`Alt+End` to extend the selection. Selected text is highlighted in reverse video.
+Hold `Shift` while using arrow keys, `Page Up`/`Page Down`, `Home`/`End`, or `Ctrl+Home`/`Ctrl+End` to extend the selection. Selected text is highlighted in reverse video.
 
 `Ctrl+E` is not used in standalone editor mode. In chat TUI mode, `Ctrl+E` copies the last user or assistant message into the input for editing; `Enter` saves and a bare `Esc` cancels.
 

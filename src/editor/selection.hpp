@@ -38,6 +38,7 @@ struct MovementKeyEvent {
     MovementKey key = MovementKey::Left;
     bool shift = false;
     bool alt = false;
+    bool ctrl = false;
     bool recognized = false;
 };
 

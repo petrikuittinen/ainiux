@@ -57,7 +57,8 @@ Error TerminalSession::enter() {
 
         active_ = true;
         clear_terminal_input_queue();
-        std::cout << "\x1b[?1049h\x1b[?25h\x1b[2J\x1b[H" << bracketed_paste_enable_sequence();
+        std::cout << "\x1b[?1049h\x1b[?25h\x1b[2J\x1b[H" << bracketed_paste_enable_sequence()
+                  << keyboard_modifier_enable_sequence();
         std::cout.flush();
         return ok_error();
 }
@@ -67,7 +68,7 @@ void TerminalSession::restore() {
             return;
         }
         tcsetattr(STDIN_FILENO, TCSAFLUSH, &original_);
-        std::cout << bracketed_paste_disable_sequence()
+        std::cout << keyboard_modifier_disable_sequence() << bracketed_paste_disable_sequence()
                   << "\x1b[0m\x1b[?25h\x1b[2J\x1b[H\x1b[?1049l";
         std::cout.flush();
         clear_terminal_input_queue();
@@ -898,7 +899,7 @@ void dispatch_escape_sequence(EditorState& state,
     if (parse_movement_sequence(sequence, movement)) {
         const TerminalSize size = terminal_size();
         const Rect panel_rect{1, 1, std::max(1, size.rows - 2), std::max(1, size.cols - 1)};
-        state.apply_movement(movement.key, panel_rect, movement.shift, movement.alt);
+        state.apply_movement(movement.key, panel_rect, movement.shift, movement.alt, movement.ctrl);
         return;
     }
 

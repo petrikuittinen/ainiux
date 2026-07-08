@@ -4,6 +4,7 @@
 #include "pkchat/version.hpp"
 #include "provider/provider.hpp"
 #include "tui/activity.hpp"
+#include "editor/terminal_input.hpp"
 #include "tui/input_handlers.hpp"
 #include "tui/session_load.hpp"
 #include "tui/tui.hpp"
@@ -42,7 +43,7 @@ void test_tui_layout_reserves_editor_input_panel() {
 
 void test_tui_ready_and_generation_status() {
     check(pkchat::tui::ready_status() == std::string("pkchat v") + pkchat::kVersion +
-                                              ". TAB command/path /help Alt+enter newline PageUp/PageDown scroll",
+                                              ". TAB command/path /help Alt+enter newline Alt+PgUp/PgDn/Home/End scroll chat",
           "TUI ready status displays compact version and key hints");
 
     pkchat::provider::ChatResult result;
@@ -400,6 +401,94 @@ void test_tui_restore_cli_context() {
           "TUI restore_cli_context resets provider context to command-line defaults");
 }
 
+void test_tui_chat_history_scroll_keys() {
+    pkchat::tui::Layout layout = pkchat::tui::layout_for_terminal(24, 80);
+    int history_scroll = 0;
+
+    pkchat::editor::MovementKeyEvent plain_page_up;
+    plain_page_up.key = pkchat::editor::MovementKey::PageUp;
+    check(!pkchat::tui::apply_chat_history_scroll(plain_page_up, layout, history_scroll),
+          "plain PageUp does not scroll chat history");
+
+    pkchat::editor::MovementKeyEvent alt_page_up;
+    alt_page_up.key = pkchat::editor::MovementKey::PageUp;
+    alt_page_up.alt = true;
+    check(pkchat::tui::apply_chat_history_scroll(alt_page_up, layout, history_scroll),
+          "Alt+PageUp scrolls chat history");
+    check(history_scroll > 0, "Alt+PageUp increases history scroll offset");
+
+    pkchat::editor::MovementKeyEvent alt_home;
+    alt_home.key = pkchat::editor::MovementKey::Home;
+    alt_home.alt = true;
+    check(pkchat::tui::apply_chat_history_scroll(alt_home, layout, history_scroll),
+          "Alt+Home jumps to the oldest chat history");
+    check(history_scroll == pkchat::tui::history_scroll_for_thread_beginning(),
+          "Alt+Home uses the thread-beginning scroll sentinel");
+
+    history_scroll = 12;
+    pkchat::editor::MovementKeyEvent alt_end;
+    alt_end.key = pkchat::editor::MovementKey::End;
+    alt_end.alt = true;
+    check(pkchat::tui::apply_chat_history_scroll(alt_end, layout, history_scroll),
+          "Alt+End returns to the live chat bottom");
+    check(history_scroll == 0, "Alt+End resets history scroll offset");
+}
+
+void test_tui_read_terminal_input_marks_alt_meta_prefix() {
+    pkchat::editor::clear_terminal_input_queue();
+    pkchat::editor::push_terminal_input_bytes("\x1b\x1b[5~");
+
+    pkchat::editor::TerminalInputEvent event;
+    check(pkchat::editor::read_terminal_input(event, 0) &&
+              event.type == pkchat::editor::TerminalInputType::Byte && event.byte == 27,
+          "Alt+PageUp read_terminal_input returns the leading ESC byte");
+
+    pkchat::editor::EditorState input = pkchat::editor::EditorState::from_text("hello");
+    pkchat::tui::Layout layout = pkchat::tui::layout_for_terminal(24, 80);
+    int history_scroll = 0;
+    std::string status;
+    const pkchat::tui::EscapeResult result =
+        pkchat::tui::handle_escape(input, layout, history_scroll, status, false);
+    check(result == pkchat::tui::EscapeResult::Handled,
+          "pending Alt/meta prefix makes PageUp scroll chat history");
+    check(history_scroll > 0, "pending Alt/meta prefix scrolls chat history");
+    check(input.cursor == 0, "pending Alt/meta prefix does not move the input cursor");
+}
+
+void test_tui_handle_escape_alt_pageup_scrolls_history() {
+    pkchat::editor::clear_terminal_input_queue();
+    pkchat::editor::push_terminal_input_bytes("\x1b[5~");
+
+    pkchat::editor::EditorState input = pkchat::editor::EditorState::from_text("hello");
+    pkchat::tui::Layout layout = pkchat::tui::layout_for_terminal(24, 80);
+    int history_scroll = 0;
+    std::string status;
+    const pkchat::tui::EscapeResult result =
+        pkchat::tui::handle_escape(input, layout, history_scroll, status, false);
+    check(result == pkchat::tui::EscapeResult::Handled,
+          "Alt+PageUp escape sequence is handled");
+    check(history_scroll > 0, "Alt+PageUp scrolls chat history");
+    check(input.cursor == 0, "Alt+PageUp does not move the input cursor");
+}
+
+void test_tui_handle_escape_plain_pageup_moves_input() {
+    pkchat::editor::clear_terminal_input_queue();
+    pkchat::editor::push_terminal_input_bytes("[5~");
+
+    std::string text = "line0\nline1\nline2\nline3\nline4";
+    pkchat::editor::EditorState input = pkchat::editor::EditorState::from_text(text);
+    input.cursor = input.text.size();
+    pkchat::tui::Layout layout = pkchat::tui::layout_for_terminal(24, 80);
+    int history_scroll = 0;
+    std::string status;
+    const size_t cursor_before = input.cursor;
+    const pkchat::tui::EscapeResult result =
+        pkchat::tui::handle_escape(input, layout, history_scroll, status, false);
+    check(result == pkchat::tui::EscapeResult::Handled, "plain PageUp escape sequence is handled");
+    check(history_scroll == 0, "plain PageUp does not scroll chat history");
+    check(input.cursor < cursor_before, "plain PageUp moves the input cursor");
+}
+
 void test_tui_unicode_and_empty_status() {
     check(pkchat::tui::ready_status().find("pkchat v") == 0,
           "TUI ready status starts with the pkchat version label");
@@ -432,6 +521,10 @@ void run_all() {
     test_tui_unicode_and_empty_status();
     test_tui_layout_reserves_editor_input_panel();
     test_tui_ready_and_generation_status();
+    test_tui_chat_history_scroll_keys();
+    test_tui_read_terminal_input_marks_alt_meta_prefix();
+    test_tui_handle_escape_alt_pageup_scrolls_history();
+    test_tui_handle_escape_plain_pageup_moves_input();
     test_tui_last_unanswered_user_message_requires_final_user();
     test_tui_last_editable_chat_message_finds_last_user_or_assistant();
     test_tui_pop_last_chat_message_removes_user_or_assistant_only();

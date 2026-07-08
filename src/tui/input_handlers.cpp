@@ -13,10 +13,72 @@ namespace pkchat::tui {
 namespace {
 
 bool is_escape_final(unsigned char ch) {
-    return (ch >= 'A' && ch <= 'Z') || ch == '~';
+    return (ch >= 'A' && ch <= 'Z') || ch == '~' || (ch >= 'a' && ch <= 'z');
+}
+
+bool consume_alt_meta_prefix(unsigned char& ch) {
+    if (ch != 27) {
+        return false;
+    }
+    unsigned char next = 0;
+    if (!editor::read_terminal_byte(next, 25)) {
+        return false;
+    }
+    ch = next;
+    return true;
+}
+
+bool read_csi_sequence(unsigned char first_byte, std::string& sequence) {
+    if (first_byte != '[' && first_byte != 'O') {
+        return false;
+    }
+    sequence.clear();
+    sequence.push_back(static_cast<char>(first_byte));
+    unsigned char ch = 0;
+    while (sequence.size() < 16 && editor::read_terminal_byte(ch, 25)) {
+        sequence.push_back(static_cast<char>(ch));
+        if (is_escape_final(ch)) {
+            break;
+        }
+    }
+    return true;
+}
+
+void apply_alt_meta_prefix(editor::MovementKeyEvent& movement, bool alt_meta_prefix) {
+    if (alt_meta_prefix) {
+        movement.alt = true;
+    }
 }
 
 }  // namespace
+
+bool apply_chat_history_scroll(const editor::MovementKeyEvent& movement,
+                               const Layout& layout,
+                               int& history_scroll) {
+    if (movement.shift || movement.ctrl || !movement.alt) {
+        return false;
+    }
+    switch (movement.key) {
+        case editor::MovementKey::PageUp: {
+            const int step = std::max(1, layout.history_rows / 2);
+            history_scroll += step;
+            return true;
+        }
+        case editor::MovementKey::PageDown: {
+            const int step = std::max(1, layout.history_rows / 2);
+            history_scroll -= step;
+            return true;
+        }
+        case editor::MovementKey::Home:
+            history_scroll = history_scroll_for_thread_beginning();
+            return true;
+        case editor::MovementKey::End:
+            history_scroll = history_scroll_for_thread_end();
+            return true;
+        default:
+            return false;
+    }
+}
 
 std::vector<std::string> selectable_provider_ids() {
     std::vector<std::string> providers;
@@ -126,6 +188,10 @@ EscapeResult handle_escape(editor::EditorState& input,
     if (!editor::read_terminal_byte(ch, 25)) {
         return EscapeResult::Unhandled;
     }
+    bool alt_meta_prefix = consume_alt_meta_prefix(ch);
+    if (!alt_meta_prefix) {
+        alt_meta_prefix = editor::consume_pending_escape_alt_meta();
+    }
     if (ch == '\r' || ch == '\n') {
         detail::insert_input(input, "\n", status);
         status = "Inserted newline. Enter sends; Ctrl+S also sends.";
@@ -133,13 +199,20 @@ EscapeResult handle_escape(editor::EditorState& input,
     }
 
     std::string sequence;
-    if (ch == '[' || ch == 'O') {
-        sequence.push_back(static_cast<char>(ch));
-        while (sequence.size() < 16 && editor::read_terminal_byte(ch, 25)) {
-            sequence.push_back(static_cast<char>(ch));
-            if (is_escape_final(ch)) {
-                break;
+    if (read_csi_sequence(ch, sequence)) {
+        editor::MovementKeyEvent movement;
+        if (editor::parse_movement_sequence(sequence, movement)) {
+            apply_alt_meta_prefix(movement, alt_meta_prefix);
+            if (!input_only_movement && apply_chat_history_scroll(movement, layout, history_scroll)) {
+                // Chat history scroll handled; leave input cursor unchanged.
+            } else {
+                input.apply_movement(movement.key,
+                                     layout.input_rect,
+                                     movement.shift,
+                                     movement.alt,
+                                     movement.ctrl);
             }
+            return EscapeResult::Handled;
         }
     } else {
         if (ch == 'r' || ch == 'R') {
@@ -147,31 +220,6 @@ EscapeResult handle_escape(editor::EditorState& input,
         }
         if (ch >= 32 || ch == '\t') {
             detail::insert_input(input, std::string(1, static_cast<char>(ch)), status);
-        }
-        return EscapeResult::Handled;
-    }
-
-    editor::MovementKeyEvent movement;
-    if (editor::parse_movement_sequence(sequence, movement)) {
-        if (input_only_movement) {
-            input.apply_movement(movement.key, layout.input_rect, movement.shift, movement.alt);
-        } else if (!movement.shift && !movement.alt && (movement.key == editor::MovementKey::Home ||
-                                                        movement.key == editor::MovementKey::End)) {
-            if (movement.key == editor::MovementKey::Home) {
-                history_scroll = history_scroll_for_thread_beginning();
-            } else {
-                history_scroll = history_scroll_for_thread_end();
-            }
-        } else if (!movement.shift && (movement.key == editor::MovementKey::PageUp ||
-                                       movement.key == editor::MovementKey::PageDown)) {
-            const int step = std::max(1, layout.history_rows / 2);
-            if (movement.key == editor::MovementKey::PageUp) {
-                history_scroll += step;
-            } else {
-                history_scroll -= step;
-            }
-        } else {
-            input.apply_movement(movement.key, layout.input_rect, movement.shift, movement.alt);
         }
         return EscapeResult::Handled;
     }

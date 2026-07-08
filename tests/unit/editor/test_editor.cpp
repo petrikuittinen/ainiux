@@ -929,17 +929,35 @@ void test_editor_movement_sequence_parse() {
               event.key == pkchat::editor::MovementKey::PageUp,
           "shift page up sequence parses");
     check(pkchat::editor::parse_movement_sequence("[1;3H", event) && !event.shift && event.alt &&
-              event.key == pkchat::editor::MovementKey::Home,
+              !event.ctrl && event.key == pkchat::editor::MovementKey::Home,
           "alt home sequence parses");
-    check(pkchat::editor::parse_movement_sequence("[1;3F", event) && !event.shift && event.alt &&
-              event.key == pkchat::editor::MovementKey::End,
-          "alt end sequence parses");
+    check(pkchat::editor::parse_movement_sequence("[1;5H", event) && !event.shift && !event.alt &&
+              event.ctrl && event.key == pkchat::editor::MovementKey::Home,
+          "ctrl home sequence parses");
+    check(pkchat::editor::parse_movement_sequence("[1;5F", event) && !event.shift && !event.alt &&
+              event.ctrl && event.key == pkchat::editor::MovementKey::End,
+          "ctrl end sequence parses");
     check(pkchat::editor::parse_movement_sequence("[1;3~", event) && !event.shift && event.alt &&
-              event.key == pkchat::editor::MovementKey::Home,
+              !event.ctrl && event.key == pkchat::editor::MovementKey::Home,
           "alt home tilde sequence parses");
+    check(pkchat::editor::parse_movement_sequence("[1;5~", event) && !event.shift && !event.alt &&
+              event.ctrl && event.key == pkchat::editor::MovementKey::Home,
+          "ctrl home tilde sequence parses");
     check(pkchat::editor::parse_movement_sequence("[4;3~", event) && !event.shift && event.alt &&
-              event.key == pkchat::editor::MovementKey::End,
+              !event.ctrl && event.key == pkchat::editor::MovementKey::End,
           "alt end tilde sequence parses");
+    check(pkchat::editor::parse_movement_sequence("[5;3~", event) && !event.shift && event.alt &&
+              !event.ctrl && event.key == pkchat::editor::MovementKey::PageUp,
+          "alt page up sequence parses");
+    check(pkchat::editor::parse_movement_sequence("[6;3~", event) && !event.shift && event.alt &&
+              !event.ctrl && event.key == pkchat::editor::MovementKey::PageDown,
+          "alt page down sequence parses");
+    check(pkchat::editor::parse_movement_sequence("[57362;3u", event) && !event.shift && event.alt &&
+              !event.ctrl && event.key == pkchat::editor::MovementKey::PageUp,
+          "kitty Alt+PageUp sequence parses");
+    check(pkchat::editor::parse_movement_sequence("[57360;3u", event) && !event.shift && event.alt &&
+              event.key == pkchat::editor::MovementKey::Home,
+          "kitty Alt+Home sequence parses");
 }
 
 void test_editor_select_all() {
@@ -969,12 +987,12 @@ void test_editor_line_home_end_navigation() {
     check(state.cursor == state.text.line_start(1) + state.text.line_length(1),
           "editor End moves to the end of the current line");
 
-    state.apply_movement(pkchat::editor::MovementKey::Home, rect, false, true);
-    check(state.cursor == 0, "editor Alt+Home moves to the beginning of the buffer");
-    check(state.scroll_line == 0, "editor Alt+Home scrolls to the top of the buffer");
+    state.apply_movement(pkchat::editor::MovementKey::Home, rect, false, false, true);
+    check(state.cursor == 0, "editor Ctrl+Home moves to the beginning of the buffer");
+    check(state.scroll_line == 0, "editor Ctrl+Home scrolls to the top of the buffer");
 
-    state.apply_movement(pkchat::editor::MovementKey::End, rect, false, true);
-    check(state.cursor == state.text.size(), "editor Alt+End moves to the end of the buffer");
+    state.apply_movement(pkchat::editor::MovementKey::End, rect, false, false, true);
+    check(state.cursor == state.text.size(), "editor Ctrl+End moves to the end of the buffer");
 }
 
 void test_editor_wrapped_line_home_end_navigation() {
@@ -1382,7 +1400,7 @@ void test_editor_undo_redo_key_bindings() {
     check(pkchat::editor::is_editor_undo_key(21), "Ctrl+U is an editor undo key");
     check(!pkchat::editor::is_editor_undo_key(18), "Ctrl+R is not an editor undo key");
 
-    check(pkchat::editor::is_editor_redo_key(18), "Ctrl+R is an editor redo key");
+    check(!pkchat::editor::is_editor_redo_key(18), "Ctrl+R is not an editor redo key");
     check(pkchat::editor::is_editor_redo_key(25), "Ctrl+Y is an editor redo key");
     check(!pkchat::editor::is_editor_redo_key(26), "Ctrl+Z is not an editor redo key");
 
@@ -1390,7 +1408,7 @@ void test_editor_undo_redo_key_bindings() {
     check(pkchat::editor::decode_control_key_sequence("[26;5u", decoded) && decoded == 26,
           "kitty Ctrl+Z sequence decodes to undo key");
     check(pkchat::editor::decode_control_key_sequence("[18;5u", decoded) && decoded == 18,
-          "kitty Ctrl+R sequence decodes to redo key");
+          "kitty Ctrl+R sequence decodes to regenerate key");
 }
 
 void test_editor_undo_redo() {

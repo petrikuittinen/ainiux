@@ -24,6 +24,10 @@ std::string system_edit_text();
 std::string history_edit_text();
 std::string join_models_preview(const std::vector<std::string>& models);
 
+bool apply_chat_history_scroll(const editor::MovementKeyEvent& movement,
+                               const Layout& layout,
+                               int& history_scroll);
+
 EscapeResult handle_escape(editor::EditorState& input,
                            const Layout& layout,
                            int& history_scroll,

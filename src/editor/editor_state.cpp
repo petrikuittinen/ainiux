@@ -457,7 +457,11 @@ void EditorState::finish_movement(bool extend_selection) {
     }
 }
 
-void EditorState::apply_movement(MovementKey key, const Rect& rect, bool extend_selection, bool alt) {
+void EditorState::apply_movement(MovementKey key,
+                                 const Rect& rect,
+                                 bool extend_selection,
+                                 bool /*alt*/,
+                                 bool ctrl) {
     begin_movement(extend_selection);
     switch (key) {
         case MovementKey::Left:
@@ -479,14 +483,14 @@ void EditorState::apply_movement(MovementKey key, const Rect& rect, bool extend_
             page_down(rect);
             break;
         case MovementKey::Home:
-            if (alt) {
+            if (ctrl) {
                 move_home();
             } else {
                 move_line_home(rect);
             }
             break;
         case MovementKey::End:
-            if (alt) {
+            if (ctrl) {
                 move_end();
             } else {
                 move_line_end(rect);

@@ -4,7 +4,7 @@ Current bindings as implemented in `src/tui/run.cpp`, `src/tui/input_handlers.cp
 
 ---
 
-## `--chat` mode (full-screen chat TUI)
+## `--chat` mode (TUI)
 
 ### Send, quit, and cancel
 
@@ -15,7 +15,6 @@ Current bindings as implemented in `src/tui/run.cpp`, `src/tui/input_handlers.cp
 | `Esc` then `Enter` | Insert newline in input |
 | `Alt+Enter` | Newline where the terminal emits it (same intent as `Esc`+`Enter`; shown in status line) |
 | `Ctrl+Q` | Quit chat mode |
-| `Ctrl+D` | Quit when input is empty |
 | `Esc` (alone, no follow-up key within ~25 ms) | Cancel active model request or file job |
 
 ### Input editing
@@ -28,7 +27,7 @@ Current bindings as implemented in `src/tui/run.cpp`, `src/tui/input_handlers.cp
 | `Ctrl+V` | Paste (internal clipboard, then bracketed terminal paste) |
 | `Ctrl+K` | Kill from cursor to end of line |
 | `Ctrl+Z` or `Ctrl+U` | Undo last edit (typing, delete, cut, paste) |
-| `Ctrl+R` or `Ctrl+Y` | Redo |
+| `Ctrl+Y` | Redo |
 | `Backspace` | Delete before cursor |
 | `Delete` | Delete at cursor |
 | `Tab` | Slash-command completion (start of first line) or path completion after `/insert`, `/attach`, `/save`, `/load` |
@@ -40,10 +39,12 @@ Bracketed terminal paste (middle-click or Shift+Insert in many terminals) is als
 | Shortcut | Action |
 |----------|--------|
 | `Ctrl+E` | Copy last user/assistant message into input for editing (`/edit`) |
-| `Ctrl+P` | Pop last user or assistant message (`/pop`) |
+| `Ctrl+R` | Regenerate last answer (resend last user prompt) |
 | `Ctrl+T` | Toggle thinking-trace display (`/thinking trace` / `notrace`) |
 | `Ctrl+L` | Open saved-thread picker (`/list`) |
-| `Esc` then `R` / `Alt+R` | Regenerate last answer |
+| `Esc` then `R` / `Alt+R` | Regenerate last answer (alternate binding) |
+
+Use `/pop` to remove the last user or assistant message.
 
 ### Cursor and selection (normal chat input)
 
@@ -51,10 +52,12 @@ Bracketed terminal paste (middle-click or Shift+Insert in many terminals) is als
 |----------|--------|
 | Arrow keys | Move cursor (visual-row movement across soft-wrapped lines) |
 | `Shift` + arrows | Extend selection |
-| `Alt+Home` / `Alt+End` | Jump to start/end of input buffer |
+| `Home` / `End` | Beginning / end of current line |
+| `Ctrl+Home` / `Ctrl+End` | Beginning / end of input buffer |
+| `PageUp` / `PageDown` | Page up / down in input (same as editor) |
 | `Shift` + `PageUp`/`PageDown`/`Home`/`End` | Extend selection |
-| `Home` / `End` | Scroll **chat history** to thread start / live bottom |
-| `PageUp` / `PageDown` | Scroll **chat history** (half viewport step) |
+| `Alt+PageUp` / `Alt+PageDown` | Scroll chat history (half viewport step) |
+| `Alt+Home` / `Alt+End` | Jump to oldest history / live bottom |
 
 ### Sub-mode shortcuts
 
@@ -63,7 +66,7 @@ Bracketed terminal paste (middle-click or Shift+Insert in many terminals) is als
 - `Enter` or `Ctrl+S` — save
 - Bare `Esc` — cancel
 - Arrow/`Home`/`End`/etc. — edit the buffer (not history scroll)
-- `Ctrl+Z`/`Ctrl+U`, `Ctrl+R`/`Ctrl+Y`, copy/cut/paste — same as normal input editing
+- `Ctrl+Z`/`Ctrl+U`, `Ctrl+Y`, copy/cut/paste — same as normal input editing
 
 **Thread list** (`Ctrl+L` / `/list`):
 
@@ -115,7 +118,7 @@ Bracketed terminal paste (middle-click or Shift+Insert in many terminals) is als
 | `Ctrl+C` / `Ctrl+X` / `Ctrl+V` | Copy / cut / paste |
 | `Ctrl+K` | Kill to end of line |
 | `Ctrl+Z` or `Ctrl+U` | Undo last edit (typing, delete, cut, paste) |
-| `Ctrl+R` or `Ctrl+Y` | Redo |
+| `Ctrl+Y` | Redo |
 | `Ctrl+A` | Select all |
 | `Backspace` | Delete before cursor |
 | `Delete` | Delete at cursor |
@@ -141,7 +144,7 @@ Bracketed terminal paste is undoable with `Ctrl+Z` / `Ctrl+U`.
 | Arrow keys | Move cursor (**logical-line** up/down) |
 | `Shift` + arrows | Extend selection |
 | `Home` / `End` | Beginning / end of **current line** |
-| `Alt+Home` / `Alt+End` | Beginning / end of **buffer** |
+| `Ctrl+Home` / `Ctrl+End` | Beginning / end of **buffer** |
 | `PageUp` / `PageDown` | Move/scroll in document |
 | `Shift` + movement keys | Extend selection |
 
@@ -155,9 +158,20 @@ Also: `/provider`, `/model`, `/search QUERY`
 
 ---
 
-## Shortcuts that differ between modes
+## Shared movement and editing (both modes)
 
-### Same key, different action
+| Shortcut | Action |
+|----------|--------|
+| `Ctrl+Z` or `Ctrl+U` | Undo |
+| `Ctrl+Y` | Redo |
+| `Home` / `End` | Beginning / end of current line |
+| `Ctrl+Home` / `Ctrl+End` | Beginning / end of buffer |
+| `PageUp` / `PageDown` | Page up / down in input or document |
+| `Ctrl+Q` | Quit |
+| `Ctrl+C` / `Ctrl+X` / `Ctrl+V` / `Ctrl+K` / `Ctrl+A` | Copy / cut / paste / kill line / select all |
+| `Shift` + movement keys | Extend selection |
+
+## Shortcuts that differ between modes
 
 | Shortcut | `--chat` | `--editor` |
 |----------|----------|------------|
@@ -165,48 +179,8 @@ Also: `/provider`, `/model`, `/search QUERY`
 | `Ctrl+S` | Send message | Save file |
 | `Ctrl+L` | Thread list (`/list`) | Buffer list (`/list`) |
 | `Ctrl+E` | Edit last chat message | **Unused** |
+| `Ctrl+R` | Regenerate last answer | **Unused** (redo is `Ctrl+Y` only) |
 | `Esc` (idle) | Cancel in-flight job | Open slash-command minibuffer |
-| `Home` / `End` | Scroll chat history | Move to line start/end |
-| `PageUp` / `PageDown` | Scroll chat history | Move/scroll in document |
+| `Alt+PageUp` / `Alt+PageDown` | Scroll chat history | **Unused** |
 | `Tab` | Command/path completion | Disabled |
 | `↑` / `↓` | Visual-row movement (soft wrap) | Logical-line movement |
-
-### Present in one mode only
-
-| Shortcut | Mode | Action |
-|----------|------|--------|
-| `Ctrl+D` | Chat only | Quit when input empty |
-| `Ctrl+E` | Chat only | Edit last message |
-| `Ctrl+P` | Chat only | Pop last message |
-| `Ctrl+T` | Chat only | Toggle thinking traces |
-| `Esc`+`Enter` / `Alt+Enter` | Chat only | Insert newline |
-| `Esc`+`R` / `Alt+R` | Chat only | Regenerate last answer |
-| `Ctrl+N` | Editor only | New buffer |
-| `Ctrl+O` | Editor only | Open file |
-| `Ctrl+W` | Editor only | Close buffer |
-| `Ctrl+Shift+S` | Editor only | Save as |
-| `Ctrl+F` / `Ctrl+H` | Editor only | Search / replace |
-| `F3` / `Shift+F3` | Editor only | Search next/previous |
-| `Ctrl+Space` | Editor only | AI continue at cursor |
-| `Ctrl+G` | Editor only | Cancel minibuffer/replace |
-
-### Shared (same behavior in both)
-
-`Ctrl+Q`, `Ctrl+C`, `Ctrl+X`, `Ctrl+V`, `Ctrl+K`, `Ctrl+A`, `Backspace`, `Delete`, bracketed paste, `Shift`+movement for selection, `Alt+Home`/`Alt+End` for buffer bounds.
-
-**Undo / redo (both modes):**
-
-| Primary | Alternate | Action |
-|---------|-----------|--------|
-| `Ctrl+Z` | `Ctrl+U` | Undo |
-| `Ctrl+R` | `Ctrl+Y` | Redo |
-
-**Note on redo vs regenerate:** `Ctrl+R` and `Ctrl+Y` are **redo** in both modes. Regenerate in chat is **`Esc`+`R`** or **`Alt+R`**, not `Ctrl+R`.
-
-### Slash-command UX differs
-
-| | `--chat` | `--editor` |
-|--|----------|------------|
-| How to run | Type `/command` directly in input | Press `Esc`, then type in minibuffer |
-| Tab completion | Yes (commands + some paths) | Yes in command minibuffer; disabled in main buffer |
-| Command sets | Chat/session oriented (`/load`, `/theme`, `/remove`, …) | File/AI oriented (`/spell`, `/open`, `/saveas`, …) |
