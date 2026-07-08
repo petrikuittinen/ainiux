@@ -41,6 +41,21 @@ void test_tui_layout_reserves_editor_input_panel() {
     check(large.history_rows > large.input_rect.height, "TUI layout keeps the editor from taking the full screen");
 }
 
+void test_tui_sqlite_unavailable_status() {
+    const std::string reason =
+        "could not open SQLite database: /home/test/.pkchat/pkchat.db: file is not a database";
+    const std::string status = pkchat::tui::sqlite_unavailable_status(reason);
+    check(status.find("Saved chat database unavailable:") == 0,
+          "SQLite unavailable status names the saved chat database");
+    check(status.find(reason) != std::string::npos,
+          "SQLite unavailable status includes the underlying open error");
+
+    const std::string fallback = pkchat::tui::sqlite_unavailable_status("");
+    check(fallback.find("Saved chat database unavailable") == 0 &&
+              fallback.find("~/.pkchat/pkchat.db") != std::string::npos,
+          "SQLite unavailable status without details suggests moving the database aside");
+}
+
 void test_tui_ready_and_generation_status() {
     check(pkchat::tui::ready_status() == std::string("pkchat v") + pkchat::kVersion +
                                               ". TAB command/path /help Alt+enter newline Ctrl+B/D scroll chat Alt+Home/End jump",
@@ -529,6 +544,7 @@ void run_all() {
     test_tui_provider_and_model_picker_text();
     test_tui_unicode_and_empty_status();
     test_tui_layout_reserves_editor_input_panel();
+    test_tui_sqlite_unavailable_status();
     test_tui_ready_and_generation_status();
     test_tui_ctrl_chat_history_scroll_shortcuts();
     test_tui_chat_history_scroll_keys();

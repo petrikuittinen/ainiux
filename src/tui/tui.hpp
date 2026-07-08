@@ -83,6 +83,7 @@ struct ThinkingDisplay {
 
 ThinkingDisplay thinking_display_text(const std::string& content, bool show_traces);
 std::string ready_status();
+std::string sqlite_unavailable_status(const std::string& reason);
 std::string chat_startup_status(const provider::RequestContext& context);
 std::string provider_model_status_message(const provider::RequestContext& context, const std::string& suffix);
 std::string provider_model_status_message(const provider::RequestContext& context,

@@ -62,6 +62,13 @@ std::string ready_status() {
            ". TAB command/path /help Alt+enter newline Ctrl+B/D scroll chat Alt+Home/End jump";
 }
 
+std::string sqlite_unavailable_status(const std::string& reason) {
+    if (reason.empty()) {
+        return "Saved chat database unavailable; move ~/.pkchat/pkchat.db aside and restart pkchat";
+    }
+    return "Saved chat database unavailable: " + reason;
+}
+
 std::string chat_startup_status(const provider::RequestContext& context) {
     if (context.profile.offline) {
         return "Select a provider with /provider, then choose a model with /model";

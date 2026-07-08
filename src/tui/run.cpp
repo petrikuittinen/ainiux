@@ -80,6 +80,7 @@ int run(provider::RequestContext context, chat::Session session) {
     chat::SqliteStore sqlite_store;
     bool sqlite_available = false;
     std::string sqlite_path;
+    std::string sqlite_unavailable_reason;
 
     auto apply_loaded_session_context = [&](const chat::Session& loaded) {
         Error context_error = apply_loaded_session_to_context(context, loaded);
@@ -159,12 +160,23 @@ int run(provider::RequestContext context, chat::Session session) {
         }
     };
 
-    Error sqlite_open_error = sqlite_store.open_default();
-    if (sqlite_open_error.ok()) {
-        sqlite_available = true;
-        sqlite_path = sqlite_store.path();
+    auto sqlite_unavailable_message = [&]() {
+        return sqlite_unavailable_status(sqlite_unavailable_reason);
+    };
+
+    const chat::DatabasePathResult sqlite_db_path = chat::default_sqlite_database_path();
+    if (!sqlite_db_path.error.ok()) {
+        sqlite_unavailable_reason = sqlite_db_path.error.message;
+        status = sqlite_unavailable_message();
     } else {
-        status = "SQLite persistence unavailable: " + sqlite_open_error.message;
+        sqlite_path = sqlite_db_path.path;
+        const Error sqlite_open_error = sqlite_store.open(sqlite_path);
+        if (sqlite_open_error.ok()) {
+            sqlite_available = true;
+        } else {
+            sqlite_unavailable_reason = sqlite_open_error.message;
+            status = sqlite_unavailable_message();
+        }
     }
 
     auto pending_assistant_is_hidden_thinking = [&]() {
@@ -278,7 +290,7 @@ int run(provider::RequestContext context, chat::Session session) {
 
     auto start_store_load = [&](long long thread_id) {
         if (!sqlite_available) {
-            status = "SQLite persistence is unavailable";
+            status = sqlite_unavailable_message();
             return;
         }
         if (file_job.running()) {
@@ -521,6 +533,10 @@ int run(provider::RequestContext context, chat::Session session) {
     };
 
     auto refresh_startup_status = [&]() {
+        if (!sqlite_available) {
+            status = sqlite_unavailable_message();
+            return;
+        }
         status = chat_startup_status(context);
     };
 
@@ -708,7 +724,7 @@ int run(provider::RequestContext context, chat::Session session) {
 
     auto start_thread_list = [&]() {
         if (!sqlite_available) {
-            status = "SQLite persistence is unavailable";
+            status = sqlite_unavailable_message();
             return;
         }
         if (active_job != ActiveJob::None) {
@@ -1034,7 +1050,7 @@ int run(provider::RequestContext context, chat::Session session) {
         }
         if (text == "/remove") {
             if (!sqlite_available) {
-                status = "SQLite persistence is unavailable";
+                status = sqlite_unavailable_message();
                 return;
             }
             if (session.thread_id <= 0) {
@@ -1047,7 +1063,7 @@ int run(provider::RequestContext context, chat::Session session) {
         }
         if (text == "/remove-empty") {
             if (!sqlite_available) {
-                status = "SQLite persistence is unavailable";
+                status = sqlite_unavailable_message();
                 return;
             }
             if (active_job != ActiveJob::None) {

@@ -317,6 +317,7 @@ def scenario_stale_last_thread(binary, base, model, home_dir):
 
 def scenario_corrupt_database(binary, base, model, home_dir):
     path = db_path(home_dir)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
     with open(path, "wb") as handle:
         handle.write(b"not-a-sqlite-database")
 
@@ -328,11 +329,21 @@ def scenario_corrupt_database(binary, base, model, home_dir):
         [("/quit\r", 0.2)],
     )
     if (
-        b"SQLite persistence unavailable" not in transcript
+        b"Saved chat database unavailable" not in transcript
         and b"could not open SQLite database" not in transcript
         and b"notadb" not in transcript.lower()
     ):
         raise RuntimeError("expected corrupt SQLite database to surface a persistence error")
+
+    list_transcript = run_tui(
+        binary,
+        base,
+        model,
+        home_dir,
+        [("/list\r", 0.2), ("/quit\r", 0.2)],
+    )
+    if b"Saved chat database unavailable" not in list_transcript:
+        raise RuntimeError("expected /list to repeat the saved chat database error")
 
 
 def main():
