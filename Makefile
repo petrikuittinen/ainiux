@@ -38,7 +38,8 @@ BUILTIN_DATASET_PARTS := benchmarks/builtin/safety.jsonl \
                          benchmarks/builtin/reasoning.jsonl \
                          benchmarks/builtin/writing.jsonl \
                          benchmarks/builtin/coding.jsonl \
-                         benchmarks/builtin/multi-turn.jsonl
+                         benchmarks/builtin/multi-turn.jsonl \
+                         benchmarks/builtin/cutoff.jsonl
 BUILTIN_DATASET := benchmarks/builtin.jsonl
 
 SRC := $(shell find src -name '*.cpp' | sort)

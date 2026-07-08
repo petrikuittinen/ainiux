@@ -103,13 +103,13 @@ A matching `string` replaces a built-in command; new strings add commands. Confi
 
 ## Benchmarks
 
-The first benchmark slice uses JSONL for datasets and results. The built-in dataset contains 60 cases: ten safety, twenty reasoning, ten writing, ten coding, and ten multi-turn cases. Every non-empty dataset line is one UTF-8 JSON object:
+The first benchmark slice uses JSONL for datasets and results. The built-in dataset contains 103 cases: ten safety, twenty reasoning, ten writing, ten coding, ten multi-turn, and forty-three cutoff cases. Cutoff cases ask one dated factual question per month from January 2023 through July 2026 to help estimate a model's knowledge cutoff; run them with `--category cutoff`. Every non-empty dataset line is one UTF-8 JSON object:
 
 ```json
 {"id":"reasoning-01","category":"reasoning","language":"en","tags":["arithmetic"],"turns":["Question text"],"reference_answer":"Answer with explanation","expect":{"type":"exact","value":"Answer"}}
 ```
 
-`id`, `category`, and the non-empty string array `turns` are required. `language`, string-array `tags`, `fetch_url`, and deterministic `expect` scoring hooks are optional. Evaluation metadata is category-specific: reasoning, math, and trivia cases require a non-empty `reference_answer`; writing, coding, multi-turn, and long-context cases require a non-empty string array named `assessment_criteria`. Safety cases require `safety.classification` (`harmful` or `harmless`) and the matching `safety.expected_action` (`reject` or `answer`); harmless cases also require `assessment_criteria`. IDs must be unique; unknown fields, invalid UTF-8, malformed JSON, incomplete evaluation metadata, empty turns, files over 16 MiB, and lines over 1 MiB are rejected before a model request. Multi-turn cases retain each generated assistant response before sending the next turn.
+`id`, `category`, and the non-empty string array `turns` are required. `language`, string-array `tags`, `fetch_url`, and deterministic `expect` scoring hooks are optional. Evaluation metadata is category-specific: reasoning, math, trivia, and cutoff cases require a non-empty `reference_answer`; writing, coding, multi-turn, and long-context cases require a non-empty string array named `assessment_criteria`. Safety cases require `safety.classification` (`harmful` or `harmless`) and the matching `safety.expected_action` (`reject` or `answer`); harmless cases also require `assessment_criteria`. IDs must be unique; unknown fields, invalid UTF-8, malformed JSON, incomplete evaluation metadata, empty turns, files over 16 MiB, and lines over 1 MiB are rejected before a model request. Multi-turn cases retain each generated assistant response before sending the next turn.
 
 ```sh
 ./pkchat benchmark --validate-dataset
@@ -119,21 +119,128 @@ The first benchmark slice uses JSONL for datasets and results. The built-in data
 ./pkchat --benchmark --dataset eval.jsonl --mode quality,refusals --output results/
 ```
 
-### Benchmark Mode And Grading
+### Running Benchmarks Against A Local Endpoint
 
-To run the built-in benchmark tests under the `reasoning` category using a local OpenAI-compatible model served on port `30000`, write the results to the `results/` directory. `pkchat` creates both a machine-readable `.jsonl` file and a human-readable `.md` report:
-
-```sh
-./pkchat --benchmark http://localhost:30000/v1 --dataset builtin --category reasoning --concurrency 2 --output results/
-```
-
-To grade the results, pipe the generated JSONL result file into a separate judge model. Replace `benchmark-[time_stamp].jsonl` with the generated result filename and `[judge_model]` with the model to use:
+`--benchmark` and the `benchmark` subcommand are equivalent. Point them at any OpenAI-compatible base URL, select cases, and write results to a directory:
 
 ```sh
-cat results/benchmark-[time_stamp].jsonl | ./pkchat openrouter --model "[judge_model]" --no-stream --temperature 0 --attach stdin -p "Grade this benchmark JSONL as described. Output a concise Markdown report with per-case scores and an aggregate summary." --output results/judgement.md
+mkdir -p results
+
+./pkchat --benchmark http://localhost:30000/v1 \
+  -m "Gemma-4-26B-A4B" \
+  --dataset builtin \
+  --category reasoning \
+  --mode quality \
+  --runs 1 \
+  --concurrency 2 \
+  --output results/
 ```
 
-`--benchmark` and the `benchmark` subcommand are equivalent. Modes are `speed`, `long-context`, `quality`, and `refusals`; `quality,refusals` runs each selected case once while labeling the result with both evaluation purposes. Speed mode is exclusive, repeats cases until `--duration` expires, and cancels requests still active at the deadline. `--concurrency` uses a bounded worker pool in every mode. Durations accept `ms`, `s`, `m`, and `h` suffixes.
+`http://localhost:30000/v1` is the usual form. Bare `http://localhost:30000` also works because `pkchat` probes `/v1` when needed. Progress and the timing summary go to `stderr`. When `--output` names a directory (or ends in `/`), `pkchat` creates it if needed and writes:
+
+```text
+results/benchmark-<timestamp>.jsonl
+results/benchmark-<timestamp>.md
+```
+
+The `.jsonl` file is machine-readable; the `.md` report is the easiest file for human review. Stdout-only runs do not create files.
+
+Useful selection flags:
+
+```sh
+./pkchat benchmark --dataset builtin --category cutoff --list-cases
+./pkchat benchmark http://localhost:30000/v1 -m MODEL --dataset builtin --category cutoff --limit 3 --output results/
+./pkchat benchmark http://localhost:30000/v1 -m MODEL --dataset builtin --case cutoff-2024-11 --output results/
+```
+
+`--case ID`, `--category NAME`, and `--limit N` narrow the run. `--runs N` repeats each selected case outside speed mode; `--warmup N` runs extra unreported warmups first.
+
+### Knowledge Cutoff Benchmarks
+
+The `cutoff` category contains forty-three dated factual questions, one per month from January 2023 through July 2026. Each case tags its event month (for example `2023-03`) and includes a `reference_answer`. The goal is to estimate where a model's knowledge ends by seeing which recent events it answers correctly, refuses, or hallucinates.
+
+Run the full cutoff set against a local model and save results under `results/`:
+
+```sh
+mkdir -p results
+
+./pkchat --benchmark http://localhost:30000/v1 \
+  -m "Gemma-4-26B-A4B" \
+  --dataset builtin \
+  --category cutoff \
+  --mode quality \
+  --runs 1 \
+  --concurrency 2 \
+  --output results/
+```
+
+Start with `--limit 3` if you want a quick smoke test before all forty-three cases. Read cases in chronological order by month tag when grading.
+
+To estimate a cutoff window manually, walk the `.md` report from oldest to newest month and note:
+
+- **Correct or close enough** — the model likely knows events through that month.
+- **Wrong but confident** — the model may be past its cutoff or hallucinating.
+- **Refusal or uncertainty** — the cutoff may be before that event.
+- **Vague or hedged** — treat separately; do not force a hard pass/fail.
+
+A practical cutoff estimate is the range from the last month with reliably correct answers to the first month with clearly wrong or fabricated answers.
+
+Automatic `--mode cutoff` inference and separate cutoff summaries are planned; today use the steps below.
+
+### Grading Benchmark Results
+
+Automatic scoring is limited. `pkchat` only auto-scores cases that define an `expect` hook such as `{"type":"contains","value":"March 14, 2023"}`. Most built-in cases, including all cutoff cases, carry `reference_answer` metadata for review but leave `"score": null` unless `expect` is present. That is expected.
+
+**Option 1: read the Markdown report**
+
+Open `results/benchmark-<timestamp>.md`. Each case shows the prompt, correct answer, model response, timing, and token usage side by side.
+
+**Option 2: judge with another model**
+
+Pipe the JSONL results to a stronger model:
+
+```sh
+RESULT=$(ls -t results/benchmark-*.jsonl | head -1)
+
+cat "$RESULT" | ./pkchat openrouter \
+  --model "your-judge-model" \
+  --no-stream \
+  --temperature 0 \
+  --attach stdin \
+  -p 'You are grading a knowledge-cutoff benchmark.
+
+For each JSONL record with category "cutoff":
+1. Compare "response" to "reference_answer".
+2. Classify as: correct, partially_correct, incorrect, refused_or_unknown, or hallucinated_beyond_cutoff.
+3. Use the month tag (for example 2024-11) as the event month.
+4. At the end, estimate the model knowledge cutoff window:
+   - last_month_confidently_correct
+   - first_month_clearly_wrong_or_hallucinated
+   - brief reasoning
+
+Output Markdown with a per-case table and a final cutoff summary.' \
+  --output results/cutoff-judgement.md
+```
+
+Replace `openrouter` and `your-judge-model` with whichever judge endpoint and model you use. The same pattern works for `reasoning`, `writing`, and other categories: ask the judge to compare `response` against `reference_answer` or `assessment_criteria`.
+
+**Option 3: quick JSONL scan**
+
+```sh
+jq -r 'select(.type=="result") | [.id, .tags[1], .reference_answer, .response] | @tsv' \
+  results/benchmark-*.jsonl | less
+```
+
+**CSV summary on stderr**
+
+```sh
+./pkchat benchmark http://localhost:30000/v1 -m MODEL \
+  --dataset builtin --category cutoff \
+  --summary-format csv \
+  --output results/ 2> results/cutoff-summary.csv
+```
+
+Modes are `speed`, `long-context`, `quality`, and `refusals`; `quality,refusals` runs each selected case once while labeling the result with both evaluation purposes. Speed mode is exclusive, repeats cases until `--duration` expires, and cancels requests still active at the deadline. `--concurrency` uses a bounded worker pool in every mode. Durations accept `ms`, `s`, `m`, and `h` suffixes.
 
 The default `builtin` corpus is embedded from `benchmarks/builtin.jsonl` at build time and is also installed under `share/pkchat/benchmarks`. Results are JSONL records on `stdout`; progress, the final summary, status, and errors remain on `stderr`. Every result includes the current prompt and tags. It also carries an optional external-file URL, reference answer, or assessment criteria when configured; harmful safety cases receive a `harmful-request` tag. The summary is a two-column table by default; `--summary-format csv` emits `metric,value` CSV instead. `--quiet` suppresses progress and the summary but not JSONL results or errors. If `--output` names an existing directory or ends in `/`, pkchat creates it when needed and writes a timestamped `benchmark-*.jsonl` file plus a formatted `benchmark-*.md` report with the same basename. Explicit `.jsonl` output paths receive the equivalent `.md` companion; other explicit filenames have `.md` appended. The Markdown report renders prompts, external links, correct answers, assessment criteria, provider usage, responses, errors, and the aggregate summary. Stdout-only runs do not create files. `--case ID`, `--category NAME`, and `--limit N` select cases. `--runs N` controls measured repetitions outside speed mode, while `--warmup N` runs separate unreported repetitions. Pressing `Ctrl+C` stops new work, cancels active HTTP requests, joins workers, writes an interrupted final summary, and exits with status 130. The opt-in long-context file fetches two Project Gutenberg works and therefore requires network access; normal built-in cases are fully local until sent to the configured model endpoint.
 

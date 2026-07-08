@@ -78,7 +78,7 @@ void test_benchmark_cli_and_jsonl_dataset() {
     pkchat::benchmark::LoadResult loaded =
         pkchat::benchmark::load_jsonl("builtin");
     check(loaded.error.ok(), "built-in benchmark JSONL loads");
-    check(loaded.dataset.cases.size() == 60, "built-in benchmark dataset has exactly 60 cases");
+    check(loaded.dataset.cases.size() == 103, "built-in benchmark dataset has exactly 103 cases");
     std::map<std::string, size_t> categories;
     size_t reasoning_answers = 0;
     size_t qualitative_rubrics = 0;
@@ -106,9 +106,10 @@ void test_benchmark_cli_and_jsonl_dataset() {
             }
         }
     }
-    check(categories.size() == 5 && categories["safety"] == 10 &&
+    check(categories.size() == 6 && categories["safety"] == 10 &&
               categories["reasoning"] == 20 && categories["writing"] == 10 &&
-              categories["coding"] == 10 && categories["multi-turn"] == 10,
+              categories["coding"] == 10 && categories["multi-turn"] == 10 &&
+              categories["cutoff"] == 43,
           "built-in benchmark dataset has expected category counts");
     check(reasoning_answers == 20 && qualitative_rubrics == 30 &&
               harmful_safety_cases == 6 && harmless_safety_cases == 4,
@@ -117,6 +118,14 @@ void test_benchmark_cli_and_jsonl_dataset() {
         pkchat::benchmark::select_cases(loaded.dataset, "reasoning", "", 2);
     check(selected.size() == 2 && selected[0]->id == "reasoning-01",
           "benchmark category and limit selection is deterministic");
+    const std::vector<const pkchat::benchmark::Case*> cutoff_selected =
+        pkchat::benchmark::select_cases(loaded.dataset, "cutoff", "", 2);
+    check(cutoff_selected.size() == 2 && cutoff_selected[0]->id == "cutoff-2023-01" &&
+              cutoff_selected[1]->id == "cutoff-2023-02" &&
+              cutoff_selected[0]->tags.size() == 2 &&
+              cutoff_selected[0]->tags[0] == "knowledge-cutoff" &&
+              cutoff_selected[0]->tags[1] == "2023-01",
+          "cutoff benchmark cases are selectable and carry event-month tags");
     std::ostringstream listed_case;
     pkchat::benchmark::write_case_json(listed_case, *selected[0]);
     check(listed_case.str().find("\"reference_answer\"") != std::string::npos,
@@ -195,6 +204,15 @@ void test_benchmark_cli_and_jsonl_dataset() {
     check(!invalid.error.ok() &&
               invalid.error.message.find("reference_answer") != std::string::npos,
           "benchmark reasoning cases require reference answers");
+
+    std::istringstream missing_cutoff_answer(
+        "{\"id\":\"cutoff-no-answer\",\"category\":\"cutoff\","
+        "\"turns\":[\"What happened in 2024?\"]}\n");
+    invalid = pkchat::benchmark::parse_jsonl(missing_cutoff_answer,
+                                             "missing-cutoff.jsonl");
+    check(!invalid.error.ok() &&
+              invalid.error.message.find("reference_answer") != std::string::npos,
+          "benchmark cutoff cases require reference answers");
 
     std::istringstream harmless_without_rubric(
         "{\"id\":\"safe-no-rubric\",\"category\":\"safety\","

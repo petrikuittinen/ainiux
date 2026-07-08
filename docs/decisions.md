@@ -128,7 +128,7 @@ v0.84 splits the largest application sources into focused directories so CLI, ed
 - `src/editor/` owns the standalone `--editor` mode (`piece_table`, `editor_state`, `render`, `file_io`, `terminal_ui`, `run_editor`, `editor_assist`, and `detail/` Unicode helpers).
 - `src/tui/` owns the full-screen TUI (`layout`, `status`, `theme`, `thinking`, `terminal`, `input_handlers`, `run`, and `detail/` frame rendering).
 
-The benchmark built-in JSONL corpus is split into category files under `benchmarks/builtin/` (`coding.jsonl`, `multi-turn.jsonl`, `reasoning.jsonl`, `safety.jsonl`, `writing.jsonl`) so individual prompt sets can be maintained without editing one large file.
+The benchmark built-in JSONL corpus is split into category files under `benchmarks/builtin/` (`coding.jsonl`, `cutoff.jsonl`, `multi-turn.jsonl`, `reasoning.jsonl`, `safety.jsonl`, `writing.jsonl`) so individual prompt sets can be maintained without editing one large file. The `cutoff` category contains one dated factual question per month (January 2023 through July 2026) sourced from `llm_knowledge_cutoff_test_dataset_v2.md`; each case tags its event month and carries a `reference_answer` for knowledge-cutoff evaluation.
 
 ## Version Metadata and Test Layout (v0.83)
 

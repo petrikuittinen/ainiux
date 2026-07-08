@@ -214,9 +214,10 @@ Error parse_evaluation_metadata(const json::Value& value,
     }
 
     if ((output.category == "reasoning" || output.category == "math" ||
-         output.category == "trivia") && output.reference_answer.empty()) {
+         output.category == "trivia" || output.category == "cutoff") &&
+        output.reference_answer.empty()) {
         return schema_error(source, line,
-                            "reasoning, math, and trivia cases require a non-empty "
+                            "reasoning, math, trivia, and cutoff cases require a non-empty "
                             "'reference_answer'");
     }
     if ((output.category == "writing" || output.category == "coding" ||
