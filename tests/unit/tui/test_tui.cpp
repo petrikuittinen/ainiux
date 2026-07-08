@@ -43,7 +43,7 @@ void test_tui_layout_reserves_editor_input_panel() {
 
 void test_tui_ready_and_generation_status() {
     check(pkchat::tui::ready_status() == std::string("pkchat v") + pkchat::kVersion +
-                                              ". TAB command/path /help Alt+enter newline Alt+PgUp/PgDn/Home/End scroll chat",
+                                              ". TAB command/path /help Alt+enter newline Ctrl+B/D scroll chat Alt+Home/End jump",
           "TUI ready status displays compact version and key hints");
 
     pkchat::provider::ChatResult result;
@@ -401,6 +401,15 @@ void test_tui_restore_cli_context() {
           "TUI restore_cli_context resets provider context to command-line defaults");
 }
 
+void test_tui_ctrl_chat_history_scroll_shortcuts() {
+    pkchat::tui::Layout layout = pkchat::tui::layout_for_terminal(24, 80);
+    int history_scroll = 0;
+    pkchat::tui::scroll_chat_history_page_up(layout, history_scroll);
+    check(history_scroll > 0, "Ctrl+B helper scrolls chat history back");
+    pkchat::tui::scroll_chat_history_page_down(layout, history_scroll);
+    check(history_scroll == 0, "Ctrl+D helper scrolls chat history forward");
+}
+
 void test_tui_chat_history_scroll_keys() {
     pkchat::tui::Layout layout = pkchat::tui::layout_for_terminal(24, 80);
     int history_scroll = 0;
@@ -521,6 +530,7 @@ void run_all() {
     test_tui_unicode_and_empty_status();
     test_tui_layout_reserves_editor_input_panel();
     test_tui_ready_and_generation_status();
+    test_tui_ctrl_chat_history_scroll_shortcuts();
     test_tui_chat_history_scroll_keys();
     test_tui_read_terminal_input_marks_alt_meta_prefix();
     test_tui_handle_escape_alt_pageup_scrolls_history();

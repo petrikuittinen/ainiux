@@ -1592,6 +1592,16 @@ int run(provider::RequestContext context, chat::Session session) {
                     status = input.redo() ? "Redone" : "Nothing to redo";
                     continue;
                 }
+                if (mode == TuiMode::Chat && ch == 2) {
+                    const detail::TuiSize screen = detail::terminal_size();
+                    scroll_chat_history_page_up(layout_for_terminal(screen.rows, screen.cols), history_scroll);
+                    continue;
+                }
+                if (mode == TuiMode::Chat && ch == 4) {
+                    const detail::TuiSize screen = detail::terminal_size();
+                    scroll_chat_history_page_down(layout_for_terminal(screen.rows, screen.cols), history_scroll);
+                    continue;
+                }
                 if (ch == 18 && mode == TuiMode::Chat) {
                     regenerate_last_turn();
                     continue;

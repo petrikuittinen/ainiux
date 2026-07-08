@@ -56,8 +56,10 @@ Use `/pop` to remove the last user or assistant message.
 | `Ctrl+Home` / `Ctrl+End` | Beginning / end of input buffer |
 | `PageUp` / `PageDown` | Page up / down in input (same as editor) |
 | `Shift` + `PageUp`/`PageDown`/`Home`/`End` | Extend selection |
-| `Alt+PageUp` / `Alt+PageDown` | Scroll chat history (half viewport step) |
+| `Ctrl+B` | Scroll chat history back (older messages, half viewport) |
+| `Ctrl+D` | Scroll chat history forward (toward live bottom, half viewport) |
 | `Alt+Home` / `Alt+End` | Jump to oldest history / live bottom |
+| `Alt+PageUp` / `Alt+PageDown` | Scroll chat history (when the terminal sends them; often blocked in SSH clients) |
 
 ### Sub-mode shortcuts
 
@@ -181,6 +183,7 @@ Also: `/provider`, `/model`, `/search QUERY`
 | `Ctrl+E` | Edit last chat message | **Unused** |
 | `Ctrl+R` | Regenerate last answer | **Unused** (redo is `Ctrl+Y` only) |
 | `Esc` (idle) | Cancel in-flight job | Open slash-command minibuffer |
-| `Alt+PageUp` / `Alt+PageDown` | Scroll chat history | **Unused** |
+| `Ctrl+B` / `Ctrl+D` | Scroll chat history back / forward | **Unused** |
+| `Alt+PageUp` / `Alt+PageDown` | Scroll chat history (if terminal allows) | **Unused** |
 | `Tab` | Command/path completion | Disabled |
 | `↑` / `↓` | Visual-row movement (soft wrap) | Logical-line movement |

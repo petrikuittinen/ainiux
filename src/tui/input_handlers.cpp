@@ -52,6 +52,16 @@ void apply_alt_meta_prefix(editor::MovementKeyEvent& movement, bool alt_meta_pre
 
 }  // namespace
 
+void scroll_chat_history_page_up(const Layout& layout, int& history_scroll) {
+    const int step = std::max(1, layout.history_rows / 2);
+    history_scroll += step;
+}
+
+void scroll_chat_history_page_down(const Layout& layout, int& history_scroll) {
+    const int step = std::max(1, layout.history_rows / 2);
+    history_scroll -= step;
+}
+
 bool apply_chat_history_scroll(const editor::MovementKeyEvent& movement,
                                const Layout& layout,
                                int& history_scroll) {
@@ -59,16 +69,12 @@ bool apply_chat_history_scroll(const editor::MovementKeyEvent& movement,
         return false;
     }
     switch (movement.key) {
-        case editor::MovementKey::PageUp: {
-            const int step = std::max(1, layout.history_rows / 2);
-            history_scroll += step;
+        case editor::MovementKey::PageUp:
+            scroll_chat_history_page_up(layout, history_scroll);
             return true;
-        }
-        case editor::MovementKey::PageDown: {
-            const int step = std::max(1, layout.history_rows / 2);
-            history_scroll -= step;
+        case editor::MovementKey::PageDown:
+            scroll_chat_history_page_down(layout, history_scroll);
             return true;
-        }
         case editor::MovementKey::Home:
             history_scroll = history_scroll_for_thread_beginning();
             return true;
