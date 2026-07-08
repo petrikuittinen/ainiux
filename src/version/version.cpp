@@ -6,7 +6,7 @@
 
 namespace pkchat {
 
-const char kVersion[] = "0.90";
+const char kVersion[] = "0.91";
 
 const char kCopyright[] = "Copyright (c) 2026 Petri Kuittinen";
 

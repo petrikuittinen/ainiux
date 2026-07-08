@@ -155,12 +155,12 @@ Question: On what date was Iranian Supreme Leader Ali Khamenei assassinated duri
 Answer: Around February 28, 2026.
 
 Date: 2026-03
-Question: What major sporting event took place in Italy from February 6 to 22, 2026?
-Answer: The 2026 Winter Olympic Games were held in Milan and Cortina d'Ampezzo.
+Question: On what date was Iraqi women's rights activist Yanar Mohammed assassinated outside her home in Baghdad?
+Answer: March 2, 2026. Iraqi women's rights activist Yanar Mohammed was assassinated outside her home in Baghdad.
 
 Date: 2026-04
-Question: What historic NASA crewed mission launched in early April 2026, sending astronauts on a lunar flyby?
-Answer: Artemis II launched around April 1, 2026 (first crewed flight beyond low Earth orbit since 1972).
+Question: On what date did US President Donald Trump and his officials rush offstage after a suspected gunman attempted to storm the White House Correspondents' Dinner at the Hilton Hotel in Washington, D.C.?
+Answer: April 25, 2026.
 
 Date: 2026-05
 Question: What major development occurred in the Iran conflict or related global diplomacy in May 2026?
