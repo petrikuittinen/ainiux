@@ -1,10 +1,9 @@
 name: CI
 
+# Automatic CI is disabled to avoid failure notification emails.
+# Run manually from GitHub: Actions → CI → Run workflow.
 on:
-  push:
-    branches:
-      - main
-  pull_request:
+  workflow_dispatch:
 
 jobs:
   test:
