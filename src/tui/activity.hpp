@@ -9,6 +9,7 @@
 
 namespace pkchat::tui {
 
+const char* input_label_status_message();
 std::string input_label_text();
 std::vector<StyledSegment> input_label_segments();
 

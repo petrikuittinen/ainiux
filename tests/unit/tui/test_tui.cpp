@@ -57,9 +57,9 @@ void test_tui_sqlite_unavailable_status() {
 }
 
 void test_tui_ready_and_generation_status() {
-    check(pkchat::tui::ready_status() == pkchat::app_version_label() +
-                                              ". TAB command/path /help Alt+enter newline Ctrl+B/D scroll chat Alt+Home/End jump",
-          "TUI ready status displays compact version and key hints");
+    check(pkchat::tui::ready_status() ==
+              "TAB command/path · Alt+Enter newline · Alt+Home/End jump chat",
+          "TUI ready status displays complementary input and navigation hints");
 
     pkchat::provider::ChatResult result;
     result.ttft_ms = 100;
@@ -253,9 +253,13 @@ void test_tui_thinking_trace_display() {
 
 void test_tui_input_label_and_activity_indicators() {
     const std::string label = pkchat::tui::input_label_text();
-    check(label.find(pkchat::app_version_label()) == 0, "TUI input label starts with app version branding");
+    check(label == pkchat::app_version_label() + pkchat::tui::input_label_status_message(),
+          "TUI input label concatenates app version branding with helper text");
     check(label.find(pkchat::versionNumber) != std::string::npos, "TUI input label includes the current version");
-    check(label.find("input:") != std::string::npos, "TUI input label ends with input prompt");
+    check(label.find("/help") != std::string::npos &&
+              label.find("Ctrl+b history back") != std::string::npos &&
+              label.find("ctrl+d history down") != std::string::npos,
+          "TUI input label shows help and history navigation hints");
 
     const std::string thinking_a =
         pkchat::tui::activity_indicator_text(pkchat::tui::ActivityKind::Thinking, 0);
@@ -514,8 +518,8 @@ void test_tui_handle_escape_plain_pageup_moves_input() {
 }
 
 void test_tui_unicode_and_empty_status() {
-    check(pkchat::tui::ready_status().find(pkchat::app_version_label()) == 0,
-          "TUI ready status starts with the app version label");
+    check(pkchat::tui::ready_status().find(pkchat::app_version_label()) == std::string::npos,
+          "TUI ready status leaves app version branding to the input label line");
     const std::string unicode_model = u8"模型-مرحبا-👨‍👩‍👧‍👦";
     pkchat::provider::ChatResult result;
     const std::string status = pkchat::tui::generation_ready_status(

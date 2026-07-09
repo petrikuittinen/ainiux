@@ -1,7 +1,6 @@
 #include "tui/tui.hpp"
 
 #include "context/context.hpp"
-#include "pkchat/version.hpp"
 #include "provider/provider.hpp"
 
 #include <iomanip>
@@ -58,8 +57,7 @@ std::string provider_model_status_message(const provider::RequestContext& contex
 }
 
 std::string ready_status() {
-    return app_version_label() +
-           ". TAB command/path /help Alt+enter newline Ctrl+B/D scroll chat Alt+Home/End jump";
+    return "TAB command/path · Alt+Enter newline · Alt+Home/End jump chat";
 }
 
 std::string sqlite_unavailable_status(const std::string& reason) {

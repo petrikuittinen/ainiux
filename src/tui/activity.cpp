@@ -47,18 +47,25 @@ void append_segment(std::vector<StyledSegment>& segments, std::string text, Styl
     segments.push_back({std::move(text), role});
 }
 
+constexpr const char kInputLabelStatusMessage[] =
+    " ready. /help. Ctrl+b history back and ctrl+d history down";
+
 }  // namespace
 
+const char* input_label_status_message() {
+    return kInputLabelStatusMessage;
+}
+
 std::string input_label_text() {
-    return app_version_label() + " input:";
+    return app_version_label() + input_label_status_message();
 }
 
 std::vector<StyledSegment> input_label_segments() {
     const std::string label = input_label_text();
-    const std::string app(appName);
+    const std::string& version = app_version_label();
     return {
-        {label.substr(0, app.size()), StyleRole::PanelTitle},
-        {label.substr(app.size()), StyleRole::InputLabel},
+        {version, StyleRole::PanelTitle},
+        {label.substr(version.size()), StyleRole::InputLabel},
     };
 }
 
