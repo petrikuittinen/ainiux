@@ -1,0 +1,19 @@
+#pragma once
+
+#include <functional>
+#include <string>
+#include <vector>
+
+#include "common.hpp"
+#include "provider/provider.hpp"
+#include "runtime/runtime.hpp"
+
+namespace pkchat::provider {
+
+using ModelListJobCallback = std::function<void(Error error, std::vector<std::string> model_ids)>;
+
+void start_list_models_job(runtime::JobHandle& job,
+                           RequestContext context,
+                           ModelListJobCallback deliver);
+
+}  // namespace pkchat::provider

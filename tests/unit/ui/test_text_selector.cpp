@@ -2,6 +2,7 @@
 
 #include "editor/selection.hpp"
 #include "support/test_support.hpp"
+#include "ui/confirmation.hpp"
 #include "ui/text_selector.hpp"
 
 namespace pkchat::test::ui {
@@ -44,6 +45,32 @@ void test_text_selector_movement() {
           "text selector movement on empty list stays at zero");
 }
 
+void test_confirmation_helpers() {
+    check(pkchat::ui::yes_answer("y"), "confirmation accepts lowercase y");
+    check(pkchat::ui::no_answer("n"), "confirmation accepts lowercase n");
+    check(pkchat::ui::parse_confirmation_key('y') == pkchat::ui::ConfirmationKeyResult::Accepted,
+          "confirmation key parser accepts y");
+    check(pkchat::ui::parse_confirmation_key(27) == pkchat::ui::ConfirmationKeyResult::Rejected,
+          "confirmation key parser treats Esc as reject");
+}
+
+void test_text_selector_escape_sequence() {
+    size_t selected = 0;
+    std::string status;
+    const pkchat::ui::SelectorMovementResult cancelled =
+        pkchat::ui::handle_selector_escape_sequence("", 3, selected, status, "Selected model");
+    check(cancelled == pkchat::ui::SelectorMovementResult::Cancelled,
+          "selector escape sequence cancels on empty suffix");
+    check(selected == 0, "selector escape sequence leaves selection unchanged on cancel");
+
+    const pkchat::ui::SelectorMovementResult navigated =
+        pkchat::ui::handle_selector_escape_sequence("[B", 3, selected, status, "Selected model");
+    check(navigated == pkchat::ui::SelectorMovementResult::Navigated,
+          "selector escape sequence navigates on movement suffix");
+    check(selected == 1, "selector escape sequence moves selection down");
+    check(status == "Selected model 2/3", "selector escape sequence updates status line");
+}
+
 void test_text_selector_status() {
     check(pkchat::ui::text_selector_status("Selected model", 0, 3) == "Selected model 1/3",
           "text selector status formats one-based position");
@@ -56,8 +83,10 @@ void test_text_selector_status() {
 }  // namespace
 
 void run_all() {
+    test_confirmation_helpers();
     test_text_selector_rendering();
     test_text_selector_movement();
+    test_text_selector_escape_sequence();
     test_text_selector_status();
 }
 

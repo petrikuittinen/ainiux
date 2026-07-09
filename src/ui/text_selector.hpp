@@ -41,4 +41,12 @@ size_t move_text_selector_selection(size_t selected,
 
 std::string text_selector_status(const std::string& label, size_t selected, size_t item_count);
 
+enum class SelectorMovementResult { Cancelled, Navigated };
+
+SelectorMovementResult handle_selector_escape_sequence(const std::string& sequence,
+                                                       size_t item_count,
+                                                       size_t& selected,
+                                                       std::string& status,
+                                                       const std::string& selection_label);
+
 }  // namespace pkchat::ui

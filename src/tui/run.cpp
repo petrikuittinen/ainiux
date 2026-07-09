@@ -1,10 +1,16 @@
 #include "tui/activity.hpp"
 #include "tui/tui.hpp"
 #include "tui/events.hpp"
+#include "tui/commands.hpp"
+#include "tui/file_jobs.hpp"
 #include "tui/input_handlers.hpp"
+#include "tui/picker_input.hpp"
+#include "tui/provider_actions.hpp"
 #include "tui/session_load.hpp"
 #include "tui/terminal.hpp"
 #include "tui/detail/render.hpp"
+
+#include "provider/model_list_job.hpp"
 
 #include "app/app.hpp"
 #include "app/detail.hpp"
@@ -168,6 +174,16 @@ int run(provider::RequestContext context, chat::Session session) {
         return sqlite_unavailable_status(sqlite_unavailable_reason);
     };
 
+    TuiFileJobs file_jobs{file_job,
+                         events,
+                         context,
+                         session,
+                         sqlite_store,
+                         sqlite_path,
+                         sqlite_available,
+                         sqlite_unavailable_message,
+                         status};
+
     const chat::DatabasePathResult sqlite_db_path = chat::default_sqlite_database_path();
     if (!sqlite_db_path.error.ok()) {
         sqlite_unavailable_reason = sqlite_db_path.error.message;
@@ -249,104 +265,12 @@ int run(provider::RequestContext context, chat::Session session) {
     };
 
     auto start_save = [&](const std::string& path, chat::Session snapshot, bool quiet_success = false) {
-        if (path.empty()) {
-            return;
-        }
-        if (file_job.running()) {
-            if (!quiet_success) {
-                status = "A file job is already running";
-            }
-            return;
-        }
-        file_job.start([path, snapshot = std::move(snapshot), quiet_success, &events](
-                           runtime::CancellationToken token) mutable {
-            TuiEvent event;
-            event.type = TuiEventType::SaveDone;
-            event.text = path;
-            event.quiet_success = quiet_success;
-            if (token.cancelled()) {
-                event.error = {ErrorCode::Cancelled, "save cancelled: " + path};
-            } else {
-                event.error = chat::save_session_atomic(path, std::move(snapshot));
-            }
-            events.push(std::move(event));
-        });
+        file_jobs.start_save(path, std::move(snapshot), quiet_success);
     };
 
-    auto start_load = [&](const std::string& path) {
-        if (file_job.running()) {
-            status = "A file job is already running";
-            return;
-        }
-        file_job.start([path, &events](runtime::CancellationToken token) mutable {
-            TuiEvent event;
-            event.type = TuiEventType::LoadDone;
-            event.text = path;
-            if (token.cancelled()) {
-                event.error = {ErrorCode::Cancelled, "load cancelled: " + path};
-            } else {
-                event.error = chat::load_session(path, event.session);
-            }
-            events.push(std::move(event));
-        });
-        status = "Loading " + path;
-    };
+    auto start_store_save = [&]() { file_jobs.start_store_save(); };
 
-    auto start_store_load = [&](long long thread_id) {
-        if (!sqlite_available) {
-            status = sqlite_unavailable_message();
-            return;
-        }
-        if (file_job.running()) {
-            status = "A file job is already running";
-            return;
-        }
-        const std::string db_path = sqlite_path;
-        file_job.start([db_path, thread_id, &events](runtime::CancellationToken token) mutable {
-            TuiEvent event;
-            event.type = TuiEventType::StoreLoadDone;
-            event.text = std::to_string(thread_id);
-            if (token.cancelled()) {
-                event.error = {ErrorCode::Cancelled, "thread load cancelled: " + event.text};
-            } else {
-                chat::SqliteStore store;
-                event.error = store.open(db_path);
-                if (event.error.ok()) {
-                    event.error = store.load_session(thread_id, event.session);
-                }
-            }
-            events.push(std::move(event));
-        });
-        status = "Loading thread " + std::to_string(thread_id);
-    };
-
-    auto start_store_save = [&]() {
-        if (!sqlite_available) {
-            return;
-        }
-        if (file_job.running()) {
-            return;
-        }
-        chat::Session snapshot = session;
-        app::refresh_session_metadata(snapshot, context);
-        const std::string db_path = sqlite_path;
-        file_job.start([db_path, snapshot = std::move(snapshot), &events](
-                           runtime::CancellationToken token) mutable {
-            TuiEvent event;
-            event.type = TuiEventType::StoreSaveDone;
-            if (token.cancelled()) {
-                event.error = {ErrorCode::Cancelled, "SQLite autosave cancelled"};
-            } else {
-                chat::SqliteStore store;
-                event.error = store.open(db_path);
-                if (event.error.ok()) {
-                    event.error = store.save_session(snapshot);
-                }
-                event.session = std::move(snapshot);
-            }
-            events.push(std::move(event));
-        });
-    };
+    auto start_store_load = [&](long long thread_id) { file_jobs.start_store_load(thread_id); };
 
     auto persist_settings_change = [&](const std::string& message) {
         app::refresh_session_metadata(session, context);
@@ -368,124 +292,6 @@ int run(provider::RequestContext context, chat::Session session) {
         refresh_settings_panel_if_visible();
     };
 
-    auto start_insert = [&](const std::string& path) {
-        if (file_job.running()) {
-            status = "A file job is already running";
-            return;
-        }
-        if (path.empty()) {
-            status = "Usage: /insert PATH or /attach PATH";
-            return;
-        }
-        if (path == "stdin") {
-            status = "stdin input is only supported by non-interactive --input and --attach";
-            return;
-        }
-        input::FileType type;
-        Error type_error = input::classify_file_type(path, type);
-        if (!type_error.ok()) {
-            status = detail::error_line(type_error);
-            return;
-        }
-        if (type.kind == input::Kind::Image) {
-            Error capability_error = provider::validate_image_input(context);
-            if (!capability_error.ok()) {
-                status = detail::error_line(capability_error);
-                return;
-            }
-        }
-        const long text_limit = context.options.max_input_bytes;
-        const long image_limit = context.options.max_image_bytes;
-        file_job.start([path, type, text_limit, image_limit, &events](runtime::CancellationToken token) mutable {
-            TuiEvent event;
-            event.type = TuiEventType::InsertDone;
-            event.text = path;
-            if (type.kind == input::Kind::Image) {
-                event.image_attachment = true;
-                if (image_limit <= 0) {
-                    event.error = {ErrorCode::BadArgs, "--max-image-bytes must be greater than zero"};
-                } else {
-                    input::ImageData loaded;
-                    event.error = input::load_image_file(
-                        path, type, static_cast<size_t>(image_limit), loaded, token);
-                    if (event.error.ok()) {
-                        event.image = {loaded.mime_type, std::move(loaded.base64_data)};
-                    }
-                }
-            } else if (text_limit <= 0) {
-                event.error = {ErrorCode::BadArgs, "--max-input-bytes must be greater than zero"};
-            } else {
-                input::TextContext loaded;
-                event.error = input::load_text_context_file(
-                    path, static_cast<size_t>(text_limit), loaded, token);
-                if (event.error.ok()) {
-                    event.inserted_message = {"user", input::text_context_message(loaded)};
-                }
-            }
-            events.push(std::move(event));
-        });
-        status = (type.kind == input::Kind::Image ? "Attaching " : "Inserting ") + path + "...";
-    };
-
-    auto start_fetch = [&](const std::string& url) {
-        if (file_job.running()) {
-            status = "A file job is already running";
-            return;
-        }
-        if (url.empty()) {
-            status = "Usage: /fetch URL";
-            return;
-        }
-        fetch::Options options;
-        options.connect_timeout_seconds = context.options.connect_timeout_seconds;
-        options.timeout_seconds = context.options.timeout_seconds > 0 ? context.options.timeout_seconds : 30;
-        options.max_bytes = context.options.max_fetch_bytes;
-        options.proxy = context.options.proxy;
-        options.insecure_tls = context.options.insecure_tls;
-        options.trace_http = context.options.trace_http;
-        options.allow_private = context.options.allow_private_url_fetch;
-        file_job.start([url, options, &events](runtime::CancellationToken token) mutable {
-            TuiEvent event;
-            event.type = TuiEventType::FetchDone;
-            event.text = url;
-            std::string markdown;
-            event.error = fetch::fetch_markdown(url, options, markdown, token);
-            if (event.error.ok()) {
-                input::TextContext fetched;
-                fetched.source = "URL " + url;
-                fetched.kind = input::Kind::Markdown;
-                fetched.content = std::move(markdown);
-                event.inserted_message = {"user", input::text_context_message(fetched)};
-            }
-            events.push(std::move(event));
-        });
-        status = "Fetching " + url + "...";
-    };
-
-    auto start_search = [&](const std::string& query) {
-        if (file_job.running()) {
-            status = "A file job is already running";
-            return;
-        }
-        if (query.empty()) {
-            status = "Usage: /search QUERY";
-            return;
-        }
-        search::Options options = search::options_for(context.options);
-        file_job.start([query, options, &events](runtime::CancellationToken token) mutable {
-            TuiEvent event;
-            event.type = TuiEventType::SearchDone;
-            event.text = query;
-            search::SearchResponse response;
-            event.error = search::search(query, options, response, token);
-            if (event.error.ok()) {
-                event.inserted_message = {"user", search::format_context_message(query, response)};
-            }
-            events.push(std::move(event));
-        });
-        status = "Searching " + query + "...";
-    };
-
     auto start_models = [&](ModelsRequestPurpose purpose = ModelsRequestPurpose::Preview) {
         if (active_job != ActiveJob::None) {
             status = "A model job is already running";
@@ -494,30 +300,14 @@ int run(provider::RequestContext context, chat::Session session) {
         models_request_purpose = purpose;
         active_job = ActiveJob::Models;
         provider::RequestContext job_context = context;
-        model_job.start([job_context, &events](runtime::CancellationToken token) mutable {
+        provider::start_list_models_job(model_job, job_context, [&events](Error error, std::vector<std::string> model_ids) {
             TuiEvent event;
             event.type = TuiEventType::ModelsDone;
-            provider::ModelsResult models;
-            event.error = provider::list_models(job_context, models, token);
-            event.models = std::move(models.model_ids);
+            event.error = std::move(error);
+            event.models = std::move(model_ids);
             events.push(std::move(event));
         });
         status = purpose == ModelsRequestPurpose::Picker ? "Loading models..." : "Listing models...";
-    };
-
-    auto apply_selected_provider = [&](const std::string& provider_target) -> bool {
-        cli::Options next = context.options;
-        provider::apply_provider_target(next, provider_target);
-        next.model.clear();
-        provider::ContextResult rebuilt = provider::build_context(next);
-        if (!rebuilt.error.ok()) {
-            status = detail::error_line(rebuilt.error);
-            return false;
-        }
-        context = std::move(rebuilt.context);
-        show_thinking_traces = context.options.show_thinking_traces;
-        app::refresh_session_metadata(session, context);
-        return true;
     };
 
     auto open_provider_picker = [&](bool cancel_quits) {
@@ -801,329 +591,118 @@ int run(provider::RequestContext context, chat::Session session) {
         status = "Regenerating...";
     };
 
+    TuiCommandHandlers command_handlers;
+    command_handlers.quit = [&]() { quit = true; };
+    command_handlers.start_history_edit = start_history_edit;
+    command_handlers.start_thread_list = start_thread_list;
+    command_handlers.start_new_chat_thread = [&](const std::string& name) { start_new_chat_thread(name); };
+    command_handlers.open_provider_picker = open_provider_picker;
+    command_handlers.apply_selected_provider = [&](const std::string& provider_target) {
+        return apply_selected_provider(context, session, show_thinking_traces, provider_target, status);
+    };
+    command_handlers.start_store_save = start_store_save;
+    command_handlers.start_models = start_models;
+    command_handlers.persist_settings_change = persist_settings_change;
+    command_handlers.refresh_settings_panel_if_visible = refresh_settings_panel_if_visible;
+    command_handlers.start_save = [&](const std::string& path) { start_save(path, session); };
+    command_handlers.start_load = [&](const std::string& path) { file_jobs.start_load(path); };
+    command_handlers.pop_last_message = pop_last_message;
+    command_handlers.start_response_to_unanswered_user = start_response_to_unanswered_user;
+    command_handlers.start_insert = [&](const std::string& path) { file_jobs.start_insert(path); };
+    command_handlers.start_fetch = [&](const std::string& url) { file_jobs.start_fetch(url); };
+    command_handlers.start_search = [&](const std::string& query) { file_jobs.start_search(query); };
+    command_handlers.set_thinking_trace_mode = set_thinking_trace_mode;
+
+    TuiCommandContext command_context{context,
+                                      session,
+                                      input,
+                                      status,
+                                      help_text,
+                                      settings_text,
+                                      history_scroll,
+                                      show_thinking_traces,
+                                      theme,
+                                      use_colors,
+                                      active_job,
+                                      mode,
+                                      input_undo_limit,
+                                      sqlite_available,
+                                      sqlite_store,
+                                      sqlite_unavailable_message,
+                                      pending_images,
+                                      inflight_image_count};
+
     auto handle_command = [&](const std::string& text) {
-        if (text == "/quit" || text == "/exit") {
-            quit = true;
-            return;
-        }
-        if (text == "/help") {
-            if (help_text.empty()) {
-                settings_text.clear();
-                help_text =
-                    "/help (hide/show this panel)\n"
-                    "/quit or /exit\n"
-                    "/clear\n"
-                    "/edit\n"
-                    "/list (Ctrl+L; N new thread)\n"
-                    "/new [NAME]\n"
-                    "/provider [PROVIDER]\n"
-                    "/models\n"
-                    "/model [MODEL]\n"
-                    "/system [TEXT]\n"
-                    "/setting (hide/show current settings)\n"
-                    "/setting NAME=VALUE\n"
-                    "/setting general|coding|instruct|creative\n"
-                    "/clone\n"
-                    "/save [PATH]\n"
-                    "/load PATH\n"
-                    "/remove\n"
-                    "/remove-empty\n"
-                    "/pop\n"
-                    "/response\n"
-                    "/insert PATH or /attach PATH (text or image)\n"
-                    "/fetch URL\n"
-                    "/search QUERY\n"
-                    "/theme [dark|light]\n"
-                    "/thinking [trace|notrace]";
-                status = "Help shown; /help hides it";
-            } else {
-                help_text.clear();
-                status = "Help hidden";
-            }
-            history_scroll = 0;
-            return;
-        }
-        if (text.rfind("/thinking", 0) == 0) {
-            const std::string requested = app::detail::trim_ascii(text.substr(9));
-            if (requested.empty()) {
-                status = std::string("Thinking traces: ") + (show_thinking_traces ? "trace" : "notrace") +
-                         ". Use /thinking trace or /thinking notrace";
-                return;
-            }
-            if (requested == "trace") {
-                set_thinking_trace_mode(true);
-                return;
-            }
-            if (requested == "notrace") {
-                set_thinking_trace_mode(false);
-                return;
-            }
-            status = "Usage: /thinking trace|notrace";
-            return;
-        }
-        if (text.rfind("/theme", 0) == 0) {
-            const std::string requested = app::detail::trim_ascii(text.substr(6));
-            if (requested.empty()) {
-                status = std::string("Theme: ") + theme_name(theme) + ". Available: dark, light";
-                if (!use_colors) {
-                    status += " (colors disabled by --nocolors)";
-                }
-                return;
-            }
-            ThemeName next = theme;
-            if (!parse_theme_name(requested, next)) {
-                status = "Unknown theme: " + requested + ". Available: dark, light";
-                return;
-            }
-            theme = next;
-            status = std::string("Theme set to ") + theme_name(theme);
-            if (!use_colors) {
-                status += " (colors disabled by --nocolors)";
-            }
-            return;
-        }
-        if (text == "/edit") {
-            start_history_edit();
-            return;
-        }
-        if (text == "/clear") {
-            session.messages.clear();
-            pending_images.clear();
-            inflight_image_count = 0;
-            app::apply_system_prompt(session, context.options.system);
-            history_scroll = 0;
-            status = "Chat history cleared";
-            return;
-        }
-        if (text == "/list") {
-            start_thread_list();
-            return;
-        }
-        if (text == "/new" || text.rfind("/new ", 0) == 0) {
-            start_new_chat_thread(text.size() <= 4 ? "" : text.substr(4));
-            return;
-        }
-        if (text == "/provider" || text.rfind("/provider ", 0) == 0) {
-            const std::string provider_name = app::detail::trim_ascii(text.substr(9));
-            if (provider_name.empty()) {
-                open_provider_picker(false);
-                return;
-            }
-            if (!apply_selected_provider(provider_name)) {
-                return;
-            }
+        handle_tui_command(text, command_context, command_handlers);
+    };
+
+    TuiPickerCallbacks picker_callbacks;
+    picker_callbacks.on_provider_selected = [&](const std::string& provider_name) {
+        if (apply_selected_provider(context, session, show_thinking_traces, provider_name, status)) {
+            picker_items.clear();
+            picker_selected = 0;
+            mode = TuiMode::Chat;
+            status = "Provider set to " + provider::display_name_for_profile(context.profile.name);
             start_store_save();
             start_models(ModelsRequestPurpose::Picker);
-            return;
         }
-        if (text == "/model" || text.rfind("/model ", 0) == 0) {
-            const std::string model = app::detail::trim_ascii(text.substr(6));
-            if (model.empty()) {
-                if (context.profile.offline) {
-                    status = "Select a provider with /provider first";
-                    return;
-                }
-                start_models(ModelsRequestPurpose::Picker);
-                return;
-            }
-            context.options.model = model;
-            session.model = model;
-            status = provider_model_status_message(context, "ready");
-            start_store_save();
-            return;
-        }
-        if (text == "/system" || text.rfind("/system ", 0) == 0) {
-            const std::string system_text = text.size() <= 7 ? "" : app::detail::trim_ascii(text.substr(7));
-            if (system_text.empty()) {
-                if (active_job != ActiveJob::None) {
-                    status = "Cannot edit system prompt while a model job is running";
-                    return;
-                }
-                input = editor::EditorState::from_text(chat::current_system_prompt(session));
-                input.set_undo_limit(input_undo_limit);
-                mode = TuiMode::SystemEdit;
-                status = "Editing system prompt";
-                return;
-            }
-            app::replace_system_prompt(session, system_text);
-            context.options.system = system_text;
-            persist_settings_change("System prompt updated");
-            return;
-        }
-        if (text == "/clone") {
-            if (active_job != ActiveJob::None) {
-                status = "Cannot clone a thread while a model job is running";
-                return;
-            }
-            chat::Session cloned = session;
-            cloned.thread_id = 0;
-            cloned.created_at = chat::current_timestamp_utc();
-            cloned.updated_at = cloned.created_at;
-            if (cloned.name.empty()) {
-                cloned.name = "Copy";
-            } else {
-                cloned.name += " (copy)";
-            }
-            session = std::move(cloned);
-            history_scroll = 0;
-            persist_settings_change("Cloned chat thread");
-            return;
-        }
-        if (text == "/setting" || text.rfind("/setting ", 0) == 0) {
-            const std::string requested = text.size() <= 8 ? "" : app::detail::trim_ascii(text.substr(8));
-            if (requested.empty()) {
-                if (settings_text.empty()) {
-                    help_text.clear();
-                    settings_text = chat::format_settings_panel(context.options);
-                    status = "Settings shown; /setting hides them";
-                } else {
-                    settings_text.clear();
-                    status = "Settings hidden";
-                }
-                history_scroll = 0;
-                return;
-            }
-            if (requested == "general" || requested == "coding" || requested == "instruct" ||
-                requested == "creative") {
-                if (context.options.model.empty()) {
-                    status = "Set a model with /model before applying a purpose preset";
-                    return;
-                }
-                const ModelSetting* preset =
-                    chat::find_model_setting(context.options.model, requested, context.options.model_settings);
-                if (preset == nullptr) {
-                    status = "No [Model-setting] preset for model " + context.options.model + " purpose " + requested;
-                    return;
-                }
-                Error preset_error = chat::apply_model_setting_preset(context.options, *preset);
-                if (!preset_error.ok()) {
-                    status = detail::error_line(preset_error);
-                    return;
-                }
-                if (!preset->default_system_prompt.empty()) {
-                    app::replace_system_prompt(session, preset->default_system_prompt);
-                    context.options.system = preset->default_system_prompt;
-                }
-                persist_settings_change("Applied " + requested + " settings for " + context.options.model);
-                refresh_settings_panel_if_visible();
-                return;
-            }
-            const size_t equals = requested.find('=');
-            if (equals == std::string::npos) {
-                status = "Usage: /setting NAME=VALUE or /setting general|coding|instruct|creative";
-                return;
-            }
-            const std::string name = app::detail::trim_ascii(requested.substr(0, equals));
-            const std::string value = app::detail::trim_ascii(requested.substr(equals + 1));
-            if (name.empty()) {
-                status = "Usage: /setting NAME=VALUE";
-                return;
-            }
-            Error setting_error = chat::apply_chat_setting(context.options, name, value);
-            if (!setting_error.ok()) {
-                status = setting_error.message;
-                return;
-            }
-            persist_settings_change("Updated " + name);
-            refresh_settings_panel_if_visible();
-            return;
-        }
-        if (text == "/models") {
-            start_models();
-            return;
-        }
-        if (text.rfind("/save", 0) == 0) {
-            std::string path = app::detail::trim_ascii(text.substr(5));
-            if (path.empty()) {
-                path = context.options.save_chat_path;
-            }
-            if (path.empty()) {
-                status = "Usage: /save PATH";
-                return;
-            }
-            start_save(path, session);
-            status = "Saving " + path;
-            return;
-        }
-        if (text.rfind("/load", 0) == 0) {
-            const std::string path = app::detail::trim_ascii(text.substr(5));
-            if (path.empty()) {
-                status = "Usage: /load PATH";
-                return;
-            }
-            start_load(path);
-            return;
-        }
-        if (text == "/remove") {
-            if (!sqlite_available) {
-                status = sqlite_unavailable_message();
-                return;
-            }
-            if (session.thread_id <= 0) {
-                status = "No saved thread to remove";
-                return;
-            }
-            mode = TuiMode::RemoveConfirm;
-            status = "Confirm removal with y or cancel with n/Esc";
-            return;
-        }
-        if (text == "/remove-empty") {
-            if (!sqlite_available) {
-                status = sqlite_unavailable_message();
-                return;
-            }
-            if (active_job != ActiveJob::None) {
-                status = "Cannot remove empty threads while a model job is running";
-                return;
-            }
-            long long deleted_count = 0;
-            bool current_removed = false;
-            Error remove_error =
-                sqlite_store.soft_delete_empty_threads(deleted_count, session.thread_id, current_removed);
-            if (!remove_error.ok()) {
-                status = detail::error_line(remove_error);
-                return;
-            }
-            if (current_removed) {
-                sqlite_store.set_last_thread_id(0);
-                start_new_thread_from_cli();
-            }
-            if (deleted_count == 0) {
-                status = "No empty threads to remove";
-            } else if (deleted_count == 1) {
-                status = current_removed ? "Removed 1 empty thread and started a new chat"
-                                         : "Removed 1 empty thread";
-            } else {
-                status = current_removed
-                             ? "Removed " + std::to_string(deleted_count) +
-                                   " empty threads and started a new chat"
-                             : "Removed " + std::to_string(deleted_count) + " empty threads";
-            }
-            return;
-        }
-        if (text == "/pop") {
-            pop_last_message();
-            return;
-        }
-        if (text == "/response") {
-            start_response_to_unanswered_user();
-            return;
-        }
-        if (text == "/insert" || text.rfind("/insert ", 0) == 0 ||
-            text == "/attach" || text.rfind("/attach ", 0) == 0) {
-            start_insert(app::detail::trim_ascii(text.substr(7)));
-            return;
-        }
-        if (text == "/fetch" || text.rfind("/fetch ", 0) == 0) {
-            start_fetch(app::detail::trim_ascii(text.substr(6)));
-            return;
-        }
-        if (text == "/search" || text.rfind("/search ", 0) == 0) {
-            start_search(app::detail::trim_ascii(text.substr(7)));
-            return;
-        }
-        status = "Unknown command: " + text;
     };
+    picker_callbacks.on_model_selected = [&](const std::string& model_name) {
+        context.options.model = model_name;
+        session.model = model_name;
+        picker_items.clear();
+        picker_selected = 0;
+        mode = TuiMode::Chat;
+        status = provider_model_status_message(context, "ready");
+        start_store_save();
+    };
+    picker_callbacks.on_thread_selected = [&](long long thread_id) {
+        mode = TuiMode::Chat;
+        thread_picker_threads.clear();
+        thread_picker_selected = 0;
+        start_store_load(thread_id);
+    };
+    picker_callbacks.on_thread_new = [&]() {
+        if (start_new_chat_thread()) {
+            mode = TuiMode::Chat;
+            thread_picker_threads.clear();
+            thread_picker_selected = 0;
+            history_scroll = 0;
+        }
+    };
+    picker_callbacks.on_remove_accepted = [&]() {
+        const long long removed_thread_id = session.thread_id;
+        Error remove_error = sqlite_store.soft_delete_thread(removed_thread_id);
+        if (remove_error.ok()) {
+            sqlite_store.set_last_thread_id(0);
+            start_new_thread_from_cli();
+            status = "Removed thread " + std::to_string(removed_thread_id);
+        } else {
+            status = detail::error_line(remove_error);
+        }
+        mode = TuiMode::Chat;
+    };
+    picker_callbacks.on_remove_rejected = [&]() {
+        mode = TuiMode::Chat;
+        status = "Remove cancelled";
+    };
+    picker_callbacks.on_remove_retry = [&](const std::string& message) { status = message; };
+    picker_callbacks.on_model_confirm_accepted = [&]() {
+        app::refresh_session_metadata(session, context);
+        mode = TuiMode::Chat;
+        status = context.options.model.empty()
+                     ? "Using current provider: " + provider::display_name_for_profile(context.profile.name)
+                     : "Using current model: " + context.options.model;
+        start_store_save();
+    };
+    picker_callbacks.on_model_confirm_rejected = [&]() {
+        Error context_error = apply_loaded_session_context(session);
+        mode = TuiMode::Chat;
+        status = context_error.ok() ? "Using thread model: " + context.options.model
+                                    : detail::error_line(context_error);
+        start_store_save();
+    };
+    picker_callbacks.on_model_confirm_retry = [&](const std::string& message) { status = message; };
 
     auto submit_input = [&]() {
         const std::string raw = input.text.str();
@@ -1375,144 +954,17 @@ int run(provider::RequestContext context, chat::Session session) {
                     continue;
                 }
                 const unsigned char ch = event.byte;
-                if (mode == TuiMode::ProviderList || mode == TuiMode::ModelList) {
-                    if (ch == 17) {
-                        quit = true;
-                        continue;
-                    }
-                    if (ch == 27) {
-                        const std::string selection_label =
-                            mode == TuiMode::ProviderList ? "Selected provider" : "Selected model";
-                        const PickerEscapeResult result = handle_list_picker_escape(
-                            picker_items.size(), picker_selected, status, selection_label);
-                        if (result == PickerEscapeResult::Cancelled) {
-                            const bool provider_picker = mode == TuiMode::ProviderList;
-                            picker_items.clear();
-                            picker_selected = 0;
-                            if (picker_cancel_quits) {
-                                quit = true;
-                            } else {
-                                mode = TuiMode::Chat;
-                            }
-                            status = provider_picker ? "Provider selection cancelled"
-                                                     : "Model selection cancelled";
-                        }
-                        continue;
-                    }
-                    if (ch == '\r' || ch == '\n') {
-                        if (picker_selected < picker_items.size()) {
-                            if (mode == TuiMode::ProviderList) {
-                                const std::string provider_name = picker_items[picker_selected];
-                                if (apply_selected_provider(provider_name)) {
-                                    picker_items.clear();
-                                    picker_selected = 0;
-                                    mode = TuiMode::Chat;
-                                    status = "Provider set to " +
-                                             provider::display_name_for_profile(context.profile.name);
-                                    start_store_save();
-                                    start_models(ModelsRequestPurpose::Picker);
-                                }
-                            } else {
-                                context.options.model = picker_items[picker_selected];
-                                session.model = context.options.model;
-                                picker_items.clear();
-                                picker_selected = 0;
-                                mode = TuiMode::Chat;
-                                status = provider_model_status_message(context, "ready");
-                                start_store_save();
-                            }
-                        }
-                        continue;
-                    }
+                TuiPickerInputState picker_state{mode,
+                                                 quit,
+                                                 status,
+                                                 picker_items,
+                                                 picker_selected,
+                                                 picker_cancel_quits,
+                                                 thread_picker_threads,
+                                                 thread_picker_selected,
+                                                 input.text.empty()};
+                if (handle_tui_picker_input(ch, picker_state, picker_callbacks)) {
                     continue;
-                }
-                if (mode == TuiMode::ThreadList) {
-                    if (ch == 17) {
-                        quit = true;
-                        continue;
-                    }
-                    if (ch == 27) {
-                        handle_thread_picker_escape(thread_picker_threads,
-                                                    thread_picker_selected,
-                                                    mode,
-                                                    status);
-                        continue;
-                    }
-                    if (ch == '\r' || ch == '\n') {
-                        if (thread_picker_selected < thread_picker_threads.size()) {
-                            const long long thread_id = thread_picker_threads[thread_picker_selected].id;
-                            mode = TuiMode::Chat;
-                            thread_picker_threads.clear();
-                            thread_picker_selected = 0;
-                            start_store_load(thread_id);
-                        }
-                        continue;
-                    }
-                    if (ch == 'n' || ch == 'N') {
-                        if (start_new_chat_thread()) {
-                            mode = TuiMode::Chat;
-                            thread_picker_threads.clear();
-                            thread_picker_selected = 0;
-                            history_scroll = 0;
-                        }
-                        continue;
-                    }
-                    continue;
-                }
-                if (mode == TuiMode::RemoveConfirm) {
-                    if (ch == 17) {
-                        quit = true;
-                        continue;
-                    }
-                    if (ch == 27 || ch == 'n' || ch == 'N') {
-                        mode = TuiMode::Chat;
-                        status = "Remove cancelled";
-                        continue;
-                    }
-                    if (ch == 'y' || ch == 'Y') {
-                        const long long removed_thread_id = session.thread_id;
-                        Error remove_error = sqlite_store.soft_delete_thread(removed_thread_id);
-                        if (remove_error.ok()) {
-                            sqlite_store.set_last_thread_id(0);
-                            start_new_thread_from_cli();
-                            status = "Removed thread " + std::to_string(removed_thread_id);
-                        } else {
-                            status = detail::error_line(remove_error);
-                        }
-                        mode = TuiMode::Chat;
-                        continue;
-                    }
-                    status = "Press y to remove, n or Esc to cancel";
-                    continue;
-                }
-                if (mode == TuiMode::ModelConfirm) {
-                    if (ch == 17) {
-                        quit = true;
-                        continue;
-                    }
-                    const bool model_confirm_shortcut = input.text.empty();
-                    if (model_confirm_shortcut && (ch == 27 || ch == 'n' || ch == 'N')) {
-                        Error context_error = apply_loaded_session_context(session);
-                        mode = TuiMode::Chat;
-                        status = context_error.ok() ? "Using thread model: " + context.options.model
-                                                    : detail::error_line(context_error);
-                        start_store_save();
-                        continue;
-                    }
-                    if (model_confirm_shortcut && (ch == 'y' || ch == 'Y')) {
-                        app::refresh_session_metadata(session, context);
-                        mode = TuiMode::Chat;
-                        status = context.options.model.empty()
-                                     ? "Using current provider: " +
-                                           provider::display_name_for_profile(context.profile.name)
-                                     : "Using current model: " + context.options.model;
-                        start_store_save();
-                        continue;
-                    }
-                    if (model_confirm_shortcut && ch != '/' && ch != '\r' && ch != '\n' && ch < 32) {
-                        status = "Press y to keep current provider/model, n or Esc to use thread model";
-                        continue;
-                    }
                 }
                 if (mode == TuiMode::SystemEdit) {
                     if (ch == 27) {

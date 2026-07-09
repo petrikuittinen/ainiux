@@ -6,12 +6,14 @@
 #include "editor/detail/editor_common.hpp"
 #include "editor/editor_assist.hpp"
 #include "editor/editor_help.hpp"
+#include "editor/editor_picker.hpp"
+#include "editor/model_list_runtime.hpp"
 #include "editor/terminal_input.hpp"
 #include "editor/terminal_ui.hpp"
 #include "runtime/runtime.hpp"
 #include "search/search.hpp"
 #include "tui/activity.hpp"
-#include "tui/input_handlers.hpp"
+#include "ui/confirmation.hpp"
 #include "ui/text_selector.hpp"
 
 #include <algorithm>
@@ -24,16 +26,6 @@
 
 namespace pkchat::editor {
 namespace {
-
-Error ensure_empty_file(const std::string& path) {
-    if (path.empty()) {
-        return ok_error();
-    }
-    if (access(path.c_str(), F_OK) == 0) {
-        return ok_error();
-    }
-    return save_file(path, PieceTable::from_string(""));
-}
 
 struct HelpViewSession {
     bool active = false;
@@ -65,11 +57,6 @@ struct StoredAssistCommand {
     std::optional<AssistScope> scope;
     std::string custom_prompt;
     std::optional<AssistPromptMode> prompt_mode;
-};
-
-struct EditorModelsEvent {
-    Error error;
-    std::vector<std::string> models;
 };
 
 void clear_assist_session(AssistSession& session) {
@@ -164,13 +151,8 @@ int run_editor(const std::string& path,
     bool buffer_list_active = false;
     size_t buffer_list_selected = 0;
     EditorState buffer_list_view;
-    bool picker_list_active = false;
-    bool picker_for_provider = false;
-    std::vector<std::string> picker_items;
-    size_t picker_selected = 0;
-    EditorState picker_view;
-    runtime::JobHandle model_list_job;
-    runtime::EventQueue<EditorModelsEvent> model_events;
+    EditorProviderModelPicker picker;
+    EditorModelListRuntime model_list;
     bool pending_close_confirm = false;
     TerminalSize last_size = terminal_size();
     size_t activity_frame = 0;
@@ -212,22 +194,10 @@ int run_editor(const std::string& path,
         buffer_list_view.clear_undo_history();
     };
 
-    auto refresh_picker_view = [&]() {
-        const std::string text =
-            picker_for_provider ? tui::provider_picker_text(picker_items, picker_selected)
-                                : tui::model_picker_text(picker_items, picker_selected);
-        picker_view = EditorState::from_text(text);
-        picker_view.path = picker_for_provider ? "[providers]" : "[models]";
-        const size_t selected_line = std::min(picker_selected + 1, picker_view.text.line_count() - 1);
-        picker_view.cursor = picker_view.text.line_start(selected_line);
-        picker_view.dirty = false;
-        picker_view.clear_undo_history();
-    };
-
     auto render_editor = [&]() {
-        if (picker_list_active) {
-            refresh_picker_view();
-            render_terminal(picker_view, minibuffer, false, nullptr);
+        if (picker.active) {
+            picker.refresh_view();
+            render_terminal(picker.view, minibuffer, false, nullptr);
             return;
         }
         if (buffer_list_active) {
@@ -484,16 +454,9 @@ int run_editor(const std::string& path,
         if (help_view.active) {
             exit_help_view();
         }
-        picker_items = tui::selectable_provider_ids();
-        picker_selected = 0;
-        picker_for_provider = true;
-        picker_list_active = true;
+        picker.open_providers();
         buffer_list_active = false;
-        minibuffer_message(minibuffer,
-                           picker_items.empty()
-                               ? "No providers available"
-                               : ui::text_selector_status("Selected provider", picker_selected,
-                                                          picker_items.size()));
+        minibuffer_message(minibuffer, picker.status_message());
     };
 
     auto start_model_list = [&]() {
@@ -501,18 +464,11 @@ int run_editor(const std::string& path,
             minibuffer_message(minibuffer, editor_no_provider_message());
             return;
         }
-        if (model_list_job.running()) {
+        if (model_list.job.running()) {
             minibuffer_message(minibuffer, "Model list is already loading");
             return;
         }
-        provider::RequestContext job_context = ai_continue->request;
-        model_list_job.start([job_context, &model_events](runtime::CancellationToken token) mutable {
-            EditorModelsEvent event;
-            provider::ModelsResult models;
-            event.error = provider::list_models(job_context, models, token);
-            event.models = std::move(models.model_ids);
-            model_events.push(std::move(event));
-        });
+        model_list.start(ai_continue->request);
         minibuffer_message(minibuffer, "Loading models...");
     };
 
@@ -524,15 +480,9 @@ int run_editor(const std::string& path,
         if (help_view.active) {
             exit_help_view();
         }
-        picker_items = std::move(models);
-        picker_selected = 0;
-        picker_for_provider = false;
-        picker_list_active = true;
+        picker.open_models(std::move(models));
         buffer_list_active = false;
-        minibuffer_message(minibuffer,
-                           picker_items.empty()
-                               ? "No models returned"
-                               : ui::text_selector_status("Selected model", picker_selected, picker_items.size()));
+        minibuffer_message(minibuffer, picker.status_message());
     };
 
     auto handle_provider_command = [&](const std::string& target) {
@@ -565,57 +515,36 @@ int run_editor(const std::string& path,
         refresh_ai_status();
     };
 
-    auto cancel_picker_list = [&]() {
-        picker_list_active = false;
-        picker_items.clear();
-        picker_selected = 0;
-        minibuffer_message(minibuffer,
-                           picker_for_provider ? "Provider selection cancelled"
-                                               : "Model selection cancelled");
-    };
-
     auto handle_picker_list_escape = [&]() {
         const std::string sequence = read_escape_suffix();
-        if (sequence.empty()) {
-            cancel_picker_list();
-            return;
-        }
-        MovementKeyEvent movement;
-        if (parse_movement_sequence(sequence, movement) && !picker_items.empty()) {
-            picker_selected =
-                move_editor_buffer_selection(picker_selected, picker_items.size(), movement.key);
-            const std::string label = picker_for_provider ? "Selected provider" : "Selected model";
-            minibuffer_message(minibuffer,
-                               ui::text_selector_status(label, picker_selected, picker_items.size()));
-            return;
-        }
-        cancel_picker_list();
+        std::string picker_status;
+        picker.handle_escape(sequence, picker_status);
+        minibuffer_message(minibuffer, picker_status);
     };
 
     auto confirm_picker_selection = [&]() {
-        if (picker_selected >= picker_items.size()) {
+        if (picker.selected >= picker.items.size()) {
             return;
         }
-        if (picker_for_provider) {
-            const std::string provider_name = picker_items[picker_selected];
-            picker_list_active = false;
-            picker_items.clear();
-            picker_selected = 0;
+        if (picker.for_provider) {
+            const std::string provider_name = picker.items[picker.selected];
+            const bool was_provider_picker = picker.for_provider;
+            picker.clear();
             Error apply_error = apply_editor_provider_target(ai_continue, assist_config, provider_name);
             if (!apply_error.ok()) {
                 minibuffer_message(minibuffer, apply_error.message);
                 return;
             }
             refresh_ai_status();
-            if (editor_ai_has_provider(ai_continue) && ai_continue->request.options.model.empty()) {
+            if (was_provider_picker && editor_ai_has_provider(ai_continue) &&
+                ai_continue->request.options.model.empty()) {
                 start_model_list();
             }
             return;
         }
-        Error apply_error = apply_editor_model(ai_continue, picker_items[picker_selected]);
-        picker_list_active = false;
-        picker_items.clear();
-        picker_selected = 0;
+        const std::string model_name = picker.items[picker.selected];
+        picker.clear();
+        Error apply_error = apply_editor_model(ai_continue, model_name);
         if (!apply_error.ok()) {
             minibuffer_message(minibuffer, apply_error.message);
             return;
@@ -632,21 +561,9 @@ int run_editor(const std::string& path,
     };
 
     auto process_model_events = [&]() -> bool {
-        EditorModelsEvent event;
-        if (!model_events.try_pop(event)) {
-            return false;
-        }
-        model_list_job.join();
-        if (!event.error.ok()) {
-            minibuffer_message(minibuffer, event.error.message);
-            return true;
-        }
-        if (event.models.empty()) {
-            minibuffer_message(minibuffer, "No models returned");
-            return true;
-        }
-        open_model_picker(std::move(event.models));
-        return true;
+        return model_list.process(
+            [&](std::vector<std::string> models) { open_model_picker(std::move(models)); },
+            [&](const std::string& message) { minibuffer_message(minibuffer, message); });
     };
 
     auto handle_open_minibuffer_key = [&](unsigned char ch) -> bool {
@@ -674,7 +591,7 @@ int run_editor(const std::string& path,
                 open_buffer_from_path(recovery.path, recovery.path, false);
             } else {
                 pending_autosave_recovery = recovery;
-                minibuffer.prompt = "Type y or n: ";
+                minibuffer.prompt = ui::kConfirmationRetryPrompt;
                 minibuffer.input.clear();
             }
             return true;
@@ -694,7 +611,7 @@ int run_editor(const std::string& path,
                 pending_load_path.clear();
                 minibuffer_message(minibuffer, "Open cancelled");
             } else {
-                minibuffer.prompt = "Type y or n: ";
+                minibuffer.prompt = ui::kConfirmationRetryPrompt;
                 minibuffer.input.clear();
             }
             return true;
@@ -1137,7 +1054,7 @@ int run_editor(const std::string& path,
             }
             return;
         }
-        if (picker_list_active) {
+        if (picker.active) {
             if (ch == 17) {
                 quit = true;
                 return;
@@ -1172,18 +1089,18 @@ int run_editor(const std::string& path,
             return;
         }
         if (pending_close_confirm) {
-            if (ch == 'y' || ch == 'Y') {
-                close_active_buffer(true);
-            } else if (ch == 27 || ch == 'n' || ch == 'N') {
-                if (ch == 27) {
-                    read_escape_suffix();
-                }
-                pending_close_confirm = false;
-                minibuffer_message(minibuffer, "Close cancelled");
-            } else {
-                minibuffer_message(minibuffer, "Type y or n: ");
+            switch (ui::parse_confirmation_key(ch)) {
+                case ui::ConfirmationKeyResult::Accepted:
+                    close_active_buffer(true);
+                    return;
+                case ui::ConfirmationKeyResult::Rejected:
+                    pending_close_confirm = false;
+                    minibuffer_message(minibuffer, "Close cancelled");
+                    return;
+                case ui::ConfirmationKeyResult::Pending:
+                    minibuffer_message(minibuffer, ui::kConfirmationRetryPrompt);
+                    return;
             }
-            return;
         }
         if (minibuffer.active && is_assist_minibuffer_action(minibuffer.action)) {
             if (ch == 27 || ch == 7) {
@@ -1405,7 +1322,7 @@ int run_editor(const std::string& path,
     };
 
     auto handle_paste = [&](const std::string& terminal_text) {
-        if (picker_list_active) {
+        if (picker.active) {
             minibuffer_message(minibuffer, "Choose an item or press Esc to cancel");
             return;
         }
@@ -1414,7 +1331,7 @@ int run_editor(const std::string& path,
             return;
         }
         if (pending_close_confirm) {
-            minibuffer_message(minibuffer, "Type y or n: ");
+            minibuffer_message(minibuffer, ui::kConfirmationRetryPrompt);
             return;
         }
         Error paste_error = paste_with_clipboard_preference(state, shared_clipboard(), terminal_text);
@@ -1425,7 +1342,7 @@ int run_editor(const std::string& path,
     SteadyClock::time_point last_activity = SteadyClock::now();
 
     auto autosave_context_ready = [&]() {
-        return !help_view.active && !picker_list_active && !buffer_list_active && !pending_close_confirm &&
+        return !help_view.active && !picker.active && !buffer_list_active && !pending_close_confirm &&
                !minibuffer.active;
     };
 
@@ -1466,7 +1383,7 @@ int run_editor(const std::string& path,
             try_autosave(now - last_activity);
             const TerminalSize current_size = terminal_size();
             if (current_size.rows != last_size.rows || current_size.cols != last_size.cols ||
-                assist_session.job.running() || model_list_job.running() || assist_updated ||
+                assist_session.job.running() || model_list.job.running() || assist_updated ||
                 model_updated || assist_animating) {
                 last_size = current_size;
                 render_editor();

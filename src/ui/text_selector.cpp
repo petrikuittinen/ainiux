@@ -1,5 +1,7 @@
 #include "ui/text_selector.hpp"
 
+#include "editor/terminal_input.hpp"
+
 #include <algorithm>
 #include <sstream>
 
@@ -76,6 +78,23 @@ std::string text_selector_status(const std::string& label, size_t selected, size
     }
     return label + " " + std::to_string(clamp_selection(selected, item_count) + 1) + "/" +
            std::to_string(item_count);
+}
+
+SelectorMovementResult handle_selector_escape_sequence(const std::string& sequence,
+                                                       size_t item_count,
+                                                       size_t& selected,
+                                                       std::string& status,
+                                                       const std::string& selection_label) {
+    if (sequence.empty()) {
+        return SelectorMovementResult::Cancelled;
+    }
+    editor::MovementKeyEvent movement;
+    if (!editor::parse_movement_sequence(sequence, movement) || item_count == 0) {
+        return SelectorMovementResult::Cancelled;
+    }
+    selected = move_text_selector_selection(selected, item_count, movement.key);
+    status = text_selector_status(selection_label, selected, item_count);
+    return SelectorMovementResult::Navigated;
 }
 
 }  // namespace pkchat::ui

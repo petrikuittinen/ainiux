@@ -10,6 +10,7 @@
 #include "editor/selection.hpp"
 #include "editor/terminal_input.hpp"
 #include "tui/activity.hpp"
+#include "ui/confirmation.hpp"
 
 #include <cerrno>
 #include <cstring>
@@ -304,14 +305,6 @@ void request_save_editor_to_path(EditorState& state,
     }
 }
 
-bool yes_answer(const std::string& value) {
-    return value == "y" || value == "Y" || value == "yes" || value == "YES";
-}
-
-bool no_answer(const std::string& value) {
-    return value == "n" || value == "N" || value == "no" || value == "NO";
-}
-
 std::string file_size_warning_message(const std::string& path, std::uintmax_t size) {
     return "Warning: " + path + " is " + std::to_string(size) + " bytes";
 }
@@ -395,7 +388,7 @@ bool confirm_huge_load_before_terminal(const std::string& path, const FileLoadCh
     if (!std::getline(std::cin, response)) {
         return false;
     }
-    return yes_answer(trim_ascii_copy(response));
+    return ui::yes_answer(trim_ascii_copy(response));
 }
 
 std::string search_found_message(const std::string& needle) {
@@ -540,18 +533,18 @@ void submit_minibuffer(EditorState& state,
         return;
     }
     if (action == MinibufferAction::ConfirmLoad) {
-        if (yes_answer(value)) {
+        if (ui::yes_answer(value)) {
             const std::string path = pending_load_path;
             pending_load_path.clear();
             if (offer_autosave_recovery_before_load(path, settings, minibuffer, pending_autosave_recovery)) {
                 return;
             }
             load_editor_from_path(state, path, settings, minibuffer);
-        } else if (no_answer(value) || value.empty()) {
+        } else if (ui::no_answer(value) || value.empty()) {
             pending_load_path.clear();
             minibuffer_message(minibuffer, "Load cancelled");
         } else {
-            minibuffer.prompt = "Type y or n: ";
+            minibuffer.prompt = ui::kConfirmationRetryPrompt;
             minibuffer.input.clear();
         }
         return;
@@ -559,46 +552,46 @@ void submit_minibuffer(EditorState& state,
     if (action == MinibufferAction::ConfirmAutosaveRecovery) {
         const PendingAutosaveRecovery recovery = pending_autosave_recovery;
         pending_autosave_recovery = PendingAutosaveRecovery{};
-        if (yes_answer(value)) {
+        if (ui::yes_answer(value)) {
             recover_editor_from_autosave(state,
                                          recovery.path,
                                          recovery.autosave_path,
                                          settings,
                                          minibuffer);
-        } else if (no_answer(value) || value.empty()) {
+        } else if (ui::no_answer(value) || value.empty()) {
             load_editor_from_path(state, recovery.path, settings, minibuffer);
         } else {
             pending_autosave_recovery = recovery;
-            minibuffer.prompt = "Type y or n: ";
+            minibuffer.prompt = ui::kConfirmationRetryPrompt;
             minibuffer.input.clear();
         }
         return;
     }
     if (action == MinibufferAction::ConfirmQuit) {
-        if (yes_answer(value)) {
+        if (ui::yes_answer(value)) {
             quit = true;
-        } else if (no_answer(value) || value.empty()) {
+        } else if (ui::no_answer(value) || value.empty()) {
             minibuffer_message(minibuffer, "Quit cancelled");
         } else {
-            minibuffer.prompt = "Type y or n: ";
+            minibuffer.prompt = ui::kConfirmationRetryPrompt;
             minibuffer.input.clear();
         }
         return;
     }
     if (action == MinibufferAction::ConfirmSaveOnQuit) {
-        if (yes_answer(value)) {
+        if (ui::yes_answer(value)) {
             pending_quit_after_save = true;
             start_minibuffer(minibuffer, MinibufferAction::SaveFile, "Save file: ");
-        } else if (no_answer(value) || value.empty()) {
+        } else if (ui::no_answer(value) || value.empty()) {
             quit = true;
         } else {
-            minibuffer.prompt = "Type y or n: ";
+            minibuffer.prompt = ui::kConfirmationRetryPrompt;
             minibuffer.input.clear();
         }
         return;
     }
     if (action == MinibufferAction::ConfirmOverwrite) {
-        if (yes_answer(value)) {
+        if (ui::yes_answer(value)) {
             const PendingSaveRequest request = pending_save;
             pending_save = PendingSaveRequest{};
             save_editor_to_path(state, request.path, minibuffer, request.update_path, settings);
@@ -693,7 +686,7 @@ bool handle_minibuffer_key(EditorState& state,
             load_editor_from_path(state, recovery.path, settings, minibuffer);
         } else {
             pending_autosave_recovery = recovery;
-            minibuffer.prompt = "Type y or n: ";
+            minibuffer.prompt = ui::kConfirmationRetryPrompt;
         }
         return true;
     }
@@ -724,7 +717,7 @@ bool handle_minibuffer_key(EditorState& state,
                 minibuffer_message(minibuffer, "Quit cancelled");
             }
         } else {
-            minibuffer.prompt = "Type y or n: ";
+            minibuffer.prompt = ui::kConfirmationRetryPrompt;
         }
         return true;
     }

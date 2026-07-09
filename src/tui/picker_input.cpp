@@ -1,0 +1,113 @@
+#include "tui/picker_input.hpp"
+
+#include "tui/input_handlers.hpp"
+#include "ui/confirmation.hpp"
+
+namespace pkchat::tui {
+
+bool handle_tui_picker_input(unsigned char ch,
+                             TuiPickerInputState& state,
+                             const TuiPickerCallbacks& callbacks) {
+    if (state.mode == TuiMode::ProviderList || state.mode == TuiMode::ModelList) {
+        if (ch == 17) {
+            state.quit = true;
+            return true;
+        }
+        if (ch == 27) {
+            const std::string selection_label =
+                state.mode == TuiMode::ProviderList ? "Selected provider" : "Selected model";
+            const PickerEscapeResult result = handle_list_picker_escape(
+                state.picker_items.size(), state.picker_selected, state.status, selection_label);
+            if (result == PickerEscapeResult::Cancelled) {
+                const bool provider_picker = state.mode == TuiMode::ProviderList;
+                state.picker_items.clear();
+                state.picker_selected = 0;
+                if (state.picker_cancel_quits) {
+                    state.quit = true;
+                } else {
+                    state.mode = TuiMode::Chat;
+                }
+                state.status = provider_picker ? "Provider selection cancelled" : "Model selection cancelled";
+            }
+            return true;
+        }
+        if (ch == '\r' || ch == '\n') {
+            if (state.picker_selected < state.picker_items.size()) {
+                if (state.mode == TuiMode::ProviderList) {
+                    callbacks.on_provider_selected(state.picker_items[state.picker_selected]);
+                } else {
+                    callbacks.on_model_selected(state.picker_items[state.picker_selected]);
+                }
+            }
+            return true;
+        }
+        return true;
+    }
+    if (state.mode == TuiMode::ThreadList) {
+        if (ch == 17) {
+            state.quit = true;
+            return true;
+        }
+        if (ch == 27) {
+            handle_thread_picker_escape(state.thread_picker_threads,
+                                      state.thread_picker_selected,
+                                      state.mode,
+                                      state.status);
+            return true;
+        }
+        if (ch == '\r' || ch == '\n') {
+            if (state.thread_picker_selected < state.thread_picker_threads.size()) {
+                callbacks.on_thread_selected(state.thread_picker_threads[state.thread_picker_selected].id);
+            }
+            return true;
+        }
+        if (ch == 'n' || ch == 'N') {
+            callbacks.on_thread_new();
+            return true;
+        }
+        return true;
+    }
+    if (state.mode == TuiMode::RemoveConfirm) {
+        if (ch == 17) {
+            state.quit = true;
+            return true;
+        }
+        switch (ui::parse_confirmation_key(ch)) {
+            case ui::ConfirmationKeyResult::Accepted:
+                callbacks.on_remove_accepted();
+                return true;
+            case ui::ConfirmationKeyResult::Rejected:
+                callbacks.on_remove_rejected();
+                return true;
+            case ui::ConfirmationKeyResult::Pending:
+                callbacks.on_remove_retry("Press y to remove, n or Esc to cancel");
+                return true;
+        }
+    }
+    if (state.mode == TuiMode::ModelConfirm) {
+        if (ch == 17) {
+            state.quit = true;
+            return true;
+        }
+        if (!state.input_empty) {
+            return false;
+        }
+        switch (ui::parse_confirmation_key(ch)) {
+            case ui::ConfirmationKeyResult::Accepted:
+                callbacks.on_model_confirm_accepted();
+                return true;
+            case ui::ConfirmationKeyResult::Rejected:
+                callbacks.on_model_confirm_rejected();
+                return true;
+            case ui::ConfirmationKeyResult::Pending:
+                if (ch != '/' && ch != '\r' && ch != '\n' && ch < 32) {
+                    callbacks.on_model_confirm_retry(
+                        "Press y to keep current provider/model, n or Esc to use thread model");
+                }
+                return true;
+        }
+    }
+    return false;
+}
+
+}  // namespace pkchat::tui

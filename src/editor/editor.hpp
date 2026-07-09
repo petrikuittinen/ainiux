@@ -219,6 +219,7 @@ Error load_file(const std::string& path, PieceTable& out);
 Error load_file(const std::string& path, const EditorSettings& settings, PieceTable& out);
 Error check_load_file_size(const std::string& path, const EditorSettings& settings, FileLoadCheck& check);
 Error save_file(const std::string& path, const PieceTable& text);
+Error ensure_empty_file(const std::string& path);
 
 int run_editor(const std::string& path,
                const std::string& save_as,
