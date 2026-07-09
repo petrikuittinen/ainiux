@@ -1147,7 +1147,9 @@ int run(provider::RequestContext context, chat::Session session) {
 
     refresh_startup_status();
 
-    if (!app::detail::trim_ascii(context.options.prompt).empty()) {
+    if (should_open_startup_provider_picker(context)) {
+        open_provider_picker(false);
+    } else if (!app::detail::trim_ascii(context.options.prompt).empty()) {
         start_turn(context.options.prompt);
     }
 

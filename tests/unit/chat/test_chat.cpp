@@ -7,6 +7,7 @@
 #include "json/json.hpp"
 #include <filesystem>
 #include <fstream>
+#include <sqlite3.h>
 #include <string>
 #include <vector>
 
@@ -371,6 +372,95 @@ void test_chat_sqlite_remove_empty_threads() {
           "SQLite empty-thread cleanup reports when the watched thread is removed");
 }
 
+void test_chat_sqlite_thread_name_from_first_user_prompt() {
+    const std::string path = "build/unit-thread-name-pkchat.db";
+    std::filesystem::remove(path);
+    std::filesystem::remove(path + "-wal");
+    std::filesystem::remove(path + "-shm");
+
+    pkchat::provider::RequestContext context;
+    context.profile.name = "lm_studio";
+    context.base_url = "http://localhost:1234/v1";
+    context.options.model = "local-model";
+
+    pkchat::chat::SqliteStore store;
+    pkchat::Error err = store.open(path);
+    check(err.ok(), "SQLite thread-name test database opens");
+
+    pkchat::chat::Session session = pkchat::chat::new_session(context);
+    err = store.save_session(session);
+    check(err.ok() && session.name == "New chat", "SQLite empty thread keeps the default name");
+    const long long thread_id = session.thread_id;
+
+    session.messages.push_back({"user", "What is the capital of Norway?"});
+    err = store.save_session(session);
+    check(err.ok() && session.name == "What is the capital of Norway?",
+          "SQLite thread name updates from the first user prompt after an early autosave");
+
+    const std::string long_prompt(48, 'x');
+    pkchat::chat::Session long_session = pkchat::chat::new_session(context);
+    long_session.name = "New chat";
+    long_session.messages.push_back({"user", long_prompt});
+    err = store.save_session(long_session);
+    check(err.ok() && long_session.name.size() == 40 && long_session.name == long_prompt.substr(0, 40),
+          "SQLite thread name truncates the first user prompt to 40 characters");
+
+    pkchat::chat::Session named_session = pkchat::chat::new_session(context);
+    named_session.name = "Custom title";
+    named_session.messages.push_back({"user", "ignored for explicit names"});
+    err = store.save_session(named_session);
+    check(err.ok() && named_session.name == "Custom title",
+          "SQLite thread name keeps an explicit user-provided title");
+
+    {
+        pkchat::chat::SqliteStore legacy_store;
+        const std::string legacy_path = "build/unit-thread-name-legacy-pkchat.db";
+        std::filesystem::remove(legacy_path);
+        std::filesystem::remove(legacy_path + "-wal");
+        std::filesystem::remove(legacy_path + "-shm");
+
+        err = legacy_store.open(legacy_path);
+        check(err.ok(), "SQLite legacy thread-name database opens");
+
+        pkchat::chat::Session legacy = pkchat::chat::new_session(context);
+        err = legacy_store.save_session(legacy);
+        check(err.ok() && legacy.thread_id > 0, "SQLite legacy empty thread saves");
+        const long long legacy_thread_id = legacy.thread_id;
+        legacy_store.close();
+
+        sqlite3* raw_db = nullptr;
+        const int open_rc = sqlite3_open(legacy_path.c_str(), &raw_db);
+        check(open_rc == SQLITE_OK && raw_db != nullptr, "SQLite legacy raw database opens for seeding");
+        if (raw_db != nullptr) {
+            char* err_msg = nullptr;
+            const std::string insert_sql =
+                "INSERT INTO messages(thread_id, ordinal, created_at, role, content, metadata_json) "
+                "VALUES(" +
+                std::to_string(legacy_thread_id) +
+                ", 0, '2026-07-09T00:00:00Z', 'user', 'legacy prompt', '{}');"
+                "UPDATE threads SET name = 'New chat', message_count = 1 WHERE id = " +
+                std::to_string(legacy_thread_id) + ";"
+                "DELETE FROM schema_migrations WHERE version = 2;";
+            const int exec_rc = sqlite3_exec(raw_db, insert_sql.c_str(), nullptr, nullptr, &err_msg);
+            check(exec_rc == SQLITE_OK,
+                  err_msg == nullptr ? "SQLite legacy seed statements run"
+                                     : ("SQLite legacy seed statements run: " + std::string(err_msg)).c_str());
+            sqlite3_free(err_msg);
+            sqlite3_close(raw_db);
+        }
+
+        err = legacy_store.open(legacy_path);
+        check(err.ok(), "SQLite legacy thread-name database reopens for migration");
+
+        std::vector<pkchat::chat::ThreadSummary> threads;
+        err = legacy_store.list_threads(threads, 20);
+        check(err.ok() && threads.size() == 1 && threads[0].name == "legacy prompt",
+              "SQLite migration backfills thread names from the first user prompt");
+    }
+
+    (void)thread_id;
+}
+
 }  // namespace
 
 void run_all() {
@@ -379,6 +469,7 @@ void run_all() {
     test_chat_session_file_failures_and_unicode();
     test_chat_session_has_chat_messages();
     test_chat_sqlite_store_round_trip_and_listing();
+    test_chat_sqlite_thread_name_from_first_user_prompt();
     test_chat_sqlite_remove_empty_threads();
     test_chat_sqlite_missing_thread_and_corrupt_database();
     test_chat_settings_helpers();

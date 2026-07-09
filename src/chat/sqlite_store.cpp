@@ -15,7 +15,9 @@
 namespace pkchat::chat {
 namespace {
 
-constexpr int kSchemaVersion = 1;
+constexpr int kSchemaVersion = 2;
+constexpr const char kDefaultThreadName[] = "New chat";
+constexpr size_t kMaxThreadNameLength = 40;
 
 std::string sqlite_code_name(int code) {
     return sqlite3_errstr(code);
@@ -222,25 +224,113 @@ std::string first_line(std::string text) {
     return ascii_trim(std::move(text));
 }
 
+bool is_auto_thread_name(const std::string& name) {
+    const std::string trimmed = ascii_trim(name);
+    return trimmed.empty() || trimmed == kDefaultThreadName;
+}
+
 std::string derive_thread_name(const Session& session) {
-    std::string explicit_name = ascii_trim(session.name);
-    if (!explicit_name.empty()) {
-        return explicit_name;
-    }
+    std::string from_user;
     for (const provider::Message& message : session.messages) {
         if (message.role != "user") {
             continue;
         }
         std::string name = first_line(message.content);
         if (!name.empty()) {
-            constexpr size_t kMaxName = 80;
-            if (name.size() > kMaxName) {
-                name.resize(kMaxName);
+            if (name.size() > kMaxThreadNameLength) {
+                name.resize(kMaxThreadNameLength);
             }
-            return name;
+            from_user = std::move(name);
+            break;
         }
     }
-    return "New chat";
+
+    const std::string explicit_name = ascii_trim(session.name);
+    if (!explicit_name.empty() && !is_auto_thread_name(explicit_name)) {
+        return explicit_name;
+    }
+    if (!from_user.empty()) {
+        return from_user;
+    }
+    return kDefaultThreadName;
+}
+
+Error load_thread_messages(sqlite3* db, const std::string& path, long long thread_id,
+                           std::vector<provider::Message>& messages) {
+    messages.clear();
+    Statement stmt(db, path);
+    Error err = stmt.prepare(
+        "SELECT role, content FROM messages WHERE thread_id = ?1 ORDER BY ordinal, id;");
+    if (!err.ok()) {
+        return err;
+    }
+    if (!(err = stmt.bind_int64(1, thread_id)).ok()) {
+        return err;
+    }
+    while (true) {
+        const int rc = stmt.step();
+        if (rc == SQLITE_DONE) {
+            return ok_error();
+        }
+        if (rc != SQLITE_ROW) {
+            return sqlite_error(db, path, "could not load SQLite messages for thread name migration", rc);
+        }
+        messages.push_back({stmt.column_text(0), stmt.column_text(1), {}});
+    }
+}
+
+Error migrate_thread_names_v2(sqlite3* db, const std::string& path) {
+    Statement stmt(db, path);
+    Error err = stmt.prepare(
+        "SELECT id FROM threads WHERE deleted_at IS NULL AND (name = '' OR name = ?1) "
+        "AND EXISTS (SELECT 1 FROM messages WHERE messages.thread_id = threads.id "
+        "AND messages.role = 'user' AND trim(messages.content) != '');");
+    if (!err.ok()) {
+        return err;
+    }
+    if (!(err = stmt.bind_text(1, kDefaultThreadName)).ok()) {
+        return err;
+    }
+
+    std::vector<long long> thread_ids;
+    while (true) {
+        const int rc = stmt.step();
+        if (rc == SQLITE_DONE) {
+            break;
+        }
+        if (rc != SQLITE_ROW) {
+            return sqlite_error(db, path, "could not list SQLite threads for name migration", rc);
+        }
+        thread_ids.push_back(stmt.column_int64(0));
+    }
+
+    for (long long thread_id : thread_ids) {
+        Session session;
+        session.name = kDefaultThreadName;
+        err = load_thread_messages(db, path, thread_id, session.messages);
+        if (!err.ok()) {
+            return err;
+        }
+        const std::string derived_name = derive_thread_name(session);
+        if (is_auto_thread_name(derived_name)) {
+            continue;
+        }
+        Statement update(db, path);
+        err = update.prepare("UPDATE threads SET name = ?1 WHERE id = ?2;");
+        if (!err.ok()) {
+            return err;
+        }
+        if (!(err = update.bind_text(1, derived_name)).ok()) {
+            return err;
+        }
+        if (!(err = update.bind_int64(2, thread_id)).ok()) {
+            return err;
+        }
+        if (!(err = update.step_done("could not migrate SQLite thread name")).ok()) {
+            return err;
+        }
+    }
+    return ok_error();
 }
 
 bool valid_role(const std::string& role) {
@@ -349,10 +439,24 @@ INSERT OR IGNORE INTO schema_migrations(version, applied_at)
     if (rc != SQLITE_ROW) {
         return sqlite_error(db, path, "could not read SQLite schema version", rc);
     }
-    const long long version = stmt.column_int64(0);
+    long long version = stmt.column_int64(0);
     if (version > kSchemaVersion) {
         return {ErrorCode::ProviderSchema,
                 "SQLite database schema is newer than this pkchat build: " + path};
+    }
+    if (version < 2) {
+        err = migrate_thread_names_v2(db, path);
+        if (!err.ok()) {
+            return err;
+        }
+        err = exec_sql(db, path,
+                       "INSERT OR IGNORE INTO schema_migrations(version, applied_at) "
+                       "VALUES(2, strftime('%Y-%m-%dT%H:%M:%SZ','now'));",
+                       "could not record SQLite schema migration 2");
+        if (!err.ok()) {
+            return err;
+        }
+        version = 2;
     }
     return ok_error();
 }

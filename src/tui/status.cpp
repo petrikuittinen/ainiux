@@ -67,6 +67,10 @@ std::string sqlite_unavailable_status(const std::string& reason) {
     return "Saved chat database unavailable: " + reason;
 }
 
+bool should_open_startup_provider_picker(const provider::RequestContext& context) {
+    return context.profile.offline;
+}
+
 std::string chat_startup_status(const provider::RequestContext& context) {
     if (context.profile.offline) {
         return "Select a provider with /provider, then choose a model with /model";

@@ -327,6 +327,19 @@ void test_tui_selectable_provider_ids() {
           "TUI provider picker includes lm_studio");
 }
 
+void test_tui_startup_provider_picker() {
+    pkchat::provider::RequestContext offline;
+    offline.profile.offline = true;
+    check(pkchat::tui::should_open_startup_provider_picker(offline),
+          "TUI opens startup provider picker when chat starts offline");
+
+    pkchat::provider::RequestContext ready;
+    ready.profile.name = "lm_studio";
+    ready.options.model = "qwen-local";
+    check(!pkchat::tui::should_open_startup_provider_picker(ready),
+          "TUI skips startup provider picker when a provider is already configured");
+}
+
 void test_tui_chat_startup_status() {
     pkchat::provider::RequestContext offline;
     offline.profile.offline = true;
@@ -564,6 +577,7 @@ void run_all() {
     test_tui_input_label_and_activity_indicators();
     test_tui_provider_display_and_activity_status();
     test_tui_selectable_provider_ids();
+    test_tui_startup_provider_picker();
     test_tui_chat_startup_status();
     test_tui_provider_and_model_picker_text();
     test_tui_unicode_and_empty_status();
