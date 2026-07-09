@@ -2,6 +2,7 @@
 
 #include "app/app.hpp"
 #include "app/detail.hpp"
+#include "chat/generation_settings.hpp"
 #include "chat/settings.hpp"
 #include "pkchat/model_setting.hpp"
 #include "tui/detail/render.hpp"
@@ -190,8 +191,7 @@ void handle_tui_command(const std::string& text, TuiCommandContext& ctx, TuiComm
             ctx.history_scroll = 0;
             return;
         }
-        if (requested == "general" || requested == "coding" || requested == "instruct" ||
-            requested == "creative") {
+        if (chat::generation::is_chat_purpose(requested)) {
             if (ctx.context.options.model.empty()) {
                 ctx.status = "Set a model with /model before applying a purpose preset";
                 return;
@@ -220,7 +220,7 @@ void handle_tui_command(const std::string& text, TuiCommandContext& ctx, TuiComm
         }
         const size_t equals = requested.find('=');
         if (equals == std::string::npos) {
-            ctx.status = "Usage: /setting NAME=VALUE or /setting general|coding|instruct|creative";
+            ctx.status = "Usage: /setting NAME=VALUE or /setting " + chat::generation::chat_purpose_description();
             return;
         }
         const std::string name = app::detail::trim_ascii(requested.substr(0, equals));

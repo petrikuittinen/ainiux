@@ -1,5 +1,8 @@
 #include "config/config.hpp"
 
+#include "chat/generation_settings.hpp"
+#include "cli/option_values.hpp"
+#include "context/policy.hpp"
 #include "editor/autosave.hpp"
 #include "editor/editor_prompts.hpp"
 #include "pkchat/model_setting.hpp"
@@ -807,8 +810,10 @@ Error apply_configured_model_settings(const Document& document, cli::Options& ca
             partial.model = entry.value.string;
         } else if (key == "purpose") {
             std::string purpose;
-            Error err = enum_string(entry, {"creative", "coding", "instruct", "general"}, purpose,
-                                    "creative, coding, instruct, or general");
+            Error err = enum_string(entry,
+                                    chat::generation::chat_purpose_strings(),
+                                    purpose,
+                                    chat::generation::chat_purpose_description());
             if (!err.ok()) {
                 return err;
             }
@@ -819,49 +824,49 @@ Error apply_configured_model_settings(const Document& document, cli::Options& ca
                 return err;
             }
             partial.default_system_prompt = entry.value.string;
-        } else if (key == "temperature") {
+        } else if (key == chat::generation::kTemperature) {
             double value = 0.0;
             Error err = numeric_double(entry, value);
             if (!err.ok()) {
                 return err;
             }
             partial.temperature = value;
-        } else if (key == "top_k") {
+        } else if (key == chat::generation::kTopK) {
             int value = 0;
             Error err = nonnegative_int(entry, value);
             if (!err.ok()) {
                 return err;
             }
             partial.top_k = value;
-        } else if (key == "top_p") {
+        } else if (key == chat::generation::kTopP) {
             double value = 0.0;
             Error err = numeric_double(entry, value);
             if (!err.ok()) {
                 return err;
             }
             partial.top_p = value;
-        } else if (key == "min_p") {
+        } else if (key == chat::generation::kMinP) {
             double value = 0.0;
             Error err = numeric_double(entry, value);
             if (!err.ok()) {
                 return err;
             }
             partial.min_p = value;
-        } else if (key == "repeat_penalty") {
+        } else if (key == chat::generation::kRepeatPenalty) {
             double value = 0.0;
             Error err = numeric_double(entry, value);
             if (!err.ok()) {
                 return err;
             }
             partial.repeat_penalty = value;
-        } else if (key == "presence_penalty") {
+        } else if (key == chat::generation::kPresencePenalty) {
             double value = 0.0;
             Error err = numeric_double(entry, value);
             if (!err.ok()) {
                 return err;
             }
             partial.presence_penalty = value;
-        } else if (key == "thinking_budget") {
+        } else if (key == chat::generation::kThinkingBudget) {
             if (entry.value.is_string()) {
                 if (entry.value.string.empty()) {
                     return schema_error(entry, "thinking_budget must not be empty");
@@ -877,9 +882,8 @@ Error apply_configured_model_settings(const Document& document, cli::Options& ca
             }
         } else {
             return schema_error(entry,
-                                "unknown [Model-setting] key; expected model, purpose, "
-                                "default_system_prompt, temperature, top_k, top_p, min_p, "
-                                "repeat_penalty, presence_penalty, or thinking_budget");
+                                "unknown [Model-setting] key; expected " +
+                                    chat::generation::model_setting_keys_description());
         }
     }
 
@@ -1145,9 +1149,9 @@ Error apply_document(const Document& document, cli::Options& options) {
             err = nonnegative_long(entry, candidate.max_context_bytes);
         } else if (name == "context.policy") {
             err = enum_string(entry,
-                              {"error", "truncate-oldest", "summarize-oldest", "summarize-middle", "provider-auto"},
+                              context::policy::value_strings(),
                               candidate.context_policy,
-                              "error, truncate-oldest, summarize-oldest, summarize-middle, or provider-auto");
+                              context::policy::usage_description());
         } else if (name == "network.connect_timeout_seconds") {
             err = nonnegative_long(entry, candidate.connect_timeout_seconds);
         } else if (name == "network.request_timeout_seconds") {
@@ -1187,8 +1191,10 @@ Error apply_document(const Document& document, cli::Options& options) {
         } else if (name == "input.max_image_bytes") {
             err = nonnegative_long(entry, candidate.max_image_bytes);
         } else if (name == "input.image_capability") {
-            err = enum_string(entry, {"auto", "allow", "deny"}, candidate.image_capability,
-                              "auto, allow, or deny");
+            err = enum_string(entry,
+                              cli::option_values::image_capability_strings(),
+                              candidate.image_capability,
+                              cli::option_values::image_capability_description());
         } else if (name == "editor.undo_limit") {
             err = nonnegative_int(entry, candidate.editor_undo_limit);
         } else if (name == "editor.huge_file_size_warning") {

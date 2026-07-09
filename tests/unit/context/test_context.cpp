@@ -1,6 +1,7 @@
 #include "context/test_context.hpp"
 #include "support/test_support.hpp"
 #include "context/context.hpp"
+#include "context/policy.hpp"
 #include "provider/provider.hpp"
 #include <string>
 #include <vector>
@@ -108,9 +109,19 @@ void test_context_numeric_and_unicode_edge_cases() {
 
 }  // namespace
 
+void test_context_policy_metadata() {
+    check(pkchat::context::policy::is_valid(pkchat::context::policy::kSummarizeMiddle),
+          "context policy metadata accepts summarize-middle");
+    check(!pkchat::context::policy::is_valid("bogus-policy"),
+          "context policy metadata rejects unknown policies");
+    check(pkchat::context::policy::value_strings().size() == pkchat::context::policy::values().size(),
+          "context policy string list mirrors canonical values");
+}
+
 void run_all() {
     test_context_policies_preserve_full_messages();
     test_context_numeric_and_unicode_edge_cases();
+    test_context_policy_metadata();
 }
 
 }  // namespace pkchat::test::context

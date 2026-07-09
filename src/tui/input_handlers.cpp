@@ -90,7 +90,7 @@ bool apply_chat_history_scroll(const editor::MovementKeyEvent& movement,
 std::vector<std::string> selectable_provider_ids() {
     std::vector<std::string> providers;
     for (const provider::Profile& profile : provider::built_in_profiles()) {
-        if (profile.offline || profile.name == "custom_openai_chat") {
+        if (!provider::is_selectable_provider(profile)) {
             continue;
         }
         providers.push_back(profile.name);

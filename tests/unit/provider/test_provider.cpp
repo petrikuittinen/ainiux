@@ -2,6 +2,7 @@
 #include "support/test_support.hpp"
 #include "cli/args.hpp"
 #include "json/json.hpp"
+#include "provider/names.hpp"
 #include "provider/provider.hpp"
 
 #include <arpa/inet.h>
@@ -528,6 +529,36 @@ void test_image_capability_detection() {
     context.api_kind = pkchat::provider::ApiKind::Responses;
     check(!pkchat::provider::validate_image_input(context).ok(),
           "Responses image input remains rejected until its request schema is implemented");
+}
+
+void test_provider_lookup_metadata() {
+    check(pkchat::provider::normalize_provider_key("LM-Studio") == "lm_studio",
+          "provider key normalization lowercases and maps dashes");
+    check(pkchat::provider::canonical_profile_name("lmstudio") == pkchat::provider::names::kLmStudio,
+          "canonical profile name resolves aliases");
+    check(pkchat::provider::canonical_profile_name("custom") == pkchat::provider::names::kCustomOpenAiChat,
+          "canonical profile name resolves custom alias");
+
+    const std::vector<pkchat::provider::Profile> profiles = pkchat::provider::built_in_profiles();
+    const pkchat::provider::Profile* custom_profile = nullptr;
+    const pkchat::provider::Profile* lm_studio_profile = nullptr;
+    for (const pkchat::provider::Profile& profile : profiles) {
+        if (profile.name == pkchat::provider::names::kCustomOpenAiChat) {
+            custom_profile = &profile;
+        } else if (profile.name == pkchat::provider::names::kLmStudio) {
+            lm_studio_profile = &profile;
+        }
+    }
+    check(custom_profile != nullptr && !pkchat::provider::is_selectable_provider(*custom_profile),
+          "custom OpenAI-compatible profile is not selectable in provider pickers");
+    check(lm_studio_profile != nullptr && pkchat::provider::is_selectable_provider(*lm_studio_profile),
+          "lm_studio profile is selectable in provider pickers");
+    check(pkchat::provider::profile_auto_selects_default_model(*lm_studio_profile, lm_studio_profile->base_url),
+          "local lm_studio profile auto-selects a default model");
+    check(!pkchat::provider::profile_auto_selects_default_model(*custom_profile, "https://api.example.com/v1"),
+          "custom remote endpoint does not auto-select a default model");
+    check(pkchat::provider::profile_auto_selects_default_model(*custom_profile, "http://localhost:8000/v1"),
+          "custom loopback endpoint auto-selects a default model");
 }
 
 void test_lmstudio_context() {
@@ -1192,6 +1223,7 @@ void run_all() {
     test_responses_sse_accepts_concatenated_json_payloads();
     test_explicit_chat_url_does_not_require_base_when_model_set();
     test_image_capability_detection();
+    test_provider_lookup_metadata();
     test_lmstudio_context();
     test_lmstudio_shortcut_context();
     test_parse_models_response_llamacpp_meta();

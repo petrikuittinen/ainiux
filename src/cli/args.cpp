@@ -5,6 +5,9 @@
 #include <sstream>
 
 #include "chat/settings.hpp"
+#include "cli/option_values.hpp"
+#include "context/policy.hpp"
+#include "chat/generation_settings.hpp"
 #include "pkchat/version.hpp"
 
 namespace pkchat::cli {
@@ -343,8 +346,10 @@ ParseResult parse_args(int argc, char** argv, const Options& base_options) {
                     return {opts, err};
                 }
             } else if (opt == "--purpose") {
-                if (value != "general" && value != "coding" && value != "instruct" && value != "creative") {
-                    return {opts, {ErrorCode::BadArgs, "--purpose must be general, coding, instruct, or creative"}};
+                if (!chat::generation::is_chat_purpose(value)) {
+                    return {opts,
+                            {ErrorCode::BadArgs,
+                             "--purpose must be " + chat::generation::chat_purpose_description()}};
                 }
                 opts.chat_purpose = value;
             } else if (opt == "--max-output-tokens") {
@@ -476,16 +481,16 @@ ParseResult parse_args(int argc, char** argv, const Options& base_options) {
                     return {opts, err};
                 }
             } else if (opt == "--context-policy") {
-                if (value != "error" && value != "truncate-oldest" && value != "summarize-oldest" &&
-                    value != "summarize-middle" && value != "provider-auto") {
+                if (!context::policy::is_valid(value)) {
                     return {opts, {ErrorCode::BadArgs,
-                                   "--context-policy must be error, truncate-oldest, summarize-oldest, "
-                                   "summarize-middle, or provider-auto"}};
+                                   "--context-policy must be " + context::policy::usage_description()}};
                 }
                 opts.context_policy = value;
             } else if (opt == "--image-capability") {
-                if (value != "auto" && value != "allow" && value != "deny") {
-                    return {opts, {ErrorCode::BadArgs, "--image-capability must be auto, allow, or deny"}};
+                if (!option_values::is_image_capability(value)) {
+                    return {opts,
+                            {ErrorCode::BadArgs,
+                             "--image-capability must be " + option_values::image_capability_description()}};
                 }
                 opts.image_capability = value;
             } else if (opt == "--dataset") {

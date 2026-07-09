@@ -10,32 +10,6 @@ namespace pkchat::tui {
 
 namespace {
 
-std::string normalize_provider_key(std::string name) {
-    for (char& ch : name) {
-        if (ch >= 'A' && ch <= 'Z') {
-            ch = static_cast<char>(ch - 'A' + 'a');
-        } else if (ch == '-') {
-            ch = '_';
-        }
-    }
-    return name;
-}
-
-std::string canonical_provider_key(const std::string& name) {
-    const std::string lookup = normalize_provider_key(name.empty() ? "openai" : name);
-    for (const provider::Profile& profile : provider::built_in_profiles()) {
-        if (normalize_provider_key(profile.name) == lookup) {
-            return profile.name;
-        }
-        for (const std::string& alias : profile.aliases) {
-            if (normalize_provider_key(alias) == lookup) {
-                return profile.name;
-            }
-        }
-    }
-    return lookup;
-}
-
 std::string format_provider_model_line(const std::string& provider_name, const std::string& model_name) {
     std::ostringstream out;
     if (!provider_name.empty()) {
@@ -63,8 +37,8 @@ bool loaded_session_differs_from_context(const provider::RequestContext& active,
         return false;
     }
     const bool provider_differs = !loaded.provider.empty() &&
-                                  canonical_provider_key(loaded.provider) !=
-                                      canonical_provider_key(active.profile.name);
+                                  provider::canonical_profile_name(loaded.provider) !=
+                                      provider::canonical_profile_name(active.profile.name);
     const bool model_differs = !active.options.model.empty() && !loaded.model.empty() &&
                                loaded.model != active.options.model;
     return provider_differs || model_differs;

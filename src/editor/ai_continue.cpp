@@ -7,16 +7,6 @@
 #include <sstream>
 
 namespace pkchat::editor {
-namespace {
-
-bool is_loopback_base_url(const std::string& base_url) {
-    const std::string lower = ascii_lower(base_url);
-    return lower.find("://localhost") != std::string::npos ||
-           lower.find("://127.0.0.1") != std::string::npos ||
-           lower.find("://[::1]") != std::string::npos;
-}
-
-}  // namespace
 
 AiContinueSettings ai_continue_settings_from_env() {
     AiContinueSettings settings;
@@ -86,17 +76,7 @@ std::string continue_completion_status_message(const std::string& provider_name,
 }
 
 bool editor_auto_selects_model(const provider::RequestContext& context) {
-    if (context.profile.offline) {
-        return false;
-    }
-    if (context.profile.name == "lm_studio" || context.profile.name == "ollama" ||
-        context.profile.name == "vllm") {
-        return true;
-    }
-    if (context.profile.name == "custom_openai_chat" && is_loopback_base_url(context.base_url)) {
-        return true;
-    }
-    return false;
+    return provider::profile_auto_selects_default_model(context.profile, context.base_url);
 }
 
 Error resolve_editor_default_model(AiContinueContext& context) {

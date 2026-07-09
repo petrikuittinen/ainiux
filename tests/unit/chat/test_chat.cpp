@@ -1,6 +1,7 @@
 #include "chat/test_chat.hpp"
 #include "support/test_support.hpp"
 #include "chat/session.hpp"
+#include "chat/generation_settings.hpp"
 #include "chat/settings.hpp"
 #include "chat/sqlite_store.hpp"
 #include "pkchat/model_setting.hpp"
@@ -461,6 +462,15 @@ void test_chat_sqlite_thread_name_from_first_user_prompt() {
     (void)thread_id;
 }
 
+void test_generation_settings_metadata() {
+    check(pkchat::chat::generation::is_chat_setting_name(pkchat::chat::generation::kTopP),
+          "generation metadata recognizes top_p");
+    check(!pkchat::chat::generation::is_chat_setting_name("bogus_setting"),
+          "generation metadata rejects unknown chat settings");
+    check(pkchat::chat::generation::is_chat_purpose(pkchat::chat::generation::kPurposeCoding),
+          "generation metadata recognizes coding purpose");
+}
+
 }  // namespace
 
 void run_all() {
@@ -473,6 +483,7 @@ void run_all() {
     test_chat_sqlite_remove_empty_threads();
     test_chat_sqlite_missing_thread_and_corrupt_database();
     test_chat_settings_helpers();
+    test_generation_settings_metadata();
 }
 
 }  // namespace pkchat::test::chat

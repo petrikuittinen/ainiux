@@ -1,4 +1,5 @@
 #include "chat/settings.hpp"
+#include "chat/generation_settings.hpp"
 
 #include <cctype>
 #include <cmath>
@@ -259,48 +260,47 @@ Error apply_chat_setting(cli::Options& options, const std::string& raw_name, con
         ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
     }
     if (is_null_setting_value(value)) {
-        if (name == "max_tokens" || name == "max_output_tokens") {
+        if (name == generation::kMaxTokens || name == generation::kMaxOutputTokens) {
             options.has_max_output_tokens = false;
             return ok_error();
         }
-        if (name == "thinking") {
+        if (name == generation::kThinking) {
             options.has_enable_thinking = false;
             return ok_error();
         }
-        if (name == "thinking_budget") {
+        if (name == generation::kThinkingBudget) {
             options.has_thinking_budget = false;
             options.thinking_budget.clear();
             return ok_error();
         }
-        if (name == "temperature") {
+        if (name == generation::kTemperature) {
             options.has_temperature = false;
             return ok_error();
         }
-        if (name == "top_k") {
+        if (name == generation::kTopK) {
             options.has_top_k = false;
             return ok_error();
         }
-        if (name == "top_p") {
+        if (name == generation::kTopP) {
             options.has_top_p = false;
             return ok_error();
         }
-        if (name == "min_p") {
+        if (name == generation::kMinP) {
             options.has_min_p = false;
             return ok_error();
         }
-        if (name == "repeat_penalty") {
+        if (name == generation::kRepeatPenalty) {
             options.has_repeat_penalty = false;
             return ok_error();
         }
-        if (name == "presence_penalty") {
+        if (name == generation::kPresencePenalty) {
             options.has_presence_penalty = false;
             return ok_error();
         }
         return invalid_setting_value(name,
-                                     "unknown setting; expected temperature, top_k, top_p, min_p, "
-                                     "repeat_penalty, presence_penalty, max_tokens, thinking, or thinking_budget");
+                                     "unknown setting; expected " + generation::chat_setting_names_description());
     }
-    if (name == "max_tokens" || name == "max_output_tokens") {
+    if (name == generation::kMaxTokens || name == generation::kMaxOutputTokens) {
         int parsed = 0;
         try {
             parsed = std::stoi(value);
@@ -314,7 +314,7 @@ Error apply_chat_setting(cli::Options& options, const std::string& raw_name, con
         options.has_max_output_tokens = true;
         return ok_error();
     }
-    if (name == "thinking") {
+    if (name == generation::kThinking) {
         bool enabled = false;
         if (!parse_bool_setting(value, enabled)) {
             return invalid_setting_value(name, "expected on or off");
@@ -323,7 +323,7 @@ Error apply_chat_setting(cli::Options& options, const std::string& raw_name, con
         options.has_enable_thinking = true;
         return ok_error();
     }
-    if (name == "thinking_budget") {
+    if (name == generation::kThinkingBudget) {
         Error err = validate_thinking_budget_value(value);
         if (!err.ok()) {
             return err;
@@ -332,7 +332,7 @@ Error apply_chat_setting(cli::Options& options, const std::string& raw_name, con
         options.has_thinking_budget = true;
         return ok_error();
     }
-    if (name == "temperature") {
+    if (name == generation::kTemperature) {
         try {
             options.temperature = std::stod(value);
         } catch (const std::exception&) {
@@ -344,7 +344,7 @@ Error apply_chat_setting(cli::Options& options, const std::string& raw_name, con
         options.has_temperature = true;
         return ok_error();
     }
-    if (name == "top_k") {
+    if (name == generation::kTopK) {
         try {
             const long long parsed = std::stoll(value);
             if (parsed < 0 || parsed > std::numeric_limits<int>::max()) {
@@ -357,7 +357,8 @@ Error apply_chat_setting(cli::Options& options, const std::string& raw_name, con
         options.has_top_k = true;
         return ok_error();
     }
-    if (name == "top_p" || name == "min_p" || name == "repeat_penalty" || name == "presence_penalty") {
+    if (name == generation::kTopP || name == generation::kMinP || name == generation::kRepeatPenalty ||
+        name == generation::kPresencePenalty) {
         double parsed = 0.0;
         try {
             parsed = std::stod(value);
@@ -367,13 +368,13 @@ Error apply_chat_setting(cli::Options& options, const std::string& raw_name, con
         if (!std::isfinite(parsed)) {
             return invalid_setting_value(name, "expected a finite number");
         }
-        if (name == "top_p") {
+        if (name == generation::kTopP) {
             options.top_p = parsed;
             options.has_top_p = true;
-        } else if (name == "min_p") {
+        } else if (name == generation::kMinP) {
             options.min_p = parsed;
             options.has_min_p = true;
-        } else if (name == "repeat_penalty") {
+        } else if (name == generation::kRepeatPenalty) {
             options.repeat_penalty = parsed;
             options.has_repeat_penalty = true;
         } else {
@@ -383,8 +384,7 @@ Error apply_chat_setting(cli::Options& options, const std::string& raw_name, con
         return ok_error();
     }
     return invalid_setting_value(name,
-                                 "unknown setting; expected temperature, top_k, top_p, min_p, "
-                                 "repeat_penalty, presence_penalty, max_tokens, thinking, or thinking_budget");
+                                 "unknown setting; expected " + generation::chat_setting_names_description());
 }
 
 std::string settings_json_from_options(const cli::Options& options) {

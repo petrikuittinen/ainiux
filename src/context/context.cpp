@@ -1,4 +1,5 @@
 #include "context/context.hpp"
+#include "context/policy.hpp"
 
 #include <algorithm>
 #include <cctype>
@@ -126,15 +127,14 @@ PreparedMessages prepare(const std::vector<provider::Message>& messages,
     PreparedMessages result;
     result.messages = messages;
     const size_t original_bytes = estimated_text_bytes(messages);
-    if (max_bytes == 0 || original_bytes <= max_bytes || policy == "provider-auto") {
+    if (max_bytes == 0 || original_bytes <= max_bytes || policy == policy::kProviderAuto) {
         return result;
     }
-    if (policy != "error" && policy != "truncate-oldest" && policy != "summarize-oldest" &&
-        policy != "summarize-middle") {
+    if (!policy::is_valid(policy)) {
         result.error = {ErrorCode::BadArgs, "unknown context policy: " + policy};
         return result;
     }
-    if (policy == "error") {
+    if (policy == policy::kError) {
         return too_large_error(messages, policy, max_bytes, original_bytes);
     }
 
@@ -154,7 +154,7 @@ PreparedMessages prepare(const std::vector<provider::Message>& messages,
             candidates.push_back(i);
         }
     }
-    if (policy == "summarize-middle" && !candidates.empty()) {
+    if (policy == policy::kSummarizeMiddle && !candidates.empty()) {
         candidates.erase(candidates.begin());
         const size_t center = messages.size() / 2;
         std::stable_sort(candidates.begin(), candidates.end(), [center](size_t a, size_t b) {
@@ -164,7 +164,7 @@ PreparedMessages prepare(const std::vector<provider::Message>& messages,
         });
     }
 
-    const bool summarize = policy == "summarize-oldest" || policy == "summarize-middle";
+    const bool summarize = policy == policy::kSummarizeOldest || policy == policy::kSummarizeMiddle;
     const size_t minimum_summary_bytes = summarize ? 96 : 0;
     std::vector<size_t> removed_indices;
     for (size_t index : candidates) {

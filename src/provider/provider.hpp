@@ -129,6 +129,10 @@ std::string format_models_markdown(const std::string& provider_name,
                                    const ModelsResult& result);
 Error parse_models_response(const std::string& body, ModelsResult& result);
 std::vector<Profile> built_in_profiles();
+std::string normalize_provider_key(std::string text);
+std::string canonical_profile_name(const std::string& name);
+bool is_selectable_provider(const Profile& profile);
+bool profile_auto_selects_default_model(const Profile& profile, const std::string& base_url);
 std::string display_name_for_profile(const std::string& profile_name);
 Error validate_profile_name(const std::string& name);
 const Capabilities& capabilities_for(const RequestContext& context);

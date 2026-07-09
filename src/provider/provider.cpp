@@ -1,4 +1,5 @@
 #include "chat/settings.hpp"
+#include "provider/names.hpp"
 #include "provider/provider.hpp"
 
 #include <chrono>
@@ -22,15 +23,11 @@ namespace pkchat::provider {
 
 namespace {
 
-std::string lower_alias(std::string text) {
-    for (char& ch : text) {
-        if (ch >= 'A' && ch <= 'Z') {
-            ch = static_cast<char>(ch - 'A' + 'a');
-        } else if (ch == '-') {
-            ch = '_';
-        }
-    }
-    return text;
+bool is_loopback_base_url(const std::string& base_url) {
+    const std::string lower = ascii_lower(base_url);
+    return lower.find("://localhost") != std::string::npos ||
+           lower.find("://127.0.0.1") != std::string::npos ||
+           lower.find("://[::1]") != std::string::npos;
 }
 
 Capabilities profile_capabilities(bool requires_key,
@@ -75,17 +72,17 @@ Profile make_profile(const std::string& name,
     profile.dummy_api_key = dummy_api_key;
     profile.compatibility_warning = warning;
     profile.capabilities = profile_capabilities(requires_key, local, !chat_path.empty(), !responses_path.empty(), !models_path.empty());
-    profile.capabilities.images = name == "openai" || name == "openrouter" || name == "gemini" ||
-                                  name == "xai" || name == "mistral" || name == "lm_studio" ||
-                                  name == "ollama" || name == "vllm" || name == "llamacpp" ||
-                                  name == "qwen" || name == "custom_openai_chat";
+    profile.capabilities.images = name == names::kOpenAi || name == "openrouter" || name == "gemini" ||
+                                  name == "xai" || name == "mistral" || name == names::kLmStudio ||
+                                  name == names::kOllama || name == names::kVllm || name == names::kLlamacpp ||
+                                  name == "qwen" || name == names::kCustomOpenAiChat;
     return profile;
 }
 
 Profile make_offline_profile() {
     Profile profile;
-    profile.name = "none";
-    profile.aliases = {"offline"};
+    profile.name = names::kNone;
+    profile.aliases = {names::kOffline};
     profile.base_url.clear();
     profile.chat_path.clear();
     profile.responses_path.clear();
@@ -98,7 +95,15 @@ Profile make_offline_profile() {
 const std::vector<Profile>& profile_registry() {
     static const std::vector<Profile> profiles = {
         make_offline_profile(),
-        make_profile("openai", {"openai_chat", "openai_responses"}, "https://api.openai.com/v1", "/chat/completions", "/models", "/responses", {"OPENAI_API_KEY", "PKCHAT_API_KEY"}, true, false),
+        make_profile(names::kOpenAi,
+                     {names::kOpenAiChat, names::kOpenAiResponses},
+                     "https://api.openai.com/v1",
+                     "/chat/completions",
+                     "/models",
+                     "/responses",
+                     {"OPENAI_API_KEY", "PKCHAT_API_KEY"},
+                     true,
+                     false),
         make_profile("openrouter", {}, "https://openrouter.ai/api/v1", "/chat/completions", "/models", "", {"OPENROUTER_API_KEY", "PKCHAT_API_KEY"}, true, false),
         make_profile("deepseek", {}, "https://api.deepseek.com", "/chat/completions", "/models", "", {"DEEPSEEK_API_KEY", "PKCHAT_API_KEY"}, true, false),
         make_profile("gemini", {}, "https://generativelanguage.googleapis.com/v1beta/openai", "/chat/completions", "/models", "", {"GEMINI_API_KEY", "PKCHAT_API_KEY"}, true, false),
@@ -116,36 +121,52 @@ const std::vector<Profile>& profile_registry() {
         make_profile("zai", {"z.ai", "z_ai"}, "https://api.z.ai/api/paas/v4", "/chat/completions", "", "", {"ZAI_API_KEY", "PKCHAT_API_KEY"}, true, false),
         make_profile("qwen", {"dashscope_intl"}, "https://dashscope-intl.aliyuncs.com/compatible-mode/v1", "/chat/completions", "/models", "", {"DASHSCOPE_API_KEY", "QWEN_API_KEY", "PKCHAT_API_KEY"}, true, false),
         make_profile("dashscope", {}, "https://dashscope.aliyuncs.com/compatible-mode/v1", "/chat/completions", "/models", "", {"DASHSCOPE_API_KEY", "PKCHAT_API_KEY"}, true, false),
-        make_profile("lm_studio", {"lmstudio"}, "http://localhost:1234/v1", "/chat/completions", "/models", "", {"LMSTUDIO_API_KEY", "LM_STUDIO_API_KEY", "PKCHAT_API_KEY"}, false, true),
-        make_profile("ollama", {}, "http://localhost:11434/v1", "/chat/completions", "/models", "", {}, false, true),
-        make_profile("vllm", {}, "http://localhost:8000/v1", "/chat/completions", "/models", "", {}, false, true, "token-abc123"),
-        make_profile("llamacpp", {"llama_cpp", "llama.cpp"}, "http://localhost:8080/v1", "/chat/completions", "/models", "", {}, false, true),
-        make_profile("custom_openai_chat", {"custom"}, "", "/chat/completions", "/models", "/responses", {"PKCHAT_API_KEY"}, false, false),
+        make_profile(names::kLmStudio,
+                     {names::kLmStudioAlias},
+                     "http://localhost:1234/v1",
+                     "/chat/completions",
+                     "/models",
+                     "",
+                     {"LMSTUDIO_API_KEY", "LM_STUDIO_API_KEY", "PKCHAT_API_KEY"},
+                     false,
+                     true),
+        make_profile(names::kOllama, {}, "http://localhost:11434/v1", "/chat/completions", "/models", "", {}, false, true),
+        make_profile(names::kVllm, {}, "http://localhost:8000/v1", "/chat/completions", "/models", "", {}, false, true, "token-abc123"),
+        make_profile(names::kLlamacpp, {"llama_cpp", "llama.cpp"}, "http://localhost:8080/v1", "/chat/completions", "/models", "", {}, false, true),
+        make_profile(names::kCustomOpenAiChat,
+                     {names::kCustom},
+                     "",
+                     "/chat/completions",
+                     "/models",
+                     "/responses",
+                     {"PKCHAT_API_KEY"},
+                     false,
+                     false),
     };
     return profiles;
 }
 
 std::string provider_lookup_name(const std::string& requested) {
-    const std::string name = lower_alias(requested.empty() ? "openai" : requested);
-    if (name == "openai_responses") {
-        return "openai";
+    const std::string name = normalize_provider_key(requested.empty() ? names::kOpenAi : requested);
+    if (name == names::kOpenAiResponses) {
+        return names::kOpenAi;
     }
     return name;
 }
 
 bool provider_requests_responses(const std::string& requested) {
-    return lower_alias(requested) == "openai_responses";
+    return normalize_provider_key(requested) == names::kOpenAiResponses;
 }
 
 bool find_profile(const std::string& requested, Profile& out) {
     const std::string name = provider_lookup_name(requested);
     for (const Profile& profile : profile_registry()) {
-        if (lower_alias(profile.name) == name) {
+        if (normalize_provider_key(profile.name) == name) {
             out = profile;
             return true;
         }
         for (const std::string& alias : profile.aliases) {
-            if (lower_alias(alias) == name) {
+            if (normalize_provider_key(alias) == name) {
                 out = profile;
                 return true;
             }
@@ -166,7 +187,7 @@ bool has_authorization_header(const std::vector<std::string>& headers) {
             continue;
         }
         if (is_sensitive_header_name(ascii_trim(header.substr(0, colon))) &&
-            lower_alias(ascii_trim(header.substr(0, colon))) == "authorization") {
+            normalize_provider_key(ascii_trim(header.substr(0, colon))) == "authorization") {
             return true;
         }
     }
@@ -322,9 +343,9 @@ bool text_contains_any(const std::string& text, const std::vector<std::string>& 
 std::string context_model_and_urls(const RequestContext& context);
 
 ReasoningWireFormat reasoning_wire_format_for(const RequestContext& context) {
-    const std::string profile = lower_alias(context.profile.name);
+    const std::string profile = normalize_provider_key(context.profile.name);
     const std::string model_and_urls = context_model_and_urls(context);
-    if (profile == "none" || context.profile.offline) {
+    if (profile == names::kNone || context.profile.offline) {
         return ReasoningWireFormat::None;
     }
     if (profile == "openai") {
@@ -373,8 +394,8 @@ ReasoningWireFormat reasoning_wire_format_for(const RequestContext& context) {
     if (text_contains_any(model_and_urls, {"api.z.ai", "glm-5.2", "glm_5.2", "zai-org/glm-5.2"})) {
         return ReasoningWireFormat::ZaiThinking;
     }
-    if (profile.empty() || profile == "custom_openai_chat" || profile == "lm_studio" ||
-        profile == "ollama" || profile == "vllm" || profile == "llamacpp") {
+    if (profile.empty() || profile == names::kCustomOpenAiChat || profile == names::kLmStudio ||
+        profile == names::kOllama || profile == names::kVllm || profile == names::kLlamacpp) {
         return ReasoningWireFormat::GenericThinking;
     }
     return ReasoningWireFormat::None;
@@ -2422,8 +2443,10 @@ ContextResult build_context(const cli::Options& input_options) {
     } else if (base.empty() && !options.positional_url.empty()) {
         base = options.positional_url;
         if (input_options.provider == "openai") {
-            if (!find_profile("custom_openai_chat", profile)) {
-                return {{}, {ErrorCode::Internal, "custom_openai_chat profile is missing from the provider registry"}};
+            if (!find_profile(names::kCustomOpenAiChat, profile)) {
+                return {{}, {ErrorCode::Internal,
+                            std::string(names::kCustomOpenAiChat) +
+                                " profile is missing from the provider registry"}};
             }
             options.provider = profile.name;
         }
@@ -2665,6 +2688,42 @@ std::string format_models_markdown(const std::string& provider_name,
     return out.str();
 }
 
+std::string normalize_provider_key(std::string text) {
+    for (char& ch : text) {
+        if (ch >= 'A' && ch <= 'Z') {
+            ch = static_cast<char>(ch - 'A' + 'a');
+        } else if (ch == '-') {
+            ch = '_';
+        }
+    }
+    return text;
+}
+
+std::string canonical_profile_name(const std::string& name) {
+    Profile profile;
+    if (find_profile(name, profile)) {
+        return profile.name;
+    }
+    return normalize_provider_key(name.empty() ? names::kOpenAi : name);
+}
+
+bool is_selectable_provider(const Profile& profile) {
+    return !profile.offline && profile.name != names::kCustomOpenAiChat;
+}
+
+bool profile_auto_selects_default_model(const Profile& profile, const std::string& base_url) {
+    if (profile.offline) {
+        return false;
+    }
+    if (profile.name == names::kLmStudio || profile.name == names::kOllama || profile.name == names::kVllm) {
+        return true;
+    }
+    if (profile.name == names::kCustomOpenAiChat && is_loopback_base_url(base_url)) {
+        return true;
+    }
+    return false;
+}
+
 std::vector<Profile> built_in_profiles() {
     return profile_registry();
 }
@@ -2695,7 +2754,7 @@ Capabilities detected_capabilities_for(const RequestContext& context) {
         return caps;
     }
 
-    const std::string model = lower_alias(context.options.model);
+    const std::string model = normalize_provider_key(context.options.model);
     const bool known_vision = model.find("gpt_4o") != std::string::npos ||
                               model.find("gpt_4.1") != std::string::npos ||
                               model.find("gpt_5") != std::string::npos ||
