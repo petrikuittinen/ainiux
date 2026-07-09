@@ -34,7 +34,7 @@ int main(int argc, char** argv) {
         return 0;
     }
     if (parsed.options.version) {
-        std::cout << "pkchat " << pkchat::kVersion << "\n";
+        std::cout << pkchat::app_version_label() << "\n";
         return 0;
     }
     pkchat::config::LoadResult configured = pkchat::config::load_automatic(

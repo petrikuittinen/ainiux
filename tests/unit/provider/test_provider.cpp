@@ -218,6 +218,97 @@ pkchat::Error run_responses_stream_from_body(const std::string& body,
     return run_stream_from_body(body, pkchat::provider::ApiKind::Responses, result, streamed);
 }
 
+pkchat::Error run_chat_http_status_response(long status,
+                                            const std::string& reason,
+                                            const std::string& content_type,
+                                            const std::string& body) {
+    UniqueFd listen_fd(socket(AF_INET, SOCK_STREAM, 0));
+    if (listen_fd.get() < 0) {
+        return {pkchat::ErrorCode::Internal, "could not create test server socket"};
+    }
+    const int yes = 1;
+    if (setsockopt(listen_fd.get(), SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(yes)) != 0) {
+        return {pkchat::ErrorCode::Internal, "could not configure test server socket reuse"};
+    }
+    timeval timeout{};
+    timeout.tv_sec = 5;
+    if (setsockopt(listen_fd.get(), SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout)) != 0) {
+        return {pkchat::ErrorCode::Internal, "could not configure test server socket timeout"};
+    }
+
+    sockaddr_in address{};
+    address.sin_family = AF_INET;
+    address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    address.sin_port = 0;
+    if (bind(listen_fd.get(), reinterpret_cast<sockaddr*>(&address), sizeof(address)) != 0) {
+        return {pkchat::ErrorCode::Internal, "could not bind test server socket"};
+    }
+    if (listen(listen_fd.get(), 1) != 0) {
+        return {pkchat::ErrorCode::Internal, "could not listen on test server socket"};
+    }
+    socklen_t length = sizeof(address);
+    if (getsockname(listen_fd.get(), reinterpret_cast<sockaddr*>(&address), &length) != 0) {
+        return {pkchat::ErrorCode::Internal, "could not inspect test server socket"};
+    }
+    const int port = ntohs(address.sin_port);
+    const int server_fd = listen_fd.release();
+    std::thread server([server_fd, status, reason, content_type, body]() {
+        UniqueFd scoped_listen(server_fd);
+        UniqueFd client(accept(scoped_listen.get(), nullptr, nullptr));
+        if (client.get() < 0) {
+            return;
+        }
+        char request_buffer[4096] = {};
+        if (recv(client.get(), request_buffer, sizeof(request_buffer), 0) < 0) {
+            return;
+        }
+        const std::string response =
+            "HTTP/1.1 " + std::to_string(status) + " " + reason + "\r\n"
+            "Content-Type: " + content_type + "\r\n"
+            "Content-Length: " + std::to_string(body.size()) + "\r\n"
+            "Connection: close\r\n"
+            "\r\n" +
+            body;
+        (void)send_all(client.get(), response);
+    });
+
+    pkchat::provider::RequestContext context;
+    context.profile.name = "custom_openai_chat";
+    context.profile.capabilities.chat_completions = true;
+    context.options.model = "mock-model";
+    context.options.stream = false;
+    context.options.connect_timeout_seconds = 2;
+    context.options.timeout_seconds = 5;
+    context.chat_url = "http://127.0.0.1:" + std::to_string(port) + "/v1/chat/completions";
+
+    pkchat::provider::ChatResult result;
+    pkchat::Error err = pkchat::provider::send_chat_messages(
+        context,
+        {{"user", "hello"}},
+        [](const std::string&) { return pkchat::ok_error(); },
+        result);
+    server.join();
+    return err;
+}
+
+void test_http_status_errors_are_friendly() {
+    const pkchat::Error err = run_chat_http_status_response(
+        429,
+        "Too Many Requests",
+        "application/json",
+        R"({"error":{"message":"Rate limit exceeded for mock-model"}})");
+    check(!err.ok(), "provider HTTP status failure returns an error");
+    check(err.code == pkchat::ErrorCode::RateLimit, "HTTP 429 maps to rate-limit error code");
+    check(err.message.find("HTTP 429: Too many requests.") != std::string::npos,
+          "HTTP 429 error starts with a friendly explanation");
+    check(err.message.find("Perhaps you have used your daily limits?") != std::string::npos,
+          "HTTP 429 error suggests quota exhaustion");
+    check(err.message.find("Provider message: Rate limit exceeded for mock-model") != std::string::npos,
+          "HTTP error includes concise provider message when available");
+    check(err.message.find(R"({"error")") == std::string::npos,
+          "HTTP error does not expose raw JSON error dumps");
+}
+
 void test_chat_sse_accepts_cr_only_event_boundaries() {
     const std::string body =
         "data: {\"choices\":[{\"delta\":{\"content\":\"Hello\"}}]}\r\r"
@@ -1084,6 +1175,7 @@ void test_provider_unicode_request_serialization() {
 }  // namespace
 
 void run_all() {
+    test_http_status_errors_are_friendly();
     test_chat_sse_accepts_cr_only_event_boundaries();
     test_chat_sse_streaming_reasoning_content();
     test_chat_sse_openrouter_reasoning_details_text();

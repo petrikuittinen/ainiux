@@ -58,7 +58,7 @@ std::string provider_model_status_message(const provider::RequestContext& contex
 }
 
 std::string ready_status() {
-    return std::string("pkchat v") + kVersion +
+    return app_version_label() +
            ". TAB command/path /help Alt+enter newline Ctrl+B/D scroll chat Alt+Home/End jump";
 }
 

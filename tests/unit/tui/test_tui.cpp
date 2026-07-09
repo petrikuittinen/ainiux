@@ -57,7 +57,7 @@ void test_tui_sqlite_unavailable_status() {
 }
 
 void test_tui_ready_and_generation_status() {
-    check(pkchat::tui::ready_status() == std::string("pkchat v") + pkchat::kVersion +
+    check(pkchat::tui::ready_status() == pkchat::app_version_label() +
                                               ". TAB command/path /help Alt+enter newline Ctrl+B/D scroll chat Alt+Home/End jump",
           "TUI ready status displays compact version and key hints");
 
@@ -253,8 +253,8 @@ void test_tui_thinking_trace_display() {
 
 void test_tui_input_label_and_activity_indicators() {
     const std::string label = pkchat::tui::input_label_text();
-    check(label.find("Pkchat v") == 0, "TUI input label starts with Pkchat branding");
-    check(label.find(pkchat::kVersion) != std::string::npos, "TUI input label includes the current version");
+    check(label.find(pkchat::app_version_label()) == 0, "TUI input label starts with app version branding");
+    check(label.find(pkchat::versionNumber) != std::string::npos, "TUI input label includes the current version");
     check(label.find("input:") != std::string::npos, "TUI input label ends with input prompt");
 
     const std::string thinking_a =
@@ -514,8 +514,8 @@ void test_tui_handle_escape_plain_pageup_moves_input() {
 }
 
 void test_tui_unicode_and_empty_status() {
-    check(pkchat::tui::ready_status().find("pkchat v") == 0,
-          "TUI ready status starts with the pkchat version label");
+    check(pkchat::tui::ready_status().find(pkchat::app_version_label()) == 0,
+          "TUI ready status starts with the app version label");
     const std::string unicode_model = u8"模型-مرحبا-👨‍👩‍👧‍👦";
     pkchat::provider::ChatResult result;
     const std::string status = pkchat::tui::generation_ready_status(

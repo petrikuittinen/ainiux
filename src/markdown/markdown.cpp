@@ -916,8 +916,8 @@ std::string render_html_document(const std::string& markdown) {
                        "<head>\n"
                        "  <meta charset=\"utf-8\">\n"
                        "  <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n"
-                       "  <title>pkchat ") +
-           kVersion +
+                       "  <title>") +
+           app_version_label() +
            " output</title>\n"
                        "</head>\n"
                        "<body>\n" +

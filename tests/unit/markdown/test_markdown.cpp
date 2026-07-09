@@ -126,8 +126,8 @@ void test_markdown_plaintext_and_document_rendering() {
     check(doc.find("<!doctype html>") == 0, "Markdown HTML document starts with doctype");
     check(doc.find(R"PK(<meta charset="utf-8">)PK") != std::string::npos, "Markdown HTML document includes charset");
     check(doc.find(R"PK(name="viewport")PK") != std::string::npos, "Markdown HTML document includes viewport");
-    check(doc.find(std::string("<title>pkchat ") + pkchat::kVersion + " output</title>") != std::string::npos,
-          "Markdown HTML document title displays the current pkchat version");
+    check(doc.find("<title>" + pkchat::app_version_label() + " output</title>") != std::string::npos,
+          "Markdown HTML document title displays the current app version");
     check(doc.find("<h1>Saved</h1>") != std::string::npos, "Markdown HTML document includes rendered body");
 }
 

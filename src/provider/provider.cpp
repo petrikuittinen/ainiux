@@ -812,6 +812,85 @@ std::string build_responses_request_json(const RequestContext& context, const st
     return out.str();
 }
 
+std::string provider_error_message(const json::Value& root);
+
+std::string http_status_summary(long status) {
+    switch (status) {
+        case 400:
+            return "Bad request. The provider rejected the request format or parameters.";
+        case 401:
+            return "Authentication failed. Check that the API key is set for this provider.";
+        case 402:
+            return "Payment is required. Check the provider account balance, billing status, or quota.";
+        case 403:
+            return "Access forbidden. The API key may not have access to this model or endpoint.";
+        case 404:
+            return "Endpoint or model was not found. Check the base URL, endpoint path, and model name.";
+        case 408:
+            return "Request timed out. Try again later or use a smaller request.";
+        case 409:
+            return "Request conflict. The provider could not process this request in its current state.";
+        case 413:
+            return "Request is too large. Shorten the prompt, reduce attachments, or use a model with a larger context window.";
+        case 415:
+            return "Unsupported content type. Check whether this provider supports the requested input or attachment type.";
+        case 422:
+            return "Request was understood but rejected. Check model-specific options, tools, reasoning settings, and attachment support.";
+        case 423:
+            return "Resource is locked. Try again later.";
+        case 425:
+            return "Provider asked to retry later. Try the request again after a short wait.";
+        case 429:
+            return "Too many requests. Perhaps you have used your daily limits? Try again later or use a different model or provider.";
+        case 500:
+            return "Provider server error. Try again later or use a different model or provider.";
+        case 502:
+            return "Bad gateway from the provider. The upstream model service may be temporarily unavailable.";
+        case 503:
+            return "Provider service is unavailable or overloaded. Try again later or use a different model or provider.";
+        case 504:
+            return "Provider gateway timed out. Try again later, reduce the request size, or use a different model.";
+        case 507:
+            return "Provider ran out of storage for this request. Try again later or use a smaller request.";
+        default:
+            if (status >= 400 && status < 500) {
+                return "Client request was rejected by the provider. Check the model, provider, API key, and request options.";
+            }
+            if (status >= 500 && status < 600) {
+                return "Provider service failed while handling the request. Try again later or use a different provider.";
+            }
+            return "Unexpected HTTP status from the provider.";
+    }
+}
+
+std::string compact_provider_detail(std::string text) {
+    text = ascii_trim(std::move(text));
+    for (char& ch : text) {
+        if (ch == '\r' || ch == '\n' || ch == '\t') {
+            ch = ' ';
+        }
+    }
+    if (text.size() > 500) {
+        text = text.substr(0, 500) + "...";
+    }
+    return text;
+}
+
+std::string provider_body_detail(const std::string& body) {
+    if (ascii_trim(body).empty()) {
+        return "";
+    }
+    const json::ParseResult parsed = json::parse(body);
+    if (parsed.error.ok()) {
+        return compact_provider_detail(provider_error_message(parsed.value));
+    }
+    std::string text = compact_provider_detail(body);
+    if (!text.empty() && text.front() != '{' && text.front() != '[') {
+        return text;
+    }
+    return "";
+}
+
 Error http_status_error(const RequestContext& context, const http::Response& response, const std::string& url) {
     ErrorCode code = ErrorCode::HttpStatus;
     if (response.status == 401 || response.status == 403) {
@@ -819,29 +898,53 @@ Error http_status_error(const RequestContext& context, const http::Response& res
     } else if (response.status == 429) {
         code = ErrorCode::RateLimit;
     }
-    std::string body = response.body;
-    if (body.size() > 2000) {
-        body = body.substr(0, 2000) + "...";
+    std::string message = "HTTP " + std::to_string(response.status) + ": " +
+                          http_status_summary(response.status) + "\nURL: " + url;
+    const std::string provider_detail = provider_body_detail(response.body);
+    if (!provider_detail.empty()) {
+        message += "\nProvider message: " + provider_detail;
     }
     std::string suggestion;
     if (context.profile.local_endpoint && response.status == 0) {
-        suggestion = " Suggestion: start the local provider server and verify the port.";
+        suggestion = "Start the local provider server and verify the port.";
     } else if (response.status == 404) {
-        suggestion = " Suggestion: check whether the server expects /v1, /api/v1, or an explicit --chat-url/--responses-url/--models-url.";
+        suggestion = "Check whether the server expects /v1, /api/v1, or an explicit --chat-url/--responses-url/--models-url.";
+    } else if (response.status == 401 || response.status == 403) {
+        suggestion = "Verify the API key, selected provider, account/project access, and model name.";
+    } else if (response.status == 413) {
+        suggestion = "Reduce prompt length, attached files, or max output tokens.";
+    } else if (response.status == 422) {
+        suggestion = "Try removing provider-specific options such as reasoning, tools, images, or unsupported sampling settings.";
     }
-    return {code,
-            "HTTP " + std::to_string(response.status) + " from " + url + ": " + body + suggestion};
+    if (!suggestion.empty()) {
+        message += "\nSuggestion: " + suggestion;
+    }
+    return {code, message};
 }
 
 std::string provider_error_message(const json::Value& root) {
     const json::Value* err = root.get("error");
-    if (err == nullptr) {
-        return "";
+    if (err != nullptr) {
+        if (err->is_string()) {
+            return err->string;
+        }
+        if (const json::Value* msg = err->get("message")) {
+            if (msg->is_string()) {
+                return msg->string;
+            }
+        }
+        if (const json::Value* msg = err->get("detail")) {
+            if (msg->is_string()) {
+                return msg->string;
+            }
+        }
     }
-    if (err->is_string()) {
-        return err->string;
+    if (const json::Value* msg = root.get("message")) {
+        if (msg->is_string()) {
+            return msg->string;
+        }
     }
-    if (const json::Value* msg = err->get("message")) {
+    if (const json::Value* msg = root.get("detail")) {
         if (msg->is_string()) {
             return msg->string;
         }

@@ -50,13 +50,15 @@ void append_segment(std::vector<StyledSegment>& segments, std::string text, Styl
 }  // namespace
 
 std::string input_label_text() {
-    return std::string("Pkchat v") + kVersion + " input:";
+    return app_version_label() + " input:";
 }
 
 std::vector<StyledSegment> input_label_segments() {
+    const std::string label = input_label_text();
+    const std::string app(appName);
     return {
-        {"Pkchat", StyleRole::PanelTitle},
-        {std::string(" v") + kVersion + " input:", StyleRole::InputLabel},
+        {label.substr(0, app.size()), StyleRole::PanelTitle},
+        {label.substr(app.size()), StyleRole::InputLabel},
     };
 }
 

@@ -564,7 +564,7 @@ ParseResult parse_args(int argc, char** argv) {
 }
 
 std::string help_text() {
-    return std::string("pkchat ") + kVersion + R"( - script-friendly OpenAI-compatible chat CLI
+    return app_version_label() + R"( - script-friendly OpenAI-compatible chat CLI
 
 Usage:
   pkchat [BASE_URL|PROFILE] -p TEXT [options]

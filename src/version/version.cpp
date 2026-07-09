@@ -4,12 +4,21 @@
 
 #include "pkchat/version.hpp"
 
+#include <string>
+
 namespace pkchat {
 
-const char kVersion[] = "0.91";
+const char appName[] = "Pkchat";
+
+const char versionNumber[] = "0.91";
 
 const char kCopyright[] = "Copyright (c) 2026 Petri Kuittinen";
 
 const char kLicenseName[] = "Modified MIT License";
+
+const std::string& app_version_label() {
+    static const std::string label = std::string(appName) + " v" + versionNumber;
+    return label;
+}
 
 }  // namespace pkchat

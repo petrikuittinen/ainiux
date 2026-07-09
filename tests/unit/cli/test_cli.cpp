@@ -103,10 +103,10 @@ void test_cli_editor_parse() {
 
 void test_cli_help_displays_version() {
     const std::string help = pkchat::cli::help_text();
-    const std::string expected_heading = std::string("pkchat ") + pkchat::kVersion +
-                                         " - script-friendly OpenAI-compatible chat CLI";
+    const std::string expected_heading =
+        pkchat::app_version_label() + " - script-friendly OpenAI-compatible chat CLI";
     check(help.rfind(expected_heading, 0) == 0,
-          "CLI help heading displays the current pkchat version");
+          "CLI help heading displays the current app version");
     check(help.find("openrouter --editor") != std::string::npos,
           "CLI help documents openrouter editor startup without model");
     check(help.find("choose a model inside the editor with /model") != std::string::npos,

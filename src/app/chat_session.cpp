@@ -134,7 +134,7 @@ void print_chat_start(const provider::RequestContext& context) {
         return;
     }
     if (context.options.repl) {
-        std::cerr << "pkchat " << kVersion << " REPL | ";
+        std::cerr << app_version_label() << " REPL | ";
         if (context.profile.offline) {
             std::cerr << "Provider: none (offline; AI/model requests disabled)\n";
         } else {
