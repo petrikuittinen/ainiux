@@ -189,6 +189,41 @@ class Statement {
     std::string path_;
 };
 
+class BindChain {
+   public:
+    explicit BindChain(Statement& stmt, Error initial = ok_error()) : stmt_(stmt), err_(std::move(initial)) {}
+
+    BindChain& int64(int index, long long value) {
+        if (err_.ok()) {
+            err_ = stmt_.bind_int64(index, value);
+        }
+        return *this;
+    }
+    BindChain& text(int index, const std::string& value) {
+        if (err_.ok()) {
+            err_ = stmt_.bind_text(index, value);
+        }
+        return *this;
+    }
+    BindChain& null_value(int index) {
+        if (err_.ok()) {
+            err_ = stmt_.bind_null(index);
+        }
+        return *this;
+    }
+    Error error() const { return err_; }
+    Error step_done(const std::string& action) {
+        if (!err_.ok()) {
+            return err_;
+        }
+        return stmt_.step_done(action);
+    }
+
+   private:
+    Statement& stmt_;
+    Error err_;
+};
+
 class Transaction {
    public:
     Transaction(sqlite3* db, std::string path) : db_(db), path_(std::move(path)) {}
@@ -264,7 +299,8 @@ Error load_thread_messages(sqlite3* db, const std::string& path, long long threa
     if (!err.ok()) {
         return err;
     }
-    if (!(err = stmt.bind_int64(1, thread_id)).ok()) {
+    err = BindChain(stmt).int64(1, thread_id).error();
+    if (!err.ok()) {
         return err;
     }
     while (true) {
@@ -288,7 +324,8 @@ Error migrate_thread_names_v2(sqlite3* db, const std::string& path) {
     if (!err.ok()) {
         return err;
     }
-    if (!(err = stmt.bind_text(1, kDefaultThreadName)).ok()) {
+    err = BindChain(stmt).text(1, kDefaultThreadName).error();
+    if (!err.ok()) {
         return err;
     }
 
@@ -320,13 +357,11 @@ Error migrate_thread_names_v2(sqlite3* db, const std::string& path) {
         if (!err.ok()) {
             return err;
         }
-        if (!(err = update.bind_text(1, derived_name)).ok()) {
-            return err;
-        }
-        if (!(err = update.bind_int64(2, thread_id)).ok()) {
-            return err;
-        }
-        if (!(err = update.step_done("could not migrate SQLite thread name")).ok()) {
+        err = BindChain(update)
+                  .text(1, derived_name)
+                  .int64(2, thread_id)
+                  .step_done("could not migrate SQLite thread name");
+        if (!err.ok()) {
             return err;
         }
     }
@@ -472,14 +507,17 @@ Error insert_attachment(sqlite3* db,
     Error err = stmt.prepare(
         "INSERT INTO attachments(thread_id, message_id, ordinal, kind, mime_type, metadata_json, storage_ref, created_at) "
         "VALUES(?1, ?2, ?3, 'image', ?4, '{}', ?5, ?6);");
-    if (!err.ok()) return err;
-    if (!(err = stmt.bind_int64(1, thread_id)).ok()) return err;
-    if (!(err = stmt.bind_int64(2, message_id)).ok()) return err;
-    if (!(err = stmt.bind_int64(3, ordinal)).ok()) return err;
-    if (!(err = stmt.bind_text(4, image.mime_type)).ok()) return err;
-    if (!(err = stmt.bind_text(5, image.base64_data)).ok()) return err;
-    if (!(err = stmt.bind_text(6, created_at)).ok()) return err;
-    return stmt.step_done("could not insert SQLite attachment");
+    if (!err.ok()) {
+        return err;
+    }
+    return BindChain(stmt)
+        .int64(1, thread_id)
+        .int64(2, message_id)
+        .int64(3, ordinal)
+        .text(4, image.mime_type)
+        .text(5, image.base64_data)
+        .text(6, created_at)
+        .step_done("could not insert SQLite attachment");
 }
 
 Error load_images_for_message(sqlite3* db,
@@ -490,8 +528,13 @@ Error load_images_for_message(sqlite3* db,
     Error err = stmt.prepare(
         "SELECT mime_type, storage_ref FROM attachments "
         "WHERE message_id = ?1 AND kind = 'image' ORDER BY ordinal, id;");
-    if (!err.ok()) return err;
-    if (!(err = stmt.bind_int64(1, message_id)).ok()) return err;
+    if (!err.ok()) {
+        return err;
+    }
+    err = BindChain(stmt).int64(1, message_id).error();
+    if (!err.ok()) {
+        return err;
+    }
     while (true) {
         const int rc = stmt.step();
         if (rc == SQLITE_DONE) {
@@ -603,10 +646,13 @@ Error SqliteStore::set_last_thread_id(long long thread_id) {
     Error err = stmt.prepare(
         "INSERT INTO app_state(key, value, updated_at) VALUES('last_thread_id', ?1, ?2) "
         "ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at;");
-    if (!err.ok()) return err;
-    if (!(err = stmt.bind_text(1, std::to_string(thread_id))).ok()) return err;
-    if (!(err = stmt.bind_text(2, current_timestamp_utc())).ok()) return err;
-    return stmt.step_done("could not update SQLite last thread");
+    if (!err.ok()) {
+        return err;
+    }
+    return BindChain(stmt)
+        .text(1, std::to_string(thread_id))
+        .text(2, current_timestamp_utc())
+        .step_done("could not update SQLite last thread");
 }
 
 Error SqliteStore::last_thread_id(long long& thread_id, bool& found) {
@@ -663,17 +709,23 @@ Error SqliteStore::save_session(Session& session) {
         err = insert_thread.prepare(
             "INSERT INTO threads(name, created_at, modified_at, last_provider, last_base_url, last_model, "
             "settings_json, usage_json, message_count) VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9);");
-        if (!err.ok()) return err;
-        if (!(err = insert_thread.bind_text(1, session.name)).ok()) return err;
-        if (!(err = insert_thread.bind_text(2, session.created_at)).ok()) return err;
-        if (!(err = insert_thread.bind_text(3, session.updated_at)).ok()) return err;
-        if (!(err = insert_thread.bind_text(4, session.provider)).ok()) return err;
-        if (!(err = insert_thread.bind_text(5, session.base_url)).ok()) return err;
-        if (!(err = insert_thread.bind_text(6, session.model)).ok()) return err;
-        if (!(err = insert_thread.bind_text(7, session.settings_json.empty() ? "{}" : session.settings_json)).ok()) return err;
-        if (!(err = insert_thread.bind_text(8, session.usage_json.empty() ? "{}" : session.usage_json)).ok()) return err;
-        if (!(err = insert_thread.bind_int64(9, static_cast<long long>(session.messages.size()))).ok()) return err;
-        if (!(err = insert_thread.step_done("could not insert SQLite thread")).ok()) return err;
+        if (!err.ok()) {
+            return err;
+        }
+        err = BindChain(insert_thread)
+                  .text(1, session.name)
+                  .text(2, session.created_at)
+                  .text(3, session.updated_at)
+                  .text(4, session.provider)
+                  .text(5, session.base_url)
+                  .text(6, session.model)
+                  .text(7, session.settings_json.empty() ? "{}" : session.settings_json)
+                  .text(8, session.usage_json.empty() ? "{}" : session.usage_json)
+                  .int64(9, static_cast<long long>(session.messages.size()))
+                  .step_done("could not insert SQLite thread");
+        if (!err.ok()) {
+            return err;
+        }
         session.thread_id = static_cast<long long>(sqlite3_last_insert_rowid(db_));
     } else {
         Statement update_thread(db_, path_);
@@ -681,17 +733,23 @@ Error SqliteStore::save_session(Session& session) {
             "UPDATE threads SET name = ?1, modified_at = ?2, last_provider = ?3, last_base_url = ?4, "
             "last_model = ?5, settings_json = ?6, usage_json = ?7, message_count = ?8, deleted_at = NULL "
             "WHERE id = ?9;");
-        if (!err.ok()) return err;
-        if (!(err = update_thread.bind_text(1, session.name)).ok()) return err;
-        if (!(err = update_thread.bind_text(2, session.updated_at)).ok()) return err;
-        if (!(err = update_thread.bind_text(3, session.provider)).ok()) return err;
-        if (!(err = update_thread.bind_text(4, session.base_url)).ok()) return err;
-        if (!(err = update_thread.bind_text(5, session.model)).ok()) return err;
-        if (!(err = update_thread.bind_text(6, session.settings_json.empty() ? "{}" : session.settings_json)).ok()) return err;
-        if (!(err = update_thread.bind_text(7, session.usage_json.empty() ? "{}" : session.usage_json)).ok()) return err;
-        if (!(err = update_thread.bind_int64(8, static_cast<long long>(session.messages.size()))).ok()) return err;
-        if (!(err = update_thread.bind_int64(9, session.thread_id)).ok()) return err;
-        if (!(err = update_thread.step_done("could not update SQLite thread")).ok()) return err;
+        if (!err.ok()) {
+            return err;
+        }
+        err = BindChain(update_thread)
+                  .text(1, session.name)
+                  .text(2, session.updated_at)
+                  .text(3, session.provider)
+                  .text(4, session.base_url)
+                  .text(5, session.model)
+                  .text(6, session.settings_json.empty() ? "{}" : session.settings_json)
+                  .text(7, session.usage_json.empty() ? "{}" : session.usage_json)
+                  .int64(8, static_cast<long long>(session.messages.size()))
+                  .int64(9, session.thread_id)
+                  .step_done("could not update SQLite thread");
+        if (!err.ok()) {
+            return err;
+        }
         if (sqlite3_changes(db_) == 0) {
             session.thread_id = 0;
             return {ErrorCode::FileWrite, "could not update SQLite thread: thread does not exist"};
@@ -703,9 +761,14 @@ Error SqliteStore::save_session(Session& session) {
              "DELETE FROM compaction_events WHERE thread_id = ?1;",
              "DELETE FROM messages WHERE thread_id = ?1;"}) {
         Statement cleanup(db_, path_);
-        if (!(err = cleanup.prepare(sql)).ok()) return err;
-        if (!(err = cleanup.bind_int64(1, session.thread_id)).ok()) return err;
-        if (!(err = cleanup.step_done("could not replace SQLite thread contents")).ok()) return err;
+        err = cleanup.prepare(sql);
+        if (!err.ok()) {
+            return err;
+        }
+        err = BindChain(cleanup).int64(1, session.thread_id).step_done("could not replace SQLite thread contents");
+        if (!err.ok()) {
+            return err;
+        }
     }
 
     long long last_assistant_message_id = 0;
@@ -715,13 +778,19 @@ Error SqliteStore::save_session(Session& session) {
         err = insert_message.prepare(
             "INSERT INTO messages(thread_id, ordinal, created_at, role, content, metadata_json) "
             "VALUES(?1, ?2, ?3, ?4, ?5, '{}');");
-        if (!err.ok()) return err;
-        if (!(err = insert_message.bind_int64(1, session.thread_id)).ok()) return err;
-        if (!(err = insert_message.bind_int64(2, static_cast<long long>(i))).ok()) return err;
-        if (!(err = insert_message.bind_text(3, session.updated_at)).ok()) return err;
-        if (!(err = insert_message.bind_text(4, message.role)).ok()) return err;
-        if (!(err = insert_message.bind_text(5, message.content)).ok()) return err;
-        if (!(err = insert_message.step_done("could not insert SQLite message")).ok()) return err;
+        if (!err.ok()) {
+            return err;
+        }
+        err = BindChain(insert_message)
+                  .int64(1, session.thread_id)
+                  .int64(2, static_cast<long long>(i))
+                  .text(3, session.updated_at)
+                  .text(4, message.role)
+                  .text(5, message.content)
+                  .step_done("could not insert SQLite message");
+        if (!err.ok()) {
+            return err;
+        }
         const long long message_id = static_cast<long long>(sqlite3_last_insert_rowid(db_));
         if (message.role == "assistant") {
             last_assistant_message_id = message_id;
@@ -739,18 +808,24 @@ Error SqliteStore::save_session(Session& session) {
         err = usage.prepare(
             "INSERT INTO usage_records(thread_id, message_id, provider, model, usage_json, created_at) "
             "VALUES(?1, ?2, ?3, ?4, ?5, ?6);");
-        if (!err.ok()) return err;
-        if (!(err = usage.bind_int64(1, session.thread_id)).ok()) return err;
-        if (last_assistant_message_id > 0) {
-            if (!(err = usage.bind_int64(2, last_assistant_message_id)).ok()) return err;
-        } else {
-            if (!(err = usage.bind_null(2)).ok()) return err;
+        if (!err.ok()) {
+            return err;
         }
-        if (!(err = usage.bind_text(3, session.provider)).ok()) return err;
-        if (!(err = usage.bind_text(4, session.model)).ok()) return err;
-        if (!(err = usage.bind_text(5, session.usage_json)).ok()) return err;
-        if (!(err = usage.bind_text(6, session.updated_at)).ok()) return err;
-        if (!(err = usage.step_done("could not insert SQLite usage record")).ok()) return err;
+        BindChain usage_bind(usage);
+        usage_bind.int64(1, session.thread_id);
+        if (last_assistant_message_id > 0) {
+            usage_bind.int64(2, last_assistant_message_id);
+        } else {
+            usage_bind.null_value(2);
+        }
+        err = usage_bind.text(3, session.provider)
+                    .text(4, session.model)
+                    .text(5, session.usage_json)
+                    .text(6, session.updated_at)
+                    .step_done("could not insert SQLite usage record");
+        if (!err.ok()) {
+            return err;
+        }
     }
 
     for (const context::CompactionEvent& event : session.compaction_events) {
@@ -759,15 +834,21 @@ Error SqliteStore::save_session(Session& session) {
             "INSERT INTO compaction_events(thread_id, summary_message_id, policy, messages_compacted, "
             "original_bytes, request_bytes, notice, metadata_json, created_at) "
             "VALUES(?1, NULL, ?2, ?3, ?4, ?5, ?6, '{}', ?7);");
-        if (!err.ok()) return err;
-        if (!(err = compact.bind_int64(1, session.thread_id)).ok()) return err;
-        if (!(err = compact.bind_text(2, event.policy)).ok()) return err;
-        if (!(err = compact.bind_int64(3, static_cast<long long>(event.messages_compacted))).ok()) return err;
-        if (!(err = compact.bind_int64(4, static_cast<long long>(event.original_bytes))).ok()) return err;
-        if (!(err = compact.bind_int64(5, static_cast<long long>(event.request_bytes))).ok()) return err;
-        if (!(err = compact.bind_text(6, event.notice)).ok()) return err;
-        if (!(err = compact.bind_text(7, event.timestamp.empty() ? session.updated_at : event.timestamp)).ok()) return err;
-        if (!(err = compact.step_done("could not insert SQLite compaction event")).ok()) return err;
+        if (!err.ok()) {
+            return err;
+        }
+        err = BindChain(compact)
+                  .int64(1, session.thread_id)
+                  .text(2, event.policy)
+                  .int64(3, static_cast<long long>(event.messages_compacted))
+                  .int64(4, static_cast<long long>(event.original_bytes))
+                  .int64(5, static_cast<long long>(event.request_bytes))
+                  .text(6, event.notice)
+                  .text(7, event.timestamp.empty() ? session.updated_at : event.timestamp)
+                  .step_done("could not insert SQLite compaction event");
+        if (!err.ok()) {
+            return err;
+        }
     }
 
     if (!(err = tx.commit()).ok()) {
@@ -788,8 +869,13 @@ Error SqliteStore::load_session(long long thread_id, Session& session) {
     Error err = thread.prepare(
         "SELECT id, name, created_at, modified_at, last_provider, last_base_url, last_model, "
         "settings_json, usage_json, message_count FROM threads WHERE id = ?1 AND deleted_at IS NULL;");
-    if (!err.ok()) return err;
-    if (!(err = thread.bind_int64(1, thread_id)).ok()) return err;
+    if (!err.ok()) {
+        return err;
+    }
+    err = BindChain(thread).int64(1, thread_id).error();
+    if (!err.ok()) {
+        return err;
+    }
     int rc = thread.step();
     if (rc == SQLITE_DONE) {
         return {ErrorCode::FileRead, "SQLite chat thread not found: " + std::to_string(thread_id)};
@@ -812,8 +898,13 @@ Error SqliteStore::load_session(long long thread_id, Session& session) {
     Statement messages(db_, path_);
     err = messages.prepare(
         "SELECT id, role, content FROM messages WHERE thread_id = ?1 ORDER BY ordinal, id;");
-    if (!err.ok()) return err;
-    if (!(err = messages.bind_int64(1, thread_id)).ok()) return err;
+    if (!err.ok()) {
+        return err;
+    }
+    err = BindChain(messages).int64(1, thread_id).error();
+    if (!err.ok()) {
+        return err;
+    }
     while (true) {
         rc = messages.step();
         if (rc == SQLITE_DONE) {
@@ -832,8 +923,13 @@ Error SqliteStore::load_session(long long thread_id, Session& session) {
     err = compactions.prepare(
         "SELECT created_at, policy, messages_compacted, original_bytes, request_bytes, notice "
         "FROM compaction_events WHERE thread_id = ?1 ORDER BY created_at, id;");
-    if (!err.ok()) return err;
-    if (!(err = compactions.bind_int64(1, thread_id)).ok()) return err;
+    if (!err.ok()) {
+        return err;
+    }
+    err = BindChain(compactions).int64(1, thread_id).error();
+    if (!err.ok()) {
+        return err;
+    }
     while (true) {
         rc = compactions.step();
         if (rc == SQLITE_DONE) {
@@ -871,8 +967,13 @@ Error SqliteStore::list_threads(std::vector<ThreadSummary>& threads, int limit) 
     Error err = stmt.prepare(
         "SELECT id, name, created_at, modified_at, last_provider, last_base_url, last_model, message_count "
         "FROM threads WHERE deleted_at IS NULL ORDER BY modified_at DESC, id DESC LIMIT ?1;");
-    if (!err.ok()) return err;
-    if (!(err = stmt.bind_int64(1, limit)).ok()) return err;
+    if (!err.ok()) {
+        return err;
+    }
+    err = BindChain(stmt).int64(1, limit).error();
+    if (!err.ok()) {
+        return err;
+    }
     while (true) {
         const int rc = stmt.step();
         if (rc == SQLITE_DONE) {
@@ -900,10 +1001,16 @@ Error SqliteStore::soft_delete_thread(long long thread_id) {
     }
     Statement stmt(db_, path_);
     Error err = stmt.prepare("UPDATE threads SET deleted_at = ?1, modified_at = ?1 WHERE id = ?2 AND deleted_at IS NULL;");
-    if (!err.ok()) return err;
-    if (!(err = stmt.bind_text(1, current_timestamp_utc())).ok()) return err;
-    if (!(err = stmt.bind_int64(2, thread_id)).ok()) return err;
-    if (!(err = stmt.step_done("could not delete SQLite thread")).ok()) return err;
+    if (!err.ok()) {
+        return err;
+    }
+    err = BindChain(stmt)
+              .text(1, current_timestamp_utc())
+              .int64(2, thread_id)
+              .step_done("could not delete SQLite thread");
+    if (!err.ok()) {
+        return err;
+    }
     return ok_error();
 }
 
@@ -949,13 +1056,8 @@ Error SqliteStore::soft_delete_empty_threads(long long& deleted_count,
         if (!err.ok()) {
             return err;
         }
-        if (!(err = stmt.bind_text(1, now)).ok()) {
-            return err;
-        }
-        if (!(err = stmt.bind_int64(2, thread_id)).ok()) {
-            return err;
-        }
-        if (!(err = stmt.step_done("could not delete empty SQLite thread")).ok()) {
+        err = BindChain(stmt).text(1, now).int64(2, thread_id).step_done("could not delete empty SQLite thread");
+        if (!err.ok()) {
             return err;
         }
         if (sqlite3_changes(db_) > 0) {
