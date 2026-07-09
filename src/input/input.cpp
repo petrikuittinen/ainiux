@@ -12,15 +12,6 @@
 namespace pkchat::input {
 namespace {
 
-std::string lower_ascii(std::string text) {
-    for (char& ch : text) {
-        if (ch >= 'A' && ch <= 'Z') {
-            ch = static_cast<char>(ch - 'A' + 'a');
-        }
-    }
-    return text;
-}
-
 bool ends_with(const std::string& text, const std::string& suffix) {
     return text.size() >= suffix.size() &&
            text.compare(text.size() - suffix.size(), suffix.size(), suffix) == 0;
@@ -95,7 +86,7 @@ Error classify_file_type(const std::string& path, FileType& type) {
         return {ErrorCode::BadArgs,
                 "--input - cannot infer a file type from the path ending; use a path with a supported extension"};
     }
-    const std::string lower = lower_ascii(path);
+    const std::string lower = ascii_lower(path);
     if (ends_with(lower, ".txt") || ends_with(lower, ".text")) {
         type = {Kind::Plaintext, "plaintext", "text/plain"};
         return ok_error();

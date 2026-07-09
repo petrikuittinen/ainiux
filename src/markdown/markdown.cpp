@@ -6,6 +6,7 @@
 #include <string>
 #include <vector>
 
+#include "common.hpp"
 #include "pkchat/version.hpp"
 
 namespace pkchat::markdown {
@@ -28,15 +29,6 @@ struct ListState {
     bool ordered = false;
     bool li_open = false;
 };
-
-std::string lower_ascii(std::string text) {
-    for (char& ch : text) {
-        if (ch >= 'A' && ch <= 'Z') {
-            ch = static_cast<char>(ch - 'A' + 'a');
-        }
-    }
-    return text;
-}
 
 bool is_space(char ch) {
     return ch == ' ' || ch == '\t' || ch == '\n' || ch == '\r';
@@ -76,24 +68,6 @@ size_t leading_spaces(const std::string& line) {
         }
     }
     return count;
-}
-
-std::vector<std::string> split_lines(const std::string& input) {
-    std::vector<std::string> lines;
-    size_t start = 0;
-    while (start <= input.size()) {
-        const size_t end = input.find('\n', start);
-        std::string line = end == std::string::npos ? input.substr(start) : input.substr(start, end - start);
-        if (!line.empty() && line.back() == '\r') {
-            line.pop_back();
-        }
-        lines.push_back(line);
-        if (end == std::string::npos) {
-            break;
-        }
-        start = end + 1;
-    }
-    return lines;
 }
 
 std::string escape_html_text(const std::string& input) {
@@ -608,7 +582,7 @@ class BlockRenderer {
     explicit BlockRenderer(RenderMode mode) : mode_(mode) {}
 
     std::string render(const std::string& markdown) {
-        const std::vector<std::string> lines = split_lines(markdown);
+        const std::vector<std::string> lines = split_lines_crlf(markdown);
         for (size_t i = 0; i < lines.size();) {
             const std::string stripped = trim(lines[i]);
             if (stripped.empty()) {
@@ -955,7 +929,7 @@ std::string render_html_document(const std::string& markdown) {
 }  // namespace
 
 bool parse_output_format(const std::string& text, OutputFormat& out) {
-    const std::string normalized = lower_ascii(text);
+    const std::string normalized = ascii_lower(text);
     if (normalized == "plaintext" || normalized == "plain" || normalized == "text") {
         out = OutputFormat::Plaintext;
         return true;

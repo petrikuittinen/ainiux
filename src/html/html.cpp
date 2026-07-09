@@ -7,17 +7,10 @@
 #include <string>
 #include <vector>
 
+#include "common.hpp"
+
 namespace pkchat::html {
 namespace {
-
-std::string lower_ascii(std::string text) {
-    for (char& ch : text) {
-        if (ch >= 'A' && ch <= 'Z') {
-            ch = static_cast<char>(ch - 'A' + 'a');
-        }
-    }
-    return text;
-}
 
 bool ascii_iequal_at(const std::string& text, size_t pos, const std::string& needle) {
     if (pos + needle.size() > text.size()) {
@@ -218,7 +211,7 @@ std::string tag_name(const std::string& tag) {
     if (!std::regex_search(tag, match, name_re)) {
         return "";
     }
-    return lower_ascii(match[1].str());
+    return ascii_lower(match[1].str());
 }
 
 bool is_closing_tag(const std::string& tag) {
@@ -471,7 +464,7 @@ class Writer {
 
     void append_blockquote_lines(const std::string& text) {
         blank_line();
-        const std::vector<std::string> lines = split_lines(trim_capture_text(text));
+        const std::vector<std::string> lines = split_lines_crlf(trim_capture_text(text));
         for (const std::string& line : lines) {
             if (trim_ascii(line).empty()) {
                 continue;
@@ -553,27 +546,6 @@ class Writer {
     int capture_depth_ = 0;
     int strong_depth_ = 0;
     int emphasis_depth_ = 0;
-
-    static std::vector<std::string> split_lines(const std::string& input) {
-        std::vector<std::string> lines;
-        size_t start = 0;
-        while (start <= input.size()) {
-            const size_t end = input.find('\n', start);
-            std::string line = end == std::string::npos ? input.substr(start) : input.substr(start, end - start);
-            if (!line.empty() && line.back() == '\r') {
-                line.pop_back();
-            }
-            lines.push_back(line);
-            if (end == std::string::npos) {
-                break;
-            }
-            start = end + 1;
-        }
-        if (lines.empty()) {
-            lines.push_back("");
-        }
-        return lines;
-    }
 
     void append_formatted_text(const std::string& text) {
         write_output(format_ == OutputFormat::Markdown ? markdown_escape_text(text) : text);
@@ -718,7 +690,7 @@ bool is_valid_utf8(const std::string& input, size_t* error_offset) {
 }
 
 bool parse_output_format(const std::string& text, OutputFormat& out) {
-    const std::string normalized = lower_ascii(text);
+    const std::string normalized = ascii_lower(text);
     if (normalized == "text" || normalized == "plain" || normalized == "plaintext") {
         out = OutputFormat::Text;
         return true;

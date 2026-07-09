@@ -1,20 +1,8 @@
 #include "security/redact.hpp"
 
-#include <algorithm>
-#include <cctype>
+#include "common.hpp"
 
 namespace pkchat {
-
-namespace {
-
-std::string lower_ascii(std::string value) {
-    std::transform(value.begin(), value.end(), value.begin(), [](unsigned char ch) {
-        return static_cast<char>(std::tolower(ch));
-    });
-    return value;
-}
-
-}  // namespace
 
 std::string redact_secrets(std::string text, const std::vector<std::string>& secrets) {
     for (const std::string& secret : secrets) {
@@ -31,7 +19,7 @@ std::string redact_secrets(std::string text, const std::vector<std::string>& sec
 }
 
 bool is_sensitive_header_name(const std::string& name) {
-    const std::string lower = lower_ascii(name);
+    const std::string lower = ascii_lower(name);
     return lower == "authorization" || lower == "api-key" || lower == "x-api-key" ||
            lower == "cookie" || lower == "set-cookie";
 }

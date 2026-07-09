@@ -1,5 +1,8 @@
 #include "common.hpp"
 
+#include <cstdlib>
+#include <utility>
+
 namespace pkchat {
 
 const char* error_code_name(ErrorCode code) {
@@ -46,6 +49,71 @@ const char* error_code_name(ErrorCode code) {
             return "PKCHAT_ERR_INTERNAL";
     }
     return "PKCHAT_ERR_INTERNAL";
+}
+
+std::string ascii_trim(std::string text) {
+    const size_t first = text.find_first_not_of(" \t\r\n");
+    if (first == std::string::npos) {
+        return "";
+    }
+    const size_t last = text.find_last_not_of(" \t\r\n");
+    return text.substr(first, last - first + 1);
+}
+
+std::string ascii_lower(std::string text) {
+    for (char& ch : text) {
+        if (ch >= 'A' && ch <= 'Z') {
+            ch = static_cast<char>(ch - 'A' + 'a');
+        }
+    }
+    return text;
+}
+
+std::vector<std::string> split_lines_crlf(const std::string& input) {
+    std::vector<std::string> lines;
+    size_t start = 0;
+    while (start <= input.size()) {
+        size_t end = input.find('\n', start);
+        if (end == std::string::npos) {
+            end = input.size();
+        }
+        std::string line = input.substr(start, end - start);
+        if (!line.empty() && line.back() == '\r') {
+            line.pop_back();
+        }
+        lines.push_back(std::move(line));
+        if (end == input.size()) {
+            break;
+        }
+        start = end + 1;
+    }
+    return lines;
+}
+
+int positive_int_from_env(const char* name, int default_value) {
+    const char* raw = std::getenv(name);
+    if (raw == nullptr || raw[0] == '\0') {
+        return default_value;
+    }
+    char* end = nullptr;
+    const long parsed = std::strtol(raw, &end, 10);
+    if (end == raw || *end != '\0' || parsed <= 0) {
+        return default_value;
+    }
+    return static_cast<int>(parsed);
+}
+
+size_t positive_size_from_env(const char* name, size_t default_value) {
+    const char* raw = std::getenv(name);
+    if (raw == nullptr || raw[0] == '\0') {
+        return default_value;
+    }
+    char* end = nullptr;
+    const unsigned long long parsed = std::strtoull(raw, &end, 10);
+    if (end == raw || *end != '\0' || parsed == 0) {
+        return default_value;
+    }
+    return static_cast<size_t>(parsed);
 }
 
 }  // namespace pkchat

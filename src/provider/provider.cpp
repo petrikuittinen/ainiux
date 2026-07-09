@@ -22,17 +22,6 @@ namespace pkchat::provider {
 
 namespace {
 
-std::string trim_ascii(std::string text) {
-    auto is_ws = [](unsigned char ch) { return ch == ' ' || ch == '\n' || ch == '\r' || ch == '\t'; };
-    while (!text.empty() && is_ws(static_cast<unsigned char>(text.front()))) {
-        text.erase(text.begin());
-    }
-    while (!text.empty() && is_ws(static_cast<unsigned char>(text.back()))) {
-        text.pop_back();
-    }
-    return text;
-}
-
 std::string lower_alias(std::string text) {
     for (char& ch : text) {
         if (ch >= 'A' && ch <= 'Z') {
@@ -176,8 +165,8 @@ bool has_authorization_header(const std::vector<std::string>& headers) {
         if (colon == std::string::npos) {
             continue;
         }
-        if (is_sensitive_header_name(trim_ascii(header.substr(0, colon))) &&
-            lower_alias(trim_ascii(header.substr(0, colon))) == "authorization") {
+        if (is_sensitive_header_name(ascii_trim(header.substr(0, colon))) &&
+            lower_alias(ascii_trim(header.substr(0, colon))) == "authorization") {
             return true;
         }
     }
@@ -256,13 +245,6 @@ enum class ReasoningWireFormat {
     XaiReasoningEffort,
 };
 
-std::string lower_ascii_copy(std::string text) {
-    for (char& ch : text) {
-        ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
-    }
-    return text;
-}
-
 long long parse_reasoning_token_budget(const std::string& value) {
     if (!chat::thinking_budget_is_token_count(value)) {
         return -1;
@@ -275,7 +257,7 @@ long long parse_reasoning_token_budget(const std::string& value) {
 }
 
 std::string normalize_reasoning_effort(std::string value) {
-    value = lower_ascii_copy(trim_ascii(std::move(value)));
+    value = ascii_lower(ascii_trim(std::move(value)));
     if (value == "off" || value == "false" || value == "disabled" || value == "disable" ||
         value == "no") {
         return "none";
@@ -475,14 +457,14 @@ bool text_contains_any(const std::string& text, const std::vector<std::string>& 
 }
 
 bool kimi_model_has_forced_thinking(const std::string& model) {
-    const std::string text = lower_ascii_copy(model);
+    const std::string text = ascii_lower(model);
     return text.find("kimi-k2.7") != std::string::npos ||
            text.find("kimi_k2.7") != std::string::npos;
 }
 
 std::string context_model_and_urls(const RequestContext& context) {
-    return lower_ascii_copy(context.options.model + " " + context.base_url + " " +
-                            context.chat_url + " " + context.responses_url);
+    return ascii_lower(context.options.model + " " + context.base_url + " " +
+                       context.chat_url + " " + context.responses_url);
 }
 
 std::string qwen_reasoning_fields_json(const cli::Options& o) {
@@ -849,42 +831,6 @@ Error http_status_error(const RequestContext& context, const http::Response& res
     }
     return {code,
             "HTTP " + std::to_string(response.status) + " from " + url + ": " + body + suggestion};
-}
-
-std::string json_value_to_string(const json::Value& value) {
-    std::ostringstream out;
-    switch (value.type) {
-        case json::Value::Type::Null:
-            return "null";
-        case json::Value::Type::Bool:
-            return value.boolean ? "true" : "false";
-        case json::Value::Type::Number:
-            out << std::setprecision(17) << value.number;
-            return out.str();
-        case json::Value::Type::String:
-            return json::quote(value.string);
-        case json::Value::Type::Array:
-            out << "[";
-            for (size_t i = 0; i < value.array.size(); ++i) {
-                if (i != 0) {
-                    out << ",";
-                }
-                out << json_value_to_string(value.array[i]);
-            }
-            out << "]";
-            return out.str();
-        case json::Value::Type::Object:
-            out << "{";
-            for (auto it = value.object.begin(); it != value.object.end(); ++it) {
-                if (it != value.object.begin()) {
-                    out << ",";
-                }
-                out << json::quote(it->first) << ":" << json_value_to_string(it->second);
-            }
-            out << "}";
-            return out.str();
-    }
-    return "null";
 }
 
 std::string provider_error_message(const json::Value& root) {
@@ -1430,7 +1376,7 @@ void parse_usage(const json::Value& usage, ChatResult& result) {
     if (!usage.is_object()) {
         return;
     }
-    result.usage_json = json_value_to_string(usage);
+    result.usage_json = json::stringify(usage);
     result.prompt_tokens = usage_token_value(usage, "prompt_tokens");
     if (result.prompt_tokens < 0) {
         result.prompt_tokens = usage_token_value(usage, "input_tokens");
@@ -2336,17 +2282,17 @@ ContextResult build_context(const cli::Options& input_options) {
     if (options.key_stdin) {
         std::ostringstream ss;
         ss << std::cin.rdbuf();
-        options.key = trim_ascii(ss.str());
+        options.key = ascii_trim(ss.str());
     }
     if (!options.key_file.empty()) {
         Error err = read_file(options.key_file, options.key);
         if (!err.ok()) {
             return {{}, err};
         }
-        options.key = trim_ascii(options.key);
+        options.key = ascii_trim(options.key);
     }
     if (!options.list_models && !options.repl && !options.tui && !options.editor && !options.benchmark &&
-        trim_ascii(options.prompt).empty()) {
+        ascii_trim(options.prompt).empty()) {
         return {{}, {ErrorCode::BadArgs, "prompt is empty; use -p/--prompt, --prompt-file, or --repl"}};
     }
 

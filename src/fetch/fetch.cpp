@@ -1,6 +1,5 @@
 #include "fetch/fetch.hpp"
 
-#include <cctype>
 #include <utility>
 #include <vector>
 
@@ -9,24 +8,6 @@
 
 namespace pkchat::fetch {
 namespace {
-
-std::string lower_ascii(std::string text) {
-    for (char& ch : text) {
-        ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
-    }
-    return text;
-}
-
-std::string trim_ascii(std::string text) {
-    auto is_ws = [](unsigned char ch) { return ch == ' ' || ch == '\n' || ch == '\r' || ch == '\t'; };
-    while (!text.empty() && is_ws(static_cast<unsigned char>(text.front()))) {
-        text.erase(text.begin());
-    }
-    while (!text.empty() && is_ws(static_cast<unsigned char>(text.back()))) {
-        text.pop_back();
-    }
-    return text;
-}
 
 bool ends_with(const std::string& text, const std::string& suffix) {
     return text.size() >= suffix.size() &&
@@ -81,7 +62,7 @@ Error parse_url_host(const std::string& url, std::string& host) {
     if (scheme_end == std::string::npos) {
         return {ErrorCode::BadUrl, "URL fetch expects an absolute http:// or https:// URL: " + url};
     }
-    const std::string scheme = lower_ascii(url.substr(0, scheme_end));
+    const std::string scheme = ascii_lower(url.substr(0, scheme_end));
     if (scheme != "http" && scheme != "https") {
         return {ErrorCode::BadUrl, "URL fetch only supports http:// and https:// URLs: " + url};
     }
@@ -107,7 +88,7 @@ Error parse_url_host(const std::string& url, std::string& host) {
         const size_t colon = authority.rfind(':');
         host = colon == std::string::npos ? authority : authority.substr(0, colon);
     }
-    host = lower_ascii(host);
+    host = ascii_lower(host);
     while (!host.empty() && host.back() == '.') {
         host.pop_back();
     }
@@ -118,7 +99,7 @@ Error parse_url_host(const std::string& url, std::string& host) {
 }
 
 bool is_private_or_loopback_host(std::string host) {
-    host = lower_ascii(std::move(host));
+    host = ascii_lower(std::move(host));
     while (!host.empty() && host.back() == '.') {
         host.pop_back();
     }
@@ -153,22 +134,22 @@ bool supported_html_content_type(std::string content_type) {
     if (content_type.empty()) {
         return true;
     }
-    content_type = lower_ascii(std::move(content_type));
+    content_type = ascii_lower(std::move(content_type));
     const size_t semi = content_type.find(';');
     if (semi != std::string::npos) {
         content_type = content_type.substr(0, semi);
     }
-    content_type = trim_ascii(std::move(content_type));
+    content_type = ascii_trim(std::move(content_type));
     return content_type == "text/html" || content_type == "application/xhtml+xml";
 }
 
 bool supported_plain_content_type(std::string content_type) {
-    content_type = lower_ascii(std::move(content_type));
+    content_type = ascii_lower(std::move(content_type));
     const size_t semi = content_type.find(';');
     if (semi != std::string::npos) {
         content_type = content_type.substr(0, semi);
     }
-    return trim_ascii(std::move(content_type)) == "text/plain";
+    return ascii_trim(std::move(content_type)) == "text/plain";
 }
 
 Error fetch_body(const std::string& url,

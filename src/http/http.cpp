@@ -2,7 +2,6 @@
 
 #include <curl/curl.h>
 
-#include <cctype>
 #include <chrono>
 #include <cstdlib>
 #include <cstring>
@@ -77,24 +76,6 @@ class CurlHeaders {
    private:
     curl_slist* list_ = nullptr;
 };
-
-std::string lower_ascii(std::string text) {
-    for (char& ch : text) {
-        ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
-    }
-    return text;
-}
-
-std::string trim_ascii(std::string text) {
-    auto is_ws = [](unsigned char ch) { return ch == ' ' || ch == '\n' || ch == '\r' || ch == '\t'; };
-    while (!text.empty() && is_ws(static_cast<unsigned char>(text.front()))) {
-        text.erase(text.begin());
-    }
-    while (!text.empty() && is_ws(static_cast<unsigned char>(text.back()))) {
-        text.pop_back();
-    }
-    return text;
-}
 
 std::string trim_line_end(std::string line) {
     while (!line.empty() && (line.back() == '\r' || line.back() == '\n')) {
@@ -225,9 +206,9 @@ size_t header_callback(char* ptr, size_t size, size_t nmemb, void* userdata) {
         return bytes;
     }
 
-    const std::string lowered = lower_ascii(trimmed);
+    const std::string lowered = ascii_lower(trimmed);
     if (!state->current_proxy_connect && lowered.rfind("content-type:", 0) == 0) {
-        state->response.content_type = trim_ascii(trimmed.substr(std::string("Content-Type:").size()));
+        state->response.content_type = ascii_trim(trimmed.substr(std::string("Content-Type:").size()));
     }
 
     if (trimmed.empty()) {

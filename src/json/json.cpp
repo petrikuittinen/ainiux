@@ -353,6 +353,49 @@ ParsePrefixResult parse_prefix(const std::string& input, size_t offset) {
     return Parser(input, offset).run_prefix();
 }
 
+std::string stringify(const Value& value) {
+    switch (value.type) {
+        case Value::Type::Null:
+            return "null";
+        case Value::Type::Bool:
+            return value.boolean ? "true" : "false";
+        case Value::Type::Number: {
+            std::ostringstream out;
+            out << std::setprecision(17) << value.number;
+            return out.str();
+        }
+        case Value::Type::String:
+            return quote(value.string);
+        case Value::Type::Array: {
+            std::string out = "[";
+            for (size_t i = 0; i < value.array.size(); ++i) {
+                if (i != 0) {
+                    out += ',';
+                }
+                out += stringify(value.array[i]);
+            }
+            out += ']';
+            return out;
+        }
+        case Value::Type::Object: {
+            std::string out = "{";
+            bool first = true;
+            for (const auto& item : value.object) {
+                if (!first) {
+                    out += ',';
+                }
+                first = false;
+                out += quote(item.first);
+                out += ':';
+                out += stringify(item.second);
+            }
+            out += '}';
+            return out;
+        }
+    }
+    return "null";
+}
+
 std::string escape_string(const std::string& input) {
     std::ostringstream out;
     for (unsigned char ch : input) {

@@ -1,23 +1,16 @@
 #include "editor/detail/editor_common.hpp"
 
+#include <utility>
+
+#include "common.hpp"
+
 namespace pkchat::editor {
 
 void update_preferred_column(EditorState& state) {
     state.preferred_column = state.text.display_column_for_offset(state.cursor);
 }
 
-std::string trim_ascii_copy(std::string text) {
-    auto is_ws = [](unsigned char ch) {
-        return ch == ' ' || ch == '\t' || ch == '\r' || ch == '\n';
-    };
-    while (!text.empty() && is_ws(static_cast<unsigned char>(text.front()))) {
-        text.erase(text.begin());
-    }
-    while (!text.empty() && is_ws(static_cast<unsigned char>(text.back()))) {
-        text.pop_back();
-    }
-    return text;
-}
+std::string trim_ascii_copy(std::string text) { return pkchat::ascii_trim(std::move(text)); }
 
 namespace detail {
 

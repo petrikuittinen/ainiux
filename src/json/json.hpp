@@ -40,6 +40,7 @@ struct ParsePrefixResult {
 
 ParseResult parse(const std::string& input);
 ParsePrefixResult parse_prefix(const std::string& input, size_t offset = 0);
+std::string stringify(const Value& value);
 std::string escape_string(const std::string& input);
 std::string quote(const std::string& input);
 

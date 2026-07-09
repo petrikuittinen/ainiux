@@ -3,61 +3,26 @@
 #include "editor/editor_ai_setup.hpp"
 #include "editor/editor_assist.hpp"
 
-#include <cctype>
-#include <cstdlib>
 #include <iomanip>
 #include <sstream>
 
 namespace pkchat::editor {
 namespace {
 
-std::string lower_ascii_copy(std::string text) {
-    for (char& ch : text) {
-        ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
-    }
-    return text;
-}
-
 bool is_loopback_base_url(const std::string& base_url) {
-    const std::string lower = lower_ascii_copy(base_url);
+    const std::string lower = ascii_lower(base_url);
     return lower.find("://localhost") != std::string::npos ||
            lower.find("://127.0.0.1") != std::string::npos ||
            lower.find("://[::1]") != std::string::npos;
-}
-
-int parse_positive_int_env(const char* name, int default_value) {
-    const char* value = std::getenv(name);
-    if (value == nullptr || *value == '\0') {
-        return default_value;
-    }
-    char* end = nullptr;
-    const long parsed = std::strtol(value, &end, 10);
-    if (end == value || (end != nullptr && *end != '\0') || parsed <= 0) {
-        return default_value;
-    }
-    return static_cast<int>(parsed);
-}
-
-size_t parse_positive_size_env(const char* name, size_t default_value) {
-    const char* value = std::getenv(name);
-    if (value == nullptr || *value == '\0') {
-        return default_value;
-    }
-    char* end = nullptr;
-    const unsigned long long parsed = std::strtoull(value, &end, 10);
-    if (end == value || (end != nullptr && *end != '\0') || parsed == 0) {
-        return default_value;
-    }
-    return static_cast<size_t>(parsed);
 }
 
 }  // namespace
 
 AiContinueSettings ai_continue_settings_from_env() {
     AiContinueSettings settings;
-    settings.max_read_chars = parse_positive_size_env("MAX_AI_CONTINUE_READ", kDefaultAiContinueReadChars);
+    settings.max_read_chars = positive_size_from_env("MAX_AI_CONTINUE_READ", kDefaultAiContinueReadChars);
     settings.max_output_tokens =
-        parse_positive_int_env("MAX_AI_CONTINUE_TOKENS", kDefaultAiContinueMaxTokens);
+        positive_int_from_env("MAX_AI_CONTINUE_TOKENS", kDefaultAiContinueMaxTokens);
     return settings;
 }
 

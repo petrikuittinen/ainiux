@@ -214,30 +214,18 @@ class Transaction {
     bool active_ = false;
 };
 
-std::string trim_ascii_copy(std::string text) {
-    auto is_ws = [](unsigned char ch) {
-        return ch == ' ' || ch == '\t' || ch == '\r' || ch == '\n';
-    };
-    while (!text.empty() && is_ws(static_cast<unsigned char>(text.front()))) {
-        text.erase(text.begin());
-    }
-    while (!text.empty() && is_ws(static_cast<unsigned char>(text.back()))) {
-        text.pop_back();
-    }
-    return text;
-}
-
 std::string first_line(std::string text) {
     const size_t newline = text.find_first_of("\r\n");
     if (newline != std::string::npos) {
         text.resize(newline);
     }
-    return trim_ascii_copy(std::move(text));
+    return ascii_trim(std::move(text));
 }
 
 std::string derive_thread_name(const Session& session) {
-    if (!trim_ascii_copy(session.name).empty()) {
-        return trim_ascii_copy(session.name);
+    std::string explicit_name = ascii_trim(session.name);
+    if (!explicit_name.empty()) {
+        return explicit_name;
     }
     for (const provider::Message& message : session.messages) {
         if (message.role != "user") {

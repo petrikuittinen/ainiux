@@ -5,7 +5,6 @@
 #include <cstring>
 #include <ctime>
 #include <fcntl.h>
-#include <iomanip>
 #include <sstream>
 #include <sys/stat.h>
 #include <sys/types.h>
@@ -83,45 +82,9 @@ std::string required_string(const json::Value& root, const std::string& key, Err
     return value->string;
 }
 
-std::string value_to_json(const json::Value& value) {
-    std::ostringstream out;
-    switch (value.type) {
-        case json::Value::Type::Null:
-            return "null";
-        case json::Value::Type::Bool:
-            return value.boolean ? "true" : "false";
-        case json::Value::Type::Number:
-            out << std::setprecision(17) << value.number;
-            return out.str();
-        case json::Value::Type::String:
-            return json::quote(value.string);
-        case json::Value::Type::Array:
-            out << "[";
-            for (size_t i = 0; i < value.array.size(); ++i) {
-                if (i != 0) {
-                    out << ",";
-                }
-                out << value_to_json(value.array[i]);
-            }
-            out << "]";
-            return out.str();
-        case json::Value::Type::Object:
-            out << "{";
-            for (auto it = value.object.begin(); it != value.object.end(); ++it) {
-                if (it != value.object.begin()) {
-                    out << ",";
-                }
-                out << json::quote(it->first) << ":" << value_to_json(it->second);
-            }
-            out << "}";
-            return out.str();
-    }
-    return "null";
-}
-
 std::string optional_raw_json(const json::Value& root, const std::string& key) {
     const json::Value* value = root.get(key);
-    return value == nullptr ? "{}" : value_to_json(*value);
+    return value == nullptr ? "{}" : json::stringify(*value);
 }
 
 }  // namespace

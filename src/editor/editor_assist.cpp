@@ -68,29 +68,15 @@ size_t assist_stream_holdback_length(const std::string& text) {
     return hold;
 }
 
-bool is_assist_ascii_space(unsigned char ch) {
-    return ch == ' ' || ch == '\t' || ch == '\r' || ch == '\n';
-}
-
-std::string trim_assist_response_edges(std::string text) {
-    while (!text.empty() && is_assist_ascii_space(static_cast<unsigned char>(text.front()))) {
-        text.erase(text.begin());
-    }
-    while (!text.empty() && is_assist_ascii_space(static_cast<unsigned char>(text.back()))) {
-        text.pop_back();
-    }
-    return text;
-}
-
 std::string strip_assist_response_artifacts(std::string text) {
-    text = trim_assist_response_edges(std::move(text));
+    text = ascii_trim(std::move(text));
     const std::string open = kContentOpenTag;
     if (text.rfind(open, 0) == 0) {
         text.erase(0, open.size());
-        text = trim_assist_response_edges(std::move(text));
+        text = ascii_trim(std::move(text));
     }
     for (;;) {
-        text = trim_assist_response_edges(std::move(text));
+        text = ascii_trim(std::move(text));
         bool stripped = false;
         for (const char* artifact : kAssistTrailingArtifacts) {
             const size_t len = std::strlen(artifact);
@@ -109,26 +95,6 @@ std::string strip_assist_response_artifacts(std::string text) {
 
 char lower_ascii_char(char ch) {
     return static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
-}
-
-std::string lower_ascii_copy(std::string text) {
-    for (char& ch : text) {
-        ch = lower_ascii_char(ch);
-    }
-    return text;
-}
-
-std::string trim_ascii_copy(std::string text) {
-    auto is_ws = [](unsigned char ch) {
-        return ch == ' ' || ch == '\t' || ch == '\r' || ch == '\n';
-    };
-    while (!text.empty() && is_ws(static_cast<unsigned char>(text.front()))) {
-        text.erase(text.begin());
-    }
-    while (!text.empty() && is_ws(static_cast<unsigned char>(text.back()))) {
-        text.pop_back();
-    }
-    return text;
 }
 
 bool is_token_separator(char ch) {
@@ -153,7 +119,7 @@ std::string longest_common_prefix(const std::vector<std::string>& values) {
 }
 
 std::optional<AssistScope> parse_scope_token(const std::string& token) {
-    const std::string lower = lower_ascii_copy(token);
+    const std::string lower = ascii_lower(token);
     if (lower == "all" || lower == "a") {
         return AssistScope::All;
     }
@@ -192,11 +158,11 @@ void append_mode_completions(const EditorAssistCommand& command,
 }
 
 std::string normalized_assist_command_name(std::string command) {
-    command = trim_ascii_copy(std::move(command));
+    command = ascii_trim(std::move(command));
     while (!command.empty() && command.front() == '/') {
         command.erase(command.begin());
     }
-    return lower_ascii_copy(std::move(command));
+    return ascii_lower(std::move(command));
 }
 
 std::string command_display_name(const EditorAssistCommand& command) {
@@ -226,7 +192,7 @@ std::vector<provider::Message> build_messages(const AiContinueContext& context,
 }
 
 std::string strip_assist_content_tags(std::string text) {
-    return strip_assist_response_artifacts(trim_ascii_copy(std::move(text)));
+    return strip_assist_response_artifacts(ascii_trim(std::move(text)));
 }
 
 void push_visible_delta(runtime::EventQueue<ContinueEvent>& events, const std::string& visible) {
@@ -416,7 +382,7 @@ std::string assist_completion_status(const AssistCompletionResult& result) {
     if (!result.error.ok()) {
         return result.error.message;
     }
-    const std::string value = trim_ascii_copy(result.value);
+    const std::string value = ascii_trim(result.value);
     if (result.match_count == 0) {
         return value.empty() ? "No commands match" : "No commands match " + value;
     }
@@ -508,9 +474,9 @@ AssistCompletionResult complete_assist_command(std::string& input,
     state.candidates.clear();
 
     const std::string token = input;
-    const std::string normalized_token = lower_ascii_copy(token);
+    const std::string normalized_token = ascii_lower(token);
     for (const std::string& command : assist_command_completions(config)) {
-        const std::string normalized_command = lower_ascii_copy(command);
+        const std::string normalized_command = ascii_lower(command);
         if (normalized_command.compare(0, normalized_token.size(), normalized_token) == 0) {
             state.candidates.push_back(command);
         }
@@ -540,7 +506,7 @@ AssistCompletionResult complete_assist_command(std::string& input,
 
 ParsedAssistCommand parse_assist_command(const std::string& line, const EditorAssistConfig& config) {
     ParsedAssistCommand parsed;
-    const std::string trimmed = trim_ascii_copy(line);
+    const std::string trimmed = ascii_trim(line);
     if (trimmed.empty() || trimmed[0] != '/') {
         parsed.error_message = "Command must start with /";
         return parsed;
@@ -626,7 +592,7 @@ ParsedAssistCommand parse_assist_command(const std::string& line, const EditorAs
         const size_t arg_end = remainder.find_first_of(" \t");
         const std::string arg = arg_end == std::string::npos ? remainder : remainder.substr(0, arg_end);
         const std::string trailing =
-            arg_end == std::string::npos ? "" : trim_ascii_copy(remainder.substr(arg_end + 1));
+            arg_end == std::string::npos ? "" : ascii_trim(remainder.substr(arg_end + 1));
         if (!trailing.empty()) {
             parsed.error_message = command_display_name(entry) + " has too many arguments";
             return parsed;
@@ -941,7 +907,7 @@ void start_assist_job(const AiContinueContext& context,
 std::string trim_assist_inplace_response(std::string text) {
     text = pkchat::output::split_thinking_traces(std::move(text)).visible;
     text = strip_assist_content_tags(std::move(text));
-    return trim_ascii_copy(std::move(text));
+    return ascii_trim(std::move(text));
 }
 
 void strip_trailing_assist_close_tag_without_undo(EditorState& state) {

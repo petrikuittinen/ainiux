@@ -5,7 +5,6 @@
 #include "json/json.hpp"
 #include "security/redact.hpp"
 
-#include <cctype>
 #include <cstdlib>
 #include <sstream>
 
@@ -14,39 +13,6 @@ namespace {
 
 constexpr const char* kUserAgent =
     "Mozilla/5.0 (X11; Linux x86_64; rv:128.0) Gecko/20100101 Firefox/128.0";
-
-std::string trim_ascii(std::string text) {
-    auto is_ws = [](unsigned char ch) {
-        return ch == ' ' || ch == '\t' || ch == '\r' || ch == '\n';
-    };
-    while (!text.empty() && is_ws(static_cast<unsigned char>(text.front()))) {
-        text.erase(text.begin());
-    }
-    while (!text.empty() && is_ws(static_cast<unsigned char>(text.back()))) {
-        text.pop_back();
-    }
-    return text;
-}
-
-std::string lower_ascii(std::string text) {
-    for (char& ch : text) {
-        ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
-    }
-    return text;
-}
-
-int parse_positive_int_env(const char* name, int default_value) {
-    const char* value = std::getenv(name);
-    if (value == nullptr || *value == '\0') {
-        return default_value;
-    }
-    char* end = nullptr;
-    const long parsed = std::strtol(value, &end, 10);
-    if (end == value || (end != nullptr && *end != '\0') || parsed <= 0) {
-        return default_value;
-    }
-    return static_cast<int>(parsed);
-}
 
 std::string getenv_string(const char* name) {
     const char* value = std::getenv(name);
@@ -106,7 +72,7 @@ std::string strip_tags(const std::string& html) {
             out.push_back(ch);
         }
     }
-    return trim_ascii(out);
+    return ascii_trim(out);
 }
 
 std::string decode_html_entities(const std::string& input) {
@@ -147,9 +113,9 @@ void append_unique_result(std::vector<SearchResult>& results, SearchResult item,
     if (results.size() >= static_cast<size_t>(max_results)) {
         return;
     }
-    item.title = trim_ascii(item.title);
-    item.url = trim_ascii(item.url);
-    item.snippet = trim_ascii(item.snippet);
+    item.title = ascii_trim(item.title);
+    item.url = ascii_trim(item.url);
+    item.snippet = ascii_trim(item.snippet);
     if (item.title.empty() && item.snippet.empty()) {
         return;
     }
@@ -191,7 +157,7 @@ Error perform_http(http::Request request, const std::vector<std::string>& secret
 }
 
 Error validate_query(const std::string& query) {
-    if (trim_ascii(query).empty()) {
+    if (ascii_trim(query).empty()) {
         return {ErrorCode::BadArgs, "web search requires a non-empty query"};
     }
     if (query.size() > 2048) {
@@ -242,7 +208,7 @@ void append_related_topics(const json::Value& node, int max_results, std::vector
 
 Options default_options() {
     Options options;
-    options.max_results = parse_positive_int_env("MAXIMUM_WEB_SEARCH_RESULTS", 3);
+    options.max_results = positive_int_from_env("MAXIMUM_WEB_SEARCH_RESULTS", 3);
     options.tavily_api_key = getenv_string("TAVILY_API_KEY");
     options.firecrawl_api_key = getenv_string("FIRECRAWL_API_KEY");
     options.exa_api_key = getenv_string("EXA_API_KEY");
@@ -272,7 +238,7 @@ Options options_for(const cli::Options& cli_options) {
     if (options.searxng_base_url.empty()) {
         options.searxng_base_url = getenv_string("SEARXNG_BASE_URL");
     }
-    const int env_max = parse_positive_int_env("MAXIMUM_WEB_SEARCH_RESULTS", 0);
+    const int env_max = positive_int_from_env("MAXIMUM_WEB_SEARCH_RESULTS", 0);
     if (env_max > 0 && !cli_options.max_web_search_results_explicit) {
         options.max_results = env_max;
     }
@@ -638,8 +604,8 @@ void append_google_result(std::vector<SearchResult>& results,
     }
     SearchResult item;
     item.url = url;
-    item.title = decode_html_entities(trim_ascii(std::move(title)));
-    item.snippet = decode_html_entities(trim_ascii(std::move(snippet)));
+    item.title = decode_html_entities(ascii_trim(std::move(title)));
+    item.snippet = decode_html_entities(ascii_trim(std::move(snippet)));
     append_unique_result(results, std::move(item), max_results);
 }
 
@@ -850,7 +816,7 @@ Error search_exa(const std::string& query,
     if (options.exa_api_key.empty()) {
         return {ErrorCode::Auth, "Exa search requires EXA_API_KEY or web_search.exa_key_env"};
     }
-    std::string base = trim_ascii(options.exa_base_url);
+    std::string base = ascii_trim(options.exa_base_url);
     while (!base.empty() && base.back() == '/') {
         base.pop_back();
     }
@@ -880,7 +846,7 @@ Error search_searxng(const std::string& query,
     if (options.searxng_base_url.empty()) {
         return {ErrorCode::BadArgs, "Searxng search requires web_search.searxng_base_url or SEARXNG_BASE_URL"};
     }
-    std::string base = trim_ascii(options.searxng_base_url);
+    std::string base = ascii_trim(options.searxng_base_url);
     while (!base.empty() && base.back() == '/') {
         base.pop_back();
     }
@@ -964,7 +930,7 @@ const std::vector<ProviderEntry>& provider_catalog() {
 }
 
 const ProviderEntry* find_provider(const std::string& name) {
-    const std::string normalized = lower_ascii(trim_ascii(name));
+    const std::string normalized = ascii_lower(ascii_trim(name));
     for (const ProviderEntry& entry : provider_catalog()) {
         if (normalized == entry.name) {
             return &entry;
@@ -1016,7 +982,7 @@ Error search(const std::string& query,
     }
 
     std::vector<Error> failures;
-    const std::string provider_name = lower_ascii(trim_ascii(options.provider));
+    const std::string provider_name = ascii_lower(ascii_trim(options.provider));
 
     auto try_provider = [&](const ProviderEntry& entry) -> bool {
         std::vector<SearchResult> results;
