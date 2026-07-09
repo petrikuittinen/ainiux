@@ -1,6 +1,7 @@
 #include "editor/autosave.hpp"
 #include "editor/terminal_ui.hpp"
 
+#include "common.hpp"
 #include "editor/ai_continue.hpp"
 #include "editor/detail/editor_common.hpp"
 #include "editor/detail/unicode.hpp"
@@ -21,6 +22,14 @@
 #include <unistd.h>
 
 namespace pkchat::editor {
+namespace {
+
+bool minibuffer_supports_path_completion(MinibufferAction action) {
+    return action == MinibufferAction::SaveFile || action == MinibufferAction::SaveAsFile ||
+           action == MinibufferAction::LoadFile;
+}
+
+}  // namespace
 
 using detail::pad_or_clip_ascii;
 
@@ -205,7 +214,11 @@ void minibuffer_message(MinibufferState& minibuffer, std::string message) {
 void start_minibuffer(MinibufferState& minibuffer,
                       MinibufferAction action,
                       std::string prompt,
-                      std::string initial) {
+                      std::string initial,
+                      PathCompleter* path_completer) {
+    if (path_completer != nullptr && minibuffer_supports_path_completion(action)) {
+        path_completer->reset();
+    }
     minibuffer.active = true;
     minibuffer.action = action;
     minibuffer.prompt = std::move(prompt);
@@ -459,7 +472,8 @@ void submit_minibuffer(EditorState& state,
                        std::string& pending_load_path,
                        bool& pending_quit_after_save,
                        PendingSaveRequest& pending_save,
-                       PendingAutosaveRecovery& pending_autosave_recovery) {
+                       PendingAutosaveRecovery& pending_autosave_recovery,
+                       PathCompleter& path_completer) {
     const MinibufferAction action = minibuffer.action;
     const std::string value = trim_ascii_copy(minibuffer.input);
     const std::string raw_value = minibuffer.input;
@@ -470,7 +484,7 @@ void submit_minibuffer(EditorState& state,
             return;
         }
         request_save_editor_to_path(state,
-                                    value,
+                                    expand_user_path(value),
                                     minibuffer,
                                     true,
                                     pending_quit_after_save,
@@ -488,7 +502,14 @@ void submit_minibuffer(EditorState& state,
             minibuffer.prompt = "Save as (path required): ";
             return;
         }
-        request_save_editor_to_path(state, value, minibuffer, true, false, quit, pending_save, settings);
+        request_save_editor_to_path(state,
+                                    expand_user_path(value),
+                                    minibuffer,
+                                    true,
+                                    false,
+                                    quit,
+                                    pending_save,
+                                    settings);
         return;
     }
     if (action == MinibufferAction::LoadFile) {
@@ -497,7 +518,7 @@ void submit_minibuffer(EditorState& state,
             return;
         }
         request_load_editor_from_path(state,
-                                      value,
+                                      expand_user_path(value),
                                       settings,
                                       minibuffer,
                                       pending_load_path,
@@ -581,7 +602,11 @@ void submit_minibuffer(EditorState& state,
     if (action == MinibufferAction::ConfirmSaveOnQuit) {
         if (ui::yes_answer(value)) {
             pending_quit_after_save = true;
-            start_minibuffer(minibuffer, MinibufferAction::SaveFile, "Save file: ");
+            start_minibuffer(minibuffer,
+                             MinibufferAction::SaveFile,
+                             "Save file: ",
+                             "",
+                             &path_completer);
         } else if (ui::no_answer(value) || value.empty()) {
             quit = true;
         } else {
@@ -619,7 +644,8 @@ bool handle_minibuffer_key(EditorState& state,
                            std::string& pending_load_path,
                            bool& pending_quit_after_save,
                            PendingSaveRequest& pending_save,
-                           PendingAutosaveRecovery& pending_autosave_recovery) {
+                           PendingAutosaveRecovery& pending_autosave_recovery,
+                           PathCompleter& path_completer) {
     if (!minibuffer.active) {
         return false;
     }
@@ -632,6 +658,7 @@ bool handle_minibuffer_key(EditorState& state,
         pending_autosave_recovery = PendingAutosaveRecovery{};
         pending_quit_after_save = false;
         pending_save = PendingSaveRequest{};
+        path_completer.reset();
         minibuffer_message(minibuffer, "Minibuffer cancelled");
         return true;
     }
@@ -645,12 +672,16 @@ bool handle_minibuffer_key(EditorState& state,
                           pending_load_path,
                           pending_quit_after_save,
                           pending_save,
-                          pending_autosave_recovery);
+                          pending_autosave_recovery,
+                          path_completer);
         return true;
     }
     if (ch == 127 || ch == 8) {
         if (!minibuffer.input.empty()) {
             minibuffer.input.pop_back();
+            if (minibuffer_supports_path_completion(minibuffer.action)) {
+                path_completer.reset();
+            }
         }
         return true;
     }
@@ -705,7 +736,11 @@ bool handle_minibuffer_key(EditorState& state,
                 load_editor_from_path(state, path, settings, minibuffer);
             } else {
                 pending_quit_after_save = true;
-                start_minibuffer(minibuffer, MinibufferAction::SaveFile, "Save file: ");
+                start_minibuffer(minibuffer,
+                                 MinibufferAction::SaveFile,
+                                 "Save file: ",
+                                 "",
+                                 &path_completer);
             }
         } else if (ch == 'n' || ch == 'N') {
             if (minibuffer.action == MinibufferAction::ConfirmLoad) {
@@ -722,11 +757,23 @@ bool handle_minibuffer_key(EditorState& state,
         return true;
     }
     if (ch == '\t') {
-        minibuffer.prompt = "Tab completion disabled; enter path: ";
+        if (minibuffer_supports_path_completion(minibuffer.action)) {
+            const PathCompletionResult result = complete_path_input(minibuffer.input, path_completer);
+            minibuffer.message = path_completion_status(result);
+        } else {
+            minibuffer.message = "Tab completion is not active here";
+        }
         return true;
     }
     if (ch >= 0x20U) {
         minibuffer.input.push_back(static_cast<char>(ch));
+        if (minibuffer_supports_path_completion(minibuffer.action)) {
+            EditorState temp = EditorState::from_text(minibuffer.input);
+            temp.cursor = minibuffer.input.size();
+            if (!path_completer.can_cycle(temp)) {
+                path_completer.reset();
+            }
+        }
         return true;
     }
     return true;

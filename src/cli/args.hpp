@@ -122,7 +122,7 @@ struct Options {
     size_t editor_auto_save_threshold = pkchat::editor::kDefaultAutoSaveThreshold;
     int editor_auto_save_timeout_seconds = pkchat::editor::kDefaultAutoSaveTimeoutSeconds;
     long long editor_auto_save_size_limit = pkchat::editor::kDefaultAutoSaveSizeLimit;
-    pkchat::editor::EditorAssistConfig editor_assist_config = pkchat::editor::default_editor_assist_config();
+    pkchat::editor::EditorAssistConfig editor_assist_config = pkchat::editor::empty_editor_assist_config();
     long long context_tokens = 0;
     int benchmark_runs = 1;
     int benchmark_warmup = 0;

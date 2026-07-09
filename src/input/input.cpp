@@ -1,5 +1,7 @@
 #include "input/input.hpp"
 
+#include "common.hpp"
+
 #include <array>
 #include <fstream>
 #include <initializer_list>
@@ -78,15 +80,16 @@ std::string base64_encode(const std::string& data) {
 }  // namespace
 
 Error classify_file_type(const std::string& path, FileType& type) {
-    if (path == "stdin") {
+    const std::string resolved = expand_user_path(path);
+    if (resolved == "stdin") {
         type = {Kind::Plaintext, "plaintext", "text/plain"};
         return ok_error();
     }
-    if (path == "-") {
+    if (resolved == "-") {
         return {ErrorCode::BadArgs,
                 "--input - cannot infer a file type from the path ending; use a path with a supported extension"};
     }
-    const std::string lower = ascii_lower(path);
+    const std::string lower = ascii_lower(resolved);
     if (ends_with(lower, ".txt") || ends_with(lower, ".text")) {
         type = {Kind::Plaintext, "plaintext", "text/plain"};
         return ok_error();
@@ -114,7 +117,7 @@ Error classify_file_type(const std::string& path, FileType& type) {
     // WebP input is intentionally disabled: common vision endpoints tested here do not decode it reliably.
     // if (ends_with(lower, ".webp")) type = {Kind::Image, "image", "image/webp"};
     return {ErrorCode::UnsupportedFeature,
-            "unsupported input file type for " + path +
+            "unsupported input file type for " + resolved +
                 "; supported endings are .txt, .text, .md, .markdown, .html, .htm, .png, .jpg, .jpeg, "
                 "and .gif "
                 "(case-insensitive)"};
@@ -125,18 +128,19 @@ Error load_image_file(const std::string& path,
                       size_t max_bytes,
                       ImageData& image,
                       runtime::CancellationToken cancellation) {
+    const std::string resolved = expand_user_path(path);
     if (type.kind != Kind::Image) {
-        return {ErrorCode::Internal, "load_image_file called for non-image input: " + path};
+        return {ErrorCode::Internal, "load_image_file called for non-image input: " + resolved};
     }
-    std::ifstream file(path, std::ios::binary);
+    std::ifstream file(resolved, std::ios::binary);
     if (!file) {
-        return {ErrorCode::FileRead, "could not open image for reading: " + path};
+        return {ErrorCode::FileRead, "could not open image for reading: " + resolved};
     }
     std::string data;
     std::array<char, 8192> buffer{};
     while (file) {
         if (cancellation.cancelled()) {
-            return {ErrorCode::Cancelled, "image read cancelled: " + path};
+            return {ErrorCode::Cancelled, "image read cancelled: " + resolved};
         }
         file.read(buffer.data(), static_cast<std::streamsize>(buffer.size()));
         const std::streamsize count = file.gcount();
@@ -147,22 +151,22 @@ Error load_image_file(const std::string& path,
         if (data.size() > max_bytes || chunk_size > max_bytes - data.size()) {
             return {ErrorCode::UnsupportedFeature,
                     "image exceeds --max-image-bytes limit of " + std::to_string(max_bytes) +
-                        " bytes: " + path};
+                        " bytes: " + resolved};
         }
         data.append(buffer.data(), chunk_size);
     }
     if (file.bad()) {
-        return {ErrorCode::FileRead, "could not read image: " + path};
+        return {ErrorCode::FileRead, "could not read image: " + resolved};
     }
     if (data.empty()) {
-        return {ErrorCode::UnsupportedFeature, "image file is empty: " + path};
+        return {ErrorCode::UnsupportedFeature, "image file is empty: " + resolved};
     }
     if (!signature_matches(data, type.mime_type)) {
         return {ErrorCode::UnsupportedFeature,
-                "image content does not match its " + type.mime_type + " file extension: " + path};
+                "image content does not match its " + type.mime_type + " file extension: " + resolved};
     }
     if (cancellation.cancelled()) {
-        return {ErrorCode::Cancelled, "image read cancelled: " + path};
+        return {ErrorCode::Cancelled, "image read cancelled: " + resolved};
     }
 
     ImageData loaded;
@@ -170,7 +174,7 @@ Error load_image_file(const std::string& path,
     loaded.byte_size = data.size();
     loaded.base64_data = base64_encode(data);
     if (cancellation.cancelled()) {
-        return {ErrorCode::Cancelled, "image encoding cancelled: " + path};
+        return {ErrorCode::Cancelled, "image encoding cancelled: " + resolved};
     }
     image = std::move(loaded);
     return ok_error();
@@ -180,22 +184,24 @@ Error load_text_context_file(const std::string& path,
                              size_t max_bytes,
                              TextContext& context,
                              runtime::CancellationToken cancellation) {
+    const std::string resolved = expand_user_path(path);
     FileType type;
-    Error err = classify_file_type(path, type);
+    Error err = classify_file_type(resolved, type);
     if (!err.ok()) {
         return err;
     }
     if (type.kind == Kind::Image) {
         return {ErrorCode::UnsupportedFeature,
-                "text insertion supports .txt, .md, and .html files; attach images to a prompt instead: " + path};
+                "text insertion supports .txt, .md, and .html files; attach images to a prompt instead: " +
+                    resolved};
     }
 
     std::ifstream file;
     std::istream* input = &std::cin;
-    if (path != "stdin") {
-        file.open(path, std::ios::binary);
+    if (resolved != "stdin") {
+        file.open(resolved, std::ios::binary);
         if (!file) {
-            return {ErrorCode::FileRead, "could not open " + type.name + " for reading: " + path};
+            return {ErrorCode::FileRead, "could not open " + type.name + " for reading: " + resolved};
         }
         input = &file;
     }
@@ -203,7 +209,7 @@ Error load_text_context_file(const std::string& path,
     std::array<char, 8192> buffer{};
     while (*input) {
         if (cancellation.cancelled()) {
-            return {ErrorCode::Cancelled, "text insertion cancelled: " + path};
+            return {ErrorCode::Cancelled, "text insertion cancelled: " + resolved};
         }
         input->read(buffer.data(), static_cast<std::streamsize>(buffer.size()));
         const std::streamsize count = input->gcount();
@@ -214,20 +220,20 @@ Error load_text_context_file(const std::string& path,
         if (body.size() > max_bytes || chunk_size > max_bytes - body.size()) {
             return {ErrorCode::UnsupportedFeature,
                     type.name + " exceeds --max-input-bytes limit of " + std::to_string(max_bytes) +
-                        " bytes: " + path};
+                        " bytes: " + resolved};
         }
         body.append(buffer.data(), chunk_size);
     }
     if (input->bad()) {
         return {ErrorCode::FileRead,
-                path == "stdin" ? "could not read plaintext from stdin"
-                                : "could not read " + type.name + ": " + path};
+                resolved == "stdin" ? "could not read plaintext from stdin"
+                                    : "could not read " + type.name + ": " + resolved};
     }
     const size_t nul = body.find('\0');
     if (nul != std::string::npos) {
         return {ErrorCode::UnsupportedFeature,
                 "input appears to be binary: " +
-                    (path == "stdin" ? std::string("stdin") : "file " + path) +
+                    (resolved == "stdin" ? std::string("stdin") : "file " + resolved) +
                     " contains a NUL byte at offset " +
                     std::to_string(nul)};
     }
@@ -235,20 +241,20 @@ Error load_text_context_file(const std::string& path,
     if (!html::is_valid_utf8(body, &invalid_offset)) {
         return {ErrorCode::UnsupportedFeature,
                 "Input expects UTF-8 text; charset conversion is not implemented yet for " +
-                    (path == "stdin" ? std::string("stdin") : "file " + path) +
+                    (resolved == "stdin" ? std::string("stdin") : "file " + resolved) +
                     " (invalid byte at offset " + std::to_string(invalid_offset) +
                     "). Convert the document to UTF-8 and try again."};
     }
     if (cancellation.cancelled()) {
-        return {ErrorCode::Cancelled, "text insertion cancelled: " + path};
+        return {ErrorCode::Cancelled, "text insertion cancelled: " + resolved};
     }
 
     TextContext loaded;
-    loaded.source = path == "stdin" ? "stdin" : "file " + path;
+    loaded.source = resolved == "stdin" ? "stdin" : "file " + resolved;
     loaded.kind = type.kind;
     loaded.content = type.kind == Kind::Html ? html::convert(body, html::OutputFormat::Markdown) : std::move(body);
     if (cancellation.cancelled()) {
-        return {ErrorCode::Cancelled, "text insertion cancelled: " + path};
+        return {ErrorCode::Cancelled, "text insertion cancelled: " + resolved};
     }
     context = std::move(loaded);
     return ok_error();

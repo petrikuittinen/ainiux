@@ -751,6 +751,88 @@ void merge_assist_command(pkchat::editor::EditorAssistConfig& config, pkchat::ed
     config.commands.push_back(std::move(command));
 }
 
+Error apply_legacy_assist_prompt(const Entry& entry,
+                                 pkchat::editor::EditorAssistConfig& config,
+                                 const std::string& command_name) {
+    Error err = require_type(entry, Value::Type::String);
+    if (!err.ok()) {
+        return err;
+    }
+    if (pkchat::editor::EditorAssistCommand* command = find_assist_command_by_name(config, command_name)) {
+        command->prompt = entry.value.string;
+    }
+    return ok_error();
+}
+
+bool is_editor_commands_entry(const std::string& name) {
+    if (name.rfind("command.", 0) == 0) {
+        return true;
+    }
+    return name == "editor.assist_behavior" || name == "editor.assist_spell" ||
+           name == "editor.assist_grammar" || name == "editor.assist_continue" ||
+           name == "editor.assist_fact" || name == "editor.assist_comment" ||
+           name == "editor.assist_rewrite" || name == "editor.assist_english" ||
+           name == "editor.assist_chinese" || name == "editor.assist_finnish";
+}
+
+Error apply_editor_assist_entry(const std::string& name,
+                                const Entry& entry,
+                                cli::Options& candidate) {
+    if (name == "editor.assist_behavior") {
+        Error err = require_type(entry, Value::Type::String);
+        if (err.ok()) {
+            candidate.editor_assist_config.behavior_rules = entry.value.string;
+        }
+        return err;
+    }
+    if (name == "editor.assist_spell") {
+        return apply_legacy_assist_prompt(entry, candidate.editor_assist_config, "/spell");
+    }
+    if (name == "editor.assist_grammar") {
+        return apply_legacy_assist_prompt(entry, candidate.editor_assist_config, "/grammar");
+    }
+    if (name == "editor.assist_continue") {
+        return apply_legacy_assist_prompt(entry, candidate.editor_assist_config, "/continue");
+    }
+    if (name == "editor.assist_fact") {
+        return apply_legacy_assist_prompt(entry, candidate.editor_assist_config, "/fact");
+    }
+    if (name == "editor.assist_comment") {
+        return apply_legacy_assist_prompt(entry, candidate.editor_assist_config, "/comment");
+    }
+    if (name == "editor.assist_rewrite") {
+        return apply_legacy_assist_prompt(entry, candidate.editor_assist_config, "/rewrite");
+    }
+    if (name == "editor.assist_english") {
+        return apply_legacy_assist_prompt(entry, candidate.editor_assist_config, "/English");
+    }
+    if (name == "editor.assist_chinese") {
+        return apply_legacy_assist_prompt(entry, candidate.editor_assist_config, "/Chinese");
+    }
+    if (name == "editor.assist_finnish") {
+        return apply_legacy_assist_prompt(entry, candidate.editor_assist_config, "/Finnish");
+    }
+    return schema_error(entry, "unknown editor-commands setting");
+}
+
+std::vector<std::string> config_paths_from_dirs(const std::string& dirs, const char* filename) {
+    std::vector<std::string> priority_order;
+    size_t begin = 0;
+    while (begin <= dirs.size()) {
+        const size_t colon = dirs.find(':', begin);
+        const size_t end = colon == std::string::npos ? dirs.size() : colon;
+        const std::string dir = dirs.substr(begin, end - begin);
+        if (absolute_path(dir)) {
+            priority_order.push_back((std::filesystem::path(dir) / "pkchat" / filename).string());
+        }
+        if (colon == std::string::npos) {
+            break;
+        }
+        begin = colon + 1;
+    }
+    return std::vector<std::string>(priority_order.rbegin(), priority_order.rend());
+}
+
 void merge_model_setting(std::vector<ModelSetting>& settings, ModelSetting setting) {
     for (ModelSetting& existing : settings) {
         if (existing.model == setting.model && existing.purpose == setting.purpose) {
@@ -1030,7 +1112,34 @@ Error apply_config_file(const std::string& path, cli::Options& options) {
     return apply_document(parsed.document, options);
 }
 
+Error apply_editor_commands_document_impl(const Document& document, cli::Options& options) {
+    cli::Options candidate = options;
+    for (const auto& item : document.entries) {
+        const std::string& name = item.first;
+        if (name.rfind("command.", 0) == 0) {
+            continue;
+        }
+        if (!is_editor_commands_entry(name)) {
+            return schema_error(item.second, "unknown editor-commands setting");
+        }
+        Error err = apply_editor_assist_entry(name, item.second, candidate);
+        if (!err.ok()) {
+            return err;
+        }
+    }
+    Error command_err = apply_configured_assist_commands(document, candidate);
+    if (!command_err.ok()) {
+        return command_err;
+    }
+    options = std::move(candidate);
+    return ok_error();
+}
+
 }  // namespace
+
+Error apply_editor_commands_document(const Document& document, cli::Options& options) {
+    return apply_editor_commands_document_impl(document, options);
+}
 
 const Entry* Document::find(const std::string& qualified_key) const {
     const auto it = entries.find(qualified_key);
@@ -1222,37 +1331,23 @@ Error apply_document(const Document& document, cli::Options& options) {
             err = require_type(entry, Value::Type::String);
             if (err.ok()) candidate.editor_assist_config.behavior_rules = entry.value.string;
         } else if (name == "editor.assist_spell") {
-            err = require_type(entry, Value::Type::String);
-            if (err.ok()) {
-                if (pkchat::editor::EditorAssistCommand* command =
-                        find_assist_command_by_name(candidate.editor_assist_config, "/spell")) {
-                    command->prompt = entry.value.string;
-                }
-            }
+            err = apply_legacy_assist_prompt(entry, candidate.editor_assist_config, "/spell");
         } else if (name == "editor.assist_grammar") {
-            err = require_type(entry, Value::Type::String);
-            if (err.ok()) {
-                if (pkchat::editor::EditorAssistCommand* command =
-                        find_assist_command_by_name(candidate.editor_assist_config, "/grammar")) {
-                    command->prompt = entry.value.string;
-                }
-            }
+            err = apply_legacy_assist_prompt(entry, candidate.editor_assist_config, "/grammar");
         } else if (name == "editor.assist_continue") {
-            err = require_type(entry, Value::Type::String);
-            if (err.ok()) {
-                if (pkchat::editor::EditorAssistCommand* command =
-                        find_assist_command_by_name(candidate.editor_assist_config, "/continue")) {
-                    command->prompt = entry.value.string;
-                }
-            }
+            err = apply_legacy_assist_prompt(entry, candidate.editor_assist_config, "/continue");
         } else if (name == "editor.assist_fact") {
-            err = require_type(entry, Value::Type::String);
-            if (err.ok()) {
-                if (pkchat::editor::EditorAssistCommand* command =
-                        find_assist_command_by_name(candidate.editor_assist_config, "/fact")) {
-                    command->prompt = entry.value.string;
-                }
-            }
+            err = apply_legacy_assist_prompt(entry, candidate.editor_assist_config, "/fact");
+        } else if (name == "editor.assist_comment") {
+            err = apply_legacy_assist_prompt(entry, candidate.editor_assist_config, "/comment");
+        } else if (name == "editor.assist_rewrite") {
+            err = apply_legacy_assist_prompt(entry, candidate.editor_assist_config, "/rewrite");
+        } else if (name == "editor.assist_english") {
+            err = apply_legacy_assist_prompt(entry, candidate.editor_assist_config, "/English");
+        } else if (name == "editor.assist_chinese") {
+            err = apply_legacy_assist_prompt(entry, candidate.editor_assist_config, "/Chinese");
+        } else if (name == "editor.assist_finnish") {
+            err = apply_legacy_assist_prompt(entry, candidate.editor_assist_config, "/Finnish");
         } else if (name.rfind("command.", 0) == 0) {
             continue;
         } else if (name.rfind("Model-setting.", 0) == 0) {
@@ -1329,63 +1424,164 @@ std::string user_config_path(const Environment& environment) {
 
 std::vector<std::string> system_config_paths(const Environment& environment) {
     const std::string dirs = environment.xdg_config_dirs.empty() ? "/etc/xdg" : environment.xdg_config_dirs;
-    std::vector<std::string> priority_order;
-    size_t begin = 0;
-    while (begin <= dirs.size()) {
-        const size_t colon = dirs.find(':', begin);
-        const size_t end = colon == std::string::npos ? dirs.size() : colon;
-        const std::string dir = dirs.substr(begin, end - begin);
-        if (absolute_path(dir)) {
-            priority_order.push_back((std::filesystem::path(dir) / "pkchat" / "config.conf").string());
-        }
-        if (colon == std::string::npos) {
-            break;
-        }
-        begin = colon + 1;
+    return config_paths_from_dirs(dirs, "config.conf");
+}
+
+std::string user_editor_commands_path(const Environment& environment) {
+    if (absolute_path(environment.xdg_config_home)) {
+        return (std::filesystem::path(environment.xdg_config_home) / "pkchat" / "editor-commands.conf")
+            .string();
     }
-    return std::vector<std::string>(priority_order.rbegin(), priority_order.rend());
+    if (!absolute_path(environment.home)) {
+        return {};
+    }
+    return (std::filesystem::path(environment.home) / ".config" / "pkchat" / "editor-commands.conf")
+        .string();
+}
+
+std::vector<std::string> system_editor_commands_paths(const Environment& environment) {
+    const std::string dirs = environment.xdg_config_dirs.empty() ? "/etc/xdg" : environment.xdg_config_dirs;
+    return config_paths_from_dirs(dirs, "editor-commands.conf");
+}
+
+std::vector<std::string> bundled_editor_commands_paths() {
+    std::vector<std::string> paths;
+    if (const char* override_path = std::getenv("PKCHAT_EDITOR_COMMANDS")) {
+        if (override_path[0] != '\0') {
+            paths.emplace_back(override_path);
+        }
+    }
+    paths.emplace_back("config/editor-commands.conf");
+    paths.emplace_back("/usr/local/share/pkchat/editor-commands.conf");
+    paths.emplace_back("/usr/share/pkchat/editor-commands.conf");
+    return paths;
 }
 
 LoadResult load_automatic(const cli::Options& base_options,
                           const Environment& environment,
                           bool load_user_config) {
     LoadResult result{base_options, {}, {}, ok_error()};
+    result.options.editor_assist_config = pkchat::editor::empty_editor_assist_config();
+
+    auto load_editor_commands_path = [&](const std::string& path,
+                                         ConfigScope scope,
+                                         bool& any_loaded) -> Error {
+        std::error_code filesystem_error;
+        const bool exists = std::filesystem::exists(path, filesystem_error);
+        if (filesystem_error) {
+            result.diagnostics.push_back(
+                {scope, ConfigFileKind::EditorCommands, ConfigFileState::Error, path});
+            return {ErrorCode::Config, "could not inspect editor-commands file: " + path};
+        }
+        if (!exists) {
+            result.diagnostics.push_back(
+                {scope, ConfigFileKind::EditorCommands, ConfigFileState::Missing, path});
+            return ok_error();
+        }
+        ParseResult parsed = read_file(path);
+        if (!parsed.error.ok()) {
+            result.diagnostics.push_back(
+                {scope, ConfigFileKind::EditorCommands, ConfigFileState::Error, path});
+            return parsed.error;
+        }
+        Error err = apply_editor_commands_document(parsed.document, result.options);
+        if (!err.ok()) {
+            result.diagnostics.push_back(
+                {scope, ConfigFileKind::EditorCommands, ConfigFileState::Error, path});
+            return err;
+        }
+        any_loaded = true;
+        result.loaded_paths.push_back(path);
+        result.diagnostics.push_back(
+            {scope, ConfigFileKind::EditorCommands, ConfigFileState::Loaded, path});
+        return ok_error();
+    };
+
+    bool editor_commands_loaded = false;
+    for (const std::string& path : system_editor_commands_paths(environment)) {
+        Error err = load_editor_commands_path(path, ConfigScope::System, editor_commands_loaded);
+        if (!err.ok()) {
+            result.error = std::move(err);
+            return result;
+        }
+    }
+
+    const std::string user_editor_commands = user_editor_commands_path(environment);
+    if (user_editor_commands.empty()) {
+        result.diagnostics.push_back(
+            {ConfigScope::User, ConfigFileKind::EditorCommands, ConfigFileState::Unavailable, {}});
+    } else if (!load_user_config) {
+        result.diagnostics.push_back({ConfigScope::User,
+                                      ConfigFileKind::EditorCommands,
+                                      ConfigFileState::Skipped,
+                                      user_editor_commands});
+    } else {
+        Error err = load_editor_commands_path(user_editor_commands,
+                                              ConfigScope::User,
+                                              editor_commands_loaded);
+        if (!err.ok()) {
+            result.error = std::move(err);
+            return result;
+        }
+    }
+
+    if (!editor_commands_loaded) {
+        for (const std::string& path : bundled_editor_commands_paths()) {
+            std::error_code filesystem_error;
+            if (!std::filesystem::exists(path, filesystem_error) || filesystem_error) {
+                continue;
+            }
+            Error err = load_editor_commands_path(path, ConfigScope::System, editor_commands_loaded);
+            if (!err.ok()) {
+                result.error = std::move(err);
+                return result;
+            }
+            if (editor_commands_loaded) {
+                break;
+            }
+        }
+    }
+
+    if (!editor_commands_loaded) {
+        result.options.editor_assist_config = pkchat::editor::default_editor_assist_config();
+    }
+
     const std::vector<std::string> paths = system_config_paths(environment);
     for (const std::string& path : paths) {
         std::error_code filesystem_error;
         const bool exists = std::filesystem::exists(path, filesystem_error);
         if (filesystem_error) {
             result.diagnostics.push_back(
-                {ConfigScope::System, ConfigFileState::Error, path});
+                {ConfigScope::System, ConfigFileKind::Config, ConfigFileState::Error, path});
             result.error = {ErrorCode::Config, "could not inspect config file: " + path};
             return result;
         }
         if (!exists) {
             result.diagnostics.push_back(
-                {ConfigScope::System, ConfigFileState::Missing, path});
+                {ConfigScope::System, ConfigFileKind::Config, ConfigFileState::Missing, path});
             continue;
         }
         Error err = apply_config_file(path, result.options);
         if (!err.ok()) {
             result.diagnostics.push_back(
-                {ConfigScope::System, ConfigFileState::Error, path});
+                {ConfigScope::System, ConfigFileKind::Config, ConfigFileState::Error, path});
             result.error = std::move(err);
             return result;
         }
         result.loaded_paths.push_back(path);
         result.diagnostics.push_back(
-            {ConfigScope::System, ConfigFileState::Loaded, path});
+            {ConfigScope::System, ConfigFileKind::Config, ConfigFileState::Loaded, path});
     }
 
     const std::string user_path = user_config_path(environment);
     if (user_path.empty()) {
         result.diagnostics.push_back(
-            {ConfigScope::User, ConfigFileState::Unavailable, {}});
+            {ConfigScope::User, ConfigFileKind::Config, ConfigFileState::Unavailable, {}});
         return result;
     }
     if (!load_user_config) {
         result.diagnostics.push_back(
-            {ConfigScope::User, ConfigFileState::Skipped, user_path});
+            {ConfigScope::User, ConfigFileKind::Config, ConfigFileState::Skipped, user_path});
         return result;
     }
 
@@ -1393,25 +1589,25 @@ LoadResult load_automatic(const cli::Options& base_options,
     const bool exists = std::filesystem::exists(user_path, filesystem_error);
     if (filesystem_error) {
         result.diagnostics.push_back(
-            {ConfigScope::User, ConfigFileState::Error, user_path});
+            {ConfigScope::User, ConfigFileKind::Config, ConfigFileState::Error, user_path});
         result.error = {ErrorCode::Config, "could not inspect config file: " + user_path};
         return result;
     }
     if (!exists) {
         result.diagnostics.push_back(
-            {ConfigScope::User, ConfigFileState::Missing, user_path});
+            {ConfigScope::User, ConfigFileKind::Config, ConfigFileState::Missing, user_path});
         return result;
     }
     Error err = apply_config_file(user_path, result.options);
     if (!err.ok()) {
         result.diagnostics.push_back(
-            {ConfigScope::User, ConfigFileState::Error, user_path});
+            {ConfigScope::User, ConfigFileKind::Config, ConfigFileState::Error, user_path});
         result.error = std::move(err);
         return result;
     }
     result.loaded_paths.push_back(user_path);
     result.diagnostics.push_back(
-        {ConfigScope::User, ConfigFileState::Loaded, user_path});
+        {ConfigScope::User, ConfigFileKind::Config, ConfigFileState::Loaded, user_path});
     return result;
 }
 

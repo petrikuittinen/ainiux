@@ -1,5 +1,6 @@
 #include "editor/test_editor.hpp"
 #include "support/test_support.hpp"
+#include "common.hpp"
 #include "cli/args.hpp"
 #include "config/config.hpp"
 #include "editor/ai_continue.hpp"
@@ -479,6 +480,7 @@ void test_editor_assist_helpers() {
           "user --system is prepended to assist task system prompt");
 
     pkchat::cli::Options configured_options;
+    configured_options.editor_assist_config = pkchat::editor::default_editor_assist_config();
     pkchat::config::ParseResult assist_config = pkchat::config::parse(
         "[editor]\nassist_spell = \"Custom spell prompt\"\n", "assist.conf");
     check(assist_config.error.ok(), "editor assist prompt config parses");
@@ -1135,6 +1137,26 @@ void test_editor_path_completion() {
     result = completer.complete(reset_cycle);
     check(!result.cycling && reset_cycle.text.str() == common,
           "resetting completion prevents a later Tab from cycling stale choices");
+
+    std::string minibuffer_input = directory + "/pkchat-sing";
+    pkchat::editor::PathCompleter minibuffer_completer;
+    result = pkchat::editor::complete_path_input(minibuffer_input, minibuffer_completer);
+    check(result.error.ok() && result.match_count == 1,
+          "minibuffer path completion finds a unique file");
+    check(minibuffer_input == directory + "/pkchat-single-result.txt",
+          "minibuffer path completion completes editor save/open paths");
+}
+
+void test_expand_user_path() {
+    if (const char* home = std::getenv("HOME")) {
+        check(pkchat::expand_user_path("~") == home, "expand_user_path expands bare tilde");
+        check(pkchat::expand_user_path("~/notes.txt") == std::string(home) + "/notes.txt",
+              "expand_user_path expands tilde-prefixed paths");
+    }
+    check(pkchat::expand_user_path("-") == "-", "expand_user_path preserves stdin dash");
+    check(pkchat::expand_user_path("stdin") == "stdin", "expand_user_path preserves stdin literal");
+    check(pkchat::expand_user_path("/tmp/file") == "/tmp/file",
+          "expand_user_path leaves absolute paths unchanged");
 }
 
 void test_editor_piece_table_edits() {
@@ -2050,6 +2072,7 @@ void run_all() {
     test_editor_page_navigation();
     test_editor_paste_prefers_local_clipboard();
     test_editor_path_completion();
+    test_expand_user_path();
     test_editor_piece_table_edits();
     test_editor_rectangular_rendering();
     test_editor_search_navigation();

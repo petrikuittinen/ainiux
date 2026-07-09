@@ -63,5 +63,8 @@ class ContextualCompleter {
 };
 
 std::string path_completion_status(const PathCompletionResult& result);
+PathCompletionResult complete_path_input(std::string& input,
+                                         PathCompleter& completer,
+                                         const std::function<bool()>& cancelled = {});
 
 }  // namespace pkchat::editor

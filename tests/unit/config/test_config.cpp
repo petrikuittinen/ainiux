@@ -2,6 +2,7 @@
 #include "support/test_support.hpp"
 #include "cli/args.hpp"
 #include "config/config.hpp"
+#include "editor/editor_prompts.hpp"
 #include "provider/provider.hpp"
 #include <cstdlib>
 #include <filesystem>
@@ -37,6 +38,7 @@ void test_config_applies_user_settings() {
               options.editor_file_size_limit == -1,
           "editor config settings apply");
 
+    options.editor_assist_config = pkchat::editor::default_editor_assist_config();
     pkchat::config::ParseResult assist_prompt_config = pkchat::config::parse(
         "[editor]\nassist_fact = \"Custom fact prompt\"\n", "assist-fact.conf");
     check(assist_prompt_config.error.ok(), "editor assist fact config parses");
@@ -62,10 +64,15 @@ void test_config_applies_user_settings() {
     pkchat::config::Environment environment{config_home, system_home, "/nonexistent"};
     pkchat::config::LoadResult loaded = pkchat::config::load_automatic(pkchat::cli::Options{}, environment);
     check(loaded.error.ok(), "automatic user config loading succeeds");
-    check(loaded.loaded_paths.size() == 2 &&
-              loaded.loaded_paths[0] == system_home + "/pkchat/config.conf" &&
-              loaded.loaded_paths[1] == config_home + "/pkchat/config.conf",
-          "automatic loading applies the system file before the XDG user file");
+    check(loaded.loaded_paths.size() == 3 &&
+              loaded.loaded_paths[0].find("editor-commands.conf") != std::string::npos &&
+              loaded.loaded_paths[1] == system_home + "/pkchat/config.conf" &&
+              loaded.loaded_paths[2] == config_home + "/pkchat/config.conf",
+          "automatic loading applies bundled editor commands before system and user config");
+    const pkchat::editor::EditorAssistCommand* loaded_spell =
+        pkchat::editor::find_assist_command(loaded.options.editor_assist_config, "/spell");
+    check(loaded_spell != nullptr && loaded_spell->prompt.find("spelling") != std::string::npos,
+          "automatic loading includes built-in editor assist commands");
     check(loaded.options.allow_private_url_fetch && loaded.options.show_thinking_traces &&
               loaded.options.tui_theme == "dark",
           "user settings partially override automatic system settings");
@@ -75,10 +82,19 @@ void test_config_applies_user_settings() {
     check(system_only.error.ok() && !system_only.options.allow_private_url_fetch &&
               !system_only.options.show_thinking_traces && system_only.options.tui_theme == "light",
           "disabling user config retains the automatic system config");
-    check(system_only.loaded_paths.size() == 1 &&
-              system_only.loaded_paths[0] == system_home + "/pkchat/config.conf" &&
-              system_only.diagnostics.back().state == pkchat::config::ConfigFileState::Skipped,
-          "disabled user config is reported as skipped");
+    check(system_only.loaded_paths.size() == 2 &&
+              system_only.loaded_paths[0].find("editor-commands.conf") != std::string::npos &&
+              system_only.loaded_paths[1] == system_home + "/pkchat/config.conf",
+          "disabling user config still loads bundled editor commands and system config");
+    bool skipped_user_config = false;
+    for (const pkchat::config::ConfigDiagnostic& diagnostic : system_only.diagnostics) {
+        if (diagnostic.scope == pkchat::config::ConfigScope::User &&
+            diagnostic.kind == pkchat::config::ConfigFileKind::Config &&
+            diagnostic.state == pkchat::config::ConfigFileState::Skipped) {
+            skipped_user_config = true;
+        }
+    }
+    check(skipped_user_config, "disabled user config is reported as skipped");
 
     const char* argv[] = {"pkchat", "--no-stream", "--nocolors"};
     pkchat::cli::ParseResult cli =
@@ -350,10 +366,80 @@ void test_config_xdg_path_resolution() {
     pkchat::config::Environment environment{"relative", "/high:relative:/low", "/home/tester"};
     check(pkchat::config::user_config_path(environment) == "/home/tester/.config/pkchat/config.conf",
           "relative XDG_CONFIG_HOME falls back to HOME");
+    check(pkchat::config::user_editor_commands_path(environment) ==
+              "/home/tester/.config/pkchat/editor-commands.conf",
+          "relative XDG_CONFIG_HOME falls back to HOME for editor commands");
     const std::vector<std::string> system = pkchat::config::system_config_paths(environment);
     check(system.size() == 2 && system[0] == "/low/pkchat/config.conf" &&
               system[1] == "/high/pkchat/config.conf",
           "system config directories load in reverse order and ignore relative entries");
+    const std::vector<std::string> editor_commands =
+        pkchat::config::system_editor_commands_paths(environment);
+    check(editor_commands.size() == 2 &&
+              editor_commands[0] == "/low/pkchat/editor-commands.conf" &&
+              editor_commands[1] == "/high/pkchat/editor-commands.conf",
+          "system editor-commands directories load in reverse order and ignore relative entries");
+}
+
+void test_editor_commands_config() {
+    pkchat::config::ParseResult parsed = pkchat::config::read_file("config/editor-commands.conf");
+    check(parsed.error.ok(), "editor-commands.conf parses");
+    pkchat::cli::Options options;
+    pkchat::Error err = pkchat::config::apply_editor_commands_document(parsed.document, options);
+    check(err.ok(), "editor-commands.conf applies");
+    const pkchat::editor::EditorAssistCommand* spell =
+        pkchat::editor::find_assist_command(options.editor_assist_config, "/spell");
+    const pkchat::editor::EditorAssistCommand* continue_command =
+        pkchat::editor::find_assist_command(options.editor_assist_config, "/continue");
+    check(spell != nullptr && continue_command != nullptr,
+          "editor-commands.conf defines built-in assist commands");
+    check(options.editor_assist_config.behavior_rules.find("one-shot") != std::string::npos,
+          "editor-commands.conf defines assist behavior rules");
+
+    pkchat::config::ParseResult invalid = pkchat::config::parse("provider = openai\n", "bad-editor.conf");
+    check(invalid.error.ok(), "invalid editor-commands fixture parses");
+    err = pkchat::config::apply_editor_commands_document(invalid.document, options);
+    check(!err.ok() && err.message.find("unknown editor-commands setting") != std::string::npos,
+          "editor-commands.conf rejects unrelated settings");
+
+    const std::string system_home =
+        std::filesystem::absolute("build/config-editor-system").lexically_normal().string();
+    std::filesystem::create_directories(system_home + "/pkchat");
+    {
+        std::ofstream system_commands(system_home + "/pkchat/editor-commands.conf", std::ios::trunc);
+        check(system_commands.is_open(), "system editor-commands test file opens");
+        system_commands << "[command]\nstring = /spell\nmodes = selection, all\n"
+                           "prompt = \"System spell override\"\n";
+        system_commands.close();
+        check(system_commands.good(), "system editor-commands test file is written");
+    }
+    const std::string config_home =
+        std::filesystem::absolute("build/config-editor-user").lexically_normal().string();
+    std::filesystem::create_directories(config_home + "/pkchat");
+    {
+        std::ofstream user_commands(config_home + "/pkchat/editor-commands.conf", std::ios::trunc);
+        check(user_commands.is_open(), "user editor-commands test file opens");
+        user_commands << "[command]\nstring = /spell\nmodes = selection, all\n"
+                         "prompt = \"User spell override\"\n";
+        user_commands.close();
+        check(user_commands.good(), "user editor-commands test file is written");
+    }
+    pkchat::config::Environment environment{config_home, system_home, "/nonexistent"};
+    pkchat::config::LoadResult loaded = pkchat::config::load_automatic(pkchat::cli::Options{}, environment);
+    check(loaded.error.ok(), "automatic loading with editor-commands overrides succeeds");
+    const pkchat::editor::EditorAssistCommand* overridden_spell =
+        pkchat::editor::find_assist_command(loaded.options.editor_assist_config, "/spell");
+    check(overridden_spell != nullptr && overridden_spell->prompt == "User spell override",
+          "user editor-commands.conf overrides system editor-commands.conf");
+
+    pkchat::config::ParseResult config_override = pkchat::config::parse(
+        "[editor]\nassist_spell = \"Config spell override\"\n", "config-spell.conf");
+    check(config_override.error.ok(), "config assist_spell override parses");
+    err = pkchat::config::apply_document(config_override.document, loaded.options);
+    overridden_spell = pkchat::editor::find_assist_command(loaded.options.editor_assist_config, "/spell");
+    check(err.ok() && overridden_spell != nullptr &&
+              overridden_spell->prompt == "Config spell override",
+          "config.conf assist_spell overrides editor-commands.conf");
 }
 
 void test_config_empty_and_numeric_edge_cases() {
@@ -395,6 +481,7 @@ void run_all() {
     test_config_rejects_invalid_input();
     test_config_schema_rejects_invalid_settings_transactionally();
     test_config_xdg_path_resolution();
+    test_editor_commands_config();
 }
 
 }  // namespace pkchat::test::config

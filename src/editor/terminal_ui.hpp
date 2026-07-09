@@ -6,6 +6,7 @@
 
 #include "editor/editor.hpp"
 #include "editor/editor_assist.hpp"
+#include "editor/path_completion.hpp"
 #include "tui/activity.hpp"
 
 namespace pkchat::editor {
@@ -109,7 +110,8 @@ void minibuffer_message(MinibufferState& minibuffer, std::string message);
 void start_minibuffer(MinibufferState& minibuffer,
                       MinibufferAction action,
                       std::string prompt,
-                      std::string initial = "");
+                      std::string initial = "",
+                      PathCompleter* path_completer = nullptr);
 
 bool confirm_huge_load_before_terminal(const std::string& path, const FileLoadCheck& check);
 
@@ -134,7 +136,8 @@ bool handle_minibuffer_key(EditorState& state,
                            std::string& pending_load_path,
                            bool& pending_quit_after_save,
                            PendingSaveRequest& pending_save,
-                           PendingAutosaveRecovery& pending_autosave_recovery);
+                           PendingAutosaveRecovery& pending_autosave_recovery,
+                           PathCompleter& path_completer);
 
 bool handle_replace_key(EditorState& state,
                         MinibufferState& minibuffer,

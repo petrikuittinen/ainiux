@@ -1,5 +1,7 @@
 #include "editor/path_completion.hpp"
 
+#include "common.hpp"
+
 #include <algorithm>
 #include <cstdlib>
 #include <filesystem>
@@ -118,16 +120,7 @@ std::string longest_common_prefix(const std::vector<std::string>& values) {
 }
 
 std::filesystem::path expanded_scan_path(const std::string& path) {
-    if (path == "~" || path.rfind("~/", 0) == 0) {
-        const char* home = std::getenv("HOME");
-        if (home != nullptr && *home != '\0') {
-            if (path.size() <= 2) {
-                return std::filesystem::path(home);
-            }
-            return std::filesystem::path(home) / path.substr(2);
-        }
-    }
-    return std::filesystem::path(path);
+    return std::filesystem::path(expand_user_path(path));
 }
 
 Error find_candidates(const std::string& token,
@@ -436,6 +429,16 @@ PathCompletionResult ContextualCompleter::complete_command(EditorState& state) {
     } else {
         command_candidates_.clear();
     }
+    return result;
+}
+
+PathCompletionResult complete_path_input(std::string& input,
+                                         PathCompleter& completer,
+                                         const std::function<bool()>& cancelled) {
+    EditorState state = EditorState::from_text(input);
+    state.cursor = input.size();
+    PathCompletionResult result = completer.complete(state, cancelled);
+    input = state.text.str();
     return result;
 }
 

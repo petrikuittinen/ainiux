@@ -282,6 +282,10 @@ const std::vector<AssistCommandMode>& default_builtin_assist_modes() {
     return modes;
 }
 
+EditorAssistConfig empty_editor_assist_config() {
+    return {};
+}
+
 EditorAssistConfig default_editor_assist_config() {
     EditorAssistConfig config;
     config.behavior_rules = kDefaultAssistBehaviorRules;

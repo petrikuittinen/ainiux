@@ -201,14 +201,15 @@ Error read_file(const std::string& path, std::string& out) {
         out = ss.str();
         return ok_error();
     }
-    std::ifstream file(path, std::ios::binary);
+    const std::string resolved = expand_user_path(path);
+    std::ifstream file(resolved, std::ios::binary);
     if (!file) {
-        return {ErrorCode::FileRead, "could not open file for reading: " + path};
+        return {ErrorCode::FileRead, "could not open file for reading: " + resolved};
     }
     std::ostringstream ss;
     ss << file.rdbuf();
     if (file.bad()) {
-        return {ErrorCode::FileRead, "could not read file: " + path};
+        return {ErrorCode::FileRead, "could not read file: " + resolved};
     }
     out = ss.str();
     return ok_error();

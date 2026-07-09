@@ -1,3 +1,4 @@
+#include "common.hpp"
 #include "editor/autosave.hpp"
 #include "editor/editor.hpp"
 #include "editor/ai_continue.hpp"
@@ -8,6 +9,7 @@
 #include "editor/editor_help.hpp"
 #include "editor/editor_picker.hpp"
 #include "editor/model_list_runtime.hpp"
+#include "editor/path_completion.hpp"
 #include "editor/terminal_input.hpp"
 #include "editor/terminal_ui.hpp"
 #include "runtime/runtime.hpp"
@@ -86,24 +88,25 @@ int run_editor(const std::string& path,
                const EditorAssistConfig& assist_config) {
     EditorState state;
     state.set_undo_limit(settings.undo_limit);
-    state.path = path.empty() ? save_as : path;
+    const std::string initial_path = expand_user_path(path.empty() ? save_as : path);
+    state.path = initial_path;
     std::string status = "Ready";
-    if (!path.empty() && access(path.c_str(), F_OK) == 0) {
+    if (!initial_path.empty() && access(initial_path.c_str(), F_OK) == 0) {
         FileLoadCheck check;
-        Error err = check_load_file_size(path, settings, check);
+        Error err = check_load_file_size(initial_path, settings, check);
         if (!err.ok()) {
             std::cerr << error_code_name(err.code) << ": " << err.message << "\n";
             return 5;
         }
-        if (check.should_warn && !confirm_huge_load_before_terminal(path, check)) {
-            std::cerr << "Editor load cancelled: " << path << "\n";
+        if (check.should_warn && !confirm_huge_load_before_terminal(initial_path, check)) {
+            std::cerr << "Editor load cancelled: " << initial_path << "\n";
             return 5;
         }
-        const AutosaveRecoveryOffer recovery_offer = check_autosave_recovery_offer(path, settings);
+        const AutosaveRecoveryOffer recovery_offer = check_autosave_recovery_offer(initial_path, settings);
         const bool recover_autosave =
             recovery_offer.should_offer &&
-            confirm_autosave_recovery_before_terminal(path, recovery_offer.autosave_path);
-        const std::string& load_path = recover_autosave ? recovery_offer.autosave_path : path;
+            confirm_autosave_recovery_before_terminal(initial_path, recovery_offer.autosave_path);
+        const std::string& load_path = recover_autosave ? recovery_offer.autosave_path : initial_path;
         err = load_file(load_path, settings, state.text);
         if (!err.ok()) {
             std::cerr << error_code_name(err.code) << ": " << err.message << "\n";
@@ -115,8 +118,8 @@ int run_editor(const std::string& path,
         } else {
             status = "Loaded";
         }
-    } else if (!path.empty()) {
-        Error create_err = ensure_empty_file(path);
+    } else if (!initial_path.empty()) {
+        Error create_err = ensure_empty_file(initial_path);
         if (!create_err.ok()) {
             std::cerr << error_code_name(create_err.code) << ": " << create_err.message << "\n";
             return 5;
@@ -146,6 +149,7 @@ int run_editor(const std::string& path,
     AssistSession assist_session;
     StoredAssistCommand last_assist_command;
     AssistCompleterState assist_completer;
+    PathCompleter minibuffer_path_completer;
     PendingAssist pending_assist;
     HelpViewSession help_view;
     bool buffer_list_active = false;
@@ -576,6 +580,7 @@ int run_editor(const std::string& path,
         if (ch == 27 || ch == 7) {
             pending_load_path.clear();
             pending_autosave_recovery = PendingAutosaveRecovery{};
+            minibuffer_path_completer.reset();
             minibuffer_message(minibuffer, "Open cancelled");
             return true;
         }
@@ -617,7 +622,7 @@ int run_editor(const std::string& path,
             return true;
         }
         if (ch == '\r' || ch == '\n') {
-            const std::string open_path = trim_ascii_copy(minibuffer.input);
+            const std::string open_path = expand_user_path(trim_ascii_copy(minibuffer.input));
             if (open_path.empty()) {
                 minibuffer.prompt = "Open file (path required): ";
                 return true;
@@ -628,15 +633,27 @@ int run_editor(const std::string& path,
         if (ch == 127 || ch == 8) {
             if (!minibuffer.input.empty()) {
                 minibuffer.input.pop_back();
+                if (minibuffer.action == MinibufferAction::LoadFile) {
+                    minibuffer_path_completer.reset();
+                }
             }
             return true;
         }
-        if (ch == '\t') {
-            minibuffer.prompt = "Tab completion disabled; enter path: ";
+        if (ch == '\t' && minibuffer.action == MinibufferAction::LoadFile) {
+            const PathCompletionResult result =
+                complete_path_input(minibuffer.input, minibuffer_path_completer);
+            minibuffer.message = path_completion_status(result);
             return true;
         }
         if (ch >= 0x20U) {
             minibuffer.input.push_back(static_cast<char>(ch));
+            if (minibuffer.action == MinibufferAction::LoadFile) {
+                EditorState temp = EditorState::from_text(minibuffer.input);
+                temp.cursor = minibuffer.input.size();
+                if (!minibuffer_path_completer.can_cycle(temp)) {
+                    minibuffer_path_completer.reset();
+                }
+            }
             return true;
         }
         return true;
@@ -798,7 +815,11 @@ int run_editor(const std::string& path,
 
     auto trigger_save = [&]() {
         if (state.path.empty()) {
-            start_minibuffer(minibuffer, MinibufferAction::SaveFile, "Save file: ");
+            start_minibuffer(minibuffer,
+                             MinibufferAction::SaveFile,
+                             "Save file: ",
+                             "",
+                             &minibuffer_path_completer);
         } else {
             request_save_editor_to_path(state, state.path, minibuffer, true, false, quit, pending_save, settings);
         }
@@ -821,7 +842,11 @@ int run_editor(const std::string& path,
                 pending_assist = PendingAssist{};
                 exit_assist_command_mode(minibuffer, assist_completer);
                 if (slash.path.empty()) {
-                    start_minibuffer(minibuffer, MinibufferAction::SaveAsFile, "Save as: ", state.path);
+                    start_minibuffer(minibuffer,
+                                     MinibufferAction::SaveAsFile,
+                                     "Save as: ",
+                                     state.path,
+                                     &minibuffer_path_completer);
                 } else {
                     request_save_editor_to_path(state, slash.path, minibuffer, true, false, quit, pending_save,
                                                 settings);
@@ -841,7 +866,11 @@ int run_editor(const std::string& path,
                 pending_assist = PendingAssist{};
                 exit_assist_command_mode(minibuffer, assist_completer);
                 if (slash.path.empty()) {
-                    start_minibuffer(minibuffer, MinibufferAction::LoadFile, "Open file: ");
+                    start_minibuffer(minibuffer,
+                                     MinibufferAction::LoadFile,
+                                     "Open file: ",
+                                     "",
+                                     &minibuffer_path_completer);
                 } else {
                     request_open_buffer_from_path(slash.path);
                 }
@@ -981,7 +1010,8 @@ int run_editor(const std::string& path,
                                       pending_load_path,
                                       pending_quit_after_save,
                                       pending_save,
-                                      pending_autosave_recovery)) {
+                                      pending_autosave_recovery,
+                                      minibuffer_path_completer)) {
                 return;
             }
             if (minibuffer.active && is_assist_minibuffer_action(minibuffer.action)) {
@@ -1204,7 +1234,8 @@ int run_editor(const std::string& path,
                                   pending_load_path,
                                   pending_quit_after_save,
                                   pending_save,
-                                  pending_autosave_recovery)) {
+                                  pending_autosave_recovery,
+                                  minibuffer_path_completer)) {
             return;
         }
         if (handle_replace_key(state, minibuffer, replace, ch)) {
@@ -1265,7 +1296,11 @@ int run_editor(const std::string& path,
         } else if (ch == 14) {
             new_empty_buffer();
         } else if (ch == 15) {
-            start_minibuffer(minibuffer, MinibufferAction::LoadFile, "Open file: ");
+            start_minibuffer(minibuffer,
+                             MinibufferAction::LoadFile,
+                             "Open file: ",
+                             "",
+                             &minibuffer_path_completer);
         } else if (ch == 0) {
             start_continue();
         } else if (ch == 19) {
@@ -1275,9 +1310,13 @@ int run_editor(const std::string& path,
         } else if (ch == 23) {
             close_active_buffer(false);
         } else if (ch == editor_key_save_as()) {
-            start_minibuffer(minibuffer, MinibufferAction::SaveAsFile, "Save as: ", state.path);
+            start_minibuffer(minibuffer,
+                             MinibufferAction::SaveAsFile,
+                             "Save as: ",
+                             state.path,
+                             &minibuffer_path_completer);
         } else if (ch == '\t') {
-            minibuffer_message(minibuffer, "Tab completion is disabled in editor mode");
+            minibuffer_message(minibuffer, "Tab completion is not active here");
         } else if (ch == 27) {
             if (!minibuffer.active && !replace.active && !assist_session.active) {
                 const std::string sequence = read_escape_suffix();

@@ -69,6 +69,28 @@ std::string ascii_lower(std::string text) {
     return text;
 }
 
+std::string expand_user_path(std::string path) {
+    if (path.empty() || path == "-" || path == "stdin") {
+        return path;
+    }
+    if (path == "~") {
+        if (const char* home = std::getenv("HOME")) {
+            if (*home != '\0') {
+                return home;
+            }
+        }
+        return path;
+    }
+    if (path.rfind("~/", 0) == 0) {
+        if (const char* home = std::getenv("HOME")) {
+            if (*home != '\0') {
+                return std::string(home) + path.substr(1);
+            }
+        }
+    }
+    return path;
+}
+
 std::vector<std::string> split_lines_crlf(const std::string& input) {
     std::vector<std::string> lines;
     size_t start = 0;

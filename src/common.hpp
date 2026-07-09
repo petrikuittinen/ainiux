@@ -42,6 +42,7 @@ const char* error_code_name(ErrorCode code);
 
 std::string ascii_trim(std::string text);
 std::string ascii_lower(std::string text);
+std::string expand_user_path(std::string path);
 std::vector<std::string> split_lines_crlf(const std::string& input);
 int positive_int_from_env(const char* name, int default_value);
 size_t positive_size_from_env(const char* name, size_t default_value);

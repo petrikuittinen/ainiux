@@ -24,7 +24,9 @@ void print_config_diagnostics(const config::LoadResult& configured) {
                 state = "path unavailable";
                 break;
         }
-        std::cerr << "Config debug: " << state << " " << scope << " config";
+        const char* kind =
+            diagnostic.kind == config::ConfigFileKind::EditorCommands ? "editor commands" : "config";
+        std::cerr << "Config debug: " << state << " " << scope << " " << kind;
         if (!diagnostic.path.empty()) {
             std::cerr << ": " << diagnostic.path;
         }

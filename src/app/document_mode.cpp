@@ -1,5 +1,7 @@
 #include "app/app.hpp"
 
+#include "common.hpp"
+
 #include <array>
 #include <fstream>
 #include <iostream>
@@ -20,12 +22,13 @@ Error read_local_file(const std::string& path,
                       const std::string& description,
                       size_t max_bytes,
                       std::string& body) {
+    const std::string resolved = expand_user_path(path);
     std::ifstream file;
     std::istream* input = &std::cin;
-    if (path != "stdin") {
-        file.open(path, std::ios::binary);
+    if (resolved != "stdin") {
+        file.open(resolved, std::ios::binary);
         if (!file) {
-            return {ErrorCode::FileRead, "could not open " + description + " for reading: " + path};
+            return {ErrorCode::FileRead, "could not open " + description + " for reading: " + resolved};
         }
         input = &file;
     }
@@ -42,13 +45,13 @@ Error read_local_file(const std::string& path,
         if (loaded.size() > max_bytes || chunk_size > max_bytes - loaded.size()) {
             return {ErrorCode::UnsupportedFeature,
                     description + " exceeds --max-input-bytes limit of " + std::to_string(max_bytes) +
-                        " bytes: " + (path == "stdin" ? std::string("stdin") : path)};
+                        " bytes: " + (resolved == "stdin" ? std::string("stdin") : resolved)};
         }
         loaded.append(buffer.data(), chunk_size);
     }
     if (input->bad()) {
         return {ErrorCode::FileRead,
-                "could not read " + description + (path == "stdin" ? std::string(" from stdin") : ": " + path)};
+                "could not read " + description + (resolved == "stdin" ? std::string(" from stdin") : ": " + resolved)};
     }
     body = std::move(loaded);
     return ok_error();
