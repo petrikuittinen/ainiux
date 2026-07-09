@@ -12,6 +12,7 @@
 #include "search/search.hpp"
 #include "tui/activity.hpp"
 #include "tui/input_handlers.hpp"
+#include "ui/text_selector.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -192,8 +193,7 @@ int run_editor(const std::string& path,
     };
 
     auto selected_buffer_status = [&]() {
-        return "Selected buffer " + std::to_string(buffer_list_selected + 1) + "/" +
-               std::to_string(buffers.size());
+        return ui::text_selector_status("Selected buffer", buffer_list_selected, buffers.size());
     };
 
     auto refresh_buffer_list_view = [&]() {
@@ -490,9 +490,10 @@ int run_editor(const std::string& path,
         picker_list_active = true;
         buffer_list_active = false;
         minibuffer_message(minibuffer,
-                           picker_items.empty() ? "No providers available"
-                                                : "Selected provider 1/" +
-                                                      std::to_string(picker_items.size()));
+                           picker_items.empty()
+                               ? "No providers available"
+                               : ui::text_selector_status("Selected provider", picker_selected,
+                                                          picker_items.size()));
     };
 
     auto start_model_list = [&]() {
@@ -531,7 +532,7 @@ int run_editor(const std::string& path,
         minibuffer_message(minibuffer,
                            picker_items.empty()
                                ? "No models returned"
-                               : "Selected model 1/" + std::to_string(picker_items.size()));
+                               : ui::text_selector_status("Selected model", picker_selected, picker_items.size()));
     };
 
     auto handle_provider_command = [&](const std::string& target) {
@@ -585,8 +586,7 @@ int run_editor(const std::string& path,
                 move_editor_buffer_selection(picker_selected, picker_items.size(), movement.key);
             const std::string label = picker_for_provider ? "Selected provider" : "Selected model";
             minibuffer_message(minibuffer,
-                               label + " " + std::to_string(picker_selected + 1) + "/" +
-                                   std::to_string(picker_items.size()));
+                               ui::text_selector_status(label, picker_selected, picker_items.size()));
             return;
         }
         cancel_picker_list();

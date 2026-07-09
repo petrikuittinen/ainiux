@@ -19,6 +19,7 @@
 #include "security/test_security.hpp"
 #include "support/test_support.hpp"
 #include "tui/test_tui.hpp"
+#include "ui/test_text_selector.hpp"
 
 int main() {
     pkchat::test::output::run_all();
@@ -37,6 +38,7 @@ int main() {
     pkchat::test::chat::run_all();
     pkchat::test::runtime::run_all();
     pkchat::test::security::run_all();
+    pkchat::test::ui::run_all();
     pkchat::test::editor::run_all();
     pkchat::test::tui::run_all();
 

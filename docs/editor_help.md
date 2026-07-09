@@ -1,4 +1,4 @@
-# pkchat Editor Help v0.91
+# pkchat Editor Help v0.92
 
 Standalone editor mode (`pkchat --editor [PATH]`) is a multiline text editor with Unicode-aware navigation, search/replace, and optional AI assist when a provider and model are configured.
 

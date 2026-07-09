@@ -13,9 +13,6 @@
 namespace pkchat::tui {
 
 std::vector<std::string> selectable_provider_ids();
-std::string list_picker_text(const std::string& hint,
-                             const std::vector<std::string>& items,
-                             size_t selected);
 std::string provider_picker_text(const std::vector<std::string>& provider_ids, size_t selected);
 std::string model_picker_text(const std::vector<std::string>& models, size_t selected);
 std::string thread_picker_text(const std::vector<chat::ThreadSummary>& threads, size_t selected);

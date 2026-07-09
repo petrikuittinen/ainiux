@@ -20,6 +20,7 @@
 #include "search/search.hpp"
 #include "input/input.hpp"
 #include "runtime/runtime.hpp"
+#include "ui/text_selector.hpp"
 
 #include <cerrno>
 #include <cstring>
@@ -92,10 +93,13 @@ int run(provider::RequestContext context, chat::Session session) {
         pending_images.clear();
         inflight_image_count = 0;
         history_scroll = 0;
-        if (loaded_session_differs_from_cli(cli_context, session)) {
-            restore_cli_context(context, cli_context);
-            show_thinking_traces = context.options.show_thinking_traces;
+        if (loaded_session_differs_from_context(context, session)) {
             mode = TuiMode::ModelConfirm;
+            status = loaded_label;
+            return;
+        }
+        if (active_context_has_provider_selection(context)) {
+            app::refresh_session_metadata(session, context);
             status = loaded_label;
             return;
         }
@@ -127,7 +131,7 @@ int run(provider::RequestContext context, chat::Session session) {
             return remove_confirm_text(session);
         }
         if (mode == TuiMode::ModelConfirm) {
-            return model_confirm_text(cli_context, session);
+            return model_confirm_text(context, session);
         }
         if (mode == TuiMode::SystemEdit) {
             return system_edit_text();
@@ -528,8 +532,9 @@ int run(provider::RequestContext context, chat::Session session) {
         history_scroll = 0;
         help_text.clear();
         settings_text.clear();
-        status = picker_items.empty() ? "No providers available"
-                                      : "Selected provider 1/" + std::to_string(picker_items.size());
+        status = picker_items.empty()
+                     ? "No providers available"
+                     : ui::text_selector_status("Selected provider", picker_selected, picker_items.size());
     };
 
     auto refresh_startup_status = [&]() {
@@ -743,7 +748,8 @@ int run(provider::RequestContext context, chat::Session session) {
         thread_picker_selected = 0;
         mode = TuiMode::ThreadList;
         history_scroll = 0;
-        status = "Selected thread 1/" + std::to_string(thread_picker_threads.size());
+        status = ui::text_selector_status("Selected thread", thread_picker_selected,
+                                          thread_picker_threads.size());
     };
 
     auto start_new_chat_thread = [&](const std::string& name = "") -> bool {
@@ -1319,7 +1325,8 @@ int run(provider::RequestContext context, chat::Session session) {
                             history_scroll = 0;
                             help_text.clear();
                             settings_text.clear();
-                            status = "Selected model 1/" + std::to_string(picker_items.size());
+                            status = ui::text_selector_status("Selected model", picker_selected,
+                                                              picker_items.size());
                         }
                     } else {
                         status = event.error.ok() ? join_models_preview(event.models)
@@ -1485,22 +1492,23 @@ int run(provider::RequestContext context, chat::Session session) {
                     if (model_confirm_shortcut && (ch == 27 || ch == 'n' || ch == 'N')) {
                         Error context_error = apply_loaded_session_context(session);
                         mode = TuiMode::Chat;
-                        status = context_error.ok() ? "Using thread model: " + session.model
+                        status = context_error.ok() ? "Using thread model: " + context.options.model
                                                     : detail::error_line(context_error);
                         start_store_save();
                         continue;
                     }
                     if (model_confirm_shortcut && (ch == 'y' || ch == 'Y')) {
-                        restore_cli_context(context, cli_context);
-                        show_thinking_traces = context.options.show_thinking_traces;
                         app::refresh_session_metadata(session, context);
                         mode = TuiMode::Chat;
-                        status = "Using command-line model: " + context.options.model;
+                        status = context.options.model.empty()
+                                     ? "Using current provider: " +
+                                           provider::display_name_for_profile(context.profile.name)
+                                     : "Using current model: " + context.options.model;
                         start_store_save();
                         continue;
                     }
                     if (model_confirm_shortcut && ch != '/' && ch != '\r' && ch != '\n' && ch < 32) {
-                        status = "Press y to use command-line model, n or Esc to keep thread model";
+                        status = "Press y to keep current provider/model, n or Esc to use thread model";
                         continue;
                     }
                 }

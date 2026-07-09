@@ -3,8 +3,9 @@
 #include "tui/detail/render.hpp"
 
 #include "editor/selection.hpp"
-#include "provider/provider.hpp"
 #include "editor/terminal_input.hpp"
+#include "provider/provider.hpp"
+#include "ui/text_selector.hpp"
 
 #include <sstream>
 
@@ -97,20 +98,36 @@ std::vector<std::string> selectable_provider_ids() {
     return providers;
 }
 
-std::string list_picker_text(const std::string& hint,
-                             const std::vector<std::string>& items,
-                             size_t selected) {
+namespace {
+
+std::string thread_summary_label(const chat::ThreadSummary& thread) {
     std::ostringstream out;
-    out << hint << "\n";
-    for (size_t i = 0; i < items.size(); ++i) {
-        out << (i == selected ? u8"› " : "  ");
-        out << items[i];
-        if (i + 1 != items.size()) {
-            out << "\n";
+    out << thread.name;
+    if (!thread.last_provider.empty() || !thread.last_model.empty()) {
+        out << " [";
+        if (!thread.last_provider.empty()) {
+            out << provider::display_name_for_profile(thread.last_provider);
         }
+        if (!thread.last_model.empty()) {
+            if (!thread.last_provider.empty()) {
+                out << " / ";
+            }
+            out << thread.last_model;
+        }
+        out << "]";
     }
+    out << " · " << thread.modified_at;
+    out << " · " << thread.message_count << " msgs";
     return out.str();
 }
+
+ui::TextSelectorConfig standard_picker_config(const char* header) {
+    ui::TextSelectorConfig config;
+    config.header = header;
+    return config;
+}
+
+}  // namespace
 
 std::string provider_picker_text(const std::vector<std::string>& provider_ids, size_t selected) {
     std::vector<std::string> labels;
@@ -118,40 +135,16 @@ std::string provider_picker_text(const std::vector<std::string>& provider_ids, s
     for (const std::string& provider_id : provider_ids) {
         labels.push_back(provider::display_name_for_profile(provider_id));
     }
-    return list_picker_text("↑↓ move · Enter select · Esc cancel", labels, selected);
+    return ui::render_text_selector(standard_picker_config(ui::kTextSelectorStandardHint), selected, labels);
 }
 
 std::string model_picker_text(const std::vector<std::string>& models, size_t selected) {
-    return list_picker_text("↑↓ move · Enter select · Esc cancel", models, selected);
+    return ui::render_text_selector(standard_picker_config(ui::kTextSelectorStandardHint), selected, models);
 }
 
 std::string thread_picker_text(const std::vector<chat::ThreadSummary>& threads, size_t selected) {
-    std::ostringstream out;
-    out << "Newest first · Enter opens · N new · Esc cancels\n";
-    for (size_t i = 0; i < threads.size(); ++i) {
-        const chat::ThreadSummary& thread = threads[i];
-        out << (i == selected ? u8"› " : "  ");
-        out << thread.name;
-        if (!thread.last_provider.empty() || !thread.last_model.empty()) {
-            out << " [";
-            if (!thread.last_provider.empty()) {
-                out << provider::display_name_for_profile(thread.last_provider);
-            }
-            if (!thread.last_model.empty()) {
-                if (!thread.last_provider.empty()) {
-                    out << " / ";
-                }
-                out << thread.last_model;
-            }
-            out << "]";
-        }
-        out << " · " << thread.modified_at;
-        out << " · " << thread.message_count << " msgs";
-        if (i + 1 != threads.size()) {
-            out << "\n";
-        }
-    }
-    return out.str();
+    return ui::render_text_selector(standard_picker_config(ui::kTextSelectorThreadHint), selected, threads.size(),
+                                    [&](size_t index) { return thread_summary_label(threads[index]); });
 }
 
 std::string remove_confirm_text(const chat::Session& session) {
@@ -258,34 +251,8 @@ PickerEscapeResult handle_list_picker_escape(size_t item_count,
     if (!editor::parse_movement_sequence(sequence, movement) || item_count == 0) {
         return PickerEscapeResult::Cancelled;
     }
-    switch (movement.key) {
-        case editor::MovementKey::Up:
-            if (selected > 0) {
-                --selected;
-            }
-            break;
-        case editor::MovementKey::Down:
-            if (selected + 1 < item_count) {
-                ++selected;
-            }
-            break;
-        case editor::MovementKey::PageUp:
-            selected = selected > 10 ? selected - 10 : 0;
-            break;
-        case editor::MovementKey::PageDown:
-            selected = std::min(item_count - 1, selected + 10);
-            break;
-        case editor::MovementKey::Home:
-            selected = 0;
-            break;
-        case editor::MovementKey::End:
-            selected = item_count - 1;
-            break;
-        case editor::MovementKey::Left:
-        case editor::MovementKey::Right:
-            break;
-    }
-    status = selection_label + " " + std::to_string(selected + 1) + "/" + std::to_string(item_count);
+    selected = ui::move_text_selector_selection(selected, item_count, movement.key);
+    status = ui::text_selector_status(selection_label, selected, item_count);
     return PickerEscapeResult::Navigated;
 }
 

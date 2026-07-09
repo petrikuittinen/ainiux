@@ -53,24 +53,35 @@ std::string format_provider_model_line(const std::string& provider_name, const s
 
 }  // namespace
 
-bool loaded_session_differs_from_cli(const provider::RequestContext& cli_context,
-                                     const chat::Session& loaded) {
+bool active_context_has_provider_selection(const provider::RequestContext& active) {
+    return !active.profile.offline;
+}
+
+bool loaded_session_differs_from_context(const provider::RequestContext& active,
+                                         const chat::Session& loaded) {
+    if (!active_context_has_provider_selection(active)) {
+        return false;
+    }
     const bool provider_differs = !loaded.provider.empty() &&
                                   canonical_provider_key(loaded.provider) !=
-                                      canonical_provider_key(cli_context.profile.name);
-    const bool model_differs = !cli_context.options.model.empty() && !loaded.model.empty() &&
-                               loaded.model != cli_context.options.model;
+                                      canonical_provider_key(active.profile.name);
+    const bool model_differs = !active.options.model.empty() && !loaded.model.empty() &&
+                               loaded.model != active.options.model;
     return provider_differs || model_differs;
 }
 
-std::string model_confirm_text(const provider::RequestContext& cli_context,
+bool loaded_session_differs_from_cli(const provider::RequestContext& cli_context,
+                                     const chat::Session& loaded) {
+    return loaded_session_differs_from_context(cli_context, loaded);
+}
+
+std::string model_confirm_text(const provider::RequestContext& active,
                                const chat::Session& loaded) {
     std::ostringstream out;
     out << "Thread model: " << format_provider_model_line(loaded.provider, loaded.model) << "\n";
-    out << "Command line: " << format_provider_model_line(cli_context.profile.name, cli_context.options.model)
-        << "\n";
-    out << "Use new model? (yes, otherwise defaults to old model)\n";
-    out << "Press y for yes · n or Esc to keep thread model";
+    out << "Current: " << format_provider_model_line(active.profile.name, active.options.model) << "\n";
+    out << "Keep current provider and model?\n";
+    out << "Press y to keep current · n or Esc to use thread model";
     return out.str();
 }
 

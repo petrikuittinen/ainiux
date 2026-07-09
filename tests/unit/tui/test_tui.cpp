@@ -362,46 +362,66 @@ void test_tui_provider_and_model_picker_text() {
 }
 
 void test_tui_session_load_model_mismatch_detection() {
-    pkchat::provider::RequestContext cli_context;
-    cli_context.profile.name = "lm_studio";
-    cli_context.options.model = "qwen-local";
+    pkchat::provider::RequestContext active_context;
+    active_context.profile.name = "lm_studio";
+    active_context.options.model = "qwen-local";
 
     pkchat::chat::Session loaded;
     loaded.provider = "openai";
     loaded.model = "gpt-4";
-    check(pkchat::tui::loaded_session_differs_from_cli(cli_context, loaded),
-          "TUI session load detects provider and model mismatch against command line");
+    check(pkchat::tui::loaded_session_differs_from_context(active_context, loaded),
+          "TUI session load detects provider and model mismatch against active context");
 
     loaded.provider = "lm_studio";
     loaded.model = "qwen-local";
-    check(!pkchat::tui::loaded_session_differs_from_cli(cli_context, loaded),
+    check(!pkchat::tui::loaded_session_differs_from_context(active_context, loaded),
           "TUI session load accepts matching provider and model");
 
     loaded.provider = "lmstudio";
     loaded.model = "other-model";
-    check(pkchat::tui::loaded_session_differs_from_cli(cli_context, loaded),
+    check(pkchat::tui::loaded_session_differs_from_context(active_context, loaded),
           "TUI session load detects model mismatch for provider aliases");
 
-    cli_context.options.model.clear();
+    active_context.options.model.clear();
     loaded.model = "other-model";
+    check(!pkchat::tui::loaded_session_differs_from_context(active_context, loaded),
+          "TUI session load skips model prompt when active model is empty");
+
+    pkchat::provider::RequestContext offline_context;
+    offline_context.profile.name = "none";
+    offline_context.profile.offline = true;
+    loaded.provider = "openai";
+    loaded.model = "gpt-4";
+    check(!pkchat::tui::loaded_session_differs_from_context(offline_context, loaded),
+          "TUI session load skips mismatch prompt before provider selection");
+
+    active_context.profile.name = "lm_studio";
+    active_context.options.model = "qwen-local";
+    pkchat::provider::RequestContext cli_context = offline_context;
+    loaded.provider = "openai";
+    loaded.model = "gpt-4";
+    check(pkchat::tui::loaded_session_differs_from_context(active_context, loaded),
+          "TUI session load compares against in-session provider selection, not startup CLI");
     check(!pkchat::tui::loaded_session_differs_from_cli(cli_context, loaded),
-          "TUI session load skips model prompt when command line model is empty");
+          "TUI session load CLI helper still reflects startup defaults for compatibility");
 }
 
 void test_tui_session_load_model_confirm_text() {
-    pkchat::provider::RequestContext cli_context;
-    cli_context.profile.name = "lm_studio";
-    cli_context.options.model = "qwen-local";
+    pkchat::provider::RequestContext active_context;
+    active_context.profile.name = "lm_studio";
+    active_context.options.model = "qwen-local";
 
     pkchat::chat::Session loaded;
     loaded.provider = "openai";
     loaded.model = "gpt-4";
 
-    const std::string prompt = pkchat::tui::model_confirm_text(cli_context, loaded);
-    check(prompt.find("Use new model? (yes, otherwise defaults to old model)") != std::string::npos,
-          "TUI model confirm prompt asks whether to use the command-line model");
+    const std::string prompt = pkchat::tui::model_confirm_text(active_context, loaded);
+    check(prompt.find("Keep current provider and model?") != std::string::npos,
+          "TUI model confirm prompt asks whether to keep the active provider/model");
+    check(prompt.find("Current:") != std::string::npos,
+          "TUI model confirm prompt labels the active provider/model as current");
     check(prompt.find("gpt-4") != std::string::npos && prompt.find("qwen-local") != std::string::npos,
-          "TUI model confirm prompt shows thread and command-line models");
+          "TUI model confirm prompt shows thread and current models");
 }
 
 void test_tui_restore_cli_context() {
