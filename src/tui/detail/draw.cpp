@@ -1,6 +1,7 @@
 #include "tui/activity.hpp"
 #include "tui/detail/render.hpp"
 #include "tui/events.hpp"
+#include "tui/theme_registry.hpp"
 #include "tui/tui.hpp"
 
 #include "app/detail.hpp"
@@ -70,17 +71,9 @@ int displayed_cells(const std::string& text) {
     return cells;
 }
 
-std::string style_sequence(ThemeName theme, StyleRole role) {
-    const StylePair pair = style_pair_for(theme, role);
-    return "\x1b[38;2;" + std::to_string(pair.foreground.r) + ";" +
-           std::to_string(pair.foreground.g) + ";" + std::to_string(pair.foreground.b) +
-           "m\x1b[48;2;" + std::to_string(pair.background.r) + ";" +
-           std::to_string(pair.background.g) + ";" + std::to_string(pair.background.b) + "m";
-}
-
 void write_style(const RenderStyle& style, StyleRole role) {
-    if (style.colors) {
-        std::cout << style_sequence(style.theme, role);
+    if (style.colors && style.themes != nullptr) {
+        std::cout << style_sequence_for(*style.themes, style.theme_name, role);
     }
 }
 

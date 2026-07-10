@@ -6,6 +6,7 @@
 #include "editor/autosave.hpp"
 #include "editor/editor_prompts.hpp"
 #include "pkchat/model_setting.hpp"
+#include "tui/theme_registry.hpp"
 
 #include <array>
 #include <cerrno>
@@ -385,7 +386,7 @@ class Parser {
     std::map<std::string, size_t> repeatable_section_current_instance_;
 
     static bool is_repeatable_section(const std::string& name) {
-        return name == "command" || name == "Model-setting";
+        return name == "command" || name == "Model-setting" || name == "theme";
     }
 
     Error parse_line(const std::string& line,
@@ -764,6 +765,300 @@ Error apply_legacy_assist_prompt(const Entry& entry,
     return ok_error();
 }
 
+Error apply_theme_color_key(const Entry& entry, const std::string& key, tui::Rgb& out) {
+    Error err = require_type(entry, Value::Type::String);
+    if (!err.ok()) {
+        return err;
+    }
+    if (!tui::parse_rgb_color(entry.value.string, out)) {
+        return schema_error(entry, "expected color in #RRGGBB form for " + key);
+    }
+    return ok_error();
+}
+
+Error apply_configured_themes(const Document& document, cli::Options& candidate) {
+    struct PartialTheme {
+        std::optional<std::string> name;
+        std::optional<tui::Rgb> background;
+        std::optional<tui::Rgb> text;
+        std::optional<tui::Rgb> muted;
+        std::optional<tui::Rgb> thinking_trace;
+        std::optional<tui::Rgb> user_label;
+        std::optional<tui::Rgb> assistant_label;
+        std::optional<tui::Rgb> error;
+        std::optional<tui::Rgb> status_foreground;
+        std::optional<tui::Rgb> status_background;
+        std::optional<tui::Rgb> thinking_activity;
+        std::optional<tui::Rgb> streaming_activity;
+        std::optional<tui::Rgb> panel_title;
+        std::optional<tui::Rgb> panel_border;
+        std::optional<tui::Rgb> panel_hint;
+        std::optional<tui::Rgb> panel_highlight;
+        std::optional<tui::Rgb> panel_body;
+        std::optional<tui::Rgb> panel_background;
+        SourceLocation source;
+    };
+
+    std::map<size_t, PartialTheme> partial_themes;
+    for (const auto& item : document.entries) {
+        const std::string& name = item.first;
+        if (name.rfind("theme.", 0) != 0) {
+            continue;
+        }
+        const std::string tail = name.substr(std::string("theme.").size());
+        const size_t dot = tail.find('.');
+        if (dot == std::string::npos) {
+            continue;
+        }
+        size_t index = 0;
+        try {
+            index = static_cast<size_t>(std::stoul(tail.substr(0, dot)));
+        } catch (const std::exception&) {
+            continue;
+        }
+        const std::string key = tail.substr(dot + 1);
+        PartialTheme& partial = partial_themes[index];
+        if (partial.source.path.empty()) {
+            partial.source = item.second.source;
+        }
+        const Entry& entry = item.second;
+        tui::Rgb color{};
+        if (key == "name") {
+            Error err = require_type(entry, Value::Type::String);
+            if (!err.ok()) {
+                return err;
+            }
+            const std::string theme_name = trim_config_ascii(entry.value.string);
+            if (theme_name.empty()) {
+                return schema_error(entry, "name must not be empty");
+            }
+            partial.name = theme_name;
+        } else if (key == "background") {
+            Error err = apply_theme_color_key(entry, key, color);
+            if (!err.ok()) {
+                return err;
+            }
+            partial.background = color;
+        } else if (key == "text") {
+            Error err = apply_theme_color_key(entry, key, color);
+            if (!err.ok()) {
+                return err;
+            }
+            partial.text = color;
+        } else if (key == "muted") {
+            Error err = apply_theme_color_key(entry, key, color);
+            if (!err.ok()) {
+                return err;
+            }
+            partial.muted = color;
+        } else if (key == "thinking_trace") {
+            Error err = apply_theme_color_key(entry, key, color);
+            if (!err.ok()) {
+                return err;
+            }
+            partial.thinking_trace = color;
+        } else if (key == "user_label") {
+            Error err = apply_theme_color_key(entry, key, color);
+            if (!err.ok()) {
+                return err;
+            }
+            partial.user_label = color;
+        } else if (key == "assistant_label") {
+            Error err = apply_theme_color_key(entry, key, color);
+            if (!err.ok()) {
+                return err;
+            }
+            partial.assistant_label = color;
+        } else if (key == "error") {
+            Error err = apply_theme_color_key(entry, key, color);
+            if (!err.ok()) {
+                return err;
+            }
+            partial.error = color;
+        } else if (key == "status_foreground") {
+            Error err = apply_theme_color_key(entry, key, color);
+            if (!err.ok()) {
+                return err;
+            }
+            partial.status_foreground = color;
+        } else if (key == "status_background") {
+            Error err = apply_theme_color_key(entry, key, color);
+            if (!err.ok()) {
+                return err;
+            }
+            partial.status_background = color;
+        } else if (key == "thinking_activity") {
+            Error err = apply_theme_color_key(entry, key, color);
+            if (!err.ok()) {
+                return err;
+            }
+            partial.thinking_activity = color;
+        } else if (key == "streaming_activity") {
+            Error err = apply_theme_color_key(entry, key, color);
+            if (!err.ok()) {
+                return err;
+            }
+            partial.streaming_activity = color;
+        } else if (key == "panel_title") {
+            Error err = apply_theme_color_key(entry, key, color);
+            if (!err.ok()) {
+                return err;
+            }
+            partial.panel_title = color;
+        } else if (key == "panel_border") {
+            Error err = apply_theme_color_key(entry, key, color);
+            if (!err.ok()) {
+                return err;
+            }
+            partial.panel_border = color;
+        } else if (key == "panel_hint") {
+            Error err = apply_theme_color_key(entry, key, color);
+            if (!err.ok()) {
+                return err;
+            }
+            partial.panel_hint = color;
+        } else if (key == "panel_highlight") {
+            Error err = apply_theme_color_key(entry, key, color);
+            if (!err.ok()) {
+                return err;
+            }
+            partial.panel_highlight = color;
+        } else if (key == "panel_body") {
+            Error err = apply_theme_color_key(entry, key, color);
+            if (!err.ok()) {
+                return err;
+            }
+            partial.panel_body = color;
+        } else if (key == "panel_background") {
+            Error err = apply_theme_color_key(entry, key, color);
+            if (!err.ok()) {
+                return err;
+            }
+            partial.panel_background = color;
+        } else {
+            return schema_error(entry,
+                                "unknown [theme] key; expected name, background, text, muted, thinking_trace, "
+                                "user_label, assistant_label, error, status_foreground, status_background, "
+                                "thinking_activity, streaming_activity, panel_title, panel_border, panel_hint, "
+                                "panel_highlight, panel_body, or panel_background");
+        }
+    }
+
+    auto required_color = [&](const PartialTheme& partial, const std::optional<tui::Rgb>& value, const char* key) -> Error {
+        if (value.has_value()) {
+            return ok_error();
+        }
+        return {ErrorCode::Config,
+                partial.source.path + ":" + std::to_string(partial.source.line) + ":" +
+                    std::to_string(partial.source.column) + ": invalid config setting [theme] " +
+                    (partial.name.has_value() ? *partial.name : "<unnamed>") + ": " + key + " is required"};
+    };
+
+    for (const auto& item : partial_themes) {
+        const PartialTheme& partial = item.second;
+        if (!partial.name.has_value()) {
+            return {ErrorCode::Config,
+                    partial.source.path + ":" + std::to_string(partial.source.line) + ":" +
+                        std::to_string(partial.source.column) +
+                        ": invalid config setting [theme]: name is required"};
+        }
+        Error err = required_color(partial, partial.background, "background");
+        if (!err.ok()) {
+            return err;
+        }
+        err = required_color(partial, partial.text, "text");
+        if (!err.ok()) {
+            return err;
+        }
+        err = required_color(partial, partial.muted, "muted");
+        if (!err.ok()) {
+            return err;
+        }
+        err = required_color(partial, partial.thinking_trace, "thinking_trace");
+        if (!err.ok()) {
+            return err;
+        }
+        err = required_color(partial, partial.user_label, "user_label");
+        if (!err.ok()) {
+            return err;
+        }
+        err = required_color(partial, partial.assistant_label, "assistant_label");
+        if (!err.ok()) {
+            return err;
+        }
+        err = required_color(partial, partial.error, "error");
+        if (!err.ok()) {
+            return err;
+        }
+        err = required_color(partial, partial.status_foreground, "status_foreground");
+        if (!err.ok()) {
+            return err;
+        }
+        err = required_color(partial, partial.status_background, "status_background");
+        if (!err.ok()) {
+            return err;
+        }
+        err = required_color(partial, partial.thinking_activity, "thinking_activity");
+        if (!err.ok()) {
+            return err;
+        }
+        err = required_color(partial, partial.streaming_activity, "streaming_activity");
+        if (!err.ok()) {
+            return err;
+        }
+        err = required_color(partial, partial.panel_title, "panel_title");
+        if (!err.ok()) {
+            return err;
+        }
+        err = required_color(partial, partial.panel_border, "panel_border");
+        if (!err.ok()) {
+            return err;
+        }
+        err = required_color(partial, partial.panel_hint, "panel_hint");
+        if (!err.ok()) {
+            return err;
+        }
+        err = required_color(partial, partial.panel_highlight, "panel_highlight");
+        if (!err.ok()) {
+            return err;
+        }
+        err = required_color(partial, partial.panel_body, "panel_body");
+        if (!err.ok()) {
+            return err;
+        }
+        err = required_color(partial, partial.panel_background, "panel_background");
+        if (!err.ok()) {
+            return err;
+        }
+
+        tui::ThemePalette palette;
+        palette.name = *partial.name;
+        palette.background = *partial.background;
+        palette.text = *partial.text;
+        palette.muted = *partial.muted;
+        palette.thinking_trace = *partial.thinking_trace;
+        palette.user_label = *partial.user_label;
+        palette.assistant_label = *partial.assistant_label;
+        palette.error = *partial.error;
+        palette.status_foreground = *partial.status_foreground;
+        palette.status_background = *partial.status_background;
+        palette.thinking_activity = *partial.thinking_activity;
+        palette.streaming_activity = *partial.streaming_activity;
+        palette.panel_title = *partial.panel_title;
+        palette.panel_border = *partial.panel_border;
+        palette.panel_hint = *partial.panel_hint;
+        palette.panel_highlight = *partial.panel_highlight;
+        palette.panel_body = *partial.panel_body;
+        palette.panel_background = *partial.panel_background;
+        candidate.tui_themes.merge(std::move(palette));
+    }
+    return ok_error();
+}
+
+bool is_themes_entry(const std::string& name) {
+    return name.rfind("theme.", 0) == 0;
+}
+
 bool is_editor_commands_entry(const std::string& name) {
     if (name.rfind("command.", 0) == 0) {
         return true;
@@ -1135,10 +1430,29 @@ Error apply_editor_commands_document_impl(const Document& document, cli::Options
     return ok_error();
 }
 
+Error apply_themes_document_impl(const Document& document, cli::Options& options) {
+    cli::Options candidate = options;
+    for (const auto& item : document.entries) {
+        if (!is_themes_entry(item.first)) {
+            return schema_error(item.second, "unknown themes setting");
+        }
+    }
+    Error theme_err = apply_configured_themes(document, candidate);
+    if (!theme_err.ok()) {
+        return theme_err;
+    }
+    options = std::move(candidate);
+    return ok_error();
+}
+
 }  // namespace
 
 Error apply_editor_commands_document(const Document& document, cli::Options& options) {
     return apply_editor_commands_document_impl(document, options);
+}
+
+Error apply_themes_document(const Document& document, cli::Options& options) {
+    return apply_themes_document_impl(document, options);
 }
 
 const Entry* Document::find(const std::string& qualified_key) const {
@@ -1350,6 +1664,8 @@ Error apply_document(const Document& document, cli::Options& options) {
             err = apply_legacy_assist_prompt(entry, candidate.editor_assist_config, "/Finnish");
         } else if (name.rfind("command.", 0) == 0) {
             continue;
+        } else if (name.rfind("theme.", 0) == 0) {
+            continue;
         } else if (name.rfind("Model-setting.", 0) == 0) {
             continue;
         } else if (name == "url_fetch.max_bytes") {
@@ -1384,7 +1700,16 @@ Error apply_document(const Document& document, cli::Options& options) {
             err = require_type(entry, Value::Type::Boolean);
             if (err.ok()) candidate.no_colors = !entry.value.boolean;
         } else if (name == "tui.theme") {
-            err = enum_string(entry, {"dark", "light"}, candidate.tui_theme, "dark or light");
+            err = require_type(entry, Value::Type::String);
+            if (err.ok()) {
+                std::string normalized;
+                if (!candidate.tui_themes.normalize_name(entry.value.string, normalized)) {
+                    err = schema_error(entry,
+                                         "unknown theme; available: " + tui::format_theme_list(candidate.tui_themes));
+                } else {
+                    candidate.tui_theme = normalized;
+                }
+            }
         } else if (name == "tui.thinking_traces") {
             err = require_type(entry, Value::Type::Boolean);
             if (err.ok()) candidate.show_thinking_traces = entry.value.boolean;
@@ -1457,11 +1782,112 @@ std::vector<std::string> bundled_editor_commands_paths() {
     return paths;
 }
 
+std::string user_themes_path(const Environment& environment) {
+    if (absolute_path(environment.xdg_config_home)) {
+        return (std::filesystem::path(environment.xdg_config_home) / "pkchat" / "themes.conf").string();
+    }
+    if (!absolute_path(environment.home)) {
+        return {};
+    }
+    return (std::filesystem::path(environment.home) / ".config" / "pkchat" / "themes.conf").string();
+}
+
+std::vector<std::string> system_themes_paths(const Environment& environment) {
+    const std::string dirs = environment.xdg_config_dirs.empty() ? "/etc/xdg" : environment.xdg_config_dirs;
+    return config_paths_from_dirs(dirs, "themes.conf");
+}
+
+std::vector<std::string> bundled_themes_paths() {
+    std::vector<std::string> paths;
+    if (const char* override_path = std::getenv("PKCHAT_THEMES")) {
+        if (override_path[0] != '\0') {
+            paths.emplace_back(override_path);
+        }
+    }
+    paths.emplace_back("config/themes.conf");
+    paths.emplace_back("/usr/local/share/pkchat/themes.conf");
+    paths.emplace_back("/usr/share/pkchat/themes.conf");
+    return paths;
+}
+
 LoadResult load_automatic(const cli::Options& base_options,
                           const Environment& environment,
                           bool load_user_config) {
     LoadResult result{base_options, {}, {}, ok_error()};
     result.options.editor_assist_config = pkchat::editor::empty_editor_assist_config();
+    result.options.tui_themes = tui::default_theme_registry();
+
+    auto load_themes_path = [&](const std::string& path, ConfigScope scope, bool& any_loaded) -> Error {
+        std::error_code filesystem_error;
+        const bool exists = std::filesystem::exists(path, filesystem_error);
+        if (filesystem_error) {
+            result.diagnostics.push_back({scope, ConfigFileKind::Themes, ConfigFileState::Error, path});
+            return {ErrorCode::Config, "could not inspect themes file: " + path};
+        }
+        if (!exists) {
+            result.diagnostics.push_back({scope, ConfigFileKind::Themes, ConfigFileState::Missing, path});
+            return ok_error();
+        }
+        ParseResult parsed = read_file(path);
+        if (!parsed.error.ok()) {
+            result.diagnostics.push_back({scope, ConfigFileKind::Themes, ConfigFileState::Error, path});
+            return parsed.error;
+        }
+        Error err = apply_themes_document(parsed.document, result.options);
+        if (!err.ok()) {
+            result.diagnostics.push_back({scope, ConfigFileKind::Themes, ConfigFileState::Error, path});
+            return err;
+        }
+        any_loaded = true;
+        result.loaded_paths.push_back(path);
+        result.diagnostics.push_back({scope, ConfigFileKind::Themes, ConfigFileState::Loaded, path});
+        return ok_error();
+    };
+
+    bool themes_loaded = false;
+    for (const std::string& path : system_themes_paths(environment)) {
+        Error err = load_themes_path(path, ConfigScope::System, themes_loaded);
+        if (!err.ok()) {
+            result.error = std::move(err);
+            return result;
+        }
+    }
+
+    const std::string user_themes = user_themes_path(environment);
+    if (user_themes.empty()) {
+        result.diagnostics.push_back(
+            {ConfigScope::User, ConfigFileKind::Themes, ConfigFileState::Unavailable, {}});
+    } else if (!load_user_config) {
+        result.diagnostics.push_back(
+            {ConfigScope::User, ConfigFileKind::Themes, ConfigFileState::Skipped, user_themes});
+    } else {
+        Error err = load_themes_path(user_themes, ConfigScope::User, themes_loaded);
+        if (!err.ok()) {
+            result.error = std::move(err);
+            return result;
+        }
+    }
+
+    if (!themes_loaded) {
+        for (const std::string& path : bundled_themes_paths()) {
+            std::error_code filesystem_error;
+            if (!std::filesystem::exists(path, filesystem_error) || filesystem_error) {
+                continue;
+            }
+            Error err = load_themes_path(path, ConfigScope::System, themes_loaded);
+            if (!err.ok()) {
+                result.error = std::move(err);
+                return result;
+            }
+            if (themes_loaded) {
+                break;
+            }
+        }
+    }
+
+    if (!themes_loaded) {
+        result.options.tui_themes = tui::default_theme_registry();
+    }
 
     auto load_editor_commands_path = [&](const std::string& path,
                                          ConfigScope scope,

@@ -27,7 +27,7 @@ make leak-check
 make clean
 ```
 
-Install the binary and the v0.6 system-wide configuration template with:
+Install the binary, system configuration templates, and bundled theme/editor-command files with:
 
 ```sh
 make install PREFIX=/usr/local
@@ -51,6 +51,69 @@ thinking_traces = true
 ```
 
 Editor defaults can also be configured. `undo_limit` controls how many undo states are retained and defaults to `5`. `huge_file_size_warning` defaults to `1073741824` bytes and asks for confirmation before loading files at or above that size. `file_size_limit` defaults to `-1`, which means no configured upper limit; set it to a non-negative byte count to reject larger editor files before they are read into memory. Auto-save settings (`auto-save-mode`, `auto-save-postfix`, `auto-save-threshold`, `auto-save-timeout`, `auto-save-size-limit`) write backup copies such as `notes.txt~` while you edit; defaults are `on`, `~`, `300` bytes changed, `30` idle seconds, and `10M` max buffer size.
+
+### Themes
+
+TUI and editor colors are defined in repeatable `[theme]` blocks in `themes.conf`, not in `config.conf`. At startup pkchat loads system themes from `$XDG_CONFIG_DIRS/pkchat/themes.conf` (default `/etc/xdg/pkchat/themes.conf`), then the user file at `$XDG_CONFIG_HOME/pkchat/themes.conf` (normally `~/.config/pkchat/themes.conf`), and finally the bundled `config/themes.conf` if no other file was found. A theme with the same `name` replaces an earlier definition; a new `name` adds a selectable theme.
+
+Each `[theme]` block needs `name` plus every color key below. Colors use `#RRGGBB` (or `0xRRGGBB`).
+
+| Key | Used for |
+| --- | --- |
+| `background` | Main chat/editor background |
+| `text` | Default body text |
+| `muted` | Secondary labels and dim text |
+| `thinking_trace` | `<think>...</think>` trace text |
+| `user_label` | User message labels |
+| `assistant_label` | Assistant message labels |
+| `error` | Error status text |
+| `status_foreground`, `status_background` | Status line and input label bar |
+| `thinking_activity`, `streaming_activity` | Thinking/streaming indicators |
+| `panel_title`, `panel_border`, `panel_hint`, `panel_highlight`, `panel_body`, `panel_background` | Help, settings, and picker panels |
+
+Built-in themes are `dark`, `light`, and `sepia`. Set the default in `config.conf`:
+
+```conf
+[tui]
+theme = sepia
+colors = true
+```
+
+Switch at runtime in chat TUI or editor command mode:
+
+```text
+/theme
+/theme sepia
+/theme dark
+```
+
+`/theme` with no argument lists available themes. Use `--nocolors` to disable 24-bit ANSI styling.
+
+Complete example: add or override the sepia theme in `~/.config/pkchat/themes.conf`:
+
+```conf
+[theme]
+name = sepia
+background = #F4ECD8
+text = #5B4636
+muted = #7A6A58
+thinking_trace = #6E5F4D
+user_label = #8B5E34
+assistant_label = #4F6F46
+error = #9B2C2C
+status_foreground = #5B4636
+status_background = #E8DCC8
+thinking_activity = #8B5E34
+streaming_activity = #4F6F46
+panel_title = #8B5E34
+panel_border = #7A6A58
+panel_hint = #6E5F4D
+panel_highlight = #B7791F
+panel_body = #5B4636
+panel_background = #EFE2C8
+```
+
+Copy an existing built-in block from `config/themes.conf`, change `name` and the colors, save the file, then run `/theme YOUR_THEME` or set `theme = YOUR_THEME` under `[tui]`. `make install` also places the bundled themes file at `/etc/xdg/pkchat/themes.conf` and `share/pkchat/themes.conf`.
 
 The format is deliberately TOML-alike rather than full TOML. Keep secrets out of it; `[credentials]` selects an environment variable or key file and never contains an API key value. Use `--debug` to list loaded, missing, skipped, or failed configuration paths on `stderr`; `--quiet` suppresses these diagnostics. Deliberately selected extra configuration files and repeatable `--config` layers are not supported.
 
@@ -456,7 +519,7 @@ The TUI also runs `/insert`, `/attach`, `/fetch`, and `/search` through cancella
 
 In non-interactive `-p`/`--prompt` mode, model thinking traces are written only to standard error. Standard output contains only the visible answer, including with streaming, JSON, NDJSON, rendered output, and `--output stdout`, so it is safe to pipe into another command. Saved chat files retain the full assistant response, including thinking traces.
 
-The TUI keeps model requests, `/models`, `/save`, and `/load` behind runtime jobs so the terminal loop stays responsive. Its initial status is `Pkchat vVERSION ready`; after a completed streaming response, the status shows time to first token and token/s, marked as estimated when provider token usage is unavailable. With `--context`, that same line also shows estimated context usage. Non-streaming responses show total response latency because true first-token timing is not observable. The bottom input area embeds the editor component in a fixed-height panel with soft wrap and visual-row cursor movement. In chat TUI mode, `Tab` is context sensitive: at the beginning of the first input line it completes slash commands, and after `/insert`, `/attach`, `/save`, or `/load` it completes file paths with repeated-choice cycling. Empty input and non-file commands do not start path completion. Colors are enabled by default with the `dark` theme; use `--nocolors` to disable color styling, and `/theme`, `/theme dark`, or `/theme light` inside the TUI to inspect or switch themes. Thinking traces are hidden by default; use `/thinking trace`, `/thinking notrace`, or `Ctrl+T` to toggle display of `<think>...</think>` blocks; visible thinking traces use a subdued tinted color that is kept WCAG 2.1 AA compliant. Provider reasoning fields such as `reasoning_content`, `reasoning`, and text `reasoning_details` are displayed as `<think>` blocks. TUI chat threads are stored in `~/.pkchat/pkchat.db` using SQLite WAL mode; `/list` opens a newest-first thread picker, up/down changes selection, Enter loads a thread, and Esc cancels. `/new [NAME]` starts a fresh thread, `/provider PROVIDER` changes the provider for future turns, `/model MODEL` changes the model, `/pop` removes the last user or assistant message, `/response` replies to a final unanswered user message, and `/remove` asks before soft-deleting the current thread. `Enter` sends, `Alt+Enter` or `Esc` then `Enter` inserts a newline, `Shift` plus arrows, `PageUp`/`PageDown`, `Home`/`End`, or `Ctrl+Home`/`Ctrl+End` extend a highlighted selection in the input, `Ctrl+A` selects the entire input buffer, `Ctrl+E` copies the last user or assistant message into the input for editing (`Enter` saves, a bare `Esc` cancels), `Ctrl+C` copies the selection, `Ctrl+X` cuts it, `Ctrl+V` pastes, `Ctrl+K` kills from the cursor to the end of the input line and removes the line when it is already empty, `Ctrl+Z` or `Ctrl+U` undoes, `Ctrl+Y` redoes, and `Ctrl+S` sends the current multiline draft. A bare `Esc` cancels the active model request while keeping the current turn visible. `Ctrl+R`, `Alt+R`, or `Esc` then `R` regenerates the last answer by resending the last user prompt. `/pop` removes the last user or assistant message. `Home`/`End` move to the current input line, `Ctrl+Home`/`Ctrl+End` jump to buffer bounds, `PageUp`/`PageDown` page through the input like the editor, `Ctrl+B` and `Ctrl+D` scroll chat history back and forward, and `Alt+Home`/`Alt+End` jump to the oldest history or live bottom. `Ctrl+Q` exits chat mode.
+The TUI keeps model requests, `/models`, `/save`, and `/load` behind runtime jobs so the terminal loop stays responsive. Its initial status is `Pkchat vVERSION ready`; after a completed streaming response, the status shows time to first token and token/s, marked as estimated when provider token usage is unavailable. With `--context`, that same line also shows estimated context usage. Non-streaming responses show total response latency because true first-token timing is not observable. The bottom input area embeds the editor component in a fixed-height panel with soft wrap and visual-row cursor movement. In chat TUI mode, `Tab` is context sensitive: at the beginning of the first input line it completes slash commands, and after `/insert`, `/attach`, `/save`, or `/load` it completes file paths with repeated-choice cycling. Empty input and non-file commands do not start path completion. Colors are enabled by default with the `dark` theme; use `--nocolors` to disable color styling, and `/theme` or `/theme NAME` inside the TUI or editor to inspect or switch themes (`dark`, `light`, `sepia`, or any theme defined in `themes.conf`). Thinking traces are hidden by default; use `/thinking trace`, `/thinking notrace`, or `Ctrl+T` to toggle display of `<think>...</think>` blocks; visible thinking traces use a subdued tinted color that is kept WCAG 2.1 AA compliant. Provider reasoning fields such as `reasoning_content`, `reasoning`, and text `reasoning_details` are displayed as `<think>` blocks. TUI chat threads are stored in `~/.pkchat/pkchat.db` using SQLite WAL mode; `/list` opens a newest-first thread picker, up/down changes selection, Enter loads a thread, and Esc cancels. `/new [NAME]` starts a fresh thread, `/provider PROVIDER` changes the provider for future turns, `/model MODEL` changes the model, `/pop` removes the last user or assistant message, `/response` replies to a final unanswered user message, and `/remove` asks before soft-deleting the current thread. `Enter` sends, `Alt+Enter` or `Esc` then `Enter` inserts a newline, `Shift` plus arrows, `PageUp`/`PageDown`, `Home`/`End`, or `Ctrl+Home`/`Ctrl+End` extend a highlighted selection in the input, `Ctrl+A` selects the entire input buffer, `Ctrl+E` copies the last user or assistant message into the input for editing (`Enter` saves, a bare `Esc` cancels), `Ctrl+C` copies the selection, `Ctrl+X` cuts it, `Ctrl+V` pastes, `Ctrl+K` kills from the cursor to the end of the input line and removes the line when it is already empty, `Ctrl+Z` or `Ctrl+U` undoes, `Ctrl+Y` redoes, and `Ctrl+S` sends the current multiline draft. A bare `Esc` cancels the active model request while keeping the current turn visible. `Ctrl+R`, `Alt+R`, or `Esc` then `R` regenerates the last answer by resending the last user prompt. `/pop` removes the last user or assistant message. `Home`/`End` move to the current input line, `Ctrl+Home`/`Ctrl+End` jump to buffer bounds, `PageUp`/`PageDown` page through the input like the editor, `Ctrl+B` and `Ctrl+D` scroll chat history back and forward, and `Alt+Home`/`Alt+End` jump to the oldest history or live bottom. `Ctrl+Q` exits chat mode.
 
 Verbose timing:
 

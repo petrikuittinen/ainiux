@@ -6,6 +6,7 @@
 #include "chat/settings.hpp"
 #include "pkchat/model_setting.hpp"
 #include "tui/detail/render.hpp"
+#include "tui/theme_registry.hpp"
 
 namespace pkchat::tui {
 
@@ -41,7 +42,7 @@ void handle_tui_command(const std::string& text, TuiCommandContext& ctx, TuiComm
                 "/insert PATH or /attach PATH (text or image)\n"
                 "/fetch URL\n"
                 "/search QUERY\n"
-                "/theme [dark|light]\n"
+                "/theme [THEME]\n"
                 "/thinking [trace|notrace]";
             ctx.status = "Help shown; /help hides it";
         } else {
@@ -71,22 +72,11 @@ void handle_tui_command(const std::string& text, TuiCommandContext& ctx, TuiComm
     }
     if (text.rfind("/theme", 0) == 0) {
         const std::string requested = app::detail::trim_ascii(text.substr(6));
-        if (requested.empty()) {
-            ctx.status = std::string("Theme: ") + theme_name(ctx.theme) + ". Available: dark, light";
-            if (!ctx.use_colors) {
-                ctx.status += " (colors disabled by --nocolors)";
-            }
-            return;
-        }
-        ThemeName next = ctx.theme;
-        if (!parse_theme_name(requested, next)) {
-            ctx.status = "Unknown theme: " + requested + ". Available: dark, light";
-            return;
-        }
-        ctx.theme = next;
-        ctx.status = std::string("Theme set to ") + theme_name(ctx.theme);
-        if (!ctx.use_colors) {
-            ctx.status += " (colors disabled by --nocolors)";
+        const ThemeCommandResult theme_result =
+            handle_theme_command(ctx.themes, ctx.theme, requested, ctx.use_colors);
+        ctx.status = theme_result.message;
+        if (theme_result.ok && !theme_result.selected_theme.empty()) {
+            ctx.theme = theme_result.selected_theme;
         }
         return;
     }

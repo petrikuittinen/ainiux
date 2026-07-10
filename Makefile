@@ -28,10 +28,13 @@ IO_FAULT_OBJ := $(OBJ_DIR)/tests/unit/test_io_faults.o \
                 $(OBJ_DIR)/tests/unit/support/test_support.o
 COMMON_CONFIG := config/pkchat.conf
 EDITOR_COMMANDS_CONFIG := config/editor-commands.conf
+THEMES_CONFIG := config/themes.conf
 COMMON_CONFIG_DIR := $(DESTDIR)$(SYSCONFDIR)/xdg/pkchat
 COMMON_CONFIG_PATH := $(COMMON_CONFIG_DIR)/config.conf
 EDITOR_COMMANDS_CONFIG_PATH := $(COMMON_CONFIG_DIR)/editor-commands.conf
+THEMES_CONFIG_PATH := $(COMMON_CONFIG_DIR)/themes.conf
 EDITOR_COMMANDS_INSTALL := $(DESTDIR)$(PREFIX)/share/pkchat/editor-commands.conf
+THEMES_INSTALL := $(DESTDIR)$(PREFIX)/share/pkchat/themes.conf
 BENCHMARK_DATA_DIR := $(DESTDIR)$(PREFIX)/share/pkchat/benchmarks
 BUILTIN_BENCHMARK_HEADER := $(GENERATED_DIR)/builtin_dataset.hpp
 EDITOR_HELP_SRC := docs/editor_help.md
@@ -150,7 +153,7 @@ leak-check: $(BIN) $(TEST_BIN) $(IO_FAULT_BIN)
 
 test-leak: leak-check
 
-install: $(BIN) $(COMMON_CONFIG) $(EDITOR_COMMANDS_CONFIG) $(EDITOR_HELP_SRC)
+install: $(BIN) $(COMMON_CONFIG) $(EDITOR_COMMANDS_CONFIG) $(THEMES_CONFIG) $(EDITOR_HELP_SRC)
 	install -d "$(DESTDIR)$(PREFIX)/bin"
 	install -m 0755 $(BIN) "$(DESTDIR)$(PREFIX)/bin/$(BIN)"
 	install -d "$(COMMON_CONFIG_DIR)"
@@ -164,11 +167,17 @@ install: $(BIN) $(COMMON_CONFIG) $(EDITOR_COMMANDS_CONFIG) $(EDITOR_HELP_SRC)
 	else \
 		install -m 0644 "$(EDITOR_COMMANDS_CONFIG)" "$(EDITOR_COMMANDS_CONFIG_PATH)"; \
 	fi
+	@if test -e "$(THEMES_CONFIG_PATH)"; then \
+		echo "Preserving existing system themes: $(THEMES_CONFIG_PATH)"; \
+	else \
+		install -m 0644 "$(THEMES_CONFIG)" "$(THEMES_CONFIG_PATH)"; \
+	fi
 	install -d "$(BENCHMARK_DATA_DIR)"
 	install -m 0644 $(BUILTIN_DATASET) benchmarks/long-context.jsonl $(BUILTIN_DATASET_PARTS) "$(BENCHMARK_DATA_DIR)"
 	install -d "$(DESTDIR)$(PREFIX)/share/pkchat"
 	install -m 0644 "$(EDITOR_HELP_SRC)" "$(EDITOR_HELP_INSTALL)"
 	install -m 0644 "$(EDITOR_COMMANDS_CONFIG)" "$(EDITOR_COMMANDS_INSTALL)"
+	install -m 0644 "$(THEMES_CONFIG)" "$(THEMES_INSTALL)"
 
 clean:
 	rm -rf $(BUILD_DIR) $(BIN) $(IO_FAULT_BIN)

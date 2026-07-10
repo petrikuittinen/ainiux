@@ -7,6 +7,8 @@
 #include "editor/terminal_input.hpp"
 #include "tui/input_handlers.hpp"
 #include "tui/session_load.hpp"
+#include "config/config.hpp"
+#include "tui/theme_registry.hpp"
 #include "tui/tui.hpp"
 #include <algorithm>
 #include <string>
@@ -178,17 +180,15 @@ void test_tui_regeneration_plan_uses_last_user_turn() {
 }
 
 void test_tui_theme_parsing_and_contrast() {
-    pkchat::tui::ThemeName theme = pkchat::tui::ThemeName::Dark;
-    check(pkchat::tui::parse_theme_name("dark", theme), "TUI dark theme parses");
-    check(theme == pkchat::tui::ThemeName::Dark, "TUI dark theme selected");
-    check(pkchat::tui::parse_theme_name("Light", theme), "TUI light theme parses case-insensitively");
-    check(theme == pkchat::tui::ThemeName::Light, "TUI light theme selected");
-    check(!pkchat::tui::parse_theme_name("sepia", theme), "TUI rejects unknown theme");
+    const pkchat::tui::ThemeRegistry registry = pkchat::tui::default_theme_registry();
+    std::string theme;
+    check(registry.normalize_name("dark", theme), "TUI dark theme parses");
+    check(theme == "dark", "TUI dark theme selected");
+    check(registry.normalize_name("Light", theme), "TUI light theme parses case-insensitively");
+    check(theme == "light", "TUI light theme selected");
+    check(!registry.normalize_name("sepia", theme), "TUI rejects unknown theme");
 
-    const std::vector<pkchat::tui::ThemeName> themes = {
-        pkchat::tui::ThemeName::Dark,
-        pkchat::tui::ThemeName::Light,
-    };
+    const std::vector<std::string> themes = registry.names();
     const std::vector<pkchat::tui::StyleRole> roles = {
         pkchat::tui::StyleRole::Text,
         pkchat::tui::StyleRole::Muted,
@@ -207,29 +207,47 @@ void test_tui_theme_parsing_and_contrast() {
         pkchat::tui::StyleRole::PanelBody,
     };
 
-    for (pkchat::tui::ThemeName item : themes) {
+    for (const std::string& item : themes) {
         for (pkchat::tui::StyleRole role : roles) {
-            const pkchat::tui::StylePair pair = pkchat::tui::style_pair_for(item, role);
+            const pkchat::tui::StylePair pair = pkchat::tui::style_pair_for(registry, item, role);
             check(pkchat::tui::contrast_ratio(pair.foreground, pair.background) >= 4.5,
-                  std::string("TUI theme contrast meets WCAG AA for ") + pkchat::tui::theme_name(item));
+                  std::string("TUI theme contrast meets WCAG AA for ") + item);
         }
     }
 
     const pkchat::tui::StylePair dark_text =
-        pkchat::tui::style_pair_for(pkchat::tui::ThemeName::Dark, pkchat::tui::StyleRole::Text);
+        pkchat::tui::style_pair_for(registry, "dark", pkchat::tui::StyleRole::Text);
     const pkchat::tui::StylePair dark_thinking =
-        pkchat::tui::style_pair_for(pkchat::tui::ThemeName::Dark, pkchat::tui::StyleRole::ThinkingTrace);
+        pkchat::tui::style_pair_for(registry, "dark", pkchat::tui::StyleRole::ThinkingTrace);
     check(pkchat::tui::contrast_ratio(dark_thinking.foreground, dark_thinking.background) <
               pkchat::tui::contrast_ratio(dark_text.foreground, dark_text.background),
           "TUI dark thinking trace text is dimmer than normal text");
 
     const pkchat::tui::StylePair light_text =
-        pkchat::tui::style_pair_for(pkchat::tui::ThemeName::Light, pkchat::tui::StyleRole::Text);
+        pkchat::tui::style_pair_for(registry, "light", pkchat::tui::StyleRole::Text);
     const pkchat::tui::StylePair light_thinking =
-        pkchat::tui::style_pair_for(pkchat::tui::ThemeName::Light, pkchat::tui::StyleRole::ThinkingTrace);
+        pkchat::tui::style_pair_for(registry, "light", pkchat::tui::StyleRole::ThinkingTrace);
     check(pkchat::tui::contrast_ratio(light_thinking.foreground, light_thinking.background) <
               pkchat::tui::contrast_ratio(light_text.foreground, light_text.background),
           "TUI light thinking trace text is less stark than normal text");
+
+    pkchat::config::ParseResult parsed = pkchat::config::read_file("config/themes.conf");
+    check(parsed.error.ok(), "themes.conf parses");
+    pkchat::cli::Options options;
+    pkchat::Error err = pkchat::config::apply_themes_document(parsed.document, options);
+    check(err.ok(), "themes.conf applies");
+    check(options.tui_themes.has("dark") && options.tui_themes.has("light") &&
+              options.tui_themes.has("sepia"),
+          "themes.conf defines built-in dark, light, and sepia themes");
+
+    const pkchat::tui::ThemeCommandResult listed =
+        pkchat::tui::handle_theme_command(options.tui_themes, "dark", "", true);
+    check(listed.ok && listed.message.find("dark") != std::string::npos &&
+              listed.message.find("light") != std::string::npos,
+          "theme command lists configured themes");
+    const pkchat::tui::ThemeCommandResult switched =
+        pkchat::tui::handle_theme_command(options.tui_themes, "dark", "light", true);
+    check(switched.ok && switched.selected_theme == "light", "theme command switches themes");
 }
 
 void test_tui_thinking_trace_display() {

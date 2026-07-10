@@ -8,6 +8,7 @@
 
 #include "cli/args.hpp"
 #include "common.hpp"
+#include "tui/theme_registry.hpp"
 
 namespace pkchat::config {
 
@@ -60,7 +61,7 @@ struct Environment {
 };
 
 enum class ConfigScope { System, User };
-enum class ConfigFileKind { Config, EditorCommands };
+enum class ConfigFileKind { Config, EditorCommands, Themes };
 enum class ConfigFileState { Loaded, Missing, Skipped, Error, Unavailable };
 
 struct ConfigDiagnostic {
@@ -81,12 +82,16 @@ ParseResult parse(const std::string& input, const std::string& source_path = "<m
 ParseResult read_file(const std::string& path, size_t max_bytes = kMaxConfigBytes);
 Error apply_document(const Document& document, cli::Options& options);
 Error apply_editor_commands_document(const Document& document, cli::Options& options);
+Error apply_themes_document(const Document& document, cli::Options& options);
 Environment process_environment();
 std::string user_config_path(const Environment& environment);
 std::string user_editor_commands_path(const Environment& environment);
+std::string user_themes_path(const Environment& environment);
 std::vector<std::string> system_config_paths(const Environment& environment);
 std::vector<std::string> system_editor_commands_paths(const Environment& environment);
+std::vector<std::string> system_themes_paths(const Environment& environment);
 std::vector<std::string> bundled_editor_commands_paths();
+std::vector<std::string> bundled_themes_paths();
 LoadResult load_automatic(const cli::Options& base_options,
                           const Environment& environment,
                           bool load_user_config = true);

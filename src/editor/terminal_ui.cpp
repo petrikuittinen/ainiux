@@ -11,6 +11,7 @@
 #include "editor/selection.hpp"
 #include "editor/terminal_input.hpp"
 #include "tui/activity.hpp"
+#include "tui/theme_registry.hpp"
 #include "ui/confirmation.hpp"
 
 #include <cerrno>
@@ -116,16 +117,13 @@ std::string minibuffer_text(const MinibufferState& minibuffer) {
 
 namespace {
 
-std::string activity_color_sequence(tui::ActivityKind kind) {
-    switch (kind) {
-        case tui::ActivityKind::Thinking:
-            return "\x1b[38;2;147;197;253m";
-        case tui::ActivityKind::Streaming:
-            return "\x1b[38;2;74;222;128m";
-        case tui::ActivityKind::None:
-            break;
+std::string activity_color_sequence(const TerminalThemeStyle& theme_style, tui::ActivityKind kind) {
+    if (!theme_style.use_colors || theme_style.themes == nullptr) {
+        return "";
     }
-    return "";
+    const tui::StyleRole role = tui::activity_indicator_role(kind);
+    return tui::ansi_foreground_sequence(
+        tui::style_pair_for(*theme_style.themes, theme_style.theme_name, role).foreground);
 }
 
 int append_utf8_cells(std::string& out, const std::string& text, size_t& pos, int max_cells) {
@@ -150,13 +148,15 @@ int append_utf8_cells(std::string& out, const std::string& text, size_t& pos, in
     return used;
 }
 
-std::string editor_assist_minibuffer_line(const EditorAssistDisplay& assist, int width) {
+std::string editor_assist_minibuffer_line(const EditorAssistDisplay& assist,
+                                          const TerminalThemeStyle& theme_style,
+                                          int width) {
     if (width <= 0) {
         return "";
     }
     const std::string label = continue_status_label(assist.provider_name, assist.model_name);
     const std::string indicator = tui::activity_indicator_text(assist.kind, assist.frame);
-    const std::string color = activity_color_sequence(assist.kind);
+    const std::string color = activity_color_sequence(theme_style, assist.kind);
     const std::string reset = "\x1b[0m";
 
     std::string out;
@@ -869,6 +869,7 @@ bool handle_replace_key(EditorState& state,
 
 void render_terminal(EditorState& state,
                      const MinibufferState& minibuffer,
+                     const TerminalThemeStyle& theme_style,
                      bool help_view,
                      const EditorAssistDisplay* assist_display) {
     const TerminalSize size = terminal_size();
@@ -889,15 +890,29 @@ void render_terminal(EditorState& state,
 
     const int status_row = rows - 1;
     const int minibuffer_row = rows;
-    std::cout << "\x1b[" << status_row << ";1H\x1b[7m"
-              << pad_or_clip_ascii(editor_status_line(state, help_view), width) << "\x1b[0m\x1b[K";
+    const std::string status_text = pad_or_clip_ascii(editor_status_line(state, help_view), width);
+    std::cout << "\x1b[" << status_row << ";1H";
+    if (theme_style.use_colors && theme_style.themes != nullptr) {
+        std::cout << tui::style_sequence_for(*theme_style.themes, theme_style.theme_name, tui::StyleRole::Status);
+    } else {
+        std::cout << "\x1b[7m";
+    }
+    std::cout << status_text << "\x1b[0m\x1b[K";
     const bool show_assist_activity = assist_display != nullptr && assist_display->active &&
                                         assist_display->kind != tui::ActivityKind::None &&
                                         !minibuffer.active;
     const std::string minibuffer_line =
-        show_assist_activity ? editor_assist_minibuffer_line(*assist_display, width)
+        show_assist_activity ? editor_assist_minibuffer_line(*assist_display, theme_style, width)
                              : pad_or_clip_ascii(minibuffer_text(minibuffer), width);
-    std::cout << "\x1b[" << minibuffer_row << ";1H" << minibuffer_line << "\x1b[K";
+    std::cout << "\x1b[" << minibuffer_row << ";1H";
+    if (theme_style.use_colors && theme_style.themes != nullptr && !show_assist_activity) {
+        std::cout << tui::style_sequence_for(*theme_style.themes, theme_style.theme_name, tui::StyleRole::Text);
+    }
+    std::cout << minibuffer_line;
+    if (theme_style.use_colors && theme_style.themes != nullptr && !show_assist_activity) {
+        std::cout << "\x1b[0m";
+    }
+    std::cout << "\x1b[K";
 
     int cursor_row = panel.cursor.visible ? panel_rect.row + panel.cursor.row : panel_rect.row;
     int cursor_col = panel.cursor.visible ? panel_rect.col + panel.cursor.col : panel_rect.col;

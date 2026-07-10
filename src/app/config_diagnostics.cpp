@@ -24,8 +24,12 @@ void print_config_diagnostics(const config::LoadResult& configured) {
                 state = "path unavailable";
                 break;
         }
-        const char* kind =
-            diagnostic.kind == config::ConfigFileKind::EditorCommands ? "editor commands" : "config";
+        const char* kind = "config";
+        if (diagnostic.kind == config::ConfigFileKind::EditorCommands) {
+            kind = "editor commands";
+        } else if (diagnostic.kind == config::ConfigFileKind::Themes) {
+            kind = "themes";
+        }
         std::cerr << "Config debug: " << state << " " << scope << " " << kind;
         if (!diagnostic.path.empty()) {
             std::cerr << ": " << diagnostic.path;

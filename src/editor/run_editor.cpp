@@ -15,6 +15,7 @@
 #include "runtime/runtime.hpp"
 #include "search/search.hpp"
 #include "tui/activity.hpp"
+#include "tui/theme_registry.hpp"
 #include "ui/confirmation.hpp"
 #include "ui/text_selector.hpp"
 
@@ -160,6 +161,13 @@ int run_editor(const std::string& path,
     bool pending_close_confirm = false;
     TerminalSize last_size = terminal_size();
     size_t activity_frame = 0;
+    std::string theme_name = settings.theme_name;
+    if (settings.themes != nullptr) {
+        settings.themes->normalize_name(theme_name, theme_name);
+    }
+    auto terminal_theme_style = [&]() {
+        return TerminalThemeStyle{settings.themes, theme_name, settings.use_colors};
+    };
     EditorAssistDisplay assist_display;
     auto refresh_assist_display = [&]() -> const EditorAssistDisplay* {
         assist_display.active = assist_session.active;
@@ -199,17 +207,18 @@ int run_editor(const std::string& path,
     };
 
     auto render_editor = [&]() {
+        const TerminalThemeStyle theme_style = terminal_theme_style();
         if (picker.active) {
             picker.refresh_view();
-            render_terminal(picker.view, minibuffer, false, nullptr);
+            render_terminal(picker.view, minibuffer, theme_style);
             return;
         }
         if (buffer_list_active) {
             refresh_buffer_list_view();
-            render_terminal(buffer_list_view, minibuffer, false, nullptr);
+            render_terminal(buffer_list_view, minibuffer, theme_style);
             return;
         }
-        render_terminal(state, minibuffer, help_view.active, refresh_assist_display());
+        render_terminal(state, minibuffer, theme_style, help_view.active, refresh_assist_display());
     };
     render_editor();
 
@@ -894,6 +903,23 @@ int run_editor(const std::string& path,
                 break;
         }
         const std::string command_line = trim_ascii_copy(minibuffer.input);
+        if (command_line == "/theme" || command_line.rfind("/theme ", 0) == 0) {
+            pending_assist = PendingAssist{};
+            exit_assist_command_mode(minibuffer, assist_completer);
+            if (settings.themes == nullptr) {
+                minibuffer_message(minibuffer, "Themes are unavailable");
+                return;
+            }
+            const std::string requested =
+                command_line.size() <= 6 ? "" : trim_ascii_copy(command_line.substr(6));
+            const tui::ThemeCommandResult theme_result =
+                tui::handle_theme_command(*settings.themes, theme_name, requested, settings.use_colors);
+            minibuffer_message(minibuffer, theme_result.message);
+            if (theme_result.ok && !theme_result.selected_theme.empty()) {
+                theme_name = theme_result.selected_theme;
+            }
+            return;
+        }
         if (command_line == "/provider" || command_line.rfind("/provider ", 0) == 0) {
             pending_assist = PendingAssist{};
             exit_assist_command_mode(minibuffer, assist_completer);

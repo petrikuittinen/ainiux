@@ -7,12 +7,14 @@
 #include "common.hpp"
 #include "editor/editor.hpp"
 #include "tui/events.hpp"
+#include "tui/theme_registry.hpp"
 #include "tui/tui.hpp"
 
 namespace pkchat::tui::detail {
 
 struct RenderStyle {
-    ThemeName theme = ThemeName::Dark;
+    const ThemeRegistry* themes = nullptr;
+    std::string theme_name = "dark";
     bool colors = true;
 };
 

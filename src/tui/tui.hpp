@@ -7,6 +7,7 @@
 #include "chat/session.hpp"
 #include "editor/editor.hpp"
 #include "provider/provider.hpp"
+#include "tui/theme_types.hpp"
 
 namespace pkchat::tui {
 
@@ -25,35 +26,6 @@ struct Layout {
 
 Layout layout_for_terminal(int rows, int cols);
 
-struct Rgb {
-    int r = 0;
-    int g = 0;
-    int b = 0;
-};
-
-enum class ThemeName {
-    Dark,
-    Light,
-};
-
-enum class StyleRole {
-    Text,
-    Muted,
-    ThinkingTrace,
-    UserLabel,
-    AssistantLabel,
-    Error,
-    Status,
-    InputLabel,
-    ThinkingActivity,
-    StreamingActivity,
-    PanelTitle,
-    PanelBorder,
-    PanelHint,
-    PanelHighlight,
-    PanelBody,
-};
-
 struct StyledSegment {
     std::string text;
     StyleRole role = StyleRole::Text;
@@ -63,14 +35,6 @@ struct StyledLine {
     std::vector<StyledSegment> segments;
 };
 
-struct StylePair {
-    Rgb foreground;
-    Rgb background;
-};
-
-const char* theme_name(ThemeName theme);
-bool parse_theme_name(const std::string& text, ThemeName& out);
-StylePair style_pair_for(ThemeName theme, StyleRole role);
 double contrast_ratio(Rgb foreground, Rgb background);
 int history_scroll_for_thread_beginning();
 int history_scroll_for_thread_end();

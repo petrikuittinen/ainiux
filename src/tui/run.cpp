@@ -61,8 +61,8 @@ int run(provider::RequestContext context, chat::Session session) {
     size_t completion_generation = 0;
     bool completion_pending = false;
     std::string status = ready_status();
-    ThemeName theme = ThemeName::Dark;
-    parse_theme_name(context.options.tui_theme, theme);
+    std::string theme = "dark";
+    context.options.tui_themes.normalize_name(context.options.tui_theme, theme);
     const bool use_colors = !context.options.no_colors;
     bool quit = false;
     bool show_thinking_traces = context.options.show_thinking_traces;
@@ -621,6 +621,7 @@ int run(provider::RequestContext context, chat::Session session) {
                                       settings_text,
                                       history_scroll,
                                       show_thinking_traces,
+                                      context.options.tui_themes,
                                       theme,
                                       use_colors,
                                       active_job,
@@ -736,7 +737,7 @@ int run(provider::RequestContext context, chat::Session session) {
     size_t render_frame = 0;
     ActivityKind activity_kind = ActivityKind::None;
     detail::render(session, input, status, history_scroll, show_thinking_traces, mode, visible_panel,
-                   activity_kind, render_frame, detail::RenderStyle{theme, use_colors}, panel_title());
+                   activity_kind, render_frame, detail::RenderStyle{&context.options.tui_themes, theme, use_colors}, panel_title());
     while (!quit) {
         TuiEvent event;
         while (events.try_pop(event)) {
@@ -1126,7 +1127,7 @@ int run(provider::RequestContext context, chat::Session session) {
                             : ActivityKind::None;
         ++render_frame;
         detail::render(session, input, status, history_scroll, show_thinking_traces, mode, visible_panel,
-                       activity_kind, render_frame, detail::RenderStyle{theme, use_colors}, panel_title());
+                       activity_kind, render_frame, detail::RenderStyle{&context.options.tui_themes, theme, use_colors}, panel_title());
     }
 
     model_job.cancel();

@@ -197,6 +197,9 @@ int main(int argc, char** argv) {
         editor_settings.auto_save_threshold = options.editor_auto_save_threshold;
         editor_settings.auto_save_timeout_seconds = options.editor_auto_save_timeout_seconds;
         editor_settings.auto_save_size_limit = options.editor_auto_save_size_limit;
+        editor_settings.themes = &options.tui_themes;
+        editor_settings.theme_name = options.tui_theme;
+        editor_settings.use_colors = !options.no_colors;
         pkchat::provider::apply_editor_startup_default(options);
         pkchat::provider::apply_editor_offline_default(options);
         pkchat::provider::ContextResult context_result = pkchat::provider::build_context(options);

@@ -10,6 +10,10 @@
 #include <vector>
 
 #include "common.hpp"
+
+namespace pkchat::tui {
+class ThemeRegistry;
+}
 #include "editor/clipboard.hpp"
 #include "editor/selection.hpp"
 
@@ -58,6 +62,9 @@ struct EditorSettings {
     size_t auto_save_threshold = kDefaultAutoSaveThreshold;
     int auto_save_timeout_seconds = kDefaultAutoSaveTimeoutSeconds;
     long long auto_save_size_limit = kDefaultAutoSaveSizeLimit;
+    const tui::ThemeRegistry* themes = nullptr;
+    std::string theme_name = "dark";
+    bool use_colors = true;
 };
 
 struct AiContinueContext;

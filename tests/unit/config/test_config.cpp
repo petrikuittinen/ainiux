@@ -3,6 +3,7 @@
 #include "cli/args.hpp"
 #include "config/config.hpp"
 #include "editor/editor_prompts.hpp"
+#include "tui/theme_registry.hpp"
 #include "provider/provider.hpp"
 #include <cstdlib>
 #include <filesystem>
@@ -64,11 +65,15 @@ void test_config_applies_user_settings() {
     pkchat::config::Environment environment{config_home, system_home, "/nonexistent"};
     pkchat::config::LoadResult loaded = pkchat::config::load_automatic(pkchat::cli::Options{}, environment);
     check(loaded.error.ok(), "automatic user config loading succeeds");
-    check(loaded.loaded_paths.size() == 3 &&
-              loaded.loaded_paths[0].find("editor-commands.conf") != std::string::npos &&
-              loaded.loaded_paths[1] == system_home + "/pkchat/config.conf" &&
-              loaded.loaded_paths[2] == config_home + "/pkchat/config.conf",
-          "automatic loading applies bundled editor commands before system and user config");
+    check(loaded.loaded_paths.size() == 4 &&
+              loaded.loaded_paths[0].find("themes.conf") != std::string::npos &&
+              loaded.loaded_paths[1].find("editor-commands.conf") != std::string::npos &&
+              loaded.loaded_paths[2] == system_home + "/pkchat/config.conf" &&
+              loaded.loaded_paths[3] == config_home + "/pkchat/config.conf",
+          "automatic loading applies bundled themes and editor commands before system and user config");
+    check(loaded.options.tui_themes.has("dark") && loaded.options.tui_themes.has("light") &&
+              loaded.options.tui_themes.has("sepia"),
+          "automatic loading includes built-in themes");
     const pkchat::editor::EditorAssistCommand* loaded_spell =
         pkchat::editor::find_assist_command(loaded.options.editor_assist_config, "/spell");
     check(loaded_spell != nullptr && loaded_spell->prompt.find("spelling") != std::string::npos,
@@ -82,10 +87,11 @@ void test_config_applies_user_settings() {
     check(system_only.error.ok() && !system_only.options.allow_private_url_fetch &&
               !system_only.options.show_thinking_traces && system_only.options.tui_theme == "light",
           "disabling user config retains the automatic system config");
-    check(system_only.loaded_paths.size() == 2 &&
-              system_only.loaded_paths[0].find("editor-commands.conf") != std::string::npos &&
-              system_only.loaded_paths[1] == system_home + "/pkchat/config.conf",
-          "disabling user config still loads bundled editor commands and system config");
+    check(system_only.loaded_paths.size() == 3 &&
+              system_only.loaded_paths[0].find("themes.conf") != std::string::npos &&
+              system_only.loaded_paths[1].find("editor-commands.conf") != std::string::npos &&
+              system_only.loaded_paths[2] == system_home + "/pkchat/config.conf",
+          "disabling user config still loads bundled themes, editor commands, and system config");
     bool skipped_user_config = false;
     for (const pkchat::config::ConfigDiagnostic& diagnostic : system_only.diagnostics) {
         if (diagnostic.scope == pkchat::config::ConfigScope::User &&
@@ -369,6 +375,8 @@ void test_config_xdg_path_resolution() {
     check(pkchat::config::user_editor_commands_path(environment) ==
               "/home/tester/.config/pkchat/editor-commands.conf",
           "relative XDG_CONFIG_HOME falls back to HOME for editor commands");
+    check(pkchat::config::user_themes_path(environment) == "/home/tester/.config/pkchat/themes.conf",
+          "relative XDG_CONFIG_HOME falls back to HOME for themes");
     const std::vector<std::string> system = pkchat::config::system_config_paths(environment);
     check(system.size() == 2 && system[0] == "/low/pkchat/config.conf" &&
               system[1] == "/high/pkchat/config.conf",
@@ -379,6 +387,76 @@ void test_config_xdg_path_resolution() {
               editor_commands[0] == "/low/pkchat/editor-commands.conf" &&
               editor_commands[1] == "/high/pkchat/editor-commands.conf",
           "system editor-commands directories load in reverse order and ignore relative entries");
+    const std::vector<std::string> themes = pkchat::config::system_themes_paths(environment);
+    check(themes.size() == 2 && themes[0] == "/low/pkchat/themes.conf" &&
+              themes[1] == "/high/pkchat/themes.conf",
+          "system themes directories load in reverse order and ignore relative entries");
+}
+
+void test_themes_config() {
+    pkchat::config::ParseResult parsed = pkchat::config::read_file("config/themes.conf");
+    check(parsed.error.ok(), "themes.conf parses");
+    pkchat::cli::Options options;
+    pkchat::Error err = pkchat::config::apply_themes_document(parsed.document, options);
+    check(err.ok(), "themes.conf applies");
+    check(options.tui_themes.has("dark") && options.tui_themes.has("light") &&
+              options.tui_themes.has("sepia"),
+          "themes.conf defines built-in dark, light, and sepia themes");
+
+    pkchat::config::ParseResult invalid = pkchat::config::parse("provider = openai\n", "bad-themes.conf");
+    check(invalid.error.ok(), "invalid themes fixture parses");
+    err = pkchat::config::apply_themes_document(invalid.document, options);
+    check(!err.ok() && err.message.find("unknown themes setting") != std::string::npos,
+          "themes.conf rejects unrelated settings");
+
+    const std::string system_home =
+        std::filesystem::absolute("build/config-theme-system").lexically_normal().string();
+    std::filesystem::create_directories(system_home + "/pkchat");
+    {
+        std::ofstream system_themes(system_home + "/pkchat/themes.conf", std::ios::trunc);
+        check(system_themes.is_open(), "system themes test file opens");
+        system_themes << "[theme]\nname = sepia\nbackground = #F4ECD8\ntext = #5B4636\n"
+                         "muted = #7A6A58\nthinking_trace = #6E5F4D\nuser_label = #8B5E34\n"
+                         "assistant_label = #4F6F46\nerror = #9B2C2C\nstatus_foreground = #5B4636\n"
+                         "status_background = #E8DCC8\nthinking_activity = #8B5E34\n"
+                         "streaming_activity = #4F6F46\npanel_title = #8B5E34\npanel_border = #7A6A58\n"
+                         "panel_hint = #6E5F4D\npanel_highlight = #B7791F\npanel_body = #5B4636\n"
+                         "panel_background = #EFE2C8\n";
+        system_themes.close();
+        check(system_themes.good(), "system themes test file is written");
+    }
+    const std::string config_home =
+        std::filesystem::absolute("build/config-theme-user").lexically_normal().string();
+    std::filesystem::create_directories(config_home + "/pkchat");
+    {
+        std::ofstream user_themes(config_home + "/pkchat/themes.conf", std::ios::trunc);
+        check(user_themes.is_open(), "user themes test file opens");
+        user_themes << "[theme]\nname = dark\nbackground = #101010\ntext = #EEEEEE\n"
+                         "muted = #AAAAAA\nthinking_trace = #888888\nuser_label = #66CCFF\n"
+                         "assistant_label = #66FF99\nerror = #FF6666\nstatus_foreground = #FFFFFF\n"
+                         "status_background = #202020\nthinking_activity = #66CCFF\n"
+                         "streaming_activity = #66FF99\npanel_title = #66CCFF\npanel_border = #888888\n"
+                         "panel_hint = #777777\npanel_highlight = #FFCC66\npanel_body = #DDDDDD\n"
+                         "panel_background = #181818\n";
+        user_themes.close();
+        check(user_themes.good(), "user themes test file is written");
+    }
+    pkchat::config::Environment environment{config_home, system_home, "/nonexistent"};
+    pkchat::config::LoadResult loaded = pkchat::config::load_automatic(pkchat::cli::Options{}, environment);
+    check(loaded.error.ok(), "automatic loading with themes overrides succeeds");
+    check(loaded.options.tui_themes.has("sepia") && loaded.options.tui_themes.has("dark"),
+          "system and user themes merge into the registry");
+    const pkchat::tui::ThemePalette* dark = loaded.options.tui_themes.find("dark");
+    check(dark != nullptr && dark->background.r == 0x10 && dark->background.g == 0x10 &&
+              dark->background.b == 0x10,
+          "user themes.conf overrides the built-in dark theme");
+
+    pkchat::config::ParseResult config_override =
+        pkchat::config::parse("[tui]\ntheme = sepia\n", "config-theme.conf");
+    check(config_override.error.ok(), "config theme override parses");
+    err = pkchat::config::apply_document(config_override.document, loaded.options);
+    check(err.ok() && loaded.options.tui_theme == "sepia",
+          "config.conf selects a custom theme by name");
 }
 
 void test_editor_commands_config() {
@@ -481,6 +559,7 @@ void run_all() {
     test_config_rejects_invalid_input();
     test_config_schema_rejects_invalid_settings_transactionally();
     test_config_xdg_path_resolution();
+    test_themes_config();
     test_editor_commands_config();
 }
 

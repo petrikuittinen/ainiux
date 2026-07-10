@@ -9,6 +9,10 @@
 #include "editor/path_completion.hpp"
 #include "tui/activity.hpp"
 
+namespace pkchat::tui {
+class ThemeRegistry;
+}
+
 namespace pkchat::editor {
 
 struct TerminalSize {
@@ -92,8 +96,15 @@ class TerminalSession {
 };
 
 TerminalSize terminal_size();
+struct TerminalThemeStyle {
+    const tui::ThemeRegistry* themes = nullptr;
+    std::string theme_name = "dark";
+    bool use_colors = true;
+};
+
 void render_terminal(EditorState& state,
                      const MinibufferState& minibuffer,
+                     const TerminalThemeStyle& theme_style = {},
                      bool help_view = false,
                      const EditorAssistDisplay* assist_display = nullptr);
 std::string editor_status_line(const EditorState& state, bool help_view = false);

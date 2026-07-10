@@ -10,6 +10,7 @@
 #include "editor/editor.hpp"
 #include "provider/provider.hpp"
 #include "tui/events.hpp"
+#include "tui/theme_registry.hpp"
 #include "tui/tui.hpp"
 
 namespace pkchat::tui {
@@ -44,7 +45,8 @@ struct TuiCommandContext {
     std::string& settings_text;
     int& history_scroll;
     bool& show_thinking_traces;
-    ThemeName& theme;
+    const ThemeRegistry& themes;
+    std::string& theme;
     bool use_colors = true;
     ActiveJob& active_job;
     TuiMode& mode;

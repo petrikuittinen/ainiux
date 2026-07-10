@@ -9,6 +9,7 @@
 #include "editor/editor_prompts.hpp"
 #include "markdown/markdown.hpp"
 #include "pkchat/model_setting.hpp"
+#include "tui/theme_registry.hpp"
 
 namespace pkchat::cli {
 
@@ -77,6 +78,7 @@ struct Options {
     std::string context_policy = "error";
     std::string image_capability = "auto";
     std::string tui_theme = "dark";
+    tui::ThemeRegistry tui_themes = tui::default_theme_registry();
     std::string benchmark_dataset = "builtin";
     std::string benchmark_category;
     std::string benchmark_case;
