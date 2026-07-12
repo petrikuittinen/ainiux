@@ -34,6 +34,7 @@ struct TuiCommandHandlers {
     std::function<void(const std::string&)> start_fetch;
     std::function<void(const std::string&)> start_search;
     std::function<void(bool)> set_thinking_trace_mode;
+    std::function<void()> switch_to_editor;
 };
 
 struct TuiCommandContext {

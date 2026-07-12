@@ -5,6 +5,7 @@
 #include <vector>
 
 #include "app/app.hpp"
+#include "app/interactive_mode.hpp"
 #include "chat/session.hpp"
 #include "cli/args.hpp"
 #include "config/config.hpp"
@@ -20,6 +21,38 @@
 namespace {
 
 using InputKind = pkchat::input::Kind;
+
+pkchat::editor::EditorSettings editor_settings_from_options(const pkchat::cli::Options& options) {
+    pkchat::editor::EditorSettings settings;
+    settings.undo_limit = static_cast<size_t>(options.editor_undo_limit);
+    settings.huge_file_size_warning = options.editor_huge_file_size_warning;
+    settings.file_size_limit = options.editor_file_size_limit;
+    settings.auto_save_mode = options.editor_auto_save_mode;
+    settings.auto_save_postfix = options.editor_auto_save_postfix;
+    settings.auto_save_threshold = options.editor_auto_save_threshold;
+    settings.auto_save_timeout_seconds = options.editor_auto_save_timeout_seconds;
+    settings.auto_save_size_limit = options.editor_auto_save_size_limit;
+    settings.themes = &options.tui_themes;
+    settings.theme_name = options.tui_theme;
+    settings.use_colors = !options.no_colors;
+    return settings;
+}
+
+pkchat::app::InteractiveSession interactive_session_from_editor_startup(
+    pkchat::cli::Options& options,
+    std::optional<pkchat::editor::AiContinueContext> ai_continue) {
+    pkchat::app::InteractiveSession session;
+    session.start_mode = pkchat::app::InteractiveMode::Editor;
+    session.editor_path = options.editor_path;
+    session.editor_save_as = options.output_path;
+    session.editor_settings = editor_settings_from_options(options);
+    session.ai_continue = std::move(ai_continue);
+    session.assist_config = options.editor_assist_config;
+    if (session.ai_continue.has_value()) {
+        session.context = session.ai_continue->request;
+    }
+    return session;
+}
 
 }  // namespace
 
@@ -188,18 +221,6 @@ int main(int argc, char** argv) {
         return pkchat::app::exit_code_for(pkchat::ErrorCode::BadArgs);
     }
     if (options.editor) {
-        pkchat::editor::EditorSettings editor_settings;
-        editor_settings.undo_limit = static_cast<size_t>(options.editor_undo_limit);
-        editor_settings.huge_file_size_warning = options.editor_huge_file_size_warning;
-        editor_settings.file_size_limit = options.editor_file_size_limit;
-        editor_settings.auto_save_mode = options.editor_auto_save_mode;
-        editor_settings.auto_save_postfix = options.editor_auto_save_postfix;
-        editor_settings.auto_save_threshold = options.editor_auto_save_threshold;
-        editor_settings.auto_save_timeout_seconds = options.editor_auto_save_timeout_seconds;
-        editor_settings.auto_save_size_limit = options.editor_auto_save_size_limit;
-        editor_settings.themes = &options.tui_themes;
-        editor_settings.theme_name = options.tui_theme;
-        editor_settings.use_colors = !options.no_colors;
         pkchat::provider::apply_editor_startup_default(options);
         pkchat::provider::apply_editor_offline_default(options);
         pkchat::provider::ContextResult context_result = pkchat::provider::build_context(options);
@@ -223,11 +244,8 @@ int main(int argc, char** argv) {
             configured.assist_config = options.editor_assist_config;
             ai_continue = std::move(configured);
         }
-        return pkchat::editor::run_editor(options.editor_path,
-                                            options.output_path,
-                                            editor_settings,
-                                            std::move(ai_continue),
-                                            options.editor_assist_config);
+        return pkchat::app::run_interactive(
+            interactive_session_from_editor_startup(options, std::move(ai_continue)));
     }
     if (!options.key.empty() && !options.quiet) {
         std::cerr << "Warning: command line API keys may be visible to other local users; prefer --key-env, "
@@ -403,7 +421,17 @@ int main(int argc, char** argv) {
     pkchat::app::apply_system_prompt(session, context.options.system);
 
     if (context.options.tui) {
-        return pkchat::tui::run(context, std::move(session));
+        pkchat::app::InteractiveSession interactive;
+        interactive.start_mode = pkchat::app::InteractiveMode::Chat;
+        interactive.context = std::move(context);
+        interactive.chat_session = std::move(session);
+        interactive.chat_session_initialized = true;
+        interactive.editor_path = interactive.context.options.editor_path;
+        interactive.editor_save_as = interactive.context.options.output_path;
+        interactive.editor_settings = editor_settings_from_options(interactive.context.options);
+        interactive.assist_config = interactive.context.options.editor_assist_config;
+        pkchat::app::sync_shared_provider_to_editor(interactive);
+        return pkchat::app::run_interactive(std::move(interactive));
     }
 
     pkchat::app::print_chat_start(context);

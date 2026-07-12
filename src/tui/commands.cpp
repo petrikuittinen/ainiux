@@ -43,7 +43,8 @@ void handle_tui_command(const std::string& text, TuiCommandContext& ctx, TuiComm
                 "/fetch URL\n"
                 "/search QUERY\n"
                 "/theme [THEME]\n"
-                "/thinking [trace|notrace]";
+                "/thinking [trace|notrace]\n"
+                "/editor (Ctrl+P; switch to editor mode)";
             ctx.status = "Help shown; /help hides it";
         } else {
             ctx.help_text.clear();
@@ -78,6 +79,14 @@ void handle_tui_command(const std::string& text, TuiCommandContext& ctx, TuiComm
         if (theme_result.ok && !theme_result.selected_theme.empty()) {
             ctx.theme = theme_result.selected_theme;
         }
+        return;
+    }
+    if (text == "/editor") {
+        if (ctx.active_job != ActiveJob::None) {
+            ctx.status = "Cannot switch to editor while a model job is running";
+            return;
+        }
+        handlers.switch_to_editor();
         return;
     }
     if (text == "/edit") {

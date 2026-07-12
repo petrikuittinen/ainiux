@@ -13,6 +13,7 @@
 #include "provider/model_list_job.hpp"
 
 #include "app/app.hpp"
+#include "app/interactive_mode.hpp"
 #include "app/detail.hpp"
 #include "chat/settings.hpp"
 #include "pkchat/model_setting.hpp"
@@ -38,14 +39,16 @@ namespace pkchat::tui {
 
 using detail::RenderStyle;
 
-int run(provider::RequestContext context, chat::Session session) {
+app::TuiRunResult run(provider::RequestContext context,
+                      chat::Session session,
+                      app::InteractiveSession* interactive) {
     const provider::RequestContext cli_context = context;
     if (context.options.model.empty() &&
         provider::profile_auto_selects_default_model(context.profile, context.base_url)) {
         Error model_err = app::choose_default_model(context);
         if (!model_err.ok()) {
             std::cerr << error_code_name(model_err.code) << ": " << model_err.message << "\n";
-            return app::exit_code_for(model_err.code);
+            return {app::exit_code_for(model_err.code), app::InteractiveUiTarget::Quit};
         }
         app::refresh_session_metadata(session, context);
     }
@@ -53,7 +56,7 @@ int run(provider::RequestContext context, chat::Session session) {
     Error err = terminal.enter();
     if (!err.ok()) {
         std::cerr << error_code_name(err.code) << ": " << err.message << "\n";
-        return app::exit_code_for(err.code);
+        return {app::exit_code_for(err.code), app::InteractiveUiTarget::Quit};
     }
 
     runtime::EventQueue<TuiEvent> events;
@@ -74,6 +77,7 @@ int run(provider::RequestContext context, chat::Session session) {
     context.options.tui_themes.normalize_name(context.options.tui_theme, theme);
     const bool use_colors = !context.options.no_colors;
     bool quit = false;
+    bool switch_to_editor = false;
     bool show_thinking_traces = context.options.show_thinking_traces;
     size_t pending_user = static_cast<size_t>(-1);
     size_t pending_assistant = static_cast<size_t>(-1);
@@ -624,6 +628,18 @@ int run(provider::RequestContext context, chat::Session session) {
     command_handlers.start_fetch = [&](const std::string& url) { file_jobs.start_fetch(url); };
     command_handlers.start_search = [&](const std::string& query) { file_jobs.start_search(query); };
     command_handlers.set_thinking_trace_mode = set_thinking_trace_mode;
+    command_handlers.switch_to_editor = [&]() {
+        if (interactive == nullptr) {
+            status = "Editor mode is unavailable";
+            return;
+        }
+        if (active_job != ActiveJob::None) {
+            status = "Cannot switch to editor while a model job is running";
+            return;
+        }
+        switch_to_editor = true;
+        quit = true;
+    };
 
     TuiCommandContext command_context{context,
                                       session,
@@ -1129,6 +1145,10 @@ int run(provider::RequestContext context, chat::Session session) {
                     input.select_all();
                     continue;
                 }
+                if (ch == 16 && mode == TuiMode::Chat && active_job == ActiveJob::None) {
+                    command_handlers.switch_to_editor();
+                    continue;
+                }
                 if (ch == 5 && mode == TuiMode::Chat) {
                     start_history_edit();
                     continue;
@@ -1171,7 +1191,13 @@ int run(provider::RequestContext context, chat::Session session) {
     remove_empty_thread_on_exit();
     file_job.cancel();
     file_job.join();
-    return 0;
+    if (switch_to_editor && interactive != nullptr) {
+        interactive->context = context;
+        interactive->chat_session = session;
+        interactive->chat_session_initialized = true;
+        return {0, app::InteractiveUiTarget::Editor};
+    }
+    return {0, app::InteractiveUiTarget::Quit};
 }
 
 }  // namespace pkchat::tui

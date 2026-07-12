@@ -50,6 +50,9 @@ EditorSlashCommand command_from_token(const std::string& command_token) {
     if (command_token == "close") {
         return EditorSlashCommand::Close;
     }
+    if (command_token == "chat") {
+        return EditorSlashCommand::Chat;
+    }
     return EditorSlashCommand::None;
 }
 
@@ -139,7 +142,7 @@ ParsedEditorSlashCommand parse_editor_slash_command(const std::string& line) {
     if (path_start < trimmed.size()) {
         const std::string path = trim_ascii_copy(trimmed.substr(path_start));
         if (parsed.command == EditorSlashCommand::New || parsed.command == EditorSlashCommand::List ||
-            parsed.command == EditorSlashCommand::Close) {
+            parsed.command == EditorSlashCommand::Close || parsed.command == EditorSlashCommand::Chat) {
             parsed.command = EditorSlashCommand::None;
             return parsed;
         }

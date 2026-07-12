@@ -1,3 +1,4 @@
+#include "app/interactive_mode.hpp"
 #include "common.hpp"
 #include "editor/autosave.hpp"
 #include "editor/editor.hpp"
@@ -87,26 +88,41 @@ void clear_assist_session(AssistSession& session) {
 
 }  // namespace
 
-int run_editor(const std::string& path,
-               const std::string& save_as,
-               const EditorSettings& settings,
-               std::optional<AiContinueContext> ai_continue,
-               const EditorAssistConfig& assist_config) {
+app::EditorRunResult run_editor(const std::string& path,
+                                const std::string& save_as,
+                                const EditorSettings& settings,
+                                std::optional<AiContinueContext> ai_continue,
+                                const EditorAssistConfig& assist_config,
+                                app::InteractiveSession* interactive) {
     EditorState state;
     state.set_undo_limit(settings.undo_limit);
     const std::string initial_path = expand_user_path(path.empty() ? save_as : path);
     state.path = initial_path;
     std::string status = "Ready";
-    if (!initial_path.empty() && access(initial_path.c_str(), F_OK) == 0) {
+    bool switch_to_chat = false;
+    std::vector<EditorState> buffers;
+    size_t active_buffer = 0;
+    const bool restore_editor_buffers =
+        interactive != nullptr && interactive->editor_buffers_initialized &&
+        !interactive->editor_buffers.empty();
+    if (restore_editor_buffers) {
+        buffers = std::move(interactive->editor_buffers);
+        active_buffer = std::min(interactive->editor_active_buffer, buffers.size() - 1);
+        interactive->editor_buffers_initialized = false;
+        interactive->editor_buffers.clear();
+        interactive->editor_active_buffer = 0;
+        state = buffers[active_buffer];
+        status = "Editor";
+    } else if (!initial_path.empty() && access(initial_path.c_str(), F_OK) == 0) {
         FileLoadCheck check;
         Error err = check_load_file_size(initial_path, settings, check);
         if (!err.ok()) {
             std::cerr << error_code_name(err.code) << ": " << err.message << "\n";
-            return 5;
+            return {5, app::InteractiveUiTarget::Quit};
         }
         if (check.should_warn && !confirm_huge_load_before_terminal(initial_path, check)) {
             std::cerr << "Editor load cancelled: " << initial_path << "\n";
-            return 5;
+            return {5, app::InteractiveUiTarget::Quit};
         }
         const AutosaveRecoveryOffer recovery_offer = check_autosave_recovery_offer(initial_path, settings);
         const bool recover_autosave =
@@ -116,7 +132,7 @@ int run_editor(const std::string& path,
         err = load_file(load_path, settings, state.text);
         if (!err.ok()) {
             std::cerr << error_code_name(err.code) << ": " << err.message << "\n";
-            return 5;
+            return {5, app::InteractiveUiTarget::Quit};
         }
         if (recover_autosave) {
             state.dirty = true;
@@ -124,23 +140,25 @@ int run_editor(const std::string& path,
         } else {
             status = "Loaded";
         }
-    } else if (!initial_path.empty()) {
-        Error create_err = ensure_empty_file(initial_path);
-        if (!create_err.ok()) {
-            std::cerr << error_code_name(create_err.code) << ": " << create_err.message << "\n";
-            return 5;
+        buffers.push_back(state);
+    } else {
+        if (!initial_path.empty()) {
+            Error create_err = ensure_empty_file(initial_path);
+            if (!create_err.ok()) {
+                std::cerr << error_code_name(create_err.code) << ": " << create_err.message << "\n";
+                return {5, app::InteractiveUiTarget::Quit};
+            }
+            status = "New file";
         }
-        status = "New file";
+        buffers.push_back(state);
     }
-    std::vector<EditorState> buffers;
-    buffers.push_back(state);
-    size_t active_buffer = 0;
 
     TerminalSession terminal;
     Error err = terminal.enter();
     if (!err.ok()) {
         std::cerr << error_code_name(err.code) << ": " << err.message << "\n";
-        return err.code == ErrorCode::BadArgs ? 2 : 6;
+        const int exit_code = err.code == ErrorCode::BadArgs ? 2 : 6;
+        return {exit_code, app::InteractiveUiTarget::Quit};
     }
 
     bool quit = false;
@@ -189,6 +207,38 @@ int run_editor(const std::string& path,
         if (!help_view.active && active_buffer < buffers.size()) {
             buffers[active_buffer] = state;
         }
+    };
+
+    auto can_switch_to_chat = [&]() {
+        if (interactive == nullptr) {
+            return false;
+        }
+        return !help_view.active && !picker.active && !buffer_list_active && !pending_close_confirm &&
+               !minibuffer.active && !replace.active && !assist_session.active;
+    };
+
+    auto request_switch_to_chat = [&]() {
+        if (!can_switch_to_chat()) {
+            if (interactive != nullptr) {
+                minibuffer_message(minibuffer, "Cannot switch to chat right now");
+            }
+            return;
+        }
+        clear_assist_session(assist_session);
+        model_list.job.cancel();
+        model_list.job.join();
+        sync_active_buffer();
+        interactive->editor_buffers = std::move(buffers);
+        interactive->editor_active_buffer = active_buffer;
+        interactive->editor_buffers_initialized = true;
+        interactive->editor_path = path;
+        interactive->editor_save_as = save_as;
+        interactive->editor_settings = settings;
+        interactive->assist_config = assist_config;
+        interactive->ai_continue = ai_continue;
+        app::sync_editor_provider_to_shared(*interactive, ai_continue);
+        switch_to_chat = true;
+        quit = true;
     };
 
     auto selected_buffer_status = [&]() {
@@ -925,10 +975,21 @@ int run_editor(const std::string& path,
                 exit_assist_command_mode(minibuffer, assist_completer);
                 close_active_buffer(false);
                 return;
+            case EditorSlashCommand::Chat:
+                pending_assist = PendingAssist{};
+                exit_assist_command_mode(minibuffer, assist_completer);
+                request_switch_to_chat();
+                return;
             case EditorSlashCommand::None:
                 break;
         }
         const std::string command_line = trim_ascii_copy(minibuffer.input);
+        if (command_line == "/chat") {
+            pending_assist = PendingAssist{};
+            exit_assist_command_mode(minibuffer, assist_completer);
+            request_switch_to_chat();
+            return;
+        }
         if (command_line == "/theme" || command_line.rfind("/theme ", 0) == 0) {
             pending_assist = PendingAssist{};
             exit_assist_command_mode(minibuffer, assist_completer);
@@ -1294,6 +1355,10 @@ int run_editor(const std::string& path,
             return;
         }
 
+        if (ch == 16) {
+            request_switch_to_chat();
+            return;
+        }
         if (ch == 17) {
             if (help_view.active) {
                 exit_help_view();
@@ -1507,7 +1572,10 @@ int run_editor(const std::string& path,
         render_editor();
     }
     sync_active_buffer();
-    return 0;
+    if (switch_to_chat) {
+        return {0, app::InteractiveUiTarget::Chat};
+    }
+    return {0, app::InteractiveUiTarget::Quit};
 }
 
 }  // namespace pkchat::editor

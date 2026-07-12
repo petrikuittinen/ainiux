@@ -16,6 +16,7 @@ enum class EditorSlashCommand {
     New,
     List,
     Close,
+    Chat,
 };
 
 struct ParsedEditorSlashCommand {

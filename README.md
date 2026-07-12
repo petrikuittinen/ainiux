@@ -2,7 +2,7 @@
 
 `pkchat` is a fast, script-friendly command-line chat client for OpenAI and OpenAI-compatible APIs.
 
-Current status: v0.91 CLI with libcurl transport, cancellable runtime jobs, provider registry/profile aliases, `/v1/models`, `/v1/chat/completions`, text-only OpenAI Responses API support, provider-specific reasoning/thinking request compatibility, local JPEG/PNG/GIF image input, interactive text/image attachments, request-only context policies, safe URL insertion, web search with API providers and keyless fallbacks, a simple REPL, a standalone `--editor` mode with multiple file buffers, selection, copy/cut/paste across buffers, grapheme-aware Unicode editing, and AI continue/editor commands, a full-screen non-blocking TUI foundation, SQLite-backed TUI chat threads, JSON chat import/export save/load, HTML-to-text/Markdown extraction, Markdown assistant-output rendering to HTML or plaintext, automatic system/user TOML-alike configuration loading, and a concurrent JSONL benchmark runner.
+Current status: v0.94 CLI with libcurl transport, cancellable runtime jobs, provider registry/profile aliases, `/v1/models`, `/v1/chat/completions`, text-only OpenAI Responses API support, provider-specific reasoning/thinking request compatibility, local JPEG/PNG/GIF image input, interactive text/image attachments, request-only context policies, safe URL insertion, web search with API providers and keyless fallbacks, a simple REPL, a standalone `--editor` mode with multiple file buffers, selection, copy/cut/paste across buffers, grapheme-aware Unicode editing, and AI continue/editor commands, a full-screen non-blocking TUI foundation, SQLite-backed TUI chat threads, JSON chat import/export save/load, HTML-to-text/Markdown extraction, Markdown assistant-output rendering to HTML or plaintext, automatic system/user TOML-alike configuration loading, and a concurrent JSONL benchmark runner.
 
 ## Build
 
@@ -565,6 +565,10 @@ make test
 ```
 
 `make test` runs unit tests, I/O and network fault tests, and one integration script against a local mock OpenAI-compatible server.
+
+### v0.94 editor and chat mode switching
+
+v0.94 lets you switch between standalone editor mode and chat TUI without restarting: `Ctrl+P`, editor `Esc /chat`, or chat `/editor`. Provider, model, editor buffers, and the active chat thread are preserved across switches.
 
 ### v0.91 cutoff benchmark updates
 

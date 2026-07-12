@@ -1985,6 +1985,11 @@ void test_editor_help_document_and_command() {
     slash = pkchat::editor::parse_editor_slash_command("/close file.txt");
     check(slash.command == pkchat::editor::EditorSlashCommand::None,
           "editor /close rejects arguments");
+    slash = pkchat::editor::parse_editor_slash_command("/chat");
+    check(slash.command == pkchat::editor::EditorSlashCommand::Chat && slash.path.empty(),
+          "editor /chat slash command is recognized");
+    check(std::find(completions.begin(), completions.end(), "/chat") != completions.end(),
+          "assist command completions include /chat");
     slash = pkchat::editor::parse_editor_slash_command("/save extra words");
     check(slash.command == pkchat::editor::EditorSlashCommand::None,
           "editor file slash commands reject multi-token path arguments");

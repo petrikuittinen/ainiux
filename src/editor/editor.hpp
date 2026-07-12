@@ -11,6 +11,11 @@
 
 #include "common.hpp"
 
+namespace pkchat::app {
+struct EditorRunResult;
+struct InteractiveSession;
+}
+
 namespace pkchat::tui {
 class ThemeRegistry;
 }
@@ -230,10 +235,11 @@ Error check_load_file_size(const std::string& path, const EditorSettings& settin
 Error save_file(const std::string& path, const PieceTable& text);
 Error ensure_empty_file(const std::string& path);
 
-int run_editor(const std::string& path,
-               const std::string& save_as,
-               const EditorSettings& settings,
-               std::optional<AiContinueContext> ai_continue,
-               const EditorAssistConfig& assist_config);
+pkchat::app::EditorRunResult run_editor(const std::string& path,
+                                        const std::string& save_as,
+                                        const EditorSettings& settings,
+                                        std::optional<AiContinueContext> ai_continue,
+                                        const EditorAssistConfig& assist_config,
+                                        pkchat::app::InteractiveSession* interactive = nullptr);
 
 }  // namespace pkchat::editor
