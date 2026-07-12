@@ -612,7 +612,7 @@ printf '%s\n' "$jsond" | grep '"event":"done"' >/dev/null
 verbose_err="$ROOT/build/verbose.err"
 verbose_out=$("$ROOT/pkchat" "$BASE" -v --stream -m "$MODEL" -p "hello" 2>"$verbose_err")
 test "$verbose_out" = "Hello"
-grep 'TTFT: [0-9][0-9]* ms, Token/s: [0-9][0-9]*[.][0-9]' "$verbose_err" >/dev/null
+grep 'TTFT: ' "$verbose_err" | grep ', context: ' | grep '%)' >/dev/null
 
 
 CHAT_FILE="$ROOT/build/chat.json"

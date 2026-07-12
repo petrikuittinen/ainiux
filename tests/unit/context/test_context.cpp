@@ -109,6 +109,23 @@ void test_context_numeric_and_unicode_edge_cases() {
 
 }  // namespace
 
+void test_context_usage_formatting() {
+    pkchat::provider::ChatResult result;
+    result.usage_json = "{\"prompt_tokens\":20,\"completion_tokens\":5,\"total_tokens\":25}";
+    const std::vector<pkchat::provider::Message> messages = {
+        {"user", "hi"}, {"assistant", "ok"}};
+    check(pkchat::context::estimated_usage_tokens(messages, result) == 25,
+          "context usage prefers provider-reported totals when available");
+
+    result.usage_json = "null";
+    check(pkchat::context::format_context_usage(1000, 10000) == "1000 (10%)",
+          "context usage formats token count and percentage");
+    check(pkchat::context::format_context_usage(20, 131072) == "20 (<1%)",
+          "context usage shows sub-one-percent usage without rounding to zero");
+    check(pkchat::context::format_context_usage(1000, 0).empty(),
+          "context usage is omitted without a configured window");
+}
+
 void test_context_policy_metadata() {
     check(pkchat::context::policy::is_valid(pkchat::context::policy::kSummarizeMiddle),
           "context policy metadata accepts summarize-middle");
@@ -121,6 +138,7 @@ void test_context_policy_metadata() {
 void run_all() {
     test_context_policies_preserve_full_messages();
     test_context_numeric_and_unicode_edge_cases();
+    test_context_usage_formatting();
     test_context_policy_metadata();
 }
 

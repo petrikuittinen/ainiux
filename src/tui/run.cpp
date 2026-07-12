@@ -40,6 +40,15 @@ using detail::RenderStyle;
 
 int run(provider::RequestContext context, chat::Session session) {
     const provider::RequestContext cli_context = context;
+    if (context.options.model.empty() &&
+        provider::profile_auto_selects_default_model(context.profile, context.base_url)) {
+        Error model_err = app::choose_default_model(context);
+        if (!model_err.ok()) {
+            std::cerr << error_code_name(model_err.code) << ": " << model_err.message << "\n";
+            return app::exit_code_for(model_err.code);
+        }
+        app::refresh_session_metadata(session, context);
+    }
     TerminalSession terminal;
     Error err = terminal.enter();
     if (!err.ok()) {
@@ -84,6 +93,8 @@ int run(provider::RequestContext context, chat::Session session) {
     size_t picker_selected = 0;
     bool picker_cancel_quits = false;
     ModelsRequestPurpose models_request_purpose = ModelsRequestPurpose::Preview;
+    provider::ModelsResult cached_models;
+    bool have_cached_models = false;
     chat::SqliteStore sqlite_store;
     bool sqlite_available = false;
     std::string sqlite_path;
@@ -300,11 +311,12 @@ int run(provider::RequestContext context, chat::Session session) {
         models_request_purpose = purpose;
         active_job = ActiveJob::Models;
         provider::RequestContext job_context = context;
-        provider::start_list_models_job(model_job, job_context, [&events](Error error, std::vector<std::string> model_ids) {
+        provider::start_list_models_job(model_job, job_context, [&events](Error error, provider::ModelsResult models) {
             TuiEvent event;
             event.type = TuiEventType::ModelsDone;
             event.error = std::move(error);
-            event.models = std::move(model_ids);
+            event.models = std::move(models.model_ids);
+            event.models_result = std::move(models);
             events.push(std::move(event));
         });
         status = purpose == ModelsRequestPurpose::Picker ? "Loading models..." : "Listing models...";
@@ -651,6 +663,9 @@ int run(provider::RequestContext context, chat::Session session) {
     picker_callbacks.on_model_selected = [&](const std::string& model_name) {
         context.options.model = model_name;
         session.model = model_name;
+        if (have_cached_models) {
+            provider::apply_context_window_from_models(context, cached_models);
+        }
         picker_items.clear();
         picker_selected = 0;
         mode = TuiMode::Chat;
@@ -725,6 +740,15 @@ int run(provider::RequestContext context, chat::Session session) {
         start_turn(raw);
     };
 
+    if (!context.profile.offline && !context.options.has_context_tokens &&
+        context.options.context_tokens <= 0) {
+        provider::resolve_context_window(context);
+    }
+    if (!context.profile.offline && !context.options.model.empty() && !context.options.has_context_tokens &&
+        context.options.context_tokens <= 0 && active_job == ActiveJob::None) {
+        start_models(ModelsRequestPurpose::Preview);
+    }
+
     refresh_startup_status();
 
     if (should_open_startup_provider_picker(context)) {
@@ -777,6 +801,11 @@ int run(provider::RequestContext context, chat::Session session) {
                     if (should_regenerate) {
                         start_queued_regeneration(regenerate_erase_from);
                     } else {
+                        if (!context.options.has_context_tokens && context.options.context_tokens <= 0) {
+                            const std::string selector =
+                                !event.chat.model.empty() ? event.chat.model : context.options.model;
+                            provider::resolve_context_window(context, selector);
+                        }
                         status = event.compacted
                                      ? event.compaction.notice
                                      : generation_ready_status(context.profile.name,
@@ -893,6 +922,11 @@ int run(provider::RequestContext context, chat::Session session) {
                 case TuiEventType::ModelsDone:
                     model_job.join();
                     active_job = ActiveJob::None;
+                    if (event.error.ok()) {
+                        cached_models = std::move(event.models_result);
+                        have_cached_models = true;
+                        provider::apply_context_window_from_models(context, cached_models);
+                    }
                     if (models_request_purpose == ModelsRequestPurpose::Picker) {
                         models_request_purpose = ModelsRequestPurpose::Preview;
                         if (!event.error.ok()) {

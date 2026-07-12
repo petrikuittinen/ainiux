@@ -53,7 +53,9 @@ int run_benchmark_mode(const cli::Options& options);
 void refresh_session_metadata(chat::Session& session, const provider::RequestContext& context);
 void apply_system_prompt(chat::Session& session, const std::string& system);
 void replace_system_prompt(chat::Session& session, const std::string& system);
-void print_verbose_metrics(const cli::Options& options, const provider::ChatResult& result);
+void print_verbose_metrics(provider::RequestContext& context,
+                           const provider::ChatResult& result,
+                           const std::vector<provider::Message>& messages = {});
 Error save_if_requested(const cli::Options& options, const chat::Session& session);
 Error choose_default_model(provider::RequestContext& context);
 void print_chat_start(const provider::RequestContext& context);

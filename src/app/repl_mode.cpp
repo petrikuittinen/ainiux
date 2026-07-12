@@ -41,7 +41,7 @@ int run_repl(provider::RequestContext context, chat::Session session, std::ostre
             print_error(err);
             return exit_code_for(err.code);
         }
-        print_verbose_metrics(context.options, chat);
+        print_verbose_metrics(context, chat, session.messages);
         return 0;
     };
 

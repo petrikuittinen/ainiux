@@ -54,7 +54,21 @@ class Handler(BaseHTTPRequestHandler):
             if self.empty_models:
                 self._send(200, json.dumps({"object": "list", "data": []}))
                 return
-            self._send(200, json.dumps({"object": "list", "data": [{"id": self.model, "object": "model"}]}))
+            self._send(
+                200,
+                json.dumps(
+                    {
+                        "object": "list",
+                        "data": [
+                            {
+                                "id": self.model,
+                                "object": "model",
+                                "context_length": 10000,
+                            }
+                        ],
+                    }
+                ),
+            )
         else:
             self._send(404, json.dumps({"error": {"message": "not found"}}))
 

@@ -629,6 +629,23 @@ void test_none_provider_allows_an_empty_endpoint() {
           "none provider rejects model endpoint overrides");
 }
 
+void test_parse_models_response_llama_server_hybrid() {
+    const std::string body = R"json({
+      "models":[{"name":"Gemma-4-26B-A4B","model":"Gemma-4-26B-A4B","type":"model"}],
+      "object":"list",
+      "data":[{"id":"Gemma-4-26B-A4B","aliases":["Gemma-4-26B-A4B"],"object":"model","created":1783852595,"owned_by":"llamacpp","meta":{"n_vocab":262144,"n_ctx":131072,"n_ctx_train":262144}}]
+    })json";
+    pkchat::provider::ModelsResult result;
+    pkchat::Error err = pkchat::provider::parse_models_response(body, result);
+    check(err.ok(), "llama-server hybrid models JSON parses");
+    check(result.model_ids.size() == 1 && result.model_ids.front() == "Gemma-4-26B-A4B",
+          "llama-server hybrid models JSON preserves model id");
+    check(pkchat::provider::context_window_for_model(result, "Gemma-4-26B-A4B") == 131072,
+          "llama-server hybrid models JSON exposes runtime context length");
+    check(pkchat::provider::context_window_for_model(result, "definitely-not-a-model") < 0,
+          "unknown llama-server model selector does not invent a context window");
+}
+
 void test_parse_models_response_llamacpp_meta() {
     const std::string body = R"json({
       "object": "list",
@@ -668,6 +685,50 @@ void test_parse_models_response_llamacpp_meta() {
           "llama-server markdown formats training context length");
     check(markdown.find("25.2B") != std::string::npos, "llama-server markdown formats parameter count");
     check(markdown.find("13.26 GiB") != std::string::npos, "llama-server markdown formats model size");
+}
+
+void test_model_context_window_tokens() {
+    pkchat::provider::ModelInfo llama;
+    llama.id = "Gemma-4-26B-A4B";
+    llama.attributes = {{"n_ctx", "131072"}, {"n_ctx_train", "262144"}};
+    check(pkchat::provider::model_context_window_tokens(llama) == 131072,
+          "model context window prefers runtime n_ctx over training context");
+
+    pkchat::provider::ModelsResult models;
+    pkchat::provider::ModelInfo ollama;
+    ollama.id = "llama3";
+    ollama.attributes = {{"context_length", "8192"}};
+    models.models.push_back(ollama);
+    models.model_ids.push_back("llama3");
+    check(pkchat::provider::context_window_for_model(models, "llama3") == 8192,
+          "model context window lookup matches model id");
+
+    pkchat::provider::RequestContext context;
+    context.options.model = "llama3";
+    pkchat::provider::apply_context_window_from_models(context, models);
+    check(context.options.context_tokens == 8192,
+          "context window is applied from model metadata when not configured explicitly");
+
+    context.options.has_context_tokens = true;
+    context.options.context_tokens = 0;
+    pkchat::provider::apply_context_window_from_models(context, models);
+    check(context.options.context_tokens == 0,
+          "explicit context window configuration blocks model metadata fallback");
+
+    pkchat::provider::ModelInfo aliased;
+    aliased.id = "Gemma-4-26B-A4B";
+    aliased.attributes = {{"n_ctx", "131072"}, {"aliases", "gemma-4, Gemma-4-26B-A4B"}};
+    pkchat::provider::ModelsResult aliased_models;
+    aliased_models.models.push_back(aliased);
+    aliased_models.model_ids.push_back("Gemma-4-26B-A4B");
+    check(pkchat::provider::context_window_for_model(aliased_models, "gemma-4") == 131072,
+          "model context window lookup matches aliases");
+
+    pkchat::provider::RequestContext wrong_requested;
+    wrong_requested.options.model = "WrongModel";
+    pkchat::provider::apply_context_window_from_models(wrong_requested, aliased_models, "Gemma-4-26B-A4B");
+    check(wrong_requested.options.context_tokens == 131072,
+          "model context window can be resolved from the provider-reported model id");
 }
 
 void test_models_markdown_format() {
@@ -740,6 +801,26 @@ void test_apply_provider_target_accepts_custom_url() {
           "custom URL provider target selects the custom OpenAI-compatible profile");
     check(context.context.base_url.find("localhost:30000") != std::string::npos,
           "custom URL provider target normalizes the requested endpoint");
+}
+
+void test_tui_local_endpoint_auto_selects_model() {
+    const char* argv[] = {"pkchat", "http://localhost:30000", "--chat"};
+    pkchat::cli::ParseResult parsed = pkchat::cli::parse_args(3, const_cast<char**>(argv));
+    check(parsed.error.ok(), "local URL chat UI args parse");
+    pkchat::provider::ContextResult context = pkchat::provider::build_context(parsed.options);
+    check(context.error.ok(), "local URL chat UI context builds");
+    check(!pkchat::provider::tui_defers_model_selection(context.context),
+          "local custom URL chat UI auto-selects the default model");
+    check(context.context.base_url.find("localhost:30000") != std::string::npos,
+          "local URL chat UI keeps the requested endpoint");
+
+    pkchat::cli::Options bare_chat;
+    bare_chat.tui = true;
+    pkchat::provider::apply_tui_startup_default(bare_chat);
+    pkchat::provider::ContextResult offline = pkchat::provider::build_context(bare_chat);
+    check(offline.error.ok(), "bare chat UI offline context builds");
+    check(!pkchat::provider::tui_defers_model_selection(offline.context),
+          "bare offline chat UI does not defer because provider selection comes first");
 }
 
 void test_tui_startup_provider_selection_helpers() {
@@ -1226,9 +1307,12 @@ void run_all() {
     test_provider_lookup_metadata();
     test_lmstudio_context();
     test_lmstudio_shortcut_context();
+    test_parse_models_response_llama_server_hybrid();
     test_parse_models_response_llamacpp_meta();
+    test_model_context_window_tokens();
     test_models_markdown_format();
     test_apply_provider_target_accepts_custom_url();
+    test_tui_local_endpoint_auto_selects_model();
     test_tui_startup_provider_selection_helpers();
     test_editor_startup_local_only_default();
     test_editor_defaults_offline_without_credentials();

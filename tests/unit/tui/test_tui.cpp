@@ -92,13 +92,13 @@ void test_tui_ready_and_generation_status() {
         pkchat::tui::generation_ready_status("lm_studio", "gpt-test", result, true, messages, 100);
     check(context_status.find("TTFT 100ms | ~20.0 tok/s") != std::string::npos,
           "TUI context status uses compact timing and estimated-throughput notation");
-    check(context_status.find("Context used: 25/100 (25.0%)") != std::string::npos,
+    check(context_status.find("context: 25 (25%)") != std::string::npos,
           "TUI completion status displays estimated context usage");
 
     result.usage_json = "null";
     const std::string exhausted =
         pkchat::tui::generation_ready_status("lm_studio", "gpt-test", result, true, messages, 10);
-    check(exhausted.find("Context used: 17/10 (170.0%)") != std::string::npos,
+    check(exhausted.find("context: 17 (170%)") != std::string::npos,
           "TUI context estimate reports usage beyond the configured window");
 }
 
@@ -373,6 +373,8 @@ void test_tui_chat_startup_status() {
     ready.profile.name = "lm_studio";
     ready.options.model = "qwen-local";
     const std::string ready_status = pkchat::tui::chat_startup_status(ready);
+    check(ready_status.find("[lmstudio / qwen-local]") == 0,
+          "TUI startup status shows provider and model when ready");
     check(ready_status.find("/provider") != std::string::npos &&
               ready_status.find("/list") != std::string::npos,
           "TUI startup status reminds about provider changes and thread list when ready");

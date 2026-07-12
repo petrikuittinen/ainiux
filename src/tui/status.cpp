@@ -78,7 +78,7 @@ std::string chat_startup_status(const provider::RequestContext& context) {
     if (context.options.model.empty()) {
         return "Choose a model with /model · Change provider with /provider";
     }
-    return "Change provider with /provider · Open saved threads with /list";
+    return provider_model_status_message(context, "ready · Change provider with /provider · Open saved threads with /list");
 }
 
 std::string generation_ready_status(const std::string& provider_name,
@@ -120,13 +120,10 @@ std::string generation_ready_status(const std::string& provider_name,
             out << " (estimated)";
         }
     }
-    if (context_tokens > 0) {
-        const long long locally_estimated = context::estimated_text_tokens(messages);
-        const long long reported = provider::reported_total_tokens(result);
-        const long long used = std::max(locally_estimated, reported);
-        const double percentage = static_cast<double>(used) * 100.0 / static_cast<double>(context_tokens);
-        out << " | Context used: " << used << "/" << context_tokens << " (" << std::fixed
-            << std::setprecision(1) << percentage << "%)";
+    const std::string context_usage =
+        context::format_context_usage(context::estimated_usage_tokens(messages, result), context_tokens);
+    if (!context_usage.empty()) {
+        out << " | context: " << context_usage;
     }
     return out.str();
 }

@@ -10,7 +10,7 @@
 
 namespace pkchat::provider {
 
-using ModelListJobCallback = std::function<void(Error error, std::vector<std::string> model_ids)>;
+using ModelListJobCallback = std::function<void(Error error, ModelsResult models)>;
 
 void start_list_models_job(runtime::JobHandle& job,
                            RequestContext context,

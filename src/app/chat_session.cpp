@@ -84,15 +84,26 @@ void replace_system_prompt(chat::Session& session, const std::string& system) {
     }
 }
 
-void print_verbose_metrics(const cli::Options& options, const provider::ChatResult& result) {
-    if (!options.verbose || options.quiet) {
+void print_verbose_metrics(provider::RequestContext& context,
+                           const provider::ChatResult& result,
+                           const std::vector<provider::Message>& messages) {
+    if (!context.options.verbose || context.options.quiet) {
         return;
+    }
+    if (!context.options.has_context_tokens && context.options.context_tokens <= 0) {
+        const std::string selector = !result.model.empty() ? result.model : context.options.model;
+        provider::resolve_context_window(context, selector);
     }
     std::cerr << "TTFT: " << result.ttft_ms << " ms, ";
     std::cerr << "Token/s: " << std::fixed << std::setprecision(1)
-              << provider::tokens_per_second(result, options.stream);
+              << provider::tokens_per_second(result, context.options.stream);
     if (result.completion_tokens_estimated) {
         std::cerr << " (estimated)";
+    }
+    const std::string context_usage = context::format_context_usage(
+        context::estimated_usage_tokens(messages, result), context.options.context_tokens);
+    if (!context_usage.empty()) {
+        std::cerr << ", context: " << context_usage;
     }
     std::cerr << "\n";
 }
@@ -108,14 +119,28 @@ Error choose_default_model(provider::RequestContext& context) {
     if (context.profile.offline) {
         return ok_error();
     }
+    provider::ModelsResult models;
+    bool listed_models = false;
     if (context.options.model.empty()) {
-        provider::ModelsResult models;
         Error err = provider::list_models(context, models);
         if (!err.ok()) {
             return err;
         }
+        listed_models = true;
         if (!models.model_ids.empty()) {
             context.options.model = models.model_ids.front();
+        }
+    }
+    if (!context.options.has_context_tokens && context.options.context_tokens <= 0 &&
+        !context.options.model.empty()) {
+        if (!listed_models) {
+            const Error err = provider::list_models(context, models);
+            if (err.ok()) {
+                listed_models = true;
+            }
+        }
+        if (listed_models) {
+            provider::apply_context_window_from_models(context, models);
         }
     }
     if (!context.options.chat_purpose.empty() && !context.options.model.empty()) {

@@ -121,6 +121,30 @@ long long estimated_text_tokens(const std::vector<provider::Message>& messages) 
     return total;
 }
 
+long long estimated_usage_tokens(const std::vector<provider::Message>& messages,
+                                 const provider::ChatResult& result) {
+    const long long locally_estimated = estimated_text_tokens(messages);
+    const long long reported = provider::reported_total_tokens(result);
+    if (reported < 0) {
+        return locally_estimated;
+    }
+    return std::max(locally_estimated, reported);
+}
+
+std::string format_context_usage(long long used_tokens, long long window_tokens) {
+    if (window_tokens <= 0) {
+        return "";
+    }
+    std::string percent_text;
+    if (used_tokens > 0 && used_tokens * 100 < window_tokens) {
+        percent_text = "<1%";
+    } else {
+        const long long percent = (used_tokens * 100 + window_tokens / 2) / window_tokens;
+        percent_text = std::to_string(percent) + "%";
+    }
+    return std::to_string(used_tokens) + " (" + percent_text + ")";
+}
+
 PreparedMessages prepare(const std::vector<provider::Message>& messages,
                          const std::string& policy,
                          size_t max_bytes) {

@@ -1568,6 +1568,9 @@ Error apply_document(const Document& document, cli::Options& options) {
             if (err.ok()) candidate.has_max_output_tokens = true;
         } else if (name == "context.window_tokens") {
             err = context_window_tokens(entry, candidate.context_tokens);
+            if (err.ok()) {
+                candidate.has_context_tokens = true;
+            }
         } else if (name == "context.max_bytes") {
             err = nonnegative_long(entry, candidate.max_context_bytes);
         } else if (name == "context.policy") {

@@ -133,6 +133,7 @@ std::string normalize_provider_key(std::string text);
 std::string canonical_profile_name(const std::string& name);
 bool is_selectable_provider(const Profile& profile);
 bool profile_auto_selects_default_model(const Profile& profile, const std::string& base_url);
+bool tui_defers_model_selection(const RequestContext& context);
 std::string display_name_for_profile(const std::string& profile_name);
 Error validate_profile_name(const std::string& name);
 const Capabilities& capabilities_for(const RequestContext& context);
@@ -141,6 +142,12 @@ Error validate_image_input(const RequestContext& context);
 std::string active_request_url(const RequestContext& context);
 double tokens_per_second(const ChatResult& result, bool stream);
 long long reported_total_tokens(const ChatResult& result);
+long long model_context_window_tokens(const ModelInfo& model);
+long long context_window_for_model(const ModelsResult& models, const std::string& model_selector);
+void apply_context_window_from_models(RequestContext& context,
+                                      const ModelsResult& models,
+                                      const std::string& model_selector = "");
+Error resolve_context_window(RequestContext& context, const std::string& model_selector = "");
 std::string serialize_request(const RequestContext& context, const std::vector<Message>& messages);
 std::string serialize_chat_request(const RequestContext& context, const std::vector<Message>& messages);
 Error list_models(const RequestContext& context,

@@ -1453,6 +1453,52 @@ std::string model_attribute_heading(const std::string& key) {
     return heading;
 }
 
+void append_parsed_model(ModelInfo info, ModelsResult& result) {
+    if (info.id.empty()) {
+        return;
+    }
+    result.model_ids.push_back(info.id);
+    result.models.push_back(std::move(info));
+}
+
+void append_models_from_array(const json::Value& array, ModelsResult& result) {
+    for (const json::Value& item : array.array) {
+        if (!item.is_object()) {
+            continue;
+        }
+        ModelInfo info;
+        if (const json::Value* id = item.get("id")) {
+            if (id->is_string()) {
+                info.id = id->string;
+            }
+        }
+        if (info.id.empty()) {
+            if (const json::Value* name = item.get("name")) {
+                if (name->is_string()) {
+                    info.id = name->string;
+                }
+            }
+        }
+        if (info.id.empty()) {
+            if (const json::Value* model = item.get("model")) {
+                if (model->is_string()) {
+                    info.id = model->string;
+                }
+            }
+        }
+        if (info.id.empty()) {
+            continue;
+        }
+        for (const auto& entry : item.object) {
+            if (entry.first == "id") {
+                continue;
+            }
+            flatten_model_value(entry.first, entry.second, info.attributes);
+        }
+        append_parsed_model(std::move(info), result);
+    }
+}
+
 Error parse_models_json(const std::string& body, ModelsResult& result) {
     json::ParseResult parsed = json::parse(body);
     if (!parsed.error.ok()) {
@@ -1461,29 +1507,22 @@ Error parse_models_json(const std::string& body, ModelsResult& result) {
     if (const std::string provider_msg = provider_error_message(parsed.value); !provider_msg.empty()) {
         return {ErrorCode::ProviderSchema, "provider error: " + provider_msg};
     }
-    const json::Value* data = parsed.value.get("data");
-    if (data == nullptr || !data->is_array()) {
-        return {ErrorCode::ProviderSchema, "models response did not contain a data array"};
-    }
     result.models.clear();
     result.model_ids.clear();
-    for (const json::Value& item : data->array) {
-        const json::Value* id = item.get("id");
-        if (id == nullptr || !id->is_string() || id->string.empty()) {
-            continue;
+    if (const json::Value* data = parsed.value.get("data")) {
+        if (data->is_array()) {
+            append_models_from_array(*data, result);
         }
-        ModelInfo info;
-        info.id = id->string;
-        if (item.is_object()) {
-            for (const auto& entry : item.object) {
-                if (entry.first == "id") {
-                    continue;
-                }
-                flatten_model_value(entry.first, entry.second, info.attributes);
+    }
+    if (result.models.empty()) {
+        if (const json::Value* models = parsed.value.get("models")) {
+            if (models->is_array()) {
+                append_models_from_array(*models, result);
             }
         }
-        result.model_ids.push_back(info.id);
-        result.models.push_back(std::move(info));
+    }
+    if (result.models.empty()) {
+        return {ErrorCode::ProviderSchema, "models response did not contain any models"};
     }
     return ok_error();
 }
@@ -2716,13 +2755,21 @@ bool profile_auto_selects_default_model(const Profile& profile, const std::strin
     if (profile.offline) {
         return false;
     }
-    if (profile.name == names::kLmStudio || profile.name == names::kOllama || profile.name == names::kVllm) {
+    if (profile.name == names::kLmStudio || profile.name == names::kOllama || profile.name == names::kVllm ||
+        profile.name == names::kLlamacpp) {
         return true;
     }
     if (profile.name == names::kCustomOpenAiChat && is_loopback_base_url(base_url)) {
         return true;
     }
     return false;
+}
+
+bool tui_defers_model_selection(const RequestContext& context) {
+    if (!context.options.tui || !context.options.model.empty() || context.profile.offline) {
+        return false;
+    }
+    return !profile_auto_selects_default_model(context.profile, context.base_url);
 }
 
 std::vector<Profile> built_in_profiles() {
@@ -2854,6 +2901,146 @@ std::string serialize_request(const RequestContext& context, const std::vector<M
 
 std::string serialize_chat_request(const RequestContext& context, const std::vector<Message>& messages) {
     return build_chat_request_json(context, messages);
+}
+
+bool model_selector_matches_value(const std::string& selector, const std::string& candidate) {
+    if (selector.empty() || candidate.empty()) {
+        return false;
+    }
+    if (selector == candidate) {
+        return true;
+    }
+    return ascii_lower(selector) == ascii_lower(candidate);
+}
+
+bool model_selector_matches_aliases(const std::string& selector, const std::string& aliases) {
+    if (selector.empty() || aliases.empty()) {
+        return false;
+    }
+    std::size_t start = 0;
+    while (start <= aliases.size()) {
+        const std::size_t comma = aliases.find(',', start);
+        const std::size_t end = comma == std::string::npos ? aliases.size() : comma;
+        std::string alias = aliases.substr(start, end - start);
+        while (!alias.empty() && alias.front() == ' ') {
+            alias.erase(alias.begin());
+        }
+        while (!alias.empty() && alias.back() == ' ') {
+            alias.pop_back();
+        }
+        if (model_selector_matches_value(selector, alias)) {
+            return true;
+        }
+        if (comma == std::string::npos) {
+            break;
+        }
+        start = comma + 1;
+    }
+    return false;
+}
+
+bool model_matches_selector(const ModelInfo& model, const std::string& selector) {
+    if (model_selector_matches_value(selector, model.id)) {
+        return true;
+    }
+    const auto aliases = model.attributes.find("aliases");
+    if (aliases != model.attributes.end() && model_selector_matches_aliases(selector, aliases->second)) {
+        return true;
+    }
+    static const char* alternate_keys[] = {"name", "model"};
+    for (const char* key : alternate_keys) {
+        const auto it = model.attributes.find(key);
+        if (it != model.attributes.end() && model_selector_matches_value(selector, it->second)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+long long model_attribute_tokens(const std::map<std::string, std::string>& attributes, const std::string& key) {
+    const auto it = attributes.find(key);
+    if (it == attributes.end()) {
+        return -1;
+    }
+    long long value = 0;
+    if (!parse_integral_string(it->second, value) || value <= 0) {
+        return -1;
+    }
+    return value;
+}
+
+long long model_context_window_tokens(const ModelInfo& model) {
+    static const char* keys[] = {"n_ctx",
+                                 "context_length",
+                                 "max_model_len",
+                                 "max_context_length",
+                                 "n_ctx_train",
+                                 "max_tokens"};
+    for (const char* key : keys) {
+        const long long value = model_attribute_tokens(model.attributes, key);
+        if (value > 0) {
+            return value;
+        }
+    }
+    return -1;
+}
+
+long long context_window_for_model(const ModelsResult& models, const std::string& model_selector) {
+    if (model_selector.empty()) {
+        return -1;
+    }
+    for (const ModelInfo& model : models.models) {
+        if (model_matches_selector(model, model_selector)) {
+            return model_context_window_tokens(model);
+        }
+    }
+    return -1;
+}
+
+void apply_context_window_from_models(RequestContext& context,
+                                      const ModelsResult& models,
+                                      const std::string& model_selector) {
+    if (context.options.has_context_tokens || context.options.context_tokens > 0) {
+        return;
+    }
+    std::vector<std::string> selectors;
+    if (!model_selector.empty()) {
+        selectors.push_back(model_selector);
+    }
+    if (!context.options.model.empty() &&
+        (selectors.empty() || selectors.front() != context.options.model)) {
+        selectors.push_back(context.options.model);
+    }
+    for (const std::string& selector : selectors) {
+        const long long window = context_window_for_model(models, selector);
+        if (window > 0) {
+            context.options.context_tokens = window;
+            return;
+        }
+    }
+    if (!models.model_ids.empty()) {
+        const long long window = context_window_for_model(models, models.model_ids.front());
+        if (window > 0) {
+            context.options.context_tokens = window;
+        }
+    }
+}
+
+Error resolve_context_window(RequestContext& context, const std::string& model_selector) {
+    if (context.profile.offline || context.options.has_context_tokens ||
+        context.options.context_tokens > 0) {
+        return ok_error();
+    }
+    if (model_selector.empty() && context.options.model.empty()) {
+        return ok_error();
+    }
+    ModelsResult models;
+    const Error err = list_models(context, models);
+    if (!err.ok()) {
+        return ok_error();
+    }
+    apply_context_window_from_models(context, models, model_selector);
+    return ok_error();
 }
 
 Error parse_models_response(const std::string& body, ModelsResult& result) {

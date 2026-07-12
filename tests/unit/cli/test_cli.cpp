@@ -40,6 +40,7 @@ void test_cli_context_token_parse() {
     pkchat::cli::ParseResult parsed = pkchat::cli::parse_args(4, const_cast<char**>(binary_argv));
     check(parsed.error.ok(), "binary-k context size parses");
     check(parsed.options.context_tokens == 65536, "64k context size equals 65536 tokens");
+    check(parsed.options.has_context_tokens, "--context marks context window as explicitly configured");
 
     const char* million_argv[] = {"pkchat", "--chat", "--context", "1M"};
     parsed = pkchat::cli::parse_args(4, const_cast<char**>(million_argv));

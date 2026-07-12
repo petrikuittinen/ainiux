@@ -49,6 +49,7 @@ struct TuiEvent {
     provider::ChatResult chat;
     chat::Session session;
     std::vector<std::string> models;
+    provider::ModelsResult models_result;
     provider::Message inserted_message;
     provider::ImageInput image;
     bool image_attachment = false;

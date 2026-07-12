@@ -480,6 +480,7 @@ ParseResult parse_args(int argc, char** argv, const Options& base_options) {
                 if (!err.ok()) {
                     return {opts, err};
                 }
+                opts.has_context_tokens = true;
             } else if (opt == "--context-policy") {
                 if (!context::policy::is_valid(value)) {
                     return {opts, {ErrorCode::BadArgs,

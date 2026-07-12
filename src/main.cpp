@@ -386,8 +386,7 @@ int main(int argc, char** argv) {
     if (!loaded_session) {
         session = pkchat::chat::new_session(context);
     }
-    const bool defer_tui_model_selection =
-        context.options.tui && context.options.model.empty() && !context.profile.offline;
+    const bool defer_tui_model_selection = pkchat::provider::tui_defers_model_selection(context);
     if (!model_chosen && !defer_tui_model_selection) {
         pkchat::Error model_err = pkchat::app::choose_default_model(context);
         if (!model_err.ok()) {
@@ -443,6 +442,6 @@ int main(int argc, char** argv) {
         pkchat::app::print_error(err);
         return pkchat::app::exit_code_for(err.code);
     }
-    pkchat::app::print_verbose_metrics(context.options, chat);
+    pkchat::app::print_verbose_metrics(context, chat, session.messages);
     return 0;
 }

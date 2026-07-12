@@ -5,10 +5,10 @@
 namespace pkchat::editor {
 
 void EditorModelListRuntime::start(const provider::RequestContext& context) {
-    provider::start_list_models_job(job, context, [this](Error error, std::vector<std::string> model_ids) {
+    provider::start_list_models_job(job, context, [this](Error error, provider::ModelsResult models) {
         EditorModelsEvent event;
         event.error = std::move(error);
-        event.models = std::move(model_ids);
+        event.models = std::move(models.model_ids);
         events.push(std::move(event));
     });
 }

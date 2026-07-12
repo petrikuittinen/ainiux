@@ -104,7 +104,7 @@ def main():
             raise RuntimeError("TUI did not report a unique path completion")
         send(master, "\r")
         response_output = send(master, "summarize-insert\r", 0.8)
-        if b"Context used:" not in response_output:
+        if b"context:" not in response_output:
             raise RuntimeError("TUI completion status did not render estimated context usage")
         send(master, f"/attach {image_path}\r")
         send(master, "describe-image\r", 0.8)

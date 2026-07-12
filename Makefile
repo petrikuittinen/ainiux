@@ -125,6 +125,7 @@ test-unit-faults: $(IO_FAULT_BIN) $(POSIX_IO_MOCK)
 test-integration: $(BIN)
 	tests/integration/test_mock_server.sh
 	tests/integration/test_sqlite_persistence.sh
+	sh tests/integration/test_llama_server.sh
 
 test-integration-sqlite: $(BIN)
 	tests/integration/test_sqlite_persistence.sh

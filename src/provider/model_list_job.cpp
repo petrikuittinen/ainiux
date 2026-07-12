@@ -9,7 +9,7 @@ void start_list_models_job(runtime::JobHandle& job,
                   runtime::CancellationToken token) mutable {
         ModelsResult models;
         Error error = list_models(context, models, token);
-        deliver(std::move(error), std::move(models.model_ids));
+        deliver(std::move(error), std::move(models));
     });
 }
 

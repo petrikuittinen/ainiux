@@ -27,6 +27,9 @@ struct PreparedMessages {
 
 size_t estimated_text_bytes(const std::vector<provider::Message>& messages);
 long long estimated_text_tokens(const std::vector<provider::Message>& messages);
+long long estimated_usage_tokens(const std::vector<provider::Message>& messages,
+                                 const provider::ChatResult& result);
+std::string format_context_usage(long long used_tokens, long long window_tokens);
 PreparedMessages prepare(const std::vector<provider::Message>& messages,
                          const std::string& policy,
                          size_t max_bytes);
