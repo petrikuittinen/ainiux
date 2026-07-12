@@ -48,6 +48,8 @@ void clear_assist_session(AssistSession& session) {
     session.activity_kind = tui::ActivityKind::None;
     session.replace_start = 0;
     session.replace_count = 0;
+    session.new_buffer_assist = false;
+    session.source_buffer_index = 0;
 }
 
 std::string assist_request_text_from_messages(const std::vector<provider::Message>& messages) {

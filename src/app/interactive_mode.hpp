@@ -23,6 +23,12 @@ enum class InteractiveUiTarget {
     Chat,
 };
 
+struct PendingEditorAssistFromChat {
+    bool active = false;
+    size_t command_index = 0;
+    std::string selection_text;
+};
+
 struct InteractiveSession {
     InteractiveMode start_mode = InteractiveMode::Editor;
 
@@ -40,6 +46,7 @@ struct InteractiveSession {
     std::string editor_save_as;
     editor::EditorSettings editor_settings;
     editor::EditorAssistConfig assist_config;
+    PendingEditorAssistFromChat pending_editor_assist;
 };
 
 struct EditorRunResult {

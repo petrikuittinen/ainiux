@@ -714,8 +714,10 @@ Error parse_assist_command_modes(const Entry& entry, std::vector<pkchat::editor:
             modes.push_back(pkchat::editor::AssistCommandMode::Insert);
         } else if (token == "fact") {
             modes.push_back(pkchat::editor::AssistCommandMode::Fact);
+        } else if (token == "newbuffer" || token == "new" || token == "n") {
+            modes.push_back(pkchat::editor::AssistCommandMode::NewBuffer);
         } else {
-            return schema_error(entry, "expected continue, selection, all, insert, or fact");
+            return schema_error(entry, "expected continue, selection, all, insert, newbuffer, or fact");
         }
     }
     if (modes.empty()) {

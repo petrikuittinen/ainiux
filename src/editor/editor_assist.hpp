@@ -29,6 +29,7 @@ enum class AssistScope {
     All,
     Continue,
     Insert,
+    NewBuffer,
 };
 
 enum class AssistPromptMode {
@@ -41,6 +42,7 @@ enum class AssistPromptMode {
 enum class AssistEditKind {
     StreamInsert,
     ReplaceInPlace,
+    NewBuffer,
 };
 
 struct ParsedAssistCommand {

@@ -11,6 +11,7 @@ enum class AssistCommandMode {
     Selection,
     All,
     Insert,
+    NewBuffer,
     Fact,
 };
 

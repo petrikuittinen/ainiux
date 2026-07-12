@@ -133,6 +133,9 @@ std::optional<AssistScope> parse_scope_token(const std::string& token) {
         lower == "l") {
         return AssistScope::Insert;
     }
+    if (lower == "newbuffer" || lower == "new" || lower == "n") {
+        return AssistScope::NewBuffer;
+    }
     return std::nullopt;
 }
 
@@ -154,6 +157,9 @@ void append_mode_completions(const EditorAssistCommand& command,
     }
     if (command_has_mode(command, AssistCommandMode::Insert)) {
         commands.push_back(name + " insert");
+    }
+    if (command_has_mode(command, AssistCommandMode::NewBuffer)) {
+        commands.push_back(name + " newbuffer");
     }
 }
 
@@ -276,8 +282,15 @@ const std::vector<AssistCommandMode>& default_builtin_assist_modes() {
     static const std::vector<AssistCommandMode> modes = {
         AssistCommandMode::Selection,
         AssistCommandMode::All,
-        AssistCommandMode::Continue,
+        AssistCommandMode::NewBuffer,
         AssistCommandMode::Insert,
+    };
+    return modes;
+}
+
+const std::vector<AssistCommandMode>& default_continue_assist_modes() {
+    static const std::vector<AssistCommandMode> modes = {
+        AssistCommandMode::Continue,
     };
     return modes;
 }
@@ -293,7 +306,7 @@ EditorAssistConfig default_editor_assist_config() {
     config.commands = {
         {"/spell", modes, kDefaultAssistSpellPrompt},
         {"/grammar", modes, kDefaultAssistGrammarPrompt},
-        {"/continue", modes, kDefaultAssistContinuePrompt},
+        {"/continue", default_continue_assist_modes(), kDefaultAssistContinuePrompt},
         {"/fact", modes, kDefaultAssistFactPrompt},
         {"/comment", modes, kDefaultAssistCommentPrompt},
         {"/rewrite", modes, kDefaultAssistRewritePrompt},
@@ -329,7 +342,8 @@ bool assist_command_requires_scope(const EditorAssistCommand& command) {
     return command_has_mode(command, AssistCommandMode::Selection) ||
            command_has_mode(command, AssistCommandMode::All) ||
            command_has_mode(command, AssistCommandMode::Continue) ||
-           command_has_mode(command, AssistCommandMode::Insert);
+           command_has_mode(command, AssistCommandMode::Insert) ||
+           command_has_mode(command, AssistCommandMode::NewBuffer);
 }
 
 bool assist_command_runs_without_scope(const EditorAssistCommand& command) {
@@ -606,7 +620,7 @@ ParsedAssistCommand parse_assist_command(const std::string& line, const EditorAs
         const std::optional<AssistScope> scope = parse_scope_token(arg);
         if (!scope.has_value()) {
             parsed.error_message = command_display_name(entry) +
-                                   " mode must be selection, all, continue, or insert";
+                                   " mode must be selection, all, newbuffer, continue, or insert";
             return parsed;
         }
         if (*scope == AssistScope::Selection && !command_has_mode(entry, AssistCommandMode::Selection)) {
@@ -624,6 +638,11 @@ ParsedAssistCommand parse_assist_command(const std::string& line, const EditorAs
         }
         if (*scope == AssistScope::Insert && !command_has_mode(entry, AssistCommandMode::Insert)) {
             parsed.error_message = command_display_name(entry) + " does not support insert mode";
+            return parsed;
+        }
+        if (*scope == AssistScope::NewBuffer &&
+            !command_has_mode(entry, AssistCommandMode::NewBuffer)) {
+            parsed.error_message = command_display_name(entry) + " does not support new buffer mode";
             return parsed;
         }
         parsed.scope = scope;
@@ -657,6 +676,9 @@ std::string assist_scope_prompt(const EditorAssistCommand& command) {
     }
     if (command_has_mode(command, AssistCommandMode::Insert)) {
         append("insert (i)");
+    }
+    if (command_has_mode(command, AssistCommandMode::NewBuffer)) {
+        append("new buffer (n)");
     }
     return prompt;
 }
@@ -780,6 +802,21 @@ AssistExecution build_assist_execution(const EditorState& state,
             execution.messages = build_messages(context, command.prompt, state.text.str());
             execution.stream = false;
             execution.edit_kind = AssistEditKind::ReplaceInPlace;
+            execution.ok = true;
+            return execution;
+        }
+
+        if (*scope == AssistScope::NewBuffer) {
+            if (!command_has_mode(command, AssistCommandMode::NewBuffer)) {
+                return fail(name + " does not support new buffer mode");
+            }
+            if (!state.selection.has_range()) {
+                return fail(name + " new buffer requires an active selection");
+            }
+            execution.stream = true;
+            execution.edit_kind = AssistEditKind::NewBuffer;
+            execution.messages =
+                build_messages(context, command.prompt, state.selected_text());
             execution.ok = true;
             return execution;
         }

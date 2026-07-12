@@ -25,6 +25,7 @@ std::optional<std::string> chat_assist_turn_prompt(const editor::ParsedAssistCom
 }
 
 bool try_handle_chat_assist_command(const std::string& text,
+                                    const editor::EditorState& input,
                                     const editor::EditorAssistConfig& assist_config,
                                     provider::RequestContext& context,
                                     chat::Session& session,
@@ -66,6 +67,25 @@ bool try_handle_chat_assist_command(const std::string& text,
         history_scroll = 0;
         status = "Inserted web search results from " + response.provider_used;
         callbacks.start_store_save();
+        return true;
+    }
+
+    if (parsed.kind == editor::AssistCommandKind::Configured &&
+        parsed.scope == editor::AssistScope::NewBuffer) {
+        if (!input.selection.has_range()) {
+            status = "AI new-buffer command requires selected text in chat input";
+            return true;
+        }
+        if (!callbacks.switch_to_editor_new_buffer_assist) {
+            status = "Editor mode is unavailable";
+            return true;
+        }
+        ChatEditorNewBufferAssist pending;
+        pending.command_index = parsed.command_index;
+        pending.selection_text = input.selected_text();
+        if (!callbacks.switch_to_editor_new_buffer_assist(pending)) {
+            return true;
+        }
         return true;
     }
 

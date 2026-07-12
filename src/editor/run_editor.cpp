@@ -706,10 +706,24 @@ app::EditorRunResult run_editor(const std::string& path,
         state.revert_to_snapshot(last_assist_command.revert_snapshot);
     };
 
+    auto restore_after_new_buffer_assist_cancel = [&]() {
+        if (!assist_session.new_buffer_assist) {
+            return;
+        }
+        const size_t source = assist_session.source_buffer_index;
+        if (active_buffer < buffers.size()) {
+            buffers.erase(buffers.begin() + static_cast<std::ptrdiff_t>(active_buffer));
+        }
+        active_buffer = std::min(source, buffers.size() - 1);
+        state = buffers[active_buffer];
+        assist_session.new_buffer_assist = false;
+    };
+
     auto finish_assist_session = [&](const std::string& message,
                                      bool commit_stream_undo,
                                      const std::optional<std::string>& inplace_content,
                                      bool message_includes_label = false) {
+        assist_session.new_buffer_assist = false;
         assist_session.job.join();
         const auto show_finish_message = [&]() {
             if (message_includes_label) {
@@ -729,7 +743,8 @@ app::EditorRunResult run_editor(const std::string& path,
                 show_finish_message();
             }
         } else {
-            if (assist_session.edit_kind == AssistEditKind::StreamInsert) {
+            if (assist_session.edit_kind == AssistEditKind::StreamInsert ||
+                assist_session.edit_kind == AssistEditKind::NewBuffer) {
                 strip_trailing_assist_close_tag_without_undo(state);
             }
             if (commit_stream_undo && assist_session.saw_visible) {
@@ -791,15 +806,18 @@ app::EditorRunResult run_editor(const std::string& path,
                 if (assist_session.saw_visible) {
                     state.revert_to_snapshot(assist_session.undo_before);
                 }
+                restore_after_new_buffer_assist_cancel();
                 return;
             }
             if (assist_session.edit_kind == AssistEditKind::ReplaceInPlace) {
                 set_assist_minibuffer("stopped and ready");
                 return;
             }
+            restore_after_new_buffer_assist_cancel();
             finish_assist_session("stopped and ready", true, std::nullopt);
             return;
         }
+        restore_after_new_buffer_assist_cancel();
         minibuffer_message(minibuffer, error.message);
     };
 
@@ -814,7 +832,8 @@ app::EditorRunResult run_editor(const std::string& path,
                             size_t command_index,
                             std::optional<AssistScope> scope,
                             const std::string& custom_prompt,
-                            std::optional<AssistPromptMode> prompt_mode) {
+                            std::optional<AssistPromptMode> prompt_mode,
+                            const EditorState* execution_state = nullptr) {
         if (assist_session.active) {
             return;
         }
@@ -830,8 +849,9 @@ app::EditorRunResult run_editor(const std::string& path,
             return;
         }
 
+        const EditorState& source_state = execution_state != nullptr ? *execution_state : state;
         AssistExecution execution = build_assist_execution(
-            state, *ai_continue, kind, command_index, scope, custom_prompt, prompt_mode);
+            source_state, *ai_continue, kind, command_index, scope, custom_prompt, prompt_mode);
         if (!execution.ok) {
             minibuffer_message(minibuffer, execution.error_message);
             return;
@@ -849,6 +869,24 @@ app::EditorRunResult run_editor(const std::string& path,
         pending_assist = PendingAssist{};
         exit_assist_command_mode(minibuffer, assist_completer);
         clear_assist_session(assist_session);
+        if (execution.edit_kind == AssistEditKind::NewBuffer) {
+            const size_t source_buffer_index = active_buffer;
+            sync_active_buffer();
+            EditorState next;
+            next.set_undo_limit(settings.undo_limit);
+            next.text = PieceTable::from_string("");
+            next.path.clear();
+            next.dirty = false;
+            next.clear_selection();
+            next.clear_undo_history();
+            buffers.push_back(next);
+            active_buffer = buffers.size() - 1;
+            state = buffers[active_buffer];
+            assist_session.new_buffer_assist = true;
+            assist_session.source_buffer_index = source_buffer_index;
+            buffer_list_active = false;
+            buffer_list_selected = active_buffer;
+        }
         assist_session.active = true;
         assist_session.streaming = execution.stream;
         assist_session.edit_kind = execution.edit_kind;
@@ -1260,6 +1298,18 @@ app::EditorRunResult run_editor(const std::string& path,
                 return;
             }
             if (minibuffer.action == MinibufferAction::AssistScopeChoice) {
+                const EditorAssistConfig& active_assist_config =
+                    ai_continue.has_value() ? ai_continue->assist_config : assist_config;
+                const EditorAssistCommand* scope_command = nullptr;
+                if (pending_assist.kind == AssistCommandKind::Configured &&
+                    pending_assist.command_index < active_assist_config.commands.size()) {
+                    scope_command = &active_assist_config.commands[pending_assist.command_index];
+                }
+                auto command_has_mode = [&](AssistCommandMode mode) {
+                    return scope_command != nullptr &&
+                           std::find(scope_command->modes.begin(), scope_command->modes.end(), mode) !=
+                               scope_command->modes.end();
+                };
                 if (ch == 's' || ch == 'S') {
                     start_assist(pending_assist.kind,
                                  pending_assist.command_index,
@@ -1272,16 +1322,23 @@ app::EditorRunResult run_editor(const std::string& path,
                                  AssistScope::All,
                                  "",
                                  std::nullopt);
-                } else if (ch == 'c' || ch == 'C') {
+                } else if ((ch == 'c' || ch == 'C') && command_has_mode(AssistCommandMode::Continue)) {
                     start_assist(pending_assist.kind,
                                  pending_assist.command_index,
                                  AssistScope::Continue,
                                  "",
                                  std::nullopt);
-                } else if (ch == 'i' || ch == 'I' || ch == 'l' || ch == 'L') {
+                } else if ((ch == 'i' || ch == 'I' || ch == 'l' || ch == 'L') &&
+                           command_has_mode(AssistCommandMode::Insert)) {
                     start_assist(pending_assist.kind,
                                  pending_assist.command_index,
                                  AssistScope::Insert,
+                                 "",
+                                 std::nullopt);
+                } else if ((ch == 'n' || ch == 'N') && command_has_mode(AssistCommandMode::NewBuffer)) {
+                    start_assist(pending_assist.kind,
+                                 pending_assist.command_index,
+                                 AssistScope::NewBuffer,
                                  "",
                                  std::nullopt);
                 }
@@ -1505,6 +1562,28 @@ app::EditorRunResult run_editor(const std::string& path,
             minibuffer_message(minibuffer, message);
         }
     };
+
+    if (interactive != nullptr && interactive->pending_editor_assist.active) {
+        const app::PendingEditorAssistFromChat pending = interactive->pending_editor_assist;
+        interactive->pending_editor_assist = {};
+        const EditorAssistConfig& active_assist_config =
+            ai_continue.has_value() ? ai_continue->assist_config : assist_config;
+        if (pending.selection_text.empty()) {
+            minibuffer_message(minibuffer, "AI new-buffer command requires selected text");
+        } else if (pending.command_index >= active_assist_config.commands.size()) {
+            minibuffer_message(minibuffer, "Configured assist command index is out of range");
+        } else {
+            EditorState assist_state = EditorState::from_text(pending.selection_text);
+            assist_state.selection.anchor = 0;
+            assist_state.selection.active = assist_state.text.size();
+            start_assist(AssistCommandKind::Configured,
+                         pending.command_index,
+                         AssistScope::NewBuffer,
+                         "",
+                         std::nullopt,
+                         &assist_state);
+        }
+    }
 
     while (!quit) {
         const bool assist_updated = process_assist_events();

@@ -642,6 +642,23 @@ app::TuiRunResult run(provider::RequestContext context,
     chat_assist_callbacks.start_turn = start_turn;
     chat_assist_callbacks.regenerate_last_turn = regenerate_last_turn;
     chat_assist_callbacks.start_store_save = start_store_save;
+    chat_assist_callbacks.switch_to_editor_new_buffer_assist =
+        [&](const ChatEditorNewBufferAssist& pending) {
+            if (interactive == nullptr) {
+                status = "Editor mode is unavailable";
+                return false;
+            }
+            if (active_job != ActiveJob::None) {
+                status = "Cannot switch to editor while a model job is running";
+                return false;
+            }
+            interactive->pending_editor_assist.active = true;
+            interactive->pending_editor_assist.command_index = pending.command_index;
+            interactive->pending_editor_assist.selection_text = pending.selection_text;
+            switch_to_editor = true;
+            quit = true;
+            return true;
+        };
 
     TuiCommandHandlers command_handlers;
     command_handlers.quit = [&]() { quit = true; };
@@ -780,16 +797,18 @@ app::TuiRunResult run(provider::RequestContext context,
             return;
         }
         if (raw.find('\n') == std::string::npos && text[0] == '/') {
-            input = new_input_editor();
             if (try_handle_chat_assist_command(text,
+                                               input,
                                                ai_continue.assist_config,
                                                context,
                                                session,
                                                status,
                                                history_scroll,
                                                chat_assist_callbacks)) {
+                input = new_input_editor();
                 return;
             }
+            input = new_input_editor();
             handle_command(text);
             return;
         }

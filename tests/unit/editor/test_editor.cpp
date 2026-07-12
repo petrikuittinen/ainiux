@@ -309,12 +309,17 @@ void test_editor_assist_helpers() {
     parsed = pkchat::editor::parse_assist_command("/continue", default_config);
     check(parsed.ok && parsed.kind == pkchat::editor::AssistCommandKind::Configured &&
               !parsed.scope.has_value(),
-          "bare /continue requests scope");
+          "bare /continue runs without scope");
 
-    parsed = pkchat::editor::parse_assist_command("/fact continue", default_config);
+    parsed = pkchat::editor::parse_assist_command("/fact newbuffer", default_config);
     check(parsed.ok && parsed.kind == pkchat::editor::AssistCommandKind::Configured &&
-              parsed.scope == pkchat::editor::AssistScope::Continue,
-          "/fact continue parses");
+              parsed.scope == pkchat::editor::AssistScope::NewBuffer,
+          "/fact newbuffer parses");
+
+    parsed = pkchat::editor::parse_assist_command("/fact n", default_config);
+    check(parsed.ok && parsed.kind == pkchat::editor::AssistCommandKind::Configured &&
+              parsed.scope == pkchat::editor::AssistScope::NewBuffer,
+          "/fact n parses as new buffer");
 
     parsed = pkchat::editor::parse_assist_command("/fact insert", default_config);
     check(parsed.ok && parsed.kind == pkchat::editor::AssistCommandKind::Configured &&
@@ -331,15 +336,15 @@ void test_editor_assist_helpers() {
               parsed.scope == pkchat::editor::AssistScope::Selection,
           "/rewrite selection parses");
 
-    parsed = pkchat::editor::parse_assist_command("/english insert", default_config);
+    parsed = pkchat::editor::parse_assist_command("/english newbuffer", default_config);
     check(parsed.ok && parsed.kind == pkchat::editor::AssistCommandKind::Configured &&
-              parsed.scope == pkchat::editor::AssistScope::Insert,
+              parsed.scope == pkchat::editor::AssistScope::NewBuffer,
           "/English parses case-insensitively");
 
-    parsed = pkchat::editor::parse_assist_command("/Chinese continue", default_config);
+    parsed = pkchat::editor::parse_assist_command("/Chinese n", default_config);
     check(parsed.ok && parsed.kind == pkchat::editor::AssistCommandKind::Configured &&
-              parsed.scope == pkchat::editor::AssistScope::Continue,
-          "/Chinese continue parses");
+              parsed.scope == pkchat::editor::AssistScope::NewBuffer,
+          "/Chinese n parses as new buffer");
 
     parsed = pkchat::editor::parse_assist_command("/Finnish all", default_config);
     check(parsed.ok && parsed.kind == pkchat::editor::AssistCommandKind::Configured &&
@@ -381,26 +386,36 @@ void test_editor_assist_helpers() {
     check(!completions.empty() && completions.front() == "/spell", "assist completions include /spell");
     check(std::find(completions.begin(), completions.end(), "/regenerate") != completions.end(),
           "assist completions include /regenerate");
-    for (const char* builtin : {"/spell", "/grammar", "/continue", "/fact", "/comment", "/rewrite",
-                                "/English", "/Chinese", "/Finnish"}) {
-        for (const char* mode : {"selection", "all", "continue", "insert"}) {
+    for (const char* builtin : {"/spell", "/grammar", "/fact", "/comment", "/rewrite", "/English",
+                                "/Chinese", "/Finnish"}) {
+        for (const char* mode : {"selection", "all", "newbuffer", "insert"}) {
             const std::string variant = std::string(builtin) + " " + mode;
             check(std::find(completions.begin(), completions.end(), variant) != completions.end(),
                   std::string("builtin assist completions include ") + variant);
         }
     }
-    for (const char* builtin : {"/spell", "/grammar", "/continue", "/fact", "/comment", "/rewrite",
-                                "/English", "/Chinese", "/Finnish"}) {
+    check(std::find(completions.begin(), completions.end(), "/continue") != completions.end(),
+          "builtin assist completions include bare /continue");
+    for (const char* builtin : {"/spell", "/grammar", "/fact", "/comment", "/rewrite", "/English",
+                                "/Chinese", "/Finnish"}) {
         const pkchat::editor::EditorAssistCommand* command =
             pkchat::editor::find_assist_command(default_config, builtin);
         check(command != nullptr && command->modes.size() == 4,
-              std::string("default ") + builtin + " exposes all four scoped modes");
+              std::string("default ") + builtin +
+                  " exposes selection, all, newbuffer, and insert modes");
         const std::string scope_prompt = pkchat::editor::assist_scope_prompt(*command);
         check(scope_prompt.find("selection (s)") != std::string::npos &&
                   scope_prompt.find("all (a)") != std::string::npos &&
-                  scope_prompt.find("continue (c)") != std::string::npos &&
-                  scope_prompt.find("insert (i)") != std::string::npos,
-              std::string("default ") + builtin + " scope prompt lists all four modes");
+                  scope_prompt.find("new buffer (n)") != std::string::npos &&
+                  scope_prompt.find("insert (i)") != std::string::npos &&
+                  scope_prompt.find("continue (c)") == std::string::npos,
+              std::string("default ") + builtin + " scope prompt lists scoped modes without continue");
+    }
+    {
+        const pkchat::editor::EditorAssistCommand* continue_command =
+            pkchat::editor::find_assist_command(default_config, "/continue");
+        check(continue_command != nullptr && continue_command->modes.size() == 1,
+              "default /continue exposes only continue mode");
     }
 
     std::string input = "/sp";
@@ -662,6 +677,50 @@ void test_editor_assist_helpers() {
     check(!execution.ok &&
               execution.error_message.find("insert requires an active selection") != std::string::npos,
           "insert mode rejects missing selection");
+
+    pkchat::config::ParseResult newbuffer_modes_config = pkchat::config::parse(
+        "[command]\n"
+        "string = /summarize\n"
+        "modes = selection, all, newbuffer\n"
+        "prompt = \"Summarize the input.\"\n",
+        "newbuffer-modes.conf");
+    check(newbuffer_modes_config.error.ok(), "configured newbuffer mode parses");
+    configured_options = pkchat::cli::Options{};
+    check(pkchat::config::apply_document(newbuffer_modes_config.document, configured_options).ok(),
+          "configured newbuffer mode applies");
+    parsed = pkchat::editor::parse_assist_command("/summarize n",
+                                                  configured_options.editor_assist_config);
+    check(parsed.ok && parsed.scope == pkchat::editor::AssistScope::NewBuffer,
+          "/summarize n parses as new buffer");
+    insert_state.selection.anchor = 0;
+    insert_state.selection.active = 4;
+    context.assist_config = configured_options.editor_assist_config;
+    execution = pkchat::editor::build_assist_execution(
+        insert_state,
+        context,
+        pkchat::editor::AssistCommandKind::Configured,
+        *pkchat::editor::assist_command_index(context.assist_config, "/summarize"),
+        pkchat::editor::AssistScope::NewBuffer,
+        "",
+        std::nullopt);
+    check(execution.ok && execution.stream &&
+              execution.edit_kind == pkchat::editor::AssistEditKind::NewBuffer,
+          "new buffer mode builds streaming execution into a new buffer");
+    check(execution.messages.back().content == "<content>Once</content>",
+          "new buffer mode sends the current selection as input");
+    insert_state.clear_selection();
+    execution = pkchat::editor::build_assist_execution(
+        insert_state,
+        context,
+        pkchat::editor::AssistCommandKind::Configured,
+        *pkchat::editor::assist_command_index(context.assist_config, "/summarize"),
+        pkchat::editor::AssistScope::NewBuffer,
+        "",
+        std::nullopt);
+    check(!execution.ok &&
+              execution.error_message.find("new buffer requires an active selection") !=
+                  std::string::npos,
+          "new buffer mode rejects missing selection");
 
     check(pkchat::editor::trim_assist_inplace_response("  fixed text \n") == "fixed text",
           "in-place assist responses are trimmed");
