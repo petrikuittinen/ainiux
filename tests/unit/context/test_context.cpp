@@ -46,6 +46,22 @@ void test_context_policies_preserve_full_messages() {
     check(middle.error.ok() && middle.compacted, "summarize-middle compacts middle provider messages");
     check(middle.messages.back().content == messages.back().content,
           "summarize-middle preserves the newest message");
+
+    pkchat::context::PreparedMessages truncate_middle =
+        pkchat::context::prepare(messages, "truncate-middle", 1000);
+    check(truncate_middle.error.ok() && truncate_middle.compacted,
+          "truncate-middle compacts middle provider messages");
+    check(truncate_middle.messages.back().content == messages.back().content,
+          "truncate-middle preserves the newest message");
+    check(pkchat::context::estimated_text_bytes(truncate_middle.messages) <= 1000,
+          "truncate-middle respects the configured text budget");
+    bool truncate_middle_summary_seen = false;
+    for (const pkchat::provider::Message& message : truncate_middle.messages) {
+        truncate_middle_summary_seen =
+            truncate_middle_summary_seen ||
+            message.content.find("Context summary of") != std::string::npos;
+    }
+    check(!truncate_middle_summary_seen, "truncate-middle does not insert a summary message");
     pkchat::context::PreparedMessages automatic = pkchat::context::prepare(messages, "provider-auto", 1);
     check(automatic.error.ok() && !automatic.compacted && automatic.messages.size() == messages.size(),
           "provider-auto delegates context management without changing messages");
@@ -138,7 +154,42 @@ void test_context_usage_formatting() {
           "context usage is omitted without a configured window");
 }
 
+void test_truncate_middle_preserves_beginning() {
+    std::vector<pkchat::provider::Message> messages = {
+        {"system", "sys"},
+        {"user", "KEEP_FIRST"},
+        {"assistant", std::string(300, 'a')},
+        {"user", std::string(300, 'b')},
+        {"assistant", std::string(300, 'c')},
+        {"user", std::string(300, 'd')},
+        {"assistant", std::string(300, 'e')},
+        {"user", "KEEP_LAST"},
+    };
+    const size_t budget = 900;
+    pkchat::context::PreparedMessages oldest =
+        pkchat::context::prepare(messages, "truncate-oldest", budget);
+    pkchat::context::PreparedMessages middle =
+        pkchat::context::prepare(messages, "truncate-middle", budget);
+    check(oldest.error.ok() && oldest.compacted, "truncate-oldest compacts the oversized transcript");
+    check(middle.error.ok() && middle.compacted, "truncate-middle compacts the oversized transcript");
+
+    bool oldest_keeps_first = false;
+    bool middle_keeps_first = false;
+    for (const pkchat::provider::Message& message : oldest.messages) {
+        oldest_keeps_first = oldest_keeps_first || message.content == "KEEP_FIRST";
+    }
+    for (const pkchat::provider::Message& message : middle.messages) {
+        middle_keeps_first = middle_keeps_first || message.content == "KEEP_FIRST";
+    }
+    check(!oldest_keeps_first, "truncate-oldest removes the earliest non-system message first");
+    check(middle_keeps_first, "truncate-middle preserves the earliest non-system message");
+    check(middle.messages.back().content == "KEEP_LAST",
+          "truncate-middle preserves the newest message while trimming the middle");
+}
+
 void test_context_policy_metadata() {
+    check(pkchat::context::policy::is_valid(pkchat::context::policy::kTruncateMiddle),
+          "context policy metadata accepts truncate-middle");
     check(pkchat::context::policy::is_valid(pkchat::context::policy::kSummarizeMiddle),
           "context policy metadata accepts summarize-middle");
     check(!pkchat::context::policy::is_valid("bogus-policy"),
@@ -149,6 +200,7 @@ void test_context_policy_metadata() {
 
 void run_all() {
     test_context_policies_preserve_full_messages();
+    test_truncate_middle_preserves_beginning();
     test_context_numeric_and_unicode_edge_cases();
     test_context_usage_formatting();
     test_context_policy_metadata();

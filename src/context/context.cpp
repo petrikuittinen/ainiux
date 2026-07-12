@@ -199,7 +199,9 @@ PreparedMessages prepare(const std::vector<provider::Message>& messages,
             candidates.push_back(i);
         }
     }
-    if (policy == policy::kSummarizeMiddle && !candidates.empty()) {
+    const bool remove_from_middle =
+        policy == policy::kSummarizeMiddle || policy == policy::kTruncateMiddle;
+    if (remove_from_middle && !candidates.empty()) {
         candidates.erase(candidates.begin());
         const size_t center = messages.size() / 2;
         std::stable_sort(candidates.begin(), candidates.end(), [center](size_t a, size_t b) {

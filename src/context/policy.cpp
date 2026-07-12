@@ -6,6 +6,7 @@ const std::vector<const char*>& values() {
     static const std::vector<const char*> kValues = {
         kError,
         kTruncateOldest,
+        kTruncateMiddle,
         kSummarizeOldest,
         kSummarizeMiddle,
         kProviderAuto,
@@ -32,7 +33,8 @@ bool is_valid(const std::string& policy) {
 }
 
 std::string usage_description() {
-    return "error, truncate-oldest, summarize-oldest, summarize-middle, or provider-auto";
+    return "error, truncate-oldest, truncate-middle, summarize-oldest, summarize-middle, "
+           "or provider-auto";
 }
 
 }  // namespace pkchat::context::policy

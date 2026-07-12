@@ -701,8 +701,8 @@ Options:
       --max-image-bytes N       Maximum image file size; default 20971520.
       --context TOKENS          Model context-window size; k is 1024, M is 1000000.
       --max-context-bytes N     Request text budget; 0 disables the client budget.
-      --context-policy POLICY   error, truncate-oldest, summarize-oldest,
-                                summarize-middle, or provider-auto.
+      --context-policy POLICY   error, truncate-oldest, truncate-middle,
+                                summarize-oldest, summarize-middle, or provider-auto.
       --image-capability MODE   auto, allow, or deny; allow overrides model detection.
       --allow-private-url-fetch Allow loopback/private URL fetches.
       --save-chat PATH          Save JSON chat history after a successful reply.
