@@ -146,8 +146,19 @@ bool is_configured_assist_slash_command(const std::string& line, const EditorAss
     return command_token_matches_config(line, config);
 }
 
+std::string chat_assist_command_name(const EditorAssistCommand& command) {
+    if (!command.command.empty() && command.command.front() == '/') {
+        return command.command;
+    }
+    return "/" + command.command;
+}
+
 std::vector<std::string> chat_assist_command_completions(const EditorAssistConfig& config) {
-    std::vector<std::string> commands = assist_command_completions(config);
+    std::vector<std::string> commands;
+    commands.reserve(config.commands.size() + 32);
+    for (const EditorAssistCommand& command : config.commands) {
+        commands.push_back(chat_assist_command_name(command));
+    }
     static const char* kChatOnly[] = {
         "/attach ",
         "/clear",
@@ -164,11 +175,14 @@ std::vector<std::string> chat_assist_command_completions(const EditorAssistConfi
         "/models",
         "/new ",
         "/pop",
+        "/prompt ",
         "/provider ",
+        "/regenerate",
         "/remove",
         "/remove-empty",
         "/response",
         "/save ",
+        "/search ",
         "/setting",
         "/setting ",
         "/system",

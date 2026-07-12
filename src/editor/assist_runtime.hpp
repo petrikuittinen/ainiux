@@ -69,6 +69,7 @@ bool process_assist_events(AssistSession& session,
 
 bool is_configured_assist_slash_command(const std::string& line, const EditorAssistConfig& config);
 
+std::string chat_assist_command_name(const EditorAssistCommand& command);
 std::vector<std::string> chat_assist_command_completions(const EditorAssistConfig& config);
 
 }  // namespace pkchat::editor

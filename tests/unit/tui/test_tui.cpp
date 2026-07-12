@@ -73,6 +73,10 @@ void test_chat_assist_command_completions_include_configured_commands() {
           "chat assist completions include chat /help");
     check(std::find(completions.begin(), completions.end(), "/editor") != completions.end(),
           "chat assist completions include chat /editor");
+    check(std::find(completions.begin(), completions.end(), "/Chinese selection") == completions.end(),
+          "chat assist completions omit scoped editor variants");
+    check(std::find(completions.begin(), completions.end(), "/Chinese newbuffer") == completions.end(),
+          "chat assist completions omit newbuffer scoped variants");
 }
 
 void test_chat_assist_request_text_strips_content_tags() {
@@ -116,10 +120,20 @@ void test_chat_slash_command_tab_completion_matches_assist_commands() {
     check(pkchat::editor::is_chat_slash_command_tab_completion(state),
           "chat slash-command tab completion is active on the first token");
     const pkchat::editor::PathCompletionResult result = completer.complete(state);
-    check(result.handled && result.changed,
+    check(result.handled && result.changed && result.match_count == 1,
           "chat tab completion expands a case-insensitive assist command prefix");
-    check(state.text.str().rfind("/English", 0) == 0,
+    check(state.text.str() == "/English",
           "chat tab completion resolves /eng to /English");
+
+    completer.reset();
+    pkchat::editor::EditorState chinese = pkchat::editor::EditorState::from_text("/Chi");
+    chinese.mode = pkchat::editor::EditorMode::Chat;
+    chinese.cursor = chinese.text.size();
+    const pkchat::editor::PathCompletionResult chinese_result = completer.complete(chinese);
+    check(chinese_result.handled && chinese_result.changed && chinese_result.match_count == 1,
+          "chat tab completion completes a unique assist prefix in one press");
+    check(chinese.text.str() == "/Chinese",
+          "chat tab completion resolves /Chi to /Chinese");
 }
 
 void test_configured_assist_slash_command_detection() {
