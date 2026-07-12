@@ -162,6 +162,7 @@ struct EditorState {
     Error erase_at_cursor();
     bool undo();
     bool redo();
+    void revert_to_snapshot(const EditorSnapshot& snapshot);
     bool can_undo() const;
     bool can_redo() const;
     void set_undo_limit(size_t limit);

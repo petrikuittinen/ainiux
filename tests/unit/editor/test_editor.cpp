@@ -1475,6 +1475,19 @@ void test_editor_undo_redo_key_bindings() {
           "kitty Ctrl+R sequence decodes to regenerate key");
 }
 
+void test_editor_revert_to_snapshot() {
+    pkchat::editor::EditorState state = pkchat::editor::EditorState::from_text("alpha beta");
+    state.cursor = state.text.offset_for_line_column(0, 6);
+    const pkchat::editor::EditorSnapshot before = state.capture_state();
+    pkchat::Error err = state.insert_without_undo("GAMMA");
+    check(err.ok(), "editor insert before revert succeeds");
+    check(state.text.str() == "alpha GAMMAbeta", "editor assist-style insert changes text");
+    state.revert_to_snapshot(before);
+    check(state.text.str() == "alpha beta", "editor revert_to_snapshot restores pre-assist buffer");
+    check(state.cursor == before.cursor, "editor revert_to_snapshot restores cursor");
+    check(state.dirty, "editor revert_to_snapshot marks buffer dirty after content change");
+}
+
 void test_editor_undo_redo() {
     pkchat::editor::EditorState state = pkchat::editor::EditorState::from_text("alpha");
     state.cursor = state.text.size();
@@ -2127,6 +2140,7 @@ void run_all() {
     test_editor_selection_and_clipboard();
     test_editor_autosave();
     test_editor_undo_redo_key_bindings();
+    test_editor_revert_to_snapshot();
     test_editor_undo_redo();
     test_editor_unicode_combining_sequence_wraps_on_grapheme_boundary();
     test_editor_unicode_display_columns_and_offsets();

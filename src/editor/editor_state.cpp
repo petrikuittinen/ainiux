@@ -38,6 +38,14 @@ void EditorState::restore_snapshot(const EditorSnapshot& snapshot) {
     selection.clear(cursor);
 }
 
+void EditorState::revert_to_snapshot(const EditorSnapshot& snapshot) {
+    const std::string before = text.str();
+    restore_snapshot(snapshot);
+    if (text.str() != before) {
+        dirty = true;
+    }
+}
+
 void EditorState::remember_undo(EditorSnapshot snapshot) {
     redo_stack_.clear();
     if (undo_limit_ == 0) {

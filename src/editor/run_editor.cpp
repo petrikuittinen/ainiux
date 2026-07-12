@@ -64,6 +64,8 @@ struct StoredAssistCommand {
     std::optional<AssistScope> scope;
     std::string custom_prompt;
     std::optional<AssistPromptMode> prompt_mode;
+    bool has_revertable_output = false;
+    EditorSnapshot revert_snapshot;
 };
 
 void clear_assist_session(AssistSession& session) {
@@ -162,6 +164,8 @@ app::EditorRunResult run_editor(const std::string& path,
     }
 
     bool quit = false;
+    bool regenerate_after_cancel = false;
+    bool pending_regenerate_restart = false;
     bool pending_quit_after_save = false;
     PendingSaveRequest pending_save;
     MinibufferState minibuffer;
@@ -735,6 +739,21 @@ app::EditorRunResult run_editor(const std::string& path,
                                                    suffix));
     };
 
+    auto mark_last_assist_output = [&]() {
+        if (!last_assist_command.valid) {
+            return;
+        }
+        last_assist_command.has_revertable_output = true;
+        last_assist_command.revert_snapshot = assist_session.undo_before;
+    };
+
+    auto revert_last_assist_output = [&]() {
+        if (!last_assist_command.has_revertable_output) {
+            return;
+        }
+        state.revert_to_snapshot(last_assist_command.revert_snapshot);
+    };
+
     auto finish_assist_session = [&](const std::string& message,
                                      bool commit_stream_undo,
                                      const std::optional<std::string>& inplace_content,
@@ -754,6 +773,7 @@ app::EditorRunResult run_editor(const std::string& path,
                 minibuffer_message(minibuffer, replace_error.message);
             } else {
                 state.clear_selection();
+                mark_last_assist_output();
                 show_finish_message();
             }
         } else {
@@ -762,6 +782,7 @@ app::EditorRunResult run_editor(const std::string& path,
             }
             if (commit_stream_undo && assist_session.saw_visible) {
                 state.finalize_stream_edit(assist_session.undo_before);
+                mark_last_assist_output();
             }
             show_finish_message();
         }
@@ -823,7 +844,15 @@ app::EditorRunResult run_editor(const std::string& path,
                 }
                 case ContinueEventType::Error:
                     if (event.error.code == ErrorCode::Cancelled) {
-                        if (assist_session.edit_kind == AssistEditKind::ReplaceInPlace) {
+                        if (regenerate_after_cancel) {
+                            regenerate_after_cancel = false;
+                            assist_session.job.join();
+                            if (assist_session.saw_visible) {
+                                state.revert_to_snapshot(assist_session.undo_before);
+                            }
+                            clear_assist_session(assist_session);
+                            pending_regenerate_restart = true;
+                        } else if (assist_session.edit_kind == AssistEditKind::ReplaceInPlace) {
                             assist_session.job.join();
                             set_assist_minibuffer("stopped and ready");
                             clear_assist_session(assist_session);
@@ -889,13 +918,31 @@ app::EditorRunResult run_editor(const std::string& path,
         assist_session.usage_messages = execution.usage_messages;
         assist_session.replace_start = execution.replace_start;
         assist_session.replace_count = execution.replace_count;
-        if (execution.edit_kind == AssistEditKind::StreamInsert) {
-            assist_session.undo_before = state.capture_state();
-        }
+        assist_session.undo_before = state.capture_state();
         state.clear_selection();
         start_assist_job(*ai_continue, execution.messages, execution.stream, assist_session.events,
                          assist_session.job);
         set_assist_activity(tui::ActivityKind::Thinking, "thinking... ESC to abort");
+    };
+
+    auto regenerate_last_assist = [&]() {
+        if (!last_assist_command.valid) {
+            minibuffer_message(minibuffer, "No previous AI command to regenerate");
+            return;
+        }
+        if (assist_session.active) {
+            regenerate_after_cancel = true;
+            assist_session.job.cancel();
+            minibuffer_message(minibuffer, "Cancelling before regenerate...");
+            return;
+        }
+        revert_last_assist_output();
+        start_assist(last_assist_command.kind,
+                     last_assist_command.command_index,
+                     last_assist_command.scope,
+                     last_assist_command.custom_prompt,
+                     last_assist_command.prompt_mode);
+        minibuffer_message(minibuffer, "Regenerating...");
     };
 
     auto trigger_save = [&]() {
@@ -1051,15 +1098,9 @@ app::EditorRunResult run_editor(const std::string& path,
             return;
         }
         if (parsed.kind == AssistCommandKind::Regenerate) {
-            if (!last_assist_command.valid) {
-                minibuffer_message(minibuffer, "No previous AI command to regenerate");
-                return;
-            }
-            start_assist(last_assist_command.kind,
-                         last_assist_command.command_index,
-                         last_assist_command.scope,
-                         last_assist_command.custom_prompt,
-                         last_assist_command.prompt_mode);
+            pending_assist = PendingAssist{};
+            exit_assist_command_mode(minibuffer, assist_completer);
+            regenerate_last_assist();
             return;
         }
         if (parsed.kind == AssistCommandKind::Quit) {
@@ -1359,6 +1400,10 @@ app::EditorRunResult run_editor(const std::string& path,
             request_switch_to_chat();
             return;
         }
+        if (ch == 18) {
+            regenerate_last_assist();
+            return;
+        }
         if (ch == 17) {
             if (help_view.active) {
                 exit_help_view();
@@ -1523,6 +1568,17 @@ app::EditorRunResult run_editor(const std::string& path,
 
     while (!quit) {
         const bool assist_updated = process_assist_events();
+        if (pending_regenerate_restart) {
+            pending_regenerate_restart = false;
+            if (last_assist_command.valid) {
+                start_assist(last_assist_command.kind,
+                             last_assist_command.command_index,
+                             last_assist_command.scope,
+                             last_assist_command.custom_prompt,
+                             last_assist_command.prompt_mode);
+                minibuffer_message(minibuffer, "Regenerating...");
+            }
+        }
         const bool model_updated = process_model_events();
         const bool assist_animating =
             assist_session.active && assist_session.activity_kind != tui::ActivityKind::None;
