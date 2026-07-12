@@ -2,6 +2,7 @@
 #include "support/test_support.hpp"
 #include "cli/args.hpp"
 #include "config/config.hpp"
+#include "editor/editor.hpp"
 #include "editor/editor_prompts.hpp"
 #include "tui/theme_registry.hpp"
 #include "provider/provider.hpp"
@@ -30,13 +31,16 @@ void test_config_applies_user_settings() {
     check(options.show_thinking_traces, "user config shows thinking traces by default");
 
     pkchat::config::ParseResult editor_config =
-        pkchat::config::parse("[editor]\nundo_limit = 7\nhuge_file_size_warning = 2048\nfile_size_limit = -1\n",
+        pkchat::config::parse("[editor]\nundo_limit = 7\nhuge_file_size_warning = 2048\nfile_size_limit = -1\n"
+                              "continue_read_chars = 8192\ncontinue_max_tokens = 4096\n",
                               "editor.conf");
     check(editor_config.error.ok(), "editor config fixture parses");
     err = pkchat::config::apply_document(editor_config.document, options);
     check(err.ok() && options.editor_undo_limit == 7 &&
               options.editor_huge_file_size_warning == 2048 &&
-              options.editor_file_size_limit == -1,
+              options.editor_file_size_limit == -1 &&
+              options.editor_ai_continue_read_chars == 8192 &&
+              options.editor_ai_continue_max_tokens == 4096,
           "editor config settings apply");
 
     options.editor_assist_config = pkchat::editor::default_editor_assist_config();
@@ -266,7 +270,7 @@ void test_config_model_setting_thinking_budget() {
 void test_config_reads_common_template() {
     pkchat::config::ParseResult parsed = pkchat::config::read_file("config/pkchat.conf");
     check(parsed.error.ok(), "common config file parses");
-    check(parsed.document.entries.size() == 151, "common config has every expected setting");
+    check(parsed.document.entries.size() == 153, "common config has every expected setting");
 
     const pkchat::config::Entry* provider = parsed.document.find("provider");
     check(provider != nullptr && provider->value.is_string() && provider->value.string == "openai",
@@ -295,7 +299,9 @@ void test_config_reads_common_template() {
               options.editor_file_size_limit == -1 && options.editor_auto_save_mode &&
               options.editor_auto_save_postfix == "~" && options.editor_auto_save_threshold == 300 &&
               options.editor_auto_save_timeout_seconds == 30 &&
-              options.editor_auto_save_size_limit == 10LL * 1024LL * 1024LL,
+              options.editor_auto_save_size_limit == 10LL * 1024LL * 1024LL &&
+              options.editor_ai_continue_read_chars == pkchat::editor::kDefaultAiContinueReadChars &&
+              options.editor_ai_continue_max_tokens == pkchat::editor::kDefaultAiContinueMaxTokens,
           "common config maps to the built-in runtime defaults");
     check(options.model_settings.size() == 12, "common config includes model-setting presets");
     check(options.model_settings.front().model == "Qwen3.6-*" &&

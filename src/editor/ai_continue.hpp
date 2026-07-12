@@ -2,16 +2,19 @@
 
 #include <cstddef>
 #include <string>
+#include <vector>
 
 #include "common.hpp"
+#include "editor/editor.hpp"
 #include "editor/editor_prompts.hpp"
+
+namespace pkchat::cli {
+struct Options;
+}
 #include "provider/provider.hpp"
 #include "runtime/runtime.hpp"
 
 namespace pkchat::editor {
-
-constexpr size_t kDefaultAiContinueReadChars = 4096;
-constexpr int kDefaultAiContinueMaxTokens = 32768;
 
 struct AiContinueSettings {
     size_t max_read_chars = kDefaultAiContinueReadChars;
@@ -39,22 +42,18 @@ struct ContinueEvent {
     provider::ChatResult chat;
 };
 
-AiContinueSettings ai_continue_settings_from_env();
+AiContinueSettings ai_continue_settings(const cli::Options& options);
 std::string continue_status_message(const std::string& provider_name,
                                     const std::string& model_name,
                                     const std::string& suffix);
 
 std::string continue_status_label(const std::string& provider_name, const std::string& model_name);
-std::string continue_completion_status_suffix(const provider::ChatResult& result,
-                                              bool stream,
-                                              const std::string& state);
 std::string continue_completion_status_message(const std::string& provider_name,
                                                const std::string& model_name,
                                                const provider::ChatResult& result,
                                                bool stream,
-                                               const std::string& state);
-bool editor_auto_selects_model(const provider::RequestContext& context);
-Error resolve_editor_default_model(AiContinueContext& context);
+                                               const std::vector<provider::Message>& messages = {},
+                                               long long context_tokens = 0);
 Error validate_continue_request(const AiContinueContext& context);
 provider::RequestContext continue_request_context(const AiContinueContext& context);
 void start_continue_job(const AiContinueContext& context,

@@ -56,6 +56,7 @@ struct AssistExecution {
     bool ok = false;
     std::string error_message;
     std::vector<provider::Message> messages;
+    std::vector<provider::Message> usage_messages;
     bool stream = false;
     AssistEditKind edit_kind = AssistEditKind::StreamInsert;
     size_t replace_start = 0;

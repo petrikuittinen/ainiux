@@ -2765,11 +2765,18 @@ bool profile_auto_selects_default_model(const Profile& profile, const std::strin
     return false;
 }
 
-bool tui_defers_model_selection(const RequestContext& context) {
-    if (!context.options.tui || !context.options.model.empty() || context.profile.offline) {
+bool defers_model_selection(const RequestContext& context) {
+    if (!context.options.model.empty() || context.profile.offline) {
         return false;
     }
     return !profile_auto_selects_default_model(context.profile, context.base_url);
+}
+
+bool tui_defers_model_selection(const RequestContext& context) {
+    if (!context.options.tui) {
+        return false;
+    }
+    return defers_model_selection(context);
 }
 
 std::vector<Profile> built_in_profiles() {

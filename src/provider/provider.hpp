@@ -133,6 +133,7 @@ std::string normalize_provider_key(std::string text);
 std::string canonical_profile_name(const std::string& name);
 bool is_selectable_provider(const Profile& profile);
 bool profile_auto_selects_default_model(const Profile& profile, const std::string& base_url);
+bool defers_model_selection(const RequestContext& context);
 bool tui_defers_model_selection(const RequestContext& context);
 std::string display_name_for_profile(const std::string& profile_name);
 Error validate_profile_name(const std::string& name);

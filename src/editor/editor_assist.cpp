@@ -673,8 +673,18 @@ AssistExecution build_assist_execution(const EditorState& state,
                                        const std::string& custom_prompt,
                                        std::optional<AssistPromptMode> prompt_mode) {
     AssistExecution execution;
-    const size_t read_len = std::min(state.cursor, context.settings.max_read_chars);
+    const size_t read_len = context.settings.max_read_chars == 0
+                                ? state.cursor
+                                : std::min(state.cursor, context.settings.max_read_chars);
     const std::string prefix = state.text.range_text(state.cursor - read_len, read_len);
+    const std::string full_prefix = state.text.range_text(0, state.cursor);
+
+    auto assign_messages = [&](const std::string& task_prompt, const std::string& request_text) {
+        execution.messages = build_messages(context, task_prompt, request_text);
+        if (request_text != full_prefix) {
+            execution.usage_messages = build_messages(context, task_prompt, full_prefix);
+        }
+    };
 
     auto fail = [&](std::string message) {
         execution.error_message = std::move(message);
@@ -692,7 +702,7 @@ AssistExecution build_assist_execution(const EditorState& state,
             (!scope.has_value() || assist_command_runs_without_scope(command))) {
             execution.stream = true;
             execution.edit_kind = AssistEditKind::StreamInsert;
-            execution.messages = build_messages(context, command.prompt, prefix);
+            assign_messages(command.prompt, prefix);
             execution.ok = true;
             return execution;
         }
@@ -703,7 +713,11 @@ AssistExecution build_assist_execution(const EditorState& state,
             execution.edit_kind = AssistEditKind::StreamInsert;
             const std::string source =
                 state.selection.has_range() ? state.selected_text() : prefix;
-            execution.messages = build_messages(context, command.prompt, source);
+            if (state.selection.has_range()) {
+                execution.messages = build_messages(context, command.prompt, source);
+            } else {
+                assign_messages(command.prompt, prefix);
+            }
             execution.ok = true;
             return execution;
         }
@@ -718,7 +732,7 @@ AssistExecution build_assist_execution(const EditorState& state,
             }
             execution.stream = true;
             execution.edit_kind = AssistEditKind::StreamInsert;
-            execution.messages = build_messages(context, command.prompt, prefix);
+            assign_messages(command.prompt, prefix);
             execution.ok = true;
             return execution;
         }
@@ -783,7 +797,7 @@ AssistExecution build_assist_execution(const EditorState& state,
             case AssistPromptMode::Continue:
                 execution.stream = true;
                 execution.edit_kind = AssistEditKind::StreamInsert;
-                execution.messages = build_messages(context, custom_prompt, prefix);
+                assign_messages(custom_prompt, prefix);
                 break;
             case AssistPromptMode::Selection:
                 if (!state.selection.has_range()) {

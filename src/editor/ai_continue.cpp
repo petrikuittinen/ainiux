@@ -1,18 +1,20 @@
 #include "editor/ai_continue.hpp"
 
+#include "cli/args.hpp"
 #include "editor/editor_ai_setup.hpp"
 #include "editor/editor_assist.hpp"
-
-#include <iomanip>
-#include <sstream>
+#include "tui/tui.hpp"
 
 namespace pkchat::editor {
 
-AiContinueSettings ai_continue_settings_from_env() {
+AiContinueSettings ai_continue_settings(const cli::Options& options) {
     AiContinueSettings settings;
-    settings.max_read_chars = positive_size_from_env("MAX_AI_CONTINUE_READ", kDefaultAiContinueReadChars);
+    settings.max_read_chars = options.editor_ai_continue_read_chars;
+    settings.max_output_tokens = options.editor_ai_continue_max_tokens;
+    settings.max_read_chars =
+        positive_size_from_env("MAX_AI_CONTINUE_READ", settings.max_read_chars);
     settings.max_output_tokens =
-        positive_int_from_env("MAX_AI_CONTINUE_TOKENS", kDefaultAiContinueMaxTokens);
+        positive_int_from_env("MAX_AI_CONTINUE_TOKENS", settings.max_output_tokens);
     return settings;
 }
 
@@ -41,63 +43,14 @@ std::string continue_status_label(const std::string& provider_name, const std::s
     return label;
 }
 
-std::string continue_completion_status_suffix(const provider::ChatResult& result,
-                                              bool stream,
-                                              const std::string& state) {
-    std::ostringstream out;
-    out << state;
-    if (stream) {
-        out << " | TTFT ";
-        if (result.ttft_ms >= 0) {
-            out << result.ttft_ms << "ms";
-        } else {
-            out << "unknown";
-        }
-    } else {
-        out << " | Response " << result.total_ms << "ms";
-    }
-    out << " | ";
-    if (result.completion_tokens_estimated) {
-        out << "~";
-    }
-    out << std::fixed << std::setprecision(1) << provider::tokens_per_second(result, stream)
-        << " tok/s";
-    return out.str();
-}
-
 std::string continue_completion_status_message(const std::string& provider_name,
                                                const std::string& model_name,
                                                const provider::ChatResult& result,
                                                bool stream,
-                                               const std::string& state) {
-    return continue_status_message(provider_name,
-                                   model_name,
-                                   continue_completion_status_suffix(result, stream, state));
-}
-
-bool editor_auto_selects_model(const provider::RequestContext& context) {
-    return provider::profile_auto_selects_default_model(context.profile, context.base_url);
-}
-
-Error resolve_editor_default_model(AiContinueContext& context) {
-    if (!context.request.options.model.empty()) {
-        return ok_error();
-    }
-    if (!editor_auto_selects_model(context.request)) {
-        return {ErrorCode::BadArgs, "AI continue requires --model for this provider"};
-    }
-
-    provider::ModelsResult models;
-    Error err = provider::list_models(context.request, models);
-    if (!err.ok()) {
-        return err;
-    }
-    if (models.model_ids.empty()) {
-        return {ErrorCode::ProviderSchema,
-                "model list from " + context.request.models_url + " was empty; pass --model explicitly"};
-    }
-    context.request.options.model = models.model_ids.front();
-    return ok_error();
+                                               const std::vector<provider::Message>& messages,
+                                               long long context_tokens) {
+    return tui::generation_ready_status(provider_name, model_name, result, stream, messages,
+                                        context_tokens);
 }
 
 Error validate_continue_request(const AiContinueContext& context) {

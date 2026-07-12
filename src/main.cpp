@@ -210,12 +210,17 @@ int main(int argc, char** argv) {
         pkchat::provider::RequestContext editor_context = std::move(context_result.context);
         std::optional<pkchat::editor::AiContinueContext> ai_continue;
         if (!editor_context.profile.offline) {
+            if (!pkchat::provider::defers_model_selection(editor_context)) {
+                pkchat::Error model_err = pkchat::app::choose_default_model(editor_context);
+                if (!model_err.ok()) {
+                    pkchat::app::print_error(model_err);
+                    return pkchat::app::exit_code_for(model_err.code);
+                }
+            }
             pkchat::editor::AiContinueContext configured;
             configured.request = std::move(editor_context);
-            configured.settings = pkchat::editor::ai_continue_settings_from_env();
+            configured.settings = pkchat::editor::ai_continue_settings(options);
             configured.assist_config = options.editor_assist_config;
-            // Defer model selection when --model is omitted, like --chat TUI mode.
-            // AI assist stays disabled until the user picks a model with /model.
             ai_continue = std::move(configured);
         }
         return pkchat::editor::run_editor(options.editor_path,

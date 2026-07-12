@@ -1,6 +1,7 @@
 #include "editor/editor_ai_setup.hpp"
 
 #include "cli/args.hpp"
+#include "tui/tui.hpp"
 
 namespace pkchat::editor {
 
@@ -24,10 +25,11 @@ std::string editor_startup_status(const std::optional<AiContinueContext>& contex
     if (!editor_ai_has_provider(context)) {
         return "Local editor · Use /provider and /model to enable AI features";
     }
-    if (!editor_ai_ready(context)) {
-        return "Choose a model with /model";
+    if (context->request.options.model.empty()) {
+        return tui::chat_startup_status(context->request);
     }
-    return "AI ready · Change provider with /provider or model with /model";
+    return tui::provider_model_status_message(context->request,
+                                              "ready · Change provider with /provider or model with /model");
 }
 
 Error ensure_editor_ai_context(std::optional<AiContinueContext>& context, const EditorAssistConfig& assist_config) {
@@ -35,11 +37,11 @@ Error ensure_editor_ai_context(std::optional<AiContinueContext>& context, const 
         return ok_error();
     }
     AiContinueContext created;
-    created.settings = ai_continue_settings_from_env();
     created.assist_config = assist_config;
     cli::Options options;
     options.editor = true;
     provider::apply_editor_startup_default(options);
+    created.settings = ai_continue_settings(options);
     provider::ContextResult built = provider::build_context(options);
     if (!built.error.ok()) {
         return built.error;
@@ -72,6 +74,10 @@ Error apply_editor_model(std::optional<AiContinueContext>& context, const std::s
         return {ErrorCode::UnsupportedFeature, editor_no_provider_message()};
     }
     context->request.options.model = model;
+    const Error context_err = provider::resolve_context_window(context->request, model);
+    if (!context_err.ok()) {
+        return context_err;
+    }
     return ok_error();
 }
 

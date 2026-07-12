@@ -809,6 +809,8 @@ void test_tui_local_endpoint_auto_selects_model() {
     check(parsed.error.ok(), "local URL chat UI args parse");
     pkchat::provider::ContextResult context = pkchat::provider::build_context(parsed.options);
     check(context.error.ok(), "local URL chat UI context builds");
+    check(!pkchat::provider::defers_model_selection(context.context),
+          "local custom URL defers model selection only for non-auto-select providers");
     check(!pkchat::provider::tui_defers_model_selection(context.context),
           "local custom URL chat UI auto-selects the default model");
     check(context.context.base_url.find("localhost:30000") != std::string::npos,
@@ -821,6 +823,14 @@ void test_tui_local_endpoint_auto_selects_model() {
     check(offline.error.ok(), "bare chat UI offline context builds");
     check(!pkchat::provider::tui_defers_model_selection(offline.context),
           "bare offline chat UI does not defer because provider selection comes first");
+
+    const char* editor_argv[] = {"pkchat", "http://localhost:30000", "--editor"};
+    pkchat::cli::ParseResult editor_parsed = pkchat::cli::parse_args(3, const_cast<char**>(editor_argv));
+    check(editor_parsed.error.ok(), "local URL editor args parse");
+    pkchat::provider::ContextResult editor_context = pkchat::provider::build_context(editor_parsed.options);
+    check(editor_context.error.ok(), "local URL editor context builds");
+    check(!pkchat::provider::defers_model_selection(editor_context.context),
+          "local custom URL editor auto-selects the default model");
 }
 
 void test_tui_startup_provider_selection_helpers() {

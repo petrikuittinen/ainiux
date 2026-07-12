@@ -16,6 +16,7 @@
 #include "search/search.hpp"
 #include "tui/activity.hpp"
 #include "tui/theme_registry.hpp"
+#include "tui/tui.hpp"
 #include "ui/confirmation.hpp"
 #include "ui/text_selector.hpp"
 
@@ -47,6 +48,8 @@ struct AssistSession {
     EditorSnapshot undo_before;
     std::string provider_name;
     std::string model_name;
+    std::vector<provider::Message> messages;
+    std::vector<provider::Message> usage_messages;
     std::string status_suffix;
     tui::ActivityKind activity_kind = tui::ActivityKind::None;
     size_t replace_start = 0;
@@ -74,6 +77,8 @@ void clear_assist_session(AssistSession& session) {
     session.undo_before = EditorSnapshot{};
     session.provider_name.clear();
     session.model_name.clear();
+    session.messages.clear();
+    session.usage_messages.clear();
     session.status_suffix.clear();
     session.activity_kind = tui::ActivityKind::None;
     session.replace_start = 0;
@@ -680,10 +685,18 @@ int run_editor(const std::string& path,
                                                    suffix));
     };
 
-    auto finish_assist_session = [&](const std::string& suffix,
+    auto finish_assist_session = [&](const std::string& message,
                                      bool commit_stream_undo,
-                                     const std::optional<std::string>& inplace_content) {
+                                     const std::optional<std::string>& inplace_content,
+                                     bool message_includes_label = false) {
         assist_session.job.join();
+        const auto show_finish_message = [&]() {
+            if (message_includes_label) {
+                minibuffer_message(minibuffer, message);
+            } else {
+                set_assist_minibuffer(message);
+            }
+        };
         if (inplace_content.has_value()) {
             Error replace_error =
                 state.replace(assist_session.replace_start, assist_session.replace_count, *inplace_content);
@@ -691,7 +704,7 @@ int run_editor(const std::string& path,
                 minibuffer_message(minibuffer, replace_error.message);
             } else {
                 state.clear_selection();
-                set_assist_minibuffer(suffix);
+                show_finish_message();
             }
         } else {
             if (assist_session.edit_kind == AssistEditKind::StreamInsert) {
@@ -700,7 +713,7 @@ int run_editor(const std::string& path,
             if (commit_stream_undo && assist_session.saw_visible) {
                 state.finalize_stream_edit(assist_session.undo_before);
             }
-            set_assist_minibuffer(suffix);
+            show_finish_message();
         }
         clear_assist_session(assist_session);
     };
@@ -729,24 +742,35 @@ int run_editor(const std::string& path,
                     }
                     state.ensure_cursor_visible(assist_panel_rect());
                     break;
-                case ContinueEventType::Done:
+                case ContinueEventType::Done: {
                     if (!event.chat.model.empty()) {
                         assist_session.model_name = event.chat.model;
                     }
+                    long long context_tokens = 0;
+                    if (ai_continue.has_value()) {
+                        provider::resolve_context_window(ai_continue->request, assist_session.model_name);
+                        context_tokens = ai_continue->request.options.context_tokens;
+                    }
+                    const std::vector<provider::Message>& usage_messages =
+                        assist_session.usage_messages.empty() ? assist_session.messages
+                                                            : assist_session.usage_messages;
+                    const std::string completion_status = continue_completion_status_message(
+                        assist_session.provider_name,
+                        assist_session.model_name,
+                        event.chat,
+                        assist_session.streaming,
+                        usage_messages,
+                        context_tokens);
                     if (assist_session.edit_kind == AssistEditKind::ReplaceInPlace) {
-                        finish_assist_session(
-                            continue_completion_status_suffix(event.chat, assist_session.streaming, "ready"),
-                            false,
-                            trim_assist_inplace_response(event.chat.content));
+                        finish_assist_session(completion_status,
+                                              false,
+                                              trim_assist_inplace_response(event.chat.content),
+                                              true);
                     } else {
-                        finish_assist_session(
-                            continue_completion_status_suffix(event.chat,
-                                                              assist_session.streaming,
-                                                              "stopped and ready"),
-                            true,
-                            std::nullopt);
+                        finish_assist_session(completion_status, true, std::nullopt, true);
                     }
                     return true;
+                }
                 case ContinueEventType::Error:
                     if (event.error.code == ErrorCode::Cancelled) {
                         if (assist_session.edit_kind == AssistEditKind::ReplaceInPlace) {
@@ -811,6 +835,8 @@ int run_editor(const std::string& path,
         assist_session.edit_kind = execution.edit_kind;
         assist_session.provider_name = ai_continue->request.profile.name;
         assist_session.model_name = ai_continue->request.options.model;
+        assist_session.messages = execution.messages;
+        assist_session.usage_messages = execution.usage_messages;
         assist_session.replace_start = execution.replace_start;
         assist_session.replace_count = execution.replace_count;
         if (execution.edit_kind == AssistEditKind::StreamInsert) {

@@ -121,14 +121,35 @@ long long estimated_text_tokens(const std::vector<provider::Message>& messages) 
     return total;
 }
 
+bool messages_include_assistant_output(const std::vector<provider::Message>& messages) {
+    for (const provider::Message& message : messages) {
+        if (message.role == "assistant") {
+            return true;
+        }
+    }
+    return false;
+}
+
 long long estimated_usage_tokens(const std::vector<provider::Message>& messages,
                                  const provider::ChatResult& result) {
     const long long locally_estimated = estimated_text_tokens(messages);
     const long long reported = provider::reported_total_tokens(result);
-    if (reported < 0) {
-        return locally_estimated;
+    if (reported >= 0) {
+        return std::max(locally_estimated, reported);
     }
-    return std::max(locally_estimated, reported);
+    if (result.prompt_tokens >= 0) {
+        long long total = result.prompt_tokens;
+        if (result.completion_tokens > 0 &&
+            total <= std::numeric_limits<long long>::max() - result.completion_tokens) {
+            total += result.completion_tokens;
+        }
+        return std::max(locally_estimated, total);
+    }
+    if (!messages_include_assistant_output(messages) && result.completion_tokens > 0 &&
+        locally_estimated <= std::numeric_limits<long long>::max() - result.completion_tokens) {
+        return locally_estimated + result.completion_tokens;
+    }
+    return locally_estimated;
 }
 
 std::string format_context_usage(long long used_tokens, long long window_tokens) {

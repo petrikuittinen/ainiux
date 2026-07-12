@@ -118,6 +118,18 @@ void test_context_usage_formatting() {
           "context usage prefers provider-reported totals when available");
 
     result.usage_json = "null";
+    result.total_tokens = -1;
+    result.prompt_tokens = -1;
+    result.completion_tokens = 5;
+    check(pkchat::context::estimated_usage_tokens(messages, result) > 5,
+          "context usage adds completion tokens when provider totals are missing");
+
+    result.completion_tokens = 0;
+    result.prompt_tokens = 18;
+    check(pkchat::context::estimated_usage_tokens(messages, result) == 18,
+          "context usage uses provider prompt tokens when totals are missing");
+
+    result.usage_json = "null";
     check(pkchat::context::format_context_usage(1000, 10000) == "1000 (10%)",
           "context usage formats token count and percentage");
     check(pkchat::context::format_context_usage(20, 131072) == "20 (<1%)",

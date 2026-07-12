@@ -1644,6 +1644,14 @@ Error apply_document(const Document& document, cli::Options& options) {
             err = nonnegative_int(entry, candidate.editor_auto_save_timeout_seconds);
         } else if (name == "editor.auto-save-size-limit") {
             err = auto_save_byte_size(entry, candidate.editor_auto_save_size_limit);
+        } else if (name == "editor.continue_read_chars") {
+            long long value = 0;
+            err = nonnegative_long_long(entry, value);
+            if (err.ok()) {
+                candidate.editor_ai_continue_read_chars = static_cast<size_t>(value);
+            }
+        } else if (name == "editor.continue_max_tokens") {
+            err = nonnegative_int(entry, candidate.editor_ai_continue_max_tokens);
         } else if (name == "editor.assist_behavior") {
             err = require_type(entry, Value::Type::String);
             if (err.ok()) candidate.editor_assist_config.behavior_rules = entry.value.string;

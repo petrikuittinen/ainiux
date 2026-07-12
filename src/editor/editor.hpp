@@ -52,6 +52,8 @@ constexpr size_t kDefaultAutoSaveThreshold = 300;
 constexpr int kDefaultAutoSaveTimeoutSeconds = 30;
 constexpr long long kDefaultAutoSaveSizeLimit = 10LL * 1024LL * 1024LL;
 constexpr const char* kDefaultAutoSavePostfix = "~";
+constexpr size_t kDefaultAiContinueReadChars = 16384;
+constexpr int kDefaultAiContinueMaxTokens = 32768;
 
 struct EditorSettings {
     size_t undo_limit = kDefaultUndoLimit;

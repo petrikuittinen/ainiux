@@ -45,10 +45,9 @@ void test_editor_ai_continue_helpers() {
     check(pkchat::editor::continue_completion_status_message("custom_openai_chat",
                                                              "gpt-test",
                                                              continue_result,
-                                                             true,
-                                                             "stopped and ready") ==
-              "[custom / gpt-test] stopped and ready | TTFT 100ms | ~20.0 tok/s",
-          "continue completion status includes provider, model, TTFT, and estimated token throughput");
+                                                             true) ==
+              "[custom / gpt-test] | TTFT: 100 ms | Token/s: 20.0 (estimated)",
+          "continue completion status reuses TUI generation metrics formatting");
 
     pkchat::editor::EditorState state = pkchat::editor::EditorState::from_text("Once upon a ");
     state.cursor = state.text.size();
@@ -66,7 +65,7 @@ void test_editor_ai_continue_helpers() {
     check(context.error.ok(), "none provider context builds");
     pkchat::editor::AiContinueContext ai_continue;
     ai_continue.request = context.context;
-    ai_continue.settings = pkchat::editor::ai_continue_settings_from_env();
+    ai_continue.settings = pkchat::editor::ai_continue_settings(pkchat::cli::Options{});
     check(!pkchat::editor::validate_continue_request(ai_continue).ok(),
           "none provider rejects AI continue");
 
@@ -75,7 +74,8 @@ void test_editor_ai_continue_helpers() {
     check(lm_parsed.error.ok(), "lmstudio editor args without model parse");
     context = pkchat::provider::build_context(lm_parsed.options);
     check(context.error.ok(), "lmstudio provider context builds without model");
-    check(pkchat::editor::editor_auto_selects_model(context.context),
+    check(pkchat::provider::profile_auto_selects_default_model(context.context.profile,
+                                                             context.context.base_url),
           "lmstudio editor auto-selects the first model");
     ai_continue.request = context.context;
     check(pkchat::editor::validate_continue_request(ai_continue).code == pkchat::ErrorCode::BadArgs,
@@ -87,12 +87,14 @@ void test_editor_ai_continue_helpers() {
     pkchat::provider::ContextResult localhost_context =
         pkchat::provider::build_context(localhost_parsed.options);
     check(localhost_context.error.ok(), "localhost custom endpoint context builds without model");
-    check(pkchat::editor::editor_auto_selects_model(localhost_context.context),
+    check(pkchat::provider::profile_auto_selects_default_model(localhost_context.context.profile,
+                                                               localhost_context.context.base_url),
           "localhost custom endpoint auto-selects the first model");
 
     pkchat::provider::RequestContext openai_context;
     openai_context.profile.name = "openai";
-    check(!pkchat::editor::editor_auto_selects_model(openai_context),
+    check(!pkchat::provider::profile_auto_selects_default_model(openai_context.profile,
+                                                                openai_context.base_url),
           "openai editor does not auto-select a model");
 
     const char* lm_model_argv[] = {"pkchat", "lmstudio", "-m", "mock-model", "--editor"};
@@ -108,6 +110,12 @@ void test_editor_ai_continue_helpers() {
     check(job_context.options.has_max_output_tokens, "continue sets max output tokens");
     check(job_context.options.max_output_tokens == 1234, "continue uses configured token limit");
 
+    pkchat::cli::Options default_options;
+    const pkchat::editor::AiContinueSettings default_settings =
+        pkchat::editor::ai_continue_settings(default_options);
+    check(default_settings.max_read_chars == pkchat::editor::kDefaultAiContinueReadChars,
+          "default continue read uses the configured 16k default");
+
     const char* previous_read = std::getenv("MAX_AI_CONTINUE_READ");
     const char* previous_tokens = std::getenv("MAX_AI_CONTINUE_TOKENS");
 #if defined(_WIN32)
@@ -117,7 +125,7 @@ void test_editor_ai_continue_helpers() {
     setenv("MAX_AI_CONTINUE_READ", "16", 1);
     setenv("MAX_AI_CONTINUE_TOKENS", "2048", 1);
 #endif
-    const pkchat::editor::AiContinueSettings env_settings = pkchat::editor::ai_continue_settings_from_env();
+    const pkchat::editor::AiContinueSettings env_settings = pkchat::editor::ai_continue_settings(default_options);
     check(env_settings.max_read_chars == 16, "MAX_AI_CONTINUE_READ overrides default");
     check(env_settings.max_output_tokens == 2048, "MAX_AI_CONTINUE_TOKENS overrides default");
 #if defined(_WIN32)
@@ -181,8 +189,11 @@ void test_editor_ai_setup_helpers() {
     check(pkchat::editor::editor_ai_has_provider(ready_continue), "configured provider is chosen");
     ready_continue.request.options.model = "mock-model";
     check(pkchat::editor::editor_ai_ready(ready_continue), "provider with model is AI-ready");
-    check(pkchat::editor::editor_startup_status(ready_continue).find("AI ready") != std::string::npos,
-          "ready startup status mentions AI ready");
+    const std::string ready_startup_status = pkchat::editor::editor_startup_status(ready_continue);
+    check(ready_startup_status.find("[lmstudio / mock-model]") == 0,
+          "ready startup status shows provider and model like chat mode");
+    check(ready_startup_status.find("ready") != std::string::npos,
+          "ready startup status mentions ready");
 
     std::optional<pkchat::editor::AiContinueContext> created;
     pkchat::editor::EditorAssistConfig assist_config = pkchat::editor::default_editor_assist_config();
@@ -220,8 +231,10 @@ void test_editor_ai_setup_helpers() {
         pkchat::editor::editor_startup_status(openrouter_continue);
     check(openrouter_startup_status.find("/model") != std::string::npos,
           "openrouter editor startup status mentions /model");
-    check(openrouter_startup_status == "Choose a model with /model",
-          "openrouter editor startup status does not ask for /provider");
+    check(openrouter_startup_status.find("Choose a model with /model") != std::string::npos,
+          "openrouter editor startup status asks for /model");
+    check(openrouter_startup_status.find("/provider") != std::string::npos,
+          "openrouter editor startup status mentions /provider like chat mode");
 
     const char* lm_no_model_argv[] = {"pkchat", "lmstudio", "--editor"};
     pkchat::cli::ParseResult lm_no_model_parsed =
@@ -475,6 +488,25 @@ void test_editor_assist_helpers() {
           "/continue continue builds streaming execution");
     check(execution.messages.back().content == "<content>hello wrld</content>",
           "/continue continue sends tail-before-cursor context as input");
+    check(execution.usage_messages.empty(),
+          "/continue continue omits separate usage messages when the full prefix fits the read limit");
+
+    context.settings.max_read_chars = 4096;
+    pkchat::editor::EditorState long_state =
+        pkchat::editor::EditorState::from_text(std::string(5000, 'a'));
+    long_state.cursor = long_state.text.size();
+    execution = pkchat::editor::build_assist_execution(
+        long_state,
+        context,
+        pkchat::editor::AssistCommandKind::Configured,
+        *continue_index,
+        pkchat::editor::AssistScope::Continue,
+        "",
+        std::nullopt);
+    check(execution.ok, "long /continue continue execution builds");
+    check(execution.messages.back().content.size() <
+              execution.usage_messages.back().content.size(),
+          "/continue continue keeps truncated request text but full-prefix usage messages");
     check(execution.messages.front().content.rfind("Custom system", 0) == 0 &&
               execution.messages.front().content.find(default_continue->prompt) != std::string::npos,
           "user --system is prepended to assist task system prompt");

@@ -81,7 +81,7 @@ Requires a configured provider **and** model. If either is missing, `Ctrl+Space`
 
 `Ctrl+Space` runs **`/continue`** in **continue** mode:
 
-1. Sends up to 4096 characters immediately before the cursor as context
+1. Sends up to `continue_read_chars` characters immediately before the cursor as context (default 16384; `0` means unlimited)
 2. Streams new text after the cursor (thinking traces stay out of the buffer)
 3. Shows status in the minibuffer: `thinking...`, `writing.`, `stopped and ready`
 4. `Esc` during generation cancels the request but keeps text already streamed

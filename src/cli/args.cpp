@@ -28,7 +28,7 @@ bool needs_value(const std::string& opt) {
         "--context", "--context-policy", "--image-capability",
         "--save-chat", "--load-chat", "--dataset", "--category", "--case",
         "--runs", "--warmup", "--limit", "--mode", "--concurrency", "--duration",
-        "--summary-format"};
+        "--summary-format", "--editor-continue-read", "--editor-continue-max-tokens"};
     for (const char* item : with_values) {
         if (opt == item) {
             return true;
@@ -65,6 +65,15 @@ Error parse_int(const std::string& name, const std::string& text, int& out) {
         return {ErrorCode::BadArgs, name + " value is too large"};
     }
     out = static_cast<int>(value);
+    return ok_error();
+}
+
+Error parse_nonnegative_long(const std::string& name, const std::string& text, long& out) {
+    char* end = nullptr;
+    out = std::strtol(text.c_str(), &end, 10);
+    if (end == text.c_str() || *end != '\0' || out < 0) {
+        return {ErrorCode::BadArgs, name + " expects a non-negative integer"};
+    }
     return ok_error();
 }
 
@@ -358,6 +367,18 @@ ParseResult parse_args(int argc, char** argv, const Options& base_options) {
                     return {opts, err};
                 }
                 opts.has_max_output_tokens = true;
+            } else if (opt == "--editor-continue-read") {
+                long read_chars = 0;
+                Error err = parse_nonnegative_long(opt, value, read_chars);
+                if (!err.ok()) {
+                    return {opts, err};
+                }
+                opts.editor_ai_continue_read_chars = static_cast<size_t>(read_chars);
+            } else if (opt == "--editor-continue-max-tokens") {
+                Error err = parse_int(opt, value, opts.editor_ai_continue_max_tokens);
+                if (!err.ok()) {
+                    return {opts, err};
+                }
             } else if (opt == "--format") {
                 if (value == "text") {
                     opts.format = OutputFormat::Text;
@@ -645,6 +666,10 @@ Options:
                                 A provider shortcut/profile may precede --editor without -m/--model;
                                 choose a model inside the editor with /model (like --chat).
                                 Use --provider none for offline local editing.
+      --editor-continue-read N  Characters before the cursor sent for Ctrl+Space /continue;
+                                default 16384; 0 means unlimited.
+      --editor-continue-max-tokens N
+                                Maximum streamed output tokens for editor AI continue; default 32768.
       --input PATH              Read text/Markdown/HTML, or attach PNG/JPEG/GIF with -p;
                                 'stdin' reads UTF-8 plaintext from standard input.
       --attach PATH             Add text/Markdown/HTML or PNG/JPEG/GIF; repeatable;
