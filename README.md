@@ -142,23 +142,25 @@ With a configured provider and model, the editor can run one-shot AI tasks from 
 |---------------|------|-------------------------|--------|
 | `s` / `selection` | selection | Selected text | Replace the selection in-place |
 | `a` / `all` | all | Whole buffer | Replace the whole buffer in-place |
-| `c` / `continue` | continue | Up to `MAX_AI_CONTINUE_READ` characters immediately before the cursor (default 4096) | Stream new text after the cursor |
+| `n` / `newbuffer` | new buffer | Selected text | Stream into a new editor buffer |
 | `i` / `insert` | insert | Selected text | Stream new text after the cursor |
 
-Built-in commands are `/spell`, `/grammar`, `/continue`, `/fact`, `/comment`, `/rewrite`, `/English`, `/Chinese`, and `/Finnish`. Each supports all four modes above. `/comment` comments on how to improve the text, `/rewrite` rewrites for spelling, grammar, facts, and style, and the language commands translate. Type `Esc` to open the command minibuffer, enter a command such as `/spell`, and pkchat prompts for a mode when one is omitted. `Tab` completes commands and mode variants. `/prompt YOUR TASK` runs a custom one-shot prompt and accepts the same modes (`c`, `i`, `s`, `a`). `/regenerate` repeats the previous AI command with the same command options where the current buffer state allows it. `/quit` leaves command mode.
+Built-in commands are `/spell`, `/grammar`, `/continue`, `/fact`, `/comment`, `/rewrite`, `/English`, `/Chinese`, and `/Finnish`. All except `/continue` support `selection`, `all`, `newbuffer`, and `insert`. `/continue` is continue-only and is also bound to `Ctrl+Space`. `/comment` comments on how to improve the text, `/rewrite` rewrites for spelling, grammar, facts, and style, and the language commands translate. Type `Esc` to open the command minibuffer, enter a command such as `/spell`, and pkchat prompts for a mode when one is omitted. `Tab` completes commands and mode variants. `/prompt YOUR TASK` runs a custom one-shot prompt and accepts the same scoped modes (`s`, `a`, `n`, `i`, plus `c` for continue). `/regenerate` repeats the previous AI command with the same command options where the current buffer state allows it. `/quit` leaves command mode.
 
 `Ctrl+Space` runs `/continue` in **continue** mode: it sends the tail-before-cursor context, streams visible continuation text at the cursor up to `MAX_AI_CONTINUE_TOKENS` (default 32768), hides thinking traces from the buffer, and shows `[MODEL] thinking... ESC to abort` / `[MODEL] writing. Press ESC to stop.` / `[MODEL] stopped and ready` in the minibuffer. `Esc` cancels an in-flight request but keeps any text already streamed into the buffer. Editor mode does not auto-select a model at startup; choose one with `/model` after `pkchat openrouter --editor`, `pkchat lmstudio --editor`, or similar. Provider/model pickers are also available through `Esc` then `/provider` or `/model`.
+
+In the chat TUI, the same built-in editor AI commands are available as slash commands. A bare command such as `/Chinese` submits that command's prompt as a normal chat turn. `/Chinese n` (or `newbuffer`) with selected input text switches to the editor and runs the command in **new buffer** mode there.
 
 Custom commands use repeatable `[command]` blocks in config:
 
 ```conf
 [command]
 string = /example
-modes = selection, all, continue, insert
+modes = selection, all, newbuffer, insert
 prompt = "Output 5 examples of the user-given topic. Answer inside <content>...</content> tags only."
 ```
 
-A matching `string` replaces a built-in command; new strings add commands. Config mode tokens are `selection`, `all`, `continue`, `insert`, and `fact`. `local_insert` is accepted as an alias for `insert`. Legacy `[editor]` keys `assist_spell`, `assist_grammar`, `assist_continue`, `assist_fact`, and `assist_behavior` still override the built-in prompts and behavior rules.
+A matching `string` replaces a built-in command; new strings add commands. Config mode tokens are `selection`, `all`, `newbuffer` (`new` or `n`), `continue`, `insert`, and `fact`. `local_insert` is accepted as an alias for `insert`. Legacy `[editor]` keys `assist_spell`, `assist_grammar`, `assist_continue`, `assist_fact`, and `assist_behavior` still override the built-in prompts and behavior rules.
 
 ### Editor Controls
 

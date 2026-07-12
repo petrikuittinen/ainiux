@@ -124,15 +124,17 @@ Most commands accept a **mode** (prompted if omitted):
 |----------|------|----------------|--------|
 | `s` | selection | Selected text | Replace selection in place |
 | `a` | all | Whole buffer | Replace entire buffer in place |
-| `c` | continue | Text before cursor | Stream after cursor |
+| `n` | new buffer | Selected text | Stream into a new editor buffer |
 | `i` | insert | Selected text | Stream after cursor |
+
+**Continue** mode (`c`) is only available on **`/continue`**, including `Ctrl+Space`. Other built-in commands do not offer continue.
 
 Examples:
 
 ```text
 /spell selection
 /rewrite all
-/continue continue
+/Chinese newbuffer
 /prompt Summarize the buffer in three bullets
 ```
 
