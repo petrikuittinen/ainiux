@@ -635,12 +635,14 @@ void EditorState::move_line_end(const Rect& rect) {
     selection.clear(cursor);
 }
 
-Error EditorState::kill_to_line_end() {
+Error EditorState::kill_to_line_end(Clipboard& clipboard) {
     const size_t line = text.line_for_offset(cursor);
     const size_t start = text.line_start(line);
     const size_t length = text.line_length(line);
     const size_t end = start + length;
     if (cursor < end) {
+        const std::string killed = text.range_text(cursor, end - cursor);
+        clipboard.set(killed);
         EditorSnapshot before = snapshot();
         Error err = text.erase(cursor, end - cursor);
         if (!err.ok()) {
@@ -660,6 +662,7 @@ Error EditorState::kill_to_line_end() {
     if (line + 1 >= text.line_count()) {
         erase_pos = start == 0 ? 0 : start - 1;
     }
+    clipboard.set("\n");
     EditorSnapshot before = snapshot();
     Error err = text.erase(erase_pos, 1);
     if (!err.ok()) {

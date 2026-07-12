@@ -1406,7 +1406,7 @@ app::EditorRunResult run_editor(const std::string& path,
         } else if (ch == 1) {
             state.select_all();
         } else if (ch == 11) {
-            Error kill_error = state.kill_to_line_end();
+            Error kill_error = state.kill_to_line_end(shared_clipboard());
             if (!kill_error.ok()) {
                 minibuffer_message(minibuffer, kill_error.message);
             }

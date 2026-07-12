@@ -919,34 +919,44 @@ void test_editor_invalid_utf8_rendering_is_sanitized() {
 }
 
 void test_editor_kill_to_line_end() {
+    pkchat::editor::Clipboard clipboard;
     pkchat::editor::EditorState state = pkchat::editor::EditorState::from_text("alpha beta\ngamma");
     state.cursor = state.text.offset_for_line_column(0, 6);
-    pkchat::Error err = state.kill_to_line_end();
+    pkchat::Error err = state.kill_to_line_end(clipboard);
     check(err.ok(), "editor kill to line end succeeds");
     check(state.text.str() == "alpha \ngamma", "editor kill to line end erases text before newline only");
     check(state.cursor == state.text.offset_for_line_column(0, 6), "editor kill to line end keeps cursor in place");
     check(state.dirty, "editor kill to line end marks dirty after deleting text");
+    check(clipboard.text() == "beta", "editor kill to line end copies killed text to clipboard");
 
-    err = state.kill_to_line_end();
+    err = state.paste(clipboard);
+    check(err.ok(), "editor paste after kill succeeds");
+    check(state.text.str() == "alpha beta\ngamma", "editor paste after kill restores killed text");
+
+    clipboard.clear();
+    err = state.kill_to_line_end(clipboard);
     check(err.ok(), "editor kill at end of line succeeds");
-    check(state.text.str() == "alpha \ngamma", "editor kill at end of non-empty line leaves newline intact");
+    check(state.text.str() == "alpha beta\ngamma", "editor kill at end of non-empty line leaves newline intact");
+    check(clipboard.empty(), "editor kill at end of non-empty line does not change clipboard");
 
     pkchat::editor::EditorState middle = pkchat::editor::EditorState::from_text("alpha\n\ngamma");
     middle.cursor = middle.text.line_start(1);
-    err = middle.kill_to_line_end();
+    err = middle.kill_to_line_end(clipboard);
     check(err.ok(), "editor kill empty middle line succeeds");
     check(middle.text.str() == "alpha\ngamma", "editor kill empty middle line removes that line");
     check(middle.cursor == middle.text.line_start(1), "editor kill empty middle line keeps cursor at next line start");
+    check(clipboard.text() == "\n", "editor kill empty middle line copies newline to clipboard");
 
     pkchat::editor::EditorState last = pkchat::editor::EditorState::from_text("alpha\n");
     last.cursor = last.text.line_start(1);
-    err = last.kill_to_line_end();
+    err = last.kill_to_line_end(clipboard);
     check(err.ok(), "editor kill empty final line succeeds");
     check(last.text.str() == "alpha", "editor kill empty final line removes preceding newline");
     check(last.cursor == last.text.size(), "editor kill empty final line moves cursor to new end");
+    check(clipboard.text() == "\n", "editor kill empty final line copies newline to clipboard");
 
     pkchat::editor::EditorState only = pkchat::editor::EditorState::from_text("");
-    err = only.kill_to_line_end();
+    err = only.kill_to_line_end(clipboard);
     check(err.ok(), "editor kill single empty buffer succeeds");
     check(only.text.str().empty(), "editor kill single empty buffer is a no-op");
 }

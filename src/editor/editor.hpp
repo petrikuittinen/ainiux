@@ -197,7 +197,7 @@ struct EditorState {
     void move_end();
     void move_line_home(const Rect& rect);
     void move_line_end(const Rect& rect);
-    Error kill_to_line_end();
+    Error kill_to_line_end(Clipboard& clipboard);
     void ensure_cursor_visible(const Rect& rect);
     RenderedPanel render(const Rect& rect) const;
     size_t autosave_pending_bytes() const;

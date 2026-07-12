@@ -1158,7 +1158,7 @@ app::TuiRunResult run(provider::RequestContext context,
                     continue;
                 }
                 if (ch == 11) {
-                    detail::set_status_from_error(input.kill_to_line_end(), status);
+                    detail::set_status_from_error(input.kill_to_line_end(editor::shared_clipboard()), status);
                     continue;
                 }
                 if (ch == 127 || ch == 8) {
