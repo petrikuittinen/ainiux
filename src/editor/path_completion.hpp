@@ -7,6 +7,7 @@
 
 #include "common.hpp"
 #include "editor/editor.hpp"
+#include "editor/editor_prompts.hpp"
 
 namespace pkchat::editor {
 
@@ -44,6 +45,8 @@ class PathCompleter {
 
 class ContextualCompleter {
    public:
+    void set_assist_config(const EditorAssistConfig* config) { assist_config_ = config; }
+
     PathCompletionResult complete(EditorState& state,
                                   const std::function<bool()>& cancelled = {});
     bool can_complete(const EditorState& state) const;
@@ -55,12 +58,15 @@ class ContextualCompleter {
     PathCompletionResult complete_command(EditorState& state);
 
     PathCompleter path_completer_;
+    const EditorAssistConfig* assist_config_ = nullptr;
     bool command_active_ = false;
     size_t command_start_ = 0;
     size_t command_next_choice_ = 0;
     std::string command_applied_value_;
     std::vector<std::string> command_candidates_;
 };
+
+bool is_chat_slash_command_tab_completion(const EditorState& state);
 
 std::string path_completion_status(const PathCompletionResult& result);
 PathCompletionResult complete_path_input(std::string& input,

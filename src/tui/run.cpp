@@ -1,7 +1,10 @@
 #include "tui/activity.hpp"
 #include "tui/tui.hpp"
 #include "tui/events.hpp"
+#include "tui/chat_assist.hpp"
 #include "tui/commands.hpp"
+#include "editor/ai_continue.hpp"
+
 #include "tui/file_jobs.hpp"
 #include "tui/input_handlers.hpp"
 #include "tui/picker_input.hpp"
@@ -70,6 +73,23 @@ app::TuiRunResult run(provider::RequestContext context,
     };
     editor::EditorState input = new_input_editor();
     editor::ContextualCompleter path_completer;
+    editor::AiContinueContext ai_continue;
+    ai_continue.request = context;
+    ai_continue.settings = editor::ai_continue_settings(context.options);
+    ai_continue.assist_config = context.options.editor_assist_config;
+    if (ai_continue.assist_config.commands.empty()) {
+        ai_continue.assist_config = editor::default_editor_assist_config();
+    }
+    if (interactive != nullptr) {
+        if (interactive->ai_continue.has_value()) {
+            ai_continue = *interactive->ai_continue;
+            ai_continue.request = context;
+        } else {
+            ai_continue.assist_config = interactive->assist_config;
+        }
+    }
+    path_completer.set_assist_config(&ai_continue.assist_config);
+    ChatAssistCallbacks chat_assist_callbacks;
     size_t completion_generation = 0;
     bool completion_pending = false;
     std::string status = ready_status();
@@ -234,22 +254,34 @@ app::TuiRunResult run(provider::RequestContext context,
             }
             return;
         }
+        if (editor::is_chat_slash_command_tab_completion(input)) {
+            const editor::PathCompletionResult completion = path_completer.complete(input);
+            if (completion.handled) {
+                status = editor::path_completion_status(completion);
+            }
+            return;
+        }
         if (completion_pending) {
             status = "Tab completion is still running";
             return;
         }
 
         editor::EditorState completion_input = input;
+        editor::ContextualCompleter completion_completer;
+        completion_completer.set_assist_config(&ai_continue.assist_config);
         const size_t generation = completion_generation;
         completion_job.start(
-            [completion_input = std::move(completion_input), generation, &events](
-                runtime::CancellationToken token) mutable {
+            [completion_input = std::move(completion_input),
+             completion_completer = std::move(completion_completer),
+             generation,
+             &events](runtime::CancellationToken token) mutable {
                 TuiEvent event;
                 event.type = TuiEventType::CompletionDone;
                 event.completion_generation = generation;
-                event.completion = event.path_completer.complete(
+                event.completion = completion_completer.complete(
                     completion_input, [&token]() { return token.cancelled(); });
                 event.completed_input = std::move(completion_input);
+                event.path_completer = std::move(completion_completer);
                 events.push(std::move(event));
             });
         completion_pending = true;
@@ -607,6 +639,10 @@ app::TuiRunResult run(provider::RequestContext context,
         status = "Regenerating...";
     };
 
+    chat_assist_callbacks.start_turn = start_turn;
+    chat_assist_callbacks.regenerate_last_turn = regenerate_last_turn;
+    chat_assist_callbacks.start_store_save = start_store_save;
+
     TuiCommandHandlers command_handlers;
     command_handlers.quit = [&]() { quit = true; };
     command_handlers.start_history_edit = start_history_edit;
@@ -745,6 +781,15 @@ app::TuiRunResult run(provider::RequestContext context,
         }
         if (raw.find('\n') == std::string::npos && text[0] == '/') {
             input = new_input_editor();
+            if (try_handle_chat_assist_command(text,
+                                               ai_continue.assist_config,
+                                               context,
+                                               session,
+                                               status,
+                                               history_scroll,
+                                               chat_assist_callbacks)) {
+                return;
+            }
             handle_command(text);
             return;
         }
@@ -972,6 +1017,7 @@ app::TuiRunResult run(provider::RequestContext context,
                         event.completion.handled) {
                         input = std::move(event.completed_input);
                         path_completer = std::move(event.path_completer);
+                        path_completer.set_assist_config(&ai_continue.assist_config);
                         status = editor::path_completion_status(event.completion);
                     }
                     break;
@@ -1145,6 +1191,12 @@ app::TuiRunResult run(provider::RequestContext context,
                     input.select_all();
                     continue;
                 }
+                if (ch == 0 && mode == TuiMode::Chat && active_job == ActiveJob::None) {
+                    handle_chat_assist_continue_key(ai_continue.assist_config,
+                                                    status,
+                                                    chat_assist_callbacks);
+                    continue;
+                }
                 if (ch == 16 && mode == TuiMode::Chat && active_job == ActiveJob::None) {
                     command_handlers.switch_to_editor();
                     continue;
@@ -1195,6 +1247,8 @@ app::TuiRunResult run(provider::RequestContext context,
         interactive->context = context;
         interactive->chat_session = session;
         interactive->chat_session_initialized = true;
+        interactive->ai_continue = ai_continue;
+        interactive->assist_config = ai_continue.assist_config;
         return {0, app::InteractiveUiTarget::Editor};
     }
     return {0, app::InteractiveUiTarget::Quit};

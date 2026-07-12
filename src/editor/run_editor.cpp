@@ -6,6 +6,7 @@
 #include "editor/editor_ai_setup.hpp"
 #include "editor/clipboard.hpp"
 #include "editor/detail/editor_common.hpp"
+#include "editor/assist_runtime.hpp"
 #include "editor/editor_assist.hpp"
 #include "editor/editor_help.hpp"
 #include "editor/editor_picker.hpp"
@@ -38,55 +39,6 @@ struct HelpViewSession {
     std::string saved_path;
     bool saved_dirty = false;
 };
-
-struct AssistSession {
-    runtime::JobHandle job;
-    runtime::EventQueue<ContinueEvent> events;
-    bool active = false;
-    bool streaming = false;
-    bool saw_visible = false;
-    AssistEditKind edit_kind = AssistEditKind::StreamInsert;
-    EditorSnapshot undo_before;
-    std::string provider_name;
-    std::string model_name;
-    std::vector<provider::Message> messages;
-    std::vector<provider::Message> usage_messages;
-    std::string status_suffix;
-    tui::ActivityKind activity_kind = tui::ActivityKind::None;
-    size_t replace_start = 0;
-    size_t replace_count = 0;
-};
-
-struct StoredAssistCommand {
-    bool valid = false;
-    AssistCommandKind kind = AssistCommandKind::Unknown;
-    size_t command_index = 0;
-    std::optional<AssistScope> scope;
-    std::string custom_prompt;
-    std::optional<AssistPromptMode> prompt_mode;
-    bool has_revertable_output = false;
-    EditorSnapshot revert_snapshot;
-};
-
-void clear_assist_session(AssistSession& session) {
-    session.job.join();
-    ContinueEvent event;
-    while (session.events.try_pop(event)) {
-    }
-    session.active = false;
-    session.streaming = false;
-    session.saw_visible = false;
-    session.edit_kind = AssistEditKind::StreamInsert;
-    session.undo_before = EditorSnapshot{};
-    session.provider_name.clear();
-    session.model_name.clear();
-    session.messages.clear();
-    session.usage_messages.clear();
-    session.status_suffix.clear();
-    session.activity_kind = tui::ActivityKind::None;
-    session.replace_start = 0;
-    session.replace_count = 0;
-}
 
 }  // namespace
 
@@ -789,85 +741,73 @@ app::EditorRunResult run_editor(const std::string& path,
         clear_assist_session(assist_session);
     };
 
-    auto process_assist_events = [&]() -> bool {
-        bool updated = false;
-        ContinueEvent event;
-        while (assist_session.events.try_pop(event)) {
-            updated = true;
-            switch (event.type) {
-                case ContinueEventType::Thinking:
-                    set_assist_activity(tui::ActivityKind::Thinking, "thinking... ESC to abort");
-                    break;
-                case ContinueEventType::Writing:
-                    set_assist_activity(tui::ActivityKind::Streaming, "writing. Press ESC to stop.");
-                    break;
-                case ContinueEventType::Delta:
-                    assist_session.saw_visible = true;
-                    set_assist_activity(tui::ActivityKind::Streaming, "writing. Press ESC to stop.");
-                    if (Error insert_error = state.insert_without_undo(event.text); !insert_error.ok()) {
-                        assist_session.job.cancel();
-                        assist_session.job.join();
-                        minibuffer_message(minibuffer, insert_error.message);
-                        clear_assist_session(assist_session);
-                        return true;
-                    }
-                    state.ensure_cursor_visible(assist_panel_rect());
-                    break;
-                case ContinueEventType::Done: {
-                    if (!event.chat.model.empty()) {
-                        assist_session.model_name = event.chat.model;
-                    }
-                    long long context_tokens = 0;
-                    if (ai_continue.has_value()) {
-                        provider::resolve_context_window(ai_continue->request, assist_session.model_name);
-                        context_tokens = ai_continue->request.options.context_tokens;
-                    }
-                    const std::vector<provider::Message>& usage_messages =
-                        assist_session.usage_messages.empty() ? assist_session.messages
-                                                            : assist_session.usage_messages;
-                    const std::string completion_status = continue_completion_status_message(
-                        assist_session.provider_name,
-                        assist_session.model_name,
-                        event.chat,
-                        assist_session.streaming,
-                        usage_messages,
-                        context_tokens);
-                    if (assist_session.edit_kind == AssistEditKind::ReplaceInPlace) {
-                        finish_assist_session(completion_status,
-                                              false,
-                                              trim_assist_inplace_response(event.chat.content),
-                                              true);
-                    } else {
-                        finish_assist_session(completion_status, true, std::nullopt, true);
-                    }
-                    return true;
-                }
-                case ContinueEventType::Error:
-                    if (event.error.code == ErrorCode::Cancelled) {
-                        if (regenerate_after_cancel) {
-                            regenerate_after_cancel = false;
-                            assist_session.job.join();
-                            if (assist_session.saw_visible) {
-                                state.revert_to_snapshot(assist_session.undo_before);
-                            }
-                            clear_assist_session(assist_session);
-                            pending_regenerate_restart = true;
-                        } else if (assist_session.edit_kind == AssistEditKind::ReplaceInPlace) {
-                            assist_session.job.join();
-                            set_assist_minibuffer("stopped and ready");
-                            clear_assist_session(assist_session);
-                        } else {
-                            finish_assist_session("stopped and ready", true, std::nullopt);
-                        }
-                    } else {
-                        assist_session.job.join();
-                        minibuffer_message(minibuffer, event.error.message);
-                        clear_assist_session(assist_session);
-                    }
-                    return true;
-            }
+    AssistEventHandlers assist_handlers;
+    assist_handlers.on_thinking = [&]() {
+        set_assist_activity(tui::ActivityKind::Thinking, "thinking... ESC to abort");
+    };
+    assist_handlers.on_writing = [&]() {
+        set_assist_activity(tui::ActivityKind::Streaming, "writing. Press ESC to stop.");
+    };
+    assist_handlers.on_delta = [&](const std::string& text) -> Error {
+        assist_session.saw_visible = true;
+        set_assist_activity(tui::ActivityKind::Streaming, "writing. Press ESC to stop.");
+        const Error insert_error = state.insert_without_undo(text);
+        if (insert_error.ok()) {
+            state.ensure_cursor_visible(assist_panel_rect());
         }
-        return updated;
+        return insert_error;
+    };
+    assist_handlers.on_done = [&](const ContinueEvent& event, AssistSession& session_state) {
+        if (!event.chat.model.empty()) {
+            session_state.model_name = event.chat.model;
+        }
+        long long context_tokens = 0;
+        if (ai_continue.has_value()) {
+            provider::resolve_context_window(ai_continue->request, session_state.model_name);
+            context_tokens = ai_continue->request.options.context_tokens;
+        }
+        const std::vector<provider::Message>& usage_messages =
+            session_state.usage_messages.empty() ? session_state.messages : session_state.usage_messages;
+        const std::string completion_status = continue_completion_status_message(
+            session_state.provider_name,
+            session_state.model_name,
+            event.chat,
+            session_state.streaming,
+            usage_messages,
+            context_tokens);
+        if (session_state.edit_kind == AssistEditKind::ReplaceInPlace) {
+            finish_assist_session(completion_status,
+                                  false,
+                                  trim_assist_inplace_response(event.chat.content),
+                                  true);
+        } else {
+            finish_assist_session(completion_status, true, std::nullopt, true);
+        }
+    };
+    assist_handlers.on_error = [&](const Error& error, bool cancelled, AssistSession& session_state) {
+        (void)session_state;
+        if (cancelled) {
+            if (regenerate_after_cancel) {
+                if (assist_session.saw_visible) {
+                    state.revert_to_snapshot(assist_session.undo_before);
+                }
+                return;
+            }
+            if (assist_session.edit_kind == AssistEditKind::ReplaceInPlace) {
+                set_assist_minibuffer("stopped and ready");
+                return;
+            }
+            finish_assist_session("stopped and ready", true, std::nullopt);
+            return;
+        }
+        minibuffer_message(minibuffer, error.message);
+    };
+
+    auto process_assist_events = [&]() -> bool {
+        return editor::process_assist_events(assist_session,
+                                             assist_handlers,
+                                             regenerate_after_cancel,
+                                             pending_regenerate_restart);
     };
 
     auto start_assist = [&](AssistCommandKind kind,

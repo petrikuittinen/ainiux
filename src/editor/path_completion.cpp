@@ -1,6 +1,7 @@
 #include "editor/path_completion.hpp"
 
 #include "common.hpp"
+#include "editor/assist_runtime.hpp"
 
 #include <algorithm>
 #include <cstdlib>
@@ -398,8 +399,13 @@ PathCompletionResult ContextualCompleter::complete_command(EditorState& state) {
     }
 
     const std::string token = buffer.substr(0, cursor);
-    for (const std::string& command : chat_command_completions()) {
-        if (command.compare(0, token.size(), token) == 0) {
+    const std::string normalized_token = ascii_lower(token);
+    const std::vector<std::string>& commands =
+        assist_config_ != nullptr ? chat_assist_command_completions(*assist_config_)
+                                  : chat_command_completions();
+    for (const std::string& command : commands) {
+        const std::string normalized_command = ascii_lower(command);
+        if (normalized_command.compare(0, normalized_token.size(), normalized_token) == 0) {
             command_candidates_.push_back(command);
         }
     }
@@ -430,6 +436,10 @@ PathCompletionResult ContextualCompleter::complete_command(EditorState& state) {
         command_candidates_.clear();
     }
     return result;
+}
+
+bool is_chat_slash_command_tab_completion(const EditorState& state) {
+    return chat_completion_context(state).kind == ChatCompletionContextKind::Command;
 }
 
 PathCompletionResult complete_path_input(std::string& input,

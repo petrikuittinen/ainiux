@@ -9,6 +9,10 @@
 #include "tui/session_load.hpp"
 #include "config/config.hpp"
 #include "tui/theme_registry.hpp"
+#include "editor/assist_runtime.hpp"
+#include "editor/editor_assist.hpp"
+#include "editor/path_completion.hpp"
+#include "tui/chat_assist.hpp"
 #include "tui/tui.hpp"
 #include <algorithm>
 #include <string>
@@ -58,9 +62,81 @@ void test_tui_sqlite_unavailable_status() {
           "SQLite unavailable status without details suggests moving the database aside");
 }
 
+void test_chat_assist_command_completions_include_configured_commands() {
+    const pkchat::editor::EditorAssistConfig config = pkchat::editor::default_editor_assist_config();
+    const std::vector<std::string> completions = pkchat::editor::chat_assist_command_completions(config);
+    check(std::find(completions.begin(), completions.end(), "/spell") != completions.end(),
+          "chat assist completions include /spell from editor-commands defaults");
+    check(std::find(completions.begin(), completions.end(), "/Chinese") != completions.end(),
+          "chat assist completions include /Chinese from editor-commands defaults");
+    check(std::find(completions.begin(), completions.end(), "/help") != completions.end(),
+          "chat assist completions include chat /help");
+    check(std::find(completions.begin(), completions.end(), "/editor") != completions.end(),
+          "chat assist completions include chat /editor");
+}
+
+void test_chat_assist_request_text_strips_content_tags() {
+    const std::vector<pkchat::provider::Message> messages = {
+        {"system", "rules"},
+        {"user", "<content>Helo world</content>"},
+    };
+    check(pkchat::editor::assist_request_text_from_messages(messages) == "Helo world",
+          "assist request text helper strips content wrapper tags");
+}
+
+void test_chat_assist_turn_prompt_uses_configured_command_text() {
+    const pkchat::editor::EditorAssistConfig config = pkchat::editor::default_editor_assist_config();
+    const pkchat::editor::ParsedAssistCommand chinese =
+        pkchat::editor::parse_assist_command("/Chinese", config);
+    const std::optional<std::string> chinese_prompt =
+        pkchat::tui::chat_assist_turn_prompt(chinese, config);
+    check(chinese.ok && chinese_prompt.has_value(), "chat /Chinese parses as a configured command");
+    check(chinese_prompt->find("Chinese") != std::string::npos,
+          "chat /Chinese turn prompt asks for Chinese translation");
+
+    const pkchat::editor::ParsedAssistCommand finnish =
+        pkchat::editor::parse_assist_command("/Finnish", config);
+    const std::optional<std::string> finnish_prompt =
+        pkchat::tui::chat_assist_turn_prompt(finnish, config);
+    check(finnish.ok && finnish_prompt.has_value(), "chat /Finnish parses as a configured command");
+    check(finnish_prompt->find("Finnish") != std::string::npos,
+          "chat /Finnish turn prompt asks for Finnish translation");
+    check(finnish_prompt->find("suomi") == std::string::npos,
+          "chat /Finnish turn prompt is the configured instruction, not a translation");
+}
+
+void test_chat_slash_command_tab_completion_matches_assist_commands() {
+    pkchat::editor::ContextualCompleter completer;
+    const pkchat::editor::EditorAssistConfig config = pkchat::editor::default_editor_assist_config();
+    completer.set_assist_config(&config);
+
+    pkchat::editor::EditorState state = pkchat::editor::EditorState::from_text("/eng");
+    state.mode = pkchat::editor::EditorMode::Chat;
+    state.cursor = state.text.size();
+    check(pkchat::editor::is_chat_slash_command_tab_completion(state),
+          "chat slash-command tab completion is active on the first token");
+    const pkchat::editor::PathCompletionResult result = completer.complete(state);
+    check(result.handled && result.changed,
+          "chat tab completion expands a case-insensitive assist command prefix");
+    check(state.text.str().rfind("/English", 0) == 0,
+          "chat tab completion resolves /eng to /English");
+}
+
+void test_configured_assist_slash_command_detection() {
+    const pkchat::editor::EditorAssistConfig config = pkchat::editor::default_editor_assist_config();
+    check(pkchat::editor::is_configured_assist_slash_command("/spell all", config),
+          "configured assist slash command detection matches /spell");
+    check(!pkchat::editor::is_configured_assist_slash_command("/model gpt-4", config),
+          "configured assist slash command detection ignores unrelated chat commands");
+    const pkchat::editor::ParsedAssistCommand parsed =
+        pkchat::editor::parse_assist_command("/grammar selection", config);
+    check(parsed.ok && parsed.kind == pkchat::editor::AssistCommandKind::Configured,
+          "chat and editor share parse_assist_command for configured commands");
+}
+
 void test_tui_ready_and_generation_status() {
     check(pkchat::tui::ready_status() ==
-              "TAB command/path · Alt+Enter newline · Alt+Home/End jump chat",
+              "TAB command/path · Ctrl+Space continue · Alt+Enter newline · Alt+Home/End jump chat",
           "TUI ready status displays complementary input and navigation hints");
 
     pkchat::provider::ChatResult result;
@@ -603,6 +679,11 @@ void run_all() {
     test_tui_unicode_and_empty_status();
     test_tui_layout_reserves_editor_input_panel();
     test_tui_sqlite_unavailable_status();
+    test_chat_assist_turn_prompt_uses_configured_command_text();
+    test_chat_slash_command_tab_completion_matches_assist_commands();
+    test_chat_assist_command_completions_include_configured_commands();
+    test_chat_assist_request_text_strips_content_tags();
+    test_configured_assist_slash_command_detection();
     test_tui_ready_and_generation_status();
     test_tui_ctrl_chat_history_scroll_shortcuts();
     test_tui_chat_history_scroll_keys();
