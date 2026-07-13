@@ -2027,6 +2027,10 @@ void test_editor_help_document_and_command() {
           "assist command completions include /provider");
     check(std::find(completions.begin(), completions.end(), "/model ") != completions.end(),
           "assist command completions include /model");
+    check(std::find(completions.begin(), completions.end(), "/mode python") != completions.end() &&
+              std::find(completions.begin(), completions.end(), "/mode typescript") != completions.end() &&
+              std::find(completions.begin(), completions.end(), "/mode bash") != completions.end(),
+          "editor command completions include programming-language modes");
 
     pkchat::editor::ParsedEditorSlashCommand slash =
         pkchat::editor::parse_editor_slash_command("/save");
@@ -2182,6 +2186,27 @@ void test_editor_markdown_mode_and_structured_highlighting() {
               new_file_state.language_automatic,
           "editor detects Markdown from a new path before the file exists");
 
+    const std::vector<std::pair<const char*, pkchat::highlight::Language>> detected_modes = {
+        {"new.py", pkchat::highlight::Language::Python},
+        {"new.c", pkchat::highlight::Language::C},
+        {"new.hpp", pkchat::highlight::Language::Cpp},
+        {"new.cs", pkchat::highlight::Language::CSharp},
+        {"new.java", pkchat::highlight::Language::Java},
+        {"new.jsx", pkchat::highlight::Language::JavaScript},
+        {"new.tsx", pkchat::highlight::Language::TypeScript},
+        {"new.html", pkchat::highlight::Language::Html},
+        {"new.css", pkchat::highlight::Language::Css},
+        {"new.xml", pkchat::highlight::Language::Xml},
+        {"new.jsonl", pkchat::highlight::Language::Json},
+        {"new.sh", pkchat::highlight::Language::Bash},
+    };
+    for (const auto& detected : detected_modes) {
+        pkchat::editor::EditorState detected_state;
+        detected_state.set_path(detected.first);
+        check(detected_state.language == detected.second && detected_state.language_automatic,
+              std::string("editor automatically selects mode for new file: ") + detected.first);
+    }
+
     state.selection.anchor = 2;
     state.selection.active = 8;
     const pkchat::editor::RenderedPanel rendered = state.render({1, 1, 1, 40});
@@ -2199,6 +2224,22 @@ void test_editor_markdown_mode_and_structured_highlighting() {
     check(saw_heading, "editor rendering includes Markdown heading spans");
     check(saw_selected_heading,
           "editor rendering overlays selection independently on Markdown syntax spans");
+
+    pkchat::editor::EditorState python_state =
+        pkchat::editor::EditorState::from_text("def greet(name: str): return 17");
+    python_state.set_language(pkchat::highlight::Language::Python, false);
+    python_state.highlight_enabled = true;
+    const pkchat::editor::RenderedPanel python_rendered = python_state.render({1, 1, 1, 40});
+    bool saw_python_keyword = false;
+    bool saw_python_type = false;
+    for (const pkchat::editor::RenderedPanel::Span& span : python_rendered.line_spans[0]) {
+        saw_python_keyword = saw_python_keyword ||
+                             (span.syntax && span.role == pkchat::highlight::TokenRole::Keyword);
+        saw_python_type = saw_python_type ||
+                          (span.syntax && span.role == pkchat::highlight::TokenRole::Type);
+    }
+    check(saw_python_keyword && saw_python_type,
+          "editor rendering applies a manually selected programming-language mode");
 
     state.set_language(pkchat::highlight::Language::Text, false);
     state.set_path("renamed.md");

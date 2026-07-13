@@ -10,7 +10,7 @@ namespace pkchat {
 
 const char appName[] = "Pkchat";
 
-const char versionNumber[] = "0.94";
+const char versionNumber[] = "0.95";
 
 const char kCopyright[] = "Copyright (c) 2026 Petri Kuittinen";
 

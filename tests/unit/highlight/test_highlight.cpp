@@ -27,25 +27,172 @@ bool has_exact_span(const std::vector<Span>& spans,
     });
 }
 
-void test_mode_parsing_and_detection() {
-    Language language = Language::Text;
-    check(pkchat::highlight::parse_language("markdown", language) && language == Language::Markdown,
-          "highlight parses markdown mode");
-    check(pkchat::highlight::parse_language("MD", language) && language == Language::Markdown,
-          "highlight parses md alias case-insensitively");
-    check(pkchat::highlight::parse_language("text", language) && language == Language::Text,
-          "highlight parses text mode");
-    check(!pkchat::highlight::parse_language("python", language),
-          "highlight defers unsupported language modes");
+bool has_role_at(const std::vector<Span>& spans, size_t byte, TokenRole role) {
+    return std::any_of(spans.begin(), spans.end(), [&](const Span& span) {
+        return span.start <= byte && byte < span.end && span.role == role;
+    });
+}
 
-    for (const char* path : {"README.md", "notes.MARKDOWN", "draft.mdown", "doc.MKD"}) {
-        check(pkchat::highlight::detect_language(path) == Language::Markdown,
-              std::string("highlight detects Markdown extension: ") + path);
+void test_mode_parsing_and_detection() {
+    const std::vector<std::pair<const char*, Language>> aliases = {
+        {"text", Language::Text},       {"markdown", Language::Markdown}, {"MD", Language::Markdown},
+        {"python", Language::Python},  {"py", Language::Python},         {"c", Language::C},
+        {"cpp", Language::Cpp},        {"c++", Language::Cpp},           {"cxx", Language::Cpp},
+        {"csharp", Language::CSharp},  {"c#", Language::CSharp},         {"cs", Language::CSharp},
+        {"java", Language::Java},      {"javascript", Language::JavaScript},
+        {"js", Language::JavaScript},  {"typescript", Language::TypeScript},
+        {"ts", Language::TypeScript},  {"html", Language::Html},         {"html5", Language::Html},
+        {"css", Language::Css},        {"css3", Language::Css},          {"xml", Language::Xml},
+        {"json", Language::Json},      {"jsonl", Language::Json},        {"ndjson", Language::Json},
+        {"bash", Language::Bash},      {"sh", Language::Bash},           {"shell", Language::Bash},
+    };
+    for (const auto& alias : aliases) {
+        Language language = Language::Text;
+        check(pkchat::highlight::parse_language(alias.first, language) && language == alias.second,
+              std::string("highlight parses mode alias: ") + alias.first);
+    }
+    Language language = Language::Text;
+    check(!pkchat::highlight::parse_language("rust", language),
+          "highlight rejects unsupported language modes");
+
+    const std::vector<std::pair<const char*, Language>> paths = {
+        {"README.md", Language::Markdown}, {"notes.MARKDOWN", Language::Markdown},
+        {"draft.mdown", Language::Markdown}, {"doc.MKD", Language::Markdown},
+        {"script.py", Language::Python}, {"window.pyw", Language::Python}, {"types.PYI", Language::Python},
+        {"source.c", Language::C}, {"header.h", Language::C},
+        {"source.cc", Language::Cpp}, {"source.cpp", Language::Cpp}, {"source.cxx", Language::Cpp},
+        {"source.c++", Language::Cpp}, {"header.hh", Language::Cpp}, {"header.hpp", Language::Cpp},
+        {"header.hxx", Language::Cpp}, {"header.H++", Language::Cpp}, {"body.ipp", Language::Cpp},
+        {"body.tpp", Language::Cpp}, {"body.inl", Language::Cpp},
+        {"program.cs", Language::CSharp}, {"Main.java", Language::Java},
+        {"script.js", Language::JavaScript}, {"module.mjs", Language::JavaScript},
+        {"common.cjs", Language::JavaScript}, {"view.JSX", Language::JavaScript},
+        {"source.ts", Language::TypeScript}, {"module.mts", Language::TypeScript},
+        {"common.cts", Language::TypeScript}, {"view.TSX", Language::TypeScript},
+        {"index.html", Language::Html}, {"index.htm", Language::Html}, {"page.xhtml", Language::Html},
+        {"site.css", Language::Css}, {"document.xml", Language::Xml}, {"schema.xsd", Language::Xml},
+        {"style.xsl", Language::Xml}, {"transform.xslt", Language::Xml}, {"icon.svg", Language::Xml},
+        {"data.json", Language::Json}, {"events.jsonl", Language::Json},
+        {"map.geojson", Language::Json}, {"config.json5", Language::Json},
+        {"build.sh", Language::Bash}, {"login.bash", Language::Bash},
+        {"/home/user/.bashrc", Language::Bash}, {".bash_profile", Language::Bash},
+        {".bash_login", Language::Bash}, {".bash_logout", Language::Bash}, {".profile", Language::Bash},
+    };
+    for (const auto& path : paths) {
+        check(pkchat::highlight::detect_language(path.first) == path.second,
+              std::string("highlight detects language from path: ") + path.first);
     }
     check(pkchat::highlight::detect_language("notes.txt") == Language::Text,
           "highlight treats txt as text");
     check(pkchat::highlight::detect_language("") == Language::Text,
           "highlight treats scratch buffers as text");
+}
+
+void test_programming_language_roles() {
+    struct Fixture {
+        Language language;
+        std::string line;
+        std::vector<TokenRole> roles;
+        const char* name;
+    };
+    const std::vector<Fixture> fixtures = {
+        {Language::Python, "def greet(name: str = None): # note", {TokenRole::Keyword, TokenRole::Function,
+             TokenRole::Type, TokenRole::Literal, TokenRole::Comment}, "Python"},
+        {Language::C, "#define N 17", {TokenRole::Preprocessor}, "C preprocessor"},
+        {Language::C, "const char *s = \"return\"; /* note */", {TokenRole::Keyword, TokenRole::Type,
+             TokenRole::String, TokenRole::Comment}, "C"},
+        {Language::Cpp, "template <typename T> T make() { return T{}; }", {TokenRole::Keyword,
+             TokenRole::Function}, "C++"},
+        {Language::CSharp, "public record Person(string Name, int Age);", {TokenRole::Keyword,
+             TokenRole::Type, TokenRole::Function}, "C#"},
+        {Language::Java, "public static void main(String[] args) { return; }", {TokenRole::Keyword,
+             TokenRole::Type, TokenRole::Function}, "Java"},
+        {Language::JavaScript, "const ok = /ab+c/gi; function run() { return true; }",
+             {TokenRole::Keyword, TokenRole::String, TokenRole::Function, TokenRole::Literal}, "JavaScript"},
+        {Language::TypeScript, "interface User { readonly id: number; }",
+             {TokenRole::Keyword, TokenRole::Type}, "TypeScript"},
+        {Language::Css, "--accent: #2563eb; margin: 1.5rem; color: var(--accent);",
+             {TokenRole::Property, TokenRole::Literal, TokenRole::Number, TokenRole::Function}, "CSS"},
+        {Language::Json, "\"enabled\": true, \"count\": 17, \"name\": \"demo\"",
+             {TokenRole::Property, TokenRole::Literal, TokenRole::Number, TokenRole::String}, "JSON"},
+        {Language::Json, "{ name: 'fixture', enabled: true } // JSON5",
+             {TokenRole::Property, TokenRole::String, TokenRole::Literal, TokenRole::Comment}, "JSON5"},
+        {Language::Bash, "for item in ${items[@]}; do printf '%s' \"$item\"; done # note",
+             {TokenRole::Keyword, TokenRole::Variable, TokenRole::Function, TokenRole::String,
+              TokenRole::Comment}, "Bash"},
+    };
+    for (const Fixture& fixture : fixtures) {
+        const auto highlighted = pkchat::highlight::highlight_line(fixture.language, fixture.line);
+        for (TokenRole role : fixture.roles) {
+            check(has_role(highlighted.spans, role),
+                  std::string(fixture.name) + " emits requested semantic token role");
+        }
+    }
+
+    const std::string c_line = "const char *text = \"return 123\";";
+    const auto c = pkchat::highlight::highlight_line(Language::C, c_line);
+    check(has_role_at(c.spans, c_line.find("return"), TokenRole::String) &&
+              !has_role_at(c.spans, c_line.find("return"), TokenRole::Keyword),
+          "strings take precedence over lower-priority C keyword and number rules");
+}
+
+void test_markup_and_embedded_languages() {
+    const std::string html =
+        "<script type=\"module\">const answer = 42;</script><p class=\"x\">Hi</p>";
+    const auto html_line = pkchat::highlight::highlight_line(Language::Html, html);
+    check(has_role(html_line.spans, TokenRole::Tag), "HTML highlights tag names and delimiters");
+    check(has_role(html_line.spans, TokenRole::Attribute), "HTML highlights attributes");
+    check(has_role(html_line.spans, TokenRole::String), "HTML highlights attribute values");
+    check(has_role_at(html_line.spans, html.find("const"), TokenRole::Keyword),
+          "HTML delegates script contents to JavaScript highlighting");
+    check(has_role_at(html_line.spans, html.find("42"), TokenRole::Number),
+          "HTML highlights JavaScript numbers inside script elements");
+
+    const std::string jsx = "return <button onClick={run}>Go</button>;";
+    const auto jsx_line = pkchat::highlight::highlight_line(Language::TypeScript, jsx);
+    check(has_role(jsx_line.spans, TokenRole::Tag) && has_role(jsx_line.spans, TokenRole::Attribute),
+          "TypeScript/JSX highlights tags and attributes");
+
+    const std::string xml = "<xs:element name=\"message\" type=\"xs:string\"/>";
+    const auto xml_line = pkchat::highlight::highlight_line(Language::Xml, xml);
+    check(has_role(xml_line.spans, TokenRole::Tag) && has_role(xml_line.spans, TokenRole::Attribute),
+          "XML highlights namespace-qualified tags and attributes");
+}
+
+void test_multiline_language_states() {
+    const auto c = pkchat::highlight::highlight_document(
+        Language::C, "/* open\nreturn 17;\n*/ int value = 3;");
+    check(c.size() == 3 && c[1].spans.size() == 1 && c[1].spans[0].role == TokenRole::Comment,
+          "C block comments suppress lower-priority tokens across lines");
+    check(has_role(c[2].spans, TokenRole::Type) && has_role(c[2].spans, TokenRole::Number),
+          "C highlighting resumes after a block comment closes");
+
+    const auto python = pkchat::highlight::highlight_document(
+        Language::Python, "value = \"\"\"open\nreturn 17\n\"\"\"\nprint(value)");
+    check(python.size() == 4 && python[1].spans.size() == 1 &&
+              python[1].spans[0].role == TokenRole::String,
+          "Python triple strings preserve multiline lexical state");
+    check(has_role(python[3].spans, TokenRole::Function),
+          "Python highlighting resumes after a triple string");
+
+    const auto bash = pkchat::highlight::highlight_document(
+        Language::Bash, "cat <<EOF\nreturn $HOME\nEOF\necho done");
+    check(bash.size() == 4 && bash[1].spans.size() == 1 && bash[1].spans[0].role == TokenRole::String,
+          "Bash heredoc bodies preserve explicit multiline state");
+    check(has_role(bash[2].spans, TokenRole::Preprocessor), "Bash highlights heredoc terminators");
+
+    const auto xml = pkchat::highlight::highlight_document(
+        Language::Xml, "<![CDATA[<not-a-tag>\ncontinued\n]]><real id=\"1\"/>");
+    check(xml.size() == 3 && xml[1].spans.size() == 1 && xml[1].spans[0].role == TokenRole::String,
+          "XML CDATA preserves multiline state");
+    check(has_role(xml[2].spans, TokenRole::Tag), "XML resumes tag highlighting after CDATA");
+
+    const auto html = pkchat::highlight::highlight_document(
+        Language::Html, "<style>\n/* open\n*/ color: #2563eb;\n</style>");
+    check(html.size() == 4 && has_role(html[1].spans, TokenRole::Comment),
+          "HTML style blocks delegate multiline comment state to CSS");
+    check(has_role(html[2].spans, TokenRole::Property) && has_role(html[2].spans, TokenRole::Literal),
+          "HTML style blocks resume CSS tokens after comments");
 }
 
 void test_markdown_inline_and_structure() {
@@ -128,9 +275,25 @@ void test_markdown_multiline_state_and_precedence() {
     check(has_role(lines[1].spans, TokenRole::Emphasis),
           "Markdown resumes inline highlighting after a comment closes");
     check(has_role(lines[2].spans, TokenRole::Preprocessor), "Markdown highlights opening fences");
-    check(lines[3].spans.size() == 1 && lines[3].spans[0].role == TokenRole::String,
-          "Markdown fenced text suppresses heading rules");
+    check(lines[3].spans.empty(),
+          "Markdown unknown fenced languages stay plain and suppress heading rules");
     check(has_role(lines[4].spans, TokenRole::Preprocessor), "Markdown highlights closing fences");
+
+    const auto tagged = pkchat::highlight::highlight_document(
+        Language::Markdown, "```py\ndef greet(name: str):\n    return True\n```\n~~~not-a-mode\nconst x = 1\n~~~");
+    check(tagged.size() == 7 && has_role(tagged[1].spans, TokenRole::Keyword) &&
+              has_role(tagged[1].spans, TokenRole::Function) &&
+              has_role(tagged[1].spans, TokenRole::Type),
+          "Markdown delegates known fenced language aliases to their highlighter");
+    check(has_role(tagged[2].spans, TokenRole::Literal),
+          "Markdown fenced highlighter retains embedded language state");
+    check(tagged[5].spans.empty(), "Markdown leaves unknown tagged fences as plain text");
+
+    const auto partial = pkchat::highlight::highlight_document(
+        Language::Markdown, "```js\nconst value = 17");
+    check(partial.size() == 2 && has_role(partial[1].spans, TokenRole::Keyword) &&
+              partial[1].next_state.block == pkchat::highlight::LineState::Block::Fence,
+          "Markdown keeps streaming partial fences open while highlighting received code");
 }
 
 void test_setext_unicode_invalid_bytes_and_budget() {
@@ -146,11 +309,22 @@ void test_setext_unicode_invalid_bytes_and_budget() {
     check(has_role(lines[2].spans, TokenRole::Emphasis),
           "Markdown safely scans markup after invalid UTF-8 bytes");
 
+    std::string invalid_code = u8"const Привет = 17; ";
+    invalid_code.push_back(static_cast<char>(0xFF));
+    invalid_code += " return true;";
+    const auto code = pkchat::highlight::highlight_line(Language::JavaScript, invalid_code);
+    check(has_role(code.spans, TokenRole::Keyword) && has_role(code.spans, TokenRole::Literal),
+          "programming-language highlighting preserves Unicode and scans past invalid UTF-8");
+
     const std::string long_line(pkchat::highlight::kMaximumHighlightedLineBytes + 1, '*');
     const pkchat::highlight::HighlightedLine limited =
         pkchat::highlight::highlight_line(Language::Markdown, long_line);
     check(limited.work_limited && limited.spans.empty(),
           "Markdown long-line highlighting falls back to plain text");
+    const pkchat::highlight::HighlightedLine limited_code =
+        pkchat::highlight::highlight_line(Language::Python, long_line);
+    check(limited_code.work_limited && limited_code.spans.empty(),
+          "programming-language long lines fall back to plain text");
 }
 
 void test_incremental_cache_invalidation() {
@@ -185,6 +359,9 @@ void test_incremental_cache_invalidation() {
 
 void run_all() {
     test_mode_parsing_and_detection();
+    test_programming_language_roles();
+    test_markup_and_embedded_languages();
+    test_multiline_language_states();
     test_markdown_inline_and_structure();
     test_markdown_emphasis_delimiters_are_complete();
     test_markdown_multiline_state_and_precedence();

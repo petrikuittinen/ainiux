@@ -4,6 +4,7 @@
 #include <cctype>
 #include <filesystem>
 #include <regex>
+#include <unordered_set>
 
 namespace pkchat::highlight {
 namespace {
@@ -379,11 +380,866 @@ bool setext_heading_candidate(const std::string& line) {
            !setext_underline(line);
 }
 
+bool ascii_identifier_start(char ch) {
+    const unsigned char value = static_cast<unsigned char>(ch);
+    return std::isalpha(value) != 0 || ch == '_';
+}
+
+bool ascii_identifier_part(char ch) {
+    const unsigned char value = static_cast<unsigned char>(ch);
+    return std::isalnum(value) != 0 || ch == '_';
+}
+
+size_t skip_ascii_space(const std::string& line, size_t pos) {
+    while (pos < line.size() && (line[pos] == ' ' || line[pos] == '\t')) {
+        ++pos;
+    }
+    return pos;
+}
+
+size_t find_case_insensitive(const std::string& text, const std::string& needle, size_t start) {
+    if (needle.empty() || start > text.size()) {
+        return std::string::npos;
+    }
+    for (size_t pos = start; pos + needle.size() <= text.size(); ++pos) {
+        size_t index = 0;
+        while (index < needle.size() &&
+               std::tolower(static_cast<unsigned char>(text[pos + index])) ==
+                   std::tolower(static_cast<unsigned char>(needle[index]))) {
+            ++index;
+        }
+        if (index == needle.size()) {
+            return pos;
+        }
+    }
+    return std::string::npos;
+}
+
+bool unescaped_at(const std::string& line, size_t pos) {
+    return !delimiter_is_escaped(line, pos);
+}
+
+const std::unordered_set<std::string>& keywords_for(Language language) {
+    static const std::unordered_set<std::string> empty;
+    static const std::unordered_set<std::string> python = {
+        "and", "as", "assert", "async", "await", "break", "case", "class", "continue",
+        "def", "del", "elif", "else", "except", "finally", "for", "from", "global",
+        "if", "import", "in", "is", "lambda", "match", "nonlocal", "not", "or", "pass",
+        "raise", "return", "try", "while", "with", "yield"};
+    static const std::unordered_set<std::string> c = {
+        "auto", "break", "case", "const", "continue", "default", "do", "else", "enum",
+        "extern", "for", "goto", "if", "inline", "register", "restrict", "return", "sizeof",
+        "static", "struct", "switch", "typedef", "union", "volatile", "while", "_Alignas",
+        "_Alignof", "_Atomic", "_Generic", "_Noreturn", "_Static_assert", "_Thread_local"};
+    static const std::unordered_set<std::string> cpp = {
+        "alignas", "alignof", "and", "and_eq", "asm", "auto", "bitand", "bitor", "break",
+        "case", "catch", "class", "compl", "concept", "const", "consteval", "constexpr",
+        "constinit", "const_cast", "continue", "co_await", "co_return", "co_yield", "decltype",
+        "default", "delete", "do", "dynamic_cast", "else", "enum", "explicit", "export",
+        "extern", "for", "friend", "goto", "if", "inline", "mutable", "namespace", "new",
+        "noexcept", "not", "not_eq", "operator", "or", "or_eq", "private", "protected",
+        "public", "register", "reinterpret_cast", "requires", "return", "sizeof", "static",
+        "static_assert", "static_cast", "struct", "switch", "template", "this", "thread_local",
+        "throw", "try", "typedef", "typeid", "typename", "union", "using", "virtual", "volatile",
+        "while", "xor", "xor_eq"};
+    static const std::unordered_set<std::string> csharp = {
+        "abstract", "as", "async", "await", "base", "break", "case", "catch", "checked",
+        "class", "const", "continue", "default", "delegate", "do", "else", "enum", "event",
+        "explicit", "extern", "finally", "fixed", "for", "foreach", "goto", "if", "implicit",
+        "in", "interface", "internal", "is", "lock", "namespace", "new", "operator", "out",
+        "override", "params", "private", "protected", "public", "readonly", "record", "ref",
+        "return", "sealed", "sizeof", "stackalloc", "static", "struct", "switch", "this",
+        "throw", "try", "typeof", "unchecked", "unsafe", "using", "virtual", "volatile", "while",
+        "yield", "get", "set", "init", "required", "when", "where", "with"};
+    static const std::unordered_set<std::string> java = {
+        "abstract", "assert", "break", "case", "catch", "class", "const", "continue", "default",
+        "do", "else", "enum", "exports", "extends", "final", "finally", "for", "goto", "if",
+        "implements", "import", "instanceof", "interface", "module", "native", "new", "non-sealed",
+        "open", "opens", "package", "permits", "private", "protected", "provides", "public",
+        "record", "requires", "return", "sealed", "static", "strictfp", "super", "switch",
+        "synchronized", "this", "throw", "throws", "to", "transient", "transitive", "try", "uses",
+        "var", "volatile", "while", "with", "yield"};
+    static const std::unordered_set<std::string> javascript = {
+        "async", "await", "break", "case", "catch", "class", "const", "continue", "debugger",
+        "default", "delete", "do", "else", "export", "extends", "finally", "for", "from",
+        "function", "get", "if", "import", "in", "instanceof", "let", "new", "of", "return",
+        "set", "static", "super", "switch", "this", "throw", "try", "typeof", "var", "void",
+        "while", "with", "yield"};
+    static const std::unordered_set<std::string> typescript = {
+        "abstract", "as", "asserts", "async", "await", "break", "case", "catch", "class",
+        "const", "constructor", "continue", "debugger", "declare", "default", "delete", "do",
+        "else", "enum", "export", "extends", "finally", "for", "from", "function", "get", "if",
+        "implements", "import", "in", "infer", "instanceof", "interface", "is", "keyof", "let",
+        "module", "namespace", "new", "of", "override", "private", "protected", "public", "readonly",
+        "return", "satisfies", "set", "static", "super", "switch", "this", "throw", "try", "type",
+        "typeof", "var", "void", "while", "with", "yield"};
+    static const std::unordered_set<std::string> bash = {
+        "case", "coproc", "do", "done", "elif", "else", "esac", "fi", "for", "function", "if",
+        "in", "select", "then", "time", "until", "while", "declare", "export", "local", "readonly",
+        "return", "set", "source", "typeset", "unset"};
+    switch (language) {
+        case Language::Python: return python;
+        case Language::C: return c;
+        case Language::Cpp: return cpp;
+        case Language::CSharp: return csharp;
+        case Language::Java: return java;
+        case Language::JavaScript: return javascript;
+        case Language::TypeScript: return typescript;
+        case Language::Bash: return bash;
+        default: return empty;
+    }
+}
+
+const std::unordered_set<std::string>& types_for(Language language) {
+    static const std::unordered_set<std::string> empty;
+    static const std::unordered_set<std::string> python = {
+        "bool", "bytes", "complex", "dict", "float", "frozenset", "int", "list", "memoryview",
+        "object", "range", "set", "str", "tuple", "type", "None"};
+    static const std::unordered_set<std::string> c = {
+        "bool", "char", "double", "float", "int", "long", "short", "signed", "unsigned", "void",
+        "size_t", "ptrdiff_t", "int8_t", "int16_t", "int32_t", "int64_t", "uint8_t", "uint16_t",
+        "uint32_t", "uint64_t"};
+    static const std::unordered_set<std::string> cpp = {
+        "bool", "char", "char8_t", "char16_t", "char32_t", "double", "float", "int", "long",
+        "short", "signed", "unsigned", "void", "wchar_t", "size_t", "nullptr_t"};
+    static const std::unordered_set<std::string> csharp = {
+        "bool", "byte", "char", "decimal", "double", "dynamic", "float", "int", "long", "nint",
+        "nuint", "object", "sbyte", "short", "string", "uint", "ulong", "ushort", "void"};
+    static const std::unordered_set<std::string> java = {
+        "boolean", "byte", "char", "double", "float", "int", "long", "short", "void", "String",
+        "Object"};
+    static const std::unordered_set<std::string> typescript = {
+        "any", "bigint", "boolean", "never", "number", "object", "string", "symbol", "unknown",
+        "void"};
+    switch (language) {
+        case Language::Python: return python;
+        case Language::C: return c;
+        case Language::Cpp: return cpp;
+        case Language::CSharp: return csharp;
+        case Language::Java: return java;
+        case Language::TypeScript: return typescript;
+        default: return empty;
+    }
+}
+
+bool is_literal_word(Language language, const std::string& word) {
+    if (language == Language::Python) {
+        return word == "True" || word == "False" || word == "None" || word == "NotImplemented";
+    }
+    if (language == Language::Json) {
+        return word == "true" || word == "false" || word == "null" || word == "Infinity" ||
+               word == "NaN";
+    }
+    return word == "true" || word == "false" || word == "null" || word == "nullptr";
+}
+
+void add_words_numbers_operators(Language language,
+                                 const std::string& line,
+                                 std::vector<Candidate>& words,
+                                 std::vector<Candidate>& lower) {
+    const auto& keywords = keywords_for(language);
+    const auto& types = types_for(language);
+    size_t pos = 0;
+    while (pos < line.size()) {
+        if (ascii_identifier_start(line[pos])) {
+            const size_t start = pos++;
+            while (pos < line.size() && ascii_identifier_part(line[pos])) {
+                ++pos;
+            }
+            const std::string word = line.substr(start, pos - start);
+            if (is_literal_word(language, word)) {
+                append_candidate(words, start, pos, TokenRole::Literal);
+            } else if (keywords.find(word) != keywords.end()) {
+                append_candidate(words, start, pos, TokenRole::Keyword);
+            } else if (types.find(word) != types.end()) {
+                append_candidate(words, start, pos, TokenRole::Type);
+            } else if (skip_ascii_space(line, pos) < line.size() &&
+                       line[skip_ascii_space(line, pos)] == '(') {
+                append_candidate(lower, start, pos, TokenRole::Function);
+            }
+            continue;
+        }
+        if (std::isdigit(static_cast<unsigned char>(line[pos])) != 0 ||
+            (line[pos] == '.' && pos + 1 < line.size() &&
+             std::isdigit(static_cast<unsigned char>(line[pos + 1])) != 0)) {
+            const size_t start = pos++;
+            while (pos < line.size()) {
+                const char ch = line[pos];
+                if (std::isalnum(static_cast<unsigned char>(ch)) != 0 || ch == '.' || ch == '_') {
+                    ++pos;
+                } else if ((ch == '+' || ch == '-') && pos > start &&
+                           (line[pos - 1] == 'e' || line[pos - 1] == 'E' ||
+                            line[pos - 1] == 'p' || line[pos - 1] == 'P')) {
+                    ++pos;
+                } else {
+                    break;
+                }
+            }
+            append_candidate(lower, start, pos, TokenRole::Number);
+            continue;
+        }
+        static const std::string operators = "+-*/%=!<>?:&|^~.,;()[]{}";
+        if (operators.find(line[pos]) != std::string::npos) {
+            append_candidate(lower, pos, pos + 1, TokenRole::Operator);
+        }
+        ++pos;
+    }
+}
+
+size_t quoted_end(const std::string& line, size_t start, char quote) {
+    size_t pos = start + 1;
+    while (pos < line.size()) {
+        if (line[pos] == quote && unescaped_at(line, pos)) {
+            return pos + 1;
+        }
+        ++pos;
+    }
+    return line.size();
+}
+
+bool javascript_regex_context(const std::string& line, size_t slash) {
+    const size_t previous = slash == 0 ? std::string::npos : line.find_last_not_of(" \t", slash - 1);
+    if (previous == std::string::npos ||
+        std::string("=([{,:;!&|?").find(line[previous]) != std::string::npos) {
+        return true;
+    }
+    if (!ascii_identifier_part(line[previous])) return false;
+    size_t start = previous;
+    while (start > 0 && ascii_identifier_part(line[start - 1])) --start;
+    const std::string prior = line.substr(start, previous + 1 - start);
+    return prior == "return" || prior == "case" || prior == "throw" || prior == "yield" ||
+           prior == "await" || prior == "else" || prior == "do";
+}
+
+void scan_c_like_lexical(Language language,
+                         const std::string& line,
+                         LineState& next_state,
+                         std::vector<Candidate>& high_priority) {
+    const bool line_comments = language != Language::Css;
+    const bool backticks = language == Language::JavaScript || language == Language::TypeScript;
+    size_t pos = 0;
+    if (next_state.block == LineState::Block::BlockComment) {
+        const size_t close = line.find("*/");
+        if (close == std::string::npos) {
+            append_candidate(high_priority, 0, line.size(), TokenRole::Comment);
+            return;
+        }
+        append_candidate(high_priority, 0, close + 2, TokenRole::Comment);
+        next_state.block = LineState::Block::None;
+        pos = close + 2;
+    } else if (next_state.block == LineState::Block::TemplateString) {
+        size_t close = pos;
+        while ((close = line.find('`', close)) != std::string::npos && !unescaped_at(line, close)) {
+            ++close;
+        }
+        if (close == std::string::npos) {
+            append_candidate(high_priority, 0, line.size(), TokenRole::String);
+            return;
+        }
+        append_candidate(high_priority, 0, close + 1, TokenRole::String);
+        next_state.block = LineState::Block::None;
+        pos = close + 1;
+    } else if (next_state.block == LineState::Block::RawString) {
+        const std::string close_marker = ")" + next_state.delimiter + "\"";
+        const size_t close = line.find(close_marker);
+        if (close == std::string::npos) {
+            append_candidate(high_priority, 0, line.size(), TokenRole::String);
+            return;
+        }
+        append_candidate(high_priority, 0, close + close_marker.size(), TokenRole::String);
+        next_state.block = LineState::Block::None;
+        next_state.delimiter.clear();
+        pos = close + close_marker.size();
+    }
+
+    while (pos < line.size()) {
+        if (pos + 1 < line.size() && line[pos] == '/' && line[pos + 1] == '*') {
+            const size_t close = line.find("*/", pos + 2);
+            if (close == std::string::npos) {
+                append_candidate(high_priority, pos, line.size(), TokenRole::Comment);
+                next_state.block = LineState::Block::BlockComment;
+                return;
+            }
+            append_candidate(high_priority, pos, close + 2, TokenRole::Comment);
+            pos = close + 2;
+            continue;
+        }
+        if (line_comments && pos + 1 < line.size() && line[pos] == '/' && line[pos + 1] == '/') {
+            append_candidate(high_priority, pos, line.size(), TokenRole::Comment);
+            return;
+        }
+        if (language == Language::Cpp && pos + 2 < line.size() && line[pos] == 'R' &&
+            line[pos + 1] == '"') {
+            const size_t open = line.find('(', pos + 2);
+            if (open != std::string::npos && open - (pos + 2) <= 16) {
+                const std::string delimiter = line.substr(pos + 2, open - (pos + 2));
+                const std::string close_marker = ")" + delimiter + "\"";
+                const size_t close = line.find(close_marker, open + 1);
+                if (close == std::string::npos) {
+                    append_candidate(high_priority, pos, line.size(), TokenRole::String);
+                    next_state.block = LineState::Block::RawString;
+                    next_state.delimiter = delimiter;
+                    return;
+                }
+                append_candidate(high_priority, pos, close + close_marker.size(), TokenRole::String);
+                pos = close + close_marker.size();
+                continue;
+            }
+        }
+        if (line[pos] == '"' || line[pos] == '\'') {
+            const size_t end = quoted_end(line, pos, line[pos]);
+            append_candidate(high_priority, pos, end, TokenRole::String);
+            pos = end;
+            continue;
+        }
+        if (backticks && line[pos] == '`') {
+            size_t close = pos + 1;
+            while ((close = line.find('`', close)) != std::string::npos && !unescaped_at(line, close)) {
+                ++close;
+            }
+            if (close == std::string::npos) {
+                append_candidate(high_priority, pos, line.size(), TokenRole::String);
+                next_state.block = LineState::Block::TemplateString;
+                return;
+            }
+            append_candidate(high_priority, pos, close + 1, TokenRole::String);
+            pos = close + 1;
+            continue;
+        }
+        if ((language == Language::JavaScript || language == Language::TypeScript) &&
+            line[pos] == '/' && javascript_regex_context(line, pos)) {
+            size_t close = pos + 1;
+            bool bracket = false;
+            bool matched = false;
+            while (close < line.size()) {
+                if (line[close] == '[' && unescaped_at(line, close)) bracket = true;
+                if (line[close] == ']' && unescaped_at(line, close)) bracket = false;
+                if (line[close] == '/' && !bracket && unescaped_at(line, close)) {
+                    ++close;
+                    while (close < line.size() && std::isalpha(static_cast<unsigned char>(line[close]))) {
+                        ++close;
+                    }
+                    append_candidate(high_priority, pos, close, TokenRole::String);
+                    pos = close;
+                    matched = true;
+                    break;
+                }
+                ++close;
+            }
+            if (!matched) {
+                ++pos;
+            }
+            continue;
+        }
+        ++pos;
+    }
+}
+
+void scan_python_lexical(const std::string& line,
+                         LineState& next_state,
+                         std::vector<Candidate>& high_priority) {
+    size_t pos = 0;
+    if (next_state.block == LineState::Block::TripleSingleString ||
+        next_state.block == LineState::Block::TripleDoubleString) {
+        const std::string delimiter = next_state.block == LineState::Block::TripleSingleString
+                                          ? "'''"
+                                          : "\"\"\"";
+        const size_t close = line.find(delimiter);
+        if (close == std::string::npos) {
+            append_candidate(high_priority, 0, line.size(), TokenRole::String);
+            return;
+        }
+        append_candidate(high_priority, 0, close + 3, TokenRole::String);
+        next_state.block = LineState::Block::None;
+        pos = close + 3;
+    }
+    while (pos < line.size()) {
+        if (line[pos] == '#') {
+            append_candidate(high_priority, pos, line.size(), TokenRole::Comment);
+            return;
+        }
+        if (line.compare(pos, 3, "'''") == 0 || line.compare(pos, 3, "\"\"\"") == 0) {
+            const std::string delimiter = line.substr(pos, 3);
+            const size_t close = line.find(delimiter, pos + 3);
+            if (close == std::string::npos) {
+                append_candidate(high_priority, pos, line.size(), TokenRole::String);
+                next_state.block = delimiter[0] == '\'' ? LineState::Block::TripleSingleString
+                                                         : LineState::Block::TripleDoubleString;
+                return;
+            }
+            append_candidate(high_priority, pos, close + 3, TokenRole::String);
+            pos = close + 3;
+            continue;
+        }
+        if (line[pos] == '\'' || line[pos] == '"') {
+            const size_t end = quoted_end(line, pos, line[pos]);
+            append_candidate(high_priority, pos, end, TokenRole::String);
+            pos = end;
+            continue;
+        }
+        ++pos;
+    }
+}
+
+void scan_json_lexical(const std::string& line,
+                       LineState& next_state,
+                       std::vector<Candidate>& high_priority,
+                       std::vector<Candidate>& structural) {
+    size_t pos = 0;
+    if (next_state.block == LineState::Block::BlockComment) {
+        const size_t close = line.find("*/");
+        if (close == std::string::npos) {
+            append_candidate(high_priority, 0, line.size(), TokenRole::Comment);
+            return;
+        }
+        append_candidate(high_priority, 0, close + 2, TokenRole::Comment);
+        next_state.block = LineState::Block::None;
+        pos = close + 2;
+    }
+    while (pos < line.size()) {
+        if (pos + 1 < line.size() && line[pos] == '/' && line[pos + 1] == '*') {
+            const size_t close = line.find("*/", pos + 2);
+            if (close == std::string::npos) {
+                append_candidate(high_priority, pos, line.size(), TokenRole::Comment);
+                next_state.block = LineState::Block::BlockComment;
+                return;
+            }
+            append_candidate(high_priority, pos, close + 2, TokenRole::Comment);
+            pos = close + 2;
+            continue;
+        }
+        if (pos + 1 < line.size() && line[pos] == '/' && line[pos + 1] == '/') {
+            append_candidate(high_priority, pos, line.size(), TokenRole::Comment);
+            return;
+        }
+        if (line[pos] != '"' && line[pos] != '\'') {
+            ++pos;
+            continue;
+        }
+        const size_t end = quoted_end(line, pos, line[pos]);
+        const size_t after = skip_ascii_space(line, end);
+        append_candidate(high_priority,
+                         pos,
+                         end,
+                         after < line.size() && line[after] == ':' ? TokenRole::Property
+                                                                  : TokenRole::String);
+        pos = end;
+    }
+    (void)structural;
+}
+
+void scan_bash_lexical(const std::string& line,
+                       LineState& next_state,
+                       std::vector<Candidate>& high_priority,
+                       std::vector<Candidate>& structural,
+                       std::vector<Candidate>& lower) {
+    if (next_state.block == LineState::Block::Heredoc) {
+        size_t compare = 0;
+        if (next_state.strip_tabs) {
+            while (compare < line.size() && line[compare] == '\t') ++compare;
+        }
+        if (line.compare(compare, next_state.delimiter.size(), next_state.delimiter) == 0 &&
+            only_ascii_space_after(line, compare + next_state.delimiter.size())) {
+            append_candidate(structural, compare, compare + next_state.delimiter.size(),
+                             TokenRole::Preprocessor);
+            next_state = {};
+        } else {
+            append_candidate(high_priority, 0, line.size(), TokenRole::String);
+        }
+        return;
+    }
+    size_t pos = 0;
+    while (pos < line.size()) {
+        if (line[pos] == '#') {
+            append_candidate(high_priority, pos, line.size(), TokenRole::Comment);
+            break;
+        }
+        if (line[pos] == '\'' || line[pos] == '"') {
+            const size_t end = quoted_end(line, pos, line[pos]);
+            append_candidate(high_priority, pos, end, TokenRole::String);
+            pos = end;
+            continue;
+        }
+        if (line[pos] == '$') {
+            size_t end = pos + 1;
+            if (end < line.size() && line[end] == '{') {
+                const size_t close = line.find('}', end + 1);
+                end = close == std::string::npos ? line.size() : close + 1;
+            } else {
+                if (end < line.size() && std::string("@*#?$!-0123456789").find(line[end]) !=
+                                             std::string::npos) {
+                    ++end;
+                } else {
+                    while (end < line.size() && ascii_identifier_part(line[end])) ++end;
+                }
+            }
+            append_candidate(lower, pos, end, TokenRole::Variable);
+            pos = end;
+            continue;
+        }
+        ++pos;
+    }
+    static const std::regex heredoc(
+        R"(<<(-)?[\t ]*(['"]?)([A-Za-z_][A-Za-z0-9_]*)\2)",
+        std::regex::ECMAScript | std::regex::optimize);
+    std::smatch match;
+    if (std::regex_search(line, match, heredoc)) {
+        const size_t heredoc_start = static_cast<size_t>(match.position());
+        const bool hidden = std::any_of(high_priority.begin(), high_priority.end(),
+                                        [&](const Candidate& candidate) {
+                                            return candidate.start <= heredoc_start &&
+                                                   heredoc_start < candidate.end;
+                                        });
+        if (hidden) return;
+        append_candidate(structural,
+                         heredoc_start,
+                         static_cast<size_t>(match.position() + match.length()),
+                         TokenRole::Preprocessor);
+        next_state.block = LineState::Block::Heredoc;
+        next_state.delimiter = match.str(3);
+        next_state.strip_tabs = match[1].matched;
+    }
+}
+
+void add_preprocessor(Language language,
+                      const std::string& line,
+                      std::vector<Candidate>& structural) {
+    if (language != Language::C && language != Language::Cpp) return;
+    const size_t first = line.find_first_not_of(" \t");
+    if (first != std::string::npos && line[first] == '#') {
+        append_candidate(structural, first, line.size(), TokenRole::Preprocessor);
+    }
+}
+
+void add_bash_commands(const std::string& line, std::vector<Candidate>& lower) {
+    size_t pos = 0;
+    while (pos < line.size()) {
+        if (!ascii_identifier_start(line[pos])) {
+            ++pos;
+            continue;
+        }
+        const size_t start = pos++;
+        while (pos < line.size() && (ascii_identifier_part(line[pos]) || line[pos] == '-')) ++pos;
+        size_t previous = start;
+        while (previous > 0 && (line[previous - 1] == ' ' || line[previous - 1] == '\t')) --previous;
+        bool command = previous == 0 || std::string(";|&(").find(line[previous - 1]) != std::string::npos;
+        if (!command && previous > 0) {
+            size_t word_end = previous;
+            size_t word_start = word_end;
+            while (word_start > 0 && ascii_identifier_part(line[word_start - 1])) --word_start;
+            const std::string prior = line.substr(word_start, word_end - word_start);
+            command = prior == "do" || prior == "then" || prior == "else" || prior == "elif";
+        }
+        if (command && keywords_for(Language::Bash).find(line.substr(start, pos - start)) ==
+                           keywords_for(Language::Bash).end() &&
+            (skip_ascii_space(line, pos) >= line.size() || line[skip_ascii_space(line, pos)] != '=')) {
+            append_candidate(lower, start, pos, TokenRole::Function);
+        }
+    }
+}
+
+void add_css_tokens(const std::string& line,
+                    std::vector<Candidate>& structural,
+                    std::vector<Candidate>& words,
+                    std::vector<Candidate>& lower) {
+    const size_t first = line.find_first_not_of(" \t");
+    if (first != std::string::npos && line[first] == '@') {
+        size_t end = first + 1;
+        while (end < line.size() && (ascii_identifier_part(line[end]) || line[end] == '-')) ++end;
+        append_candidate(words, first, end, TokenRole::Keyword);
+    }
+    size_t pos = 0;
+    while (pos < line.size()) {
+        if ((ascii_identifier_start(line[pos]) || (line[pos] == '-' && pos + 1 < line.size())) &&
+            (pos == 0 || line[pos - 1] == '{' || line[pos - 1] == ';' ||
+             std::isspace(static_cast<unsigned char>(line[pos - 1])) != 0)) {
+            const size_t start = pos++;
+            while (pos < line.size() && (ascii_identifier_part(line[pos]) || line[pos] == '-')) ++pos;
+            const size_t after = skip_ascii_space(line, pos);
+            if (after < line.size() && line[after] == ':') {
+                append_candidate(structural, start, pos, TokenRole::Property);
+            }
+            continue;
+        }
+        if (line[pos] == '#') {
+            size_t end = pos + 1;
+            while (end < line.size() && std::isxdigit(static_cast<unsigned char>(line[end]))) ++end;
+            if (end - pos == 4 || end - pos == 7 || end - pos == 9) {
+                append_candidate(words, pos, end, TokenRole::Literal);
+            }
+        }
+        ++pos;
+    }
+    add_words_numbers_operators(Language::Css, line, words, lower);
+}
+
+size_t markup_tag_end(const std::string& line, size_t start) {
+    char quote = 0;
+    for (size_t pos = start + 1; pos < line.size(); ++pos) {
+        if (quote != 0) {
+            if (line[pos] == quote) quote = 0;
+        } else if (line[pos] == '\'' || line[pos] == '"') {
+            quote = line[pos];
+        } else if (line[pos] == '>') {
+            return pos + 1;
+        }
+    }
+    return line.size();
+}
+
+std::string markup_tag_name(const std::string& line, size_t start, size_t end) {
+    size_t pos = start + 1;
+    if (pos < end && line[pos] == '/') ++pos;
+    pos = skip_ascii_space(line, pos);
+    const size_t name_start = pos;
+    while (pos < end && (ascii_identifier_part(line[pos]) || line[pos] == ':' || line[pos] == '-')) ++pos;
+    return lower_ascii(line.substr(name_start, pos - name_start));
+}
+
+void add_markup_tag_tokens(const std::string& line,
+                           size_t start,
+                           size_t end,
+                           std::vector<Candidate>& high_priority,
+                           std::vector<Candidate>& structural,
+                           std::vector<Candidate>& lower) {
+    size_t pos = start;
+    append_candidate(structural, pos, std::min(pos + size_t{1}, end), TokenRole::Tag);
+    ++pos;
+    if (pos < end && line[pos] == '/') {
+        append_candidate(structural, pos, pos + 1, TokenRole::Tag);
+        ++pos;
+    }
+    pos = skip_ascii_space(line, pos);
+    const size_t name_start = pos;
+    while (pos < end && (ascii_identifier_part(line[pos]) || line[pos] == ':' || line[pos] == '-')) ++pos;
+    append_candidate(structural, name_start, pos, TokenRole::Tag);
+    while (pos < end) {
+        pos = skip_ascii_space(line, pos);
+        if (pos >= end || line[pos] == '>') break;
+        if (line[pos] == '/') {
+            append_candidate(structural, pos, pos + 1, TokenRole::Tag);
+            ++pos;
+            continue;
+        }
+        if (ascii_identifier_start(line[pos]) || line[pos] == ':') {
+            const size_t attr_start = pos++;
+            while (pos < end && (ascii_identifier_part(line[pos]) || line[pos] == ':' ||
+                                 line[pos] == '-' || line[pos] == '.')) ++pos;
+            append_candidate(structural, attr_start, pos, TokenRole::Attribute);
+            pos = skip_ascii_space(line, pos);
+            if (pos < end && line[pos] == '=') {
+                append_candidate(lower, pos, pos + 1, TokenRole::Operator);
+                pos = skip_ascii_space(line, pos + 1);
+                if (pos < end && (line[pos] == '\'' || line[pos] == '"')) {
+                    const size_t value_end = std::min(quoted_end(line, pos, line[pos]), end);
+                    append_candidate(high_priority, pos, value_end, TokenRole::String);
+                    pos = value_end;
+                }
+            }
+            continue;
+        }
+        ++pos;
+    }
+    if (end > start && line[end - 1] == '>') {
+        append_candidate(structural, end - 1, end, TokenRole::Tag);
+    }
+}
+
+HighlightedLine highlight_code(Language language,
+                               const std::string& line,
+                               const LineState& state,
+                               size_t byte_budget);
+
+HighlightedLine highlight_markup(Language language,
+                                 const std::string& line,
+                                 const LineState& state,
+                                 size_t byte_budget) {
+    HighlightedLine result;
+    result.next_state = state;
+    std::vector<Candidate> high_priority;
+    std::vector<Candidate> structural;
+    std::vector<Candidate> lower;
+    size_t pos = 0;
+
+    if (state.block == LineState::Block::Script || state.block == LineState::Block::Style) {
+        const bool script = state.block == LineState::Block::Script;
+        const std::string closing = script ? "</script" : "</style";
+        const size_t close = find_case_insensitive(line, closing, 0);
+        const size_t code_end = close == std::string::npos ? line.size() : close;
+        LineState nested;
+        nested.block = state.nested_block;
+        const HighlightedLine embedded = highlight_code(script ? Language::JavaScript : Language::Css,
+                                                        line.substr(0, code_end), nested, byte_budget);
+        for (const Span& span : embedded.spans) {
+            append_candidate(high_priority, span.start, span.end, span.role);
+        }
+        if (close == std::string::npos) {
+            result.next_state.nested_block = embedded.next_state.block;
+            result.spans = resolve_candidates(line.size(), {high_priority});
+            return result;
+        }
+        result.next_state = {};
+        pos = close;
+    } else if (state.block == LineState::Block::HtmlComment) {
+        const size_t close = line.find("-->");
+        if (close == std::string::npos) {
+            append_candidate(high_priority, 0, line.size(), TokenRole::Comment);
+            result.spans = resolve_candidates(line.size(), {high_priority});
+            return result;
+        }
+        append_candidate(high_priority, 0, close + 3, TokenRole::Comment);
+        result.next_state = {};
+        pos = close + 3;
+    } else if (state.block == LineState::Block::CData) {
+        const size_t close = line.find("]]>");
+        if (close == std::string::npos) {
+            append_candidate(high_priority, 0, line.size(), TokenRole::String);
+            result.spans = resolve_candidates(line.size(), {high_priority});
+            return result;
+        }
+        append_candidate(high_priority, 0, close + 3, TokenRole::String);
+        result.next_state = {};
+        pos = close + 3;
+    }
+
+    while (pos < line.size()) {
+        const size_t open = line.find('<', pos);
+        if (open == std::string::npos) break;
+        if (line.compare(open, 4, "<!--") == 0) {
+            const size_t close = line.find("-->", open + 4);
+            if (close == std::string::npos) {
+                append_candidate(high_priority, open, line.size(), TokenRole::Comment);
+                result.next_state.block = LineState::Block::HtmlComment;
+                break;
+            }
+            append_candidate(high_priority, open, close + 3, TokenRole::Comment);
+            pos = close + 3;
+            continue;
+        }
+        if (line.compare(open, 9, "<![CDATA[") == 0) {
+            const size_t close = line.find("]]>", open + 9);
+            if (close == std::string::npos) {
+                append_candidate(high_priority, open, line.size(), TokenRole::String);
+                result.next_state.block = LineState::Block::CData;
+                break;
+            }
+            append_candidate(high_priority, open, close + 3, TokenRole::String);
+            pos = close + 3;
+            continue;
+        }
+        const size_t end = markup_tag_end(line, open);
+        if (end == line.size() && (line.empty() || line.back() != '>')) break;
+        const std::string name = markup_tag_name(line, open, end);
+        if (line.compare(open, 2, "<!") == 0 || line.compare(open, 2, "<?") == 0) {
+            append_candidate(structural, open, end, TokenRole::Preprocessor);
+        } else {
+            add_markup_tag_tokens(line, open, end, high_priority, structural, lower);
+        }
+        const bool closing_tag = open + 1 < line.size() && line[open + 1] == '/';
+        const bool self_closing = end >= 2 && line[end - 2] == '/';
+        pos = end;
+        if (language == Language::Html && !closing_tag && !self_closing &&
+            (name == "script" || name == "style")) {
+            result.next_state.block = name == "script" ? LineState::Block::Script
+                                                       : LineState::Block::Style;
+            result.next_state.nested_block = LineState::Block::None;
+            const std::string closing = name == "script" ? "</script" : "</style";
+            const size_t close = find_case_insensitive(line, closing, pos);
+            const size_t code_end = close == std::string::npos ? line.size() : close;
+            const HighlightedLine embedded = highlight_code(name == "script" ? Language::JavaScript
+                                                                               : Language::Css,
+                                                            line.substr(pos, code_end - pos), {},
+                                                            byte_budget);
+            for (const Span& span : embedded.spans) {
+                append_candidate(high_priority, pos + span.start, pos + span.end, span.role);
+            }
+            if (close == std::string::npos) {
+                result.next_state.nested_block = embedded.next_state.block;
+                break;
+            }
+            result.next_state = {};
+            pos = close;
+        }
+    }
+    result.spans = resolve_candidates(line.size(), {high_priority, structural, lower});
+    return result;
+}
+
+HighlightedLine highlight_code(Language language,
+                               const std::string& line,
+                               const LineState& state,
+                               size_t byte_budget) {
+    HighlightedLine result;
+    result.next_state = state;
+    if (line.size() > kMaximumHighlightedLineBytes || line.size() > byte_budget) {
+        result.work_limited = true;
+        return result;
+    }
+    if (language == Language::Html || language == Language::Xml) {
+        return highlight_markup(language, line, state, byte_budget);
+    }
+    std::vector<Candidate> high_priority;
+    std::vector<Candidate> structural;
+    std::vector<Candidate> words;
+    std::vector<Candidate> lower;
+    if (language == Language::Python) {
+        scan_python_lexical(line, result.next_state, high_priority);
+    } else if (language == Language::Bash) {
+        scan_bash_lexical(line, result.next_state, high_priority, structural, lower);
+    } else if (language == Language::Json) {
+        scan_json_lexical(line, result.next_state, high_priority, structural);
+        size_t key = 0;
+        while (key < line.size()) {
+            if (!ascii_identifier_start(line[key])) {
+                ++key;
+                continue;
+            }
+            const size_t start = key++;
+            while (key < line.size() && (ascii_identifier_part(line[key]) || line[key] == '-')) ++key;
+            const size_t after = skip_ascii_space(line, key);
+            if (after < line.size() && line[after] == ':') {
+                append_candidate(structural, start, key, TokenRole::Property);
+            }
+        }
+    } else {
+        scan_c_like_lexical(language, line, result.next_state, high_priority);
+    }
+    add_preprocessor(language, line, structural);
+    if (language == Language::Bash) {
+        add_bash_commands(line, lower);
+    }
+    if (language == Language::JavaScript || language == Language::TypeScript) {
+        size_t tag = 0;
+        while ((tag = line.find('<', tag)) != std::string::npos) {
+            size_t name = tag + 1;
+            if (name < line.size() && line[name] == '/') ++name;
+            if (name >= line.size() || !ascii_identifier_start(line[name])) {
+                ++tag;
+                continue;
+            }
+            const size_t end = markup_tag_end(line, tag);
+            if (end == line.size() && (line.empty() || line.back() != '>')) break;
+            add_markup_tag_tokens(line, tag, end, high_priority, structural, lower);
+            tag = end;
+        }
+    }
+    if (language == Language::Css) {
+        add_css_tokens(line, structural, words, lower);
+    } else {
+        add_words_numbers_operators(language, line, words, lower);
+    }
+    result.spans = resolve_candidates(line.size(), {high_priority, structural, words, lower});
+    return result;
+}
+
 }  // namespace
 
 bool LineState::operator==(const LineState& other) const {
     return block == other.block && fence_character == other.fence_character &&
-           fence_length == other.fence_length;
+           fence_length == other.fence_length && embedded_language == other.embedded_language &&
+           nested_block == other.nested_block && nested_delimiter == other.nested_delimiter &&
+           nested_strip_tabs == other.nested_strip_tabs && delimiter == other.delimiter &&
+           strip_tabs == other.strip_tabs;
 }
 
 const char* language_name(Language language) {
@@ -392,6 +1248,30 @@ const char* language_name(Language language) {
             return "text";
         case Language::Markdown:
             return "markdown";
+        case Language::Python:
+            return "python";
+        case Language::C:
+            return "c";
+        case Language::Cpp:
+            return "cpp";
+        case Language::CSharp:
+            return "csharp";
+        case Language::Java:
+            return "java";
+        case Language::JavaScript:
+            return "javascript";
+        case Language::TypeScript:
+            return "typescript";
+        case Language::Html:
+            return "html";
+        case Language::Css:
+            return "css";
+        case Language::Xml:
+            return "xml";
+        case Language::Json:
+            return "json";
+        case Language::Bash:
+            return "bash";
     }
     return "text";
 }
@@ -406,6 +1286,54 @@ bool parse_language(const std::string& text, Language& language) {
         language = Language::Markdown;
         return true;
     }
+    if (mode == "python" || mode == "py") {
+        language = Language::Python;
+        return true;
+    }
+    if (mode == "c") {
+        language = Language::C;
+        return true;
+    }
+    if (mode == "cpp" || mode == "c++" || mode == "cxx") {
+        language = Language::Cpp;
+        return true;
+    }
+    if (mode == "csharp" || mode == "c#" || mode == "cs") {
+        language = Language::CSharp;
+        return true;
+    }
+    if (mode == "java") {
+        language = Language::Java;
+        return true;
+    }
+    if (mode == "javascript" || mode == "js") {
+        language = Language::JavaScript;
+        return true;
+    }
+    if (mode == "typescript" || mode == "ts") {
+        language = Language::TypeScript;
+        return true;
+    }
+    if (mode == "html" || mode == "html5") {
+        language = Language::Html;
+        return true;
+    }
+    if (mode == "css" || mode == "css3") {
+        language = Language::Css;
+        return true;
+    }
+    if (mode == "xml") {
+        language = Language::Xml;
+        return true;
+    }
+    if (mode == "json" || mode == "jsonl" || mode == "ndjson") {
+        language = Language::Json;
+        return true;
+    }
+    if (mode == "bash" || mode == "sh" || mode == "shell") {
+        language = Language::Bash;
+        return true;
+    }
     return false;
 }
 
@@ -413,11 +1341,36 @@ Language detect_language(const std::string& path) {
     if (path.empty()) {
         return Language::Text;
     }
-    const std::string extension = lower_ascii(std::filesystem::path(path).extension().string());
+    const std::filesystem::path file_path(path);
+    const std::string extension = lower_ascii(file_path.extension().string());
+    const std::string filename = lower_ascii(file_path.filename().string());
     if (extension == ".md" || extension == ".markdown" || extension == ".mdown" ||
         extension == ".mkd") {
         return Language::Markdown;
     }
+    if (extension == ".py" || extension == ".pyw" || extension == ".pyi") return Language::Python;
+    if (extension == ".c" || extension == ".h") return Language::C;
+    if (extension == ".cc" || extension == ".cpp" || extension == ".cxx" ||
+        extension == ".c++" || extension == ".hh" || extension == ".hpp" ||
+        extension == ".hxx" || extension == ".h++" || extension == ".ipp" ||
+        extension == ".tpp" || extension == ".inl") return Language::Cpp;
+    if (extension == ".cs") return Language::CSharp;
+    if (extension == ".java") return Language::Java;
+    if (extension == ".js" || extension == ".mjs" || extension == ".cjs" ||
+        extension == ".jsx") return Language::JavaScript;
+    if (extension == ".ts" || extension == ".mts" || extension == ".cts" ||
+        extension == ".tsx") return Language::TypeScript;
+    if (extension == ".html" || extension == ".htm" || extension == ".xhtml") return Language::Html;
+    if (extension == ".css") return Language::Css;
+    if (extension == ".xml" || extension == ".xsd" || extension == ".xsl" ||
+        extension == ".xslt" || extension == ".svg") return Language::Xml;
+    if (extension == ".json" || extension == ".jsonl" || extension == ".ndjson" ||
+        extension == ".geojson" || extension == ".json5") return Language::Json;
+    if (extension == ".sh" || extension == ".bash" || filename == ".bashrc" ||
+        filename == ".bash_profile" || filename == ".bash_login" ||
+        filename == ".bash_logout" || filename == ".profile" || filename == "bashrc" ||
+        filename == "bash_profile" || filename == "bash_login" || filename == "bash_logout" ||
+        filename == "profile") return Language::Bash;
     return Language::Text;
 }
 
@@ -430,6 +1383,9 @@ HighlightedLine highlight_line(Language language,
     if (language == Language::Text) {
         result.next_state = {};
         return result;
+    }
+    if (language != Language::Markdown) {
+        return highlight_code(language, line, state, byte_budget);
     }
     if (line.size() > kMaximumHighlightedLineBytes || line.size() > byte_budget) {
         result.work_limited = true;
@@ -449,7 +1405,20 @@ HighlightedLine highlight_line(Language language,
             append_candidate(high_priority, start, line.size(), TokenRole::Preprocessor);
             result.next_state = {};
         } else {
-            append_candidate(high_priority, 0, line.size(), TokenRole::String);
+            LineState embedded_state;
+            embedded_state.block = result.next_state.nested_block;
+            embedded_state.delimiter = result.next_state.nested_delimiter;
+            embedded_state.strip_tabs = result.next_state.nested_strip_tabs;
+            const HighlightedLine embedded = highlight_line(result.next_state.embedded_language,
+                                                            line,
+                                                            embedded_state,
+                                                            byte_budget);
+            result.spans = embedded.spans;
+            result.next_state.nested_block = embedded.next_state.block;
+            result.next_state.nested_delimiter = embedded.next_state.delimiter;
+            result.next_state.nested_strip_tabs = embedded.next_state.strip_tabs;
+            result.work_limited = embedded.work_limited;
+            return result;
         }
         result.spans = resolve_candidates(line.size(), {high_priority});
         return result;
@@ -471,6 +1440,19 @@ HighlightedLine highlight_line(Language language,
         result.next_state.block = LineState::Block::Fence;
         result.next_state.fence_character = fence_character;
         result.next_state.fence_length = fence_length;
+        const size_t info_start = skip_ascii_space(line, fence_start + fence_length);
+        size_t info_end = info_start;
+        while (info_end < line.size() && line[info_end] != ' ' && line[info_end] != '\t' &&
+               line[info_end] != '{' && line[info_end] != ',') {
+            ++info_end;
+        }
+        Language embedded = Language::Text;
+        if (info_end > info_start &&
+            parse_language(line.substr(info_start, info_end - info_start), embedded)) {
+            result.next_state.embedded_language = embedded;
+        } else {
+            result.next_state.embedded_language = Language::Text;
+        }
         result.spans = resolve_candidates(line.size(), {high_priority});
         return result;
     }

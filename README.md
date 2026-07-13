@@ -2,7 +2,7 @@
 
 `pkchat` is a fast, script-friendly command-line chat client for OpenAI and OpenAI-compatible APIs.
 
-Current status: v0.94 CLI with libcurl transport, cancellable runtime jobs, provider registry/profile aliases, `/v1/models`, `/v1/chat/completions`, text-only OpenAI Responses API support, provider-specific reasoning/thinking request compatibility, local JPEG/PNG/GIF image input, interactive text/image attachments, request-only context policies, safe URL insertion, web search with API providers and keyless fallbacks, a simple REPL, a standalone `--editor` mode with multiple file buffers, selection, copy/cut/paste across buffers, grapheme-aware Unicode editing, Markdown syntax-highlighting preview, and AI continue/editor commands, a full-screen non-blocking TUI foundation, SQLite-backed TUI chat threads, JSON chat import/export save/load, HTML-to-text/Markdown extraction, Markdown assistant-output rendering to HTML or plaintext, automatic system/user TOML-alike configuration loading, and a concurrent JSONL benchmark runner.
+Current status: v0.95 CLI with libcurl transport, cancellable runtime jobs, provider registry/profile aliases, `/v1/models`, `/v1/chat/completions`, text-only OpenAI Responses API support, provider-specific reasoning/thinking request compatibility, local JPEG/PNG/GIF image input, interactive text/image attachments, request-only context policies, safe URL insertion, web search with API providers and keyless fallbacks, a simple REPL, a standalone `--editor` mode with multiple file buffers, selection, copy/cut/paste across buffers, grapheme-aware Unicode editing, multi-language syntax highlighting, and AI continue/editor commands, a full-screen non-blocking TUI foundation, SQLite-backed TUI chat threads, JSON chat import/export save/load, HTML-to-text/Markdown extraction, Markdown assistant-output rendering to HTML or plaintext, automatic system/user TOML-alike configuration loading, and a concurrent JSONL benchmark runner.
 
 ## Build
 
@@ -93,13 +93,13 @@ Switch at runtime in chat TUI or editor command mode:
 
 `/theme` with no argument lists available themes. Use `--nocolors` to disable 24-bit ANSI styling.
 
-### Markdown syntax highlighting preview
+### Syntax highlighting
 
-Syntax highlighting is enabled by default in the standalone editor, chat input, and raw Markdown chat history. This first implementation supports Markdown only; other programming-language modes remain intentionally deferred until the Markdown behavior has been tried and reviewed.
+Syntax highlighting is enabled by default in the standalone editor, chat input, and raw Markdown chat history. The editor supports text, Markdown, Python, C, C++, C#, Java, JavaScript/JSX, TypeScript/TSX, HTML5, CSS3, XML, JSON/JSONL, and Bash. Markdown fenced blocks delegate to these language modes when their info string uses a recognized name or alias; unknown and untagged fences remain plain text.
 
 Inline destinations such as the URL in `[link text](http://example.com)` use the contrasting `syntax_attribute` color, while the link text and Markdown delimiters use `syntax_link`. Both bundled colors meet the same WCAG AA contrast target as the other syntax roles.
 
-Files ending in `.md`, `.markdown`, `.mdown`, or `.mkd` are detected case-insensitively. Scratch buffers and unknown endings stay in `text` mode. In editor command mode:
+Modes are detected case-insensitively from common endings, including `.h` as C, C++ source/header/template endings, `.py`/`.pyw`/`.pyi`, JS/JSX, TS/TSX, HTML, CSS, XML/SVG, JSON/JSONL/NDJSON/GeoJSON/JSON5, and `.sh`/`.bash` plus standard Bash startup filenames. Scratch buffers, `.txt`, and unknown endings stay in `text` mode. In editor command mode:
 
 ```text
 /highlight
@@ -108,11 +108,15 @@ Files ending in `.md`, `.markdown`, `.mdown`, or `.mkd` are detected case-insens
 /mode
 /mode markdown
 /mode md
+/mode python
+/mode cpp
+/mode typescript
+/mode bash
 /mode text
 /mode auto
 ```
 
-`/mode markdown` and `/mode text` are manual per-buffer overrides. `/mode auto` resumes filename detection; save-as only re-detects while the buffer remains automatic. `/highlight` is process-wide and shared when switching between editor and chat. Chat supports `/highlight [on|off]` but not `/mode`. Interactive commands do not rewrite config.
+Canonical modes are `text`, `markdown`, `python`, `c`, `cpp`, `csharp`, `java`, `javascript`, `typescript`, `html`, `css`, `xml`, `json`, and `bash`. Accepted aliases include `md`, `py`, `c++`, `cxx`, `c#`, `cs`, `js`, `ts`, `html5`, `css3`, `jsonl`, `ndjson`, `sh`, and `shell`. A selected mode is a manual per-buffer override. `/mode auto` resumes filename detection; save-as only re-detects while the buffer remains automatic. `/highlight` is process-wide and shared when switching between editor and chat. Chat supports `/highlight [on|off]` but not `/mode`. Interactive commands do not rewrite config.
 
 Set the startup default with `highlight = on|off` (or a boolean) under `[tui]`. `--nocolors` suppresses syntax colors while selection remains visible. Existing custom themes remain valid when syntax keys are omitted; accessible colors are derived from their existing semantic colors.
 
@@ -594,6 +598,10 @@ make test
 ```
 
 `make test` runs unit tests, I/O and network fault tests, and one integration script against a local mock OpenAI-compatible server.
+
+### v0.95 multi-language syntax highlighting
+
+v0.95 expands the shared editor/chat highlighter from Markdown to Python, C, C++, C#, Java, JavaScript/JSX, TypeScript/TSX, HTML, CSS, XML, JSON/JSONL, and Bash. The editor detects common filename endings, supports manual per-buffer `/mode` overrides and automatic re-detection, and highlights recognized languages inside Markdown fences. Multiline comments, strings, Bash heredocs, XML CDATA, and HTML script/style blocks retain state across lines.
 
 ### v0.94 editor and chat mode switching
 

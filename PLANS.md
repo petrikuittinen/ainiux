@@ -85,7 +85,7 @@ Implementation note (2026-06-28, v0.83): Version metadata moved to `src/version/
 
 Add a shared, dependency-free syntax-highlighting engine for the editor and chat TUI. Highlighting defaults to enabled, uses semantic theme colors, supports automatic per-buffer language detection, and preserves existing editor, chat, theme, selection, streaming, Unicode, and `--nocolors` behavior.
 
-Implementation note (2026-07-13): the first reviewable slice implements the shared span/cache architecture and Markdown only. Editor `.md`/`.markdown`/`.mdown`/`.mkd` detection, manual `/mode text|markdown|md|auto`, process-wide `/highlight`, raw chat/input Markdown, structured selection overlays, semantic theme colors, and bounded multiline Markdown state are available for interactive evaluation. Other language engines and low-contrast override warnings remain deliberately pending.
+Implementation note (2026-07-13): the shared span/cache architecture now supports Markdown, Python, C, C++, C#, Java, JavaScript/JSX, TypeScript/TSX, HTML, CSS, XML, JSON, and Bash. Editor detection and all approved `/mode` aliases are enabled, and recognized Markdown fences delegate to the corresponding engine. Explicit multiline state covers comments, Python triple strings, C++ raw strings, JavaScript templates, Bash heredocs, HTML/XML comments and CDATA, Markdown fences, and embedded HTML script/style content. Low-contrast user-override warnings remain pending.
 
 ### Files likely to change
 
@@ -109,8 +109,8 @@ Implementation note (2026-07-13): the first reviewable slice implements the shar
 ### Steps
 
 - [x] Inspect the approved plan and record it under the active milestone.
-- [ ] Add language parsing/detection, token roles, byte spans, lexical state, and an incremental document cache.
-- [ ] Add table-driven language, multiline-state, overlap, Markdown fence, embedded-language, Unicode, invalid-byte, budget, and cache-invalidation tests.
+- [x] Add language parsing/detection, token roles, byte spans, lexical state, and an incremental document cache.
+- [x] Add table-driven language, multiline-state, overlap, Markdown fence, embedded-language, Unicode, invalid-byte, budget, and cache-invalidation tests.
 - [ ] Add semantic theme roles, accessible defaults, optional config keys, contrast validation, and warning tests.
 - [x] Integrate structured Markdown highlighting into editor rendering, selection, buffers, save-as detection, commands, completion, help, and status.
 - [x] Integrate raw Markdown and fenced-code highlighting into chat rendering and `/highlight` handling.
@@ -121,10 +121,10 @@ Implementation note (2026-07-13): the first reviewable slice implements the shar
 ### Acceptance criteria
 
 - [ ] `/highlight on|off` works in editor and chat, shares process state, reports its state when bare, and gives actionable errors for invalid arguments.
-- [ ] `/mode MODE|auto|text` supports every approved alias, maintains per-buffer automatic/manual state across switches, and handles save-as detection correctly.
-- [ ] Every approved extension mapping is tested, including `.h` as C, Bash startup filenames, unknown files as text, and case-insensitivity.
-- [ ] All requested language constructs, Markdown structures/fences, embedded JavaScript/CSS, streaming partial fences, precedence, Unicode, invalid UTF-8, wrapping, and selection overlays are tested.
-- [ ] Highlighting work is bounded for long lines and repeated edits; cache invalidation starts at the first changed line.
+- [x] `/mode MODE|auto|text` supports every approved alias, maintains per-buffer automatic/manual state across switches, and handles save-as detection correctly.
+- [x] Every approved extension mapping is tested, including `.h` as C, Bash startup filenames, unknown files as text, and case-insensitivity.
+- [x] All requested language constructs, Markdown structures/fences, embedded JavaScript/CSS, streaming partial fences, precedence, Unicode, invalid UTF-8, wrapping, and selection overlays are tested.
+- [x] Highlighting work is bounded for long lines and repeated edits; cache invalidation starts at the first changed line.
 - [ ] Built-in syntax colors exceed 4.5:1 contrast without rounding; low-contrast user overrides remain active and warn; old theme files still load.
 - [ ] `--nocolors` suppresses syntax colors while preserving selection and text.
 - [ ] Relevant builds, tests, sanitizer checks, and available leak checks pass without new warnings or leaks.
@@ -132,15 +132,17 @@ Implementation note (2026-07-13): the first reviewable slice implements the shar
 ### Verification performed
 
 - `make -j2 build/test_runner pkchat`: passed (existing `ModelSetting` initializer warnings only).
-- `make test-unit`: passed, including Markdown detection, multiline state, overlap,
+- `make test-unit`: passed, including every approved language alias and extension, multiline
+  state, tagged Markdown fences, embedded JavaScript/CSS, overlap precedence,
   Unicode/invalid-byte preservation, work budgets, cache invalidation, structured selection,
   config parsing, theme contrast, and chat rendering tests.
 - `tests/integration/editor_buffers_driver.py`: passed through the isolated-port integration run.
 - `tests/integration/tui_insert_driver.py` against an isolated mock server: passed.
 - `sh tests/integration/test_llama_server.sh`: passed.
 - Sanitized build plus `build/test_runner` with ASan leak detection: passed without leaks;
-  UBSan recovery reports the repository's pre-existing benchmark `std::chrono` signed-overflow
-  warning before completing the unit suite.
+  UBSan recovery reports the repository's pre-existing editor-autosave filesystem-clock
+  signed-overflow warning before completing the unit suite.
+- Valgrind `build/test_runner` with full definite/indirect leak checks: passed.
 - Full `make test-integration` is currently blocked by unrelated baseline assertions: the mock
   integration expects lowercase `pkchat` while the program emits `Pkchat`, and the SQLite PTY
   test expects `/list` after the 80-column startup status has truncated it off-screen.

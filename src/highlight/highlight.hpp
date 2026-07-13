@@ -9,6 +9,18 @@ namespace pkchat::highlight {
 enum class Language {
     Text,
     Markdown,
+    Python,
+    C,
+    Cpp,
+    CSharp,
+    Java,
+    JavaScript,
+    TypeScript,
+    Html,
+    Css,
+    Xml,
+    Json,
+    Bash,
 };
 
 enum class TokenRole {
@@ -41,11 +53,26 @@ struct LineState {
         None,
         HtmlComment,
         Fence,
+        BlockComment,
+        TripleSingleString,
+        TripleDoubleString,
+        TemplateString,
+        RawString,
+        Heredoc,
+        CData,
+        Script,
+        Style,
     };
 
     Block block = Block::None;
     char fence_character = 0;
     size_t fence_length = 0;
+    Language embedded_language = Language::Text;
+    Block nested_block = Block::None;
+    std::string nested_delimiter;
+    bool nested_strip_tabs = false;
+    std::string delimiter;
+    bool strip_tabs = false;
 
     bool operator==(const LineState& other) const;
     bool operator!=(const LineState& other) const { return !(*this == other); }

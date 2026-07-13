@@ -443,6 +443,23 @@ void test_tui_markdown_history_highlighting() {
     }
     check(saw_thinking && saw_heading,
           "TUI thinking-trace style keeps priority while visible Markdown remains highlighted");
+
+    session.messages.clear();
+    session.messages.push_back({"assistant", "```python\ndef greet(name: str):\n    return 17\n```"});
+    lines = pkchat::tui::detail::history_lines_for_session(
+        session, 100, false, pkchat::tui::ActivityKind::None, 0, true);
+    bool saw_keyword = false;
+    bool saw_type = false;
+    bool saw_number = false;
+    for (const pkchat::tui::StyledLine& line : lines) {
+        for (const pkchat::tui::StyledSegment& segment : line.segments) {
+            saw_keyword = saw_keyword || segment.role == pkchat::tui::StyleRole::SyntaxKeyword;
+            saw_type = saw_type || segment.role == pkchat::tui::StyleRole::SyntaxType;
+            saw_number = saw_number || segment.role == pkchat::tui::StyleRole::SyntaxNumber;
+        }
+    }
+    check(saw_keyword && saw_type && saw_number,
+          "TUI chat highlights recognized languages inside Markdown fences");
 }
 
 void test_tui_input_label_and_activity_indicators() {

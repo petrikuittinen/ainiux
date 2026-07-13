@@ -1,4 +1,4 @@
-# pkchat Editor Help v0.94
+# pkchat Editor Help v0.95
 
 Standalone editor mode (`pkchat --editor [PATH]`) is a multiline text editor with Unicode-aware navigation, search/replace, and optional AI assist when a provider and model are configured.
 
@@ -114,7 +114,7 @@ Press **`Esc`** to open the command minibuffer (`Command:`). Type a slash comman
 | `/list` | List open editor buffers (same as `Ctrl+L`; Enter chooses, Esc cancels) |
 | `/close` | Close the active editor buffer (same as `Ctrl+W`; prompts if modified) |
 | `/highlight [on|off]` | Show or toggle syntax highlighting for editor and chat |
-| `/mode [auto|text|markdown|md]` | Show or set this buffer's syntax mode |
+| `/mode [MODE|auto]` | Show or set this buffer's syntax mode |
 | `/provider [NAME]` | Change provider (picker when omitted) |
 | `/model [MODEL]` | Change model (picker when omitted) |
 | `/help` | Toggle this help view |
@@ -148,9 +148,11 @@ Examples:
 
 With a provider but no model, editing still works; AI commands report **No model chosen. Use /model to choose one**.
 
-## Markdown highlighting preview
+## Syntax highlighting
 
-Markdown highlighting is enabled by default for `.md`, `.markdown`, `.mdown`, and `.mkd` files. The status line shows the current language and whether detection is automatic or manual. `/mode text` disables syntax styling for the current buffer, `/mode markdown` forces Markdown, and `/mode auto` resumes filename detection. Manual mode survives buffer switches and save-as operations. `/highlight off` disables highlighting across editor/chat switches for the current process; it does not change configuration.
+Highlighting is enabled by default. The editor detects Markdown, Python, C, C++, C#, Java, JavaScript/JSX, TypeScript/TSX, HTML, CSS, XML/SVG, JSON/JSONL, and Bash from common filename endings. Scratch buffers, `.txt`, and unknown endings use `text`. Markdown fenced blocks use the named language highlighter when the fence tag is recognized.
+
+The status line shows the current language and whether detection is automatic or manual. `/mode text` disables syntax styling for the current buffer. `/mode markdown|python|c|cpp|csharp|java|javascript|typescript|html|css|xml|json|bash` selects a manual mode; aliases such as `md`, `py`, `c++`, `c#`, `js`, `ts`, `jsonl`, and `sh` are accepted. `/mode auto` resumes filename detection. Manual mode survives buffer switches and save-as operations. `/highlight off` disables highlighting across editor/chat switches for the current process; it does not change configuration.
 
 ## Configuration
 
