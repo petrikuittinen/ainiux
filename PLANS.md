@@ -78,6 +78,59 @@ Implementation note (2026-06-28, v0.84): Large monolithic sources were split int
 
 Implementation note (2026-06-28, v0.83): Version metadata moved to `src/version/version.cpp`. Unit tests were split into module directories under `tests/unit/` with a thin `test_runner` driver. Coverage was expanded with Unicode, numeric, file I/O, and network edge cases. Mock helpers were added for slow HTTP timeouts, simulated disk-full (`ENOSPC` via `LD_PRELOAD`), and permission-denied read-only paths. See `README.md` Testing and `docs/decisions.md` for the layout and targets (`make test-unit`, `make test-unit-faults`, `make test-integration`).
 
+
+## Task: Syntax highlighting for editor and chat
+
+### Goal
+
+Add a shared, dependency-free syntax-highlighting engine for the editor and chat TUI. Highlighting defaults to enabled, uses semantic theme colors, supports automatic per-buffer language detection, and preserves existing editor, chat, theme, selection, streaming, Unicode, and `--nocolors` behavior.
+
+### Files likely to change
+
+- `src/highlight/`, `src/editor/`, `src/tui/`, `src/config/`, and their unit tests.
+- `README.md`, `config/pkchat.conf`, `config/themes.conf`, `docs/decisions.md`, `docs/editor_help.md`, and `TODO.md`.
+
+### Design notes
+
+- Add `/highlight on|off` to editor and chat; bare `/highlight` reports state. Store the startup default as `highlight = on|off` under `[tui]`, accepting booleans too. Interactive changes are shared across editor/chat switches for the process and do not rewrite config.
+- Add editor `/mode MODE`, `/mode auto`, and `/mode text`. Manual modes are per buffer; save-as re-detects only for automatic buffers. Show the language in the editor status line.
+- Support text, Markdown, Python, C, C++, C#, Java, JavaScript, TypeScript, HTML5, CSS3, XML, JSON/JSONL/NDJSON, and Bash, with the approved aliases and case-insensitive filename detection.
+- Highlight byte spans without changing document text. Use explicit lexical state for multiline comments, Python triple strings, Bash heredocs, HTML/XML comments and CDATA, Markdown fences, and embedded script/style content.
+- Resolve overlaps in this order: comments/fences/heredocs/strings; structural tokens; keywords/types/literals; numbers/functions/variables/operators. Lower-priority tokens never style comments or strings.
+- Keep highlighting incremental with per-document line-state caching, invalidation from the edited line, bounded long-line work, and a per-frame budget that falls back to plain text.
+- Replace embedded ANSI selection markup with structured rendered spans so syntax color and reverse-video selection remain independent across wrapping, Unicode cell width, and invalid UTF-8.
+- Highlight raw Markdown in chat, including tagged fenced code. Existing labels, thinking traces, and streaming indicators retain priority. Unknown/untagged fences remain text.
+- Add optional semantic syntax theme keys for comments, keywords, types, strings, numbers, literals, functions, variables, operators, preprocessors, tags, attributes, properties, headings, emphasis, and links. Existing themes remain valid through derived accessible defaults.
+- Built-in dark, light, and sepia syntax colors must meet WCAG 2.1 AA normal-text contrast (4.5:1). Keep lower-contrast user overrides active but warn precisely on startup unless quiet and concisely through `/theme` or `/highlight on`.
+- Add no external dependency and keep all implementation C++17-compatible.
+
+### Steps
+
+- [x] Inspect the approved plan and record it under the active milestone.
+- [ ] Add language parsing/detection, token roles, byte spans, lexical state, and an incremental document cache.
+- [ ] Add table-driven language, multiline-state, overlap, Markdown fence, embedded-language, Unicode, invalid-byte, budget, and cache-invalidation tests.
+- [ ] Add semantic theme roles, accessible defaults, optional config keys, contrast validation, and warning tests.
+- [ ] Integrate structured highlighting into editor rendering, selection, buffers, save-as detection, commands, completion, help, and status.
+- [ ] Integrate raw Markdown and fenced-code highlighting into chat rendering and `/highlight` handling.
+- [ ] Add shared process state across chat/editor switching and preserve `--nocolors` behavior.
+- [ ] Update `README.md`, bundled config/theme examples, `docs/decisions.md`, `docs/editor_help.md`, and `TODO.md`.
+- [ ] Run `make test-unit`, `make test-integration`, `make test-sanitize`, and available Valgrind/leak checks.
+
+### Acceptance criteria
+
+- [ ] `/highlight on|off` works in editor and chat, shares process state, reports its state when bare, and gives actionable errors for invalid arguments.
+- [ ] `/mode MODE|auto|text` supports every approved alias, maintains per-buffer automatic/manual state across switches, and handles save-as detection correctly.
+- [ ] Every approved extension mapping is tested, including `.h` as C, Bash startup filenames, unknown files as text, and case-insensitivity.
+- [ ] All requested language constructs, Markdown structures/fences, embedded JavaScript/CSS, streaming partial fences, precedence, Unicode, invalid UTF-8, wrapping, and selection overlays are tested.
+- [ ] Highlighting work is bounded for long lines and repeated edits; cache invalidation starts at the first changed line.
+- [ ] Built-in syntax colors exceed 4.5:1 contrast without rounding; low-contrast user overrides remain active and warn; old theme files still load.
+- [ ] `--nocolors` suppresses syntax colors while preserving selection and text.
+- [ ] Relevant builds, tests, sanitizer checks, and available leak checks pass without new warnings or leaks.
+
+### Verification performed
+
+- Pending implementation.
+
 ## Execution-plan template for agents
 
 For any non-trivial coding task, create or update a short plan using this structure:
