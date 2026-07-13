@@ -382,6 +382,17 @@ std::vector<std::string> assist_command_completions(const EditorAssistConfig& co
     commands.push_back("/mode xml");
     commands.push_back("/mode json");
     commands.push_back("/mode bash");
+    commands.push_back("/mode php");
+    commands.push_back("/mode perl");
+    commands.push_back("/mode ruby");
+    commands.push_back("/mode rust");
+    commands.push_back("/mode go");
+    commands.push_back("/mode powershell");
+    commands.push_back("/mode assembly");
+    commands.push_back("/mode sql");
+    commands.push_back("/mode toml");
+    commands.push_back("/mode yaml");
+    commands.push_back("/mode ini");
     commands.push_back("/provider ");
     commands.push_back("/model ");
     commands.push_back("/save");

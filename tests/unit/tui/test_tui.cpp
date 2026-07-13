@@ -480,6 +480,26 @@ void test_tui_markdown_history_highlighting() {
     }
     check(saw_property && saw_keyword && saw_number,
           "TUI chat renders CSS and JavaScript inside HTML Markdown fences");
+
+    session.messages.clear();
+    session.messages.push_back(
+        {"assistant",
+         "```sql\nSELECT count(*) FROM articles WHERE active = TRUE;\n```\n"
+         "```yaml\nenabled: true\n```"});
+    lines = pkchat::tui::detail::history_lines_for_session(
+        session, 100, false, pkchat::tui::ActivityKind::None, 0, true);
+    saw_keyword = false;
+    saw_property = false;
+    bool saw_literal = false;
+    for (const pkchat::tui::StyledLine& line : lines) {
+        for (const pkchat::tui::StyledSegment& segment : line.segments) {
+            saw_keyword = saw_keyword || segment.role == pkchat::tui::StyleRole::SyntaxKeyword;
+            saw_property = saw_property || segment.role == pkchat::tui::StyleRole::SyntaxProperty;
+            saw_literal = saw_literal || segment.role == pkchat::tui::StyleRole::SyntaxLiteral;
+        }
+    }
+    check(saw_keyword && saw_property && saw_literal,
+          "TUI chat highlights newly supported SQL and YAML Markdown fences");
 }
 
 void test_tui_input_label_and_activity_indicators() {

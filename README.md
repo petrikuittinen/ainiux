@@ -95,11 +95,11 @@ Switch at runtime in chat TUI or editor command mode:
 
 ### Syntax highlighting
 
-Syntax highlighting is enabled by default in the standalone editor, chat input, and raw Markdown chat history. The editor supports text, Markdown, Python, C, C++, C#, Java, JavaScript/JSX, TypeScript/TSX, HTML, HTML-only, CSS3, XML, JSON/JSONL, and Bash. Markdown fenced blocks delegate to these language modes when their info string uses a recognized name or alias; unknown and untagged fences remain plain text.
+Syntax highlighting is enabled by default in the standalone editor, chat input, and raw Markdown chat history. The editor supports text, Markdown, Python, C, C++, C#, Java, JavaScript/JSX, TypeScript/TSX, HTML, HTML-only, CSS3, XML, JSON/JSONL, Bash, PHP, Perl, Ruby, Rust, Go, PowerShell, Assembly, SQL, TOML, YAML, and INI. Markdown fenced blocks delegate to these language modes when their info string uses a recognized name or alias; unknown and untagged fences remain plain text.
 
 Inline destinations such as the URL in `[link text](http://example.com)` use the contrasting `syntax_attribute` color, while the link text and Markdown delimiters use `syntax_link`. Both bundled colors meet the same WCAG AA contrast target as the other syntax roles.
 
-Modes are detected case-insensitively from common endings, including `.h` as C, C++ source/header/template endings, `.py`/`.pyw`/`.pyi`, JS/JSX, TS/TSX, HTML, CSS, XML/SVG, JSON/JSONL/NDJSON/GeoJSON/JSON5, and `.sh`/`.bash` plus standard Bash startup filenames. `.html` and `.htm` select `html`; XML-oriented `.xhtml` selects `htmlonly`. Scratch buffers, `.txt`, and unknown endings stay in `text` mode. In editor command mode:
+Modes are detected case-insensitively from common endings, including `.h` as C, C++ source/header/template endings, `.py`/`.pyw`/`.pyi`, JS/JSX, TS/TSX, HTML, CSS, XML/SVG, JSON variants, Bash scripts/startup files, PHP variants, `.pl`/`.pm`/`.pod`/`.t`, Ruby files and standard build filenames, `.rs`, `.go`, PowerShell module/data files, `.asm`/`.s`, `.sql`, `.toml`, `.yaml`/`.yml`, and `.ini`/`.cfg`. `.html` and `.htm` select `html`; XML-oriented `.xhtml` selects `htmlonly`. Scratch buffers, `.txt`, and unknown endings stay in `text` mode. In editor command mode:
 
 ```text
 /highlight
@@ -114,11 +114,16 @@ Modes are detected case-insensitively from common endings, including `.h` as C, 
 /mode html
 /mode htmlonly
 /mode bash
+/mode php
+/mode rust
+/mode powershell
+/mode sql
+/mode yaml
 /mode text
 /mode auto
 ```
 
-Canonical modes are `text`, `markdown`, `python`, `c`, `cpp`, `csharp`, `java`, `javascript`, `typescript`, `html`, `htmlonly`, `css`, `xml`, `json`, and `bash`. Accepted aliases include `md`, `py`, `c++`, `cxx`, `c#`, `cs`, `js`, `ts`, `html5`, `html-multi`, `htmlmulti`, `html-only`, `css3`, `jsonl`, `ndjson`, `sh`, and `shell`. The default `html` mode highlights markup, JavaScript inside `<script>` and `on*=""` event attributes, and CSS inside `<style>` and `style=""` attributes. It preserves nested multiline state and continued tags. Use `htmlonly` when markup-only highlighting is preferred; embedded code is then treated as strings. A selected mode is a manual per-buffer override. `/mode auto` resumes filename detection; save-as only re-detects while the buffer remains automatic. `/highlight` is process-wide and shared when switching between editor and chat. Chat supports `/highlight [on|off]` but not `/mode`. Interactive commands do not rewrite config.
+Canonical modes are `text`, `markdown`, `python`, `c`, `cpp`, `csharp`, `java`, `javascript`, `typescript`, `html`, `htmlonly`, `css`, `xml`, `json`, `bash`, `php`, `perl`, `ruby`, `rust`, `go`, `powershell`, `assembly`, `sql`, `toml`, `yaml`, and `ini`. Accepted aliases include `md`, `py`, `c++`, `cxx`, `c#`, `cs`, `js`, `ts`, `html5`, `html-multi`, `htmlmulti`, `html-only`, `css3`, `jsonl`, `ndjson`, `sh`, `shell`, `pl`, `rb`, `rs`, `golang`, `pwsh`, `ps1`, `asm`, `yml`, and `dosini`. The default `html` mode highlights markup, JavaScript inside `<script>` and `on*=""` event attributes, and CSS inside `<style>` and `style=""` attributes. It preserves nested multiline state and continued tags. Use `htmlonly` when markup-only highlighting is preferred; embedded code is then treated as strings. A selected mode is a manual per-buffer override. `/mode auto` resumes filename detection; save-as only re-detects while the buffer remains automatic. `/highlight` is process-wide and shared when switching between editor and chat. Chat supports `/highlight [on|off]` but not `/mode`. Interactive commands do not rewrite config.
 
 The editor status line displays the active syntax language compactly as `(mode)`, for example `(html)`. Bare `/mode` reports whether detection is automatic or manually selected.
 

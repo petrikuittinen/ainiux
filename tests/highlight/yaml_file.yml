@@ -1,0 +1,7 @@
+name: compact-yaml-fixture
+items:
+  - id: 1
+    active: yes
+  - id: 2
+    active: no
+

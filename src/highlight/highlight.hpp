@@ -22,6 +22,17 @@ enum class Language {
     Xml,
     Json,
     Bash,
+    Php,
+    Perl,
+    Ruby,
+    Rust,
+    Go,
+    PowerShell,
+    Assembly,
+    Sql,
+    Toml,
+    Yaml,
+    Ini,
 };
 
 enum class TokenRole {
@@ -64,6 +75,9 @@ struct LineState {
         Tag,
         Script,
         Style,
+        LineDelimitedComment,
+        HereString,
+        IndentedString,
     };
 
     Block block = Block::None;
@@ -73,11 +87,14 @@ struct LineState {
     Block nested_block = Block::None;
     std::string nested_delimiter;
     bool nested_strip_tabs = false;
+    size_t nested_block_depth = 0;
     Block nested_inner_block = Block::None;
     std::string nested_inner_delimiter;
     bool nested_inner_strip_tabs = false;
+    size_t nested_inner_block_depth = 0;
     std::string delimiter;
     bool strip_tabs = false;
+    size_t block_depth = 0;
 
     bool operator==(const LineState& other) const;
     bool operator!=(const LineState& other) const { return !(*this == other); }

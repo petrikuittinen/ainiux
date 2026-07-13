@@ -1091,7 +1091,9 @@ app::EditorRunResult run_editor(const std::string& path,
                 minibuffer_message(minibuffer,
                                    "Unknown mode: " + requested +
                                        ". Use auto, text, markdown, python, c, cpp, csharp, java, "
-                                       "javascript, typescript, html, htmlonly, css, xml, json, or bash");
+                                       "javascript, typescript, html, htmlonly, css, xml, json, bash, "
+                                       "php, perl, ruby, rust, go, powershell, assembly, sql, toml, "
+                                       "yaml, or ini");
                 return;
             }
             state.set_language(language, false);

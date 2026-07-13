@@ -47,6 +47,13 @@ void test_mode_parsing_and_detection() {
         {"css", Language::Css},        {"css3", Language::Css},          {"xml", Language::Xml},
         {"json", Language::Json},      {"jsonl", Language::Json},        {"ndjson", Language::Json},
         {"bash", Language::Bash},      {"sh", Language::Bash},           {"shell", Language::Bash},
+        {"php", Language::Php},        {"perl", Language::Perl},         {"pl", Language::Perl},
+        {"ruby", Language::Ruby},      {"rb", Language::Ruby},           {"rust", Language::Rust},
+        {"rs", Language::Rust},        {"go", Language::Go},             {"golang", Language::Go},
+        {"powershell", Language::PowerShell}, {"pwsh", Language::PowerShell},
+        {"ps1", Language::PowerShell}, {"assembly", Language::Assembly}, {"asm", Language::Assembly},
+        {"sql", Language::Sql},        {"toml", Language::Toml},         {"yaml", Language::Yaml},
+        {"yml", Language::Yaml},       {"ini", Language::Ini},           {"dosini", Language::Ini},
     };
     for (const auto& alias : aliases) {
         Language language = Language::Text;
@@ -54,11 +61,23 @@ void test_mode_parsing_and_detection() {
               std::string("highlight parses mode alias: ") + alias.first);
     }
     Language language = Language::Text;
-    check(!pkchat::highlight::parse_language("rust", language),
+    check(!pkchat::highlight::parse_language("kotlin", language),
           "highlight rejects unsupported language modes");
     check(std::string(pkchat::highlight::language_name(Language::Html)) == "html" &&
               std::string(pkchat::highlight::language_name(Language::HtmlOnly)) == "htmlonly",
           "HTML modes expose their canonical names");
+    const std::vector<std::pair<Language, const char*>> canonical_names = {
+        {Language::Php, "php"},           {Language::Perl, "perl"},
+        {Language::Ruby, "ruby"},         {Language::Rust, "rust"},
+        {Language::Go, "go"},             {Language::PowerShell, "powershell"},
+        {Language::Assembly, "assembly"}, {Language::Sql, "sql"},
+        {Language::Toml, "toml"},         {Language::Yaml, "yaml"},
+        {Language::Ini, "ini"},
+    };
+    for (const auto& canonical : canonical_names) {
+        check(std::string(pkchat::highlight::language_name(canonical.first)) == canonical.second,
+              std::string("highlight exposes canonical mode name: ") + canonical.second);
+    }
 
     const std::vector<std::pair<const char*, Language>> paths = {
         {"README.md", Language::Markdown}, {"notes.MARKDOWN", Language::Markdown},
@@ -83,6 +102,15 @@ void test_mode_parsing_and_detection() {
         {"build.sh", Language::Bash}, {"login.bash", Language::Bash},
         {"/home/user/.bashrc", Language::Bash}, {".bash_profile", Language::Bash},
         {".bash_login", Language::Bash}, {".bash_logout", Language::Bash}, {".profile", Language::Bash},
+        {"index.php", Language::Php}, {"template.PHTML", Language::Php},
+        {"script.pl", Language::Perl}, {"Module.pm", Language::Perl}, {"feature.t", Language::Perl},
+        {"app.rb", Language::Ruby}, {"Rakefile", Language::Ruby}, {"package.gemspec", Language::Ruby},
+        {"main.rs", Language::Rust}, {"main.go", Language::Go},
+        {"profile.ps1", Language::PowerShell}, {"module.psm1", Language::PowerShell},
+        {"data.psd1", Language::PowerShell}, {"boot.asm", Language::Assembly},
+        {"start.S", Language::Assembly}, {"schema.sql", Language::Sql}, {"Cargo.toml", Language::Toml},
+        {"compose.yaml", Language::Yaml}, {"workflow.yml", Language::Yaml},
+        {"settings.ini", Language::Ini}, {"project.cfg", Language::Ini}, {".editorconfig", Language::Ini},
     };
     for (const auto& path : paths) {
         check(pkchat::highlight::detect_language(path.first) == path.second,
@@ -126,6 +154,37 @@ void test_programming_language_roles() {
         {Language::Bash, "for item in ${items[@]}; do printf '%s' \"$item\"; done # note",
              {TokenRole::Keyword, TokenRole::Variable, TokenRole::Function, TokenRole::String,
               TokenRole::Comment}, "Bash"},
+        {Language::Php,
+             "<?php #[Override] readonly class Box { public function value(): int { return $this->value ?? 17; } } // note",
+             {TokenRole::Preprocessor, TokenRole::Keyword, TokenRole::Type, TokenRole::Function,
+              TokenRole::Variable, TokenRole::Number, TokenRole::Comment}, "PHP"},
+        {Language::Perl, "my $value = 17; sub greet { say \"hello\"; } greet(); # note",
+             {TokenRole::Keyword, TokenRole::Variable, TokenRole::Number, TokenRole::Function,
+              TokenRole::String, TokenRole::Comment}, "Perl"},
+        {Language::Ruby, "class Greeter; def call(name); puts(\"hello\"); :ready; end; end # note",
+             {TokenRole::Keyword, TokenRole::Function, TokenRole::String, TokenRole::Literal,
+              TokenRole::Comment}, "Ruby"},
+        {Language::Rust, "pub async fn run(value: i32) -> Option<i32> { Some(value) } // note",
+             {TokenRole::Keyword, TokenRole::Type, TokenRole::Function, TokenRole::Comment}, "Rust"},
+        {Language::Go, "func main() { var count int = 17; fmt.Println(count) } // note",
+             {TokenRole::Keyword, TokenRole::Type, TokenRole::Function, TokenRole::Number,
+              TokenRole::Comment}, "Go"},
+        {Language::PowerShell,
+             "function Get-Thing { param([string]$Name) if ($true) { Write-Output \"hello\" } } # note",
+             {TokenRole::Keyword, TokenRole::Type, TokenRole::Function, TokenRole::Variable,
+              TokenRole::Literal, TokenRole::String, TokenRole::Comment}, "PowerShell"},
+        {Language::Assembly, "start: mov %rax, $0x3c # note",
+             {TokenRole::Function, TokenRole::Keyword, TokenRole::Type, TokenRole::Number,
+              TokenRole::Comment}, "Assembly"},
+        {Language::Sql, "SELECT count(*) FROM users WHERE active = TRUE AND id > 17; -- note",
+             {TokenRole::Keyword, TokenRole::Function, TokenRole::Literal, TokenRole::Number,
+              TokenRole::Comment}, "SQL"},
+        {Language::Toml, "enabled = true # note",
+             {TokenRole::Property, TokenRole::Literal, TokenRole::Comment}, "TOML"},
+        {Language::Yaml, "name: \"demo\" # note",
+             {TokenRole::Property, TokenRole::String, TokenRole::Comment}, "YAML"},
+        {Language::Ini, "port = 8080 ; note",
+             {TokenRole::Property, TokenRole::Number, TokenRole::Comment}, "INI"},
     };
     for (const Fixture& fixture : fixtures) {
         const auto highlighted = pkchat::highlight::highlight_line(fixture.language, fixture.line);
@@ -140,6 +199,19 @@ void test_programming_language_roles() {
     check(has_role_at(c.spans, c_line.find("return"), TokenRole::String) &&
               !has_role_at(c.spans, c_line.find("return"), TokenRole::Keyword),
           "strings take precedence over lower-priority C keyword and number rules");
+
+    const std::string php_template = "<h1 class=\"title\"><?= $title ?></h1>";
+    const auto php = pkchat::highlight::highlight_line(Language::Php, php_template);
+    check(has_role(php.spans, TokenRole::Tag) && has_role(php.spans, TokenRole::Attribute) &&
+              has_role(php.spans, TokenRole::Preprocessor) &&
+              has_role(php.spans, TokenRole::Variable),
+          "PHP highlights surrounding template markup and PHP delimiters");
+
+    const std::string arm = "mov x0, #1  # exit status";
+    const auto assembly = pkchat::highlight::highlight_line(Language::Assembly, arm);
+    check(has_role_at(assembly.spans, arm.find("#1"), TokenRole::Number) &&
+              has_role_at(assembly.spans, arm.rfind('#'), TokenRole::Comment),
+          "Assembly distinguishes ARM immediates from hash comments");
 }
 
 void test_markup_and_embedded_languages() {
@@ -264,6 +336,89 @@ void test_multiline_language_states() {
               has_role(fenced_html[4].spans, TokenRole::Keyword) &&
               has_role(fenced_html[4].spans, TokenRole::Number),
           "HTML fences resume JavaScript tokens after a nested comment closes");
+
+    const auto php = pkchat::highlight::highlight_document(
+        Language::Php, "$text = <<<TXT\nreturn 17\nTXT;\necho $text;");
+    check(php.size() == 4 && has_role(php[0].spans, TokenRole::Preprocessor) &&
+              php[1].spans.size() == 1 && php[1].spans[0].role == TokenRole::String &&
+              has_role(php[2].spans, TokenRole::Preprocessor),
+          "PHP heredocs preserve multiline string state");
+
+    const auto perl = pkchat::highlight::highlight_document(
+        Language::Perl, "=pod\nreturn 17\n=cut\nmy $value = 1;");
+    check(perl.size() == 4 && has_role(perl[1].spans, TokenRole::Comment) &&
+              has_role(perl[3].spans, TokenRole::Keyword),
+          "Perl POD comments preserve multiline state and resume code");
+    const auto perl_heredoc = pkchat::highlight::highlight_document(
+        Language::Perl, "print <<TEXT;\nreturn 17\nTEXT\nsay 'done';");
+    check(perl_heredoc.size() == 4 && has_role(perl_heredoc[1].spans, TokenRole::String) &&
+              has_role(perl_heredoc[2].spans, TokenRole::Preprocessor),
+          "Perl heredocs preserve multiline string state");
+
+    const auto ruby = pkchat::highlight::highlight_document(
+        Language::Ruby, "=begin\nreturn 17\n=end\ndef run = 1");
+    check(ruby.size() == 4 && has_role(ruby[1].spans, TokenRole::Comment) &&
+              has_role(ruby[3].spans, TokenRole::Keyword),
+          "Ruby block comments preserve multiline state and resume code");
+    const auto ruby_heredoc = pkchat::highlight::highlight_document(
+        Language::Ruby, "text = <<~TEXT\n  return 17\n  TEXT\nputs(text)");
+    check(ruby_heredoc.size() == 4 && has_role(ruby_heredoc[1].spans, TokenRole::String) &&
+              has_role(ruby_heredoc[2].spans, TokenRole::Preprocessor),
+          "Ruby squiggly heredocs accept indented terminators");
+
+    const auto rust = pkchat::highlight::highlight_document(
+        Language::Rust, "/* outer\n/* nested */\nstill */ fn run() {}\nlet raw = r##\"open\ntext\nclose\"##;");
+    check(rust.size() == 6 && has_role(rust[1].spans, TokenRole::Comment) &&
+              has_role(rust[2].spans, TokenRole::Comment) &&
+              has_role(rust[2].spans, TokenRole::Keyword),
+          "Rust nested block comments retain depth and resume code");
+    check(has_role(rust[4].spans, TokenRole::String) && has_role(rust[5].spans, TokenRole::String),
+          "Rust raw strings preserve hash-delimited multiline state");
+
+    const auto go = pkchat::highlight::highlight_document(
+        Language::Go, "value := `open\nreturn 17\n`\nfmt.Println(value)");
+    check(go.size() == 4 && has_role(go[1].spans, TokenRole::String) &&
+              has_role(go[2].spans, TokenRole::String) && has_role(go[3].spans, TokenRole::Function),
+          "Go raw strings preserve multiline state and resume code");
+
+    const auto powershell = pkchat::highlight::highlight_document(
+        Language::PowerShell, "$text = @\"\nreturn 17\n\"@\nWrite-Output $text");
+    check(powershell.size() == 4 && has_role(powershell[1].spans, TokenRole::String) &&
+              has_role(powershell[2].spans, TokenRole::Preprocessor) &&
+              has_role(powershell[3].spans, TokenRole::Function),
+          "PowerShell here-strings preserve multiline state and resume commands");
+    const auto powershell_comment = pkchat::highlight::highlight_document(
+        Language::PowerShell, "<# open\nreturn 17\n#> function Get-Value {}");
+    check(powershell_comment.size() == 3 && has_role(powershell_comment[1].spans, TokenRole::Comment) &&
+              has_role(powershell_comment[2].spans, TokenRole::Comment) &&
+              has_role(powershell_comment[2].spans, TokenRole::Keyword),
+          "PowerShell block comments preserve state and resume code");
+
+    const auto sql = pkchat::highlight::highlight_document(
+        Language::Sql, "DO $body$\nBEGIN\nRETURN 17;\nEND\n$body$;\nSELECT 1;");
+    check(sql.size() == 6 && has_role(sql[1].spans, TokenRole::String) &&
+              has_role(sql[4].spans, TokenRole::String) && has_role(sql[5].spans, TokenRole::Keyword),
+          "SQL dollar-quoted strings preserve multiline state and resume statements");
+    const auto sql_comment = pkchat::highlight::highlight_document(
+        Language::Sql, "/* open\nSELECT 17\n*/ SELECT 1;");
+    check(sql_comment.size() == 3 && has_role(sql_comment[1].spans, TokenRole::Comment) &&
+              has_role(sql_comment[2].spans, TokenRole::Comment) &&
+              has_role(sql_comment[2].spans, TokenRole::Keyword),
+          "SQL block comments preserve state and resume statements");
+
+    const auto toml = pkchat::highlight::highlight_document(
+        Language::Toml, "text = \"\"\"open\nreturn 17\n\"\"\"\nenabled = true");
+    check(toml.size() == 4 && has_role(toml[1].spans, TokenRole::String) &&
+              has_role(toml[2].spans, TokenRole::String) &&
+              has_role(toml[3].spans, TokenRole::Literal),
+          "TOML multiline strings preserve state and resume values");
+
+    const auto yaml = pkchat::highlight::highlight_document(
+        Language::Yaml, "message: |\n  return 17\nnext: true");
+    check(yaml.size() == 3 && has_role(yaml[1].spans, TokenRole::String) &&
+              has_role(yaml[2].spans, TokenRole::Property) &&
+              has_role(yaml[2].spans, TokenRole::Literal),
+          "YAML block scalars preserve indentation state and resume mappings");
 }
 
 void test_markdown_inline_and_structure() {
@@ -365,6 +520,14 @@ void test_markdown_multiline_state_and_precedence() {
     check(partial.size() == 2 && has_role(partial[1].spans, TokenRole::Keyword) &&
               partial[1].next_state.block == pkchat::highlight::LineState::Block::Fence,
           "Markdown keeps streaming partial fences open while highlighting received code");
+
+    const auto nested_rust = pkchat::highlight::highlight_document(
+        Language::Markdown,
+        "```rust\n/* outer\n/* nested\nstill nested\n*/\nstill outer\n*/ fn run() {}\n```");
+    check(nested_rust.size() == 8 && has_role(nested_rust[5].spans, TokenRole::Comment) &&
+              has_role(nested_rust[6].spans, TokenRole::Comment) &&
+              has_role(nested_rust[6].spans, TokenRole::Keyword),
+          "Markdown fences preserve nested Rust comment depth");
 }
 
 void test_setext_unicode_invalid_bytes_and_budget() {

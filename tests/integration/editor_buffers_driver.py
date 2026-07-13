@@ -87,6 +87,8 @@ def main():
     check_new_file_mode(binary, tmpdir, "new-document.md", "markdown")
     check_new_file_mode(binary, tmpdir, "new-document.html", "html")
     check_new_file_mode(binary, tmpdir, "new-document.xhtml", "htmlonly")
+    check_new_file_mode(binary, tmpdir, "new-document.php", "php")
+    check_new_file_mode(binary, tmpdir, "new-document.yaml", "yaml")
     file1 = os.path.join(tmpdir, "file1.txt")
     file2 = os.path.join(tmpdir, "file2.txt")
     with open(file1, "w", encoding="utf-8") as handle:

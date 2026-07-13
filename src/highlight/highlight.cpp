@@ -477,6 +477,60 @@ const std::unordered_set<std::string>& keywords_for(Language language) {
         "case", "coproc", "do", "done", "elif", "else", "esac", "fi", "for", "function", "if",
         "in", "select", "then", "time", "until", "while", "declare", "export", "local", "readonly",
         "return", "set", "source", "typeset", "unset"};
+    static const std::unordered_set<std::string> php = {
+        "abstract", "and", "as", "break", "case", "catch", "class", "clone", "const",
+        "continue", "declare", "default", "do", "echo", "else", "elseif", "empty", "enddeclare",
+        "endfor", "endforeach", "endif", "endswitch", "endwhile", "enum", "eval", "exit",
+        "extends", "final", "finally", "fn", "for", "foreach", "from", "function", "global",
+        "get", "goto", "if", "implements", "include", "include_once", "instanceof", "insteadof",
+        "interface", "isset", "list", "match", "namespace", "new", "or", "print", "private",
+        "protected", "public", "readonly", "require", "require_once", "return", "set", "static", "switch",
+        "throw", "trait", "try", "unset", "use", "var", "while", "xor", "yield"};
+    static const std::unordered_set<std::string> perl = {
+        "BEGIN", "END", "UNITCHECK", "CHECK", "INIT", "continue", "do", "else", "elsif", "eval",
+        "for", "foreach", "given", "goto", "if", "last", "local", "my", "next", "no", "our",
+        "package", "redo", "require", "return", "state", "sub", "unless", "until", "use", "when",
+        "while", "say", "print", "map", "grep", "sort", "split", "defined", "delete", "exists"};
+    static const std::unordered_set<std::string> ruby = {
+        "BEGIN", "END", "alias", "and", "begin", "break", "case", "class", "def", "defined",
+        "do", "else", "elsif", "end", "ensure", "false", "for", "if", "in", "module", "next",
+        "nil", "not", "or", "redo", "rescue", "retry", "return", "self", "super", "then", "true",
+        "undef", "unless", "until", "when", "while", "yield"};
+    static const std::unordered_set<std::string> rust = {
+        "as", "async", "await", "break", "const", "continue", "crate", "dyn", "else", "enum",
+        "extern", "false", "fn", "for", "gen", "if", "impl", "in", "let", "loop", "macro_rules",
+        "match", "mod", "move", "mut", "pub", "ref", "return", "self", "Self", "static", "struct",
+        "super", "trait", "true", "type", "union", "unsafe", "use", "where", "while", "yield",
+        "abstract", "become", "box", "do", "final", "macro", "override", "priv", "try", "typeof",
+        "unsized", "virtual"};
+    static const std::unordered_set<std::string> go = {
+        "break", "case", "chan", "const", "continue", "default", "defer", "else", "fallthrough",
+        "for", "func", "go", "goto", "if", "import", "interface", "map", "package", "range",
+        "return", "select", "struct", "switch", "type", "var"};
+    static const std::unordered_set<std::string> powershell = {
+        "begin", "break", "catch", "class", "clean", "continue", "data", "define", "do", "dynamicparam",
+        "else", "elseif", "end", "enum", "exit", "filter", "finally", "for", "foreach", "from",
+        "function", "if", "in", "param", "process", "return", "switch", "throw", "trap", "try",
+        "until", "using", "var", "while", "workflow", "parallel", "sequence", "inlinescript"};
+    static const std::unordered_set<std::string> assembly = {
+        "adc", "add", "and", "bl", "b", "call", "cmp", "dec", "div", "enter", "hlt", "imul",
+        "inc", "int", "ja", "jae", "jb", "jbe", "je", "jg", "jge", "jl", "jle", "jmp", "jne",
+        "lea", "leave", "ldr", "mov", "movsx", "movzx", "mul", "neg", "nop", "not", "or", "pop",
+        "push", "ret", "rol", "ror", "sar", "sbb", "shl", "shr", "str", "sub", "svc", "syscall",
+        "sysret", "test", "xor", "cbz", "cbnz", "beq", "bne", "bgt", "blt", "bge", "ble",
+        "global", "extern", "section", "segment", "bits", "default", "db", "dw", "dd", "dq",
+        "dt", "do", "dy", "dz", "resb", "resw", "resd", "resq", "equ", "times"};
+    static const std::unordered_set<std::string> sql = {
+        "add", "all", "alter", "analyze", "and", "any", "as", "asc", "begin", "between", "by",
+        "case", "check", "column", "commit", "constraint", "create", "cross", "current", "database",
+        "default", "delete", "desc", "distinct", "do", "drop", "else", "end", "except", "exists",
+        "explain", "fetch", "filter", "for", "foreign", "from", "full", "function", "generated",
+        "grant", "group", "having", "if", "ilike", "in", "index", "inner", "insert", "intersect",
+        "into", "is", "join", "lateral", "left", "like", "limit", "materialized", "merge", "natural",
+        "not", "nulls", "offset", "on", "or", "order", "outer", "over", "partition", "primary",
+        "procedure", "recursive", "references", "returning", "revoke", "right", "rollback", "row",
+        "rows", "schema", "select", "set", "table", "then", "trigger", "truncate", "union", "unique",
+        "update", "using", "values", "view", "when", "where", "window", "with"};
     switch (language) {
         case Language::Python: return python;
         case Language::C: return c;
@@ -486,6 +540,14 @@ const std::unordered_set<std::string>& keywords_for(Language language) {
         case Language::JavaScript: return javascript;
         case Language::TypeScript: return typescript;
         case Language::Bash: return bash;
+        case Language::Php: return php;
+        case Language::Perl: return perl;
+        case Language::Ruby: return ruby;
+        case Language::Rust: return rust;
+        case Language::Go: return go;
+        case Language::PowerShell: return powershell;
+        case Language::Assembly: return assembly;
+        case Language::Sql: return sql;
         default: return empty;
     }
 }
@@ -511,6 +573,33 @@ const std::unordered_set<std::string>& types_for(Language language) {
     static const std::unordered_set<std::string> typescript = {
         "any", "bigint", "boolean", "never", "number", "object", "string", "symbol", "unknown",
         "void"};
+    static const std::unordered_set<std::string> php = {
+        "array", "bool", "callable", "false", "float", "int", "iterable", "mixed", "never", "null",
+        "object", "parent", "self", "static", "string", "true", "void"};
+    static const std::unordered_set<std::string> perl = {
+        "ARRAY", "CODE", "GLOB", "HASH", "IO", "REF", "SCALAR", "Regexp"};
+    static const std::unordered_set<std::string> rust = {
+        "bool", "char", "f32", "f64", "i8", "i16", "i32", "i64", "i128", "isize", "str", "u8",
+        "u16", "u32", "u64", "u128", "usize", "Option", "Result", "String", "Vec"};
+    static const std::unordered_set<std::string> go = {
+        "any", "bool", "byte", "comparable", "complex64", "complex128", "error", "float32", "float64",
+        "int", "int8", "int16", "int32", "int64", "rune", "string", "uint", "uint8", "uint16",
+        "uint32", "uint64", "uintptr"};
+    static const std::unordered_set<std::string> powershell = {
+        "array", "bool", "byte", "char", "datetime", "decimal", "double", "float", "guid", "hashtable",
+        "int", "int16", "int32", "int64", "long", "object", "pscustomobject", "regex", "scriptblock",
+        "single", "string", "switch", "timespan", "type", "uint", "uint16", "uint32", "uint64", "xml"};
+    static const std::unordered_set<std::string> assembly = {
+        "al", "ah", "ax", "eax", "rax", "bl", "bh", "bx", "ebx", "rbx", "cl", "ch", "cx",
+        "ecx", "rcx", "dl", "dh", "dx", "edx", "rdx", "si", "esi", "rsi", "di", "edi", "rdi",
+        "sp", "esp", "rsp", "bp", "ebp", "rbp", "rip", "x0", "x1", "x2", "x3", "x4", "x5",
+        "x6", "x7", "x8", "x9", "x10", "x11", "x12", "x13", "x14", "x15", "x16", "x17",
+        "x18", "x19", "x20", "x21", "x22", "x23", "x24", "x25", "x26", "x27", "x28", "x29",
+        "x30", "sp", "w0", "w1", "w2", "w3", "w4", "w5", "w6", "w7"};
+    static const std::unordered_set<std::string> sql = {
+        "bigint", "binary", "bit", "blob", "boolean", "char", "date", "decimal", "double", "float",
+        "int", "integer", "interval", "json", "jsonb", "numeric", "real", "serial", "smallint",
+        "text", "time", "timestamp", "uuid", "varchar"};
     switch (language) {
         case Language::Python: return python;
         case Language::C: return c;
@@ -518,6 +607,13 @@ const std::unordered_set<std::string>& types_for(Language language) {
         case Language::CSharp: return csharp;
         case Language::Java: return java;
         case Language::TypeScript: return typescript;
+        case Language::Php: return php;
+        case Language::Perl: return perl;
+        case Language::Rust: return rust;
+        case Language::Go: return go;
+        case Language::PowerShell: return powershell;
+        case Language::Assembly: return assembly;
+        case Language::Sql: return sql;
         default: return empty;
     }
 }
@@ -530,7 +626,32 @@ bool is_literal_word(Language language, const std::string& word) {
         return word == "true" || word == "false" || word == "null" || word == "Infinity" ||
                word == "NaN";
     }
+    const std::string lower = lower_ascii(word);
+    if (language == Language::Php || language == Language::Sql || language == Language::Toml) {
+        return lower == "true" || lower == "false" || lower == "null";
+    }
+    if (language == Language::Ruby) {
+        return word == "true" || word == "false" || word == "nil";
+    }
+    if (language == Language::Rust) {
+        return word == "true" || word == "false";
+    }
+    if (language == Language::Go) {
+        return word == "true" || word == "false" || word == "nil" || word == "iota";
+    }
+    if (language == Language::Perl) {
+        return word == "undef";
+    }
+    if (language == Language::Yaml) {
+        return lower == "true" || lower == "false" || lower == "null" || lower == "yes" ||
+               lower == "no" || lower == "on" || lower == "off" || word == "~";
+    }
     return word == "true" || word == "false" || word == "null" || word == "nullptr";
+}
+
+bool case_insensitive_words(Language language) {
+    return language == Language::Php || language == Language::PowerShell ||
+           language == Language::Assembly || language == Language::Sql;
 }
 
 void add_words_numbers_operators(Language language,
@@ -547,15 +668,19 @@ void add_words_numbers_operators(Language language,
                 ++pos;
             }
             const std::string word = line.substr(start, pos - start);
+            const std::string lookup = case_insensitive_words(language) ? lower_ascii(word) : word;
             if (is_literal_word(language, word)) {
                 append_candidate(words, start, pos, TokenRole::Literal);
-            } else if (keywords.find(word) != keywords.end()) {
+            } else if (keywords.find(lookup) != keywords.end()) {
                 append_candidate(words, start, pos, TokenRole::Keyword);
-            } else if (types.find(word) != types.end()) {
+            } else if (types.find(lookup) != types.end()) {
                 append_candidate(words, start, pos, TokenRole::Type);
-            } else if (skip_ascii_space(line, pos) < line.size() &&
-                       line[skip_ascii_space(line, pos)] == '(') {
-                append_candidate(lower, start, pos, TokenRole::Function);
+            } else {
+                const size_t after = skip_ascii_space(line, pos);
+                if (after < line.size() &&
+                    (line[after] == '(' || (language == Language::Rust && line[after] == '!'))) {
+                    append_candidate(lower, start, pos, TokenRole::Function);
+                }
             }
             continue;
         }
@@ -901,13 +1026,784 @@ void scan_bash_lexical(const std::string& line,
     }
 }
 
+size_t identifier_end(const std::string& line, size_t pos) {
+    while (pos < line.size() && ascii_identifier_part(line[pos])) ++pos;
+    return pos;
+}
+
+bool heredoc_opener(const std::string& line,
+                    size_t marker,
+                    size_t marker_length,
+                    bool modifiers,
+                    std::string& delimiter,
+                    size_t& end) {
+    size_t pos = marker + marker_length;
+    if (modifiers) {
+        while (pos < line.size() && (line[pos] == '-' || line[pos] == '~')) ++pos;
+    }
+    pos = skip_ascii_space(line, pos);
+    char quote = 0;
+    if (pos < line.size() && (line[pos] == '\'' || line[pos] == '"' || line[pos] == '`')) {
+        quote = line[pos++];
+    }
+    if (pos >= line.size() || !ascii_identifier_start(line[pos])) return false;
+    const size_t start = pos;
+    pos = identifier_end(line, pos + 1);
+    delimiter = line.substr(start, pos - start);
+    if (quote != 0) {
+        if (pos >= line.size() || line[pos] != quote) return false;
+        ++pos;
+    }
+    end = pos;
+    return true;
+}
+
+void add_sigil_variable(const std::string& line,
+                        size_t& pos,
+                        const std::string& sigils,
+                        std::vector<Candidate>& lower) {
+    if (sigils.find(line[pos]) == std::string::npos) return;
+    const size_t start = pos++;
+    while (pos < line.size() && sigils.find(line[pos]) != std::string::npos) ++pos;
+    if (pos < line.size() && line[pos] == '{') {
+        const size_t close = line.find('}', pos + 1);
+        pos = close == std::string::npos ? line.size() : close + 1;
+    } else if (pos < line.size() &&
+               (std::isdigit(static_cast<unsigned char>(line[pos])) != 0 ||
+                std::string("!/?_^|&`'+-.:").find(line[pos]) != std::string::npos)) {
+        ++pos;
+    } else {
+        pos = identifier_end(line, pos);
+    }
+    if (pos > start + 1) append_candidate(lower, start, pos, TokenRole::Variable);
+}
+
+void scan_php_lexical(const std::string& line,
+                      LineState& next_state,
+                      std::vector<Candidate>& high_priority,
+                      std::vector<Candidate>& structural,
+                      std::vector<Candidate>& lower) {
+    if (next_state.block == LineState::Block::Heredoc) {
+        const size_t first = line.find_first_not_of(" \t");
+        if (first != std::string::npos &&
+            line.compare(first, next_state.delimiter.size(), next_state.delimiter) == 0 &&
+            (first + next_state.delimiter.size() == line.size() ||
+             line[first + next_state.delimiter.size()] == ';')) {
+            append_candidate(structural, first, first + next_state.delimiter.size(),
+                             TokenRole::Preprocessor);
+            next_state = {};
+        } else {
+            append_candidate(high_priority, 0, line.size(), TokenRole::String);
+        }
+        return;
+    }
+    size_t pos = 0;
+    if (next_state.block == LineState::Block::BlockComment) {
+        const size_t close = line.find("*/");
+        if (close == std::string::npos) {
+            append_candidate(high_priority, 0, line.size(), TokenRole::Comment);
+            return;
+        }
+        append_candidate(high_priority, 0, close + 2, TokenRole::Comment);
+        next_state = {};
+        pos = close + 2;
+    }
+    while (pos < line.size()) {
+        if (line.compare(pos, 5, "<?php") == 0) {
+            append_candidate(structural, pos, pos + 5, TokenRole::Preprocessor);
+            pos += 5;
+            continue;
+        }
+        if (line.compare(pos, 3, "<?=") == 0) {
+            append_candidate(structural, pos, pos + 3, TokenRole::Preprocessor);
+            pos += 3;
+            continue;
+        }
+        if (line.compare(pos, 2, "?>") == 0) {
+            append_candidate(structural, pos, pos + 2, TokenRole::Preprocessor);
+            pos += 2;
+            continue;
+        }
+        if (line.compare(pos, 2, "/*") == 0) {
+            const size_t close = line.find("*/", pos + 2);
+            if (close == std::string::npos) {
+                append_candidate(high_priority, pos, line.size(), TokenRole::Comment);
+                next_state.block = LineState::Block::BlockComment;
+                return;
+            }
+            append_candidate(high_priority, pos, close + 2, TokenRole::Comment);
+            pos = close + 2;
+            continue;
+        }
+        if (line.compare(pos, 2, "#[") == 0) {
+            append_candidate(structural, pos, pos + 2, TokenRole::Preprocessor);
+            const size_t close = line.find(']', pos + 2);
+            if (close != std::string::npos) {
+                append_candidate(structural, close, close + 1, TokenRole::Preprocessor);
+            }
+            pos += 2;
+            continue;
+        }
+        if (line.compare(pos, 2, "//") == 0 ||
+            (line[pos] == '#' && line.compare(pos, 2, "#[") != 0)) {
+            append_candidate(high_priority, pos, line.size(), TokenRole::Comment);
+            return;
+        }
+        if (line.compare(pos, 3, "<<<") == 0) {
+            std::string delimiter;
+            size_t end = pos;
+            if (heredoc_opener(line, pos, 3, false, delimiter, end)) {
+                append_candidate(structural, pos, end, TokenRole::Preprocessor);
+                next_state.block = LineState::Block::Heredoc;
+                next_state.delimiter = delimiter;
+                pos = end;
+                continue;
+            }
+        }
+        if (line[pos] == '\'' || line[pos] == '"' || line[pos] == '`') {
+            const size_t end = quoted_end(line, pos, line[pos]);
+            append_candidate(high_priority, pos, end, TokenRole::String);
+            pos = end;
+            continue;
+        }
+        if (line[pos] == '$') {
+            add_sigil_variable(line, pos, "$", lower);
+            continue;
+        }
+        ++pos;
+    }
+}
+
+void scan_perl_ruby_lexical(Language language,
+                            const std::string& line,
+                            LineState& next_state,
+                            std::vector<Candidate>& high_priority,
+                            std::vector<Candidate>& structural,
+                            std::vector<Candidate>& lower) {
+    if (next_state.block == LineState::Block::LineDelimitedComment) {
+        const size_t first = line.find_first_not_of(" \t");
+        append_candidate(high_priority, 0, line.size(), TokenRole::Comment);
+        if (first != std::string::npos &&
+            line.compare(first, next_state.delimiter.size(), next_state.delimiter) == 0) {
+            next_state = {};
+        }
+        return;
+    }
+    if (next_state.block == LineState::Block::Heredoc) {
+        size_t compare = 0;
+        if (next_state.strip_tabs) {
+            while (compare < line.size() && (line[compare] == ' ' || line[compare] == '\t')) ++compare;
+        }
+        if (line.compare(compare, next_state.delimiter.size(), next_state.delimiter) == 0 &&
+            only_ascii_space_after(line, compare + next_state.delimiter.size())) {
+            append_candidate(structural, compare, compare + next_state.delimiter.size(),
+                             TokenRole::Preprocessor);
+            next_state = {};
+        } else {
+            append_candidate(high_priority, 0, line.size(), TokenRole::String);
+        }
+        return;
+    }
+    const size_t first = line.find_first_not_of(" \t");
+    if (language == Language::Perl && first != std::string::npos && line[first] == '=' &&
+        (line.compare(first, 4, "=pod") == 0 || line.compare(first, 6, "=head1") == 0 ||
+         line.compare(first, 6, "=begin") == 0)) {
+        append_candidate(high_priority, first, line.size(), TokenRole::Comment);
+        next_state.block = LineState::Block::LineDelimitedComment;
+        next_state.delimiter = "=cut";
+        return;
+    }
+    if (language == Language::Ruby && first != std::string::npos &&
+        line.compare(first, 6, "=begin") == 0) {
+        append_candidate(high_priority, first, line.size(), TokenRole::Comment);
+        next_state.block = LineState::Block::LineDelimitedComment;
+        next_state.delimiter = "=end";
+        return;
+    }
+    size_t pos = 0;
+    while (pos < line.size()) {
+        if (line[pos] == '#') {
+            append_candidate(high_priority, pos, line.size(), TokenRole::Comment);
+            return;
+        }
+        if (line[pos] == '\'' || line[pos] == '"' || line[pos] == '`') {
+            const size_t end = quoted_end(line, pos, line[pos]);
+            append_candidate(high_priority, pos, end, TokenRole::String);
+            pos = end;
+            continue;
+        }
+        if (language == Language::Perl &&
+            (line.compare(pos, 2, "m/") == 0 || line.compare(pos, 3, "qr/") == 0 ||
+             line.compare(pos, 2, "s/") == 0)) {
+            const bool substitution = line.compare(pos, 2, "s/") == 0;
+            const size_t slash = line.find('/', pos);
+            size_t end = slash + 1;
+            const size_t parts = substitution ? 2 : 1;
+            bool complete = true;
+            for (size_t part = 0; part < parts; ++part) {
+                while (end < line.size() && (line[end] != '/' || !unescaped_at(line, end))) ++end;
+                if (end >= line.size()) {
+                    complete = false;
+                    break;
+                }
+                ++end;
+            }
+            if (complete) {
+                while (end < line.size() && std::isalpha(static_cast<unsigned char>(line[end])) != 0) ++end;
+                append_candidate(high_priority, pos, end, TokenRole::String);
+                pos = end;
+                continue;
+            }
+        }
+        if (language == Language::Ruby && line.compare(pos, 3, "%r{") == 0) {
+            size_t end = pos + 3;
+            while (end < line.size() && (line[end] != '}' || !unescaped_at(line, end))) ++end;
+            if (end < line.size()) {
+                ++end;
+                while (end < line.size() && std::isalpha(static_cast<unsigned char>(line[end])) != 0) ++end;
+                append_candidate(high_priority, pos, end, TokenRole::String);
+                pos = end;
+                continue;
+            }
+        }
+        if (language == Language::Ruby && line[pos] == '/') {
+            const size_t previous = pos == 0 ? std::string::npos : line.find_last_not_of(" \t", pos - 1);
+            if (previous == std::string::npos ||
+                std::string("=~([{,:;!&|?").find(line[previous]) != std::string::npos) {
+                size_t end = pos + 1;
+                while (end < line.size() && (line[end] != '/' || !unescaped_at(line, end))) ++end;
+                if (end < line.size()) {
+                    ++end;
+                    while (end < line.size() && std::isalpha(static_cast<unsigned char>(line[end])) != 0) ++end;
+                    append_candidate(high_priority, pos, end, TokenRole::String);
+                    pos = end;
+                    continue;
+                }
+            }
+        }
+        if (line.compare(pos, 2, "<<") == 0) {
+            std::string delimiter;
+            size_t end = pos;
+            if (heredoc_opener(line, pos, 2, true, delimiter, end)) {
+                append_candidate(structural, pos, end, TokenRole::Preprocessor);
+                next_state.block = LineState::Block::Heredoc;
+                next_state.delimiter = delimiter;
+                next_state.strip_tabs = line.find('-', pos + 2) == pos + 2 ||
+                                        line.find('~', pos + 2) == pos + 2;
+                pos = end;
+                continue;
+            }
+        }
+        if ((language == Language::Perl && std::string("$@%").find(line[pos]) != std::string::npos) ||
+            (language == Language::Ruby && (line[pos] == '$' || line[pos] == '@'))) {
+            add_sigil_variable(line, pos, language == Language::Perl ? "$@%" : "$@", lower);
+            continue;
+        }
+        if (language == Language::Ruby && line[pos] == ':' && pos + 1 < line.size() &&
+            ascii_identifier_start(line[pos + 1])) {
+            const size_t end = identifier_end(line, pos + 2);
+            append_candidate(lower, pos, end, TokenRole::Literal);
+            pos = end;
+            continue;
+        }
+        ++pos;
+    }
+}
+
+size_t scan_nested_comment(const std::string& line,
+                           size_t pos,
+                           size_t& depth,
+                           std::vector<Candidate>& high_priority) {
+    const size_t start = pos;
+    while (pos < line.size()) {
+        if (line.compare(pos, 2, "/*") == 0) {
+            ++depth;
+            pos += 2;
+        } else if (line.compare(pos, 2, "*/") == 0) {
+            pos += 2;
+            if (--depth == 0) {
+                append_candidate(high_priority, start, pos, TokenRole::Comment);
+                return pos;
+            }
+        } else {
+            ++pos;
+        }
+    }
+    append_candidate(high_priority, start, line.size(), TokenRole::Comment);
+    return line.size();
+}
+
+void scan_rust_go_lexical(Language language,
+                          const std::string& line,
+                          LineState& next_state,
+                          std::vector<Candidate>& high_priority) {
+    size_t pos = 0;
+    if (next_state.block == LineState::Block::BlockComment) {
+        size_t depth = std::max(next_state.block_depth, size_t{1});
+        pos = language == Language::Rust
+                  ? scan_nested_comment(line, 0, depth, high_priority)
+                  : (line.find("*/") == std::string::npos ? line.size() : line.find("*/") + 2);
+        if (language == Language::Go) {
+            if (pos == line.size() && line.find("*/") == std::string::npos) {
+                append_candidate(high_priority, 0, line.size(), TokenRole::Comment);
+                return;
+            }
+            append_candidate(high_priority, 0, pos, TokenRole::Comment);
+            next_state = {};
+        } else if (depth != 0) {
+            next_state.block_depth = depth;
+            return;
+        } else {
+            next_state = {};
+        }
+    } else if (next_state.block == LineState::Block::RawString ||
+               next_state.block == LineState::Block::HereString) {
+        const size_t close = line.find(next_state.delimiter);
+        if (close == std::string::npos) {
+            append_candidate(high_priority, 0, line.size(), TokenRole::String);
+            return;
+        }
+        append_candidate(high_priority, 0, close + next_state.delimiter.size(), TokenRole::String);
+        pos = close + next_state.delimiter.size();
+        next_state = {};
+    }
+    while (pos < line.size()) {
+        if (line.compare(pos, 2, "//") == 0) {
+            append_candidate(high_priority, pos, line.size(), TokenRole::Comment);
+            return;
+        }
+        if (line.compare(pos, 2, "/*") == 0) {
+            if (language == Language::Rust) {
+                size_t depth = 0;
+                const size_t end = scan_nested_comment(line, pos, depth, high_priority);
+                if (depth != 0) {
+                    next_state.block = LineState::Block::BlockComment;
+                    next_state.block_depth = depth;
+                    return;
+                }
+                pos = end;
+            } else {
+                const size_t close = line.find("*/", pos + 2);
+                if (close == std::string::npos) {
+                    append_candidate(high_priority, pos, line.size(), TokenRole::Comment);
+                    next_state.block = LineState::Block::BlockComment;
+                    return;
+                }
+                append_candidate(high_priority, pos, close + 2, TokenRole::Comment);
+                pos = close + 2;
+            }
+            continue;
+        }
+        if (language == Language::Rust && line[pos] == 'r') {
+            size_t marker = pos + 1;
+            while (marker < line.size() && line[marker] == '#') ++marker;
+            if (marker < line.size() && line[marker] == '"') {
+                const std::string close = "\"" + std::string(marker - pos - 1, '#');
+                const size_t end = line.find(close, marker + 1);
+                if (end == std::string::npos) {
+                    append_candidate(high_priority, pos, line.size(), TokenRole::String);
+                    next_state.block = LineState::Block::RawString;
+                    next_state.delimiter = close;
+                    return;
+                }
+                append_candidate(high_priority, pos, end + close.size(), TokenRole::String);
+                pos = end + close.size();
+                continue;
+            }
+        }
+        if (language == Language::Go && line[pos] == '`') {
+            const size_t close = line.find('`', pos + 1);
+            if (close == std::string::npos) {
+                append_candidate(high_priority, pos, line.size(), TokenRole::String);
+                next_state.block = LineState::Block::HereString;
+                next_state.delimiter = "`";
+                return;
+            }
+            append_candidate(high_priority, pos, close + 1, TokenRole::String);
+            pos = close + 1;
+            continue;
+        }
+        if (line[pos] == '"' || (line[pos] == '\'' && language == Language::Go)) {
+            const size_t end = quoted_end(line, pos, line[pos]);
+            append_candidate(high_priority, pos, end, TokenRole::String);
+            pos = end;
+            continue;
+        }
+        if (language == Language::Rust && line[pos] == '\'' && pos + 2 < line.size()) {
+            const size_t close = line.find('\'', pos + 1);
+            if (close != std::string::npos && close - pos <= 6) {
+                append_candidate(high_priority, pos, close + 1, TokenRole::String);
+                pos = close + 1;
+                continue;
+            }
+        }
+        ++pos;
+    }
+}
+
+void scan_powershell_lexical(const std::string& line,
+                             LineState& next_state,
+                             std::vector<Candidate>& high_priority,
+                             std::vector<Candidate>& structural,
+                             std::vector<Candidate>& lower) {
+    if (next_state.block == LineState::Block::HereString) {
+        if (line.compare(0, next_state.delimiter.size(), next_state.delimiter) == 0) {
+            append_candidate(structural, 0, next_state.delimiter.size(), TokenRole::Preprocessor);
+            next_state = {};
+        } else {
+            append_candidate(high_priority, 0, line.size(), TokenRole::String);
+        }
+        return;
+    }
+    size_t pos = 0;
+    if (next_state.block == LineState::Block::BlockComment) {
+        const size_t close = line.find("#>");
+        if (close == std::string::npos) {
+            append_candidate(high_priority, 0, line.size(), TokenRole::Comment);
+            return;
+        }
+        append_candidate(high_priority, 0, close + 2, TokenRole::Comment);
+        next_state = {};
+        pos = close + 2;
+    }
+    while (pos < line.size()) {
+        if (line.compare(pos, 2, "<#") == 0) {
+            const size_t close = line.find("#>", pos + 2);
+            if (close == std::string::npos) {
+                append_candidate(high_priority, pos, line.size(), TokenRole::Comment);
+                next_state.block = LineState::Block::BlockComment;
+                return;
+            }
+            append_candidate(high_priority, pos, close + 2, TokenRole::Comment);
+            pos = close + 2;
+            continue;
+        }
+        if (line[pos] == '#') {
+            append_candidate(high_priority, pos, line.size(), TokenRole::Comment);
+            break;
+        }
+        if (line.compare(pos, 2, "@\"") == 0 || line.compare(pos, 2, "@'") == 0) {
+            append_candidate(structural, pos, pos + 2, TokenRole::Preprocessor);
+            next_state.block = LineState::Block::HereString;
+            next_state.delimiter = line[pos + 1] == '"' ? "\"@" : "'@";
+            pos += 2;
+            continue;
+        }
+        if (line[pos] == '[') {
+            const size_t close = line.find(']', pos + 1);
+            if (close != std::string::npos && close > pos + 1) {
+                append_candidate(structural, pos + 1, close, TokenRole::Type);
+            }
+        }
+        if (line[pos] == '\'' || line[pos] == '"') {
+            const size_t end = quoted_end(line, pos, line[pos]);
+            append_candidate(high_priority, pos, end, TokenRole::String);
+            pos = end;
+            continue;
+        }
+        if (line[pos] == '$') {
+            const size_t start = pos++;
+            if (pos < line.size() && line[pos] == '{') {
+                const size_t close = line.find('}', pos + 1);
+                pos = close == std::string::npos ? line.size() : close + 1;
+            } else {
+                while (pos < line.size() && (ascii_identifier_part(line[pos]) || line[pos] == ':' ||
+                                             line[pos] == '?')) ++pos;
+            }
+            const std::string variable = lower_ascii(line.substr(start, pos - start));
+            append_candidate(lower, start, pos,
+                             variable == "$true" || variable == "$false" || variable == "$null"
+                                 ? TokenRole::Literal
+                                 : TokenRole::Variable);
+            continue;
+        }
+        if (line[pos] == '-' && pos + 1 < line.size() && ascii_identifier_start(line[pos + 1])) {
+            const size_t end = identifier_end(line, pos + 2);
+            append_candidate(lower, pos, end, TokenRole::Operator);
+            pos = end;
+            continue;
+        }
+        ++pos;
+    }
+    pos = 0;
+    while (pos < line.size()) {
+        if (!ascii_identifier_start(line[pos])) {
+            ++pos;
+            continue;
+        }
+        const size_t start = pos;
+        pos = identifier_end(line, pos + 1);
+        if (pos < line.size() && line[pos] == '-' && pos + 1 < line.size() &&
+            ascii_identifier_start(line[pos + 1])) {
+            ++pos;
+            pos = identifier_end(line, pos + 1);
+            append_candidate(lower, start, pos, TokenRole::Function);
+        }
+    }
+}
+
+size_t sql_quoted_end(const std::string& line, size_t start, char quote) {
+    size_t pos = start + 1;
+    while (pos < line.size()) {
+        if (line[pos] == quote) {
+            if (pos + 1 < line.size() && line[pos + 1] == quote) {
+                pos += 2;
+                continue;
+            }
+            return pos + 1;
+        }
+        ++pos;
+    }
+    return line.size();
+}
+
+void scan_sql_lexical(const std::string& line,
+                      LineState& next_state,
+                      std::vector<Candidate>& high_priority) {
+    size_t pos = 0;
+    if (next_state.block == LineState::Block::BlockComment) {
+        const size_t close = line.find("*/");
+        if (close == std::string::npos) {
+            append_candidate(high_priority, 0, line.size(), TokenRole::Comment);
+            return;
+        }
+        append_candidate(high_priority, 0, close + 2, TokenRole::Comment);
+        next_state = {};
+        pos = close + 2;
+    } else if (next_state.block == LineState::Block::HereString) {
+        const size_t close = line.find(next_state.delimiter);
+        if (close == std::string::npos) {
+            append_candidate(high_priority, 0, line.size(), TokenRole::String);
+            return;
+        }
+        append_candidate(high_priority, 0, close + next_state.delimiter.size(), TokenRole::String);
+        pos = close + next_state.delimiter.size();
+        next_state = {};
+    }
+    while (pos < line.size()) {
+        if (line.compare(pos, 2, "--") == 0 || line[pos] == '#') {
+            append_candidate(high_priority, pos, line.size(), TokenRole::Comment);
+            return;
+        }
+        if (line.compare(pos, 2, "/*") == 0) {
+            const size_t close = line.find("*/", pos + 2);
+            if (close == std::string::npos) {
+                append_candidate(high_priority, pos, line.size(), TokenRole::Comment);
+                next_state.block = LineState::Block::BlockComment;
+                return;
+            }
+            append_candidate(high_priority, pos, close + 2, TokenRole::Comment);
+            pos = close + 2;
+            continue;
+        }
+        if (line[pos] == '$') {
+            size_t tag_end = pos + 1;
+            while (tag_end < line.size() && ascii_identifier_part(line[tag_end])) ++tag_end;
+            if (tag_end < line.size() && line[tag_end] == '$') {
+                const std::string delimiter = line.substr(pos, tag_end + 1 - pos);
+                const size_t close = line.find(delimiter, tag_end + 1);
+                if (close == std::string::npos) {
+                    append_candidate(high_priority, pos, line.size(), TokenRole::String);
+                    next_state.block = LineState::Block::HereString;
+                    next_state.delimiter = delimiter;
+                    return;
+                }
+                append_candidate(high_priority, pos, close + delimiter.size(), TokenRole::String);
+                pos = close + delimiter.size();
+                continue;
+            }
+        }
+        if (line[pos] == '\'' || line[pos] == '"' || line[pos] == '`') {
+            const size_t end = sql_quoted_end(line, pos, line[pos]);
+            append_candidate(high_priority, pos, end, TokenRole::String);
+            pos = end;
+            continue;
+        }
+        ++pos;
+    }
+}
+
+size_t leading_indentation(const std::string& line) {
+    size_t pos = 0;
+    while (pos < line.size() && (line[pos] == ' ' || line[pos] == '\t')) ++pos;
+    return pos;
+}
+
+void scan_config_lexical(Language language,
+                         const std::string& line,
+                         LineState& next_state,
+                         std::vector<Candidate>& high_priority,
+                         std::vector<Candidate>& structural,
+                         std::vector<Candidate>& lower) {
+    size_t pos = 0;
+    if (language == Language::Toml && next_state.block == LineState::Block::HereString) {
+        const size_t close = line.find(next_state.delimiter);
+        if (close == std::string::npos) {
+            append_candidate(high_priority, 0, line.size(), TokenRole::String);
+            return;
+        }
+        append_candidate(high_priority, 0, close + next_state.delimiter.size(), TokenRole::String);
+        pos = close + next_state.delimiter.size();
+        next_state = {};
+    } else if (language == Language::Yaml &&
+               next_state.block == LineState::Block::IndentedString) {
+        const size_t indent = leading_indentation(line);
+        if (line.find_first_not_of(" \t") == std::string::npos || indent > next_state.block_depth) {
+            append_candidate(high_priority, 0, line.size(), TokenRole::String);
+            return;
+        }
+        next_state = {};
+    }
+    const size_t first = line.find_first_not_of(" \t");
+    if (first == std::string::npos) return;
+    if (language == Language::Ini && (line[first] == ';' || line[first] == '#')) {
+        append_candidate(high_priority, first, line.size(), TokenRole::Comment);
+        return;
+    }
+    if (language == Language::Ini && line[first] == '[') {
+        const size_t close = line.find(']', first + 1);
+        append_candidate(structural, first,
+                         close == std::string::npos ? line.size() : close + 1,
+                         TokenRole::Heading);
+    }
+    if (language == Language::Toml && line[first] == '[') {
+        const size_t close = line.rfind(']');
+        append_candidate(structural, first,
+                         close == std::string::npos ? line.size() : close + 1,
+                         TokenRole::Heading);
+    }
+    while (pos < line.size()) {
+        if ((language == Language::Toml && line[pos] == '#') ||
+            (language == Language::Yaml && line[pos] == '#' &&
+             (pos == 0 || std::isspace(static_cast<unsigned char>(line[pos - 1])) != 0))) {
+            append_candidate(high_priority, pos, line.size(), TokenRole::Comment);
+            break;
+        }
+        if (language == Language::Ini && line[pos] == ';') {
+            append_candidate(high_priority, pos, line.size(), TokenRole::Comment);
+            break;
+        }
+        if (language == Language::Toml &&
+            (line.compare(pos, 3, "\"\"\"") == 0 || line.compare(pos, 3, "'''") == 0)) {
+            const std::string delimiter = line.substr(pos, 3);
+            const size_t close = line.find(delimiter, pos + 3);
+            if (close == std::string::npos) {
+                append_candidate(high_priority, pos, line.size(), TokenRole::String);
+                next_state.block = LineState::Block::HereString;
+                next_state.delimiter = delimiter;
+                return;
+            }
+            append_candidate(high_priority, pos, close + 3, TokenRole::String);
+            pos = close + 3;
+            continue;
+        }
+        if (line[pos] == '\'' || line[pos] == '"') {
+            const size_t end = quoted_end(line, pos, line[pos]);
+            const size_t after = skip_ascii_space(line, end);
+            const char key_separator = language == Language::Yaml ? ':' : '=';
+            append_candidate(high_priority,
+                             pos,
+                             end,
+                             after < line.size() && line[after] == key_separator
+                                 ? TokenRole::Property
+                                 : TokenRole::String);
+            pos = end;
+            continue;
+        }
+        ++pos;
+    }
+    const char separator = language == Language::Yaml ? ':' : '=';
+    size_t key_start = first;
+    if (language == Language::Yaml && line[key_start] == '-') {
+        key_start = skip_ascii_space(line, key_start + 1);
+    }
+    const size_t separator_pos = line.find(separator, key_start);
+    if (separator_pos != std::string::npos &&
+        !(language != Language::Yaml && line[first] == '[')) {
+        size_t key_end = separator_pos;
+        while (key_end > key_start && std::isspace(static_cast<unsigned char>(line[key_end - 1])) != 0) --key_end;
+        append_candidate(structural, key_start, key_end, TokenRole::Property);
+        if (language == Language::Yaml) {
+            const size_t value = skip_ascii_space(line, separator_pos + 1);
+            if (value < line.size() && (line[value] == '|' || line[value] == '>')) {
+                append_candidate(lower, value, value + 1, TokenRole::Operator);
+                next_state.block = LineState::Block::IndentedString;
+                next_state.block_depth = leading_indentation(line);
+            }
+        }
+    }
+    if (language == Language::Yaml) {
+        for (size_t index = 0; index < line.size(); ++index) {
+            if ((line[index] == '&' || line[index] == '*' || line[index] == '!') &&
+                index + 1 < line.size() && ascii_identifier_start(line[index + 1])) {
+                const size_t end = identifier_end(line, index + 2);
+                append_candidate(lower, index, end,
+                                 line[index] == '!' ? TokenRole::Preprocessor : TokenRole::Variable);
+                index = end - 1;
+            }
+        }
+    }
+}
+
+void scan_assembly_lexical(const std::string& line,
+                           std::vector<Candidate>& high_priority,
+                           std::vector<Candidate>& structural,
+                           std::vector<Candidate>& lower) {
+    size_t pos = 0;
+    while (pos < line.size()) {
+        const bool hash_immediate = line[pos] == '#' && pos + 1 < line.size() &&
+                                    (std::isdigit(static_cast<unsigned char>(line[pos + 1])) != 0 ||
+                                     line[pos + 1] == '+' || line[pos + 1] == '-');
+        if (line[pos] == ';' || (line[pos] == '#' && !hash_immediate)) {
+            append_candidate(high_priority, pos, line.size(), TokenRole::Comment);
+            break;
+        }
+        if (line[pos] == '\'' || line[pos] == '"') {
+            const size_t end = quoted_end(line, pos, line[pos]);
+            append_candidate(high_priority, pos, end, TokenRole::String);
+            pos = end;
+            continue;
+        }
+        ++pos;
+    }
+    const size_t first = line.find_first_not_of(" \t");
+    if (first != std::string::npos && line[first] == '.') {
+        size_t end = first + 1;
+        while (end < line.size() && ascii_identifier_part(line[end])) ++end;
+        append_candidate(structural, first, end, TokenRole::Preprocessor);
+    }
+    const size_t colon = line.find(':');
+    if (colon != std::string::npos && first != std::string::npos && colon > first) {
+        append_candidate(structural, first, colon, TokenRole::Function);
+    }
+    for (size_t index = 0; index < line.size(); ++index) {
+        if ((line[index] == '%' || line[index] == '$' || line[index] == '#') &&
+            index + 1 < line.size()) {
+            size_t end = index + 1;
+            while (end < line.size() && (ascii_identifier_part(line[end]) ||
+                                         std::isxdigit(static_cast<unsigned char>(line[end])) != 0)) ++end;
+            append_candidate(lower, index, end,
+                             line[index] == '%' ? TokenRole::Type : TokenRole::Number);
+            index = end > 0 ? end - 1 : end;
+        }
+    }
+}
+
 void add_preprocessor(Language language,
                       const std::string& line,
                       std::vector<Candidate>& structural) {
-    if (language != Language::C && language != Language::Cpp) return;
     const size_t first = line.find_first_not_of(" \t");
-    if (first != std::string::npos && line[first] == '#') {
+    if ((language == Language::C || language == Language::Cpp) &&
+        first != std::string::npos && line[first] == '#') {
         append_candidate(structural, first, line.size(), TokenRole::Preprocessor);
+    } else if (language == Language::Rust && first != std::string::npos &&
+               (line.compare(first, 2, "#[") == 0 || line.compare(first, 3, "#![") == 0)) {
+        const size_t prefix = line.compare(first, 3, "#![") == 0 ? 3 : 2;
+        append_candidate(structural, first, first + prefix, TokenRole::Preprocessor);
+        const size_t close = line.rfind(']');
+        if (close != std::string::npos) {
+            append_candidate(structural, close, close + 1, TokenRole::Preprocessor);
+        }
     }
 }
 
@@ -1132,6 +2028,7 @@ HighlightedLine highlight_markup(Language language,
             nested.block = state.nested_block;
             nested.delimiter = state.nested_delimiter;
             nested.strip_tabs = state.nested_strip_tabs;
+            nested.block_depth = state.nested_block_depth;
             const HighlightedLine embedded =
                 highlight_code(script ? Language::JavaScript : Language::Css,
                                line.substr(0, code_end),
@@ -1143,6 +2040,7 @@ HighlightedLine highlight_markup(Language language,
             result.next_state.nested_block = embedded.next_state.block;
             result.next_state.nested_delimiter = embedded.next_state.delimiter;
             result.next_state.nested_strip_tabs = embedded.next_state.strip_tabs;
+            result.next_state.nested_block_depth = embedded.next_state.block_depth;
         } else {
             append_candidate(high_priority, 0, code_end, TokenRole::String);
         }
@@ -1231,6 +2129,7 @@ HighlightedLine highlight_markup(Language language,
                     result.next_state.nested_block = embedded.next_state.block;
                     result.next_state.nested_delimiter = embedded.next_state.delimiter;
                     result.next_state.nested_strip_tabs = embedded.next_state.strip_tabs;
+                    result.next_state.nested_block_depth = embedded.next_state.block_depth;
                 } else {
                     append_candidate(high_priority, pos, code_end, TokenRole::String);
                 }
@@ -1318,6 +2217,7 @@ HighlightedLine highlight_markup(Language language,
                 result.next_state.nested_block = embedded.next_state.block;
                 result.next_state.nested_delimiter = embedded.next_state.delimiter;
                 result.next_state.nested_strip_tabs = embedded.next_state.strip_tabs;
+                result.next_state.nested_block_depth = embedded.next_state.block_depth;
             } else {
                 append_candidate(high_priority, pos, code_end, TokenRole::String);
             }
@@ -1355,6 +2255,26 @@ HighlightedLine highlight_code(Language language,
         scan_python_lexical(line, result.next_state, high_priority);
     } else if (language == Language::Bash) {
         scan_bash_lexical(line, result.next_state, high_priority, structural, lower);
+    } else if (language == Language::Php) {
+        scan_php_lexical(line, result.next_state, high_priority, structural, lower);
+    } else if (language == Language::Perl || language == Language::Ruby) {
+        scan_perl_ruby_lexical(language, line, result.next_state, high_priority, structural, lower);
+    } else if (language == Language::Rust || language == Language::Go) {
+        scan_rust_go_lexical(language, line, result.next_state, high_priority);
+    } else if (language == Language::PowerShell) {
+        scan_powershell_lexical(line, result.next_state, high_priority, structural, lower);
+    } else if (language == Language::Sql) {
+        scan_sql_lexical(line, result.next_state, high_priority);
+    } else if (language == Language::Toml || language == Language::Yaml ||
+               language == Language::Ini) {
+        scan_config_lexical(language,
+                            line,
+                            result.next_state,
+                            high_priority,
+                            structural,
+                            lower);
+    } else if (language == Language::Assembly) {
+        scan_assembly_lexical(line, high_priority, structural, lower);
     } else if (language == Language::Json) {
         scan_json_lexical(line, result.next_state, high_priority, structural);
         size_t key = 0;
@@ -1377,7 +2297,8 @@ HighlightedLine highlight_code(Language language,
     if (language == Language::Bash) {
         add_bash_commands(line, lower);
     }
-    if (language == Language::JavaScript || language == Language::TypeScript) {
+    if (language == Language::JavaScript || language == Language::TypeScript ||
+        language == Language::Php) {
         size_t tag = 0;
         while ((tag = line.find('<', tag)) != std::string::npos) {
             size_t name = tag + 1;
@@ -1417,10 +2338,12 @@ bool LineState::operator==(const LineState& other) const {
            fence_length == other.fence_length && embedded_language == other.embedded_language &&
            nested_block == other.nested_block && nested_delimiter == other.nested_delimiter &&
            nested_strip_tabs == other.nested_strip_tabs &&
+           nested_block_depth == other.nested_block_depth &&
            nested_inner_block == other.nested_inner_block &&
            nested_inner_delimiter == other.nested_inner_delimiter &&
-           nested_inner_strip_tabs == other.nested_inner_strip_tabs && delimiter == other.delimiter &&
-           strip_tabs == other.strip_tabs;
+           nested_inner_strip_tabs == other.nested_inner_strip_tabs &&
+           nested_inner_block_depth == other.nested_inner_block_depth && delimiter == other.delimiter &&
+           strip_tabs == other.strip_tabs && block_depth == other.block_depth;
 }
 
 const char* language_name(Language language) {
@@ -1455,6 +2378,28 @@ const char* language_name(Language language) {
             return "json";
         case Language::Bash:
             return "bash";
+        case Language::Php:
+            return "php";
+        case Language::Perl:
+            return "perl";
+        case Language::Ruby:
+            return "ruby";
+        case Language::Rust:
+            return "rust";
+        case Language::Go:
+            return "go";
+        case Language::PowerShell:
+            return "powershell";
+        case Language::Assembly:
+            return "assembly";
+        case Language::Sql:
+            return "sql";
+        case Language::Toml:
+            return "toml";
+        case Language::Yaml:
+            return "yaml";
+        case Language::Ini:
+            return "ini";
     }
     return "text";
 }
@@ -1522,6 +2467,50 @@ bool parse_language(const std::string& text, Language& language) {
         language = Language::Bash;
         return true;
     }
+    if (mode == "php") {
+        language = Language::Php;
+        return true;
+    }
+    if (mode == "perl" || mode == "pl") {
+        language = Language::Perl;
+        return true;
+    }
+    if (mode == "ruby" || mode == "rb") {
+        language = Language::Ruby;
+        return true;
+    }
+    if (mode == "rust" || mode == "rs") {
+        language = Language::Rust;
+        return true;
+    }
+    if (mode == "go" || mode == "golang") {
+        language = Language::Go;
+        return true;
+    }
+    if (mode == "powershell" || mode == "pwsh" || mode == "ps1") {
+        language = Language::PowerShell;
+        return true;
+    }
+    if (mode == "assembly" || mode == "assembler" || mode == "asm") {
+        language = Language::Assembly;
+        return true;
+    }
+    if (mode == "sql") {
+        language = Language::Sql;
+        return true;
+    }
+    if (mode == "toml") {
+        language = Language::Toml;
+        return true;
+    }
+    if (mode == "yaml" || mode == "yml") {
+        language = Language::Yaml;
+        return true;
+    }
+    if (mode == "ini" || mode == "dosini") {
+        language = Language::Ini;
+        return true;
+    }
     return false;
 }
 
@@ -1560,6 +2549,23 @@ Language detect_language(const std::string& path) {
         filename == ".bash_logout" || filename == ".profile" || filename == "bashrc" ||
         filename == "bash_profile" || filename == "bash_login" || filename == "bash_logout" ||
         filename == "profile") return Language::Bash;
+    if (extension == ".php" || extension == ".php3" || extension == ".php4" ||
+        extension == ".php5" || extension == ".php7" || extension == ".php8" ||
+        extension == ".phtml" || extension == ".phps") return Language::Php;
+    if (extension == ".pl" || extension == ".pm" || extension == ".pod" || extension == ".t")
+        return Language::Perl;
+    if (extension == ".rb" || extension == ".rake" || extension == ".gemspec" ||
+        filename == "gemfile" || filename == "rakefile") return Language::Ruby;
+    if (extension == ".rs") return Language::Rust;
+    if (extension == ".go") return Language::Go;
+    if (extension == ".ps1" || extension == ".psm1" || extension == ".psd1")
+        return Language::PowerShell;
+    if (extension == ".asm" || extension == ".s") return Language::Assembly;
+    if (extension == ".sql") return Language::Sql;
+    if (extension == ".toml") return Language::Toml;
+    if (extension == ".yaml" || extension == ".yml") return Language::Yaml;
+    if (extension == ".ini" || extension == ".cfg" || filename == ".editorconfig" ||
+        filename == ".gitconfig") return Language::Ini;
     return Language::Text;
 }
 
@@ -1598,9 +2604,11 @@ HighlightedLine highlight_line(Language language,
             embedded_state.block = result.next_state.nested_block;
             embedded_state.delimiter = result.next_state.nested_delimiter;
             embedded_state.strip_tabs = result.next_state.nested_strip_tabs;
+            embedded_state.block_depth = result.next_state.nested_block_depth;
             embedded_state.nested_block = result.next_state.nested_inner_block;
             embedded_state.nested_delimiter = result.next_state.nested_inner_delimiter;
             embedded_state.nested_strip_tabs = result.next_state.nested_inner_strip_tabs;
+            embedded_state.nested_block_depth = result.next_state.nested_inner_block_depth;
             const HighlightedLine embedded = highlight_line(result.next_state.embedded_language,
                                                             line,
                                                             embedded_state,
@@ -1609,9 +2617,11 @@ HighlightedLine highlight_line(Language language,
             result.next_state.nested_block = embedded.next_state.block;
             result.next_state.nested_delimiter = embedded.next_state.delimiter;
             result.next_state.nested_strip_tabs = embedded.next_state.strip_tabs;
+            result.next_state.nested_block_depth = embedded.next_state.block_depth;
             result.next_state.nested_inner_block = embedded.next_state.nested_block;
             result.next_state.nested_inner_delimiter = embedded.next_state.nested_delimiter;
             result.next_state.nested_inner_strip_tabs = embedded.next_state.nested_strip_tabs;
+            result.next_state.nested_inner_block_depth = embedded.next_state.nested_block_depth;
             result.work_limited = embedded.work_limited;
             return result;
         }

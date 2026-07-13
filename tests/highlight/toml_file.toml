@@ -1,0 +1,24 @@
+# TOML syntax-highlighting fixture
+title = "pkchat"
+version = "0.96"
+enabled = true
+ports = [8000, 8080]
+released = 2026-07-13T12:30:00Z
+
+[server]
+host = "127.0.0.1"
+timeout_seconds = 30.5
+
+[database.connection]
+url = "postgresql://localhost/pkchat"
+pool_size = 8
+
+[[providers]]
+name = "local"
+models = ["small", "large"]
+
+description = """
+TOML basic strings can span
+multiple physical lines.
+"""
+

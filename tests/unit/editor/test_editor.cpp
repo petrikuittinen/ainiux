@@ -2030,7 +2030,12 @@ void test_editor_help_document_and_command() {
     check(std::find(completions.begin(), completions.end(), "/mode python") != completions.end() &&
               std::find(completions.begin(), completions.end(), "/mode typescript") != completions.end() &&
               std::find(completions.begin(), completions.end(), "/mode htmlonly") != completions.end() &&
-              std::find(completions.begin(), completions.end(), "/mode bash") != completions.end(),
+              std::find(completions.begin(), completions.end(), "/mode bash") != completions.end() &&
+              std::find(completions.begin(), completions.end(), "/mode php") != completions.end() &&
+              std::find(completions.begin(), completions.end(), "/mode rust") != completions.end() &&
+              std::find(completions.begin(), completions.end(), "/mode powershell") != completions.end() &&
+              std::find(completions.begin(), completions.end(), "/mode sql") != completions.end() &&
+              std::find(completions.begin(), completions.end(), "/mode yaml") != completions.end(),
           "editor command completions include programming-language modes");
 
     pkchat::editor::ParsedEditorSlashCommand slash =
@@ -2200,6 +2205,17 @@ void test_editor_markdown_mode_and_structured_highlighting() {
         {"new.xml", pkchat::highlight::Language::Xml},
         {"new.jsonl", pkchat::highlight::Language::Json},
         {"new.sh", pkchat::highlight::Language::Bash},
+        {"new.php", pkchat::highlight::Language::Php},
+        {"new.pl", pkchat::highlight::Language::Perl},
+        {"new.rb", pkchat::highlight::Language::Ruby},
+        {"new.rs", pkchat::highlight::Language::Rust},
+        {"new.go", pkchat::highlight::Language::Go},
+        {"new.ps1", pkchat::highlight::Language::PowerShell},
+        {"new.asm", pkchat::highlight::Language::Assembly},
+        {"new.sql", pkchat::highlight::Language::Sql},
+        {"new.toml", pkchat::highlight::Language::Toml},
+        {"new.yaml", pkchat::highlight::Language::Yaml},
+        {"new.ini", pkchat::highlight::Language::Ini},
     };
     for (const auto& detected : detected_modes) {
         pkchat::editor::EditorState detected_state;
