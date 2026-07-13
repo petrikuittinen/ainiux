@@ -44,8 +44,8 @@ def require_seen(raw, needle, context):
         raise RuntimeError(f"expected {needle!r} while {context}; saw {text(raw)[-500:]!r}")
 
 
-def check_new_markdown_file_mode(binary, tmpdir):
-    path = os.path.join(tmpdir, "new-document.md")
+def check_new_file_mode(binary, tmpdir, filename, expected_mode):
+    path = os.path.join(tmpdir, filename)
     master, slave = pty.openpty()
     process = subprocess.Popen(
         [binary, "--provider", "none", "--editor", path],
@@ -61,7 +61,11 @@ def check_new_markdown_file_mode(binary, tmpdir):
         output.extend(drain(master, 1.0))
         output.extend(send(master, "\x1b"))
         output.extend(send(master, "/mode\r"))
-        require_seen(output, "Mode: markdown (automatic)", "opening a new Markdown file")
+        require_seen(
+            output,
+            f"Mode: {expected_mode} (automatic)",
+            f"opening new {expected_mode} file",
+        )
         output.extend(send(master, "\x11"))
         process.wait(timeout=10)
     finally:
@@ -70,7 +74,7 @@ def check_new_markdown_file_mode(binary, tmpdir):
             process.wait(timeout=2)
         os.close(master)
     if process.returncode != 0:
-        raise RuntimeError(f"new Markdown editor exited with status {process.returncode}")
+        raise RuntimeError(f"new {expected_mode} editor exited with status {process.returncode}")
 
 
 def main():
@@ -80,7 +84,9 @@ def main():
 
     binary = sys.argv[1]
     tmpdir = tempfile.mkdtemp(prefix="pkchat-editor-buffers-")
-    check_new_markdown_file_mode(binary, tmpdir)
+    check_new_file_mode(binary, tmpdir, "new-document.md", "markdown")
+    check_new_file_mode(binary, tmpdir, "new-document.html", "html")
+    check_new_file_mode(binary, tmpdir, "new-document.xhtml", "htmlonly")
     file1 = os.path.join(tmpdir, "file1.txt")
     file2 = os.path.join(tmpdir, "file2.txt")
     with open(file1, "w", encoding="utf-8") as handle:

@@ -460,6 +460,26 @@ void test_tui_markdown_history_highlighting() {
     }
     check(saw_keyword && saw_type && saw_number,
           "TUI chat highlights recognized languages inside Markdown fences");
+
+    session.messages.clear();
+    session.messages.push_back(
+        {"assistant",
+         "```html\n<button style=\"color: #fff\" "
+         "onclick=\"const value = 17; run(value);\">Go</button>\n```"});
+    lines = pkchat::tui::detail::history_lines_for_session(
+        session, 100, false, pkchat::tui::ActivityKind::None, 0, true);
+    bool saw_property = false;
+    saw_keyword = false;
+    saw_number = false;
+    for (const pkchat::tui::StyledLine& line : lines) {
+        for (const pkchat::tui::StyledSegment& segment : line.segments) {
+            saw_property = saw_property || segment.role == pkchat::tui::StyleRole::SyntaxProperty;
+            saw_keyword = saw_keyword || segment.role == pkchat::tui::StyleRole::SyntaxKeyword;
+            saw_number = saw_number || segment.role == pkchat::tui::StyleRole::SyntaxNumber;
+        }
+    }
+    check(saw_property && saw_keyword && saw_number,
+          "TUI chat renders CSS and JavaScript inside HTML Markdown fences");
 }
 
 void test_tui_input_label_and_activity_indicators() {

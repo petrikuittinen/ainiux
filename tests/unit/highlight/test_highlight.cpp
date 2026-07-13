@@ -42,6 +42,8 @@ void test_mode_parsing_and_detection() {
         {"java", Language::Java},      {"javascript", Language::JavaScript},
         {"js", Language::JavaScript},  {"typescript", Language::TypeScript},
         {"ts", Language::TypeScript},  {"html", Language::Html},         {"html5", Language::Html},
+        {"html-multi", Language::Html}, {"HTMLMULTI", Language::Html},
+        {"htmlonly", Language::HtmlOnly}, {"HTML-ONLY", Language::HtmlOnly},
         {"css", Language::Css},        {"css3", Language::Css},          {"xml", Language::Xml},
         {"json", Language::Json},      {"jsonl", Language::Json},        {"ndjson", Language::Json},
         {"bash", Language::Bash},      {"sh", Language::Bash},           {"shell", Language::Bash},
@@ -54,6 +56,9 @@ void test_mode_parsing_and_detection() {
     Language language = Language::Text;
     check(!pkchat::highlight::parse_language("rust", language),
           "highlight rejects unsupported language modes");
+    check(std::string(pkchat::highlight::language_name(Language::Html)) == "html" &&
+              std::string(pkchat::highlight::language_name(Language::HtmlOnly)) == "htmlonly",
+          "HTML modes expose their canonical names");
 
     const std::vector<std::pair<const char*, Language>> paths = {
         {"README.md", Language::Markdown}, {"notes.MARKDOWN", Language::Markdown},
@@ -69,7 +74,8 @@ void test_mode_parsing_and_detection() {
         {"common.cjs", Language::JavaScript}, {"view.JSX", Language::JavaScript},
         {"source.ts", Language::TypeScript}, {"module.mts", Language::TypeScript},
         {"common.cts", Language::TypeScript}, {"view.TSX", Language::TypeScript},
-        {"index.html", Language::Html}, {"index.htm", Language::Html}, {"page.xhtml", Language::Html},
+        {"index.html", Language::Html}, {"index.htm", Language::Html},
+        {"page.xhtml", Language::HtmlOnly},
         {"site.css", Language::Css}, {"document.xml", Language::Xml}, {"schema.xsd", Language::Xml},
         {"style.xsl", Language::Xml}, {"transform.xslt", Language::Xml}, {"icon.svg", Language::Xml},
         {"data.json", Language::Json}, {"events.jsonl", Language::Json},
@@ -148,6 +154,35 @@ void test_markup_and_embedded_languages() {
     check(has_role_at(html_line.spans, html.find("42"), TokenRole::Number),
           "HTML highlights JavaScript numbers inside script elements");
 
+    const auto plain_html = pkchat::highlight::highlight_line(Language::HtmlOnly, html);
+    check(has_role_at(plain_html.spans, html.find("const"), TokenRole::String) &&
+              !has_role_at(plain_html.spans, html.find("const"), TokenRole::Keyword),
+          "htmlonly mode keeps script bodies as markup strings");
+
+    const std::string inline_code =
+        "<button style=\"color: #fff; margin: 2px\" "
+        "onclick=\"const value = 17; run(value);\">Go</button>";
+    const auto inline_line =
+        pkchat::highlight::highlight_line(Language::Html, inline_code);
+    check(has_role_at(inline_line.spans, inline_code.find("color"), TokenRole::Property) &&
+              has_role_at(inline_line.spans, inline_code.find("#fff"), TokenRole::Literal) &&
+              has_role_at(inline_line.spans, inline_code.find("2px"), TokenRole::Number),
+          "HTML delegates style attributes to CSS");
+    check(has_role_at(inline_line.spans, inline_code.find("const"), TokenRole::Keyword) &&
+              has_role_at(inline_line.spans, inline_code.find("17"), TokenRole::Number) &&
+              has_role_at(inline_line.spans, inline_code.find("run"), TokenRole::Function),
+          "HTML delegates event-handler attributes to JavaScript");
+    const size_t style_quote = inline_code.find('"');
+    check(has_role_at(inline_line.spans, style_quote, TokenRole::String),
+          "HTML preserves the string role on inline-code quotes");
+
+    const auto plain_inline = pkchat::highlight::highlight_line(Language::HtmlOnly, inline_code);
+    check(has_role_at(plain_inline.spans, inline_code.find("color"), TokenRole::String) &&
+              !has_role_at(plain_inline.spans, inline_code.find("color"), TokenRole::Property) &&
+              has_role_at(plain_inline.spans, inline_code.find("const"), TokenRole::String) &&
+              !has_role_at(plain_inline.spans, inline_code.find("const"), TokenRole::Keyword),
+          "htmlonly mode does not delegate inline CSS or JavaScript");
+
     const std::string jsx = "return <button onClick={run}>Go</button>;";
     const auto jsx_line = pkchat::highlight::highlight_line(Language::TypeScript, jsx);
     check(has_role(jsx_line.spans, TokenRole::Tag) && has_role(jsx_line.spans, TokenRole::Attribute),
@@ -193,6 +228,42 @@ void test_multiline_language_states() {
           "HTML style blocks delegate multiline comment state to CSS");
     check(has_role(html[2].spans, TokenRole::Property) && has_role(html[2].spans, TokenRole::Literal),
           "HTML style blocks resume CSS tokens after comments");
+
+    const auto multiline_tag = pkchat::highlight::highlight_document(
+        Language::Html,
+        "<button\n style=\"color: #fff; margin: 2px\"\n"
+        " onclick=\"const value = 17; run(value);\">Go</button>");
+    check(multiline_tag.size() == 3 &&
+              multiline_tag[0].next_state.block == pkchat::highlight::LineState::Block::Tag,
+          "HTML retains an unfinished opening-tag state");
+    check(has_role(multiline_tag[1].spans, TokenRole::Property) &&
+              multiline_tag[1].next_state.block == pkchat::highlight::LineState::Block::Tag,
+          "HTML highlights CSS attributes on a continued tag");
+    check(has_role(multiline_tag[2].spans, TokenRole::Keyword) &&
+              multiline_tag[2].next_state.block == pkchat::highlight::LineState::Block::None,
+          "HTML highlights JavaScript attributes and closes a continued tag");
+
+    const auto multiline_script_tag = pkchat::highlight::highlight_document(
+        Language::Html,
+        "<script\n type=\"module\">const value = 17;</script>");
+    check(multiline_script_tag.size() == 2 &&
+              multiline_script_tag[0].next_state.block == pkchat::highlight::LineState::Block::Tag &&
+              has_role(multiline_script_tag[1].spans, TokenRole::Keyword) &&
+              has_role(multiline_script_tag[1].spans, TokenRole::Number) &&
+              multiline_script_tag[1].next_state.block == pkchat::highlight::LineState::Block::None,
+          "HTML starts embedded JavaScript after a continued script tag closes");
+
+    const auto fenced_html = pkchat::highlight::highlight_document(
+        Language::Markdown,
+        "```html\n<script>\n/* open\nstill comment\n*/ const value = 17;\n"
+        "</script>\n```");
+    check(fenced_html.size() == 7 && has_role(fenced_html[2].spans, TokenRole::Comment) &&
+              has_role(fenced_html[3].spans, TokenRole::Comment),
+          "HTML fences preserve nested JavaScript multiline-comment state");
+    check(has_role(fenced_html[4].spans, TokenRole::Comment) &&
+              has_role(fenced_html[4].spans, TokenRole::Keyword) &&
+              has_role(fenced_html[4].spans, TokenRole::Number),
+          "HTML fences resume JavaScript tokens after a nested comment closes");
 }
 
 void test_markdown_inline_and_structure() {

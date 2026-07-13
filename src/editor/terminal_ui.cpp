@@ -95,8 +95,7 @@ std::string editor_status_line(const EditorState& state, bool help_view) {
         if (state.dirty) {
             out << " *";
         }
-        out << "  Mode: Editor  Syntax: " << highlight::language_name(state.language)
-            << (state.language_automatic ? " (auto)" : " (manual)");
+        out << "  (" << highlight::language_name(state.language) << ')';
     }
     const size_t line = state.text.line_for_offset(state.cursor) + 1;
     const size_t column = state.text.display_column_for_offset(state.cursor) + 1;

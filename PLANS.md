@@ -85,7 +85,7 @@ Implementation note (2026-06-28, v0.83): Version metadata moved to `src/version/
 
 Add a shared, dependency-free syntax-highlighting engine for the editor and chat TUI. Highlighting defaults to enabled, uses semantic theme colors, supports automatic per-buffer language detection, and preserves existing editor, chat, theme, selection, streaming, Unicode, and `--nocolors` behavior.
 
-Implementation note (2026-07-13): the shared span/cache architecture now supports Markdown, Python, C, C++, C#, Java, JavaScript/JSX, TypeScript/TSX, HTML, CSS, XML, JSON, and Bash. Editor detection and all approved `/mode` aliases are enabled, and recognized Markdown fences delegate to the corresponding engine. Explicit multiline state covers comments, Python triple strings, C++ raw strings, JavaScript templates, Bash heredocs, HTML/XML comments and CDATA, Markdown fences, and embedded HTML script/style content. Low-contrast user-override warnings remain pending.
+Implementation note (2026-07-13): the shared span/cache architecture now supports Markdown, Python, C, C++, C#, Java, JavaScript/JSX, TypeScript/TSX, HTML, HTML-only, CSS, XML, JSON, and Bash. Editor detection and all approved `/mode` aliases are enabled, and recognized Markdown fences delegate to the corresponding engine. The canonical `html` mode composes HTML with JavaScript and CSS for element bodies and inline attributes; `htmlonly` preserves markup-only highlighting. Explicit multiline state covers comments, Python triple strings, C++ raw strings, JavaScript templates, Bash heredocs, continued HTML tags, HTML/XML comments and CDATA, Markdown fences, and embedded HTML script/style content. Low-contrast user-override warnings remain pending.
 
 ### Files likely to change
 
@@ -96,7 +96,7 @@ Implementation note (2026-07-13): the shared span/cache architecture now support
 
 - Add `/highlight on|off` to editor and chat; bare `/highlight` reports state. Store the startup default as `highlight = on|off` under `[tui]`, accepting booleans too. Interactive changes are shared across editor/chat switches for the process and do not rewrite config.
 - Add editor `/mode MODE`, `/mode auto`, and `/mode text`. Manual modes are per buffer; save-as re-detects only for automatic buffers. Show the language in the editor status line.
-- Support text, Markdown, Python, C, C++, C#, Java, JavaScript, TypeScript, HTML5, CSS3, XML, JSON/JSONL/NDJSON, and Bash, with the approved aliases and case-insensitive filename detection.
+- Support text, Markdown, Python, C, C++, C#, Java, JavaScript, TypeScript, HTML, HTML-only, CSS3, XML, JSON/JSONL/NDJSON, and Bash, with the approved aliases and case-insensitive filename detection. `html` composes JavaScript and CSS highlighting inside HTML element bodies and inline attributes; `htmlonly` retains markup-only highlighting.
 - Highlight byte spans without changing document text. Use explicit lexical state for multiline comments, Python triple strings, Bash heredocs, HTML/XML comments and CDATA, Markdown fences, and embedded script/style content.
 - Resolve overlaps in this order: comments/fences/heredocs/strings; structural tokens; keywords/types/literals; numbers/functions/variables/operators. Lower-priority tokens never style comments or strings.
 - Keep highlighting incremental with per-document line-state caching, invalidation from the edited line, bounded long-line work, and a per-frame budget that falls back to plain text.

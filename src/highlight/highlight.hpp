@@ -17,6 +17,7 @@ enum class Language {
     JavaScript,
     TypeScript,
     Html,
+    HtmlOnly,
     Css,
     Xml,
     Json,
@@ -60,6 +61,7 @@ struct LineState {
         RawString,
         Heredoc,
         CData,
+        Tag,
         Script,
         Style,
     };
@@ -71,6 +73,9 @@ struct LineState {
     Block nested_block = Block::None;
     std::string nested_delimiter;
     bool nested_strip_tabs = false;
+    Block nested_inner_block = Block::None;
+    std::string nested_inner_delimiter;
+    bool nested_inner_strip_tabs = false;
     std::string delimiter;
     bool strip_tabs = false;
 

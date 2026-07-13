@@ -996,9 +996,91 @@ std::string markup_tag_name(const std::string& line, size_t start, size_t end) {
     return lower_ascii(line.substr(name_start, pos - name_start));
 }
 
+HighlightedLine highlight_code(Language language,
+                               const std::string& line,
+                               const LineState& state,
+                               size_t byte_budget);
+
+void append_embedded_candidates(Language language,
+                                const std::string& line,
+                                size_t start,
+                                size_t end,
+                                size_t byte_budget,
+                                std::vector<Candidate>& embedded_priority) {
+    if (end <= start) return;
+    const HighlightedLine highlighted =
+        highlight_code(language, line.substr(start, end - start), {}, byte_budget);
+    for (const Span& span : highlighted.spans) {
+        append_candidate(embedded_priority, start + span.start, start + span.end, span.role);
+    }
+}
+
+void add_markup_attributes(const std::string& line,
+                           size_t pos,
+                           size_t end,
+                           bool multi_language,
+                           size_t byte_budget,
+                           std::vector<Candidate>& embedded_priority,
+                           std::vector<Candidate>& high_priority,
+                           std::vector<Candidate>& structural,
+                           std::vector<Candidate>& lower) {
+    while (pos < end) {
+        pos = skip_ascii_space(line, pos);
+        if (pos >= end || line[pos] == '>') break;
+        if (line[pos] == '/') {
+            append_candidate(structural, pos, pos + 1, TokenRole::Tag);
+            ++pos;
+            continue;
+        }
+        if (ascii_identifier_start(line[pos]) || line[pos] == ':') {
+            const size_t attr_start = pos++;
+            while (pos < end && (ascii_identifier_part(line[pos]) || line[pos] == ':' ||
+                                 line[pos] == '-' || line[pos] == '.')) ++pos;
+            const std::string attribute = lower_ascii(line.substr(attr_start, pos - attr_start));
+            append_candidate(structural, attr_start, pos, TokenRole::Attribute);
+            pos = skip_ascii_space(line, pos);
+            if (pos < end && line[pos] == '=') {
+                append_candidate(lower, pos, pos + 1, TokenRole::Operator);
+                pos = skip_ascii_space(line, pos + 1);
+                if (pos < end && (line[pos] == '\'' || line[pos] == '"')) {
+                    const char quote = line[pos];
+                    const size_t value_start = pos;
+                    const size_t value_end = std::min(quoted_end(line, pos, quote), end);
+                    append_candidate(high_priority, value_start, value_end, TokenRole::String);
+                    const bool closed = value_end > value_start + 1 && line[value_end - 1] == quote;
+                    const size_t content_start = value_start + 1;
+                    const size_t content_end = closed ? value_end - 1 : value_end;
+                    if (multi_language && attribute == "style") {
+                        append_embedded_candidates(Language::Css,
+                                                   line,
+                                                   content_start,
+                                                   content_end,
+                                                   byte_budget,
+                                                   embedded_priority);
+                    } else if (multi_language && attribute.size() > 2 &&
+                               attribute.rfind("on", 0) == 0) {
+                        append_embedded_candidates(Language::JavaScript,
+                                                   line,
+                                                   content_start,
+                                                   content_end,
+                                                   byte_budget,
+                                                   embedded_priority);
+                    }
+                    pos = value_end;
+                }
+            }
+            continue;
+        }
+        ++pos;
+    }
+}
+
 void add_markup_tag_tokens(const std::string& line,
                            size_t start,
                            size_t end,
+                           bool multi_language,
+                           size_t byte_budget,
+                           std::vector<Candidate>& embedded_priority,
                            std::vector<Candidate>& high_priority,
                            std::vector<Candidate>& structural,
                            std::vector<Candidate>& lower) {
@@ -1013,42 +1095,19 @@ void add_markup_tag_tokens(const std::string& line,
     const size_t name_start = pos;
     while (pos < end && (ascii_identifier_part(line[pos]) || line[pos] == ':' || line[pos] == '-')) ++pos;
     append_candidate(structural, name_start, pos, TokenRole::Tag);
-    while (pos < end) {
-        pos = skip_ascii_space(line, pos);
-        if (pos >= end || line[pos] == '>') break;
-        if (line[pos] == '/') {
-            append_candidate(structural, pos, pos + 1, TokenRole::Tag);
-            ++pos;
-            continue;
-        }
-        if (ascii_identifier_start(line[pos]) || line[pos] == ':') {
-            const size_t attr_start = pos++;
-            while (pos < end && (ascii_identifier_part(line[pos]) || line[pos] == ':' ||
-                                 line[pos] == '-' || line[pos] == '.')) ++pos;
-            append_candidate(structural, attr_start, pos, TokenRole::Attribute);
-            pos = skip_ascii_space(line, pos);
-            if (pos < end && line[pos] == '=') {
-                append_candidate(lower, pos, pos + 1, TokenRole::Operator);
-                pos = skip_ascii_space(line, pos + 1);
-                if (pos < end && (line[pos] == '\'' || line[pos] == '"')) {
-                    const size_t value_end = std::min(quoted_end(line, pos, line[pos]), end);
-                    append_candidate(high_priority, pos, value_end, TokenRole::String);
-                    pos = value_end;
-                }
-            }
-            continue;
-        }
-        ++pos;
-    }
+    add_markup_attributes(line,
+                          pos,
+                          end,
+                          multi_language,
+                          byte_budget,
+                          embedded_priority,
+                          high_priority,
+                          structural,
+                          lower);
     if (end > start && line[end - 1] == '>') {
         append_candidate(structural, end - 1, end, TokenRole::Tag);
     }
 }
-
-HighlightedLine highlight_code(Language language,
-                               const std::string& line,
-                               const LineState& state,
-                               size_t byte_budget);
 
 HighlightedLine highlight_markup(Language language,
                                  const std::string& line,
@@ -1056,6 +1115,8 @@ HighlightedLine highlight_markup(Language language,
                                  size_t byte_budget) {
     HighlightedLine result;
     result.next_state = state;
+    const bool multi_language = language == Language::Html;
+    std::vector<Candidate> embedded_priority;
     std::vector<Candidate> high_priority;
     std::vector<Candidate> structural;
     std::vector<Candidate> lower;
@@ -1066,16 +1127,28 @@ HighlightedLine highlight_markup(Language language,
         const std::string closing = script ? "</script" : "</style";
         const size_t close = find_case_insensitive(line, closing, 0);
         const size_t code_end = close == std::string::npos ? line.size() : close;
-        LineState nested;
-        nested.block = state.nested_block;
-        const HighlightedLine embedded = highlight_code(script ? Language::JavaScript : Language::Css,
-                                                        line.substr(0, code_end), nested, byte_budget);
-        for (const Span& span : embedded.spans) {
-            append_candidate(high_priority, span.start, span.end, span.role);
+        if (multi_language) {
+            LineState nested;
+            nested.block = state.nested_block;
+            nested.delimiter = state.nested_delimiter;
+            nested.strip_tabs = state.nested_strip_tabs;
+            const HighlightedLine embedded =
+                highlight_code(script ? Language::JavaScript : Language::Css,
+                               line.substr(0, code_end),
+                               nested,
+                               byte_budget);
+            for (const Span& span : embedded.spans) {
+                append_candidate(embedded_priority, span.start, span.end, span.role);
+            }
+            result.next_state.nested_block = embedded.next_state.block;
+            result.next_state.nested_delimiter = embedded.next_state.delimiter;
+            result.next_state.nested_strip_tabs = embedded.next_state.strip_tabs;
+        } else {
+            append_candidate(high_priority, 0, code_end, TokenRole::String);
         }
         if (close == std::string::npos) {
-            result.next_state.nested_block = embedded.next_state.block;
-            result.spans = resolve_candidates(line.size(), {high_priority});
+            result.spans =
+                resolve_candidates(line.size(), {embedded_priority, high_priority});
             return result;
         }
         result.next_state = {};
@@ -1100,6 +1173,76 @@ HighlightedLine highlight_markup(Language language,
         append_candidate(high_priority, 0, close + 3, TokenRole::String);
         result.next_state = {};
         pos = close + 3;
+    } else if (state.block == LineState::Block::Tag) {
+        char quote = 0;
+        size_t end = line.size();
+        for (size_t index = 0; index < line.size(); ++index) {
+            if (quote != 0) {
+                if (line[index] == quote && unescaped_at(line, index)) quote = 0;
+            } else if (line[index] == '\'' || line[index] == '"') {
+                quote = line[index];
+            } else if (line[index] == '>') {
+                end = index + 1;
+                break;
+            }
+        }
+        add_markup_attributes(line,
+                              0,
+                              end,
+                              multi_language,
+                              byte_budget,
+                              embedded_priority,
+                              high_priority,
+                              structural,
+                              lower);
+        const bool closed = end > 0 && end <= line.size() && line[end - 1] == '>';
+        if (!closed) {
+            result.spans = resolve_candidates(
+                line.size(), {embedded_priority, high_priority, structural, lower});
+            return result;
+        }
+        append_candidate(structural, end - 1, end, TokenRole::Tag);
+        const std::string pending_name = state.delimiter;
+        const bool closing_tag = state.strip_tabs;
+        const bool self_closing = end >= 2 && line[end - 2] == '/';
+        result.next_state = {};
+        pos = end;
+        if (!closing_tag && !self_closing &&
+            (pending_name == "script" || pending_name == "style")) {
+            result.next_state.block = pending_name == "script" ? LineState::Block::Script
+                                                               : LineState::Block::Style;
+            if (pos < line.size()) {
+                const bool script = pending_name == "script";
+                const std::string closing = script ? "</script" : "</style";
+                const size_t close = find_case_insensitive(line, closing, pos);
+                const size_t code_end = close == std::string::npos ? line.size() : close;
+                if (multi_language) {
+                    const HighlightedLine embedded =
+                        highlight_code(script ? Language::JavaScript : Language::Css,
+                                       line.substr(pos, code_end - pos),
+                                       {},
+                                       byte_budget);
+                    for (const Span& span : embedded.spans) {
+                        append_candidate(embedded_priority,
+                                         pos + span.start,
+                                         pos + span.end,
+                                         span.role);
+                    }
+                    result.next_state.nested_block = embedded.next_state.block;
+                    result.next_state.nested_delimiter = embedded.next_state.delimiter;
+                    result.next_state.nested_strip_tabs = embedded.next_state.strip_tabs;
+                } else {
+                    append_candidate(high_priority, pos, code_end, TokenRole::String);
+                }
+                if (close == std::string::npos) {
+                    result.spans = resolve_candidates(
+                        line.size(), {embedded_priority, high_priority, structural, lower});
+                    return result;
+                }
+                result.next_state = {};
+                pos = close;
+            }
+        }
     }
 
     while (pos < line.size()) {
@@ -1128,17 +1271,31 @@ HighlightedLine highlight_markup(Language language,
             continue;
         }
         const size_t end = markup_tag_end(line, open);
-        if (end == line.size() && (line.empty() || line.back() != '>')) break;
+        const bool tag_closed = end > open && end <= line.size() && line[end - 1] == '>';
         const std::string name = markup_tag_name(line, open, end);
         if (line.compare(open, 2, "<!") == 0 || line.compare(open, 2, "<?") == 0) {
             append_candidate(structural, open, end, TokenRole::Preprocessor);
         } else {
-            add_markup_tag_tokens(line, open, end, high_priority, structural, lower);
+            add_markup_tag_tokens(line,
+                                  open,
+                                  end,
+                                  multi_language,
+                                  byte_budget,
+                                  embedded_priority,
+                                  high_priority,
+                                  structural,
+                                  lower);
         }
         const bool closing_tag = open + 1 < line.size() && line[open + 1] == '/';
         const bool self_closing = end >= 2 && line[end - 2] == '/';
+        if (!tag_closed) {
+            result.next_state.block = LineState::Block::Tag;
+            result.next_state.delimiter = name;
+            result.next_state.strip_tabs = closing_tag;
+            break;
+        }
         pos = end;
-        if (language == Language::Html && !closing_tag && !self_closing &&
+        if (language != Language::Xml && !closing_tag && !self_closing &&
             (name == "script" || name == "style")) {
             result.next_state.block = name == "script" ? LineState::Block::Script
                                                        : LineState::Block::Style;
@@ -1146,22 +1303,33 @@ HighlightedLine highlight_markup(Language language,
             const std::string closing = name == "script" ? "</script" : "</style";
             const size_t close = find_case_insensitive(line, closing, pos);
             const size_t code_end = close == std::string::npos ? line.size() : close;
-            const HighlightedLine embedded = highlight_code(name == "script" ? Language::JavaScript
-                                                                               : Language::Css,
-                                                            line.substr(pos, code_end - pos), {},
-                                                            byte_budget);
-            for (const Span& span : embedded.spans) {
-                append_candidate(high_priority, pos + span.start, pos + span.end, span.role);
+            if (multi_language) {
+                const HighlightedLine embedded =
+                    highlight_code(name == "script" ? Language::JavaScript : Language::Css,
+                                   line.substr(pos, code_end - pos),
+                                   {},
+                                   byte_budget);
+                for (const Span& span : embedded.spans) {
+                    append_candidate(embedded_priority,
+                                     pos + span.start,
+                                     pos + span.end,
+                                     span.role);
+                }
+                result.next_state.nested_block = embedded.next_state.block;
+                result.next_state.nested_delimiter = embedded.next_state.delimiter;
+                result.next_state.nested_strip_tabs = embedded.next_state.strip_tabs;
+            } else {
+                append_candidate(high_priority, pos, code_end, TokenRole::String);
             }
             if (close == std::string::npos) {
-                result.next_state.nested_block = embedded.next_state.block;
                 break;
             }
             result.next_state = {};
             pos = close;
         }
     }
-    result.spans = resolve_candidates(line.size(), {high_priority, structural, lower});
+    result.spans = resolve_candidates(
+        line.size(), {embedded_priority, high_priority, structural, lower});
     return result;
 }
 
@@ -1175,7 +1343,8 @@ HighlightedLine highlight_code(Language language,
         result.work_limited = true;
         return result;
     }
-    if (language == Language::Html || language == Language::Xml) {
+    if (language == Language::Html || language == Language::HtmlOnly ||
+        language == Language::Xml) {
         return highlight_markup(language, line, state, byte_budget);
     }
     std::vector<Candidate> high_priority;
@@ -1219,7 +1388,16 @@ HighlightedLine highlight_code(Language language,
             }
             const size_t end = markup_tag_end(line, tag);
             if (end == line.size() && (line.empty() || line.back() != '>')) break;
-            add_markup_tag_tokens(line, tag, end, high_priority, structural, lower);
+            std::vector<Candidate> embedded_priority;
+            add_markup_tag_tokens(line,
+                                  tag,
+                                  end,
+                                  false,
+                                  byte_budget,
+                                  embedded_priority,
+                                  high_priority,
+                                  structural,
+                                  lower);
             tag = end;
         }
     }
@@ -1238,7 +1416,10 @@ bool LineState::operator==(const LineState& other) const {
     return block == other.block && fence_character == other.fence_character &&
            fence_length == other.fence_length && embedded_language == other.embedded_language &&
            nested_block == other.nested_block && nested_delimiter == other.nested_delimiter &&
-           nested_strip_tabs == other.nested_strip_tabs && delimiter == other.delimiter &&
+           nested_strip_tabs == other.nested_strip_tabs &&
+           nested_inner_block == other.nested_inner_block &&
+           nested_inner_delimiter == other.nested_inner_delimiter &&
+           nested_inner_strip_tabs == other.nested_inner_strip_tabs && delimiter == other.delimiter &&
            strip_tabs == other.strip_tabs;
 }
 
@@ -1264,6 +1445,8 @@ const char* language_name(Language language) {
             return "typescript";
         case Language::Html:
             return "html";
+        case Language::HtmlOnly:
+            return "htmlonly";
         case Language::Css:
             return "css";
         case Language::Xml:
@@ -1314,8 +1497,13 @@ bool parse_language(const std::string& text, Language& language) {
         language = Language::TypeScript;
         return true;
     }
-    if (mode == "html" || mode == "html5") {
+    if (mode == "html" || mode == "html5" || mode == "html-multi" ||
+        mode == "htmlmulti") {
         language = Language::Html;
+        return true;
+    }
+    if (mode == "htmlonly" || mode == "html-only") {
+        language = Language::HtmlOnly;
         return true;
     }
     if (mode == "css" || mode == "css3") {
@@ -1360,7 +1548,8 @@ Language detect_language(const std::string& path) {
         extension == ".jsx") return Language::JavaScript;
     if (extension == ".ts" || extension == ".mts" || extension == ".cts" ||
         extension == ".tsx") return Language::TypeScript;
-    if (extension == ".html" || extension == ".htm" || extension == ".xhtml") return Language::Html;
+    if (extension == ".html" || extension == ".htm") return Language::Html;
+    if (extension == ".xhtml") return Language::HtmlOnly;
     if (extension == ".css") return Language::Css;
     if (extension == ".xml" || extension == ".xsd" || extension == ".xsl" ||
         extension == ".xslt" || extension == ".svg") return Language::Xml;
@@ -1409,6 +1598,9 @@ HighlightedLine highlight_line(Language language,
             embedded_state.block = result.next_state.nested_block;
             embedded_state.delimiter = result.next_state.nested_delimiter;
             embedded_state.strip_tabs = result.next_state.nested_strip_tabs;
+            embedded_state.nested_block = result.next_state.nested_inner_block;
+            embedded_state.nested_delimiter = result.next_state.nested_inner_delimiter;
+            embedded_state.nested_strip_tabs = result.next_state.nested_inner_strip_tabs;
             const HighlightedLine embedded = highlight_line(result.next_state.embedded_language,
                                                             line,
                                                             embedded_state,
@@ -1417,6 +1609,9 @@ HighlightedLine highlight_line(Language language,
             result.next_state.nested_block = embedded.next_state.block;
             result.next_state.nested_delimiter = embedded.next_state.delimiter;
             result.next_state.nested_strip_tabs = embedded.next_state.strip_tabs;
+            result.next_state.nested_inner_block = embedded.next_state.nested_block;
+            result.next_state.nested_inner_delimiter = embedded.next_state.nested_delimiter;
+            result.next_state.nested_inner_strip_tabs = embedded.next_state.nested_strip_tabs;
             result.work_limited = embedded.work_limited;
             return result;
         }

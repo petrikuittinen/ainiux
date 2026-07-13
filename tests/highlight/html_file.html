@@ -1,5 +1,123 @@
 <!doctype html>
 <html lang="en">
-  <head><title>HTML fixture</title></head>
-  <body><a href="https://example.com">Example</a></body>
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="description" content="HTML syntax-highlighting fixture">
+    <title>HTML fixture</title>
+    <link rel="stylesheet" href="/assets/site.css">
+    <style>
+      :root {
+        --accent: #2563eb;
+        color-scheme: light dark;
+      }
+
+      body {
+        font-family: system-ui, sans-serif;
+        margin: 2rem;
+      }
+
+      .card:hover {
+        border-color: var(--accent);
+        transform: translateY(-2px);
+      }
+    </style>
+  </head>
+  <body>
+    <header id="page-header" class="site-header">
+      <h1>HTML syntax fixture</h1>
+      <nav aria-label="Primary navigation">
+        <a href="#content">Content</a>
+        <a href="https://example.com/docs" target="_blank" rel="noopener noreferrer">Documentation</a>
+      </nav>
+    </header>
+
+    <main id="content">
+      <article class="card" data-state="active" style="padding: 1rem; border: 1px solid #2563eb;">
+        <h2>Common content elements</h2>
+        <p>
+          A paragraph with <strong>strong text</strong>, <em>emphasis</em>,
+          <code>inline_code()</code>, <mark>highlighting</mark>, and a<br>
+          deliberate line break.
+        </p>
+
+        <figure>
+          <img src="/images/example.png"
+               alt="A descriptive example image"
+               width="640"
+               height="360"
+               loading="lazy">
+          <figcaption>An image with common attributes.</figcaption>
+        </figure>
+
+        <section aria-labelledby="lists-heading">
+          <h3 id="lists-heading">Lists</h3>
+          <ul>
+            <li>Unordered item</li>
+            <li>Another item</li>
+          </ul>
+          <ol start="3">
+            <li>Ordered item</li>
+            <li>Next item</li>
+          </ol>
+        </section>
+
+        <table>
+          <caption>Example scores</caption>
+          <thead>
+            <tr><th scope="col">Name</th><th scope="col">Score</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>Ada</td><td>100</td></tr>
+            <tr><td>Grace</td><td>98</td></tr>
+          </tbody>
+        </table>
+
+        <form action="/subscribe" method="post">
+          <fieldset>
+            <legend>Subscribe</legend>
+            <label for="email">Email address</label>
+            <input id="email"
+                   name="email"
+                   type="email"
+                   placeholder="you@example.com"
+                   autocomplete="email"
+                   required>
+            <label for="topic">Topic</label>
+            <select id="topic" name="topic">
+              <option value="html">HTML</option>
+              <option value="css">CSS</option>
+              <option value="javascript">JavaScript</option>
+            </select>
+            <button type="submit"
+                    style="background: #2563eb; color: white;"
+                    onclick="event.preventDefault(); alert(`Subscribed: ${document.querySelector('#email').value}`);">
+              Subscribe
+            </button>
+          </fieldset>
+        </form>
+      </article>
+    </main>
+
+    <footer>
+      <small>&copy; 2026 Example</small>
+    </footer>
+
+    <script type="module">
+      const card = document.querySelector(".card");
+      const settings = { animated: true, delay: 150 };
+
+      card?.addEventListener("click", ({ currentTarget }) => {
+        currentTarget.classList.toggle("selected");
+        console.log(`Card selected after ${settings.delay}ms`);
+      });
+
+      async function loadStatus() {
+        const response = await Promise.resolve({ ok: true });
+        return response?.ok ?? false;
+      }
+
+      loadStatus().then((ready) => console.log({ ready }));
+    </script>
+  </body>
 </html>

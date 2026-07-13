@@ -2029,6 +2029,7 @@ void test_editor_help_document_and_command() {
           "assist command completions include /model");
     check(std::find(completions.begin(), completions.end(), "/mode python") != completions.end() &&
               std::find(completions.begin(), completions.end(), "/mode typescript") != completions.end() &&
+              std::find(completions.begin(), completions.end(), "/mode htmlonly") != completions.end() &&
               std::find(completions.begin(), completions.end(), "/mode bash") != completions.end(),
           "editor command completions include programming-language modes");
 
@@ -2254,8 +2255,12 @@ void test_editor_markdown_mode_and_structured_highlighting() {
           "editor automatic mode re-detects after save-as");
 
     const std::string status = pkchat::editor::editor_status_line(state);
-    check(status.find("Syntax: text (auto)") != std::string::npos,
-          "editor status line displays the active automatic syntax mode");
+    check(status.find("(text)") != std::string::npos &&
+              status.find("Mode: Editor") == std::string::npos &&
+              status.find("Syntax:") == std::string::npos &&
+              status.find("(auto)") == std::string::npos &&
+              status.find("(manual)") == std::string::npos,
+          "editor status line displays only the compact syntax mode");
 }
 
 void run_all() {

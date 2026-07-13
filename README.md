@@ -95,11 +95,11 @@ Switch at runtime in chat TUI or editor command mode:
 
 ### Syntax highlighting
 
-Syntax highlighting is enabled by default in the standalone editor, chat input, and raw Markdown chat history. The editor supports text, Markdown, Python, C, C++, C#, Java, JavaScript/JSX, TypeScript/TSX, HTML5, CSS3, XML, JSON/JSONL, and Bash. Markdown fenced blocks delegate to these language modes when their info string uses a recognized name or alias; unknown and untagged fences remain plain text.
+Syntax highlighting is enabled by default in the standalone editor, chat input, and raw Markdown chat history. The editor supports text, Markdown, Python, C, C++, C#, Java, JavaScript/JSX, TypeScript/TSX, HTML, HTML-only, CSS3, XML, JSON/JSONL, and Bash. Markdown fenced blocks delegate to these language modes when their info string uses a recognized name or alias; unknown and untagged fences remain plain text.
 
 Inline destinations such as the URL in `[link text](http://example.com)` use the contrasting `syntax_attribute` color, while the link text and Markdown delimiters use `syntax_link`. Both bundled colors meet the same WCAG AA contrast target as the other syntax roles.
 
-Modes are detected case-insensitively from common endings, including `.h` as C, C++ source/header/template endings, `.py`/`.pyw`/`.pyi`, JS/JSX, TS/TSX, HTML, CSS, XML/SVG, JSON/JSONL/NDJSON/GeoJSON/JSON5, and `.sh`/`.bash` plus standard Bash startup filenames. Scratch buffers, `.txt`, and unknown endings stay in `text` mode. In editor command mode:
+Modes are detected case-insensitively from common endings, including `.h` as C, C++ source/header/template endings, `.py`/`.pyw`/`.pyi`, JS/JSX, TS/TSX, HTML, CSS, XML/SVG, JSON/JSONL/NDJSON/GeoJSON/JSON5, and `.sh`/`.bash` plus standard Bash startup filenames. `.html` and `.htm` select `html`; XML-oriented `.xhtml` selects `htmlonly`. Scratch buffers, `.txt`, and unknown endings stay in `text` mode. In editor command mode:
 
 ```text
 /highlight
@@ -111,12 +111,16 @@ Modes are detected case-insensitively from common endings, including `.h` as C, 
 /mode python
 /mode cpp
 /mode typescript
+/mode html
+/mode htmlonly
 /mode bash
 /mode text
 /mode auto
 ```
 
-Canonical modes are `text`, `markdown`, `python`, `c`, `cpp`, `csharp`, `java`, `javascript`, `typescript`, `html`, `css`, `xml`, `json`, and `bash`. Accepted aliases include `md`, `py`, `c++`, `cxx`, `c#`, `cs`, `js`, `ts`, `html5`, `css3`, `jsonl`, `ndjson`, `sh`, and `shell`. A selected mode is a manual per-buffer override. `/mode auto` resumes filename detection; save-as only re-detects while the buffer remains automatic. `/highlight` is process-wide and shared when switching between editor and chat. Chat supports `/highlight [on|off]` but not `/mode`. Interactive commands do not rewrite config.
+Canonical modes are `text`, `markdown`, `python`, `c`, `cpp`, `csharp`, `java`, `javascript`, `typescript`, `html`, `htmlonly`, `css`, `xml`, `json`, and `bash`. Accepted aliases include `md`, `py`, `c++`, `cxx`, `c#`, `cs`, `js`, `ts`, `html5`, `html-multi`, `htmlmulti`, `html-only`, `css3`, `jsonl`, `ndjson`, `sh`, and `shell`. The default `html` mode highlights markup, JavaScript inside `<script>` and `on*=""` event attributes, and CSS inside `<style>` and `style=""` attributes. It preserves nested multiline state and continued tags. Use `htmlonly` when markup-only highlighting is preferred; embedded code is then treated as strings. A selected mode is a manual per-buffer override. `/mode auto` resumes filename detection; save-as only re-detects while the buffer remains automatic. `/highlight` is process-wide and shared when switching between editor and chat. Chat supports `/highlight [on|off]` but not `/mode`. Interactive commands do not rewrite config.
+
+The editor status line displays the active syntax language compactly as `(mode)`, for example `(html)`. Bare `/mode` reports whether detection is automatic or manually selected.
 
 Set the startup default with `highlight = on|off` (or a boolean) under `[tui]`. `--nocolors` suppresses syntax colors while selection remains visible. Existing custom themes remain valid when syntax keys are omitted; accessible colors are derived from their existing semantic colors.
 
@@ -601,7 +605,7 @@ make test
 
 ### v0.95 multi-language syntax highlighting
 
-v0.95 expands the shared editor/chat highlighter from Markdown to Python, C, C++, C#, Java, JavaScript/JSX, TypeScript/TSX, HTML, CSS, XML, JSON/JSONL, and Bash. The editor detects common filename endings, supports manual per-buffer `/mode` overrides and automatic re-detection, and highlights recognized languages inside Markdown fences. Multiline comments, strings, Bash heredocs, XML CDATA, and HTML script/style blocks retain state across lines.
+v0.95 expands the shared editor/chat highlighter from Markdown to Python, C, C++, C#, Java, JavaScript/JSX, TypeScript/TSX, HTML, HTML-only, CSS, XML, JSON/JSONL, and Bash. The editor detects common filename endings, supports manual per-buffer `/mode` overrides and automatic re-detection, and highlights recognized languages inside Markdown fences. The default `html` mode delegates script/style elements and inline event/style attributes to JavaScript and CSS; `htmlonly` retains markup-only highlighting. Multiline comments, strings, Bash heredocs, XML CDATA, HTML tags, and embedded script/style blocks retain state across lines.
 
 ### v0.94 editor and chat mode switching
 

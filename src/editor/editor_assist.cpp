@@ -377,6 +377,7 @@ std::vector<std::string> assist_command_completions(const EditorAssistConfig& co
     commands.push_back("/mode javascript");
     commands.push_back("/mode typescript");
     commands.push_back("/mode html");
+    commands.push_back("/mode htmlonly");
     commands.push_back("/mode css");
     commands.push_back("/mode xml");
     commands.push_back("/mode json");
