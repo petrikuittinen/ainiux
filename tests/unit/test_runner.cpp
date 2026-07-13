@@ -8,6 +8,7 @@
 #include "editor/test_editor.hpp"
 #include "fetch/test_fetch.hpp"
 #include "html/test_html.hpp"
+#include "highlight/test_highlight.hpp"
 #include "http/test_http.hpp"
 #include "input/test_input.hpp"
 #include "json/test_json.hpp"
@@ -32,6 +33,7 @@ int main() {
     pkchat::test::fetch::run_all();
     pkchat::test::search::run_all();
     pkchat::test::html::run_all();
+    pkchat::test::highlight::run_all();
     pkchat::test::markdown::run_all();
     pkchat::test::provider::run_all();
     pkchat::test::json::run_all();

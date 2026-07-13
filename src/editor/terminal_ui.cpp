@@ -95,7 +95,8 @@ std::string editor_status_line(const EditorState& state, bool help_view) {
         if (state.dirty) {
             out << " *";
         }
-        out << "  Mode: Editor";
+        out << "  Mode: Editor  Syntax: " << highlight::language_name(state.language)
+            << (state.language_automatic ? " (auto)" : " (manual)");
     }
     const size_t line = state.text.line_for_offset(state.cursor) + 1;
     const size_t column = state.text.display_column_for_offset(state.cursor) + 1;
@@ -124,6 +125,51 @@ std::string activity_color_sequence(const TerminalThemeStyle& theme_style, tui::
     const tui::StyleRole role = tui::activity_indicator_role(kind);
     return tui::ansi_foreground_sequence(
         tui::style_pair_for(*theme_style.themes, theme_style.theme_name, role).foreground);
+}
+
+void write_editor_rendered_line(const std::string& line,
+                                const std::vector<RenderedPanel::Span>& spans,
+                                const TerminalThemeStyle& theme_style) {
+    size_t pos = 0;
+    auto write_base_style = [&]() {
+        if (theme_style.use_colors && theme_style.themes != nullptr) {
+            std::cout << tui::style_sequence_for(
+                *theme_style.themes, theme_style.theme_name, tui::StyleRole::Text);
+        }
+    };
+    write_base_style();
+    for (const RenderedPanel::Span& span : spans) {
+        const size_t start = std::min(span.start, line.size());
+        const size_t end = std::min(span.end, line.size());
+        if (start > pos) {
+            std::cout.write(line.data() + static_cast<std::ptrdiff_t>(pos),
+                            static_cast<std::streamsize>(start - pos));
+        }
+        if (span.syntax && theme_style.use_colors && theme_style.themes != nullptr) {
+            std::cout << tui::style_sequence_for(*theme_style.themes,
+                                                 theme_style.theme_name,
+                                                 tui::style_role_for_token(span.role));
+        } else {
+            write_base_style();
+        }
+        if (span.selected) {
+            std::cout << "\x1b[7m";
+        }
+        if (end > start) {
+            std::cout.write(line.data() + static_cast<std::ptrdiff_t>(start),
+                            static_cast<std::streamsize>(end - start));
+        }
+        std::cout << "\x1b[0m";
+        write_base_style();
+        pos = std::max(pos, end);
+    }
+    if (pos < line.size()) {
+        std::cout.write(line.data() + static_cast<std::ptrdiff_t>(pos),
+                        static_cast<std::streamsize>(line.size() - pos));
+    }
+    if (!spans.empty() || (theme_style.use_colors && theme_style.themes != nullptr)) {
+        std::cout << "\x1b[0m";
+    }
 }
 
 int append_utf8_cells(std::string& out, const std::string& text, size_t& pos, int max_cells) {
@@ -246,7 +292,7 @@ void reset_editor_buffer(EditorState& state, PieceTable text, std::string path) 
     state.preferred_column = 0;
     state.scroll_line = 0;
     state.scroll_column = 0;
-    state.path = std::move(path);
+    state.set_path(std::move(path));
     state.dirty = false;
     state.reset_autosave_pending();
     state.clear_undo_history();
@@ -287,7 +333,7 @@ void save_editor_to_path(EditorState& state,
         state.reset_autosave_pending();
         remove_autosave_file(path, settings);
         if (update_path) {
-            state.path = path;
+            state.set_path(path);
         }
         minibuffer_message(minibuffer, "Saved " + path);
     } else {
@@ -884,7 +930,11 @@ void render_terminal(EditorState& state,
     for (int row = 0; row < panel_rect.height; ++row) {
         std::cout << "\x1b[" << (panel_rect.row + row) << ";" << panel_rect.col << "H\x1b[K";
         if (row < static_cast<int>(panel.lines.size())) {
-            std::cout << panel.lines[static_cast<size_t>(row)];
+            const size_t index = static_cast<size_t>(row);
+            const std::vector<RenderedPanel::Span> empty_spans;
+            const std::vector<RenderedPanel::Span>& spans =
+                index < panel.line_spans.size() ? panel.line_spans[index] : empty_spans;
+            write_editor_rendered_line(panel.lines[index], spans, theme_style);
         }
     }
 

@@ -43,6 +43,7 @@ void handle_tui_command(const std::string& text, TuiCommandContext& ctx, TuiComm
                 "/fetch URL\n"
                 "/search QUERY\n"
                 "/theme [THEME]\n"
+                "/highlight [on|off]\n"
                 "/thinking [trace|notrace]\n"
                 "/editor (Ctrl+P; switch to editor mode)\n"
                 "AI commands from editor-commands.conf (/spell, /grammar, /continue,\n"
@@ -71,6 +72,30 @@ void handle_tui_command(const std::string& text, TuiCommandContext& ctx, TuiComm
             return;
         }
         ctx.status = "Usage: /thinking trace|notrace";
+        return;
+    }
+    if (text == "/highlight" || text.rfind("/highlight ", 0) == 0) {
+        const std::string requested = ascii_lower(app::detail::trim_ascii(text.substr(10)));
+        if (requested.empty()) {
+            ctx.status = std::string("Syntax highlighting: ") +
+                         (ctx.syntax_highlight ? "on" : "off");
+            return;
+        }
+        if (requested == "on") {
+            ctx.syntax_highlight = true;
+            ctx.context.options.tui_highlight = true;
+            ctx.input.highlight_enabled = true;
+            ctx.status = "Syntax highlighting enabled";
+            return;
+        }
+        if (requested == "off") {
+            ctx.syntax_highlight = false;
+            ctx.context.options.tui_highlight = false;
+            ctx.input.highlight_enabled = false;
+            ctx.status = "Syntax highlighting disabled";
+            return;
+        }
+        ctx.status = "Usage: /highlight on|off";
         return;
     }
     if (text.rfind("/theme", 0) == 0) {

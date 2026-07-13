@@ -2168,6 +2168,55 @@ void test_editor_buffer_list_helpers() {
           "editor clipboard content is independent of the source buffer");
 }
 
+void test_editor_markdown_mode_and_structured_highlighting() {
+    pkchat::editor::EditorState state =
+        pkchat::editor::EditorState::from_text("# Heading and *emphasis*");
+    state.set_path("README.MD");
+    state.highlight_enabled = true;
+    check(state.language == pkchat::highlight::Language::Markdown && state.language_automatic,
+          "editor automatically detects Markdown case-insensitively");
+
+    pkchat::editor::EditorState new_file_state;
+    new_file_state.set_path("definitely-does-not-exist-yet.md");
+    check(new_file_state.language == pkchat::highlight::Language::Markdown &&
+              new_file_state.language_automatic,
+          "editor detects Markdown from a new path before the file exists");
+
+    state.selection.anchor = 2;
+    state.selection.active = 8;
+    const pkchat::editor::RenderedPanel rendered = state.render({1, 1, 1, 40});
+    check(rendered.lines.size() == 1 && rendered.lines[0].find("\x1b") == std::string::npos,
+          "editor rendered text contains no embedded ANSI selection markup");
+    bool saw_heading = false;
+    bool saw_selected_heading = false;
+    for (const pkchat::editor::RenderedPanel::Span& span : rendered.line_spans[0]) {
+        saw_heading = saw_heading ||
+                      (span.syntax && span.role == pkchat::highlight::TokenRole::Heading);
+        saw_selected_heading = saw_selected_heading ||
+                               (span.syntax && span.selected &&
+                                span.role == pkchat::highlight::TokenRole::Heading);
+    }
+    check(saw_heading, "editor rendering includes Markdown heading spans");
+    check(saw_selected_heading,
+          "editor rendering overlays selection independently on Markdown syntax spans");
+
+    state.set_language(pkchat::highlight::Language::Text, false);
+    state.set_path("renamed.md");
+    check(state.language == pkchat::highlight::Language::Text && !state.language_automatic,
+          "editor manual text mode survives save-as path changes");
+    state.language_automatic = true;
+    state.redetect_language();
+    check(state.language == pkchat::highlight::Language::Markdown,
+          "editor automatic mode resumes filename detection");
+    state.set_path("renamed.txt");
+    check(state.language == pkchat::highlight::Language::Text,
+          "editor automatic mode re-detects after save-as");
+
+    const std::string status = pkchat::editor::editor_status_line(state);
+    check(status.find("Syntax: text (auto)") != std::string::npos,
+          "editor status line displays the active automatic syntax mode");
+}
+
 void run_all() {
     test_editor_control_key_sequence_decode();
     test_editor_save_as_overwrite_helpers();
@@ -2175,6 +2224,7 @@ void run_all() {
     test_editor_assist_path_completion();
     test_editor_missing_file_error_message();
     test_editor_buffer_list_helpers();
+    test_editor_markdown_mode_and_structured_highlighting();
     test_editor_ai_continue_helpers();
     test_editor_ai_setup_helpers();
     test_editor_file_io_failures();

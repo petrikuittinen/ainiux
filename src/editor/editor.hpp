@@ -10,6 +10,7 @@
 #include <vector>
 
 #include "common.hpp"
+#include "highlight/highlight.hpp"
 
 namespace pkchat::app {
 struct EditorRunResult;
@@ -39,6 +40,14 @@ struct CursorPoint {
 
 struct RenderedPanel {
     std::vector<std::string> lines;
+    struct Span {
+        size_t start = 0;
+        size_t end = 0;
+        highlight::TokenRole role = highlight::TokenRole::Operator;
+        bool syntax = false;
+        bool selected = false;
+    };
+    std::vector<std::vector<Span>> line_spans;
     CursorPoint cursor;
 };
 
@@ -72,6 +81,7 @@ struct EditorSettings {
     const tui::ThemeRegistry* themes = nullptr;
     std::string theme_name = "dark";
     bool use_colors = true;
+    bool highlight_enabled = true;
 };
 
 struct AiContinueContext;
@@ -149,8 +159,14 @@ struct EditorState {
     VerticalMovementMode vertical_movement = VerticalMovementMode::LogicalLine;
     EditorMode mode = EditorMode::Editor;
     Selection selection;
+    highlight::Language language = highlight::Language::Text;
+    bool language_automatic = true;
+    bool highlight_enabled = true;
 
     static EditorState from_text(std::string content);
+    void set_path(std::string value);
+    void set_language(highlight::Language value, bool automatic);
+    void redetect_language();
 
     Error insert(const std::string& value);
     Error insert_without_undo(const std::string& value);
@@ -217,6 +233,7 @@ struct EditorState {
     std::vector<EditorSnapshot> redo_stack_;
     size_t undo_limit_ = kDefaultUndoLimit;
     size_t autosave_pending_bytes_ = 0;
+    mutable highlight::DocumentCache highlight_cache_;
 };
 
 std::string editor_buffer_display_name(const EditorState& state, size_t index);
@@ -228,7 +245,10 @@ RenderedPanel render_panel(const PieceTable& text,
                            size_t cursor,
                            size_t scroll_line,
                            size_t scroll_column,
-                           const std::optional<Selection>& selection = std::nullopt);
+                           const std::optional<Selection>& selection = std::nullopt,
+                           highlight::Language language = highlight::Language::Text,
+                           bool highlight_enabled = false,
+                           highlight::DocumentCache* highlight_cache = nullptr);
 
 Error load_file(const std::string& path, PieceTable& out);
 Error load_file(const std::string& path, const EditorSettings& settings, PieceTable& out);

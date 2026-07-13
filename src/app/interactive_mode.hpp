@@ -47,6 +47,7 @@ struct InteractiveSession {
     editor::EditorSettings editor_settings;
     editor::EditorAssistConfig assist_config;
     PendingEditorAssistFromChat pending_editor_assist;
+    bool highlight_enabled = true;
 };
 
 struct EditorRunResult {

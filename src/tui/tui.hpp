@@ -34,6 +34,7 @@ Layout layout_for_terminal(int rows, int cols);
 struct StyledSegment {
     std::string text;
     StyleRole role = StyleRole::Text;
+    bool reverse = false;
 };
 
 struct StyledLine {

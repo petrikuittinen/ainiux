@@ -33,6 +33,7 @@ struct Options {
     bool editor = false;
     std::string editor_path;
     bool no_colors = false;
+    bool tui_highlight = true;
     bool allow_private_url_fetch = false;
     bool show_thinking_traces = false;
     bool benchmark = false;

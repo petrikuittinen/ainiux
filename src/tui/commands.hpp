@@ -46,6 +46,7 @@ struct TuiCommandContext {
     std::string& settings_text;
     int& history_scroll;
     bool& show_thinking_traces;
+    bool& syntax_highlight;
     const ThemeRegistry& themes;
     std::string& theme;
     bool use_colors = true;

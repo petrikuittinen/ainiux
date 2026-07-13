@@ -364,6 +364,8 @@ std::vector<std::string> assist_command_completions(const EditorAssistConfig& co
         }
     }
     commands.push_back("/help");
+    commands.push_back("/highlight ");
+    commands.push_back("/mode ");
     commands.push_back("/provider ");
     commands.push_back("/model ");
     commands.push_back("/save");

@@ -35,6 +35,7 @@ pkchat::editor::EditorSettings editor_settings_from_options(const pkchat::cli::O
     settings.themes = &options.tui_themes;
     settings.theme_name = options.tui_theme;
     settings.use_colors = !options.no_colors;
+    settings.highlight_enabled = options.tui_highlight;
     return settings;
 }
 
@@ -48,6 +49,7 @@ pkchat::app::InteractiveSession interactive_session_from_editor_startup(
     session.editor_settings = editor_settings_from_options(options);
     session.ai_continue = std::move(ai_continue);
     session.assist_config = options.editor_assist_config;
+    session.highlight_enabled = options.tui_highlight;
     if (session.ai_continue.has_value()) {
         session.context = session.ai_continue->request;
     }
@@ -430,6 +432,7 @@ int main(int argc, char** argv) {
         interactive.editor_save_as = interactive.context.options.output_path;
         interactive.editor_settings = editor_settings_from_options(interactive.context.options);
         interactive.assist_config = interactive.context.options.editor_assist_config;
+        interactive.highlight_enabled = interactive.context.options.tui_highlight;
         pkchat::app::sync_shared_provider_to_editor(interactive);
         return pkchat::app::run_interactive(std::move(interactive));
     }

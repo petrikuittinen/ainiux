@@ -14,6 +14,7 @@
 #include "editor/path_completion.hpp"
 #include "tui/chat_assist.hpp"
 #include "tui/tui.hpp"
+#include "tui/detail/render.hpp"
 #include <algorithm>
 #include <string>
 #include <vector>
@@ -295,6 +296,22 @@ void test_tui_theme_parsing_and_contrast() {
         pkchat::tui::StyleRole::PanelHint,
         pkchat::tui::StyleRole::PanelHighlight,
         pkchat::tui::StyleRole::PanelBody,
+        pkchat::tui::StyleRole::SyntaxComment,
+        pkchat::tui::StyleRole::SyntaxKeyword,
+        pkchat::tui::StyleRole::SyntaxType,
+        pkchat::tui::StyleRole::SyntaxString,
+        pkchat::tui::StyleRole::SyntaxNumber,
+        pkchat::tui::StyleRole::SyntaxLiteral,
+        pkchat::tui::StyleRole::SyntaxFunction,
+        pkchat::tui::StyleRole::SyntaxVariable,
+        pkchat::tui::StyleRole::SyntaxOperator,
+        pkchat::tui::StyleRole::SyntaxPreprocessor,
+        pkchat::tui::StyleRole::SyntaxTag,
+        pkchat::tui::StyleRole::SyntaxAttribute,
+        pkchat::tui::StyleRole::SyntaxProperty,
+        pkchat::tui::StyleRole::SyntaxHeading,
+        pkchat::tui::StyleRole::SyntaxEmphasis,
+        pkchat::tui::StyleRole::SyntaxLink,
     };
 
     for (const std::string& item : themes) {
@@ -303,6 +320,14 @@ void test_tui_theme_parsing_and_contrast() {
             check(pkchat::tui::contrast_ratio(pair.foreground, pair.background) >= 4.5,
                   std::string("TUI theme contrast meets WCAG AA for ") + item);
         }
+        const pkchat::tui::Rgb link =
+            pkchat::tui::style_pair_for(registry, item, pkchat::tui::StyleRole::SyntaxLink)
+                .foreground;
+        const pkchat::tui::Rgb url =
+            pkchat::tui::style_pair_for(registry, item, pkchat::tui::StyleRole::SyntaxAttribute)
+                .foreground;
+        check(link.r != url.r || link.g != url.g || link.b != url.b,
+              std::string("TUI Markdown URL color differs from link text for ") + item);
     }
 
     const pkchat::tui::StylePair dark_text =
@@ -329,6 +354,17 @@ void test_tui_theme_parsing_and_contrast() {
     check(options.tui_themes.has("dark") && options.tui_themes.has("light") &&
               options.tui_themes.has("sepia"),
           "themes.conf defines built-in dark, light, and sepia themes");
+    for (const std::string& item : options.tui_themes.names()) {
+        for (pkchat::tui::StyleRole role : roles) {
+            if (role < pkchat::tui::StyleRole::SyntaxComment) {
+                continue;
+            }
+            const pkchat::tui::StylePair pair =
+                pkchat::tui::style_pair_for(options.tui_themes, item, role);
+            check(pkchat::tui::contrast_ratio(pair.foreground, pair.background) >= 4.5,
+                  std::string("configured syntax color meets WCAG AA for ") + item);
+        }
+    }
 
     const pkchat::tui::ThemeCommandResult listed =
         pkchat::tui::handle_theme_command(options.tui_themes, "dark", "", true);
@@ -357,6 +393,56 @@ void test_tui_thinking_trace_display() {
 
     hidden = pkchat::tui::thinking_display_text("Before <think>hidden</think> after", false);
     check(hidden.text == "Before  after", "TUI thinking notrace preserves visible text around a trace");
+}
+
+void test_tui_markdown_history_highlighting() {
+    pkchat::chat::Session session;
+    session.messages.push_back({"user", "# Heading\nPlain *emphasis* and [link](https://example.test)"});
+    std::vector<pkchat::tui::StyledLine> lines =
+        pkchat::tui::detail::history_lines_for_session(
+            session, 100, false, pkchat::tui::ActivityKind::None, 0, true);
+    bool saw_heading = false;
+    bool saw_emphasis = false;
+    bool saw_link = false;
+    bool saw_link_url = false;
+    for (const pkchat::tui::StyledLine& line : lines) {
+        for (const pkchat::tui::StyledSegment& segment : line.segments) {
+            saw_heading = saw_heading || segment.role == pkchat::tui::StyleRole::SyntaxHeading;
+            saw_emphasis = saw_emphasis || segment.role == pkchat::tui::StyleRole::SyntaxEmphasis;
+            saw_link = saw_link || segment.role == pkchat::tui::StyleRole::SyntaxLink;
+            saw_link_url = saw_link_url ||
+                           segment.role == pkchat::tui::StyleRole::SyntaxAttribute;
+        }
+    }
+    check(saw_heading && saw_emphasis && saw_link && saw_link_url,
+          "TUI chat history gives Markdown link text and URLs distinct semantic colors");
+
+    lines = pkchat::tui::detail::history_lines_for_session(
+        session, 100, false, pkchat::tui::ActivityKind::None, 0, false);
+    bool saw_syntax = false;
+    for (const pkchat::tui::StyledLine& line : lines) {
+        for (const pkchat::tui::StyledSegment& segment : line.segments) {
+            saw_syntax = saw_syntax || segment.role == pkchat::tui::StyleRole::SyntaxHeading ||
+                         segment.role == pkchat::tui::StyleRole::SyntaxEmphasis ||
+                         segment.role == pkchat::tui::StyleRole::SyntaxLink;
+        }
+    }
+    check(!saw_syntax, "TUI chat /highlight off path renders Markdown as plain text");
+
+    session.messages.clear();
+    session.messages.push_back({"assistant", "<think># private</think>\n# public"});
+    lines = pkchat::tui::detail::history_lines_for_session(
+        session, 100, true, pkchat::tui::ActivityKind::None, 0, true);
+    bool saw_thinking = false;
+    saw_heading = false;
+    for (const pkchat::tui::StyledLine& line : lines) {
+        for (const pkchat::tui::StyledSegment& segment : line.segments) {
+            saw_thinking = saw_thinking || segment.role == pkchat::tui::StyleRole::ThinkingTrace;
+            saw_heading = saw_heading || segment.role == pkchat::tui::StyleRole::SyntaxHeading;
+        }
+    }
+    check(saw_thinking && saw_heading,
+          "TUI thinking-trace style keeps priority while visible Markdown remains highlighted");
 }
 
 void test_tui_input_label_and_activity_indicators() {
@@ -710,6 +796,7 @@ void run_all() {
     test_tui_regeneration_plan_uses_last_user_turn();
     test_tui_theme_parsing_and_contrast();
     test_tui_thinking_trace_display();
+    test_tui_markdown_history_highlighting();
 }
 
 }  // namespace pkchat::test::tui

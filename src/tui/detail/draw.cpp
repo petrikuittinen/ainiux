@@ -200,7 +200,13 @@ void draw_line(int row, int cols, const std::vector<StyledSegment>& segments, St
             continue;
         }
         write_style(style, segment.role);
+        if (segment.reverse) {
+            std::cout << "\x1b[7m";
+        }
         std::cout << clipped;
+        if (segment.reverse) {
+            std::cout << "\x1b[0m";
+        }
         used += displayed_cells(clipped);
     }
     if (used < cols) {
@@ -294,6 +300,58 @@ std::vector<StyledSegment> plain_text_segments(const std::string& content) {
     return std::vector<StyledSegment>{{content, StyleRole::Text}};
 }
 
+std::vector<StyledSegment> markdown_segments(const std::string& content) {
+    const std::vector<std::string> lines = highlight::split_lines(content);
+    const std::vector<highlight::HighlightedLine> highlighted =
+        highlight::highlight_document(highlight::Language::Markdown, content);
+    std::vector<StyledSegment> segments;
+    for (size_t line_index = 0; line_index < lines.size(); ++line_index) {
+        const std::string& line = lines[line_index];
+        size_t pos = 0;
+        if (line_index < highlighted.size() && !highlighted[line_index].work_limited) {
+            for (const highlight::Span& span : highlighted[line_index].spans) {
+                const size_t start = std::min(span.start, line.size());
+                const size_t end = std::min(span.end, line.size());
+                if (start > pos) {
+                    append_segment(segments, line.substr(pos, start - pos), StyleRole::Text);
+                }
+                if (end > start) {
+                    append_segment(segments,
+                                   line.substr(start, end - start),
+                                   style_role_for_token(span.role));
+                }
+                pos = std::max(pos, end);
+            }
+        }
+        if (pos < line.size()) {
+            append_segment(segments, line.substr(pos), StyleRole::Text);
+        }
+        if (line_index + 1 < lines.size()) {
+            append_segment(segments, "\n", StyleRole::Text);
+        }
+    }
+    if (segments.empty()) {
+        segments.push_back({"", StyleRole::Text});
+    }
+    return segments;
+}
+
+std::vector<StyledSegment> markdown_outside_thinking_segments(
+    const std::vector<StyledSegment>& input) {
+    std::vector<StyledSegment> output;
+    for (const StyledSegment& segment : input) {
+        if (segment.role != StyleRole::Text) {
+            append_segment(output, segment.text, segment.role);
+            continue;
+        }
+        const std::vector<StyledSegment> highlighted = markdown_segments(segment.text);
+        for (const StyledSegment& item : highlighted) {
+            append_segment(output, item.text, item.role);
+        }
+    }
+    return output;
+}
+
 StyleRole status_role_for_text(const std::string& status) {
     if (starts_with(status, "PKCHAT_ERR_") || starts_with(status, "Unknown command") ||
         starts_with(status, "Usage:") || starts_with(status, "Cannot ") ||
@@ -308,7 +366,8 @@ std::vector<StyledLine> history_lines_for_session(const chat::Session& session,
                                                   int cols,
                                                   bool show_thinking_traces,
                                                   ActivityKind activity_kind,
-                                                  size_t activity_frame) {
+                                                  size_t activity_frame,
+                                                  bool markdown_highlight) {
     std::vector<StyledLine> history;
     const int min_content_width = 8;
     for (size_t message_index = 0; message_index < session.messages.size(); ++message_index) {
@@ -353,9 +412,12 @@ std::vector<StyledLine> history_lines_for_session(const chat::Session& session,
                 activity_placeholder_segments(session_status_label(session), ActivityKind::Streaming,
                                               activity_frame, "streaming response ...");
         } else {
-            content_segments = plain_text_segments(content);
+            content_segments = markdown_highlight ? markdown_segments(content) : plain_text_segments(content);
             if (message.role == "assistant" && show_thinking_traces) {
                 content_segments = visible_thinking_trace_segments(content);
+                if (markdown_highlight) {
+                    content_segments = markdown_outside_thinking_segments(content_segments);
+                }
             }
             if (show_streaming_indicator) {
                 std::vector<StyledSegment> prefixed;

@@ -3,6 +3,7 @@
 #include <string>
 #include <vector>
 
+#include "highlight/highlight.hpp"
 #include "tui/theme_types.hpp"
 
 namespace pkchat::tui {
@@ -26,6 +27,22 @@ struct ThemePalette {
     Rgb panel_highlight{0xFD, 0xE6, 0x8A};
     Rgb panel_body{0xE6, 0xED, 0xF3};
     Rgb panel_background{0x11, 0x17, 0x22};
+    Rgb syntax_comment{0x9B, 0xA7, 0xB4};
+    Rgb syntax_keyword{0xC4, 0xB5, 0xFD};
+    Rgb syntax_type{0x7D, 0xD3, 0xFC};
+    Rgb syntax_string{0x86, 0xEF, 0xAC};
+    Rgb syntax_number{0xFD, 0xE6, 0x8A};
+    Rgb syntax_literal{0xFD, 0xA4, 0xAF};
+    Rgb syntax_function{0x93, 0xC5, 0xFD};
+    Rgb syntax_variable{0xF9, 0xA8, 0xD4};
+    Rgb syntax_operator{0xE6, 0xED, 0xF3};
+    Rgb syntax_preprocessor{0xF0, 0xAB, 0xFC};
+    Rgb syntax_tag{0x67, 0xE8, 0xF9};
+    Rgb syntax_attribute{0xFC, 0xD3, 0x4D};
+    Rgb syntax_property{0xA5, 0xB4, 0xFC};
+    Rgb syntax_heading{0xF9, 0xA8, 0xD4};
+    Rgb syntax_emphasis{0xFD, 0xBA, 0x74};
+    Rgb syntax_link{0x7D, 0xD3, 0xFC};
 };
 
 class ThemeRegistry {
@@ -46,6 +63,10 @@ bool parse_rgb_color(const std::string& text, Rgb& out);
 std::string format_theme_list(const ThemeRegistry& registry);
 std::string ansi_style_sequence(const StylePair& pair);
 std::string ansi_foreground_sequence(const Rgb& color);
+double contrast_ratio(Rgb foreground, Rgb background);
+StyleRole style_role_for_token(highlight::TokenRole role);
+bool set_syntax_theme_color(ThemePalette& palette, const std::string& key, const Rgb& color);
+void derive_syntax_theme_colors(ThemePalette& palette);
 
 struct ThemeCommandResult {
     bool ok = false;

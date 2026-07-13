@@ -38,6 +38,8 @@ struct HelpViewSession {
     EditorSnapshot saved;
     std::string saved_path;
     bool saved_dirty = false;
+    highlight::Language saved_language = highlight::Language::Text;
+    bool saved_language_automatic = true;
 };
 
 }  // namespace
@@ -50,8 +52,11 @@ app::EditorRunResult run_editor(const std::string& path,
                                 app::InteractiveSession* interactive) {
     EditorState state;
     state.set_undo_limit(settings.undo_limit);
+    bool highlight_enabled = interactive != nullptr ? interactive->highlight_enabled
+                                                    : settings.highlight_enabled;
+    state.highlight_enabled = highlight_enabled;
     const std::string initial_path = expand_user_path(path.empty() ? save_as : path);
-    state.path = initial_path;
+    state.set_path(initial_path);
     std::string status = "Ready";
     bool switch_to_chat = false;
     std::vector<EditorState> buffers;
@@ -66,6 +71,7 @@ app::EditorRunResult run_editor(const std::string& path,
         interactive->editor_buffers.clear();
         interactive->editor_active_buffer = 0;
         state = buffers[active_buffer];
+        state.highlight_enabled = highlight_enabled;
         status = "Editor";
     } else if (!initial_path.empty() && access(initial_path.c_str(), F_OK) == 0) {
         FileLoadCheck check;
@@ -101,6 +107,11 @@ app::EditorRunResult run_editor(const std::string& path,
             if (!create_err.ok()) {
                 std::cerr << error_code_name(create_err.code) << ": " << create_err.message << "\n";
                 return {5, app::InteractiveUiTarget::Quit};
+            }
+            // Detection is path-based and must not depend on the file having
+            // existed before editor startup.
+            if (state.language_automatic) {
+                state.redetect_language();
             }
             status = "New file";
         }
@@ -191,6 +202,7 @@ app::EditorRunResult run_editor(const std::string& path,
         interactive->editor_save_as = save_as;
         interactive->editor_settings = settings;
         interactive->assist_config = assist_config;
+        interactive->highlight_enabled = highlight_enabled;
         interactive->ai_continue = ai_continue;
         app::sync_editor_provider_to_shared(*interactive, ai_continue);
         switch_to_chat = true;
@@ -210,7 +222,8 @@ app::EditorRunResult run_editor(const std::string& path,
         }
         buffer_list_selected = std::min(buffer_list_selected, buffers.size() - 1);
         buffer_list_view = EditorState::from_text(editor_buffer_list_text(buffers, buffer_list_selected));
-        buffer_list_view.path = "[buffers]";
+        buffer_list_view.set_path("[buffers]");
+        buffer_list_view.highlight_enabled = false;
         const size_t selected_line = std::min(buffer_list_selected + 1, buffer_list_view.text.line_count() - 1);
         buffer_list_view.cursor = buffer_list_view.text.line_start(selected_line);
         buffer_list_view.dirty = false;
@@ -229,6 +242,7 @@ app::EditorRunResult run_editor(const std::string& path,
             render_terminal(buffer_list_view, minibuffer, theme_style);
             return;
         }
+        state.highlight_enabled = highlight_enabled;
         render_terminal(state, minibuffer, theme_style, help_view.active, refresh_assist_display());
     };
     render_editor();
@@ -245,6 +259,7 @@ app::EditorRunResult run_editor(const std::string& path,
         state.restore_captured_state(help_view.saved);
         state.path = help_view.saved_path;
         state.dirty = help_view.saved_dirty;
+        state.set_language(help_view.saved_language, help_view.saved_language_automatic);
         help_view.active = false;
         minibuffer_message(minibuffer, "Returned to editing");
     };
@@ -267,6 +282,8 @@ app::EditorRunResult run_editor(const std::string& path,
         help_view.saved = state.capture_state();
         help_view.saved_path = state.path;
         help_view.saved_dirty = state.dirty;
+        help_view.saved_language = state.language;
+        help_view.saved_language_automatic = state.language_automatic;
         help_view.active = true;
         state.text = PieceTable::from_string(std::move(help_text));
         state.cursor = 0;
@@ -274,6 +291,7 @@ app::EditorRunResult run_editor(const std::string& path,
         state.scroll_line = 0;
         state.scroll_column = 0;
         state.dirty = false;
+        state.set_language(highlight::Language::Markdown, false);
         state.clear_selection();
         state.clear_undo_history();
         minibuffer_message(minibuffer, "Help (read-only) — Esc /help or Ctrl+Q to return");
@@ -286,6 +304,7 @@ app::EditorRunResult run_editor(const std::string& path,
         sync_active_buffer();
         active_buffer = index;
         state = buffers[active_buffer];
+        state.highlight_enabled = highlight_enabled;
         buffer_list_active = false;
         buffer_list_selected = active_buffer;
         minibuffer_message(minibuffer,
@@ -324,7 +343,8 @@ app::EditorRunResult run_editor(const std::string& path,
         EditorState next;
         next.set_undo_limit(settings.undo_limit);
         next.text = std::move(loaded);
-        next.path = open_path;
+        next.set_path(open_path);
+        next.highlight_enabled = highlight_enabled;
         next.cursor = 0;
         next.preferred_column = 0;
         next.scroll_line = 0;
@@ -381,6 +401,8 @@ app::EditorRunResult run_editor(const std::string& path,
         next.set_undo_limit(settings.undo_limit);
         next.text = PieceTable::from_string("");
         next.path.clear();
+        next.redetect_language();
+        next.highlight_enabled = highlight_enabled;
         next.dirty = false;
         next.clear_selection();
         next.clear_undo_history();
@@ -435,6 +457,7 @@ app::EditorRunResult run_editor(const std::string& path,
             buffers.clear();
             state = EditorState{};
             state.set_undo_limit(settings.undo_limit);
+            state.highlight_enabled = highlight_enabled;
             buffers.push_back(state);
             active_buffer = 0;
             buffer_list_selected = 0;
@@ -876,6 +899,8 @@ app::EditorRunResult run_editor(const std::string& path,
             next.set_undo_limit(settings.undo_limit);
             next.text = PieceTable::from_string("");
             next.path.clear();
+            next.redetect_language();
+            next.highlight_enabled = highlight_enabled;
             next.dirty = false;
             next.clear_selection();
             next.clear_undo_history();
@@ -1013,6 +1038,65 @@ app::EditorRunResult run_editor(const std::string& path,
             pending_assist = PendingAssist{};
             exit_assist_command_mode(minibuffer, assist_completer);
             request_switch_to_chat();
+            return;
+        }
+        if (command_line == "/highlight" || command_line.rfind("/highlight ", 0) == 0) {
+            pending_assist = PendingAssist{};
+            exit_assist_command_mode(minibuffer, assist_completer);
+            const std::string requested = command_line.size() <= 10
+                                              ? ""
+                                              : ascii_lower(trim_ascii_copy(command_line.substr(10)));
+            if (requested.empty()) {
+                minibuffer_message(minibuffer,
+                                   std::string("Syntax highlighting: ") +
+                                       (highlight_enabled ? "on" : "off"));
+                return;
+            }
+            if (requested != "on" && requested != "off") {
+                minibuffer_message(minibuffer, "Usage: /highlight on|off");
+                return;
+            }
+            highlight_enabled = requested == "on";
+            state.highlight_enabled = highlight_enabled;
+            if (interactive != nullptr) {
+                interactive->highlight_enabled = highlight_enabled;
+            }
+            minibuffer_message(minibuffer,
+                               std::string("Syntax highlighting ") +
+                                   (highlight_enabled ? "enabled" : "disabled"));
+            return;
+        }
+        if (command_line == "/mode" || command_line.rfind("/mode ", 0) == 0) {
+            pending_assist = PendingAssist{};
+            exit_assist_command_mode(minibuffer, assist_completer);
+            const std::string requested = command_line.size() <= 5
+                                              ? ""
+                                              : ascii_lower(trim_ascii_copy(command_line.substr(5)));
+            if (requested.empty()) {
+                minibuffer_message(minibuffer,
+                                   std::string("Mode: ") + highlight::language_name(state.language) +
+                                       (state.language_automatic ? " (automatic)" : " (manual)"));
+                return;
+            }
+            if (requested == "auto") {
+                state.language_automatic = true;
+                state.redetect_language();
+                minibuffer_message(minibuffer,
+                                   std::string("Mode: ") + highlight::language_name(state.language) +
+                                       " (automatic)");
+                return;
+            }
+            highlight::Language language = highlight::Language::Text;
+            if (!highlight::parse_language(requested, language)) {
+                minibuffer_message(minibuffer,
+                                   "Unknown mode: " + requested +
+                                       ". Available in this preview: auto, text, markdown (md)");
+                return;
+            }
+            state.set_language(language, false);
+            minibuffer_message(minibuffer,
+                               std::string("Mode: ") + highlight::language_name(state.language) +
+                                   " (manual)");
             return;
         }
         if (command_line == "/theme" || command_line.rfind("/theme ", 0) == 0) {

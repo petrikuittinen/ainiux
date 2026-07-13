@@ -25,6 +25,24 @@ EditorState EditorState::from_text(std::string content) {
     return state;
 }
 
+void EditorState::set_path(std::string value) {
+    path = std::move(value);
+    if (language_automatic) {
+        redetect_language();
+    }
+}
+
+void EditorState::set_language(highlight::Language value, bool automatic) {
+    language = value;
+    language_automatic = automatic;
+    highlight_cache_.clear();
+}
+
+void EditorState::redetect_language() {
+    language = highlight::detect_language(path);
+    highlight_cache_.clear();
+}
+
 EditorSnapshot EditorState::snapshot() const {
     return {text.str(), cursor, preferred_column, scroll_line, scroll_column};
 }
@@ -708,7 +726,15 @@ void EditorState::ensure_cursor_visible(const Rect& rect) {
 RenderedPanel EditorState::render(const Rect& rect) const {
     const std::optional<Selection> active_selection =
         selection.has_range() ? std::optional<Selection>(selection) : std::nullopt;
-    return render_panel(text, rect, cursor, scroll_line, scroll_column, active_selection);
+    return render_panel(text,
+                        rect,
+                        cursor,
+                        scroll_line,
+                        scroll_column,
+                        active_selection,
+                        language,
+                        highlight_enabled,
+                        &highlight_cache_);
 }
 
 

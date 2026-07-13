@@ -24,6 +24,22 @@ enum class StyleRole {
     PanelHint,
     PanelHighlight,
     PanelBody,
+    SyntaxComment,
+    SyntaxKeyword,
+    SyntaxType,
+    SyntaxString,
+    SyntaxNumber,
+    SyntaxLiteral,
+    SyntaxFunction,
+    SyntaxVariable,
+    SyntaxOperator,
+    SyntaxPreprocessor,
+    SyntaxTag,
+    SyntaxAttribute,
+    SyntaxProperty,
+    SyntaxHeading,
+    SyntaxEmphasis,
+    SyntaxLink,
 };
 
 struct StylePair {

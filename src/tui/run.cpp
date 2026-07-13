@@ -68,8 +68,13 @@ app::TuiRunResult run(provider::RequestContext context,
     runtime::JobHandle completion_job;
     ActiveJob active_job = ActiveJob::None;
     const size_t input_undo_limit = static_cast<size_t>(std::max(0, context.options.editor_undo_limit));
+    bool syntax_highlight = interactive != nullptr ? interactive->highlight_enabled
+                                                   : context.options.tui_highlight;
     auto new_input_editor = [&]() {
-        return detail::empty_input_editor(input_undo_limit);
+        editor::EditorState editor = detail::empty_input_editor(input_undo_limit);
+        editor.set_language(highlight::Language::Markdown, false);
+        editor.highlight_enabled = syntax_highlight;
+        return editor;
     };
     editor::EditorState input = new_input_editor();
     editor::ContextualCompleter path_completer;
@@ -702,6 +707,7 @@ app::TuiRunResult run(provider::RequestContext context,
                                       settings_text,
                                       history_scroll,
                                       show_thinking_traces,
+                                      syntax_highlight,
                                       context.options.tui_themes,
                                       theme,
                                       use_colors,
@@ -841,7 +847,8 @@ app::TuiRunResult run(provider::RequestContext context,
     size_t render_frame = 0;
     ActivityKind activity_kind = ActivityKind::None;
     detail::render(session, input, status, history_scroll, show_thinking_traces, mode, visible_panel,
-                   activity_kind, render_frame, detail::RenderStyle{&context.options.tui_themes, theme, use_colors}, panel_title());
+                   activity_kind, render_frame, syntax_highlight,
+                   detail::RenderStyle{&context.options.tui_themes, theme, use_colors}, panel_title());
     while (!quit) {
         TuiEvent event;
         while (events.try_pop(event)) {
@@ -1252,7 +1259,8 @@ app::TuiRunResult run(provider::RequestContext context,
                             : ActivityKind::None;
         ++render_frame;
         detail::render(session, input, status, history_scroll, show_thinking_traces, mode, visible_panel,
-                       activity_kind, render_frame, detail::RenderStyle{&context.options.tui_themes, theme, use_colors}, panel_title());
+                       activity_kind, render_frame, syntax_highlight,
+                       detail::RenderStyle{&context.options.tui_themes, theme, use_colors}, panel_title());
     }
 
     model_job.cancel();
@@ -1268,6 +1276,7 @@ app::TuiRunResult run(provider::RequestContext context,
         interactive->chat_session_initialized = true;
         interactive->ai_continue = ai_continue;
         interactive->assist_config = ai_continue.assist_config;
+        interactive->highlight_enabled = syntax_highlight;
         return {0, app::InteractiveUiTarget::Editor};
     }
     return {0, app::InteractiveUiTarget::Quit};

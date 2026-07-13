@@ -30,6 +30,16 @@ void test_config_applies_user_settings() {
     check(options.tui_theme == "dark", "user config selects the dark theme");
     check(options.show_thinking_traces, "user config shows thinking traces by default");
 
+    pkchat::config::ParseResult highlight_config =
+        pkchat::config::parse("[tui]\nhighlight = off\n", "highlight.conf");
+    err = pkchat::config::apply_document(highlight_config.document, options);
+    check(err.ok() && !options.tui_highlight,
+          "tui.highlight accepts the on/off compatibility form");
+    highlight_config = pkchat::config::parse("[tui]\nhighlight = true\n", "highlight-bool.conf");
+    err = pkchat::config::apply_document(highlight_config.document, options);
+    check(err.ok() && options.tui_highlight,
+          "tui.highlight accepts boolean values");
+
     pkchat::config::ParseResult editor_config =
         pkchat::config::parse("[editor]\nundo_limit = 7\nhuge_file_size_warning = 2048\nfile_size_limit = -1\n"
                               "continue_read_chars = 8192\ncontinue_max_tokens = 4096\n",
@@ -270,7 +280,11 @@ void test_config_model_setting_thinking_budget() {
 void test_config_reads_common_template() {
     pkchat::config::ParseResult parsed = pkchat::config::read_file("config/pkchat.conf");
     check(parsed.error.ok(), "common config file parses");
-    check(parsed.document.entries.size() == 153, "common config has every expected setting");
+    check(parsed.document.entries.size() == 154, "common config has every expected setting");
+    pkchat::cli::Options highlight_options;
+    pkchat::Error apply_error = pkchat::config::apply_document(parsed.document, highlight_options);
+    check(apply_error.ok() && highlight_options.tui_highlight,
+          "common config enables syntax highlighting by default");
 
     const pkchat::config::Entry* provider = parsed.document.find("provider");
     check(provider != nullptr && provider->value.is_string() && provider->value.string == "openai",

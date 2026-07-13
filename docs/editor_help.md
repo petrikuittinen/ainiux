@@ -113,6 +113,8 @@ Press **`Esc`** to open the command minibuffer (`Command:`). Type a slash comman
 | `/new` | Open a new empty editor buffer (same as `Ctrl+N`) |
 | `/list` | List open editor buffers (same as `Ctrl+L`; Enter chooses, Esc cancels) |
 | `/close` | Close the active editor buffer (same as `Ctrl+W`; prompts if modified) |
+| `/highlight [on|off]` | Show or toggle syntax highlighting for editor and chat |
+| `/mode [auto|text|markdown|md]` | Show or set this buffer's syntax mode |
 | `/provider [NAME]` | Change provider (picker when omitted) |
 | `/model [MODEL]` | Change model (picker when omitted) |
 | `/help` | Toggle this help view |
@@ -145,6 +147,10 @@ Examples:
 `pkchat --provider none --editor` and plain `pkchat --editor` work offline. File editing, search, replace, undo, and clipboard still work. AI commands and `Ctrl+Space` report that a provider is required until `/provider` and `/model` are configured.
 
 With a provider but no model, editing still works; AI commands report **No model chosen. Use /model to choose one**.
+
+## Markdown highlighting preview
+
+Markdown highlighting is enabled by default for `.md`, `.markdown`, `.mdown`, and `.mkd` files. The status line shows the current language and whether detection is automatic or manual. `/mode text` disables syntax styling for the current buffer, `/mode markdown` forces Markdown, and `/mode auto` resumes filename detection. Manual mode survives buffer switches and save-as operations. `/highlight off` disables highlighting across editor/chat switches for the current process; it does not change configuration.
 
 ## Configuration
 

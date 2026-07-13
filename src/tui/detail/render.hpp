@@ -34,7 +34,8 @@ std::vector<StyledLine> history_lines_for_session(const chat::Session& session,
                                                   int cols,
                                                   bool show_thinking_traces,
                                                   ActivityKind activity_kind = ActivityKind::None,
-                                                  size_t activity_frame = 0);
+                                                  size_t activity_frame = 0,
+                                                  bool markdown_highlight = true);
 std::vector<StyledLine> panel_lines_for_text(const std::string& text,
                                                TuiMode mode,
                                                int cols,
@@ -53,6 +54,7 @@ void render(const chat::Session& session,
             const std::string& panel_text,
             ActivityKind activity_kind,
             size_t activity_frame,
+            bool syntax_highlight,
             const RenderStyle& style,
             const char* panel_title_override = nullptr);
 

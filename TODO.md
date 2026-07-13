@@ -1,5 +1,11 @@
 # TODO
 
+## Syntax Highlighting
+
+- Let the Markdown-only editor/chat preview settle before adding Python, C/C++, C#, Java, JavaScript/TypeScript, HTML/CSS/XML, JSON, and Bash modes.
+- Add startup and `/theme` warnings for explicit low-contrast user syntax colors while preserving those overrides.
+- Extend fenced Markdown blocks with tagged-language highlighting when the corresponding language engines are implemented.
+
 ## Editor AI Commands
 
 - Ensure AI text mutations are one undoable editor operation so a separate preview panel is not required.

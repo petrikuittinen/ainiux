@@ -44,6 +44,35 @@ def require_seen(raw, needle, context):
         raise RuntimeError(f"expected {needle!r} while {context}; saw {text(raw)[-500:]!r}")
 
 
+def check_new_markdown_file_mode(binary, tmpdir):
+    path = os.path.join(tmpdir, "new-document.md")
+    master, slave = pty.openpty()
+    process = subprocess.Popen(
+        [binary, "--provider", "none", "--editor", path],
+        stdin=slave,
+        stdout=slave,
+        stderr=slave,
+        close_fds=True,
+    )
+    os.close(slave)
+    output = bytearray()
+    try:
+        time.sleep(0.4)
+        output.extend(drain(master, 1.0))
+        output.extend(send(master, "\x1b"))
+        output.extend(send(master, "/mode\r"))
+        require_seen(output, "Mode: markdown (automatic)", "opening a new Markdown file")
+        output.extend(send(master, "\x11"))
+        process.wait(timeout=10)
+    finally:
+        if process.poll() is None:
+            process.terminate()
+            process.wait(timeout=2)
+        os.close(master)
+    if process.returncode != 0:
+        raise RuntimeError(f"new Markdown editor exited with status {process.returncode}")
+
+
 def main():
     if len(sys.argv) != 2:
         print("usage: editor_buffers_driver.py BINARY", file=sys.stderr)
@@ -51,6 +80,7 @@ def main():
 
     binary = sys.argv[1]
     tmpdir = tempfile.mkdtemp(prefix="pkchat-editor-buffers-")
+    check_new_markdown_file_mode(binary, tmpdir)
     file1 = os.path.join(tmpdir, "file1.txt")
     file2 = os.path.join(tmpdir, "file2.txt")
     with open(file1, "w", encoding="utf-8") as handle:

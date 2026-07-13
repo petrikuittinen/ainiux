@@ -798,6 +798,7 @@ Error apply_configured_themes(const Document& document, cli::Options& candidate)
         std::optional<tui::Rgb> panel_highlight;
         std::optional<tui::Rgb> panel_body;
         std::optional<tui::Rgb> panel_background;
+        std::map<std::string, tui::Rgb> syntax_colors;
         SourceLocation source;
     };
 
@@ -937,12 +938,22 @@ Error apply_configured_themes(const Document& document, cli::Options& candidate)
                 return err;
             }
             partial.panel_background = color;
+        } else if (key.rfind("syntax_", 0) == 0) {
+            Error err = apply_theme_color_key(entry, key, color);
+            if (!err.ok()) {
+                return err;
+            }
+            tui::ThemePalette validation;
+            if (!tui::set_syntax_theme_color(validation, key, color)) {
+                return schema_error(entry, "unknown syntax theme color key: " + key);
+            }
+            partial.syntax_colors[key] = color;
         } else {
             return schema_error(entry,
                                 "unknown [theme] key; expected name, background, text, muted, thinking_trace, "
                                 "user_label, assistant_label, error, status_foreground, status_background, "
                                 "thinking_activity, streaming_activity, panel_title, panel_border, panel_hint, "
-                                "panel_highlight, panel_body, or panel_background");
+                                "panel_highlight, panel_body, panel_background, or a syntax_* color");
         }
     }
 
@@ -1052,6 +1063,10 @@ Error apply_configured_themes(const Document& document, cli::Options& candidate)
         palette.panel_highlight = *partial.panel_highlight;
         palette.panel_body = *partial.panel_body;
         palette.panel_background = *partial.panel_background;
+        tui::derive_syntax_theme_colors(palette);
+        for (const auto& syntax_color : partial.syntax_colors) {
+            tui::set_syntax_theme_color(palette, syntax_color.first, syntax_color.second);
+        }
         candidate.tui_themes.merge(std::move(palette));
     }
     return ok_error();
@@ -1712,6 +1727,8 @@ Error apply_document(const Document& document, cli::Options& options) {
         } else if (name == "tui.colors") {
             err = require_type(entry, Value::Type::Boolean);
             if (err.ok()) candidate.no_colors = !entry.value.boolean;
+        } else if (name == "tui.highlight") {
+            err = auto_save_mode(entry, candidate.tui_highlight);
         } else if (name == "tui.theme") {
             err = require_type(entry, Value::Type::String);
             if (err.ok()) {

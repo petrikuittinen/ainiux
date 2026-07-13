@@ -37,6 +37,7 @@ void render(const chat::Session& session,
             const std::string& panel_text,
             ActivityKind activity_kind,
             size_t activity_frame,
+            bool syntax_highlight,
             const RenderStyle& style,
             const char* panel_title_override) {
     const TuiSize terminal = terminal_size();
@@ -49,7 +50,7 @@ void render(const chat::Session& session,
     std::vector<StyledLine> history =
         panel_active ? panel_lines_for_text(panel_text, mode, cols, panel_title_override)
                      : history_lines_for_session(session, cols, show_thinking_traces, activity_kind,
-                                                 activity_frame);
+                                                 activity_frame, syntax_highlight);
     const bool picker_top_aligned = mode == TuiMode::ThreadList || mode == TuiMode::ProviderList ||
                                     mode == TuiMode::ModelList;
     const int max_history_scroll = std::max(0, static_cast<int>(history.size()) - layout.history_rows);
@@ -103,10 +104,31 @@ void render(const chat::Session& session,
     draw_line(layout.input_label_row, cols, input_label_segments(), StyleRole::InputLabel, style);
 
     for (int row = 0; row < layout.input_rect.height; ++row) {
+        const size_t index = static_cast<size_t>(row);
         const std::string line = row < static_cast<int>(input_panel.lines.size())
-                                     ? input_panel.lines[static_cast<size_t>(row)]
+                                     ? input_panel.lines[index]
                                      : std::string();
-        draw_line(layout.input_rect.row + row, cols, line, StyleRole::Text, style);
+        std::vector<StyledSegment> segments;
+        size_t pos = 0;
+        if (index < input_panel.line_spans.size()) {
+            for (const editor::RenderedPanel::Span& span : input_panel.line_spans[index]) {
+                const size_t start = std::min(span.start, line.size());
+                const size_t end = std::min(span.end, line.size());
+                if (start > pos) {
+                    segments.push_back({line.substr(pos, start - pos), StyleRole::Text, false});
+                }
+                if (end > start) {
+                    segments.push_back({line.substr(start, end - start),
+                                        span.syntax ? style_role_for_token(span.role) : StyleRole::Text,
+                                        span.selected});
+                }
+                pos = std::max(pos, end);
+            }
+        }
+        if (pos < line.size()) {
+            segments.push_back({line.substr(pos), StyleRole::Text, false});
+        }
+        draw_line(layout.input_rect.row + row, cols, segments, StyleRole::Text, style);
     }
 
     const int cursor_row = input_panel.cursor.visible ? layout.input_rect.row + input_panel.cursor.row : layout.input_rect.row;
