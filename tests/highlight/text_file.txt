@@ -1,0 +1,2 @@
+Plain text has no syntax colors.
+Markdown-like **markers** and code_like_tokens() stay plain.

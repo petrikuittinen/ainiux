@@ -1,0 +1,2 @@
+# Alternative Bash login fixture.
+printf -v LOGIN_MESSAGE 'Logged in as %s' "$USER"

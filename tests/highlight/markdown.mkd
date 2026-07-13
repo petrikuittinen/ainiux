@@ -1,0 +1,5 @@
+### Markdown short ending
+
+![Alt text](https://example.com/image.png)
+
+<!-- comment -->

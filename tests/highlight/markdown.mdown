@@ -1,0 +1,5 @@
+Markdown setext heading
+=======================
+
+1. Ordered item
+2. [Documentation](https://example.com/docs)

@@ -1,0 +1,5 @@
+{
+  "type": "Feature",
+  "geometry": {"type": "Point", "coordinates": [24.94, 60.17]},
+  "properties": {"name": "Helsinki"}
+}

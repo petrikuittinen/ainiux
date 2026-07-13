@@ -1,0 +1,8 @@
+:root {
+  --accent-color: #2563eb;
+}
+
+.card:hover {
+  color: var(--accent-color);
+  margin: 1.5rem;
+}

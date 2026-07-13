@@ -1,0 +1,6 @@
+{
+  // JSON5 permits comments and unquoted keys.
+  name: 'fixture',
+  values: [1, 2, 3,],
+  enabled: true,
+}
