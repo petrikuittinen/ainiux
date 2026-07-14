@@ -182,6 +182,7 @@ Add per-buffer line-ending and indentation settings, fast block indentation, Uni
 - Add editor defaults under `[editor]`: `tab-width = 4`, `tab-style = spaces`, and `linebreak = lf`.
 - Add `/tab-width [WIDTH]`, `/tab-style [spaces|tab]`, and `/linebreak [lf|cr|crlf]`. A command without an argument reports the active buffer setting. Valid tab widths are 1 through 32.
 - Settings are per buffer. New buffers inherit config defaults; changing one buffer does not rewrite the config or affect another open buffer.
+- Existing files and recovered backups inspect at most the first 20 physical lines for a reliable indentation width/style. Consistent samples initialize that buffer; one-line, unindented, mixed, or conflicting samples use config fallbacks. `/tab-width` and `/tab-style` remain explicit per-buffer overrides.
 - Detect a uniformly LF-, CR-, or CRLF-terminated file when it is opened. Normalize line boundaries internally and write, autosave, and recover the buffer using its detected style. Empty files and files without a line ending use the configured default. Mixed-ending files use the configured default and show a precise warning.
 - `/linebreak` changes the active buffer's future write style and marks the buffer dirty. Loading or saving must not add or remove a final line ending.
 - `Tab` with a selection indents every touched line; `Shift+Tab` outdents it. A selection ending at column zero of the following line excludes that following line. Preserve selection direction and leave the transformed block selected.
@@ -220,6 +221,7 @@ Add per-buffer line-ending and indentation settings, fast block indentation, Uni
 ### Steps
 
 - [x] Add config parsing, validation, per-buffer settings, line-ending detection, internal normalization, and write/autosave/recovery conversion.
+- [x] Add bounded first-20-line indentation detection with conservative fallback behavior.
 - [x] Make display-column calculations tab-width-aware and add current-line and selected-block indent/outdent operations, including portable `Shift+Tab` decoding.
 - [x] Add the incremental Unicode word index and isolated completion-session state.
 - [x] Add conservative language indentation profiles and the cancellable reformat job.
@@ -231,6 +233,7 @@ Add per-buffer line-ending and indentation settings, fast block indentation, Uni
 
 - [ ] LF, CR, and CRLF files round-trip through save, autosave, and recovery without unintended ending or final-newline changes; mixed files warn and follow the configured default.
 - [ ] Per-buffer `/tab-width`, `/tab-style`, and `/linebreak` settings report and validate correctly, inherit defaults for new buffers, and do not leak across buffers.
+- [x] Existing two-space, four-space, and tab-indented files initialize their buffer from the first 20 lines; ambiguous, mixed, one-line, and out-of-window evidence retains configured fallbacks and remains overridable.
 - [ ] `Tab` and `Shift+Tab` indent or outdent current lines and arbitrarily large selected blocks correctly with mixed leading whitespace, stable selections, one undo record, checked bounds, and no leaks.
 - [x] Word completion is fast across large open buffers; supports Finnish/Swedish letters, Chinese, Arabic, Cyrillic, combining marks, underscore, and smart-case camelCase examples; updates incrementally after edits; and never mixes with slash, AI, path, or chat completion.
 - [ ] `/reformat` and `/reformat-all` implement the documented selection, cursor, undo, language-mode, protected-region, byte-preservation, cancellation, and stale-result behavior for every supported editor mode.
@@ -241,16 +244,18 @@ Add per-buffer line-ending and indentation settings, fast block indentation, Uni
 
 - Unit-test LF, CR, CRLF, mixed endings, no final ending, empty files, autosave/recovery, invalid UTF-8 preservation, and invalid setting values.
 - Unit-test cursor tab stops, every tab width/style, mixed-whitespace outdent, forward/reverse/column-zero selections, one-step undo/redo, large selections, and overflow/error paths.
+- Unit-test two-space/four-space/tab detection, first-20-line bounds, conflicting samples, one-line fallback, load/recovery propagation, and interactive overrides.
 - Unit-test multilingual and smart-case completion, common-prefix and cycling behavior, cross-buffer updates/removals, invalid bytes, session reset, completion-domain isolation, and indexed performance on large buffers.
 - Table-test every language profile, selected-block context, protected comments/strings/heredocs/fences/scalars, identical/no-op results, text-mode errors, cursor/selection preservation, CRLF output, cancellation, stale revisions/settings, buffer close, and shutdown.
 - Add PTY integration coverage for real `Tab`, common `Shift+Tab` encodings, slash-command separation, status/errors, buffer switching, and responsive cancellation.
 - Run `make test-unit`, `make test-integration`, `make test-sanitize`, and `make test-leak` or the available Valgrind targets before marking implementation complete.
 
-Verification performed for the language-reformat slice (2026-07-14):
+Verification performed for the language-reformat and indentation-detection slices (2026-07-14):
 
 - `make test-unit -j2`: passed, including unit, I/O/network fault, and ENOSPC fault tests.
 - `python3 tests/integration/editor_buffers_driver.py ./pkchat`: passed, including live
-  `/reformat-all`, save, and file-content verification for C++.
+  `/reformat-all`, save, and file-content verification for C++, plus detected two-space
+  JavaScript indentation and an interactive `/tab-width 6` override.
 - Direct ASan/UBSan unit runner with leak detection: passed without leaks; the existing
   filesystem-clock test still emits its known libstdc++ chrono signed-overflow warning.
 - `make test-sanitize -j2`: the sanitized unit and ordinary fault runners passed, but the

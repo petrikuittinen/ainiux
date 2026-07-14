@@ -117,6 +117,43 @@ def check_language_reformat(binary, tmpdir):
         raise RuntimeError(f"C++ reformat produced {reformatted!r}, expected {expected!r}")
 
 
+def check_detected_indentation(binary, tmpdir):
+    source = os.path.abspath("tests/highlight/javascript_file.js")
+    path = os.path.join(tmpdir, "detected-indentation.js")
+    with open(source, "r", encoding="utf-8") as source_handle:
+        with open(path, "w", encoding="utf-8") as target_handle:
+            target_handle.write(source_handle.read())
+    master, slave = pty.openpty()
+    process = subprocess.Popen(
+        [binary, "--provider", "none", "--editor", path],
+        stdin=slave,
+        stdout=slave,
+        stderr=slave,
+        close_fds=True,
+    )
+    os.close(slave)
+    output = bytearray()
+    try:
+        time.sleep(0.4)
+        output.extend(drain(master, 1.0))
+        output.extend(send(master, "\x1b", delay=0.5))
+        require_seen(output, "Command:", "opening command mode for detected indentation")
+        output.extend(send(master, "/tab-width\r", delay=0.5))
+        require_seen(output, "Tab width: 2", "reporting detected JavaScript indentation")
+        output.extend(send(master, "\x1b", delay=0.5))
+        output.extend(send(master, "/tab-width 6\r", delay=0.5))
+        require_seen(output, "Tab width: 6", "overriding detected indentation")
+        output.extend(send(master, "\x11"))
+        process.wait(timeout=10)
+    finally:
+        if process.poll() is None:
+            process.terminate()
+            process.wait(timeout=2)
+        os.close(master)
+    if process.returncode != 0:
+        raise RuntimeError(f"indent-detection editor exited with status {process.returncode}")
+
+
 def main():
     if len(sys.argv) != 2:
         print("usage: editor_buffers_driver.py BINARY", file=sys.stderr)
@@ -130,6 +167,7 @@ def main():
     check_new_file_mode(binary, tmpdir, "new-document.php", "php")
     check_new_file_mode(binary, tmpdir, "new-document.yaml", "yaml")
     check_language_reformat(binary, tmpdir)
+    check_detected_indentation(binary, tmpdir)
     file1 = os.path.join(tmpdir, "file1.txt")
     file2 = os.path.join(tmpdir, "file2.txt")
     with open(file1, "w", encoding="utf-8") as handle:

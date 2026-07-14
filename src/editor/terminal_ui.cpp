@@ -290,8 +290,7 @@ void start_assist_command_mode(MinibufferState& minibuffer, AssistCompleterState
 
 void reset_editor_buffer(EditorState& state,
                          LoadedFile loaded,
-                         std::string path,
-                         const EditorSettings& settings) {
+                         std::string path) {
     state.text = std::move(loaded.text);
     state.invalidate_word_index();
     state.cursor = 0;
@@ -299,8 +298,8 @@ void reset_editor_buffer(EditorState& state,
     state.scroll_line = 0;
     state.scroll_column = 0;
     state.set_path(std::move(path));
-    state.tab_width = settings.tab_width;
-    state.tab_style = settings.tab_style;
+    state.tab_width = loaded.tab_width;
+    state.tab_style = loaded.tab_style;
     state.linebreak = loaded.linebreak;
     state.dirty = false;
     state.reset_autosave_pending();
@@ -385,7 +384,7 @@ void load_editor_from_path(EditorState& state,
     Error load_error = load_file(path, settings, loaded);
     if (load_error.ok()) {
         const bool mixed = loaded.mixed_linebreaks;
-        reset_editor_buffer(state, std::move(loaded), path, settings);
+        reset_editor_buffer(state, std::move(loaded), path);
         minibuffer_message(minibuffer,
                            mixed ? "Warning: mixed line endings in " + path +
                                        "; normalized and using " +
@@ -405,7 +404,7 @@ void recover_editor_from_autosave(EditorState& state,
     Error load_error = load_file(autosave_path, settings, loaded);
     if (load_error.ok()) {
         const bool mixed = loaded.mixed_linebreaks;
-        reset_editor_buffer(state, std::move(loaded), path, settings);
+        reset_editor_buffer(state, std::move(loaded), path);
         state.dirty = true;
         minibuffer_message(minibuffer,
                            mixed ? "Warning: mixed line endings in recovered auto-save " +

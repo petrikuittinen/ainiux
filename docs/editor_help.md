@@ -175,11 +175,13 @@ The status line shows the current language and line-ending mode compactly in par
 - `auto-save-threshold` — auto-save after this many changed bytes (default `300`)
 - `auto-save-timeout` — auto-save after this many idle seconds when changes are pending (default `30`)
 - `auto-save-size-limit` — skip auto-save above this buffer size; supports `k`/`M`/`G`/`T` suffixes (default `10M`)
-- `tab-width` — indentation and display tab width from 1 through 32 (default `4`)
-- `tab-style` — `spaces` or `tab` (default `spaces`)
+- `tab-width` — fallback indentation and display tab width from 1 through 32 (default `4`)
+- `tab-style` — fallback `spaces` or `tab` style (default `spaces`)
 - `linebreak` — default `lf`, `cr`, or `crlf` for new, empty, no-ending, and mixed-ending files (default `lf`)
 
 When you open a file whose auto-save backup (for example `notes.txt~`) is newer than the saved file, pkchat asks whether to recover the backup instead. At startup this prompt appears on stderr before the editor UI; when opening another file in the editor, the minibuffer asks `y` to recover or `n` to load the saved file.
+
+Existing files and recovered backups detect indentation from at most the first 20 physical lines. A consistent space step selects that tab width, while consistently tab-indented lines select tab style. Ambiguous, mixed, unindented, and one-line files retain the configured fallbacks. `/tab-width` and `/tab-style` always override the detected values for the active buffer.
 
 Repeatable `[command]` blocks add or override slash commands. See `README.md` for examples.
 

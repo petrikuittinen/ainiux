@@ -104,6 +104,8 @@ app::EditorRunResult run_editor(const std::string& path,
         state.text = std::move(loaded.text);
         state.invalidate_word_index();
         state.linebreak = loaded.linebreak;
+        state.tab_width = loaded.tab_width;
+        state.tab_style = loaded.tab_style;
         if (loaded.mixed_linebreaks) {
             initial_linebreak_warning =
                 "Warning: mixed line endings in " + load_path + "; normalized and using " +
@@ -373,8 +375,8 @@ app::EditorRunResult run_editor(const std::string& path,
         next.text = std::move(loaded.text);
         next.invalidate_word_index();
         next.set_path(open_path);
-        next.tab_width = settings.tab_width;
-        next.tab_style = settings.tab_style;
+        next.tab_width = loaded.tab_width;
+        next.tab_style = loaded.tab_style;
         next.linebreak = loaded.linebreak;
         next.highlight_enabled = highlight_enabled;
         next.cursor = 0;

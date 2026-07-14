@@ -2,6 +2,7 @@
 
 #include "common.hpp"
 
+#include <algorithm>
 #include <array>
 #include <filesystem>
 #include <fstream>
@@ -10,6 +11,12 @@
 #include <unistd.h>
 
 namespace pkchat::editor {
+
+namespace {
+
+constexpr size_t kIndentDetectionLines = 20;
+
+}  // namespace
 
 const char* tab_style_name(TabStyle style) {
     return style == TabStyle::Tab ? "tab" : "spaces";
@@ -53,6 +60,114 @@ bool parse_linebreak(const std::string& value, LineBreak& out) {
         return true;
     }
     return false;
+}
+
+IndentationDetection detect_indentation(const std::string& text,
+                                        size_t fallback_width,
+                                        TabStyle fallback_style) {
+    IndentationDetection result;
+    result.tab_width = std::max<size_t>(1, std::min(fallback_width, kMaxTabWidth));
+    result.tab_style = fallback_style;
+
+    std::array<size_t, kMaxTabWidth + 1> differences{};
+    size_t difference_count = 0;
+    size_t space_indented_lines = 0;
+    size_t tab_indented_lines = 0;
+    size_t mixed_indented_lines = 0;
+    size_t previous_space_indent = 0;
+    bool have_previous_space_line = false;
+    size_t start = 0;
+    for (size_t line_number = 0;
+         line_number < kIndentDetectionLines && start <= text.size();
+         ++line_number) {
+        const size_t newline = text.find('\n', start);
+        const size_t end = newline == std::string::npos ? text.size() : newline;
+        size_t position = start;
+        size_t spaces = 0;
+        size_t tabs = 0;
+        while (position < end && (text[position] == ' ' || text[position] == '\t')) {
+            if (text[position] == ' ') {
+                ++spaces;
+            } else {
+                ++tabs;
+            }
+            ++position;
+        }
+        if (position < end) {
+            if (spaces > 0 && tabs == 0) {
+                ++space_indented_lines;
+            } else if (tabs > 0 && spaces == 0) {
+                ++tab_indented_lines;
+            } else if (spaces > 0 && tabs > 0) {
+                ++mixed_indented_lines;
+            }
+
+            if (tabs == 0) {
+                if (have_previous_space_line) {
+                    const size_t difference = spaces >= previous_space_indent
+                                                  ? spaces - previous_space_indent
+                                                  : previous_space_indent - spaces;
+                    if (difference > 0 && difference <= kMaxTabWidth) {
+                        ++differences[difference];
+                        ++difference_count;
+                    }
+                }
+                previous_space_indent = spaces;
+                have_previous_space_line = true;
+            } else {
+                have_previous_space_line = false;
+            }
+        }
+        if (newline == std::string::npos) {
+            break;
+        }
+        start = newline + 1;
+    }
+
+    if (space_indented_lines > 0 && tab_indented_lines == 0 && mixed_indented_lines == 0) {
+        result.tab_style = TabStyle::Spaces;
+        result.tab_style_detected = true;
+    } else if (tab_indented_lines > 0 && space_indented_lines == 0 &&
+               mixed_indented_lines == 0) {
+        result.tab_style = TabStyle::Tab;
+        result.tab_style_detected = true;
+    }
+
+    if (!result.tab_style_detected || result.tab_style != TabStyle::Spaces ||
+        difference_count == 0) {
+        return result;
+    }
+    if (differences[1] == difference_count) {
+        result.tab_width = 1;
+        result.tab_width_detected = true;
+        return result;
+    }
+
+    size_t best_width = 0;
+    size_t best_score = 0;
+    size_t best_exact = 0;
+    bool ambiguous = false;
+    for (size_t candidate = 2; candidate <= kMaxTabWidth; ++candidate) {
+        size_t score = 0;
+        for (size_t difference = candidate; difference <= kMaxTabWidth;
+             difference += candidate) {
+            score += differences[difference];
+        }
+        const size_t exact = differences[candidate];
+        if (score > best_score || (score == best_score && exact > best_exact)) {
+            best_width = candidate;
+            best_score = score;
+            best_exact = exact;
+            ambiguous = false;
+        } else if (score > 0 && score == best_score && exact == best_exact) {
+            ambiguous = true;
+        }
+    }
+    if (best_width > 0 && !ambiguous && best_score * 3 >= difference_count * 2) {
+        result.tab_width = best_width;
+        result.tab_width_detected = true;
+    }
+    return result;
 }
 
 Error load_file(const std::string& path, PieceTable& out) {
@@ -104,6 +219,8 @@ Error load_file(const std::string& path, const EditorSettings& settings, PieceTa
 
 Error load_file(const std::string& path, const EditorSettings& settings, LoadedFile& out) {
     out = LoadedFile{};
+    out.tab_width = settings.tab_width;
+    out.tab_style = settings.tab_style;
     const std::string resolved = expand_user_path(path);
     FileLoadCheck check;
     Error err = check_load_file_size(resolved, settings, check);
@@ -190,6 +307,12 @@ Error load_file(const std::string& path, const EditorSettings& settings, LoadedF
                     "editor file is too large to normalize line endings: " + resolved};
         }
     }
+    const IndentationDetection indentation =
+        detect_indentation(content, settings.tab_width, settings.tab_style);
+    out.tab_width = indentation.tab_width;
+    out.tab_style = indentation.tab_style;
+    out.tab_width_detected = indentation.tab_width_detected;
+    out.tab_style_detected = indentation.tab_style_detected;
     try {
         out.text = PieceTable::from_string(std::move(content));
     } catch (const std::bad_alloc&) {

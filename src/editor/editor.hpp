@@ -299,7 +299,22 @@ struct LoadedFile {
     PieceTable text;
     LineBreak linebreak = LineBreak::Lf;
     bool mixed_linebreaks = false;
+    size_t tab_width = kDefaultTabWidth;
+    TabStyle tab_style = TabStyle::Spaces;
+    bool tab_width_detected = false;
+    bool tab_style_detected = false;
 };
+
+struct IndentationDetection {
+    size_t tab_width = kDefaultTabWidth;
+    TabStyle tab_style = TabStyle::Spaces;
+    bool tab_width_detected = false;
+    bool tab_style_detected = false;
+};
+
+IndentationDetection detect_indentation(const std::string& text,
+                                        size_t fallback_width = kDefaultTabWidth,
+                                        TabStyle fallback_style = TabStyle::Spaces);
 
 Error load_file(const std::string& path, PieceTable& out);
 Error load_file(const std::string& path, const EditorSettings& settings, PieceTable& out);

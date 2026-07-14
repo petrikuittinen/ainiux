@@ -14,6 +14,7 @@
 ## Editor Text Handling
 
 - Add PTY and large-selection stress coverage for editor indentation and mixed line-ending warnings.
+- Add more real-world indentation-detection fixtures for continuation alignment and mixed tab/space conventions.
 - Expand PTY coverage for `/reformat`, `/reformat-all`, cancellation, and stale-result messages.
 
 ## Chat Persistence

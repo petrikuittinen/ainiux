@@ -1006,6 +1006,71 @@ void test_editor_linebreak_modes() {
           "file without a line ending inherits the configured default without adding one");
 }
 
+void test_editor_indentation_detection() {
+    using pkchat::editor::IndentationDetection;
+    using pkchat::editor::TabStyle;
+
+    IndentationDetection detected = pkchat::editor::detect_indentation(
+        "function run() {\n  if (ready) {\n    call();\n  }\n}", 4, TabStyle::Spaces);
+    check(detected.tab_width_detected && detected.tab_width == 2 &&
+              detected.tab_style_detected && detected.tab_style == TabStyle::Spaces,
+          "editor detects a consistent two-space indentation step");
+
+    detected = pkchat::editor::detect_indentation(
+        "if (ready) {\n    while (open) {\n        call();\n    }\n}", 2, TabStyle::Tab);
+    check(detected.tab_width_detected && detected.tab_width == 4 &&
+              detected.tab_style_detected && detected.tab_style == TabStyle::Spaces,
+          "editor detects a consistent four-space indentation step");
+
+    detected = pkchat::editor::detect_indentation(
+        "if ready\n\tcall\nend", 8, TabStyle::Spaces);
+    check(!detected.tab_width_detected && detected.tab_width == 8 &&
+              detected.tab_style_detected && detected.tab_style == TabStyle::Tab,
+          "editor detects tab indentation while retaining the fallback display width");
+
+    detected = pkchat::editor::detect_indentation(
+        "top\n  child\n     inconsistent", 6, TabStyle::Tab);
+    check(!detected.tab_width_detected && detected.tab_width == 6 &&
+              detected.tab_style == TabStyle::Spaces,
+          "ambiguous indentation steps retain the configured width");
+
+    detected = pkchat::editor::detect_indentation("const value = 1;", 7, TabStyle::Tab);
+    check(!detected.tab_width_detected && !detected.tab_style_detected &&
+              detected.tab_width == 7 && detected.tab_style == TabStyle::Tab,
+          "one-line files retain configured indentation defaults");
+
+    std::string after_limit;
+    for (size_t line = 0; line < 20; ++line) {
+        after_limit += "top_level();\n";
+    }
+    after_limit += "  ignored_after_limit();\n";
+    detected = pkchat::editor::detect_indentation(after_limit, 5, TabStyle::Spaces);
+    check(!detected.tab_width_detected && detected.tab_width == 5,
+          "indentation detection inspects only the first twenty physical lines");
+
+    pkchat::editor::EditorSettings settings;
+    settings.tab_width = 4;
+    settings.tab_style = TabStyle::Spaces;
+    pkchat::editor::LoadedFile javascript;
+    check(pkchat::editor::load_file("tests/highlight/javascript_file.js", settings, javascript).ok() &&
+              javascript.tab_width_detected && javascript.tab_width == 2 &&
+              javascript.tab_style_detected && javascript.tab_style == TabStyle::Spaces,
+          "loading the JavaScript fixture initializes its detected two-space indentation");
+
+    const std::string one_line_path = "build/unit-editor-indent-fallback.js";
+    {
+        std::ofstream out(one_line_path, std::ios::binary | std::ios::trunc);
+        out << "const compact = true;";
+    }
+    settings.tab_width = 6;
+    settings.tab_style = TabStyle::Tab;
+    pkchat::editor::LoadedFile fallback;
+    check(pkchat::editor::load_file(one_line_path, settings, fallback).ok() &&
+              !fallback.tab_width_detected && !fallback.tab_style_detected &&
+              fallback.tab_width == 6 && fallback.tab_style == TabStyle::Tab,
+          "file loading retains configured indentation when detection is inconclusive");
+}
+
 void test_editor_tab_indentation() {
     pkchat::editor::EditorState state = pkchat::editor::EditorState::from_text("ab");
     state.tab_width = 4;
@@ -2804,6 +2869,7 @@ void run_all() {
     test_editor_contextual_completion_modes();
     test_editor_file_round_trip();
     test_editor_linebreak_modes();
+    test_editor_indentation_detection();
     test_editor_tab_indentation();
     test_editor_word_completion();
     test_editor_language_reformatting();
