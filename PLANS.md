@@ -158,6 +158,94 @@ Future highlighting work should move toward regex-driven, declarative rule table
   integration expects lowercase `pkchat` while the program emits `Pkchat`, and the SQLite PTY
   test expects `/list` after the 80-column startup status has truncated it off-screen.
 
+## Task: Editor line endings, indentation, completion, and reformatting
+
+### Goal
+
+Add per-buffer line-ending and indentation settings, fast block indentation, Unicode-aware word completion across all open editor buffers, and built-in language-aware indentation reformatting. The feature must remain responsive for large files and selections, preserve document bytes outside leading indentation, and keep document completion separate from slash-command, path, AI-command, and chat completion.
+
+### Files likely to change
+
+- `src/editor/`, `src/config/`, `src/highlight/`, `src/runtime/`, and their unit and integration tests.
+- `README.md`, `config/pkchat.conf`, `docs/decisions.md`, `docs/editor_help.md`, `TODO.md`, and this roadmap.
+
+### User-facing behavior
+
+- Add editor defaults under `[editor]`: `tab-width = 4`, `tab-style = spaces`, and `linebreak = lf`.
+- Add `/tab-width [WIDTH]`, `/tab-style [spaces|tab]`, and `/linebreak [lf|cr|crlf]`. A command without an argument reports the active buffer setting. Valid tab widths are 1 through 32.
+- Settings are per buffer. New buffers inherit config defaults; changing one buffer does not rewrite the config or affect another open buffer.
+- Detect a uniformly LF-, CR-, or CRLF-terminated file when it is opened. Normalize line boundaries internally and write, autosave, and recover the buffer using its detected style. Empty files and files without a line ending use the configured default. Mixed-ending files use the configured default and show a precise warning.
+- `/linebreak` changes the active buffer's future write style and marks the buffer dirty. Loading or saving must not add or remove a final line ending.
+- `Tab` with a selection indents every touched line; `Shift+Tab` outdents it. A selection ending at column zero of the following line excludes that following line. Preserve selection direction and leave the transformed block selected.
+- Without a selection, `Shift+Tab` outdents the current line. Plain `Tab` after an eligible word prefix attempts document completion; if no candidate exists, it inserts indentation at the cursor.
+- With space indentation, an ordinary `Tab` inserts spaces to the next tab stop at the cursor, while block indentation adds exactly `tab-width` spaces. With tab indentation, it inserts one literal tab. Outdent removes up to one display tab stop of mixed leading tabs and spaces without touching non-leading text.
+- Large block indentation and outdent use checked arithmetic, one linear transformation, and one undo record rather than one edit per line.
+
+### Word-completion design
+
+- Index identifiers made from Unicode letters, numbers, combining marks, and underscore. Treat punctuation, apostrophes, and hyphens as boundaries. Preserve the original spelling of candidates.
+- Use smart case: a prefix containing an uppercase letter matches case-sensitively; an all-lowercase prefix matches case-insensitively. Do not perform canonical Unicode normalization.
+- A unique candidate completes immediately. For multiple candidates, the first `Tab` inserts their longest common prefix when it extends the typed prefix; subsequent `Tab` presses cycle through complete candidates and wrap. Candidates must extend the prefix, and the occurrence currently being edited is excluded.
+- One completion session is one undo operation. Reset it after a non-Tab edit, cursor move, selection change, or buffer switch.
+- Maintain per-buffer ordered exact and case-folded word indexes with occurrence reference counts. Update only token windows affected by an edit. Query every open buffer using prefix-range `lower_bound` lookups, obtain a range's common prefix from its first and last entries, and advance candidates lazily. Target lookup cost is `O(B log W + P)`, where `B` is open buffers, `W` is indexed words per buffer, and `P` is the prefix/result work, rather than rescanning all text on every `Tab`.
+- Use checked-in Unicode 15.1 word-property and full case-folding data so behavior is portable and needs no runtime Unicode dependency. Invalid UTF-8 bytes remain preserved and act as word boundaries.
+- Document `Tab` completion has the lowest applicable document-editor precedence after modal/minibuffer handling and selected-block indentation. It must never enter or reuse the completion state for `/` commands, AI commands, filesystem paths, or chat input.
+
+### Reformatting design
+
+- Add reserved editor commands `/reformat` and `/reformat-all`. They use an in-process indentation engine; do not invoke external formatters or subprocesses.
+- `/reformat` requires a selection, expands it to all touched lines, derives lexical and nesting context from the preceding document, and leaves the reformatted range selected. Without a selection it reports an actionable error that suggests `/reformat-all`.
+- `/reformat-all` reformats the complete active buffer from indentation base zero, clears the selection, and preserves the cursor's logical line and nearest attainable display column.
+- Reformatting changes leading indentation only. It preserves token spacing, trailing whitespace, blank lines, comments, string contents, line-ending style, final-line-ending state, and every other byte.
+- Resolve the active language through the existing per-buffer language mode and support conservative indentation profiles for:
+  - Brace languages: C, C++, C#, Java, JavaScript/JSX, TypeScript/TSX, CSS, PHP, Perl, Rust, Go, PowerShell, and JSON.
+  - Keyword/end languages: Ruby and Bash.
+  - Markup: HTML, HTML-only, and XML, including embedded JavaScript and CSS in HTML mode.
+  - SQL: conservative `BEGIN`/`END`, `CASE`, and related block indentation.
+  - Python and YAML: preserve existing nesting topology while normalizing indentation; handle Python continuations; preserve YAML block-scalar content exactly and force spaces for YAML indentation even when the buffer's tab style is `tab`.
+  - Markdown, TOML, INI, and Assembly: preserve conservative structural topology; protect Markdown fences, TOML multiline strings, and assembly labels.
+  - Text mode: return an unsupported-mode error and suggest `/mode` rather than guessing.
+- Reuse the highlighter's lexical protected-region concepts so braces or keywords in comments, strings, heredocs, fences, and embedded content do not affect indentation. Provide an unbounded/offline state path for formatting; if a pathological construct still cannot be classified safely, preserve that region and report a warning.
+- Run large reformat operations as cancellable runtime jobs. Capture buffer identity, revision, language, tab settings, range, and immutable input. Workers emit results but never mutate editor state. The editor loop applies a result only if the buffer still exists and its revision and relevant settings still match; otherwise it discards the stale result. Buffer switching and editing remain available, and `Esc` cancels the job.
+- Apply a successful result as one replacement and one undo record, then update dirty/autosave state, highlighting caches, and the word index. Cancellation, stale results, buffer close, and shutdown must release or join all job resources cleanly.
+
+### Steps
+
+- [ ] Add config parsing, validation, per-buffer settings, line-ending detection, internal normalization, and write/autosave/recovery conversion.
+- [ ] Make display-column calculations tab-width-aware and add current-line and selected-block indent/outdent operations, including portable `Shift+Tab` decoding.
+- [ ] Add the incremental Unicode word index and isolated completion-session state.
+- [ ] Add conservative language indentation profiles and the cancellable reformat job.
+- [ ] Wire commands, command completion, help, status, errors, dirty state, undo/redo, autosave, highlighting, and index invalidation.
+- [ ] Add unit, integration, PTY, large-input, cancellation, sanitizer, and leak tests.
+- [ ] Update user configuration examples and editor documentation.
+
+### Acceptance criteria
+
+- [ ] LF, CR, and CRLF files round-trip through save, autosave, and recovery without unintended ending or final-newline changes; mixed files warn and follow the configured default.
+- [ ] Per-buffer `/tab-width`, `/tab-style`, and `/linebreak` settings report and validate correctly, inherit defaults for new buffers, and do not leak across buffers.
+- [ ] `Tab` and `Shift+Tab` indent or outdent current lines and arbitrarily large selected blocks correctly with mixed leading whitespace, stable selections, one undo record, checked bounds, and no leaks.
+- [ ] Word completion is fast across large open buffers; supports Finnish/Swedish letters, Chinese, Arabic, Cyrillic, combining marks, underscore, and smart-case camelCase examples; updates incrementally after edits; and never mixes with slash, AI, path, or chat completion.
+- [ ] `/reformat` and `/reformat-all` implement the documented selection, cursor, undo, language-mode, protected-region, byte-preservation, cancellation, and stale-result behavior for every supported editor mode.
+- [ ] Errors identify the invalid setting, unsupported mode, missing selection, unsafe preserved region, cancellation, or stale result and provide a concrete next step.
+- [ ] Documentation and configuration examples describe all settings, commands, key behavior, language limits, and preservation guarantees.
+
+### Test and verification plan
+
+- Unit-test LF, CR, CRLF, mixed endings, no final ending, empty files, autosave/recovery, invalid UTF-8 preservation, and invalid setting values.
+- Unit-test cursor tab stops, every tab width/style, mixed-whitespace outdent, forward/reverse/column-zero selections, one-step undo/redo, large selections, and overflow/error paths.
+- Unit-test multilingual and smart-case completion, common-prefix and cycling behavior, cross-buffer updates/removals, invalid bytes, session reset, completion-domain isolation, and indexed performance on large buffers.
+- Table-test every language profile, selected-block context, protected comments/strings/heredocs/fences/scalars, identical/no-op results, text-mode errors, cursor/selection preservation, CRLF output, cancellation, stale revisions/settings, buffer close, and shutdown.
+- Add PTY integration coverage for real `Tab`, common `Shift+Tab` encodings, slash-command separation, status/errors, buffer switching, and responsive cancellation.
+- Run `make test-unit`, `make test-integration`, `make test-sanitize`, and `make test-leak` or the available Valgrind targets before marking implementation complete.
+
+### Explicit non-goals
+
+- Do not add automatic indentation after `Enter` as part of this task.
+- Do not rewrite token spacing or provide a full source-code formatter.
+- Do not call external formatter executables.
+- Do not change chat-input `Tab` behavior.
+- Do not add canonical Unicode normalization.
+
 ## Execution-plan template for agents
 
 For any non-trivial coding task, create or update a short plan using this structure:
