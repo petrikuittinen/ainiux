@@ -23,6 +23,7 @@ enum class ErrorCode {
     UnsupportedFeature,
     FileRead,
     FileWrite,
+    FileLock,
     Config,
     Cancelled,
     StreamComplete,

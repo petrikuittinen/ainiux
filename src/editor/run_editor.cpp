@@ -82,6 +82,7 @@ app::EditorRunResult run_editor(const std::string& path,
     state.set_path(initial_path);
     std::string status = "Ready";
     std::string initial_linebreak_warning;
+    std::string initial_lock_warning;
     bool switch_to_chat = false;
     std::vector<EditorState> buffers;
     size_t active_buffer = 0;
@@ -97,60 +98,79 @@ app::EditorRunResult run_editor(const std::string& path,
         state = buffers[active_buffer];
         state.highlight_enabled = highlight_enabled;
         status = "Editor";
-    } else if (!initial_path.empty() && access(initial_path.c_str(), F_OK) == 0) {
-        FileLoadCheck check;
-        Error err = check_load_file_size(initial_path, settings, check);
-        if (!err.ok()) {
-            std::cerr << error_code_name(err.code) << ": " << err.message << "\n";
-            return {5, app::InteractiveUiTarget::Quit};
-        }
-        if (check.should_warn && !confirm_huge_load_before_terminal(initial_path, check)) {
-            std::cerr << "Editor load cancelled: " << initial_path << "\n";
-            return {5, app::InteractiveUiTarget::Quit};
-        }
-        const AutosaveRecoveryOffer recovery_offer = check_autosave_recovery_offer(initial_path, settings);
-        const bool recover_autosave =
-            recovery_offer.should_offer &&
-            confirm_autosave_recovery_before_terminal(initial_path, recovery_offer.autosave_path);
-        const std::string& load_path = recover_autosave ? recovery_offer.autosave_path : initial_path;
-        LoadedFile loaded;
-        err = load_file(load_path, settings, loaded);
-        if (!err.ok()) {
-            std::cerr << error_code_name(err.code) << ": " << err.message << "\n";
-            return {5, app::InteractiveUiTarget::Quit};
-        }
-        state.text = std::move(loaded.text);
-        state.invalidate_word_index();
-        state.linebreak = loaded.linebreak;
-        state.tab_width = loaded.tab_width;
-        state.tab_style = loaded.tab_style;
-        if (loaded.mixed_linebreaks) {
-            initial_linebreak_warning =
-                "Warning: mixed line endings in " + load_path + "; normalized and using " +
-                linebreak_name(state.linebreak) + " for saves";
-        }
-        if (recover_autosave) {
-            state.dirty = true;
-            status = "Recovered auto-save";
-        } else {
-            status = "Loaded";
-        }
-        buffers.push_back(state);
     } else {
+        const bool initial_target_exists =
+            !initial_path.empty() && access(initial_path.c_str(), F_OK) == 0;
         if (!initial_path.empty()) {
-            Error create_err = ensure_empty_file(initial_path);
-            if (!create_err.ok()) {
-                std::cerr << error_code_name(create_err.code) << ": " << create_err.message << "\n";
+            Error lock_error = state.begin_file_session(initial_path, initial_target_exists);
+            if (!lock_error.ok()) {
+                if (!initial_target_exists) {
+                    std::cerr << error_code_name(lock_error.code) << ": "
+                              << lock_error.message << "\n";
+                    return {5, app::InteractiveUiTarget::Quit};
+                }
+                initial_lock_warning = lock_error.message;
+            }
+        }
+        if (initial_target_exists) {
+            FileLoadCheck check;
+            Error err = check_load_file_size(initial_path, settings, check);
+            if (!err.ok()) {
+                std::cerr << error_code_name(err.code) << ": " << err.message << "\n";
                 return {5, app::InteractiveUiTarget::Quit};
             }
-            // Detection is path-based and must not depend on the file having
-            // existed before editor startup.
-            if (state.language_automatic) {
-                state.redetect_language();
+            if (check.should_warn && !confirm_huge_load_before_terminal(initial_path, check)) {
+                std::cerr << "Editor load cancelled: " << initial_path << "\n";
+                return {5, app::InteractiveUiTarget::Quit};
             }
-            status = "New file";
+            const AutosaveRecoveryOffer recovery_offer =
+                check_autosave_recovery_offer(initial_path, settings);
+            const bool recover_autosave = recovery_offer.should_offer &&
+                                          confirm_autosave_recovery_before_terminal(
+                                              initial_path, recovery_offer.autosave_path);
+            const std::string& load_path =
+                recover_autosave ? recovery_offer.autosave_path : initial_path;
+            LoadedFile loaded;
+            err = load_file(load_path, settings, loaded);
+            if (!err.ok()) {
+                std::cerr << error_code_name(err.code) << ": " << err.message << "\n";
+                return {5, app::InteractiveUiTarget::Quit};
+            }
+            state.text = std::move(loaded.text);
+            state.invalidate_word_index();
+            state.linebreak = loaded.linebreak;
+            state.tab_width = loaded.tab_width;
+            state.tab_style = loaded.tab_style;
+            if (loaded.mixed_linebreaks) {
+                initial_linebreak_warning =
+                    "Warning: mixed line endings in " + load_path +
+                    "; normalized and using " + linebreak_name(state.linebreak) + " for saves";
+            }
+            if (recover_autosave) {
+                state.dirty = true;
+                status = "Recovered auto-save";
+            } else {
+                status = "Loaded";
+            }
+            buffers.push_back(state);
+        } else {
+            if (!initial_path.empty()) {
+                Error create_err = ensure_empty_file(initial_path);
+                if (!create_err.ok()) {
+                    std::cerr << error_code_name(create_err.code) << ": " << create_err.message
+                              << "\n";
+                    return {5, app::InteractiveUiTarget::Quit};
+                }
+                // Detection is path-based and must not depend on the file having
+                // existed before editor startup.
+                if (state.language_automatic) {
+                    state.redetect_language();
+                }
+                status = "New file";
+                (void)state.refresh_disk_fingerprint();
+            }
+            buffers.push_back(state);
         }
-        buffers.push_back(state);
     }
 
     TerminalSession terminal;
@@ -167,8 +187,10 @@ app::EditorRunResult run_editor(const std::string& path,
     bool pending_quit_after_save = false;
     PendingSaveRequest pending_save;
     MinibufferState minibuffer;
-    minibuffer.message = initial_linebreak_warning.empty() ? editor_startup_status(ai_continue)
-                                                           : initial_linebreak_warning;
+    minibuffer.message = !initial_lock_warning.empty()
+                             ? initial_lock_warning
+                             : initial_linebreak_warning.empty() ? editor_startup_status(ai_continue)
+                                                                 : initial_linebreak_warning;
     std::string last_search;
     ReplaceSession replace;
     std::string pending_load_path;
@@ -392,9 +414,14 @@ app::EditorRunResult run_editor(const std::string& path,
         if (path.empty()) {
             return std::nullopt;
         }
+        std::string canonical;
+        if (!canonicalize_editor_target(path, canonical).ok()) {
+            canonical.clear();
+        }
         sync_active_buffer();
         for (size_t i = 0; i < buffers.size(); ++i) {
-            if (buffers[i].path == path) {
+            if ((!canonical.empty() && buffers[i].canonical_path == canonical) ||
+                buffers[i].path == path) {
                 return i;
             }
         }
@@ -408,6 +435,10 @@ app::EditorRunResult run_editor(const std::string& path,
             activate_buffer(*existing);
             return;
         }
+        EditorState next;
+        next.set_undo_limit(settings.undo_limit);
+        next.set_path(open_path);
+        const Error lock_error = next.begin_file_session(open_path, true);
         LoadedFile loaded;
         Error load_error = load_file(load_path, settings, loaded);
         if (!load_error.ok()) {
@@ -415,12 +446,9 @@ app::EditorRunResult run_editor(const std::string& path,
             return;
         }
         sync_active_buffer();
-        EditorState next;
-        next.set_undo_limit(settings.undo_limit);
         const bool mixed_linebreaks = loaded.mixed_linebreaks;
         next.text = std::move(loaded.text);
         next.invalidate_word_index();
-        next.set_path(open_path);
         next.tab_width = loaded.tab_width;
         next.tab_style = loaded.tab_style;
         next.linebreak = loaded.linebreak;
@@ -436,7 +464,9 @@ app::EditorRunResult run_editor(const std::string& path,
         active_buffer = buffers.size() - 1;
         state = next;
         buffer_list_selected = active_buffer;
-        if (mixed_linebreaks) {
+        if (!lock_error.ok()) {
+            minibuffer_message(minibuffer, lock_error.message);
+        } else if (mixed_linebreaks) {
             minibuffer_message(minibuffer,
                                "Warning: mixed line endings in " + load_path +
                                    "; normalized and using " +
@@ -975,6 +1005,13 @@ app::EditorRunResult run_editor(const std::string& path,
             minibuffer_message(minibuffer, execution.error_message);
             return;
         }
+        if (execution.edit_kind != AssistEditKind::NewBuffer && execution_state == nullptr) {
+            Error writable = state.mutation_allowed();
+            if (!writable.ok()) {
+                minibuffer_message(minibuffer, writable.message);
+                return;
+            }
+        }
 
         if (kind == AssistCommandKind::Configured || kind == AssistCommandKind::Prompt) {
             last_assist_command.valid = true;
@@ -1064,6 +1101,11 @@ app::EditorRunResult run_editor(const std::string& path,
         }
         if (assist_session.active) {
             minibuffer_message(minibuffer, "Finish or cancel AI assist before reformatting");
+            return;
+        }
+        Error writable = state.mutation_allowed();
+        if (!writable.ok()) {
+            minibuffer_message(minibuffer, writable.message);
             return;
         }
         ReformatRequest request;
@@ -1165,6 +1207,11 @@ app::EditorRunResult run_editor(const std::string& path,
         if (source == "stdin") {
             minibuffer_message(minibuffer,
                                "stdin input is only supported by non-interactive --input and --attach");
+            return;
+        }
+        Error writable = state.mutation_allowed();
+        if (!writable.ok()) {
+            minibuffer_message(minibuffer, writable.message);
             return;
         }
         insert_session.active = true;
@@ -2075,6 +2122,17 @@ app::EditorRunResult run_editor(const std::string& path,
         minibuffer_message(minibuffer, paste_error.ok() ? "Pasted" : paste_error.message);
     };
 
+    auto prompt_for_changed_read_only_file = [&]() {
+        if (state.reload_required &&
+            (!minibuffer.active || minibuffer.action != MinibufferAction::ConfirmReloadAfterLock)) {
+            start_minibuffer(minibuffer,
+                             MinibufferAction::ConfirmReloadAfterLock,
+                             state.path +
+                                 " changed while locked by another editor. Reload it and make this "
+                                 "buffer writable? (y/n) ");
+        }
+    };
+
     using SteadyClock = std::chrono::steady_clock;
     SteadyClock::time_point last_activity = SteadyClock::now();
 
@@ -2168,8 +2226,10 @@ app::EditorRunResult run_editor(const std::string& path,
         last_activity = SteadyClock::now();
         if (event.type == TerminalInputType::BracketedPaste) {
             handle_paste(event.text);
+            prompt_for_changed_read_only_file();
         } else if (event.type == TerminalInputType::Byte) {
             handle_key(event.byte);
+            prompt_for_changed_read_only_file();
             while (!quit) {
                 if (!read_terminal_input(event, 0)) {
                     break;
@@ -2177,8 +2237,10 @@ app::EditorRunResult run_editor(const std::string& path,
                 last_activity = SteadyClock::now();
                 if (event.type == TerminalInputType::BracketedPaste) {
                     handle_paste(event.text);
+                    prompt_for_changed_read_only_file();
                 } else if (event.type == TerminalInputType::Byte) {
                     handle_key(event.byte);
+                    prompt_for_changed_read_only_file();
                 } else {
                     break;
                 }

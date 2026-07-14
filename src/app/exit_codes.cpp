@@ -25,6 +25,7 @@ int exit_code_for(ErrorCode code) {
             return 4;
         case ErrorCode::FileRead:
         case ErrorCode::FileWrite:
+        case ErrorCode::FileLock:
         case ErrorCode::Config:
             return 5;
         case ErrorCode::Cancelled:

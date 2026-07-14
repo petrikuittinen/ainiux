@@ -3,13 +3,17 @@
 #include <cstddef>
 #include <cstdint>
 #include <iosfwd>
+#include <memory>
 #include <optional>
-
-#include "editor/editor_prompts.hpp"
 #include <string>
 #include <vector>
 
 #include "common.hpp"
+#include "editor/clipboard.hpp"
+#include "editor/editor_prompts.hpp"
+#include "editor/file_session.hpp"
+#include "editor/selection.hpp"
+#include "editor/word_completion.hpp"
 #include "highlight/highlight.hpp"
 
 namespace pkchat::app {
@@ -20,9 +24,6 @@ struct InteractiveSession;
 namespace pkchat::tui {
 class ThemeRegistry;
 }
-#include "editor/clipboard.hpp"
-#include "editor/selection.hpp"
-#include "editor/word_completion.hpp"
 
 namespace pkchat::editor {
 
@@ -183,6 +184,15 @@ struct EditorState {
     size_t scroll_column = 0;
     std::string path;
     bool dirty = false;
+    bool read_only = false;
+    bool reload_required = false;
+    std::string canonical_path;
+    FileFingerprint disk_fingerprint;
+    bool has_disk_fingerprint = false;
+    // EditorState is copied while switching buffers and temporarily entering
+    // chat/help modes. Shared ownership keeps one logical buffer lock alive;
+    // EditorFileLock remains the sole owner responsible for directory cleanup.
+    std::shared_ptr<EditorFileLock> file_lock;
     VerticalMovementMode vertical_movement = VerticalMovementMode::LogicalLine;
     EditorMode mode = EditorMode::Editor;
     Selection selection;
@@ -199,6 +209,11 @@ struct EditorState {
     void set_path(std::string value);
     void set_language(highlight::Language value, bool automatic);
     void redetect_language();
+    Error begin_file_session(const std::string& value, bool target_exists);
+    Error retry_file_lock();
+    void release_file_session();
+    Error refresh_disk_fingerprint();
+    Error mutation_allowed();
 
     Error insert(const std::string& value);
     Error insert_without_undo(const std::string& value);

@@ -39,6 +39,8 @@ const char* error_code_name(ErrorCode code) {
             return "PKCHAT_ERR_FILE_READ";
         case ErrorCode::FileWrite:
             return "PKCHAT_ERR_FILE_WRITE";
+        case ErrorCode::FileLock:
+            return "PKCHAT_ERR_FILE_LOCK";
         case ErrorCode::Config:
             return "PKCHAT_ERR_CONFIG";
         case ErrorCode::Cancelled:

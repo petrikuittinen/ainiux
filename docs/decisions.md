@@ -159,3 +159,11 @@ v0.83 also expands automated coverage and adds small mocks for faults that are a
 - `tests/unit/io/test_io_faults.cpp` and `tests/unit/test_io_faults.cpp` for read-only permission failures (`chmod`) and the network/disk fault cases above.
 
 Environment-dependent fault tests run in a separate `build/test_io_faults` binary so the main `test_runner` stays fast and deterministic on every platform.
+
+## Advisory Editor File Sessions
+
+File-backed editor buffers use `src/editor/file_session.*` to canonicalize identity, fingerprint disk state, and own an atomic `FILE.LOCK` directory. `EditorState` copies share the RAII lock through `std::shared_ptr` because active buffers are copied while switching buffers and temporarily moving between editor and chat modes; the underlying lock object remains uniquely responsible for token-checked cleanup. Scratch buffers have no lock. The lock is held for the entire buffer lifetime and Save As is a destination-locked transaction that retargets only after a successful write.
+
+Lock metadata uses a bounded, versioned, hex-encoded line format so arbitrary canonical path bytes cannot alter its structure. Automatic stale recovery is deliberately limited to a valid same-host owner whose PID is proven absent with `kill(pid, 0)`. Cleanup names only `owner` and the lock directory and restores owner metadata if an unexpected entry prevents `rmdir`; recursive deletion is forbidden. Because locks are advisory, a separate fingerprint check protects saves from external modification, inode replacement, and deletion, and overwrite confirmation is valid only for the fingerprint observed by that prompt.
+
+The ENOSPC fault launcher preserves the ordinary `posix_io_mock.so` preload for normal binaries. For sanitizer binaries it detects the ASan dependency, resolves the compiler's runtime, and places that runtime first in `LD_PRELOAD`; an unresolved sanitizer runtime is an explicit unsupported-toolchain failure. The aggregate `test` target invokes integration tests only after unit and fault tests complete, including under parallel make.

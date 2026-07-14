@@ -94,6 +94,9 @@ std::string editor_status_line(const EditorState& state, bool help_view) {
         out << "Help (read-only)";
     } else {
         out << (state.path.empty() ? "[scratch]" : state.path);
+        if (state.read_only) {
+            out << " [RO]";
+        }
         if (state.dirty) {
             out << " *";
         }
@@ -280,6 +283,7 @@ Error paste_into_minibuffer(MinibufferState& minibuffer, const std::string& text
         case MinibufferAction::ConfirmQuit:
         case MinibufferAction::ConfirmSaveOnQuit:
         case MinibufferAction::ConfirmOverwrite:
+        case MinibufferAction::ConfirmReloadAfterLock:
         case MinibufferAction::AssistScopeChoice:
         case MinibufferAction::AssistPromptMode:
             return {ErrorCode::BadArgs, "paste is not accepted by the active prompt"};
@@ -379,22 +383,52 @@ std::string overwrite_prompt_message(const std::string& path) {
     return path + " exists. Press y to overwrite or any other key to cancel: ";
 }
 
-void save_editor_to_path(EditorState& state,
-                         const std::string& path,
+bool save_editor_to_path(EditorState& state,
+                         PendingSaveRequest request,
+                         PendingSaveRequest& pending_save,
                          MinibufferState& minibuffer,
-                         bool update_path,
                          const EditorSettings& settings) {
-    Error save_error = save_file(path, state.text, state.linebreak);
+    FileFingerprint current;
+    Error inspect_error = fingerprint_file(request.canonical_path, current);
+    if (!inspect_error.ok()) {
+        minibuffer_message(minibuffer, inspect_error.message);
+        return false;
+    }
+    if (current != request.observed_disk) {
+        request.observed_disk = current;
+        request.external_change = true;
+        pending_save = std::move(request);
+        start_minibuffer(minibuffer,
+                         MinibufferAction::ConfirmOverwrite,
+                         pending_save.path +
+                             " changed again while overwrite confirmation was pending. Press y "
+                             "to overwrite this version or any other key to cancel: ");
+        return false;
+    }
+
+    Error save_error = save_file(request.path, state.text, state.linebreak);
     if (save_error.ok()) {
         state.dirty = false;
         state.reset_autosave_pending();
-        remove_autosave_file(path, settings);
-        if (update_path) {
-            state.set_path(path);
+        remove_autosave_file(request.path, settings);
+        if (request.update_path) {
+            const bool retargeting = state.canonical_path != request.canonical_path;
+            state.set_path(request.path);
+            state.canonical_path = request.canonical_path;
+            if (retargeting) {
+                state.file_lock = std::move(request.destination_lock);
+            }
+            state.read_only = false;
+            state.reload_required = false;
         }
-        minibuffer_message(minibuffer, "Saved " + path);
+        const Error fingerprint_error = state.refresh_disk_fingerprint();
+        minibuffer_message(minibuffer,
+                           fingerprint_error.ok() ? "Saved " + request.path
+                                                  : "Saved, but " + fingerprint_error.message);
+        return true;
     } else {
         minibuffer_message(minibuffer, save_error.message);
+        return false;
     }
 }
 
@@ -406,17 +440,56 @@ void request_save_editor_to_path(EditorState& state,
                                  bool& quit,
                                  PendingSaveRequest& pending_save,
                                  const EditorSettings& settings) {
-    if (needs_overwrite_confirm(path, state.path)) {
-        pending_save.path = path;
-        pending_save.update_path = update_path;
-        pending_save.quit_after_save = quit_after_save;
-        start_minibuffer(minibuffer,
-                         MinibufferAction::ConfirmOverwrite,
-                         overwrite_prompt_message(path));
+    PendingSaveRequest request;
+    request.path = path;
+    request.update_path = update_path;
+    request.quit_after_save = quit_after_save;
+    Error canonical_error = canonicalize_editor_target(path, request.canonical_path);
+    if (!canonical_error.ok()) {
+        minibuffer_message(minibuffer, canonical_error.message);
         return;
     }
-    save_editor_to_path(state, path, minibuffer, update_path, settings);
-    if (quit_after_save && !state.dirty) {
+    const bool current_target = !state.canonical_path.empty() &&
+                                request.canonical_path == state.canonical_path;
+    if (current_target) {
+        if (state.read_only || !state.file_lock) {
+            minibuffer_message(minibuffer,
+                               "current buffer is read-only; use Save As to a different path");
+            return;
+        }
+        request.destination_lock = state.file_lock;
+    } else {
+        EditorLockAttempt attempt = acquire_editor_file_lock(request.canonical_path);
+        if (!attempt.lock) {
+            minibuffer_message(minibuffer, attempt.error.message);
+            return;
+        }
+        request.destination_lock = std::move(attempt.lock);
+    }
+    Error inspect_error = fingerprint_file(request.canonical_path, request.observed_disk);
+    if (!inspect_error.ok()) {
+        minibuffer_message(minibuffer, inspect_error.message);
+        return;
+    }
+    request.external_change = current_target && state.has_disk_fingerprint &&
+                              request.observed_disk != state.disk_fingerprint;
+    if ((!current_target && request.observed_disk.exists) || request.external_change) {
+        pending_save = std::move(request);
+        start_minibuffer(minibuffer,
+                         MinibufferAction::ConfirmOverwrite,
+                         pending_save.external_change
+                             ? path +
+                                   " changed, was replaced, or was deleted since it was loaded. "
+                                   "Press y to overwrite or any other key to cancel: "
+                             : overwrite_prompt_message(path));
+        return;
+    }
+    const bool saved = save_editor_to_path(state,
+                                           std::move(request),
+                                           pending_save,
+                                           minibuffer,
+                                           settings);
+    if (quit_after_save && saved) {
         quit = true;
     }
 }
@@ -730,17 +803,54 @@ void submit_minibuffer(EditorState& state,
     }
     if (action == MinibufferAction::ConfirmOverwrite) {
         if (ui::yes_answer(value)) {
-            const PendingSaveRequest request = pending_save;
+            PendingSaveRequest request = pending_save;
             pending_save = PendingSaveRequest{};
-            save_editor_to_path(state, request.path, minibuffer, request.update_path, settings);
-            if (request.quit_after_save && !state.dirty) {
+            const bool quit_after_save = request.quit_after_save;
+            const bool saved = save_editor_to_path(state,
+                                                   std::move(request),
+                                                   pending_save,
+                                                   minibuffer,
+                                                   settings);
+            if (quit_after_save && saved) {
                 quit = true;
             }
-            pending_quit_after_save = false;
+            if (pending_save.path.empty()) pending_quit_after_save = false;
         } else {
             pending_save = PendingSaveRequest{};
             pending_quit_after_save = false;
             minibuffer_message(minibuffer, "Save cancelled");
+        }
+        return;
+    }
+    if (action == MinibufferAction::ConfirmReloadAfterLock) {
+        if (ui::yes_answer(value)) {
+            FileFingerprint loaded_fingerprint;
+            Error inspect_error = fingerprint_file(state.canonical_path, loaded_fingerprint);
+            if (!inspect_error.ok()) {
+                minibuffer_message(minibuffer, inspect_error.message);
+                return;
+            }
+            LoadedFile loaded;
+            Error load_error = load_file(state.path, settings, loaded);
+            if (!load_error.ok()) {
+                minibuffer_message(minibuffer, load_error.message);
+                return;
+            }
+            reset_editor_buffer(state, std::move(loaded), state.path);
+            state.read_only = false;
+            state.reload_required = false;
+            state.disk_fingerprint = loaded_fingerprint;
+            state.has_disk_fingerprint = true;
+            minibuffer_message(minibuffer,
+                               "Reloaded changed file; buffer is writable. Repeat the edit");
+        } else if (ui::no_answer(value) || value.empty()) {
+            state.file_lock.reset();
+            state.reload_required = false;
+            state.read_only = true;
+            minibuffer_message(minibuffer, "Reload declined; buffer remains read-only");
+        } else {
+            minibuffer.prompt = ui::kConfirmationRetryPrompt;
+            minibuffer.input.clear();
         }
         return;
     }
@@ -803,17 +913,53 @@ bool handle_minibuffer_key(EditorState& state,
     }
     if (minibuffer.action == MinibufferAction::ConfirmOverwrite) {
         if (ch == 'y' || ch == 'Y' || ch == 19) {
-            const PendingSaveRequest request = pending_save;
+            PendingSaveRequest request = pending_save;
             pending_save = PendingSaveRequest{};
-            save_editor_to_path(state, request.path, minibuffer, request.update_path, settings);
-            if (request.quit_after_save && !state.dirty) {
+            const bool quit_after_save = request.quit_after_save;
+            const bool saved = save_editor_to_path(state,
+                                                   std::move(request),
+                                                   pending_save,
+                                                   minibuffer,
+                                                   settings);
+            if (quit_after_save && saved) {
                 quit = true;
             }
-            pending_quit_after_save = false;
+            if (pending_save.path.empty()) pending_quit_after_save = false;
         } else {
             pending_save = PendingSaveRequest{};
             pending_quit_after_save = false;
             minibuffer_message(minibuffer, "Save cancelled");
+        }
+        return true;
+    }
+    if (minibuffer.action == MinibufferAction::ConfirmReloadAfterLock) {
+        if (ch == 'y' || ch == 'Y') {
+            FileFingerprint loaded_fingerprint;
+            Error inspect_error = fingerprint_file(state.canonical_path, loaded_fingerprint);
+            if (!inspect_error.ok()) {
+                minibuffer_message(minibuffer, inspect_error.message);
+                return true;
+            }
+            LoadedFile loaded;
+            Error load_error = load_file(state.path, settings, loaded);
+            if (!load_error.ok()) {
+                minibuffer_message(minibuffer, load_error.message);
+                return true;
+            }
+            reset_editor_buffer(state, std::move(loaded), state.path);
+            state.read_only = false;
+            state.reload_required = false;
+            state.disk_fingerprint = loaded_fingerprint;
+            state.has_disk_fingerprint = true;
+            minibuffer_message(minibuffer,
+                               "Reloaded changed file; buffer is writable. Repeat the edit");
+        } else if (ch == 'n' || ch == 'N') {
+            state.file_lock.reset();
+            state.reload_required = false;
+            state.read_only = true;
+            minibuffer_message(minibuffer, "Reload declined; buffer remains read-only");
+        } else {
+            minibuffer.prompt = ui::kConfirmationRetryPrompt;
         }
         return true;
     }

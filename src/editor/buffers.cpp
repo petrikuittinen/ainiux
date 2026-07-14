@@ -21,6 +21,9 @@ std::string editor_buffer_list_text(const std::vector<EditorState>& buffers, siz
         const EditorState& buffer = buffers[index];
         std::ostringstream out;
         out << editor_buffer_display_name(buffer, index);
+        if (buffer.read_only) {
+            out << " [RO]";
+        }
         if (buffer.dirty) {
             out << " *";
         }

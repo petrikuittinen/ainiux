@@ -10,6 +10,7 @@
 #include "editor/editor.hpp"
 #include "editor/editor_assist.hpp"
 #include "editor/editor_help.hpp"
+#include "editor/file_session.hpp"
 #include "editor/path_completion.hpp"
 #include "editor/reformat.hpp"
 #include "editor/selection.hpp"
@@ -24,6 +25,8 @@
 #include <map>
 #include <string>
 #include <vector>
+#include <sys/wait.h>
+#include <unistd.h>
 
 namespace pkchat::test::editor {
 
@@ -2625,6 +2628,372 @@ void test_editor_save_as_overwrite_helpers() {
           "editor overwrite prompt explains other keys cancel");
 }
 
+void test_editor_file_locking_and_read_only_sessions() {
+    namespace fs = std::filesystem;
+    const fs::path root = fs::absolute("build/editor-lock-tests");
+    fs::remove_all(root);
+    fs::create_directories(root);
+    const fs::path target = root / "document.txt";
+    {
+        std::ofstream out(target);
+        out << "original";
+    }
+
+    std::string canonical;
+    check(pkchat::editor::canonicalize_editor_target(target.string(), canonical).ok() &&
+              fs::path(canonical).is_absolute(),
+          "editor lock canonicalizes the target path");
+    pkchat::editor::EditorLockAttempt first =
+        pkchat::editor::acquire_editor_file_lock(target.string());
+    check(first.lock != nullptr && fs::is_directory(canonical + ".LOCK"),
+          "editor lock acquisition atomically creates FILE.LOCK");
+    pkchat::editor::EditorLockOwner owner;
+    check(pkchat::editor::read_editor_lock_owner(canonical + ".LOCK", owner).ok() &&
+              owner.schema_version == 1 && owner.pid == static_cast<long long>(getpid()) &&
+              owner.canonical_target == canonical && !owner.token.empty(),
+          "editor lock writes complete bounded owner metadata");
+    pkchat::editor::EditorLockAttempt contended =
+        pkchat::editor::acquire_editor_file_lock(target.string());
+    check(!contended.lock && contended.error.code == pkchat::ErrorCode::FileLock &&
+              contended.owner_metadata_valid,
+          "live editor lock contention is reported without removal");
+
+    {
+        const std::string owner_path = canonical + ".LOCK/owner";
+        std::ifstream in(owner_path, std::ios::binary);
+        std::string metadata((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+        const size_t host = metadata.find("hostname=");
+        const size_t host_end = metadata.find('\n', host);
+        if (host != std::string::npos && host_end != std::string::npos) {
+            metadata.replace(host, host_end - host, "hostname=72656d6f74652d686f7374");
+        }
+        std::ofstream out(owner_path, std::ios::binary | std::ios::trunc);
+        out << metadata;
+    }
+    pkchat::editor::EditorLockAttempt remote =
+        pkchat::editor::acquire_editor_file_lock(target.string());
+    check(!remote.lock && remote.owner_metadata_valid &&
+              remote.conflicting_owner.hostname == "remote-host" &&
+              fs::exists(canonical + ".LOCK"),
+          "remote-host lock owner is never removed automatically");
+
+    const fs::path alias = root / "alias.txt";
+    fs::create_symlink(target.filename(), alias);
+    pkchat::editor::EditorLockAttempt alias_attempt =
+        pkchat::editor::acquire_editor_file_lock(alias.string());
+    check(!alias_attempt.lock && alias_attempt.conflicting_owner.canonical_target == canonical,
+          "symlink aliases contend on the canonical target lock");
+
+    pkchat::editor::EditorState copied;
+    copied.set_path(target.string());
+    copied.canonical_path = canonical;
+    copied.file_lock = first.lock;
+    pkchat::editor::EditorState copied_again = copied;
+    first.lock.reset();
+    copied.file_lock.reset();
+    check(fs::exists(canonical + ".LOCK"),
+          "EditorState copies share lock ownership for the full buffer lifetime");
+    copied_again.file_lock.reset();
+    check(!fs::exists(canonical + ".LOCK"), "last EditorState owner releases the lock directory");
+
+    pkchat::editor::EditorLockAttempt token_lock =
+        pkchat::editor::acquire_editor_file_lock(target.string());
+    const std::string token_directory = token_lock.lock->lock_directory();
+    {
+        std::ifstream in(token_directory + "/owner", std::ios::binary);
+        std::string metadata((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+        const size_t token = metadata.find("token=");
+        check(token != std::string::npos, "lock metadata contains ownership token");
+        if (token != std::string::npos) metadata.replace(token, metadata.find('\n', token) - token, "token=78");
+        std::ofstream out(token_directory + "/owner", std::ios::binary | std::ios::trunc);
+        out << metadata;
+    }
+    token_lock.lock.reset();
+    check(fs::exists(token_directory), "token mismatch prevents lock cleanup by a former owner");
+    fs::remove(token_directory + "/owner");
+    fs::remove(token_directory);
+
+    const pid_t child = fork();
+    if (child == 0) {
+        pkchat::editor::EditorLockAttempt child_lock =
+            pkchat::editor::acquire_editor_file_lock(target.string());
+        _exit(child_lock.lock ? 0 : 1);
+    }
+    int child_status = 0;
+    waitpid(child, &child_status, 0);
+    check(WIFEXITED(child_status) && WEXITSTATUS(child_status) == 0,
+          "child creates a lock for stale recovery testing");
+    pkchat::editor::EditorLockAttempt recovered =
+        pkchat::editor::acquire_editor_file_lock(target.string());
+    check(recovered.lock != nullptr && recovered.stale_lock_recovered,
+          "dead same-host owner lock is recovered once");
+    recovered.lock.reset();
+
+    const pid_t nonempty_child = fork();
+    if (nonempty_child == 0) {
+        pkchat::editor::EditorLockAttempt child_lock =
+            pkchat::editor::acquire_editor_file_lock(target.string());
+        _exit(child_lock.lock ? 0 : 1);
+    }
+    int nonempty_status = 0;
+    waitpid(nonempty_child, &nonempty_status, 0);
+    check(WIFEXITED(nonempty_status) && WEXITSTATUS(nonempty_status) == 0,
+          "child creates a lock for nonempty stale-lock testing");
+    {
+        std::ofstream unexpected(canonical + ".LOCK/unexpected");
+        unexpected << "do not remove";
+    }
+    pkchat::editor::EditorLockAttempt nonempty =
+        pkchat::editor::acquire_editor_file_lock(target.string());
+    check(!nonempty.lock && fs::exists(canonical + ".LOCK/owner") &&
+              fs::exists(canonical + ".LOCK/unexpected"),
+          "dead local lock with unexpected contents is not removed recursively");
+    fs::remove(canonical + ".LOCK/unexpected");
+    fs::remove(canonical + ".LOCK/owner");
+    fs::remove(canonical + ".LOCK");
+
+    pkchat::editor::EditorLockAttempt upgrade_blocker =
+        pkchat::editor::acquire_editor_file_lock(target.string());
+    pkchat::editor::EditorState upgrade = pkchat::editor::EditorState::from_text("original");
+    upgrade.set_path(target.string());
+    check(upgrade.begin_file_session(target.string(), true).code == pkchat::ErrorCode::FileLock &&
+              upgrade.read_only,
+          "contended existing file begins as read-only");
+    upgrade_blocker.lock.reset();
+    check(upgrade.insert("!").ok() && !upgrade.read_only && upgrade.file_lock &&
+              upgrade.text.str() == "!original",
+          "first edit retries the lock and upgrades an unchanged file to writable");
+    upgrade.release_file_session();
+
+    pkchat::editor::EditorLockAttempt reload_blocker =
+        pkchat::editor::acquire_editor_file_lock(target.string());
+    pkchat::editor::EditorState reload_declined =
+        pkchat::editor::EditorState::from_text("original");
+    reload_declined.set_path(target.string());
+    check(reload_declined.begin_file_session(target.string(), true).code ==
+              pkchat::ErrorCode::FileLock,
+          "changed-file reload fixture begins read-only");
+    {
+        std::ofstream out(target, std::ios::trunc);
+        out << "external before retry";
+    }
+    reload_blocker.lock.reset();
+    check(reload_declined.insert("!").code == pkchat::ErrorCode::FileLock &&
+              reload_declined.reload_required && reload_declined.file_lock,
+          "edit retry holds the newly acquired lock when disk content changed");
+    pkchat::editor::MinibufferState reload_minibuffer;
+    pkchat::editor::start_minibuffer(reload_minibuffer,
+                                     pkchat::editor::MinibufferAction::ConfirmReloadAfterLock,
+                                     "reload?");
+    pkchat::editor::ReplaceSession reload_replace;
+    pkchat::editor::EditorSettings reload_settings;
+    std::string reload_search;
+    std::string reload_pending_path;
+    bool reload_quit = false;
+    bool reload_pending_quit = false;
+    pkchat::editor::PendingSaveRequest reload_pending_save;
+    pkchat::editor::PendingAutosaveRecovery reload_recovery;
+    pkchat::editor::PathCompleter reload_completer;
+    check(pkchat::editor::handle_minibuffer_key(reload_declined,
+                                                reload_minibuffer,
+                                                'n',
+                                                reload_quit,
+                                                reload_search,
+                                                reload_replace,
+                                                reload_settings,
+                                                reload_pending_path,
+                                                reload_pending_quit,
+                                                reload_pending_save,
+                                                reload_recovery,
+                                                reload_completer) &&
+              reload_declined.read_only && !reload_declined.reload_required &&
+              !reload_declined.file_lock,
+          "declining changed-file reload releases the new lock and remains read-only");
+
+    const fs::path blocked_destination = root / "blocked-save-as.txt";
+    pkchat::editor::EditorState failed_save_as =
+        pkchat::editor::EditorState::from_text("keep original session");
+    failed_save_as.set_path(target.string());
+    check(failed_save_as.begin_file_session(target.string(), true).ok(),
+          "failed Save As fixture owns its original file session");
+    const std::shared_ptr<pkchat::editor::EditorFileLock> original_session =
+        failed_save_as.file_lock;
+    pkchat::editor::EditorLockAttempt destination_blocker =
+        pkchat::editor::acquire_editor_file_lock(blocked_destination.string());
+    pkchat::editor::MinibufferState failed_save_minibuffer;
+    pkchat::editor::PendingSaveRequest failed_save_pending;
+    bool failed_save_quit = false;
+    pkchat::editor::request_save_editor_to_path(failed_save_as,
+                                                blocked_destination.string(),
+                                                failed_save_minibuffer,
+                                                true,
+                                                false,
+                                                failed_save_quit,
+                                                failed_save_pending,
+                                                reload_settings);
+    check(failed_save_as.path == target.string() &&
+              failed_save_as.canonical_path == canonical &&
+              failed_save_as.file_lock == original_session && failed_save_pending.path.empty(),
+          "failed Save As retains the original path and lock session");
+    destination_blocker.lock.reset();
+    failed_save_as.release_file_session();
+
+    pkchat::editor::EditorLockAttempt save_as_blocker =
+        pkchat::editor::acquire_editor_file_lock(target.string());
+    pkchat::editor::EditorState save_as =
+        pkchat::editor::EditorState::from_text("read-only save as");
+    save_as.set_path(target.string());
+    check(save_as.begin_file_session(target.string(), true).code == pkchat::ErrorCode::FileLock,
+          "read-only Save As fixture is contended");
+    const fs::path save_as_target = root / "retargeted.txt";
+    pkchat::editor::MinibufferState save_as_minibuffer;
+    pkchat::editor::PendingSaveRequest save_as_pending;
+    bool save_as_quit = false;
+    pkchat::editor::request_save_editor_to_path(save_as,
+                                                save_as_target.string(),
+                                                save_as_minibuffer,
+                                                true,
+                                                false,
+                                                save_as_quit,
+                                                save_as_pending,
+                                                reload_settings);
+    pkchat::editor::PieceTable save_as_saved;
+    check(pkchat::editor::load_file(save_as_target.string(), save_as_saved).ok() &&
+              save_as_saved.str() == "read-only save as" && !save_as.read_only &&
+              save_as.file_lock && save_as.canonical_path != canonical &&
+              fs::exists(canonical + ".LOCK"),
+          "Save As from read-only retargets only after saving and retains destination lock");
+    save_as.release_file_session();
+    save_as_blocker.lock.reset();
+
+    fs::create_directory(canonical + ".LOCK");
+    {
+        std::ofstream out(canonical + ".LOCK/owner");
+        out << "malformed\n";
+    }
+    pkchat::editor::EditorLockAttempt malformed =
+        pkchat::editor::acquire_editor_file_lock(target.string());
+    check(!malformed.lock && !malformed.owner_metadata_valid && fs::exists(canonical + ".LOCK"),
+          "malformed unverifiable lock is never removed");
+    fs::remove(canonical + ".LOCK/owner");
+    fs::remove(canonical + ".LOCK");
+
+    fs::create_directory(canonical + ".LOCK");
+    pkchat::editor::EditorLockAttempt missing_metadata =
+        pkchat::editor::acquire_editor_file_lock(target.string());
+    check(!missing_metadata.lock && !missing_metadata.owner_metadata_valid &&
+              fs::exists(canonical + ".LOCK"),
+          "missing lock metadata is unverifiable and never removed automatically");
+    fs::remove(canonical + ".LOCK");
+
+    pkchat::editor::EditorState read_only = pkchat::editor::EditorState::from_text("abc");
+    read_only.read_only = true;
+    check(read_only.insert("x").code == pkchat::ErrorCode::FileLock &&
+              read_only.erase_before_cursor().code == pkchat::ErrorCode::FileLock &&
+              read_only.replace(0, 1, "z").code == pkchat::ErrorCode::FileLock &&
+              read_only.indent().code == pkchat::ErrorCode::FileLock &&
+              read_only.outdent().code == pkchat::ErrorCode::FileLock && !read_only.undo() &&
+              !read_only.redo(),
+          "central EditorState mutation guard rejects read-only changes");
+    check(pkchat::editor::editor_status_line(read_only).find("[RO]") != std::string::npos,
+          "read-only editor status renders [RO]");
+
+    pkchat::editor::EditorState saving = pkchat::editor::EditorState::from_text("pkchat version");
+    saving.set_path(target.string());
+    check(saving.begin_file_session(target.string(), true).ok(),
+          "writable editor state acquires its main-file lock");
+    {
+        std::ofstream out(target, std::ios::trunc);
+        out << "external version is longer";
+    }
+    pkchat::editor::MinibufferState minibuffer;
+    pkchat::editor::PendingSaveRequest pending;
+    pkchat::editor::EditorSettings settings;
+    bool quit = false;
+    pkchat::editor::request_save_editor_to_path(saving,
+                                                target.string(),
+                                                minibuffer,
+                                                true,
+                                                false,
+                                                quit,
+                                                pending,
+                                                settings);
+    check(pending.external_change &&
+              minibuffer.action == pkchat::editor::MinibufferAction::ConfirmOverwrite,
+          "saving detects an external file fingerprint change");
+    pkchat::editor::ReplaceSession replace;
+    std::string search;
+    std::string pending_load;
+    bool pending_quit = false;
+    pkchat::editor::PendingAutosaveRecovery recovery;
+    pkchat::editor::PathCompleter completer;
+    check(pkchat::editor::handle_minibuffer_key(saving,
+                                                minibuffer,
+                                                'n',
+                                                quit,
+                                                search,
+                                                replace,
+                                                settings,
+                                                pending_load,
+                                                pending_quit,
+                                                pending,
+                                                recovery,
+                                                completer) &&
+              pending.path.empty(),
+          "external-change overwrite can be cancelled");
+    pkchat::editor::PieceTable cancelled;
+    check(pkchat::editor::load_file(target.string(), cancelled).ok() &&
+              cancelled.str() == "external version is longer",
+          "cancelled overwrite preserves the external file");
+    pkchat::editor::request_save_editor_to_path(saving,
+                                                target.string(),
+                                                minibuffer,
+                                                true,
+                                                false,
+                                                quit,
+                                                pending,
+                                                settings);
+    {
+        std::ofstream out(target, std::ios::trunc);
+        out << "a second external version changed during confirmation";
+    }
+    check(pkchat::editor::handle_minibuffer_key(saving,
+                                                minibuffer,
+                                                'y',
+                                                quit,
+                                                search,
+                                                replace,
+                                                settings,
+                                                pending_load,
+                                                pending_quit,
+                                                pending,
+                                                recovery,
+                                                completer),
+          "first overwrite confirmation rechecks the observed disk version");
+    check(!pending.path.empty() &&
+              minibuffer.action == pkchat::editor::MinibufferAction::ConfirmOverwrite,
+          "a second external change requires a new confirmation");
+    check(pkchat::editor::handle_minibuffer_key(saving,
+                                                minibuffer,
+                                                'y',
+                                                quit,
+                                                search,
+                                                replace,
+                                                settings,
+                                                pending_load,
+                                                pending_quit,
+                                                pending,
+                                                recovery,
+                                                completer),
+          "explicit overwrite confirmation for the rechecked version is handled");
+    pkchat::editor::PieceTable saved;
+    check(pkchat::editor::load_file(target.string(), saved).ok() &&
+              saved.str() == "pkchat version" && saving.has_disk_fingerprint,
+          "confirmed overwrite saves content and refreshes the fingerprint");
+    saving.release_file_session();
+    fs::remove_all(root);
+}
+
 void test_editor_help_document_and_command() {
     std::string help_text;
     pkchat::Error err = pkchat::editor::load_editor_help_markdown(help_text);
@@ -2980,6 +3349,7 @@ void test_editor_markdown_mode_and_structured_highlighting() {
 }
 
 void run_all() {
+    test_editor_file_locking_and_read_only_sessions();
     test_editor_control_key_sequence_decode();
     test_editor_save_as_overwrite_helpers();
     test_editor_help_document_and_command();

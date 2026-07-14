@@ -111,16 +111,17 @@ $(OBJ_DIR)/src/editor/editor_help.o: $(EDITOR_HELP_HEADER)
 
 -include $(DEP)
 
-test: test-unit test-integration
+test: test-unit
+	$(MAKE) test-integration
 
 test-unit: $(TEST_BIN) $(IO_FAULT_BIN) $(POSIX_IO_MOCK)
 	$(TEST_BIN)
 	$(IO_FAULT_BIN)
-	PKCHAT_MOCK_ENOSPC=1 LD_PRELOAD=$(abspath $(POSIX_IO_MOCK)) $(IO_FAULT_BIN) --enospc
+	tools/run_enospc_test.sh "$(CXX)" "$(abspath $(POSIX_IO_MOCK))" "$(abspath $(IO_FAULT_BIN))"
 
 test-unit-faults: $(IO_FAULT_BIN) $(POSIX_IO_MOCK)
 	$(IO_FAULT_BIN)
-	PKCHAT_MOCK_ENOSPC=1 LD_PRELOAD=$(abspath $(POSIX_IO_MOCK)) $(IO_FAULT_BIN) --enospc
+	tools/run_enospc_test.sh "$(CXX)" "$(abspath $(POSIX_IO_MOCK))" "$(abspath $(IO_FAULT_BIN))"
 
 test-integration: $(BIN)
 	tests/integration/test_mock_server.sh

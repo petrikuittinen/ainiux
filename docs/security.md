@@ -6,6 +6,12 @@
 - LM Studio authentication is optional by default.
 - Local web mode and agent mode are not implemented yet.
 
+## Editor Advisory Locks
+
+Writable editor buffers coordinate pkchat processes with an atomic, user-only `FILE.LOCK` directory beside the canonical target. Owner metadata is bounded and contains no API credentials: schema version, hostname, PID, start time, canonical target, and a unique ownership token. Cleanup rereads and matches the token, unlinks only the known metadata file, and removes only the now-empty directory. It never recursively deletes lock contents.
+
+This is advisory coordination, not an operating-system write prohibition: unrelated programs can still alter the target. Device/inode, size, existence, and high-resolution modification-time fingerprints make those changes visible before editing a formerly read-only buffer or saving. Only a PID proven dead on the same hostname is recovered automatically. Remote, live, malformed, missing, token-mismatched, or nonempty locks require the user to verify ownership before manual removal.
+
 ## Configuration Files
 
 Automatic system and user configuration files may select a credential environment variable or key-file path, but API key values and arbitrary authorization headers are not accepted by the schema. Files are capped at 1 MiB and must be regular files. Unknown settings and invalid types fail closed before any part of that file is applied.

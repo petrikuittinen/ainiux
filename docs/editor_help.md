@@ -35,6 +35,14 @@ Arrow keys, `Page Up`/`Page Down`, `Home`, and `End` scroll the help document.
 
 Replace mode after `Ctrl+H`: `Space` replaces match, `s` skips, `a` replaces all remaining, `Esc` ends replace.
 
+## File locking and external changes
+
+Writable file buffers hold an advisory `FILE.LOCK` directory for their complete lifetime, including buffer and chat-mode switches. Opening an actively or unverifiably locked existing file produces a `[RO]` status. Search, selection, copy, settings, and AI output to a new buffer remain available; content-changing operations are blocked. The first attempted edit retries the lock. If the on-disk file changed while the buffer was read-only, accept the reload prompt to use the current disk contents and repeat the edit, or decline to remain read-only.
+
+Before saving the current path, pkchat compares the file with its load/save fingerprint and asks before overwriting an external change, replacement, or deletion. It rechecks after confirmation. Save As acquires the destination lock first; it is also the way to turn a read-only buffer into a writable buffer at a new path. Auto-save is disabled for read-only buffers.
+
+Dead same-host lock owners are recovered automatically. Remote, live, malformed, missing-metadata, token-mismatched, and unexpectedly nonempty locks are left in place. Only after verifying that no pkchat process owns the file, manually remove the known `FILE.LOCK/owner` file and then its empty `FILE.LOCK` directory.
+
 ## Editing
 
 | Key | Action |

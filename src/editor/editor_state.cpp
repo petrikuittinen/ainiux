@@ -128,6 +128,75 @@ void EditorState::redetect_language() {
     highlight_cache_.clear();
 }
 
+Error EditorState::begin_file_session(const std::string& value, bool target_exists) {
+    release_file_session();
+    Error canonical_error = canonicalize_editor_target(value, canonical_path);
+    if (!canonical_error.ok()) {
+        read_only = target_exists;
+        return canonical_error;
+    }
+    Error fingerprint_error = fingerprint_file(canonical_path, disk_fingerprint);
+    if (!fingerprint_error.ok()) {
+        read_only = target_exists;
+        return fingerprint_error;
+    }
+    has_disk_fingerprint = true;
+    EditorLockAttempt attempt = acquire_editor_file_lock(canonical_path);
+    if (!attempt.lock) {
+        read_only = target_exists;
+        return attempt.error;
+    }
+    file_lock = std::move(attempt.lock);
+    read_only = false;
+    reload_required = false;
+    return ok_error();
+}
+
+Error EditorState::retry_file_lock() {
+    if (!read_only) return ok_error();
+    if (canonical_path.empty()) {
+        return {ErrorCode::FileLock, "read-only editor buffer has no canonical file path"};
+    }
+    EditorLockAttempt attempt = acquire_editor_file_lock(canonical_path);
+    if (!attempt.lock) return attempt.error;
+    FileFingerprint current;
+    Error fingerprint_error = fingerprint_file(canonical_path, current);
+    if (!fingerprint_error.ok()) return fingerprint_error;
+    file_lock = std::move(attempt.lock);
+    if (!has_disk_fingerprint || current != disk_fingerprint) {
+        reload_required = true;
+        return {ErrorCode::FileLock,
+                "file changed while this buffer was read-only: " + canonical_path +
+                    ". Reload before editing"};
+    }
+    read_only = false;
+    reload_required = false;
+    return ok_error();
+}
+
+void EditorState::release_file_session() {
+    file_lock.reset();
+    canonical_path.clear();
+    has_disk_fingerprint = false;
+    reload_required = false;
+}
+
+Error EditorState::refresh_disk_fingerprint() {
+    if (canonical_path.empty()) {
+        has_disk_fingerprint = false;
+        disk_fingerprint = {};
+        return ok_error();
+    }
+    Error error = fingerprint_file(canonical_path, disk_fingerprint);
+    has_disk_fingerprint = error.ok();
+    return error;
+}
+
+Error EditorState::mutation_allowed() {
+    if (!read_only) return ok_error();
+    return retry_file_lock();
+}
+
 EditorSnapshot EditorState::snapshot() const {
     return {text.str(), cursor, preferred_column, scroll_line, scroll_column};
 }
@@ -144,6 +213,9 @@ void EditorState::restore_snapshot(const EditorSnapshot& snapshot) {
 }
 
 void EditorState::revert_to_snapshot(const EditorSnapshot& snapshot) {
+    if (!mutation_allowed().ok()) {
+        return;
+    }
     const std::string before = text.str();
     restore_snapshot(snapshot);
     if (text.str() != before) {
@@ -193,6 +265,8 @@ void EditorState::invalidate_word_index() {
 }
 
 Error EditorState::insert(const std::string& value) {
+    Error writable = mutation_allowed();
+    if (!writable.ok()) return writable;
     if (value.empty()) {
         return ok_error();
     }
@@ -221,6 +295,8 @@ Error EditorState::insert(const std::string& value) {
 }
 
 Error EditorState::insert_without_undo(const std::string& value) {
+    Error writable = mutation_allowed();
+    if (!writable.ok()) return writable;
     if (value.empty()) {
         return ok_error();
     }
@@ -264,6 +340,8 @@ Error EditorState::replace_completion(size_t pos,
                                       size_t count,
                                       const std::string& value,
                                       bool record_undo) {
+    Error writable = mutation_allowed();
+    if (!writable.ok()) return writable;
     if (pos > text.size()) {
         return {ErrorCode::BadArgs, "editor replace position is past the end of the buffer"};
     }
@@ -298,6 +376,8 @@ Error EditorState::replace_completion(size_t pos,
 }
 
 Error EditorState::erase_before_cursor() {
+    Error writable = mutation_allowed();
+    if (!writable.ok()) return writable;
     if (selection.has_range()) {
         const size_t start = selection.start();
         Error err = replace(start, selection_end_exclusive() - start, "");
@@ -328,6 +408,8 @@ Error EditorState::erase_before_cursor() {
 }
 
 Error EditorState::erase_at_cursor() {
+    Error writable = mutation_allowed();
+    if (!writable.ok()) return writable;
     if (cursor >= text.size()) {
         return ok_error();
     }
@@ -348,6 +430,7 @@ Error EditorState::erase_at_cursor() {
 }
 
 bool EditorState::undo() {
+    if (!mutation_allowed().ok()) return false;
     if (undo_stack_.empty()) {
         return false;
     }
@@ -366,6 +449,7 @@ bool EditorState::undo() {
 }
 
 bool EditorState::redo() {
+    if (!mutation_allowed().ok()) return false;
     if (redo_stack_.empty()) {
         return false;
     }
@@ -487,6 +571,8 @@ Error EditorState::replace_all_from(size_t start,
                                     const std::string& needle,
                                     const std::string& value,
                                     size_t& replacements) {
+    Error writable = mutation_allowed();
+    if (!writable.ok()) return writable;
     replacements = 0;
     if (needle.empty()) {
         return {ErrorCode::BadArgs, "editor replace search string is empty"};
@@ -564,6 +650,8 @@ Error EditorState::copy_selection(Clipboard& clipboard) {
 }
 
 Error EditorState::cut_selection(Clipboard& clipboard) {
+    Error writable = mutation_allowed();
+    if (!writable.ok()) return writable;
     if (!selection.has_range()) {
         return {ErrorCode::BadArgs, "no selection to cut"};
     }
@@ -594,6 +682,8 @@ Error EditorState::paste(Clipboard& clipboard) {
 }
 
 Error EditorState::indent() {
+    Error writable = mutation_allowed();
+    if (!writable.ok()) return writable;
     tab_width = std::max<size_t>(1, std::min(tab_width, kMaxTabWidth));
     if (!selection.has_range()) {
         if (tab_style == TabStyle::Tab) {
@@ -663,6 +753,8 @@ Error EditorState::indent() {
 }
 
 Error EditorState::outdent() {
+    Error writable = mutation_allowed();
+    if (!writable.ok()) return writable;
     tab_width = std::max<size_t>(1, std::min(tab_width, kMaxTabWidth));
     const bool selected = selection.has_range();
     const size_t selection_start = selected ? selection.start() : cursor;
@@ -932,6 +1024,8 @@ void EditorState::move_line_end(const Rect& rect) {
 }
 
 Error EditorState::kill_to_line_end(Clipboard& clipboard) {
+    Error writable = mutation_allowed();
+    if (!writable.ok()) return writable;
     const size_t line = text.line_for_offset(cursor);
     const size_t start = text.line_start(line);
     const size_t length = text.line_length(line);

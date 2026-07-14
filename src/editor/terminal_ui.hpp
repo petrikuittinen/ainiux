@@ -33,6 +33,7 @@ enum class MinibufferAction {
     ConfirmQuit,
     ConfirmSaveOnQuit,
     ConfirmOverwrite,
+    ConfirmReloadAfterLock,
     AssistCommand,
     AssistScopeChoice,
     AssistPromptMode,
@@ -40,8 +41,12 @@ enum class MinibufferAction {
 
 struct PendingSaveRequest {
     std::string path;
+    std::string canonical_path;
     bool update_path = true;
     bool quit_after_save = false;
+    bool external_change = false;
+    FileFingerprint observed_disk;
+    std::shared_ptr<EditorFileLock> destination_lock;
 };
 
 struct PendingAutosaveRecovery {

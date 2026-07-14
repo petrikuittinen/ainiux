@@ -87,7 +87,7 @@ std::string autosave_path_for(const std::string& path, const std::string& postfi
 }
 
 bool autosave_allowed_for_buffer(const EditorState& state, const EditorSettings& settings) {
-    if (!settings.auto_save_mode || state.path.empty() || !state.dirty) {
+    if (!settings.auto_save_mode || state.path.empty() || !state.dirty || state.read_only) {
         return false;
     }
     if (settings.auto_save_size_limit >= 0 &&
