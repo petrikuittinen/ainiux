@@ -16,6 +16,7 @@ std::vector<std::string> selectable_provider_ids();
 std::string provider_picker_text(const std::vector<std::string>& provider_ids, size_t selected);
 std::string model_picker_text(const std::vector<std::string>& models, size_t selected);
 std::string thread_picker_text(const std::vector<chat::ThreadSummary>& threads, size_t selected);
+std::string attachment_picker_text(const std::vector<ChatAttachment>& attachments, size_t selected);
 std::string remove_confirm_text(const chat::Session& session);
 std::string system_edit_text();
 std::string history_edit_text();
@@ -45,5 +46,11 @@ bool handle_thread_picker_escape(std::vector<chat::ThreadSummary>& threads,
                                  size_t& selected,
                                  TuiMode& mode,
                                  std::string& status);
+
+PickerEscapeResult handle_attachment_list_escape(size_t item_count,
+                                                 size_t& selected,
+                                                 std::string& status,
+                                                 size_t& pending_delete,
+                                                 TuiMode& mode);
 
 }  // namespace pkchat::tui

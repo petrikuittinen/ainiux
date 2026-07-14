@@ -30,6 +30,7 @@
 #include "search/search.hpp"
 #include "input/input.hpp"
 #include "runtime/runtime.hpp"
+#include "ui/confirmation.hpp"
 #include "ui/text_selector.hpp"
 
 #include <cerrno>
@@ -121,6 +122,16 @@ app::TuiRunResult run(provider::RequestContext context,
     std::vector<std::string> picker_items;
     size_t picker_selected = 0;
     bool picker_cancel_quits = false;
+    std::vector<ChatAttachment> chat_attachments;
+    size_t attachment_picker_selected = 0;
+    size_t pending_attachment_delete = static_cast<size_t>(-1);
+    size_t attachments_committed_for_turn = 0;
+    // Full (with bodies) content for the most recent user turn that had text attachments.
+    // Used to send the real data to the model on initial send and immediate regenerates,
+    // without storing the bodies in the visible/persisted chat history.
+    std::string pending_full_model_content;
+    // For queued regeneration that was triggered while a job was active.
+    std::string queued_regen_full_content;
     ModelsRequestPurpose models_request_purpose = ModelsRequestPurpose::Preview;
     provider::ModelsResult cached_models;
     bool have_cached_models = false;
@@ -138,6 +149,11 @@ app::TuiRunResult run(provider::RequestContext context,
     auto finish_loaded_session = [&](const std::string& loaded_label) {
         pending_images.clear();
         inflight_image_count = 0;
+        chat_attachments.clear();
+        attachment_picker_selected = 0;
+        attachments_committed_for_turn = 0;
+        pending_full_model_content.clear();
+        queued_regen_full_content.clear();
         history_scroll = 0;
         if (loaded_session_differs_from_context(context, session)) {
             mode = TuiMode::ModelConfirm;
@@ -159,6 +175,11 @@ app::TuiRunResult run(provider::RequestContext context,
         session = chat::new_session(context);
         pending_images.clear();
         inflight_image_count = 0;
+        chat_attachments.clear();
+        attachment_picker_selected = 0;
+        attachments_committed_for_turn = 0;
+        pending_full_model_content.clear();
+        queued_regen_full_content.clear();
         app::apply_system_prompt(session, context.options.system);
         history_scroll = 0;
     };
@@ -172,6 +193,16 @@ app::TuiRunResult run(provider::RequestContext context,
         }
         if (mode == TuiMode::ModelList) {
             return model_picker_text(picker_items, picker_selected);
+        }
+        if (mode == TuiMode::AttachmentList) {
+            return attachment_picker_text(chat_attachments, attachment_picker_selected);
+        }
+        if (mode == TuiMode::AttachmentDeleteConfirm) {
+            if (pending_attachment_delete < chat_attachments.size()) {
+                return "Delete attachment:\n  " + chat_attachments[pending_attachment_delete].source +
+                       "\nPress y to delete · n or Esc to cancel";
+            }
+            return std::string("No attachment selected to delete");
         }
         if (mode == TuiMode::RemoveConfirm) {
             return remove_confirm_text(session);
@@ -425,6 +456,16 @@ app::TuiRunResult run(provider::RequestContext context,
 
         std::vector<provider::Message> request_messages = session.messages;
         request_messages.pop_back();
+
+        // If this turn had text attachments, the history message contains only the
+        // filenames (to keep chat history readable). Patch the *copy* we send to the
+        // model with the actual full contents (including file data after the # marker).
+        if (!pending_full_model_content.empty() &&
+            !request_messages.empty() &&
+            request_messages.back().role == "user") {
+            request_messages.back().content = pending_full_model_content;
+        }
+
         pkchat::context::PreparedMessages prepared = pkchat::context::prepare(
             request_messages,
             context.options.context_policy,
@@ -436,6 +477,8 @@ app::TuiRunResult run(provider::RequestContext context,
             active_job = ActiveJob::None;
             status = detail::error_line(prepared.error);
             inflight_image_count = 0;
+            attachments_committed_for_turn = 0;
+            pending_full_model_content.clear();
             return;
         }
         if (pending_user != static_cast<size_t>(-1) && pending_user < session.messages.size()) {
@@ -476,7 +519,8 @@ app::TuiRunResult run(provider::RequestContext context,
         status = "Waiting for response...";
     };
 
-    auto start_turn = [&](const std::string& prompt) {
+    auto start_turn_with_full = [&](const std::string& history_content,
+                                      const std::string& full_model_content) {
         if (active_job != ActiveJob::None) {
             status = "A model job is already running";
             return;
@@ -484,8 +528,14 @@ app::TuiRunResult run(provider::RequestContext context,
         pending_user = session.messages.size();
         pending_user_added_for_job = true;
         inflight_image_count = pending_images.size();
-        session.messages.push_back({"user", prompt, pending_images});
+        session.messages.push_back({"user", history_content, pending_images});
+        pending_full_model_content = full_model_content;
         start_assistant_response();
+    };
+
+    // One-arg version for call sites and callbacks that don't involve attachment bodies.
+    auto start_turn = [&](const std::string& history_content) {
+        start_turn_with_full(history_content, {});
     };
 
     auto start_response_to_unanswered_user = [&]() {
@@ -501,6 +551,9 @@ app::TuiRunResult run(provider::RequestContext context,
         pending_user = user_index;
         pending_user_added_for_job = false;
         inflight_image_count = 0;
+        attachments_committed_for_turn = 0;
+        pending_full_model_content.clear();
+        queued_regen_full_content.clear();
         start_assistant_response();
     };
 
@@ -519,7 +572,10 @@ app::TuiRunResult run(provider::RequestContext context,
         if (erase_from != static_cast<size_t>(-1) && erase_from < session.messages.size()) {
             session.messages.erase(session.messages.begin() + static_cast<long>(erase_from), session.messages.end());
         }
-        start_turn(prompt);
+        attachments_committed_for_turn = 0;
+        // Use stashed full content (if any) for the model; history will get the (short) prompt.
+        start_turn_with_full(prompt, queued_regen_full_content);
+        queued_regen_full_content.clear();
         status = "Regenerating...";
     };
 
@@ -629,6 +685,9 @@ app::TuiRunResult run(provider::RequestContext context,
             }
             regenerate_after_cancel = true;
             queued_regeneration_prompt = prompt;
+            // Stash the full (bodies) version for the queued regen so the model receives data,
+            // while the history will re-use the short "prompt" (names only).
+            queued_regen_full_content = pending_full_model_content;
             model_job.cancel();
             status = "Cancelling before regenerate...";
             return;
@@ -640,11 +699,13 @@ app::TuiRunResult run(provider::RequestContext context,
             return;
         }
         session.messages.erase(session.messages.begin() + static_cast<long>(plan.erase_from), session.messages.end());
-        start_turn(plan.prompt);
+        // Pass any stashed full content (for the turn being regenerated) so the model gets the bodies.
+        // The first arg is the short history content (names only) that will be stored.
+        start_turn_with_full(plan.prompt, pending_full_model_content);
         status = "Regenerating...";
     };
 
-    chat_assist_callbacks.start_turn = start_turn;
+    chat_assist_callbacks.start_turn = start_turn;  // one-arg version (no attachment bodies)
     chat_assist_callbacks.regenerate_last_turn = regenerate_last_turn;
     chat_assist_callbacks.start_store_save = start_store_save;
     chat_assist_callbacks.switch_to_editor_new_buffer_assist =
@@ -683,7 +744,25 @@ app::TuiRunResult run(provider::RequestContext context,
     command_handlers.pop_last_message = pop_last_message;
     command_handlers.start_response_to_unanswered_user = start_response_to_unanswered_user;
     command_handlers.start_insert = [&](const std::string& path) { file_jobs.start_insert(path); };
-    command_handlers.start_attach = [&](const std::string& path) { file_jobs.start_attach(path); };
+    command_handlers.start_attach = [&](const std::string& path) {
+        if (path.empty()) {
+            if (active_job != ActiveJob::None) {
+                status = "Cannot manage attachments while a model job is running";
+                return;
+            }
+            if (chat_attachments.empty()) {
+                status = "No attachments. Use /attach PATH or URL to add one.";
+                return;
+            }
+            attachment_picker_selected = 0;
+            mode = TuiMode::AttachmentList;
+            history_scroll = 0;
+            status = ui::text_selector_status("Selected attachment", attachment_picker_selected,
+                                              chat_attachments.size());
+            return;
+        }
+        file_jobs.start_attach(path);
+    };
     command_handlers.start_fetch = [&](const std::string& url) { file_jobs.start_fetch(url); };
     command_handlers.start_search = [&](const std::string& query) { file_jobs.start_search(query); };
     command_handlers.set_thinking_trace_mode = set_thinking_trace_mode;
@@ -719,7 +798,10 @@ app::TuiRunResult run(provider::RequestContext context,
                                       sqlite_store,
                                       sqlite_unavailable_message,
                                       pending_images,
-                                      inflight_image_count};
+                                      inflight_image_count,
+                                      chat_attachments,
+                                      attachments_committed_for_turn,
+                                      pending_full_model_content};
 
     auto handle_command = [&](const std::string& text) {
         handle_tui_command(text, command_context, command_handlers);
@@ -797,13 +879,13 @@ app::TuiRunResult run(provider::RequestContext context,
     picker_callbacks.on_model_confirm_retry = [&](const std::string& message) { status = message; };
 
     auto submit_input = [&]() {
-        const std::string raw = input.text.str();
+        std::string raw = input.text.str();
         const std::string text = app::detail::trim_ascii(raw);
-        if (text.empty()) {
+        if (text.empty() && chat_attachments.empty()) {
             input = new_input_editor();
             return;
         }
-        if (raw.find('\n') == std::string::npos && text[0] == '/') {
+        if (raw.find('\n') == std::string::npos && !text.empty() && text[0] == '/') {
             if (try_handle_chat_assist_command(text,
                                                input,
                                                ai_continue.assist_config,
@@ -823,8 +905,55 @@ app::TuiRunResult run(provider::RequestContext context,
             status = "A model job is already running";
             return;
         }
+
+        // User is sending a fresh prompt (not a regeneration). Any stashed full content
+        // for a previous turn is no longer needed (user has moved on to a new prompt).
+        pending_full_model_content.clear();
+        queued_regen_full_content.clear();
+
+        const std::string typed_prompt = raw;
+
+        std::string display_content = typed_prompt;
+        std::string full_model_content;
+
+        if (!chat_attachments.empty()) {
+            // Build the FULL content for the MODEL (includes actual file data after #).
+            // This must never be stored in session.messages (to avoid flooding history).
+            full_model_content = typed_prompt;
+            if (!full_model_content.empty() && full_model_content.back() != '\n') {
+                full_model_content += '\n';
+            }
+            full_model_content += "#\n\n";
+            for (size_t i = 0; i < chat_attachments.size(); ++i) {
+                const auto& att = chat_attachments[i];
+                full_model_content += "---" + att.source + "---\n";
+                full_model_content += att.content;
+                if (!att.content.empty() && att.content.back() != '\n') {
+                    full_model_content += '\n';
+                }
+                if (i + 1 < chat_attachments.size()) {
+                    full_model_content += '\n';  // one line break between attached files
+                }
+            }
+
+            // Build the DISPLAY content for HISTORY: only the typed text + filenames (no bodies).
+            if (!display_content.empty()) {
+                display_content += "\n\n";
+            }
+            display_content += "Attached files (in order):\n";
+            for (const auto& att : chat_attachments) {
+                display_content += "- " + att.source + "\n";
+            }
+
+            attachments_committed_for_turn = chat_attachments.size();
+            // The bodies stay in chat_attachments (and the full_model_content copy above)
+            // until after the model responds and the user starts a new prompt.
+        }
+
+        pending_full_model_content = full_model_content;
+
         input = new_input_editor();
-        start_turn(raw);
+        start_turn_with_full(display_content, full_model_content);
     };
 
     if (!context.profile.offline && !context.options.has_context_tokens &&
@@ -882,6 +1011,22 @@ app::TuiRunResult run(provider::RequestContext context,
                                              pending_images.begin() + static_cast<long>(inflight_image_count));
                     }
                     inflight_image_count = 0;
+                    // Consume attachments that were used for the just-completed user prompt.
+                    // This happens after the model has responded fully. Any attachments the
+                    // user added during this turn (for a subsequent prompt) are preserved.
+                    if (attachments_committed_for_turn > 0) {
+                        const size_t n = attachments_committed_for_turn;
+                        if (n >= chat_attachments.size()) {
+                            chat_attachments.clear();
+                        } else {
+                            chat_attachments.erase(
+                                chat_attachments.begin(),
+                                chat_attachments.begin() + static_cast<std::ptrdiff_t>(n));
+                        }
+                        attachments_committed_for_turn = 0;
+                        attachment_picker_selected = chat_attachments.empty() ? 0
+                            : std::min(attachment_picker_selected, chat_attachments.size() - 1);
+                    }
                     pending_user = static_cast<size_t>(-1);
                     pending_assistant = static_cast<size_t>(-1);
                     pending_user_added_for_job = false;
@@ -914,15 +1059,37 @@ app::TuiRunResult run(provider::RequestContext context,
                     active_job = ActiveJob::None;
                     inflight_image_count = 0;
                     if (should_regenerate) {
+                        // Regeneration will reuse the prior prompt content (which already included
+                        // any folded attachments). Reset committed so we don't double-consume.
+                        attachments_committed_for_turn = 0;
                         rollback_pending_turn();
                         start_queued_regeneration(regenerate_erase_from);
                     } else {
                         clear_queued_regeneration();
                         if (event.error.code == ErrorCode::Cancelled) {
+                            // Prompt was sent and (partially) processed; consume the attachments
+                            // that were used for it.
+                            if (attachments_committed_for_turn > 0) {
+                                const size_t n = attachments_committed_for_turn;
+                                if (n >= chat_attachments.size()) {
+                                    chat_attachments.clear();
+                                } else {
+                                    chat_attachments.erase(
+                                        chat_attachments.begin(),
+                                        chat_attachments.begin() + static_cast<std::ptrdiff_t>(n));
+                                }
+                                attachments_committed_for_turn = 0;
+                                attachment_picker_selected = chat_attachments.empty() ? 0
+                                    : std::min(attachment_picker_selected, chat_attachments.size() - 1);
+                            }
                             keep_cancelled_turn();
                             status = "Cancelled";
                             start_store_save();
                         } else {
+                            // Error before/during; the user message is rolled back.
+                            // Do not consume attachments; leave them for the user to re-send.
+                            attachments_committed_for_turn = 0;
+                            pending_full_model_content.clear();
                             rollback_pending_turn();
                             status = detail::error_line(event.error);
                         }
@@ -989,8 +1156,18 @@ app::TuiRunResult run(provider::RequestContext context,
                         pending_images.push_back(std::move(event.image));
                         status = "Attached image for next prompt: " + event.text + " (" +
                                  std::to_string(pending_images.size()) + " pending)";
+                    } else if (event.error.ok() && !event.attached_content.empty()) {
+                        // New chat attachment list behavior
+                        chat_attachments.push_back({event.attached_source, std::move(event.attached_content)});
+                        history_scroll = 0;
+                        status = "Attached " + event.text + " (" +
+                                 std::to_string(chat_attachments.size()) + " attachment" +
+                                 (chat_attachments.size() == 1 ? "" : "s") + ")";
                     } else if (event.error.ok()) {
-                        session.messages.push_back(std::move(event.inserted_message));
+                        // Fallback for any legacy inserted_message path
+                        if (!event.inserted_message.content.empty()) {
+                            session.messages.push_back(std::move(event.inserted_message));
+                        }
                         history_scroll = 0;
                         status = "Attached context from " + event.text;
                     } else {
@@ -1098,6 +1275,87 @@ app::TuiRunResult run(provider::RequestContext context,
                                                  thread_picker_selected,
                                                  input.text.empty()};
                 if (handle_tui_picker_input(ch, picker_state, picker_callbacks)) {
+                    continue;
+                }
+                if (mode == TuiMode::AttachmentList) {
+                    if (ch == 17) {
+                        quit = true;
+                        continue;
+                    }
+                    if (ch == 27) {
+                        const PickerEscapeResult res =
+                            handle_attachment_list_escape(chat_attachments.size(),
+                                                          attachment_picker_selected,
+                                                          status,
+                                                          pending_attachment_delete,
+                                                          mode);
+                        if (res == PickerEscapeResult::Cancelled) {
+                            mode = TuiMode::Chat;
+                            status = "Attachment list closed";
+                        }
+                        continue;
+                    }
+                    if (ch == '\r' || ch == '\n') {
+                        // Enter on attachment list: just show status, no auto-insert
+                        if (attachment_picker_selected < chat_attachments.size()) {
+                            status = "Attachment: " + chat_attachments[attachment_picker_selected].source +
+                                     " (use DEL to remove, Esc to close)";
+                        }
+                        continue;
+                    }
+                    // DEL key: 127 or [3~ forward delete, or sometimes 8
+                    if (ch == 127 || ch == 8) {
+                        if (attachment_picker_selected < chat_attachments.size()) {
+                            pending_attachment_delete = attachment_picker_selected;
+                            mode = TuiMode::AttachmentDeleteConfirm;
+                            status = "Delete attachment? y/n (Esc cancels)";
+                        }
+                        continue;
+                    }
+                    // Also support Delete via escape sequence detection for [3~
+                    // (fall through to escape handler below for sequences)
+                    if (ch >= 32) {
+                        // ignore printable in list
+                    }
+                    continue;
+                }
+                if (mode == TuiMode::AttachmentDeleteConfirm) {
+                    if (ch == 17) {
+                        quit = true;
+                        continue;
+                    }
+                    switch (ui::parse_confirmation_key(ch)) {
+                        case ui::ConfirmationKeyResult::Accepted:
+                            if (pending_attachment_delete < chat_attachments.size()) {
+                                const std::string removed = chat_attachments[pending_attachment_delete].source;
+                                chat_attachments.erase(chat_attachments.begin() +
+                                                       static_cast<std::ptrdiff_t>(pending_attachment_delete));
+                                attachment_picker_selected = std::min(attachment_picker_selected,
+                                                                      chat_attachments.empty() ? 0 : chat_attachments.size() - 1);
+                                if (chat_attachments.empty()) {
+                                    mode = TuiMode::Chat;
+                                    status = "Deleted " + removed + "; no attachments left";
+                                } else {
+                                    mode = TuiMode::AttachmentList;
+                                    status = ui::text_selector_status("Selected attachment",
+                                                                      attachment_picker_selected,
+                                                                      chat_attachments.size());
+                                }
+                            } else {
+                                mode = TuiMode::AttachmentList;
+                                status = "Nothing to delete";
+                            }
+                            pending_attachment_delete = static_cast<size_t>(-1);
+                            continue;
+                        case ui::ConfirmationKeyResult::Rejected:
+                            mode = TuiMode::AttachmentList;
+                            pending_attachment_delete = static_cast<size_t>(-1);
+                            status = "Delete cancelled";
+                            continue;
+                        case ui::ConfirmationKeyResult::Pending:
+                            status = "Press y to delete, n or Esc to cancel";
+                            continue;
+                    }
                     continue;
                 }
                 if (mode == TuiMode::SystemEdit) {

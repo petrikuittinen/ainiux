@@ -147,6 +147,14 @@ std::string thread_picker_text(const std::vector<chat::ThreadSummary>& threads, 
                                     [&](size_t index) { return thread_summary_label(threads[index]); });
 }
 
+std::string attachment_picker_text(const std::vector<ChatAttachment>& attachments, size_t selected) {
+    ui::TextSelectorConfig config;
+    config.header = ui::kTextSelectorAttachmentHint;
+    return ui::render_text_selector(config, selected, attachments.size(), [&](size_t index) {
+        return attachments[index].source;
+    });
+}
+
 std::string remove_confirm_text(const chat::Session& session) {
     std::ostringstream out;
     out << (session.name.empty() ? "New chat" : session.name) << "\n";
@@ -267,6 +275,48 @@ bool handle_thread_picker_escape(std::vector<chat::ThreadSummary>& threads,
         status = "Thread list cancelled";
     }
     return true;
+}
+
+PickerEscapeResult handle_attachment_list_escape(size_t item_count,
+                                                 size_t& selected,
+                                                 std::string& status,
+                                                 size_t& pending_delete,
+                                                 TuiMode& mode) {
+    unsigned char ch = 0;
+    if (!editor::read_terminal_byte(ch, 25)) {
+        mode = TuiMode::Chat;
+        return PickerEscapeResult::Cancelled;
+    }
+    if (ch == '[') {
+        std::string seq;
+        seq.push_back('[');
+        unsigned char next = 0;
+        while (seq.size() < 8 && editor::read_terminal_byte(next, 25)) {
+            seq.push_back(static_cast<char>(next));
+            if ((next >= 'A' && next <= 'Z') || next == '~') {
+                break;
+            }
+        }
+        if (seq == "[3~") {
+            // Forward delete key
+            if (selected < item_count) {
+                pending_delete = selected;
+                mode = TuiMode::AttachmentDeleteConfirm;
+                status = "Delete attachment? y/n (Esc cancels)";
+            }
+            return PickerEscapeResult::Navigated;
+        }
+        // Treat as movement
+        editor::MovementKeyEvent movement;
+        if (editor::parse_movement_sequence(seq, movement) && item_count > 0) {
+            selected = ui::move_text_selector_selection(selected, item_count, movement.key);
+            status = ui::text_selector_status("Selected attachment", selected, item_count);
+            return PickerEscapeResult::Navigated;
+        }
+    }
+    // Unknown escape: cancel list
+    mode = TuiMode::Chat;
+    return PickerEscapeResult::Cancelled;
 }
 
 }  // namespace pkchat::tui

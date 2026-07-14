@@ -2,6 +2,7 @@
 
 #include "app/app.hpp"
 #include "fetch/fetch.hpp"
+#include "html/html.hpp"
 #include "input/input.hpp"
 #include "provider/provider.hpp"
 #include "search/search.hpp"
@@ -163,11 +164,59 @@ void TuiFileJobs::start_attach(const std::string& path) {
         return;
     }
     if (path.empty()) {
-        status = "Usage: /attach PATH";
+        status = "Usage: /attach PATH or URL";
         return;
     }
     if (path == "stdin") {
         status = "stdin input is only supported by non-interactive --input and --attach";
+        return;
+    }
+    const bool is_url = input::is_http_url(path);
+    if (is_url) {
+        // URLs for attach: fetch as text/HTML, convert if appropriate, store as chat attachment content
+        fetch::Options options;
+        options.connect_timeout_seconds = context.options.connect_timeout_seconds;
+        options.timeout_seconds = context.options.timeout_seconds > 0 ? context.options.timeout_seconds : 30;
+        options.max_bytes = context.options.max_fetch_bytes;
+        options.proxy = context.options.proxy;
+        options.insecure_tls = context.options.insecure_tls;
+        options.trace_http = context.options.trace_http;
+        options.allow_private = context.options.allow_private_url_fetch;
+        const bool auto_convert = context.options.auto_convert_html_to_markdown;
+        const long text_limit = context.options.max_input_bytes;
+        runtime::EventQueue<TuiEvent>& event_queue = events;
+        file_job.start([path, options, auto_convert, text_limit, &event_queue](
+                           runtime::CancellationToken token) mutable {
+            TuiEvent event;
+            event.type = TuiEventType::AttachDone;
+            event.text = path;
+            event.attached_source = path;
+            std::string body;
+            event.error = fetch::fetch_html(path, options, body, token);
+            if (event.error.ok()) {
+                if (text_limit > 0 && body.size() > static_cast<size_t>(text_limit)) {
+                    event.error = {ErrorCode::UnsupportedFeature,
+                                   "attachment from URL exceeds --max-input-bytes limit"};
+                } else {
+                    if (auto_convert) {
+                        try {
+                            body = html::convert(body, html::OutputFormat::Markdown);
+                        } catch (const std::bad_alloc&) {
+                            event.error = {ErrorCode::Internal,
+                                           "not enough memory to convert HTML from URL: " + path};
+                        } catch (const std::length_error&) {
+                            event.error = {ErrorCode::UnsupportedFeature,
+                                           "converted HTML is too large to attach from URL: " + path};
+                        }
+                    }
+                    if (event.error.ok()) {
+                        event.attached_content = std::move(body);
+                    }
+                }
+            }
+            event_queue.push(std::move(event));
+        });
+        status = "Attaching " + path + "...";
         return;
     }
     input::FileType type;
@@ -185,8 +234,10 @@ void TuiFileJobs::start_attach(const std::string& path) {
     }
     const long text_limit = context.options.max_input_bytes;
     const long image_limit = context.options.max_image_bytes;
+    const bool auto_convert = context.options.auto_convert_html_to_markdown;
     runtime::EventQueue<TuiEvent>& event_queue = events;
-    file_job.start([path, type, text_limit, image_limit, &event_queue](runtime::CancellationToken token) mutable {
+    file_job.start([path, type, text_limit, image_limit, auto_convert, &event_queue](
+                       runtime::CancellationToken token) mutable {
         TuiEvent event;
         event.type = TuiEventType::AttachDone;
         event.text = path;
@@ -205,11 +256,25 @@ void TuiFileJobs::start_attach(const std::string& path) {
         } else if (text_limit <= 0) {
             event.error = {ErrorCode::BadArgs, "--max-input-bytes must be greater than zero"};
         } else {
-            input::TextContext loaded;
-            event.error = input::load_text_context_file(
-                path, static_cast<size_t>(text_limit), loaded, token);
+            // Load raw for local file, then optionally convert HTML based on setting
+            std::string body;
+            event.error = input::read_local_text_file_for_attach(path, static_cast<size_t>(text_limit), body, token);
             if (event.error.ok()) {
-                event.inserted_message = {"user", input::text_context_message(loaded)};
+                if (type.kind == input::Kind::Html && auto_convert) {
+                    try {
+                        body = html::convert(body, html::OutputFormat::Markdown);
+                    } catch (const std::bad_alloc&) {
+                        event.error = {ErrorCode::Internal,
+                                       "not enough memory to convert HTML: " + path};
+                    } catch (const std::length_error&) {
+                        event.error = {ErrorCode::UnsupportedFeature,
+                                       "converted HTML is too large: " + path};
+                    }
+                }
+                if (event.error.ok()) {
+                    event.attached_source = path;
+                    event.attached_content = std::move(body);
+                }
             }
         }
         event_queue.push(std::move(event));

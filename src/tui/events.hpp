@@ -39,6 +39,8 @@ enum class TuiMode {
     ModelConfirm,
     SystemEdit,
     HistoryEdit,
+    AttachmentList,
+    AttachmentDeleteConfirm,
 };
 
 enum class ModelsRequestPurpose { Preview, Picker };
@@ -62,6 +64,9 @@ struct TuiEvent {
     editor::PathCompletionResult completion;
     size_t completion_generation = 0;
     bool quiet_success = false;
+    // For chat /attach list of text attachments
+    std::string attached_source;
+    std::string attached_content;
 };
 
 enum class EscapeResult {

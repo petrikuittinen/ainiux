@@ -64,4 +64,12 @@ Error load_insert_source(const std::string& source,
                          runtime::CancellationToken cancellation = runtime::CancellationToken());
 std::string text_context_message(const TextContext& context);
 
+// Raw loader for chat /attach of local files: reads UTF-8 text up to limit,
+// validates no NUL and UTF-8, but does NOT perform HTML conversion.
+// Conversion is applied by caller when appropriate.
+Error read_local_text_file_for_attach(const std::string& path,
+                                      size_t max_bytes,
+                                      std::string& content,
+                                      runtime::CancellationToken cancellation = runtime::CancellationToken());
+
 }  // namespace pkchat::input

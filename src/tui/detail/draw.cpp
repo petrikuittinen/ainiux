@@ -454,6 +454,10 @@ const char* panel_title_for_mode(TuiMode mode) {
             return "Provider";
         case TuiMode::ModelList:
             return "Model";
+        case TuiMode::AttachmentList:
+            return "Attachments";
+        case TuiMode::AttachmentDeleteConfirm:
+            return "Delete Attachment";
         case TuiMode::RemoveConfirm:
             return "Remove Thread";
         case TuiMode::ModelConfirm:
@@ -491,13 +495,15 @@ void append_panel_fill_line(std::vector<StyledLine>& lines, int cols) {
 }
 
 StyleRole panel_body_role_for_line(TuiMode mode, const std::string& line) {
-    if ((mode == TuiMode::ThreadList || mode == TuiMode::ProviderList || mode == TuiMode::ModelList) &&
+    if ((mode == TuiMode::ThreadList || mode == TuiMode::ProviderList || mode == TuiMode::ModelList ||
+         mode == TuiMode::AttachmentList) &&
         (line.rfind(u8"› ", 0) == 0 || line.rfind("> ", 0) == 0)) {
         return StyleRole::PanelHighlight;
     }
     if (line.find("Press y") != std::string::npos || line.find("Enter saves") != std::string::npos ||
         line.find("Enter opens") != std::string::npos || line.find("Esc cancel") != std::string::npos ||
-        line.find("Enter select") != std::string::npos) {
+        line.find("Enter select") != std::string::npos || line.find("DEL delete") != std::string::npos ||
+        line.find("Esc close") != std::string::npos) {
         return StyleRole::PanelHint;
     }
     return StyleRole::PanelBody;

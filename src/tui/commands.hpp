@@ -59,6 +59,9 @@ struct TuiCommandContext {
     std::function<std::string()> sqlite_unavailable_message;
     std::vector<provider::ImageInput>& pending_images;
     size_t& inflight_image_count;
+    std::vector<ChatAttachment>& chat_attachments;
+    size_t& attachments_committed_for_turn;
+    std::string& pending_full_model_content;
 };
 
 void handle_tui_command(const std::string& text, TuiCommandContext& ctx, TuiCommandHandlers& handlers);

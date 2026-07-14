@@ -427,4 +427,70 @@ std::string text_context_message(const TextContext& context) {
     return message;
 }
 
+Error read_local_text_file_for_attach(const std::string& path,
+                                      size_t max_bytes,
+                                      std::string& content,
+                                      runtime::CancellationToken cancellation) {
+    const std::string resolved = expand_user_path(path);
+    if (resolved == "stdin" || resolved == "-") {
+        return {ErrorCode::BadArgs,
+                "stdin is only supported by non-interactive --attach or --input"};
+    }
+    FileType type;
+    Error err = classify_file_type(resolved, type);
+    if (!err.ok()) {
+        return err;
+    }
+    if (type.kind == Kind::Image) {
+        return {ErrorCode::UnsupportedFeature,
+                "text attach supports .txt, .md, .html files; images use the pending image queue: " +
+                    resolved};
+    }
+
+    std::ifstream file(resolved, std::ios::binary);
+    if (!file) {
+        return {ErrorCode::FileRead, "could not open " + type.name + " for reading: " + resolved};
+    }
+    std::string body;
+    std::array<char, 8192> buffer{};
+    while (file) {
+        if (cancellation.cancelled()) {
+            return {ErrorCode::Cancelled, "attach read cancelled: " + resolved};
+        }
+        file.read(buffer.data(), static_cast<std::streamsize>(buffer.size()));
+        const std::streamsize count = file.gcount();
+        if (count <= 0) {
+            break;
+        }
+        const size_t chunk_size = static_cast<size_t>(count);
+        if (body.size() > max_bytes || chunk_size > max_bytes - body.size()) {
+            return {ErrorCode::UnsupportedFeature,
+                    type.name + " exceeds --max-input-bytes limit of " + std::to_string(max_bytes) +
+                        " bytes: " + resolved};
+        }
+        body.append(buffer.data(), chunk_size);
+    }
+    if (file.bad()) {
+        return {ErrorCode::FileRead, "could not read " + type.name + ": " + resolved};
+    }
+    const size_t nul = body.find('\0');
+    if (nul != std::string::npos) {
+        return {ErrorCode::UnsupportedFeature,
+                "input appears to be binary: file " + resolved +
+                    " contains a NUL byte at offset " + std::to_string(nul)};
+    }
+    size_t invalid_offset = 0;
+    if (!html::is_valid_utf8(body, &invalid_offset)) {
+        return {ErrorCode::UnsupportedFeature,
+                "Input expects UTF-8 text; charset conversion is not implemented yet for file " +
+                    resolved + " (invalid byte at offset " + std::to_string(invalid_offset) +
+                    "). Convert the document to UTF-8 and try again."};
+    }
+    if (cancellation.cancelled()) {
+        return {ErrorCode::Cancelled, "attach read cancelled: " + resolved};
+    }
+    content = std::move(body);
+    return ok_error();
+}
+
 }  // namespace pkchat::input

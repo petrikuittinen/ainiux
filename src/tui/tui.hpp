@@ -18,6 +18,11 @@ namespace pkchat::tui {
 
 enum class ActivityKind { None, Thinking, Streaming };
 
+struct ChatAttachment {
+    std::string source;  // original path or URL string for display in ---marker---
+    std::string content; // text content (Markdown if converted from HTML)
+};
+
 struct Layout {
     int rows = 24;
     int cols = 80;
