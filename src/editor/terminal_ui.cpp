@@ -95,7 +95,10 @@ std::string editor_status_line(const EditorState& state, bool help_view) {
         if (state.dirty) {
             out << " *";
         }
-        out << "  (" << highlight::language_name(state.language) << ')';
+        const char* linebreak = state.linebreak == LineBreak::Crlf
+                                    ? "CRLF"
+                                    : state.linebreak == LineBreak::Cr ? "CR" : "LF";
+        out << "  (" << highlight::language_name(state.language) << ' ' << linebreak << ')';
     }
     const size_t line = state.text.line_for_offset(state.cursor) + 1;
     const size_t column = state.text.display_column_for_offset(state.cursor, state.tab_width) + 1;

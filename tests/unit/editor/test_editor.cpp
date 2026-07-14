@@ -2427,13 +2427,20 @@ void test_editor_markdown_mode_and_structured_highlighting() {
     check(state.language == pkchat::highlight::Language::Text,
           "editor automatic mode re-detects after save-as");
 
+    state.linebreak = pkchat::editor::LineBreak::Lf;
     const std::string status = pkchat::editor::editor_status_line(state);
-    check(status.find("(text)") != std::string::npos &&
+    check(status.find("(text LF)") != std::string::npos &&
               status.find("Mode: Editor") == std::string::npos &&
               status.find("Syntax:") == std::string::npos &&
               status.find("(auto)") == std::string::npos &&
               status.find("(manual)") == std::string::npos,
-          "editor status line displays only the compact syntax mode");
+          "editor status line displays the compact syntax and LF mode");
+    state.linebreak = pkchat::editor::LineBreak::Crlf;
+    check(pkchat::editor::editor_status_line(state).find("(text CRLF)") != std::string::npos,
+          "editor status line displays CRLF mode");
+    state.linebreak = pkchat::editor::LineBreak::Cr;
+    check(pkchat::editor::editor_status_line(state).find("(text CR)") != std::string::npos,
+          "editor status line displays CR mode");
 }
 
 void run_all() {
