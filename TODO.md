@@ -13,7 +13,6 @@
 
 ## Editor Text Handling
 
-- Add indexed Unicode word completion across open buffers with longest-common-prefix expansion and repeated-Tab cycling.
 - Add cancellable `/reformat` and `/reformat-all` indentation formatting for the active language mode.
 - Add PTY and large-selection stress coverage for editor indentation and mixed line-ending warnings.
 

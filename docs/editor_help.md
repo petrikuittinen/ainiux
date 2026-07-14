@@ -1,4 +1,4 @@
-# pkchat Editor Help v0.95
+# pkchat Editor Help v0.96
 
 Standalone editor mode (`pkchat --editor [PATH]`) is a multiline text editor with Unicode-aware navigation, search/replace, and optional AI assist when a provider and model are configured.
 
@@ -53,7 +53,7 @@ Replace mode after `Ctrl+H`: `Space` replaces match, `s` skips, `a` replaces all
 | `Backspace` | Delete before cursor |
 | `Delete` (`Esc [3~`) | Delete at cursor |
 | `Enter` | New line |
-| `Tab` | Insert indentation, or indent every touched line in a selection |
+| `Tab` | Complete a word/symbol from open buffers; if none matches, insert indentation; with a selection, indent every touched line |
 | `Shift+Tab` | Outdent the current line, or every touched line in a selection |
 
 ## Selection
@@ -90,7 +90,7 @@ Requires a configured provider **and** model. If either is missing, `Ctrl+Space`
 
 ## Slash commands (`Esc` then type command)
 
-Press **`Esc`** to open the command minibuffer (`Command:`). Type a slash command and press `Enter`. **`Tab`** completes commands and mode variants.
+Press **`Esc`** to open the command minibuffer (`Command:`). Type a slash command and press `Enter`. **`Tab`** completes commands and mode variants. This minibuffer completion is independent from document word completion.
 
 ### Built-in commands
 
@@ -181,7 +181,8 @@ Repeatable `[command]` blocks add or override slash commands. See `README.md` fo
 
 ## Tips
 
-- Document `Tab` performs indentation. Command and path `Tab` completion remains confined to the command minibuffer.
+- After a document word or symbol prefix, `Tab` searches every open editor buffer. The first press inserts a unique match or the matches' common prefix; further presses rotate through multiple full matches. Lowercase prefixes match case-insensitively with Unicode folding, while prefixes containing uppercase letters are case-sensitive. If there is no match, `Tab` performs indentation. A selected block always uses indentation.
+- Document word completion, command/path completion in the command minibuffer, and chat-input completion use separate state and candidate domains.
 - LF, CR, and CRLF files retain their detected style on save and auto-save. Mixed endings produce a warning and use the configured default.
 - Scratch buffers (no path) prompt to save on quit when modified.
 - Bracketed paste is enabled for reliable paste detection.

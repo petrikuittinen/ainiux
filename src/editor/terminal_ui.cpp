@@ -293,6 +293,7 @@ void reset_editor_buffer(EditorState& state,
                          std::string path,
                          const EditorSettings& settings) {
     state.text = std::move(loaded.text);
+    state.invalidate_word_index();
     state.cursor = 0;
     state.preferred_column = 0;
     state.scroll_line = 0;

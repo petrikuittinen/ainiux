@@ -1019,6 +1019,7 @@ void strip_trailing_assist_close_tag_without_undo(EditorState& state) {
         return;
     }
     state.cursor = erase_start;
+    state.invalidate_word_index();
     state.preferred_column = state.text.display_column_for_offset(state.cursor);
     state.dirty = true;
 }

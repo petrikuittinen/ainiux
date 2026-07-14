@@ -22,6 +22,7 @@ class ThemeRegistry;
 }
 #include "editor/clipboard.hpp"
 #include "editor/selection.hpp"
+#include "editor/word_completion.hpp"
 
 namespace pkchat::editor {
 
@@ -201,6 +202,10 @@ struct EditorState {
     EditorSnapshot capture_state() const;
     void restore_captured_state(const EditorSnapshot& snapshot);
     Error replace(size_t pos, size_t count, const std::string& value);
+    Error replace_completion(size_t pos,
+                             size_t count,
+                             const std::string& value,
+                             bool record_undo);
     Error erase_before_cursor();
     Error erase_at_cursor();
     bool undo();
@@ -249,6 +254,9 @@ struct EditorState {
     size_t autosave_pending_bytes() const;
     void record_autosave_change(size_t bytes);
     void reset_autosave_pending();
+    const WordIndex& completion_word_index() const;
+    const WordIndex& completion_word_index(const std::string& current_text) const;
+    void invalidate_word_index();
 
    private:
     void begin_movement(bool extend_selection);
@@ -263,6 +271,7 @@ struct EditorState {
     size_t undo_limit_ = kDefaultUndoLimit;
     size_t autosave_pending_bytes_ = 0;
     mutable highlight::DocumentCache highlight_cache_;
+    mutable WordIndex word_index_;
 };
 
 std::string editor_buffer_display_name(const EditorState& state, size_t index);

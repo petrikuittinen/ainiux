@@ -213,7 +213,7 @@ Add per-buffer line-ending and indentation settings, fast block indentation, Uni
 
 - [x] Add config parsing, validation, per-buffer settings, line-ending detection, internal normalization, and write/autosave/recovery conversion.
 - [x] Make display-column calculations tab-width-aware and add current-line and selected-block indent/outdent operations, including portable `Shift+Tab` decoding.
-- [ ] Add the incremental Unicode word index and isolated completion-session state.
+- [x] Add the incremental Unicode word index and isolated completion-session state.
 - [ ] Add conservative language indentation profiles and the cancellable reformat job.
 - [ ] Wire commands, command completion, help, status, errors, dirty state, undo/redo, autosave, highlighting, and index invalidation.
 - [ ] Add unit, integration, PTY, large-input, cancellation, sanitizer, and leak tests.
@@ -224,7 +224,7 @@ Add per-buffer line-ending and indentation settings, fast block indentation, Uni
 - [ ] LF, CR, and CRLF files round-trip through save, autosave, and recovery without unintended ending or final-newline changes; mixed files warn and follow the configured default.
 - [ ] Per-buffer `/tab-width`, `/tab-style`, and `/linebreak` settings report and validate correctly, inherit defaults for new buffers, and do not leak across buffers.
 - [ ] `Tab` and `Shift+Tab` indent or outdent current lines and arbitrarily large selected blocks correctly with mixed leading whitespace, stable selections, one undo record, checked bounds, and no leaks.
-- [ ] Word completion is fast across large open buffers; supports Finnish/Swedish letters, Chinese, Arabic, Cyrillic, combining marks, underscore, and smart-case camelCase examples; updates incrementally after edits; and never mixes with slash, AI, path, or chat completion.
+- [x] Word completion is fast across large open buffers; supports Finnish/Swedish letters, Chinese, Arabic, Cyrillic, combining marks, underscore, and smart-case camelCase examples; updates incrementally after edits; and never mixes with slash, AI, path, or chat completion.
 - [ ] `/reformat` and `/reformat-all` implement the documented selection, cursor, undo, language-mode, protected-region, byte-preservation, cancellation, and stale-result behavior for every supported editor mode.
 - [ ] Errors identify the invalid setting, unsupported mode, missing selection, unsafe preserved region, cancellation, or stale result and provide a concrete next step.
 - [ ] Documentation and configuration examples describe all settings, commands, key behavior, language limits, and preservation guarantees.

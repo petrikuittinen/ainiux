@@ -126,6 +126,7 @@ EditorSnapshot EditorState::snapshot() const {
 
 void EditorState::restore_snapshot(const EditorSnapshot& snapshot) {
     text = PieceTable::from_string(snapshot.content);
+    word_index_.invalidate();
     cursor = std::min(snapshot.cursor, text.size());
     preferred_column = snapshot.preferred_column;
     scroll_line = snapshot.scroll_line;
@@ -166,6 +167,22 @@ void EditorState::reset_autosave_pending() {
     autosave_pending_bytes_ = 0;
 }
 
+const WordIndex& EditorState::completion_word_index() const {
+    if (!word_index_.initialized()) {
+        word_index_.ensure(text.str());
+    }
+    return word_index_;
+}
+
+const WordIndex& EditorState::completion_word_index(const std::string& current_text) const {
+    word_index_.ensure(current_text);
+    return word_index_;
+}
+
+void EditorState::invalidate_word_index() {
+    word_index_.invalidate();
+}
+
 Error EditorState::insert(const std::string& value) {
     if (value.empty()) {
         return ok_error();
@@ -179,10 +196,12 @@ Error EditorState::insert(const std::string& value) {
         return replaced;
     }
     EditorSnapshot before = snapshot();
+    const size_t insert_position = cursor;
     Error err = text.insert(cursor, value);
     if (!err.ok()) {
         return err;
     }
+    word_index_.apply_edit(before.content, insert_position, 0, value);
     remember_undo(std::move(before));
     cursor += value.size();
     dirty = true;
@@ -200,6 +219,9 @@ Error EditorState::insert_without_undo(const std::string& value) {
         return err;
     }
     cursor += value.size();
+    // Streaming writes can arrive in many small chunks. Rebuild lazily on the
+    // next completion instead of repeatedly materializing the whole piece table.
+    word_index_.invalidate();
     dirty = true;
     update_preferred_column(*this);
     return ok_error();
@@ -224,6 +246,13 @@ void EditorState::restore_captured_state(const EditorSnapshot& snapshot) {
 }
 
 Error EditorState::replace(size_t pos, size_t count, const std::string& value) {
+    return replace_completion(pos, count, value, true);
+}
+
+Error EditorState::replace_completion(size_t pos,
+                                      size_t count,
+                                      const std::string& value,
+                                      bool record_undo) {
     if (pos > text.size()) {
         return {ErrorCode::BadArgs, "editor replace position is past the end of the buffer"};
     }
@@ -244,7 +273,10 @@ Error EditorState::replace(size_t pos, size_t count, const std::string& value) {
         return err;
     }
     text = std::move(replacement);
-    remember_undo(std::move(before));
+    word_index_.apply_edit(before_text, pos, count, value);
+    if (record_undo) {
+        remember_undo(std::move(before));
+    }
     cursor = pos + value.size();
     selection.clear(cursor);
     dirty = true;
@@ -273,6 +305,7 @@ Error EditorState::erase_before_cursor() {
     if (!err.ok()) {
         return err;
     }
+    word_index_.apply_edit(before.content, previous, deleted, "");
     remember_undo(std::move(before));
     cursor = previous;
     dirty = true;
@@ -292,6 +325,7 @@ Error EditorState::erase_at_cursor() {
     if (!err.ok()) {
         return err;
     }
+    word_index_.apply_edit(before.content, cursor, deleted, "");
     remember_undo(std::move(before));
     dirty = true;
     record_autosave_change(deleted);
@@ -894,6 +928,7 @@ Error EditorState::kill_to_line_end(Clipboard& clipboard) {
         if (!err.ok()) {
             return err;
         }
+        word_index_.apply_edit(before.content, cursor, end - cursor, "");
         remember_undo(std::move(before));
         dirty = true;
         record_autosave_change(end - cursor);
@@ -914,6 +949,7 @@ Error EditorState::kill_to_line_end(Clipboard& clipboard) {
     if (!err.ok()) {
         return err;
     }
+    word_index_.apply_edit(before.content, erase_pos, 1, "");
     remember_undo(std::move(before));
     cursor = std::min(erase_pos, text.size());
     dirty = true;

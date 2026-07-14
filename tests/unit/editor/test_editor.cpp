@@ -18,6 +18,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iterator>
+#include <map>
 #include <string>
 #include <vector>
 
@@ -1073,6 +1074,139 @@ void test_editor_tab_indentation() {
           "large selected blocks indent in one bounded transformation");
     check(state.undo() && state.text.str() == large_text,
           "large block indentation remains one undo step");
+}
+
+void test_editor_word_completion() {
+    std::vector<pkchat::editor::EditorState> buffers;
+    buffers.push_back(pkchat::editor::EditorState::from_text("win"));
+    buffers.push_back(
+        pkchat::editor::EditorState::from_text("windowHeight windowWidth"));
+    buffers[0].cursor = buffers[0].text.size();
+
+    pkchat::editor::WordCompleter completer;
+    pkchat::editor::WordCompletionResult result = completer.complete(buffers[0], buffers, 0);
+    check(result.error.ok() && result.completed && result.match_count == 2,
+          "document Tab finds words across all open buffers");
+    check(buffers[0].text.str() == "window",
+          "first document Tab inserts the candidates' longest common prefix");
+
+    result = completer.complete(buffers[0], buffers, 0);
+    check(result.completed && result.cycling && buffers[0].text.str() == "windowHeight",
+          "second document Tab selects the first full candidate");
+    result = completer.complete(buffers[0], buffers, 0);
+    check(result.completed && buffers[0].text.str() == "windowWidth",
+          "third document Tab rotates to the next full candidate");
+    result = completer.complete(buffers[0], buffers, 0);
+    check(result.completed && buffers[0].text.str() == "windowHeight",
+          "document Tab candidate cycling wraps");
+    check(buffers[0].undo() && buffers[0].text.str() == "win",
+          "one document completion session is one undo operation");
+
+    buffers[0] = pkchat::editor::EditorState::from_text("Win");
+    buffers[0].cursor = buffers[0].text.size();
+    buffers[1] =
+        pkchat::editor::EditorState::from_text("WindowHeight windowWidth WindowSize");
+    completer.reset();
+    result = completer.complete(buffers[0], buffers, 0);
+    check(result.completed && result.match_count == 2 && buffers[0].text.str() == "Window",
+          "an uppercase prefix enables case-sensitive smart-case matching");
+
+    buffers[0] = pkchat::editor::EditorState::from_text("ä");
+    buffers[0].cursor = buffers[0].text.size();
+    buffers[1] = pkchat::editor::EditorState::from_text("Äiti");
+    completer.reset();
+    result = completer.complete(buffers[0], buffers, 0);
+    check(result.completed && buffers[0].text.str() == "Äiti",
+          "lowercase Unicode prefixes use full case-folded matching");
+
+    buffers[0] = pkchat::editor::EditorState::from_text("stras");
+    buffers[0].cursor = buffers[0].text.size();
+    buffers[1] = pkchat::editor::EditorState::from_text("Straße");
+    completer.reset();
+    result = completer.complete(buffers[0], buffers, 0);
+    check(result.completed && buffers[0].text.str() == "Straße",
+          "document completion applies expanding Unicode full case folds");
+
+    struct MultilingualCase {
+        std::string prefix;
+        std::string candidate;
+    };
+    const std::vector<MultilingualCase> multilingual = {
+        {"你好", "你好世界"},
+        {"مرح", "مرحباكم"},
+        {"при", "Приветствие"},
+        {"e\xCC\x81", "e\xCC\x81" "clair"},
+        {"foo_", "foo_bar"},
+    };
+    for (const MultilingualCase& test : multilingual) {
+        buffers[0] = pkchat::editor::EditorState::from_text(test.prefix);
+        buffers[0].cursor = buffers[0].text.size();
+        buffers[1] = pkchat::editor::EditorState::from_text(test.candidate);
+        completer.reset();
+        result = completer.complete(buffers[0], buffers, 0);
+        check(result.completed && buffers[0].text.str() == test.candidate,
+              "document completion supports Unicode letters, marks, and underscore: " +
+                  test.prefix);
+    }
+
+    buffers[0] = pkchat::editor::EditorState::from_text("wo");
+    buffers[0].cursor = buffers[0].text.size();
+    buffers[1] = pkchat::editor::EditorState::from_text(
+        std::string("bad") + static_cast<char>(0xFF) + "word");
+    completer.reset();
+    result = completer.complete(buffers[0], buffers, 0);
+    check(result.completed && buffers[0].text.str() == "word",
+          "invalid UTF-8 bytes are preserved and treated as word boundaries");
+
+    buffers[0] = pkchat::editor::EditorState::from_text("win");
+    buffers[0].cursor = buffers[0].text.size();
+    buffers[1] = pkchat::editor::EditorState::from_text("windowWidth");
+    check(buffers[1].completion_word_index().occurrence_count("windowWidth") == 1,
+          "per-buffer word index records occurrence counts");
+    pkchat::editor::EditorState edited_buffer = buffers[1];
+    check(edited_buffer.replace(0, std::string("windowWidth").size(), "paneWidth").ok(),
+          "indexed buffer edit succeeds");
+    const pkchat::editor::WordIndex& edited_index =
+        edited_buffer.completion_word_index();
+    check(edited_index.occurrence_count("windowWidth") == 0 &&
+              edited_index.occurrence_count("paneWidth") == 1,
+          "ordinary edits update only the affected indexed word window");
+    check(buffers[1].completion_word_index().occurrence_count("windowWidth") == 1,
+          "copy-on-write indexes keep copied editor buffers isolated");
+    buffers[1] = std::move(edited_buffer);
+    completer.reset();
+    result = completer.complete(buffers[0], buffers, 0);
+    check(!result.completed,
+          "removed cross-buffer words disappear from completion without a stale match");
+
+    buffers[0] = pkchat::editor::EditorState::from_text("windowHeight");
+    buffers[0].cursor = 3;
+    buffers.resize(1);
+    completer.reset();
+    result = completer.complete(buffers[0], buffers, 0);
+    check(!result.completed,
+          "document completion excludes the occurrence currently being edited");
+
+    buffers[0].selection.anchor = 0;
+    buffers[0].selection.active = 3;
+    result = completer.complete(buffers[0], buffers, 0);
+    check(!result.completed,
+          "selected document blocks stay in the indentation domain, not word completion");
+
+    std::string large;
+    for (size_t index = 0; index < 50000; ++index) {
+        large += "symbol_" + std::to_string(index) + ' ';
+    }
+    pkchat::editor::EditorState large_buffer =
+        pkchat::editor::EditorState::from_text(std::move(large));
+    const pkchat::editor::WordIndex& large_index =
+        large_buffer.completion_word_index();
+    check(large_index.unique_word_count() == 50000,
+          "large buffers build a deduplicated ordered word index");
+    std::map<std::string, size_t> large_matches;
+    large_index.append_matches("symbol_4999", true, large_matches);
+    check(large_matches.size() == 10,
+          "large-buffer prefix lookup uses the ordered index and returns the bounded range");
 }
 
 void test_editor_home_end_navigation() {
@@ -2459,6 +2593,7 @@ void run_all() {
     test_editor_file_round_trip();
     test_editor_linebreak_modes();
     test_editor_tab_indentation();
+    test_editor_word_completion();
     test_editor_home_end_navigation();
     test_editor_select_all();
     test_editor_line_home_end_navigation();

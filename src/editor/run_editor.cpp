@@ -101,6 +101,7 @@ app::EditorRunResult run_editor(const std::string& path,
             return {5, app::InteractiveUiTarget::Quit};
         }
         state.text = std::move(loaded.text);
+        state.invalidate_word_index();
         state.linebreak = loaded.linebreak;
         if (loaded.mixed_linebreaks) {
             initial_linebreak_warning =
@@ -155,6 +156,7 @@ app::EditorRunResult run_editor(const std::string& path,
     StoredAssistCommand last_assist_command;
     AssistCompleterState assist_completer;
     PathCompleter minibuffer_path_completer;
+    WordCompleter word_completer;
     PendingAssist pending_assist;
     HelpViewSession help_view;
     bool buffer_list_active = false;
@@ -303,6 +305,7 @@ app::EditorRunResult run_editor(const std::string& path,
         help_view.saved_language_automatic = state.language_automatic;
         help_view.active = true;
         state.text = PieceTable::from_string(std::move(help_text));
+        state.invalidate_word_index();
         state.cursor = 0;
         state.preferred_column = 0;
         state.scroll_line = 0;
@@ -361,6 +364,7 @@ app::EditorRunResult run_editor(const std::string& path,
         next.set_undo_limit(settings.undo_limit);
         const bool mixed_linebreaks = loaded.mixed_linebreaks;
         next.text = std::move(loaded.text);
+        next.invalidate_word_index();
         next.set_path(open_path);
         next.tab_width = settings.tab_width;
         next.tab_style = settings.tab_style;
@@ -429,6 +433,7 @@ app::EditorRunResult run_editor(const std::string& path,
         next.tab_style = settings.tab_style;
         next.linebreak = settings.linebreak;
         next.text = PieceTable::from_string("");
+        next.invalidate_word_index();
         next.path.clear();
         next.redetect_language();
         next.highlight_enabled = highlight_enabled;
@@ -930,6 +935,7 @@ app::EditorRunResult run_editor(const std::string& path,
             EditorState next;
             next.set_undo_limit(settings.undo_limit);
             next.text = PieceTable::from_string("");
+            next.invalidate_word_index();
             next.path.clear();
             next.redetect_language();
             next.highlight_enabled = highlight_enabled;
@@ -1319,6 +1325,9 @@ app::EditorRunResult run_editor(const std::string& path,
 
     std::function<void(unsigned char)> handle_key;
     handle_key = [&](unsigned char ch) {
+        if (ch != '\t') {
+            word_completer.reset();
+        }
         if (help_view.active) {
             if (handle_minibuffer_key(state,
                                       minibuffer,
@@ -1663,9 +1672,25 @@ app::EditorRunResult run_editor(const std::string& path,
                              state.path,
                              &minibuffer_path_completer);
         } else if (ch == '\t') {
-            Error indent_error = state.indent();
-            if (!indent_error.ok()) {
-                minibuffer_message(minibuffer, indent_error.message);
+            if (state.selection.has_range()) {
+                word_completer.reset();
+                Error indent_error = state.indent();
+                if (!indent_error.ok()) {
+                    minibuffer_message(minibuffer, indent_error.message);
+                }
+            } else {
+                const WordCompletionResult completion =
+                    word_completer.complete(state, buffers, active_buffer);
+                if (!completion.error.ok()) {
+                    minibuffer_message(minibuffer, completion.error.message);
+                } else if (completion.completed) {
+                    minibuffer_message(minibuffer, word_completion_status(completion));
+                } else {
+                    Error indent_error = state.indent();
+                    if (!indent_error.ok()) {
+                        minibuffer_message(minibuffer, indent_error.message);
+                    }
+                }
             }
         } else if (ch == editor_key_backtab()) {
             Error outdent_error = state.outdent();

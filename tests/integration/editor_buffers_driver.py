@@ -132,6 +132,13 @@ def main():
         require_seen(output, "file2.txt", "switching to second buffer")
 
         output.extend(send(master, "\x1b[4;5~"))  # Ctrl+End
+        output.extend(send(master, "\nal"))
+        output.extend(send(master, "\t"))
+        require_seen(output, "Completed: alpha", "completing a word from the first buffer")
+        output.extend(send(master, "\x1a"))  # Ctrl+Z: whole completion session
+        output.extend(send(master, "\x7f\x7f\x7f"))  # remove al and newline
+
+        output.extend(send(master, "\x1b[4;5~"))  # Ctrl+End
         output.extend(send(master, "\x16"))  # Ctrl+V paste shared clipboard
         require_seen(output, "Pasted", "pasting into second buffer")
         output.extend(send(master, "\x13"))  # Ctrl+S save
