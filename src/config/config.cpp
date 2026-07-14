@@ -1661,6 +1661,28 @@ Error apply_document(const Document& document, cli::Options& options) {
             err = nonnegative_int(entry, candidate.editor_auto_save_timeout_seconds);
         } else if (name == "editor.auto-save-size-limit") {
             err = auto_save_byte_size(entry, candidate.editor_auto_save_size_limit);
+        } else if (name == "editor.tab-width") {
+            int width = 0;
+            err = nonnegative_int(entry, width);
+            if (err.ok() &&
+                (width < 1 || width > static_cast<int>(editor::kMaxTabWidth))) {
+                err = schema_error(entry, "expected an integer from 1 through 32");
+            }
+            if (err.ok()) {
+                candidate.editor_tab_width = static_cast<size_t>(width);
+            }
+        } else if (name == "editor.tab-style") {
+            err = require_type(entry, Value::Type::String);
+            if (err.ok() &&
+                !editor::parse_tab_style(entry.value.string, candidate.editor_tab_style)) {
+                err = schema_error(entry, "expected spaces or tab");
+            }
+        } else if (name == "editor.linebreak") {
+            err = require_type(entry, Value::Type::String);
+            if (err.ok() &&
+                !editor::parse_linebreak(entry.value.string, candidate.editor_linebreak)) {
+                err = schema_error(entry, "expected lf, cr, or crlf");
+            }
         } else if (name == "editor.continue_read_chars") {
             long long value = 0;
             err = nonnegative_long_long(entry, value);

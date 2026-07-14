@@ -211,8 +211,8 @@ Add per-buffer line-ending and indentation settings, fast block indentation, Uni
 
 ### Steps
 
-- [ ] Add config parsing, validation, per-buffer settings, line-ending detection, internal normalization, and write/autosave/recovery conversion.
-- [ ] Make display-column calculations tab-width-aware and add current-line and selected-block indent/outdent operations, including portable `Shift+Tab` decoding.
+- [x] Add config parsing, validation, per-buffer settings, line-ending detection, internal normalization, and write/autosave/recovery conversion.
+- [x] Make display-column calculations tab-width-aware and add current-line and selected-block indent/outdent operations, including portable `Shift+Tab` decoding.
 - [ ] Add the incremental Unicode word index and isolated completion-session state.
 - [ ] Add conservative language indentation profiles and the cancellable reformat job.
 - [ ] Wire commands, command completion, help, status, errors, dirty state, undo/redo, autosave, highlighting, and index invalidation.

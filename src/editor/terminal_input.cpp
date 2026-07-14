@@ -113,14 +113,24 @@ bool csi_sequence_complete(const std::string& sequence) {
 }  // namespace
 
 bool decode_control_key_sequence(const std::string& sequence, unsigned char& out) {
+    if (sequence == "[Z" || sequence == "OZ") {
+        out = editor_key_backtab();
+        return true;
+    }
     if (sequence.size() >= 4 && sequence[0] == '[' && sequence.back() == 'u') {
         const size_t semi = sequence.find(';');
         if (semi != std::string::npos && semi > 1) {
             int codepoint = 0;
             int modifier = 0;
             if (!parse_positive_int(sequence.substr(1, semi - 1), codepoint) ||
-                !parse_positive_int(sequence.substr(semi + 1, sequence.size() - semi - 2), modifier) ||
-                !is_ctrl_modifier(modifier)) {
+                !parse_positive_int(sequence.substr(semi + 1, sequence.size() - semi - 2), modifier)) {
+                return false;
+            }
+            if (codepoint == 9 && modifier == 2) {
+                out = editor_key_backtab();
+                return true;
+            }
+            if (!is_ctrl_modifier(modifier)) {
                 return false;
             }
             if (has_shift_modifier(modifier) && (codepoint == 'S' || codepoint == 's')) {
@@ -138,8 +148,14 @@ bool decode_control_key_sequence(const std::string& sequence, unsigned char& out
             int modifier = 0;
             int key = 0;
             if (!parse_positive_int(sequence.substr(prev_semi + 1, semi - prev_semi - 1), modifier) ||
-                !parse_positive_int(sequence.substr(semi + 1, sequence.size() - semi - 2), key) ||
-                !is_ctrl_modifier(modifier)) {
+                !parse_positive_int(sequence.substr(semi + 1, sequence.size() - semi - 2), key)) {
+                return false;
+            }
+            if (modifier == 2 && key == 9) {
+                out = editor_key_backtab();
+                return true;
+            }
+            if (!is_ctrl_modifier(modifier)) {
                 return false;
             }
             return ctrl_byte_from_codepoint(key, out);

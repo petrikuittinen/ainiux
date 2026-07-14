@@ -32,6 +32,9 @@ pkchat::editor::EditorSettings editor_settings_from_options(const pkchat::cli::O
     settings.auto_save_threshold = options.editor_auto_save_threshold;
     settings.auto_save_timeout_seconds = options.editor_auto_save_timeout_seconds;
     settings.auto_save_size_limit = options.editor_auto_save_size_limit;
+    settings.tab_width = options.editor_tab_width;
+    settings.tab_style = options.editor_tab_style;
+    settings.linebreak = options.editor_linebreak;
     settings.themes = &options.tui_themes;
     settings.theme_name = options.tui_theme;
     settings.use_colors = !options.no_colors;

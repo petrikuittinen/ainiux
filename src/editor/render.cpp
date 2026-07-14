@@ -24,7 +24,8 @@ RenderedPanel render_panel(const PieceTable& text,
                            const std::optional<Selection>& selection,
                            highlight::Language language,
                            bool highlight_enabled,
-                           highlight::DocumentCache* highlight_cache) {
+                           highlight::DocumentCache* highlight_cache,
+                           size_t tab_width) {
     (void)scroll_column;
     RenderedPanel rendered;
     const size_t height = static_cast<size_t>(std::max(0, rect.height));
@@ -57,7 +58,7 @@ RenderedPanel render_panel(const PieceTable& text,
     size_t rows_to_skip = scroll_line;
     while (line < line_count) {
         const std::string line_text_value = text.line_text(line);
-        const size_t rows = wrapped_row_count(line_text_value, width);
+        const size_t rows = wrapped_row_count(line_text_value, width, tab_width);
         if (rows_to_skip < rows) {
             segment_index = rows_to_skip;
             break;
@@ -74,10 +75,12 @@ RenderedPanel render_panel(const PieceTable& text,
         }
 
         const std::string line_text_value = text.line_text(line);
-        const std::vector<WrapSegment> segments = wrap_line_segments(line_text_value, width);
+        const std::vector<WrapSegment> segments =
+            wrap_line_segments(line_text_value, width, tab_width);
         const WrapSegment segment = segments[std::min(segment_index, segments.size() - 1)];
         const size_t global_line_start = text.line_start(line);
-        rendered.lines.push_back(display_range(line_text_value, segment.start, segment.end, width));
+        rendered.lines.push_back(
+            display_range(line_text_value, segment.start, segment.end, width, tab_width));
 
         const highlight::HighlightedLine* highlighted = nullptr;
         if (highlight_enabled && highlight_cache != nullptr && language != highlight::Language::Text) {
@@ -116,11 +119,15 @@ RenderedPanel render_panel(const PieceTable& text,
         std::vector<RenderedPanel::Span> rendered_spans;
         auto displayed_byte_offset = [&](size_t source_offset) {
             const size_t cells = detail::display_width_for_range(
-                line_text_value, segment.start, std::min(source_offset, segment.end));
+                line_text_value,
+                segment.start,
+                std::min(source_offset, segment.end),
+                tab_width);
             return display_range(line_text_value,
                                  segment.start,
                                  std::min(source_offset, segment.end),
-                                 cells)
+                                 cells,
+                                 tab_width)
                 .size();
         };
         for (size_t boundary = 0; boundary + 1 < boundaries.size(); ++boundary) {
@@ -167,11 +174,15 @@ RenderedPanel render_panel(const PieceTable& text,
     const size_t cursor_line = text.line_for_offset(cursor);
     size_t cursor_row = 0;
     for (size_t i = 0; i < cursor_line; ++i) {
-        cursor_row += wrapped_row_count(text.line_text(i), width);
+        cursor_row += wrapped_row_count(text.line_text(i), width, tab_width);
     }
     const size_t cursor_line_start = text.line_start(cursor_line);
     const std::string cursor_line_text = text.line_text(cursor_line);
-    const WrappedCursor wrapped_cursor = cursor_in_wrapped_line(cursor_line_text, cursor - cursor_line_start, width);
+    const WrappedCursor wrapped_cursor =
+        cursor_in_wrapped_line(cursor_line_text,
+                               cursor - cursor_line_start,
+                               width,
+                               tab_width);
     cursor_row += wrapped_cursor.row;
     if (cursor_row >= scroll_line && cursor_row < scroll_line + height) {
         rendered.cursor.row = static_cast<int>(cursor_row - scroll_line);

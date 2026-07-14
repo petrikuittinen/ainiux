@@ -8,8 +8,6 @@
 
 namespace pkchat::editor::detail {
 
-constexpr size_t kTabStop = 4;
-
 struct DecodedChar {
     uint32_t codepoint = 0xFFFDU;
     size_t length = 1;
@@ -167,16 +165,17 @@ size_t previous_grapheme_offset(const std::string& text, size_t pos) {
     return previous;
 }
 
-size_t display_width_at(const std::string& text, size_t pos, size_t column) {
+size_t display_width_at(const std::string& text, size_t pos, size_t column, size_t tab_width) {
     if (pos >= text.size()) {
         return 0;
     }
     const DecodedChar first = decode_utf8_at(text, pos);
+    if (first.codepoint == '\t') {
+        tab_width = std::max<size_t>(1, tab_width);
+        return tab_width - (column % tab_width);
+    }
     if (!first.valid || is_control_codepoint(first.codepoint)) {
         return 1;
-    }
-    if (first.codepoint == '\t') {
-        return kTabStop - (column % kTabStop);
     }
 
     const size_t end = next_grapheme_offset(text, pos);
@@ -184,11 +183,12 @@ size_t display_width_at(const std::string& text, size_t pos, size_t column) {
     size_t scan = pos;
     while (scan < end) {
         const DecodedChar decoded = decode_utf8_at(text, scan);
+        if (decoded.codepoint == '\t') {
+            tab_width = std::max<size_t>(1, tab_width);
+            return tab_width - (column % tab_width);
+        }
         if (!decoded.valid || is_control_codepoint(decoded.codepoint)) {
             return 1;
-        }
-        if (decoded.codepoint == '\t') {
-            return kTabStop - (column % kTabStop);
         }
         if (is_wide_codepoint(decoded.codepoint)) {
             width = std::max<size_t>(width, 2);
@@ -203,7 +203,7 @@ size_t display_width_at(const std::string& text, size_t pos, size_t column) {
     return width;
 }
 
-size_t display_column_for_text(const std::string& text, size_t byte_offset) {
+size_t display_column_for_text(const std::string& text, size_t byte_offset, size_t tab_width) {
     size_t column = 0;
     size_t pos = 0;
     const size_t limit = std::min(byte_offset, text.size());
@@ -212,17 +212,19 @@ size_t display_column_for_text(const std::string& text, size_t byte_offset) {
         if (next > limit) {
             break;
         }
-        column += display_width_at(text, pos, column);
+        column += display_width_at(text, pos, column, tab_width);
         pos = next;
     }
     return column;
 }
 
-size_t byte_offset_for_display_column(const std::string& text, size_t target_column) {
+size_t byte_offset_for_display_column(const std::string& text,
+                                      size_t target_column,
+                                      size_t tab_width) {
     size_t column = 0;
     size_t pos = 0;
     while (pos < text.size()) {
-        const size_t width = display_width_at(text, pos, column);
+        const size_t width = display_width_at(text, pos, column, tab_width);
         if (column + width > target_column) {
             break;
         }
@@ -232,7 +234,10 @@ size_t byte_offset_for_display_column(const std::string& text, size_t target_col
     return pos;
 }
 
-size_t display_width_for_range(const std::string& text, size_t start, size_t end) {
+size_t display_width_for_range(const std::string& text,
+                               size_t start,
+                               size_t end,
+                               size_t tab_width) {
     size_t column = 0;
     size_t pos = start;
     const size_t limit = std::min(end, text.size());
@@ -241,13 +246,15 @@ size_t display_width_for_range(const std::string& text, size_t start, size_t end
         if (next > limit) {
             break;
         }
-        column += display_width_at(text, pos, column);
+        column += display_width_at(text, pos, column, tab_width);
         pos = next;
     }
     return column;
 }
 
-std::vector<WrapSegment> wrap_line_segments(const std::string& text, size_t width) {
+std::vector<WrapSegment> wrap_line_segments(const std::string& text,
+                                            size_t width,
+                                            size_t tab_width) {
     width = std::max<size_t>(1, width);
     if (text.empty()) {
         return {{0, 0}};
@@ -264,7 +271,7 @@ std::vector<WrapSegment> wrap_line_segments(const std::string& text, size_t widt
         while (pos < text.size()) {
             const size_t grapheme_start = pos;
             const size_t grapheme_end = next_grapheme_offset(text, pos);
-            const size_t char_width = display_width_at(text, pos, column);
+            const size_t char_width = display_width_at(text, pos, column, tab_width);
             if (column + char_width > width) {
                 break;
             }
@@ -297,13 +304,16 @@ std::vector<WrapSegment> wrap_line_segments(const std::string& text, size_t widt
     return segments;
 }
 
-size_t wrapped_row_count(const std::string& text, size_t width) {
-    return wrap_line_segments(text, width).size();
+size_t wrapped_row_count(const std::string& text, size_t width, size_t tab_width) {
+    return wrap_line_segments(text, width, tab_width).size();
 }
 
-WrappedCursor cursor_in_wrapped_line(const std::string& text, size_t byte_offset, size_t width) {
+WrappedCursor cursor_in_wrapped_line(const std::string& text,
+                                     size_t byte_offset,
+                                     size_t width,
+                                     size_t tab_width) {
     width = std::max<size_t>(1, width);
-    const std::vector<WrapSegment> segments = wrap_line_segments(text, width);
+    const std::vector<WrapSegment> segments = wrap_line_segments(text, width, tab_width);
     const size_t clamped = std::min(byte_offset, text.size());
     for (size_t i = 0; i < segments.size(); ++i) {
         const WrapSegment& segment = segments[i];
@@ -311,7 +321,7 @@ WrappedCursor cursor_in_wrapped_line(const std::string& text, size_t byte_offset
             continue;
         }
         if (clamped <= segment.end || i + 1 == segments.size()) {
-            const size_t col = display_width_for_range(text, segment.start, clamped);
+            const size_t col = display_width_for_range(text, segment.start, clamped, tab_width);
             if (clamped == segment.end && col >= width) {
                 return {i + 1, 0};
             }
@@ -321,7 +331,11 @@ WrappedCursor cursor_in_wrapped_line(const std::string& text, size_t byte_offset
     return {};
 }
 
-std::string display_range(const std::string& text, size_t start, size_t end, size_t width) {
+std::string display_range(const std::string& text,
+                          size_t start,
+                          size_t end,
+                          size_t width,
+                          size_t tab_width) {
     std::string out;
     size_t column = 0;
     size_t visible = 0;
@@ -330,7 +344,7 @@ std::string display_range(const std::string& text, size_t start, size_t end, siz
     while (pos < limit && visible < width) {
         const DecodedChar decoded = decode_utf8_at(text, pos);
         const size_t next = std::min(next_grapheme_offset(text, pos), limit);
-        const size_t char_width = display_width_at(text, pos, column);
+        const size_t char_width = display_width_at(text, pos, column, tab_width);
         const size_t next_column = column + char_width;
 
         if (decoded.valid && decoded.codepoint == '\t') {
@@ -410,12 +424,16 @@ std::string display_range_highlighted(const std::string& text,
     return out;
 }
 
-size_t byte_offset_for_range_column(const std::string& text, size_t start, size_t end, size_t target_column) {
+size_t byte_offset_for_range_column(const std::string& text,
+                                    size_t start,
+                                    size_t end,
+                                    size_t target_column,
+                                    size_t tab_width) {
     size_t column = 0;
     size_t pos = start;
     const size_t limit = std::min(end, text.size());
     while (pos < limit) {
-        const size_t width = display_width_at(text, pos, column);
+        const size_t width = display_width_at(text, pos, column, tab_width);
         if (column + width > target_column) {
             break;
         }
@@ -425,13 +443,16 @@ size_t byte_offset_for_range_column(const std::string& text, size_t start, size_
     return pos;
 }
 
-WrappedLocation wrapped_location_for_offset(const PieceTable& text, size_t offset, size_t width) {
+WrappedLocation wrapped_location_for_offset(const PieceTable& text,
+                                            size_t offset,
+                                            size_t width,
+                                            size_t tab_width) {
     width = std::max<size_t>(1, width);
     const size_t line = text.line_for_offset(offset);
     const std::string line_text_value = text.line_text(line);
     const size_t line_start = text.line_start(line);
     const size_t local_offset = std::min(offset - line_start, line_text_value.size());
-    const std::vector<WrapSegment> segments = wrap_line_segments(line_text_value, width);
+    const std::vector<WrapSegment> segments = wrap_line_segments(line_text_value, width, tab_width);
 
     for (size_t i = 0; i < segments.size(); ++i) {
         const WrapSegment& segment = segments[i];
@@ -449,12 +470,18 @@ size_t offset_for_wrapped_location(const PieceTable& text,
                                    size_t line,
                                    size_t segment_index,
                                    size_t column,
-                                   size_t width) {
+                                   size_t width,
+                                   size_t tab_width) {
     width = std::max<size_t>(1, width);
     const std::string line_text_value = text.line_text(line);
-    const std::vector<WrapSegment> segments = wrap_line_segments(line_text_value, width);
+    const std::vector<WrapSegment> segments = wrap_line_segments(line_text_value, width, tab_width);
     const WrapSegment& segment = segments[std::min(segment_index, segments.size() - 1)];
-    return text.line_start(line) + byte_offset_for_range_column(line_text_value, segment.start, segment.end, column);
+    return text.line_start(line) +
+           byte_offset_for_range_column(line_text_value,
+                                        segment.start,
+                                        segment.end,
+                                        column,
+                                        tab_width);
 }
 
 std::string pad_or_clip_ascii(const std::string& text, int width) {

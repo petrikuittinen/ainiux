@@ -135,7 +135,7 @@ Error perform_autosave(EditorState& state, const EditorSettings& settings, std::
     }
 
     const std::string backup_path = autosave_path_for(state.path, settings.auto_save_postfix);
-    Error save_error = save_file(backup_path, state.text);
+    Error save_error = save_file(backup_path, state.text, state.linebreak);
     if (!save_error.ok()) {
         message = save_error.message;
         return save_error;

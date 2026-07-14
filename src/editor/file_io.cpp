@@ -11,6 +11,50 @@
 
 namespace pkchat::editor {
 
+const char* tab_style_name(TabStyle style) {
+    return style == TabStyle::Tab ? "tab" : "spaces";
+}
+
+const char* linebreak_name(LineBreak linebreak) {
+    switch (linebreak) {
+        case LineBreak::Cr:
+            return "cr";
+        case LineBreak::Crlf:
+            return "crlf";
+        case LineBreak::Lf:
+            return "lf";
+    }
+    return "lf";
+}
+
+bool parse_tab_style(const std::string& value, TabStyle& out) {
+    if (value == "spaces") {
+        out = TabStyle::Spaces;
+        return true;
+    }
+    if (value == "tab") {
+        out = TabStyle::Tab;
+        return true;
+    }
+    return false;
+}
+
+bool parse_linebreak(const std::string& value, LineBreak& out) {
+    if (value == "lf") {
+        out = LineBreak::Lf;
+        return true;
+    }
+    if (value == "cr") {
+        out = LineBreak::Cr;
+        return true;
+    }
+    if (value == "crlf") {
+        out = LineBreak::Crlf;
+        return true;
+    }
+    return false;
+}
+
 Error load_file(const std::string& path, PieceTable& out) {
     return load_file(path, EditorSettings{}, out);
 }
@@ -50,6 +94,16 @@ Error check_load_file_size(const std::string& path, const EditorSettings& settin
 }
 
 Error load_file(const std::string& path, const EditorSettings& settings, PieceTable& out) {
+    LoadedFile loaded;
+    Error err = load_file(path, settings, loaded);
+    if (err.ok()) {
+        out = std::move(loaded.text);
+    }
+    return err;
+}
+
+Error load_file(const std::string& path, const EditorSettings& settings, LoadedFile& out) {
+    out = LoadedFile{};
     const std::string resolved = expand_user_path(path);
     FileLoadCheck check;
     Error err = check_load_file_size(resolved, settings, check);
@@ -87,11 +141,70 @@ Error load_file(const std::string& path, const EditorSettings& settings, PieceTa
     if (!in.good() && !in.eof()) {
         return {ErrorCode::FileRead, "failed while reading editor file: " + resolved};
     }
-    out = PieceTable::from_string(std::move(content));
+    size_t lf_count = 0;
+    size_t cr_count = 0;
+    size_t crlf_count = 0;
+    for (size_t i = 0; i < content.size(); ++i) {
+        if (content[i] == '\r') {
+            if (i + 1 < content.size() && content[i + 1] == '\n') {
+                ++crlf_count;
+                ++i;
+            } else {
+                ++cr_count;
+            }
+        } else if (content[i] == '\n') {
+            ++lf_count;
+        }
+    }
+    const size_t styles = (lf_count > 0 ? 1U : 0U) + (cr_count > 0 ? 1U : 0U) +
+                          (crlf_count > 0 ? 1U : 0U);
+    out.mixed_linebreaks = styles > 1;
+    if (styles == 1) {
+        out.linebreak = crlf_count > 0 ? LineBreak::Crlf
+                          : cr_count > 0 ? LineBreak::Cr
+                                         : LineBreak::Lf;
+    } else {
+        out.linebreak = settings.linebreak;
+    }
+
+    if (cr_count > 0 || crlf_count > 0) {
+        try {
+            std::string normalized;
+            normalized.reserve(content.size());
+            for (size_t i = 0; i < content.size(); ++i) {
+                if (content[i] == '\r') {
+                    if (i + 1 < content.size() && content[i + 1] == '\n') {
+                        ++i;
+                    }
+                    normalized.push_back('\n');
+                } else {
+                    normalized.push_back(content[i]);
+                }
+            }
+            content = std::move(normalized);
+        } catch (const std::bad_alloc&) {
+            return {ErrorCode::Internal,
+                    "not enough memory to normalize editor line endings: " + resolved};
+        } catch (const std::length_error&) {
+            return {ErrorCode::FileRead,
+                    "editor file is too large to normalize line endings: " + resolved};
+        }
+    }
+    try {
+        out.text = PieceTable::from_string(std::move(content));
+    } catch (const std::bad_alloc&) {
+        return {ErrorCode::Internal, "not enough memory to initialize editor file: " + resolved};
+    } catch (const std::length_error&) {
+        return {ErrorCode::FileRead, "editor file is too large to initialize: " + resolved};
+    }
     return ok_error();
 }
 
 Error save_file(const std::string& path, const PieceTable& text) {
+    return save_file(path, text, LineBreak::Lf);
+}
+
+Error save_file(const std::string& path, const PieceTable& text, LineBreak linebreak) {
     const std::string resolved = expand_user_path(path);
     if (resolved.empty()) {
         return {ErrorCode::BadArgs, "no editor save path was provided"};
@@ -100,7 +213,7 @@ Error save_file(const std::string& path, const PieceTable& text) {
     if (!out) {
         return {ErrorCode::FileWrite, "could not open editor file for writing: " + resolved};
     }
-    Error err = text.write_to(out);
+    Error err = text.write_to(out, linebreak);
     if (!err.ok()) {
         return {err.code, err.message + ": " + resolved};
     }

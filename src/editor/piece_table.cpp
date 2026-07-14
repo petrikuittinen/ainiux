@@ -47,6 +47,37 @@ Error PieceTable::write_to(std::ostream& out) const {
     return ok_error();
 }
 
+Error PieceTable::write_to(std::ostream& out, LineBreak linebreak) const {
+    if (linebreak == LineBreak::Lf) {
+        return write_to(out);
+    }
+    const char* replacement = linebreak == LineBreak::Cr ? "\r" : "\r\n";
+    const std::streamsize replacement_size = linebreak == LineBreak::Cr ? 1 : 2;
+    for (const Piece& piece : pieces_) {
+        const std::string& src = source_for(piece);
+        const size_t piece_end = piece.start + piece.length;
+        size_t start = piece.start;
+        while (start < piece_end) {
+            const size_t found = src.find('\n', start);
+            const size_t newline = found < piece_end ? found : std::string::npos;
+            const size_t end = newline == std::string::npos ? piece_end : newline;
+            if (end > start) {
+                out.write(src.data() + static_cast<std::ptrdiff_t>(start),
+                          static_cast<std::streamsize>(end - start));
+            }
+            if (newline == std::string::npos) {
+                break;
+            }
+            out.write(replacement, replacement_size);
+            start = newline + 1;
+        }
+        if (!out) {
+            return {ErrorCode::FileWrite, "failed while writing editor buffer"};
+        }
+    }
+    return ok_error();
+}
+
 char PieceTable::char_at(size_t pos) const {
     if (pos >= total_size_) {
         return '\0';
@@ -201,19 +232,21 @@ size_t PieceTable::line_for_offset(size_t offset) const {
     return static_cast<size_t>(std::distance(line_starts_.begin(), it) - 1);
 }
 
-size_t PieceTable::display_column_for_offset(size_t offset) const {
+size_t PieceTable::display_column_for_offset(size_t offset, size_t tab_width) const {
     const size_t line = line_for_offset(offset);
     const size_t start = line_start(line);
     const size_t clamped = std::min(offset, total_size_);
     std::string text;
     append_range(text, start, clamped - start);
-    return display_column_for_text(text, text.size());
+    return display_column_for_text(text, text.size(), tab_width);
 }
 
-size_t PieceTable::offset_for_line_column(size_t line, size_t display_column) const {
+size_t PieceTable::offset_for_line_column(size_t line,
+                                          size_t display_column,
+                                          size_t tab_width) const {
     const size_t start = line_start(line);
     const std::string text = line_text(line);
-    return start + byte_offset_for_display_column(text, display_column);
+    return start + byte_offset_for_display_column(text, display_column, tab_width);
 }
 
 std::string PieceTable::line_text(size_t line) const {

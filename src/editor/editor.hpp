@@ -68,6 +68,24 @@ constexpr long long kDefaultAutoSaveSizeLimit = 10LL * 1024LL * 1024LL;
 constexpr const char* kDefaultAutoSavePostfix = "~";
 constexpr size_t kDefaultAiContinueReadChars = 16384;
 constexpr int kDefaultAiContinueMaxTokens = 32768;
+constexpr size_t kDefaultTabWidth = 4;
+constexpr size_t kMaxTabWidth = 32;
+
+enum class TabStyle {
+    Spaces,
+    Tab,
+};
+
+enum class LineBreak {
+    Lf,
+    Cr,
+    Crlf,
+};
+
+const char* tab_style_name(TabStyle style);
+const char* linebreak_name(LineBreak linebreak);
+bool parse_tab_style(const std::string& value, TabStyle& out);
+bool parse_linebreak(const std::string& value, LineBreak& out);
 
 struct EditorSettings {
     size_t undo_limit = kDefaultUndoLimit;
@@ -82,6 +100,9 @@ struct EditorSettings {
     std::string theme_name = "dark";
     bool use_colors = true;
     bool highlight_enabled = true;
+    size_t tab_width = kDefaultTabWidth;
+    TabStyle tab_style = TabStyle::Spaces;
+    LineBreak linebreak = LineBreak::Lf;
 };
 
 struct AiContinueContext;
@@ -109,6 +130,7 @@ class PieceTable {
     bool empty() const { return total_size_ == 0; }
     std::string str() const;
     Error write_to(std::ostream& out) const;
+    Error write_to(std::ostream& out, LineBreak linebreak) const;
 
     char char_at(size_t pos) const;
     Error insert(size_t pos, const std::string& text);
@@ -121,8 +143,10 @@ class PieceTable {
     size_t line_start(size_t line) const;
     size_t line_length(size_t line) const;
     size_t line_for_offset(size_t offset) const;
-    size_t display_column_for_offset(size_t offset) const;
-    size_t offset_for_line_column(size_t line, size_t display_column) const;
+    size_t display_column_for_offset(size_t offset, size_t tab_width = kDefaultTabWidth) const;
+    size_t offset_for_line_column(size_t line,
+                                  size_t display_column,
+                                  size_t tab_width = kDefaultTabWidth) const;
     std::string line_text(size_t line) const;
     std::string range_text(size_t start, size_t length) const;
 
@@ -162,6 +186,9 @@ struct EditorState {
     highlight::Language language = highlight::Language::Text;
     bool language_automatic = true;
     bool highlight_enabled = true;
+    size_t tab_width = kDefaultTabWidth;
+    TabStyle tab_style = TabStyle::Spaces;
+    LineBreak linebreak = LineBreak::Lf;
 
     static EditorState from_text(std::string content);
     void set_path(std::string value);
@@ -195,6 +222,8 @@ struct EditorState {
     Error copy_selection(Clipboard& clipboard);
     Error cut_selection(Clipboard& clipboard);
     Error paste(Clipboard& clipboard);
+    Error indent();
+    Error outdent();
     void apply_movement(MovementKey key,
                         const Rect& rect,
                         bool extend_selection,
@@ -248,12 +277,21 @@ RenderedPanel render_panel(const PieceTable& text,
                            const std::optional<Selection>& selection = std::nullopt,
                            highlight::Language language = highlight::Language::Text,
                            bool highlight_enabled = false,
-                           highlight::DocumentCache* highlight_cache = nullptr);
+                           highlight::DocumentCache* highlight_cache = nullptr,
+                           size_t tab_width = kDefaultTabWidth);
+
+struct LoadedFile {
+    PieceTable text;
+    LineBreak linebreak = LineBreak::Lf;
+    bool mixed_linebreaks = false;
+};
 
 Error load_file(const std::string& path, PieceTable& out);
 Error load_file(const std::string& path, const EditorSettings& settings, PieceTable& out);
+Error load_file(const std::string& path, const EditorSettings& settings, LoadedFile& out);
 Error check_load_file_size(const std::string& path, const EditorSettings& settings, FileLoadCheck& check);
 Error save_file(const std::string& path, const PieceTable& text);
+Error save_file(const std::string& path, const PieceTable& text, LineBreak linebreak);
 Error ensure_empty_file(const std::string& path);
 
 pkchat::app::EditorRunResult run_editor(const std::string& path,

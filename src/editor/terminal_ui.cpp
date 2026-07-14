@@ -98,7 +98,7 @@ std::string editor_status_line(const EditorState& state, bool help_view) {
         out << "  (" << highlight::language_name(state.language) << ')';
     }
     const size_t line = state.text.line_for_offset(state.cursor) + 1;
-    const size_t column = state.text.display_column_for_offset(state.cursor) + 1;
+    const size_t column = state.text.display_column_for_offset(state.cursor, state.tab_width) + 1;
     out << "  Ln " << line << ", Col " << column;
     if (help_view) {
         out << "  Esc /help or Ctrl+Q to return";
@@ -285,13 +285,19 @@ void start_assist_command_mode(MinibufferState& minibuffer, AssistCompleterState
     start_minibuffer(minibuffer, MinibufferAction::AssistCommand, "Command: ", "");
 }
 
-void reset_editor_buffer(EditorState& state, PieceTable text, std::string path) {
-    state.text = std::move(text);
+void reset_editor_buffer(EditorState& state,
+                         LoadedFile loaded,
+                         std::string path,
+                         const EditorSettings& settings) {
+    state.text = std::move(loaded.text);
     state.cursor = 0;
     state.preferred_column = 0;
     state.scroll_line = 0;
     state.scroll_column = 0;
     state.set_path(std::move(path));
+    state.tab_width = settings.tab_width;
+    state.tab_style = settings.tab_style;
+    state.linebreak = loaded.linebreak;
     state.dirty = false;
     state.reset_autosave_pending();
     state.clear_undo_history();
@@ -326,7 +332,7 @@ void save_editor_to_path(EditorState& state,
                          MinibufferState& minibuffer,
                          bool update_path,
                          const EditorSettings& settings) {
-    Error save_error = save_file(path, state.text);
+    Error save_error = save_file(path, state.text, state.linebreak);
     if (save_error.ok()) {
         state.dirty = false;
         state.reset_autosave_pending();
@@ -371,11 +377,16 @@ void load_editor_from_path(EditorState& state,
                            const std::string& path,
                            const EditorSettings& settings,
                            MinibufferState& minibuffer) {
-    PieceTable loaded;
+    LoadedFile loaded;
     Error load_error = load_file(path, settings, loaded);
     if (load_error.ok()) {
-        reset_editor_buffer(state, std::move(loaded), path);
-        minibuffer_message(minibuffer, "Loaded " + path);
+        const bool mixed = loaded.mixed_linebreaks;
+        reset_editor_buffer(state, std::move(loaded), path, settings);
+        minibuffer_message(minibuffer,
+                           mixed ? "Warning: mixed line endings in " + path +
+                                       "; normalized and using " +
+                                       linebreak_name(state.linebreak) + " for saves"
+                                 : "Loaded " + path);
     } else {
         minibuffer_message(minibuffer, load_error.message);
     }
@@ -386,12 +397,17 @@ void recover_editor_from_autosave(EditorState& state,
                                   const std::string& autosave_path,
                                   const EditorSettings& settings,
                                   MinibufferState& minibuffer) {
-    PieceTable loaded;
+    LoadedFile loaded;
     Error load_error = load_file(autosave_path, settings, loaded);
     if (load_error.ok()) {
-        reset_editor_buffer(state, std::move(loaded), path);
+        const bool mixed = loaded.mixed_linebreaks;
+        reset_editor_buffer(state, std::move(loaded), path, settings);
         state.dirty = true;
-        minibuffer_message(minibuffer, "Recovered auto-save from " + autosave_path);
+        minibuffer_message(minibuffer,
+                           mixed ? "Warning: mixed line endings in recovered auto-save " +
+                                       autosave_path + "; using " +
+                                       linebreak_name(state.linebreak) + " for saves"
+                                 : "Recovered auto-save from " + autosave_path);
     } else {
         minibuffer_message(minibuffer, load_error.message);
     }

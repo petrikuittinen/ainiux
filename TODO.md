@@ -11,6 +11,12 @@
 - Nice-to-have: keep standalone editor input/navigation fully responsive while an AI assist request is active; cancellation remains the required behavior.
 - Harden the standalone editor with resize tests, multi-panel tests, scroll commands, search, and full Unicode grapheme/cell-width handling.
 
+## Editor Text Handling
+
+- Add indexed Unicode word completion across open buffers with longest-common-prefix expansion and repeated-Tab cycling.
+- Add cancellable `/reformat` and `/reformat-all` indentation formatting for the active language mode.
+- Add PTY and large-selection stress coverage for editor indentation and mixed line-ending warnings.
+
 ## Chat Persistence
 
 - Add focused integration coverage for SQLite-backed TUI chat storage in `~/.pkchat/pkchat.db`, including automatic save/load, `/new`, `/remove`, `/provider`, and `/list` picker behavior.

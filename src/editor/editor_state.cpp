@@ -2,6 +2,8 @@
 #include "editor/detail/editor_common.hpp"
 #include "editor/detail/wrap.hpp"
 
+#include <limits>
+#include <new>
 #include <optional>
 #include <sstream>
 #include <string>
@@ -17,6 +19,81 @@ using detail::selection_end_exclusive_for;
 using detail::wrap_line_segments;
 using detail::wrapped_location_for_offset;
 using detail::wrapped_row_count;
+
+namespace {
+
+struct IndentChange {
+    size_t position = 0;
+    size_t removed = 0;
+    size_t inserted = 0;
+};
+
+size_t map_indent_offset(size_t offset, const std::vector<IndentChange>& changes) {
+    size_t mapped = offset;
+    for (const IndentChange& change : changes) {
+        if (offset < change.position) {
+            break;
+        }
+        if (change.removed == 0 && offset == change.position) {
+            continue;
+        }
+        const size_t removed_end = change.position + change.removed;
+        if (offset < removed_end) {
+            const size_t relative = offset - change.position;
+            return mapped - relative + std::min(relative, change.inserted);
+        }
+        if (change.inserted >= change.removed) {
+            mapped += change.inserted - change.removed;
+        } else {
+            mapped -= change.removed - change.inserted;
+        }
+    }
+    return mapped;
+}
+
+struct IndentRemoval {
+    size_t keep = 0;
+    size_t remove = 0;
+};
+
+IndentRemoval leading_whitespace_removal(const std::string& text,
+                                         size_t start,
+                                         size_t end,
+                                         size_t tab_width) {
+    tab_width = std::max<size_t>(1, tab_width);
+    size_t prefix_end = start;
+    size_t column = 0;
+    while (prefix_end < end && (text[prefix_end] == ' ' || text[prefix_end] == '\t')) {
+        if (text[prefix_end] == '\t') {
+            column += tab_width - (column % tab_width);
+        } else {
+            ++column;
+        }
+        ++prefix_end;
+    }
+    if (prefix_end == start) {
+        return {};
+    }
+    const size_t target = column == 0
+                              ? 0
+                              : column - (column % tab_width == 0 ? tab_width
+                                                                  : column % tab_width);
+    size_t keep_end = start;
+    column = 0;
+    while (keep_end < prefix_end) {
+        const size_t next_column = text[keep_end] == '\t'
+                                       ? column + tab_width - (column % tab_width)
+                                       : column + 1;
+        if (next_column > target) {
+            break;
+        }
+        column = next_column;
+        ++keep_end;
+    }
+    return {keep_end - start, prefix_end - keep_end};
+}
+
+}  // namespace
 
 EditorState EditorState::from_text(std::string content) {
     EditorState state;
@@ -466,6 +543,145 @@ Error EditorState::paste(Clipboard& clipboard) {
     return insert(clipboard.text());
 }
 
+Error EditorState::indent() {
+    tab_width = std::max<size_t>(1, std::min(tab_width, kMaxTabWidth));
+    if (!selection.has_range()) {
+        if (tab_style == TabStyle::Tab) {
+            return insert("\t");
+        }
+        const size_t column = text.display_column_for_offset(cursor, tab_width);
+        const size_t count = tab_width - (column % tab_width);
+        try {
+            return insert(std::string(count, ' '));
+        } catch (const std::bad_alloc&) {
+            return {ErrorCode::Internal, "not enough memory to insert editor indentation"};
+        }
+    }
+
+    const size_t first_line = text.line_for_offset(selection.start());
+    size_t last_line = text.line_for_offset(selection.end());
+    if (selection.end() > selection.start() &&
+        selection.end() == text.line_start(last_line) && last_line > first_line) {
+        --last_line;
+    }
+    const size_t block_start = text.line_start(first_line);
+    const size_t block_end = last_line + 1 < text.line_count()
+                                 ? text.line_start(last_line + 1)
+                                 : text.size();
+    const std::string prefix = tab_style == TabStyle::Tab
+                                   ? std::string("\t")
+                                   : std::string(tab_width, ' ');
+    const size_t line_count = last_line - first_line + 1;
+    if (line_count > (std::numeric_limits<size_t>::max() - (block_end - block_start)) /
+                         prefix.size()) {
+        return {ErrorCode::Internal, "selected indentation is too large for this platform"};
+    }
+
+    try {
+        const std::string original = text.range_text(block_start, block_end - block_start);
+        std::string transformed;
+        transformed.reserve(original.size() + line_count * prefix.size());
+        std::vector<IndentChange> changes;
+        changes.reserve(line_count);
+        size_t local = 0;
+        for (size_t line = first_line; line <= last_line; ++line) {
+            changes.push_back({block_start + local, 0, prefix.size()});
+            transformed += prefix;
+            const size_t newline = original.find('\n', local);
+            const size_t end = newline == std::string::npos ? original.size() : newline + 1;
+            transformed.append(original, local, end - local);
+            local = end;
+        }
+
+        const size_t old_anchor = selection.anchor;
+        const size_t old_active = selection.active;
+        const size_t old_cursor = cursor;
+        Error err = replace(block_start, block_end - block_start, transformed);
+        if (!err.ok()) {
+            return err;
+        }
+        selection.anchor = map_indent_offset(old_anchor, changes);
+        selection.active = map_indent_offset(old_active, changes);
+        cursor = map_indent_offset(old_cursor, changes);
+        update_preferred_column(*this);
+        return ok_error();
+    } catch (const std::bad_alloc&) {
+        return {ErrorCode::Internal, "not enough memory to indent the selected block"};
+    } catch (const std::length_error&) {
+        return {ErrorCode::Internal, "selected indentation is too large for this platform"};
+    }
+}
+
+Error EditorState::outdent() {
+    tab_width = std::max<size_t>(1, std::min(tab_width, kMaxTabWidth));
+    const bool selected = selection.has_range();
+    const size_t selection_start = selected ? selection.start() : cursor;
+    const size_t selection_end = selected ? selection.end() : cursor;
+    const size_t first_line = text.line_for_offset(selection_start);
+    size_t last_line = text.line_for_offset(selection_end);
+    if (selected && selection_end > selection_start &&
+        selection_end == text.line_start(last_line) && last_line > first_line) {
+        --last_line;
+    }
+    const size_t block_start = text.line_start(first_line);
+    const size_t block_end = last_line + 1 < text.line_count()
+                                 ? text.line_start(last_line + 1)
+                                 : text.size();
+
+    try {
+        const std::string original = text.range_text(block_start, block_end - block_start);
+        std::string transformed;
+        transformed.reserve(original.size());
+        std::vector<IndentChange> changes;
+        changes.reserve(last_line - first_line + 1);
+        size_t local = 0;
+        for (size_t line = first_line; line <= last_line; ++line) {
+            const size_t newline = original.find('\n', local);
+            const size_t content_end = newline == std::string::npos ? original.size() : newline;
+            const IndentRemoval removal =
+                leading_whitespace_removal(original, local, content_end, tab_width);
+            if (removal.remove > 0) {
+                changes.push_back(
+                    {block_start + local + removal.keep, removal.remove, 0});
+            }
+            transformed.append(original, local, removal.keep);
+            transformed.append(original,
+                               local + removal.keep + removal.remove,
+                               content_end - local - removal.keep - removal.remove);
+            if (newline != std::string::npos) {
+                transformed.push_back('\n');
+                local = newline + 1;
+            } else {
+                local = original.size();
+            }
+        }
+        if (changes.empty()) {
+            return ok_error();
+        }
+
+        const size_t old_anchor = selection.anchor;
+        const size_t old_active = selection.active;
+        const size_t old_cursor = cursor;
+        Error err = replace(block_start, block_end - block_start, transformed);
+        if (!err.ok()) {
+            return err;
+        }
+        cursor = map_indent_offset(old_cursor, changes);
+        if (selected) {
+            selection.anchor = map_indent_offset(old_anchor, changes);
+            selection.active = map_indent_offset(old_active, changes);
+        } else {
+            selection.clear(cursor);
+        }
+        update_preferred_column(*this);
+        return ok_error();
+    } catch (const std::bad_alloc&) {
+        return {ErrorCode::Internal, "not enough memory to outdent the selected block"};
+    } catch (const std::length_error&) {
+        return {ErrorCode::Internal, "selected outdent is too large for this platform"};
+    }
+}
+
 void EditorState::begin_movement(bool extend_selection) {
     if (!extend_selection) {
         selection.clear(cursor);
@@ -545,7 +761,7 @@ void EditorState::move_up() {
     if (line == 0) {
         return;
     }
-    cursor = text.offset_for_line_column(line - 1, preferred_column);
+    cursor = text.offset_for_line_column(line - 1, preferred_column, tab_width);
 }
 
 void EditorState::move_down() {
@@ -553,7 +769,7 @@ void EditorState::move_down() {
     if (line + 1 >= text.line_count()) {
         return;
     }
-    cursor = text.offset_for_line_column(line + 1, preferred_column);
+    cursor = text.offset_for_line_column(line + 1, preferred_column, tab_width);
 }
 
 void EditorState::move_up(const Rect& rect) {
@@ -598,31 +814,35 @@ void EditorState::page_down(const Rect& rect) {
 
 void EditorState::move_up_visual(const Rect& rect) {
     const size_t width = static_cast<size_t>(std::max(1, rect.width));
-    const WrappedLocation location = wrapped_location_for_offset(text, cursor, width);
+    const WrappedLocation location = wrapped_location_for_offset(text, cursor, width, tab_width);
     if (location.segment > 0) {
-        cursor = offset_for_wrapped_location(text, location.line, location.segment - 1, preferred_column, width);
+        cursor = offset_for_wrapped_location(
+            text, location.line, location.segment - 1, preferred_column, width, tab_width);
         return;
     }
     if (location.line == 0) {
         return;
     }
     const size_t previous_line = location.line - 1;
-    const size_t previous_rows = wrapped_row_count(text.line_text(previous_line), width);
-    cursor = offset_for_wrapped_location(text, previous_line, previous_rows - 1, preferred_column, width);
+    const size_t previous_rows = wrapped_row_count(text.line_text(previous_line), width, tab_width);
+    cursor = offset_for_wrapped_location(
+        text, previous_line, previous_rows - 1, preferred_column, width, tab_width);
 }
 
 void EditorState::move_down_visual(const Rect& rect) {
     const size_t width = static_cast<size_t>(std::max(1, rect.width));
-    const WrappedLocation location = wrapped_location_for_offset(text, cursor, width);
-    const size_t current_rows = wrapped_row_count(text.line_text(location.line), width);
+    const WrappedLocation location = wrapped_location_for_offset(text, cursor, width, tab_width);
+    const size_t current_rows = wrapped_row_count(text.line_text(location.line), width, tab_width);
     if (location.segment + 1 < current_rows) {
-        cursor = offset_for_wrapped_location(text, location.line, location.segment + 1, preferred_column, width);
+        cursor = offset_for_wrapped_location(
+            text, location.line, location.segment + 1, preferred_column, width, tab_width);
         return;
     }
     if (location.line + 1 >= text.line_count()) {
         return;
     }
-    cursor = offset_for_wrapped_location(text, location.line + 1, 0, preferred_column, width);
+    cursor = offset_for_wrapped_location(
+        text, location.line + 1, 0, preferred_column, width, tab_width);
 }
 
 void EditorState::move_home() {
@@ -641,9 +861,9 @@ void EditorState::move_end() {
 
 void EditorState::move_line_home(const Rect& rect) {
     const size_t width = static_cast<size_t>(std::max(1, rect.width));
-    const WrappedLocation location = wrapped_location_for_offset(text, cursor, width);
+    const WrappedLocation location = wrapped_location_for_offset(text, cursor, width, tab_width);
     const std::string line_text_value = text.line_text(location.line);
-    const std::vector<WrapSegment> segments = wrap_line_segments(line_text_value, width);
+    const std::vector<WrapSegment> segments = wrap_line_segments(line_text_value, width, tab_width);
     const WrapSegment& segment = segments[std::min(location.segment, segments.size() - 1)];
     cursor = text.line_start(location.line) + segment.start;
     update_preferred_column(*this);
@@ -652,9 +872,9 @@ void EditorState::move_line_home(const Rect& rect) {
 
 void EditorState::move_line_end(const Rect& rect) {
     const size_t width = static_cast<size_t>(std::max(1, rect.width));
-    const WrappedLocation location = wrapped_location_for_offset(text, cursor, width);
+    const WrappedLocation location = wrapped_location_for_offset(text, cursor, width, tab_width);
     const std::string line_text_value = text.line_text(location.line);
-    const std::vector<WrapSegment> segments = wrap_line_segments(line_text_value, width);
+    const std::vector<WrapSegment> segments = wrap_line_segments(line_text_value, width, tab_width);
     const WrapSegment& segment = segments[std::min(location.segment, segments.size() - 1)];
     cursor = text.line_start(location.line) + segment.end;
     update_preferred_column(*this);
@@ -709,11 +929,16 @@ void EditorState::ensure_cursor_visible(const Rect& rect) {
 
     size_t cursor_row = 0;
     for (size_t i = 0; i < line; ++i) {
-        cursor_row += wrapped_row_count(text.line_text(i), width);
+        cursor_row += wrapped_row_count(text.line_text(i), width, tab_width);
     }
     const size_t line_start_offset = text.line_start(line);
     const std::string line_text_value = text.line_text(line);
-    cursor_row += cursor_in_wrapped_line(line_text_value, cursor - line_start_offset, width).row;
+    cursor_row +=
+        cursor_in_wrapped_line(line_text_value,
+                               cursor - line_start_offset,
+                               width,
+                               tab_width)
+            .row;
 
     if (cursor_row < scroll_line) {
         scroll_line = cursor_row;
@@ -734,7 +959,8 @@ RenderedPanel EditorState::render(const Rect& rect) const {
                         active_selection,
                         language,
                         highlight_enabled,
-                        &highlight_cache_);
+                        &highlight_cache_,
+                        tab_width);
 }
 
 

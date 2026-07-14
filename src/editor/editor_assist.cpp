@@ -393,6 +393,14 @@ std::vector<std::string> assist_command_completions(const EditorAssistConfig& co
     commands.push_back("/mode toml");
     commands.push_back("/mode yaml");
     commands.push_back("/mode ini");
+    commands.push_back("/tab-width ");
+    commands.push_back("/tab-style ");
+    commands.push_back("/tab-style spaces");
+    commands.push_back("/tab-style tab");
+    commands.push_back("/linebreak ");
+    commands.push_back("/linebreak lf");
+    commands.push_back("/linebreak cr");
+    commands.push_back("/linebreak crlf");
     commands.push_back("/provider ");
     commands.push_back("/model ");
     commands.push_back("/save");

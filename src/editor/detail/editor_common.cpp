@@ -7,7 +7,7 @@
 namespace pkchat::editor {
 
 void update_preferred_column(EditorState& state) {
-    state.preferred_column = state.text.display_column_for_offset(state.cursor);
+    state.preferred_column = state.text.display_column_for_offset(state.cursor, state.tab_width);
 }
 
 std::string trim_ascii_copy(std::string text) { return pkchat::ascii_trim(std::move(text)); }

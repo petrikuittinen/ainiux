@@ -51,7 +51,7 @@ thinking_traces = true
 highlight = on
 ```
 
-Editor defaults can also be configured. `undo_limit` controls how many undo states are retained and defaults to `5`. `huge_file_size_warning` defaults to `1073741824` bytes and asks for confirmation before loading files at or above that size. `file_size_limit` defaults to `-1`, which means no configured upper limit; set it to a non-negative byte count to reject larger editor files before they are read into memory. Auto-save settings (`auto-save-mode`, `auto-save-postfix`, `auto-save-threshold`, `auto-save-timeout`, `auto-save-size-limit`) write backup copies such as `notes.txt~` while you edit; defaults are `on`, `~`, `300` bytes changed, `30` idle seconds, and `10M` max buffer size.
+Editor defaults can also be configured. `undo_limit` controls how many undo states are retained and defaults to `5`. `huge_file_size_warning` defaults to `1073741824` bytes and asks for confirmation before loading files at or above that size. `file_size_limit` defaults to `-1`, which means no configured upper limit; set it to a non-negative byte count to reject larger editor files before they are read into memory. Auto-save settings (`auto-save-mode`, `auto-save-postfix`, `auto-save-threshold`, `auto-save-timeout`, `auto-save-size-limit`) write backup copies such as `notes.txt~` while you edit; defaults are `on`, `~`, `300` bytes changed, `30` idle seconds, and `10M` max buffer size. `tab-width` (1–32, default `4`), `tab-style` (`spaces` or `tab`, default `spaces`), and `linebreak` (`lf`, `cr`, or `crlf`, default `lf`) initialize new editor buffers.
 
 ### Themes
 
@@ -170,7 +170,9 @@ The HTTP transport uses libcurl through RAII wrappers in `src/http/`. Build flag
 ./pkchat --editor draft.txt --output saved-draft.txt
 ```
 
-A provider shortcut or base URL may precede `--editor` without changing the file argument. If the startup path does not exist, pkchat creates an empty file before editing. The `[editor]` config section controls undo depth (`undo_limit`, default `5`), a huge-file confirmation threshold (`huge_file_size_warning`, default 1 GiB), an optional hard load limit (`file_size_limit`, default unlimited), and auto-save backup behavior (`auto-save-mode`, `auto-save-postfix`, `auto-save-threshold`, `auto-save-timeout`, `auto-save-size-limit`).
+A provider shortcut or base URL may precede `--editor` without changing the file argument. If the startup path does not exist, pkchat creates an empty file before editing. The `[editor]` config section controls undo depth (`undo_limit`, default `5`), a huge-file confirmation threshold (`huge_file_size_warning`, default 1 GiB), an optional hard load limit (`file_size_limit`, default unlimited), auto-save backup behavior, and the initial indentation and line-ending settings.
+
+LF, CR, and CRLF files are normalized internally and saved back with their detected line-ending style, including whether the file has a final line ending. Empty files and files without any line ending use the configured default. A mixed-ending file produces a warning and uses the configured `linebreak` style on its next save. `/linebreak lf|cr|crlf` changes the active buffer’s save style; `/tab-width 1..32` and `/tab-style spaces|tab` change its indentation behavior. With no argument, each command reports the active value. These settings are per buffer.
 
 ### Editor AI Assist
 
@@ -204,7 +206,7 @@ A matching `string` replaces a built-in command; new strings add commands. Confi
 
 ### Editor Controls
 
-`Ctrl+S` saves, `Ctrl+Shift+S` saves as, `Ctrl+O` opens another file buffer, `Ctrl+N` or `/new` opens a new empty buffer, `Ctrl+L` or `/list` opens the buffer picker, `Ctrl+W` or `/close` closes the active buffer with a discard prompt when modified, `Ctrl+F` searches, `Ctrl+H` replaces, `Ctrl+Q` quits (with save prompts when needed), `Ctrl+C`/`Ctrl+X`/`Ctrl+V` copy/cut/paste across buffers, `Ctrl+K` kills to end of line, `Ctrl+Z`/`Ctrl+U` undo and `Ctrl+Y` redo, `Home`/`End` move to the current line, `Ctrl+Home`/`Ctrl+End` jump to buffer bounds, arrows move, `Shift` plus arrows / `PageUp`/`PageDown` / `Home`/`End` extend selection, and `Tab` completion is disabled in standalone editor mode.
+`Ctrl+S` saves, `Ctrl+Shift+S` saves as, `Ctrl+O` opens another file buffer, `Ctrl+N` or `/new` opens a new empty buffer, `Ctrl+L` or `/list` opens the buffer picker, `Ctrl+W` or `/close` closes the active buffer with a discard prompt when modified, `Ctrl+F` searches, `Ctrl+H` replaces, `Ctrl+Q` quits (with save prompts when needed), `Ctrl+C`/`Ctrl+X`/`Ctrl+V` copy/cut/paste across buffers, `Ctrl+K` kills to end of line, `Ctrl+Z`/`Ctrl+U` undo and `Ctrl+Y` redo, `Home`/`End` move to the current line, `Ctrl+Home`/`Ctrl+End` jump to buffer bounds, arrows move, and `Shift` plus arrows / `PageUp`/`PageDown` / `Home`/`End` extend selection. `Tab` inserts indentation at the cursor or indents every touched line in a selection; `Shift+Tab` outdents the current line or selected block. A selected block is transformed as one undoable edit.
 
 ## Benchmarks
 

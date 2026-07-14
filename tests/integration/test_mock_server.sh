@@ -463,6 +463,7 @@ repl_fetch_reply=$(printf '/fetch %s/page\nsummarize-url\n/quit\n' "$BASE" | \
 test "$repl_fetch_reply" = "url-context-ok"
 
 python3 "$ROOT/tests/integration/editor_buffers_driver.py" "$ROOT/pkchat"
+python3 "$ROOT/tests/integration/editor_text_modes_driver.py" "$ROOT/pkchat"
 
 image_extract_err="$ROOT/build/image-extract.err"
 if "$ROOT/pkchat" --input "$local_png" --quiet >"$ROOT/build/image-extract.out" 2>"$image_extract_err"; then

@@ -53,6 +53,8 @@ Replace mode after `Ctrl+H`: `Space` replaces match, `s` skips, `a` replaces all
 | `Backspace` | Delete before cursor |
 | `Delete` (`Esc [3~`) | Delete at cursor |
 | `Enter` | New line |
+| `Tab` | Insert indentation, or indent every touched line in a selection |
+| `Shift+Tab` | Outdent the current line, or every touched line in a selection |
 
 ## Selection
 
@@ -115,6 +117,9 @@ Press **`Esc`** to open the command minibuffer (`Command:`). Type a slash comman
 | `/close` | Close the active editor buffer (same as `Ctrl+W`; prompts if modified) |
 | `/highlight [on|off]` | Show or toggle syntax highlighting for editor and chat |
 | `/mode [MODE|auto]` | Show or set this buffer's syntax mode |
+| `/tab-width [1..32]` | Show or set this buffer's tab width |
+| `/tab-style [spaces|tab]` | Show or set this buffer's indentation style |
+| `/linebreak [lf|cr|crlf]` | Show or set this buffer's save line endings |
 | `/provider [NAME]` | Change provider (picker when omitted) |
 | `/model [MODEL]` | Change model (picker when omitted) |
 | `/help` | Toggle this help view |
@@ -166,6 +171,9 @@ The status line shows the current language compactly in parentheses, such as `(h
 - `auto-save-threshold` — auto-save after this many changed bytes (default `300`)
 - `auto-save-timeout` — auto-save after this many idle seconds when changes are pending (default `30`)
 - `auto-save-size-limit` — skip auto-save above this buffer size; supports `k`/`M`/`G`/`T` suffixes (default `10M`)
+- `tab-width` — indentation and display tab width from 1 through 32 (default `4`)
+- `tab-style` — `spaces` or `tab` (default `spaces`)
+- `linebreak` — default `lf`, `cr`, or `crlf` for new, empty, no-ending, and mixed-ending files (default `lf`)
 
 When you open a file whose auto-save backup (for example `notes.txt~`) is newer than the saved file, pkchat asks whether to recover the backup instead. At startup this prompt appears on stderr before the editor UI; when opening another file in the editor, the minibuffer asks `y` to recover or `n` to load the saved file.
 
@@ -173,7 +181,8 @@ Repeatable `[command]` blocks add or override slash commands. See `README.md` fo
 
 ## Tips
 
-- Tab completion is **disabled** in standalone editor mode (unlike the chat TUI input).
+- Document `Tab` performs indentation. Command and path `Tab` completion remains confined to the command minibuffer.
+- LF, CR, and CRLF files retain their detected style on save and auto-save. Mixed endings produce a warning and use the configured default.
 - Scratch buffers (no path) prompt to save on quit when modified.
 - Bracketed paste is enabled for reliable paste detection.
 - Invalid UTF-8 in files is preserved; the renderer shows a visible placeholder for bad bytes.

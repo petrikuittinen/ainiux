@@ -23,6 +23,7 @@
 #include "ui/text_selector.hpp"
 
 #include <algorithm>
+#include <charconv>
 #include <chrono>
 #include <functional>
 #include <iostream>
@@ -52,12 +53,16 @@ app::EditorRunResult run_editor(const std::string& path,
                                 app::InteractiveSession* interactive) {
     EditorState state;
     state.set_undo_limit(settings.undo_limit);
+    state.tab_width = settings.tab_width;
+    state.tab_style = settings.tab_style;
+    state.linebreak = settings.linebreak;
     bool highlight_enabled = interactive != nullptr ? interactive->highlight_enabled
                                                     : settings.highlight_enabled;
     state.highlight_enabled = highlight_enabled;
     const std::string initial_path = expand_user_path(path.empty() ? save_as : path);
     state.set_path(initial_path);
     std::string status = "Ready";
+    std::string initial_linebreak_warning;
     bool switch_to_chat = false;
     std::vector<EditorState> buffers;
     size_t active_buffer = 0;
@@ -89,10 +94,18 @@ app::EditorRunResult run_editor(const std::string& path,
             recovery_offer.should_offer &&
             confirm_autosave_recovery_before_terminal(initial_path, recovery_offer.autosave_path);
         const std::string& load_path = recover_autosave ? recovery_offer.autosave_path : initial_path;
-        err = load_file(load_path, settings, state.text);
+        LoadedFile loaded;
+        err = load_file(load_path, settings, loaded);
         if (!err.ok()) {
             std::cerr << error_code_name(err.code) << ": " << err.message << "\n";
             return {5, app::InteractiveUiTarget::Quit};
+        }
+        state.text = std::move(loaded.text);
+        state.linebreak = loaded.linebreak;
+        if (loaded.mixed_linebreaks) {
+            initial_linebreak_warning =
+                "Warning: mixed line endings in " + load_path + "; normalized and using " +
+                linebreak_name(state.linebreak) + " for saves";
         }
         if (recover_autosave) {
             state.dirty = true;
@@ -132,7 +145,8 @@ app::EditorRunResult run_editor(const std::string& path,
     bool pending_quit_after_save = false;
     PendingSaveRequest pending_save;
     MinibufferState minibuffer;
-    minibuffer.message = editor_startup_status(ai_continue);
+    minibuffer.message = initial_linebreak_warning.empty() ? editor_startup_status(ai_continue)
+                                                           : initial_linebreak_warning;
     std::string last_search;
     ReplaceSession replace;
     std::string pending_load_path;
@@ -218,6 +232,9 @@ app::EditorRunResult run_editor(const std::string& path,
         if (buffers.empty()) {
             buffers.push_back(EditorState{});
             buffers.back().set_undo_limit(settings.undo_limit);
+            buffers.back().tab_width = settings.tab_width;
+            buffers.back().tab_style = settings.tab_style;
+            buffers.back().linebreak = settings.linebreak;
             active_buffer = 0;
         }
         buffer_list_selected = std::min(buffer_list_selected, buffers.size() - 1);
@@ -333,7 +350,7 @@ app::EditorRunResult run_editor(const std::string& path,
             activate_buffer(*existing);
             return;
         }
-        PieceTable loaded;
+        LoadedFile loaded;
         Error load_error = load_file(load_path, settings, loaded);
         if (!load_error.ok()) {
             minibuffer_message(minibuffer, load_error.message);
@@ -342,8 +359,12 @@ app::EditorRunResult run_editor(const std::string& path,
         sync_active_buffer();
         EditorState next;
         next.set_undo_limit(settings.undo_limit);
-        next.text = std::move(loaded);
+        const bool mixed_linebreaks = loaded.mixed_linebreaks;
+        next.text = std::move(loaded.text);
         next.set_path(open_path);
+        next.tab_width = settings.tab_width;
+        next.tab_style = settings.tab_style;
+        next.linebreak = loaded.linebreak;
         next.highlight_enabled = highlight_enabled;
         next.cursor = 0;
         next.preferred_column = 0;
@@ -356,7 +377,12 @@ app::EditorRunResult run_editor(const std::string& path,
         active_buffer = buffers.size() - 1;
         state = next;
         buffer_list_selected = active_buffer;
-        if (recovered_from_autosave) {
+        if (mixed_linebreaks) {
+            minibuffer_message(minibuffer,
+                               "Warning: mixed line endings in " + load_path +
+                                   "; normalized and using " +
+                                   linebreak_name(next.linebreak) + " for saves");
+        } else if (recovered_from_autosave) {
             minibuffer_message(minibuffer, "Recovered auto-save for " + open_path);
         } else {
             minibuffer_message(minibuffer, "Opened " + open_path);
@@ -399,6 +425,9 @@ app::EditorRunResult run_editor(const std::string& path,
         sync_active_buffer();
         EditorState next;
         next.set_undo_limit(settings.undo_limit);
+        next.tab_width = settings.tab_width;
+        next.tab_style = settings.tab_style;
+        next.linebreak = settings.linebreak;
         next.text = PieceTable::from_string("");
         next.path.clear();
         next.redetect_language();
@@ -457,6 +486,9 @@ app::EditorRunResult run_editor(const std::string& path,
             buffers.clear();
             state = EditorState{};
             state.set_undo_limit(settings.undo_limit);
+            state.tab_width = settings.tab_width;
+            state.tab_style = settings.tab_style;
+            state.linebreak = settings.linebreak;
             state.highlight_enabled = highlight_enabled;
             buffers.push_back(state);
             active_buffer = 0;
@@ -1066,6 +1098,75 @@ app::EditorRunResult run_editor(const std::string& path,
                                    (highlight_enabled ? "enabled" : "disabled"));
             return;
         }
+        if (command_line == "/tab-width" || command_line.rfind("/tab-width ", 0) == 0) {
+            pending_assist = PendingAssist{};
+            exit_assist_command_mode(minibuffer, assist_completer);
+            const std::string requested =
+                command_line.size() <= 10 ? "" : trim_ascii_copy(command_line.substr(10));
+            if (requested.empty()) {
+                minibuffer_message(minibuffer, "Tab width: " + std::to_string(state.tab_width));
+                return;
+            }
+            size_t width = 0;
+            const char* begin = requested.data();
+            const char* end = begin + requested.size();
+            const std::from_chars_result parsed = std::from_chars(begin, end, width);
+            if (parsed.ec != std::errc{} || parsed.ptr != end || width < 1 ||
+                width > kMaxTabWidth) {
+                minibuffer_message(minibuffer, "Usage: /tab-width WIDTH (1 through 32)");
+                return;
+            }
+            state.tab_width = width;
+            update_preferred_column(state);
+            minibuffer_message(minibuffer, "Tab width: " + std::to_string(state.tab_width));
+            return;
+        }
+        if (command_line == "/tab-style" || command_line.rfind("/tab-style ", 0) == 0) {
+            pending_assist = PendingAssist{};
+            exit_assist_command_mode(minibuffer, assist_completer);
+            const std::string requested = command_line.size() <= 10
+                                              ? ""
+                                              : ascii_lower(trim_ascii_copy(command_line.substr(10)));
+            if (requested.empty()) {
+                minibuffer_message(minibuffer,
+                                   std::string("Tab style: ") + tab_style_name(state.tab_style));
+                return;
+            }
+            TabStyle style;
+            if (!parse_tab_style(requested, style)) {
+                minibuffer_message(minibuffer, "Usage: /tab-style spaces|tab");
+                return;
+            }
+            state.tab_style = style;
+            minibuffer_message(minibuffer,
+                               std::string("Tab style: ") + tab_style_name(state.tab_style));
+            return;
+        }
+        if (command_line == "/linebreak" || command_line.rfind("/linebreak ", 0) == 0) {
+            pending_assist = PendingAssist{};
+            exit_assist_command_mode(minibuffer, assist_completer);
+            const std::string requested = command_line.size() <= 10
+                                              ? ""
+                                              : ascii_lower(trim_ascii_copy(command_line.substr(10)));
+            if (requested.empty()) {
+                minibuffer_message(minibuffer,
+                                   std::string("Line break: ") + linebreak_name(state.linebreak));
+                return;
+            }
+            LineBreak linebreak;
+            if (!parse_linebreak(requested, linebreak)) {
+                minibuffer_message(minibuffer, "Usage: /linebreak lf|cr|crlf");
+                return;
+            }
+            if (state.linebreak != linebreak) {
+                state.linebreak = linebreak;
+                state.dirty = true;
+                state.record_autosave_change(1);
+            }
+            minibuffer_message(minibuffer,
+                               std::string("Line break: ") + linebreak_name(state.linebreak));
+            return;
+        }
         if (command_line == "/mode" || command_line.rfind("/mode ", 0) == 0) {
             pending_assist = PendingAssist{};
             exit_assist_command_mode(minibuffer, assist_completer);
@@ -1562,7 +1663,15 @@ app::EditorRunResult run_editor(const std::string& path,
                              state.path,
                              &minibuffer_path_completer);
         } else if (ch == '\t') {
-            minibuffer_message(minibuffer, "Tab completion is not active here");
+            Error indent_error = state.indent();
+            if (!indent_error.ok()) {
+                minibuffer_message(minibuffer, indent_error.message);
+            }
+        } else if (ch == editor_key_backtab()) {
+            Error outdent_error = state.outdent();
+            if (!outdent_error.ok()) {
+                minibuffer_message(minibuffer, outdent_error.message);
+            }
         } else if (ch == 27) {
             if (!minibuffer.active && !replace.active && !assist_session.active) {
                 const std::string sequence = read_escape_suffix();

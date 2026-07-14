@@ -42,6 +42,7 @@ void test_config_applies_user_settings() {
 
     pkchat::config::ParseResult editor_config =
         pkchat::config::parse("[editor]\nundo_limit = 7\nhuge_file_size_warning = 2048\nfile_size_limit = -1\n"
+                              "tab-width = 8\ntab-style = tab\nlinebreak = crlf\n"
                               "continue_read_chars = 8192\ncontinue_max_tokens = 4096\n",
                               "editor.conf");
     check(editor_config.error.ok(), "editor config fixture parses");
@@ -49,6 +50,9 @@ void test_config_applies_user_settings() {
     check(err.ok() && options.editor_undo_limit == 7 &&
               options.editor_huge_file_size_warning == 2048 &&
               options.editor_file_size_limit == -1 &&
+              options.editor_tab_width == 8 &&
+              options.editor_tab_style == pkchat::editor::TabStyle::Tab &&
+              options.editor_linebreak == pkchat::editor::LineBreak::Crlf &&
               options.editor_ai_continue_read_chars == 8192 &&
               options.editor_ai_continue_max_tokens == 4096,
           "editor config settings apply");
@@ -280,7 +284,7 @@ void test_config_model_setting_thinking_budget() {
 void test_config_reads_common_template() {
     pkchat::config::ParseResult parsed = pkchat::config::read_file("config/pkchat.conf");
     check(parsed.error.ok(), "common config file parses");
-    check(parsed.document.entries.size() == 154, "common config has every expected setting");
+    check(parsed.document.entries.size() == 157, "common config has every expected setting");
     pkchat::cli::Options highlight_options;
     pkchat::Error apply_error = pkchat::config::apply_document(parsed.document, highlight_options);
     check(apply_error.ok() && highlight_options.tui_highlight,
@@ -386,6 +390,24 @@ void test_config_schema_rejects_invalid_settings_transactionally() {
     err = pkchat::config::apply_document(bad_undo.document, options);
     check(!err.ok() && err.message.find("non-negative integer") != std::string::npos,
           "config schema rejects negative editor undo limits");
+
+    pkchat::config::ParseResult bad_tab_width =
+        pkchat::config::parse("[editor]\ntab-width = 0\n", "editor-tab-width.conf");
+    err = pkchat::config::apply_document(bad_tab_width.document, options);
+    check(!err.ok() && err.message.find("1 through 32") != std::string::npos,
+          "config schema rejects editor tab widths outside 1 through 32");
+
+    pkchat::config::ParseResult bad_tab_style =
+        pkchat::config::parse("[editor]\ntab-style = tabs\n", "editor-tab-style.conf");
+    err = pkchat::config::apply_document(bad_tab_style.document, options);
+    check(!err.ok() && err.message.find("spaces or tab") != std::string::npos,
+          "config schema rejects unknown editor tab styles");
+
+    pkchat::config::ParseResult bad_linebreak =
+        pkchat::config::parse("[editor]\nlinebreak = native\n", "editor-linebreak.conf");
+    err = pkchat::config::apply_document(bad_linebreak.document, options);
+    check(!err.ok() && err.message.find("lf, cr, or crlf") != std::string::npos,
+          "config schema rejects unknown editor linebreak modes");
 }
 
 void test_config_xdg_path_resolution() {

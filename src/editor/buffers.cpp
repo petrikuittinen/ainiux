@@ -25,7 +25,8 @@ std::string editor_buffer_list_text(const std::vector<EditorState>& buffers, siz
             out << " *";
         }
         const size_t line = buffer.text.line_for_offset(buffer.cursor) + 1;
-        const size_t column = buffer.text.display_column_for_offset(buffer.cursor) + 1;
+        const size_t column =
+            buffer.text.display_column_for_offset(buffer.cursor, buffer.tab_width) + 1;
         out << " - Ln " << line << ", Col " << column;
         return out.str();
     });

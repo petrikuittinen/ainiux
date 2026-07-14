@@ -941,6 +941,140 @@ void test_editor_file_round_trip() {
           "editor file load has no configured upper limit when file_size_limit is -1");
 }
 
+void test_editor_linebreak_modes() {
+    struct Case {
+        const char* name;
+        const char* bytes;
+        pkchat::editor::LineBreak linebreak;
+    };
+    const Case cases[] = {
+        {"lf", "first\nsecond\n", pkchat::editor::LineBreak::Lf},
+        {"cr", "first\rsecond\r", pkchat::editor::LineBreak::Cr},
+        {"crlf", "first\r\nsecond\r\n", pkchat::editor::LineBreak::Crlf},
+    };
+    for (const Case& item : cases) {
+        const std::string path = std::string("build/unit-editor-linebreak-") + item.name + ".txt";
+        {
+            std::ofstream out(path, std::ios::binary | std::ios::trunc);
+            out.write(item.bytes, static_cast<std::streamsize>(std::char_traits<char>::length(item.bytes)));
+        }
+        pkchat::editor::LoadedFile loaded;
+        pkchat::editor::EditorSettings settings;
+        check(pkchat::editor::load_file(path, settings, loaded).ok(),
+              std::string("editor loads ") + item.name + " line endings");
+        check(loaded.text.str() == "first\nsecond\n" && loaded.linebreak == item.linebreak &&
+                  !loaded.mixed_linebreaks,
+              std::string("editor detects and normalizes ") + item.name + " line endings");
+        const std::string saved = path + ".saved";
+        check(pkchat::editor::save_file(saved, loaded.text, loaded.linebreak).ok(),
+              std::string("editor saves ") + item.name + " line endings");
+        std::ifstream in(saved, std::ios::binary);
+        const std::string bytes((std::istreambuf_iterator<char>(in)),
+                                std::istreambuf_iterator<char>());
+        check(bytes == item.bytes,
+              std::string("editor round trip preserves ") + item.name + " and final ending");
+    }
+
+    const std::string mixed_path = "build/unit-editor-linebreak-mixed.txt";
+    {
+        std::ofstream out(mixed_path, std::ios::binary | std::ios::trunc);
+        out << "one\r\ntwo\nthree\r";
+    }
+    pkchat::editor::EditorSettings settings;
+    settings.linebreak = pkchat::editor::LineBreak::Cr;
+    pkchat::editor::LoadedFile mixed;
+    check(pkchat::editor::load_file(mixed_path, settings, mixed).ok(),
+          "editor loads mixed line endings");
+    check(mixed.mixed_linebreaks && mixed.linebreak == pkchat::editor::LineBreak::Cr &&
+              mixed.text.str() == "one\ntwo\nthree\n",
+          "mixed line endings normalize and use the configured default");
+
+    const std::string no_ending_path = "build/unit-editor-no-linebreak.txt";
+    {
+        std::ofstream out(no_ending_path, std::ios::binary | std::ios::trunc);
+        out << "no final ending";
+    }
+    settings.linebreak = pkchat::editor::LineBreak::Crlf;
+    pkchat::editor::LoadedFile no_ending;
+    check(pkchat::editor::load_file(no_ending_path, settings, no_ending).ok() &&
+              no_ending.linebreak == pkchat::editor::LineBreak::Crlf &&
+              no_ending.text.str() == "no final ending",
+          "file without a line ending inherits the configured default without adding one");
+}
+
+void test_editor_tab_indentation() {
+    pkchat::editor::EditorState state = pkchat::editor::EditorState::from_text("ab");
+    state.tab_width = 4;
+    state.cursor = 2;
+    check(state.indent().ok() && state.text.str() == "ab  " && state.cursor == 4,
+          "space Tab advances to the next configured tab stop");
+    check(state.undo() && state.text.str() == "ab", "single-position Tab is one undo step");
+
+    state = pkchat::editor::EditorState::from_text("ab");
+    state.tab_style = pkchat::editor::TabStyle::Tab;
+    state.cursor = 1;
+    check(state.indent().ok() && state.text.str() == "a\tb",
+          "tab style inserts one literal tab at the cursor");
+
+    state = pkchat::editor::EditorState::from_text("a\nb\nc");
+    state.tab_width = 2;
+    state.selection.anchor = 0;
+    state.selection.active = state.text.line_start(2);
+    state.cursor = state.selection.active;
+    check(state.indent().ok() && state.text.str() == "  a\n  b\nc",
+          "block Tab indents every selected line and excludes a following column-zero line");
+    check(state.selection.anchor == 0 && state.selection.active == state.text.line_start(2),
+          "block Tab preserves a forward selection over the transformed block");
+    check(state.undo() && state.text.str() == "a\nb\nc",
+          "arbitrary block indentation is one undo step");
+
+    state = pkchat::editor::EditorState::from_text("a\nb\nc");
+    state.tab_width = 2;
+    state.selection.anchor = state.text.line_start(2);
+    state.selection.active = 0;
+    state.cursor = 0;
+    check(state.indent().ok() && state.text.str() == "  a\n  b\nc" &&
+              state.selection.anchor == state.text.line_start(2) &&
+              state.selection.active == 0,
+          "block Tab preserves reverse selection direction");
+
+    state = pkchat::editor::EditorState::from_text("\t  alpha\n  \tbeta");
+    state.tab_width = 4;
+    state.selection.anchor = 0;
+    state.selection.active = state.text.size();
+    state.cursor = state.text.size();
+    check(state.outdent().ok() && state.text.str() == "\talpha\nbeta",
+          "block Shift+Tab removes one display indentation level from mixed whitespace");
+    check(state.undo() && state.text.str() == "\t  alpha\n  \tbeta",
+          "block outdent is one undo step");
+
+    state = pkchat::editor::EditorState::from_text("    alpha");
+    state.tab_width = 4;
+    state.cursor = state.text.size();
+    check(state.outdent().ok() && state.text.str() == "alpha" && state.cursor == 5,
+          "Shift+Tab without a selection outdents the current line and preserves cursor content position");
+
+    const pkchat::editor::PieceTable tabs =
+        pkchat::editor::PieceTable::from_string("\tx");
+    check(tabs.display_column_for_offset(1, 8) == 8 &&
+              tabs.offset_for_line_column(0, 8, 8) == 1,
+          "editor display columns honor the active tab width");
+
+    std::string large_text;
+    for (size_t i = 0; i < 5000; ++i) {
+        large_text += "line\n";
+    }
+    state = pkchat::editor::EditorState::from_text(large_text);
+    state.tab_width = 2;
+    state.selection.anchor = 0;
+    state.selection.active = state.text.size();
+    state.cursor = state.text.size();
+    check(state.indent().ok() && state.text.str().size() == large_text.size() + 10000,
+          "large selected blocks indent in one bounded transformation");
+    check(state.undo() && state.text.str() == large_text,
+          "large block indentation remains one undo step");
+}
+
 void test_editor_home_end_navigation() {
     pkchat::editor::EditorState state =
         pkchat::editor::EditorState::from_text("alpha\nbeta\ngamma");
@@ -1472,6 +1606,20 @@ void test_editor_autosave() {
               backup.str() == "autosave payload",
           "editor auto-save backup file contains the current buffer");
 
+    state.text = pkchat::editor::PieceTable::from_string("auto\nsave\n");
+    state.linebreak = pkchat::editor::LineBreak::Crlf;
+    state.dirty = true;
+    state.record_autosave_change(10);
+    check(pkchat::editor::perform_autosave(state, settings, autosave_message).ok(),
+          "editor auto-save writes using the buffer linebreak mode");
+    {
+        std::ifstream raw_backup("build/autosave-source.txt~", std::ios::binary);
+        const std::string raw((std::istreambuf_iterator<char>(raw_backup)),
+                              std::istreambuf_iterator<char>());
+        check(raw == "auto\r\nsave\r\n",
+              "editor auto-save preserves CRLF and final-line-ending state");
+    }
+
     pkchat::editor::remove_autosave_file(state.path, settings);
     check(!std::filesystem::exists("build/autosave-source.txt~"),
           "editor auto-save backup is removed after an explicit save cleanup");
@@ -1948,6 +2096,15 @@ void test_editor_control_key_sequence_decode() {
           "editor decodes kitty-style Ctrl+Shift+s as save-as");
     check(pkchat::editor::decode_control_key_sequence("[23;5u", decoded) && decoded == 23,
           "editor decodes kitty-style Ctrl+W as close-buffer");
+    check(pkchat::editor::decode_control_key_sequence("[Z", decoded) &&
+              decoded == pkchat::editor::editor_key_backtab(),
+          "editor decodes common xterm Shift+Tab as backtab");
+    check(pkchat::editor::decode_control_key_sequence("[9;2u", decoded) &&
+              decoded == pkchat::editor::editor_key_backtab(),
+          "editor decodes kitty Shift+Tab as backtab");
+    check(pkchat::editor::decode_control_key_sequence("[27;2;9~", decoded) &&
+              decoded == pkchat::editor::editor_key_backtab(),
+          "editor decodes xterm modifyOtherKeys Shift+Tab as backtab");
     check(!pkchat::editor::decode_control_key_sequence("[A", decoded),
           "editor ignores arrow-key escape sequences");
 }
@@ -2293,6 +2450,8 @@ void run_all() {
     test_editor_assist_helpers();
     test_editor_contextual_completion_modes();
     test_editor_file_round_trip();
+    test_editor_linebreak_modes();
+    test_editor_tab_indentation();
     test_editor_home_end_navigation();
     test_editor_select_all();
     test_editor_line_home_end_navigation();

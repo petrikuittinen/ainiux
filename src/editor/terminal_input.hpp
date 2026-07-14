@@ -31,6 +31,7 @@ bool consume_pending_escape_alt_meta();
 
 // Internal sentinel returned by decode_control_key_sequence for Ctrl+Shift+S.
 constexpr unsigned char editor_key_save_as() { return static_cast<unsigned char>(0xF1); }
+constexpr unsigned char editor_key_backtab() { return static_cast<unsigned char>(0xF2); }
 
 // Decode kitty/xterm control-key escape sequences such as "[19;5u" (Ctrl+S).
 bool decode_control_key_sequence(const std::string& sequence, unsigned char& out);
