@@ -4,6 +4,8 @@ Project: `pkchat`
 
 This file is the implementation roadmap and execution-plan template for coding agents. Work from the earliest incomplete milestone unless the user explicitly asks for something else.
 
+This is a living roadmap, not an immutable specification. Product direction naturally changes as the program and its users reveal better requirements. Dated implementation notes record what was true at that point in the project's history; they do not override newer notes, the current baseline, `AGENTS.md`, or the user's latest instructions. Before starting work from an older milestone or unchecked item, reconcile it with the current code and newer direction. Update or explicitly mark superseded plans instead of silently implementing stale assumptions.
+
 ## Product goal
 
 Create the best practical command-line, terminal, local server, and future local-web chat client for OpenAI and OpenAI-compatible APIs.
@@ -89,6 +91,12 @@ Implementation note (2026-07-13): the shared span/cache architecture now support
 
 Expansion note (2026-07-13): the same engine, editor modes, automatic detection, Markdown fences, fixtures, and tests now cover modern PHP, Perl, Ruby, Rust, Go, PowerShell, Assembly, SQL, TOML, YAML, and INI. The implementation remains dependency-free and C++17-compatible, with explicit multiline state for each language where its comments or strings require it.
 
+Implementation rationale and correction (2026-07-14): the current highlighter is a hybrid, but it is predominantly a handwritten lexical scanner rather than the regex-driven implementation originally requested. It uses a small number of precompiled C++17 `std::regex` expressions for bounded patterns such as Markdown links, structural markers, and heredoc openers, while procedural scanners recognize most comments, strings, identifiers, operators, markup, and embedded languages. Explicit state outside a regular expression is justified for constructs that cross lines or require remembered delimiters, nesting, or surrounding syntactic context: examples include Markdown fences, heredocs and here-strings, C++/Rust raw strings, Rust nested comments, JavaScript regex-literal versus division decisions, and JavaScript/CSS embedded in HTML. Incremental line-state caching, overlap priority, byte budgets, and nested-language delegation are likewise orchestration concerns rather than token-matching expressions.
+
+C++17 `std::regex` uses the ECMAScript grammar and lacks facilities such as recursive or balancing patterns, lookbehind, named captures, and atomic or possessive constructs. Those limitations make some language constructs awkward or impossible to express as one pattern, but they did not require most token recognition to become handwritten code. A regex-first hybrid could have retained a small state machine for cross-line and nested context while defining ordinary tokens through tables of precompiled expressions. The implementation therefore departed further from the requested regex approach than was necessary; this is architectural debt, not a claim that proper highlighting is impossible with C++17 regular expressions.
+
+Future highlighting work should move toward regex-driven, declarative rule tables for ordinary tokens, retaining procedural code only where multiline state, nesting, delimiter capture, or genuine context sensitivity requires it. Refactoring should split the monolithic implementation by shared language families, preserve the existing semantic-span and `DocumentCache` interfaces, and remain covered by the current boundary, precedence, Unicode, embedded-language, budget, and cache-invalidation tests. This direction does not require replacing working behavior merely to reduce line count; undertake the migration in reviewable slices when highlighting is next prioritized.
+
 ### Files likely to change
 
 - `src/highlight/`, `src/editor/`, `src/tui/`, `src/config/`, and their unit tests.
@@ -100,6 +108,7 @@ Expansion note (2026-07-13): the same engine, editor modes, automatic detection,
 - Add editor `/mode MODE`, `/mode auto`, and `/mode text`. Manual modes are per buffer; save-as re-detects only for automatic buffers. Show the language in the editor status line.
 - Support text, Markdown, Python, C, C++, C#, Java, JavaScript, TypeScript, HTML, HTML-only, CSS3, XML, JSON/JSONL/NDJSON, Bash, PHP, Perl, Ruby, Rust, Go, PowerShell, Assembly, SQL, TOML, YAML, and INI, with documented aliases and case-insensitive filename detection. `html` composes JavaScript and CSS highlighting inside HTML element bodies and inline attributes; `htmlonly` retains markup-only highlighting.
 - Highlight byte spans without changing document text. Use explicit lexical state for multiline comments, Python triple strings, Bash heredocs, HTML/XML comments and CDATA, Markdown fences, and embedded script/style content.
+- Prefer precompiled `std::regex` rule tables for ordinary, bounded token patterns. Keep procedural scanning narrowly scoped to multiline state, nesting, remembered delimiters, embedded-language transitions, and context-sensitive ambiguities that C++17 ECMAScript regular expressions cannot express reliably.
 - Resolve overlaps in this order: comments/fences/heredocs/strings; structural tokens; keywords/types/literals; numbers/functions/variables/operators. Lower-priority tokens never style comments or strings.
 - Keep highlighting incremental with per-document line-state caching, invalidation from the edited line, bounded long-line work, and a per-frame budget that falls back to plain text.
 - Replace embedded ANSI selection markup with structured rendered spans so syntax color and reverse-video selection remain independent across wrapping, Unicode cell width, and invalid UTF-8.
