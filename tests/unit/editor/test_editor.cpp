@@ -11,10 +11,13 @@
 #include "editor/editor_assist.hpp"
 #include "editor/editor_help.hpp"
 #include "editor/path_completion.hpp"
+#include "editor/reformat.hpp"
 #include "editor/selection.hpp"
 #include "editor/terminal_input.hpp"
 #include "editor/terminal_ui.hpp"
 #include <algorithm>
+#include <chrono>
+#include <cstdint>
 #include <filesystem>
 #include <fstream>
 #include <iterator>
@@ -1209,6 +1212,212 @@ void test_editor_word_completion() {
           "large-buffer prefix lookup uses the ordered index and returns the bounded range");
 }
 
+void test_editor_language_reformatting() {
+    using pkchat::editor::EditorState;
+    using pkchat::editor::ReformatRequest;
+    using pkchat::editor::ReformatResult;
+    using pkchat::highlight::Language;
+
+    const std::vector<Language> brace_languages = {
+        Language::C,          Language::Cpp,        Language::CSharp,
+        Language::Java,       Language::JavaScript, Language::TypeScript,
+        Language::Css,        Language::Json,       Language::Php,
+        Language::Perl,       Language::Rust,       Language::Go,
+        Language::PowerShell,
+    };
+    for (Language language : brace_languages) {
+        ReformatRequest request;
+        request.content = "if (ready) {\nvalue();\n}\n";
+        request.language = language;
+        request.tab_width = 4;
+        request.first_line = 0;
+        request.last_line = 3;
+        const ReformatResult result = pkchat::editor::reformat_indentation(request);
+        check(result.error.ok() && result.replacement ==
+                  "if (ready) {\n    value();\n}\n",
+              std::string("brace reformat profile works for ") +
+                  pkchat::highlight::language_name(language));
+    }
+    ReformatRequest tab_request;
+    tab_request.content = "if (ready) {\nvalue();\n}";
+    tab_request.language = Language::Cpp;
+    tab_request.tab_style = pkchat::editor::TabStyle::Tab;
+    tab_request.first_line = 0;
+    tab_request.last_line = 2;
+    check(pkchat::editor::reformat_indentation(tab_request).replacement ==
+              "if (ready) {\n\tvalue();\n}",
+          "language reformat honors literal-tab indentation style");
+
+    struct ReformatCase {
+        Language language;
+        std::string input;
+        std::string expected;
+    };
+    const std::vector<ReformatCase> cases = {
+        {Language::Ruby,
+         "if ready\nputs value\nelse\nputs other\nend\nitems.each do\nputs value\nend",
+         "if ready\n    puts value\nelse\n    puts other\nend\nitems.each do\n    puts value\nend"},
+        {Language::Bash,
+         "if ready; then\necho yes\nelse\necho no\nfi",
+         "if ready; then\n    echo yes\nelse\n    echo no\nfi"},
+        {Language::Html,
+         "<main>\n<script>\nfunction run() {\ncall();\n}\n</script>\n</main>",
+         "<main>\n    <script>\n        function run() {\n            call();\n        }\n    </script>\n</main>"},
+        {Language::HtmlOnly,
+         "<main>\n<br>\n<span>x</span>\n</main>",
+         "<main>\n    <br>\n    <span>x</span>\n</main>"},
+        {Language::Xml,
+         "<root>\n<item>text</item>\n</root>",
+         "<root>\n    <item>text</item>\n</root>"},
+        {Language::Sql,
+         "BEGIN\nSELECT CASE\nWHEN ready THEN value\nEND\nEND",
+         "BEGIN\n    SELECT CASE\n        WHEN ready THEN value\n    END\nEND"},
+        {Language::Python,
+         "if ready:\n      call()\n        nested()\nnext_call()",
+         "if ready:\n    call()\n        nested()\nnext_call()"},
+        {Language::Yaml,
+         "root:\n\tchild:\n\t\tvalue: yes",
+         "root:\n    child:\n        value: yes"},
+        {Language::Assembly,
+         "start:\nmov ax, bx\nnext:\nret",
+         "start:\n    mov ax, bx\nnext:\n    ret"},
+        {Language::Toml,
+         "[table]\n      value = 1",
+         "[table]\n    value = 1"},
+        {Language::Ini,
+         "[section]\n      value=yes",
+         "[section]\n    value=yes"},
+    };
+    for (const ReformatCase& test : cases) {
+        ReformatRequest request;
+        request.content = test.input;
+        request.language = test.language;
+        request.first_line = 0;
+        request.last_line = pkchat::highlight::split_lines(test.input).size() - 1;
+        const ReformatResult result = pkchat::editor::reformat_indentation(request);
+        check(result.error.ok() && result.replacement == test.expected,
+              std::string("language reformat profile works for ") +
+                  pkchat::highlight::language_name(test.language));
+    }
+
+    ReformatRequest protected_request;
+    protected_request.content =
+        "if (ready) {\nconst char *text = \"}\"; // {\ncall();\n}";
+    protected_request.language = Language::Cpp;
+    protected_request.first_line = 0;
+    protected_request.last_line = 3;
+    ReformatResult protected_result =
+        pkchat::editor::reformat_indentation(protected_request);
+    check(protected_result.error.ok() && protected_result.replacement ==
+              "if (ready) {\n    const char *text = \"}\"; // {\n    call();\n}",
+          "reformat ignores braces inside strings and comments");
+
+    ReformatRequest markdown_request;
+    markdown_request.content = "```cpp\n   if (x) {\n bad();\n   }\n```";
+    markdown_request.language = Language::Markdown;
+    markdown_request.first_line = 0;
+    markdown_request.last_line = 4;
+    const ReformatResult markdown_result =
+        pkchat::editor::reformat_indentation(markdown_request);
+    check(markdown_result.error.ok() && markdown_result.replacement == markdown_request.content,
+          "reformat preserves Markdown fenced-code contents exactly");
+
+    ReformatRequest pathological_request;
+    pathological_request.content =
+        std::string(pkchat::highlight::kMaximumHighlightedLineBytes + 1, 'x') +
+        "\n  preserve_after_unsafe_line();";
+    pathological_request.language = Language::Cpp;
+    pathological_request.first_line = 0;
+    pathological_request.last_line = 1;
+    const ReformatResult pathological_result =
+        pkchat::editor::reformat_indentation(pathological_request);
+    check(pathological_result.error.ok() && !pathological_result.warning.empty() &&
+              pathological_result.replacement == pathological_request.content,
+          "reformat safely preserves a region after an unclassifiable pathological line");
+
+    EditorState state = EditorState::from_text("if (ready) {\ncall();\n}\nafter();");
+    state.set_language(Language::Cpp, false);
+    state.selection.anchor = 0;
+    state.selection.active = state.text.line_start(3);
+    state.cursor = state.selection.active;
+    ReformatRequest selected_request;
+    check(pkchat::editor::build_reformat_request(state, false, selected_request).ok() &&
+              selected_request.first_line == 0 && selected_request.last_line == 2,
+          "selected reformat expands touched lines and excludes a following column-zero line");
+    ReformatResult selected_result =
+        pkchat::editor::reformat_indentation(selected_request);
+    check(pkchat::editor::apply_reformat_result(state, selected_result, false).ok() &&
+              state.text.str() == "if (ready) {\n    call();\n}\nafter();" &&
+              state.selection.has_range(),
+          "selected reformat applies one leading-whitespace replacement and keeps the block selected");
+    check(state.undo() && state.text.str() == "if (ready) {\ncall();\n}\nafter();",
+          "selected language reformat is one undo operation");
+
+    state = EditorState::from_text("if (ready) {\ncall();\n}");
+    state.set_language(Language::Cpp, false);
+    state.cursor = state.text.line_start(1) + 2;
+    ReformatRequest all_request;
+    check(pkchat::editor::build_reformat_request(state, true, all_request).ok(),
+          "reformat-all request accepts an unselected buffer");
+    const ReformatResult all_result = pkchat::editor::reformat_indentation(all_request);
+    check(pkchat::editor::apply_reformat_result(state, all_result, true).ok() &&
+              !state.selection.has_range() && state.text.line_for_offset(state.cursor) == 1,
+          "reformat-all preserves the logical cursor line and clears selection");
+
+    state = EditorState::from_text("plain text");
+    ReformatRequest invalid_request;
+    check(!pkchat::editor::build_reformat_request(state, false, invalid_request).ok(),
+          "/reformat without a selection reports an actionable error");
+    check(pkchat::editor::build_reformat_request(state, true, invalid_request).ok() &&
+              !pkchat::editor::reformat_indentation(invalid_request).error.ok(),
+          "text mode reformat reports unsupported mode instead of guessing");
+
+    pkchat::runtime::CancellationSource cancellation;
+    cancellation.cancel();
+    invalid_request.language = Language::Cpp;
+    check(pkchat::editor::reformat_indentation(invalid_request, cancellation.token()).error.code ==
+              pkchat::ErrorCode::Cancelled,
+          "language reformat observes cancellation before processing the buffer");
+
+    pkchat::runtime::EventQueue<pkchat::editor::ReformatEvent> events;
+    pkchat::runtime::JobHandle job;
+    ReformatRequest async_request;
+    async_request.content = "if (ready) {\ncall();\n}";
+    async_request.language = Language::Cpp;
+    async_request.first_line = 0;
+    async_request.last_line = 2;
+    pkchat::editor::start_reformat_job(async_request, events, job);
+    pkchat::editor::ReformatEvent event;
+    check(events.wait_pop_for(event, std::chrono::seconds(2)) && event.result.error.ok() &&
+              event.result.replacement == "if (ready) {\n    call();\n}",
+          "language reformat runs through the cancellable runtime job queue");
+    job.join();
+
+    std::string large;
+    large.reserve(300000);
+    for (size_t index = 0; index < 6000; ++index) {
+        large += "if (ready) {\ncall();\n}\n";
+    }
+    ReformatRequest large_request;
+    large_request.content = std::move(large);
+    large_request.language = Language::Cpp;
+    large_request.first_line = 0;
+    large_request.last_line =
+        pkchat::highlight::split_lines(large_request.content).size() - 1;
+    const ReformatResult large_result = pkchat::editor::reformat_indentation(large_request);
+    check(large_result.error.ok() && large_result.replacement.size() >= large_request.content.size(),
+          "large language reformat runs as one linear transformation");
+
+    EditorState revision_state = EditorState::from_text("value");
+    const std::uint64_t identity = revision_state.buffer_id();
+    const std::uint64_t revision = revision_state.revision();
+    EditorState copied_state = revision_state;
+    check(copied_state.buffer_id() == identity && copied_state.revision() == revision &&
+              copied_state.insert("x").ok() && copied_state.revision() != revision &&
+              revision_state.revision() == revision,
+          "buffer identity survives editor handoffs while revisions detect stale reformat input");
+}
+
 void test_editor_home_end_navigation() {
     pkchat::editor::EditorState state =
         pkchat::editor::EditorState::from_text("alpha\nbeta\ngamma");
@@ -2328,6 +2537,9 @@ void test_editor_help_document_and_command() {
               std::find(completions.begin(), completions.end(), "/mode sql") != completions.end() &&
               std::find(completions.begin(), completions.end(), "/mode yaml") != completions.end(),
           "editor command completions include programming-language modes");
+    check(std::find(completions.begin(), completions.end(), "/reformat") != completions.end() &&
+              std::find(completions.begin(), completions.end(), "/reformat-all") != completions.end(),
+          "editor command completions include language reformat commands");
 
     pkchat::editor::ParsedEditorSlashCommand slash =
         pkchat::editor::parse_editor_slash_command("/save");
@@ -2594,6 +2806,7 @@ void run_all() {
     test_editor_linebreak_modes();
     test_editor_tab_indentation();
     test_editor_word_completion();
+    test_editor_language_reformatting();
     test_editor_home_end_navigation();
     test_editor_select_all();
     test_editor_line_home_end_navigation();

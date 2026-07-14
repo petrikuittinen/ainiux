@@ -119,6 +119,14 @@ Future highlighting work should move toward regex-driven, declarative rule table
 
 ### Steps
 
+Implementation note (2026-07-14, v0.96): `/reformat` and `/reformat-all` now use a
+linear in-process indentation engine with profiles for every editor language mode except
+the intentionally unsupported `text` mode. The engine reuses highlighter lexical spans and
+multiline state, runs on a cancellable worker, and applies one undoable replacement only
+when buffer identity, revision, language, tab width, and tab style still match. Unit coverage
+table-tests all profile families and every brace-language mode; the editor PTY integration
+reformats and saves a real C++ buffer.
+
 - [x] Inspect the approved plan and record it under the active milestone.
 - [x] Add language parsing/detection, token roles, byte spans, lexical state, and an incremental document cache.
 - [x] Add table-driven language, multiline-state, overlap, Markdown fence, embedded-language, Unicode, invalid-byte, budget, and cache-invalidation tests.
@@ -214,10 +222,10 @@ Add per-buffer line-ending and indentation settings, fast block indentation, Uni
 - [x] Add config parsing, validation, per-buffer settings, line-ending detection, internal normalization, and write/autosave/recovery conversion.
 - [x] Make display-column calculations tab-width-aware and add current-line and selected-block indent/outdent operations, including portable `Shift+Tab` decoding.
 - [x] Add the incremental Unicode word index and isolated completion-session state.
-- [ ] Add conservative language indentation profiles and the cancellable reformat job.
-- [ ] Wire commands, command completion, help, status, errors, dirty state, undo/redo, autosave, highlighting, and index invalidation.
+- [x] Add conservative language indentation profiles and the cancellable reformat job.
+- [x] Wire commands, command completion, help, status, errors, dirty state, undo/redo, autosave, highlighting, and index invalidation.
 - [ ] Add unit, integration, PTY, large-input, cancellation, sanitizer, and leak tests.
-- [ ] Update user configuration examples and editor documentation.
+- [x] Update user configuration examples and editor documentation.
 
 ### Acceptance criteria
 
@@ -237,6 +245,18 @@ Add per-buffer line-ending and indentation settings, fast block indentation, Uni
 - Table-test every language profile, selected-block context, protected comments/strings/heredocs/fences/scalars, identical/no-op results, text-mode errors, cursor/selection preservation, CRLF output, cancellation, stale revisions/settings, buffer close, and shutdown.
 - Add PTY integration coverage for real `Tab`, common `Shift+Tab` encodings, slash-command separation, status/errors, buffer switching, and responsive cancellation.
 - Run `make test-unit`, `make test-integration`, `make test-sanitize`, and `make test-leak` or the available Valgrind targets before marking implementation complete.
+
+Verification performed for the language-reformat slice (2026-07-14):
+
+- `make test-unit -j2`: passed, including unit, I/O/network fault, and ENOSPC fault tests.
+- `python3 tests/integration/editor_buffers_driver.py ./pkchat`: passed, including live
+  `/reformat-all`, save, and file-content verification for C++.
+- Direct ASan/UBSan unit runner with leak detection: passed without leaks; the existing
+  filesystem-clock test still emits its known libstdc++ chrono signed-overflow warning.
+- `make test-sanitize -j2`: the sanitized unit and ordinary fault runners passed, but the
+  target still ends at the known ASan/`LD_PRELOAD` incompatibility in the ENOSPC step; its
+  concurrently launched mock-server integration also hit the existing server-process race.
+- Direct Valgrind unit runner with full definite/indirect leak checks: passed.
 
 ### Explicit non-goals
 

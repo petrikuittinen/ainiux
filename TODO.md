@@ -13,8 +13,8 @@
 
 ## Editor Text Handling
 
-- Add cancellable `/reformat` and `/reformat-all` indentation formatting for the active language mode.
 - Add PTY and large-selection stress coverage for editor indentation and mixed line-ending warnings.
+- Expand PTY coverage for `/reformat`, `/reformat-all`, cancellation, and stale-result messages.
 
 ## Chat Persistence
 

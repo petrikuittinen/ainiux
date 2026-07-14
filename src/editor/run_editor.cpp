@@ -12,6 +12,7 @@
 #include "editor/editor_picker.hpp"
 #include "editor/model_list_runtime.hpp"
 #include "editor/path_completion.hpp"
+#include "editor/reformat.hpp"
 #include "editor/terminal_input.hpp"
 #include "editor/terminal_ui.hpp"
 #include "runtime/runtime.hpp"
@@ -153,6 +154,7 @@ app::EditorRunResult run_editor(const std::string& path,
     std::string pending_load_path;
     PendingAutosaveRecovery pending_autosave_recovery;
     AssistSession assist_session;
+    ReformatSession reformat_session;
     StoredAssistCommand last_assist_command;
     AssistCompleterState assist_completer;
     PathCompleter minibuffer_path_completer;
@@ -197,7 +199,8 @@ app::EditorRunResult run_editor(const std::string& path,
             return false;
         }
         return !help_view.active && !picker.active && !buffer_list_active && !pending_close_confirm &&
-               !minibuffer.active && !replace.active && !assist_session.active;
+               !minibuffer.active && !replace.active && !assist_session.active &&
+               !reformat_session.active;
     };
 
     auto request_switch_to_chat = [&]() {
@@ -290,6 +293,10 @@ app::EditorRunResult run_editor(const std::string& path,
         }
         if (assist_session.active) {
             minibuffer_message(minibuffer, "Finish or cancel AI assist before opening help");
+            return;
+        }
+        if (reformat_session.active) {
+            minibuffer_message(minibuffer, "Wait for reformatting or press Esc to cancel it");
             return;
         }
         std::string help_text;
@@ -897,6 +904,10 @@ app::EditorRunResult run_editor(const std::string& path,
         if (assist_session.active) {
             return;
         }
+        if (reformat_session.active) {
+            minibuffer_message(minibuffer, "Wait for reformatting or press Esc to cancel it");
+            return;
+        }
         if (minibuffer.active && !is_assist_minibuffer_action(minibuffer.action)) {
             return;
         }
@@ -998,6 +1009,102 @@ app::EditorRunResult run_editor(const std::string& path,
         }
     };
 
+    auto start_reformat = [&](bool all) {
+        if (reformat_session.active) {
+            minibuffer_message(minibuffer, "A reformat job is already running; press Esc to cancel it");
+            return;
+        }
+        if (assist_session.active) {
+            minibuffer_message(minibuffer, "Finish or cancel AI assist before reformatting");
+            return;
+        }
+        ReformatRequest request;
+        Error request_error = build_reformat_request(state, all, request);
+        if (!request_error.ok()) {
+            minibuffer_message(minibuffer, request_error.message);
+            return;
+        }
+        if (state.language == highlight::Language::Text) {
+            minibuffer_message(minibuffer,
+                               "Cannot reformat text mode. Choose a programming language with /mode first");
+            return;
+        }
+        reformat_session.active = true;
+        reformat_session.all = all;
+        reformat_session.cancel_requested = false;
+        reformat_session.buffer_id = state.buffer_id();
+        reformat_session.revision = state.revision();
+        reformat_session.language = state.language;
+        reformat_session.tab_width = state.tab_width;
+        reformat_session.tab_style = state.tab_style;
+        start_reformat_job(std::move(request), reformat_session.events, reformat_session.job);
+        minibuffer_message(minibuffer,
+                           std::string(all ? "Reformatting entire " : "Reformatting selected ") +
+                               highlight::language_name(state.language) +
+                               " buffer... Esc to cancel");
+    };
+
+    auto process_reformat_events = [&]() -> bool {
+        ReformatEvent event;
+        if (!reformat_session.events.try_pop(event)) {
+            return false;
+        }
+        reformat_session.job.join();
+        const bool was_all = reformat_session.all;
+        const bool was_cancelled = reformat_session.cancel_requested;
+        EditorState* target = nullptr;
+        if (state.buffer_id() == reformat_session.buffer_id) {
+            target = &state;
+        } else {
+            for (size_t index = 0; index < buffers.size(); ++index) {
+                if (index != active_buffer &&
+                    buffers[index].buffer_id() == reformat_session.buffer_id) {
+                    target = &buffers[index];
+                    break;
+                }
+            }
+        }
+        reformat_session.active = false;
+        if (was_cancelled) {
+            minibuffer_message(minibuffer, "Reformat cancelled");
+            return true;
+        }
+        if (!event.result.error.ok()) {
+            minibuffer_message(minibuffer, event.result.error.message);
+            return true;
+        }
+        if (target == nullptr) {
+            minibuffer_message(minibuffer,
+                               "Reformat result discarded because its buffer was closed");
+            return true;
+        }
+        if (target->revision() != reformat_session.revision ||
+            target->language != reformat_session.language ||
+            target->tab_width != reformat_session.tab_width ||
+            target->tab_style != reformat_session.tab_style) {
+            minibuffer_message(minibuffer,
+                               "Reformat result discarded because the buffer or its indentation settings changed");
+            return true;
+        }
+        Error apply_error = apply_reformat_result(*target, event.result, was_all);
+        if (!apply_error.ok()) {
+            minibuffer_message(minibuffer, apply_error.message);
+            return true;
+        }
+        if (target == &state) {
+            sync_active_buffer();
+        }
+        const size_t count = event.result.last_line - event.result.first_line + 1;
+        std::string message = event.result.changed
+                                  ? "Reformatted " + std::to_string(count) + " line(s)"
+                                  : "Indentation already matches the active language mode";
+        if (!event.result.warning.empty()) {
+            message += ". Warning: " + event.result.warning;
+        }
+        minibuffer_message(minibuffer, std::move(message));
+        return true;
+    };
+
     auto submit_assist_command = [&]() {
         if (is_editor_help_command(minibuffer.input)) {
             exit_assist_command_mode(minibuffer, assist_completer);
@@ -1072,6 +1179,19 @@ app::EditorRunResult run_editor(const std::string& path,
                 break;
         }
         const std::string command_line = trim_ascii_copy(minibuffer.input);
+        if (command_line == "/reformat" || command_line == "/reformat-all") {
+            pending_assist = PendingAssist{};
+            exit_assist_command_mode(minibuffer, assist_completer);
+            start_reformat(command_line == "/reformat-all");
+            return;
+        }
+        if (command_line.rfind("/reformat ", 0) == 0 ||
+            command_line.rfind("/reformat-all ", 0) == 0) {
+            pending_assist = PendingAssist{};
+            exit_assist_command_mode(minibuffer, assist_completer);
+            minibuffer_message(minibuffer, "Usage: /reformat or /reformat-all");
+            return;
+        }
         if (command_line == "/chat") {
             pending_assist = PendingAssist{};
             exit_assist_command_mode(minibuffer, assist_completer);
@@ -1411,6 +1531,12 @@ app::EditorRunResult run_editor(const std::string& path,
                 assist_session.job.cancel();
                 return;
             }
+            return;
+        }
+        if (reformat_session.active && ch == 27) {
+            reformat_session.cancel_requested = true;
+            reformat_session.job.cancel();
+            minibuffer_message(minibuffer, "Cancelling reformat...");
             return;
         }
         if (picker.active) {
@@ -1808,6 +1934,7 @@ app::EditorRunResult run_editor(const std::string& path,
 
     while (!quit) {
         const bool assist_updated = process_assist_events();
+        const bool reformat_updated = process_reformat_events();
         if (pending_regenerate_restart) {
             pending_regenerate_restart = false;
             if (last_assist_command.valid) {
@@ -1836,7 +1963,8 @@ app::EditorRunResult run_editor(const std::string& path,
             const TerminalSize current_size = terminal_size();
             if (current_size.rows != last_size.rows || current_size.cols != last_size.cols ||
                 assist_session.job.running() || model_list.job.running() || assist_updated ||
-                model_updated || assist_animating) {
+                reformat_session.job.running() || reformat_updated || model_updated ||
+                assist_animating) {
                 last_size = current_size;
                 render_editor();
             }

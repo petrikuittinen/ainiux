@@ -117,6 +117,8 @@ Press **`Esc`** to open the command minibuffer (`Command:`). Type a slash comman
 | `/close` | Close the active editor buffer (same as `Ctrl+W`; prompts if modified) |
 | `/highlight [on|off]` | Show or toggle syntax highlighting for editor and chat |
 | `/mode [MODE|auto]` | Show or set this buffer's syntax mode |
+| `/reformat` | Reformat leading indentation in the selected lines |
+| `/reformat-all` | Reformat leading indentation in the entire buffer |
 | `/tab-width [1..32]` | Show or set this buffer's tab width |
 | `/tab-style [spaces|tab]` | Show or set this buffer's indentation style |
 | `/linebreak [lf|cr|crlf]` | Show or set this buffer's save line endings |
@@ -158,6 +160,8 @@ With a provider but no model, editing still works; AI commands report **No model
 Highlighting is enabled by default. The editor detects Markdown, Python, C, C++, C#, Java, JavaScript/JSX, TypeScript/TSX, HTML, HTML-only, CSS, XML/SVG, JSON/JSONL, Bash, PHP, Perl, Ruby, Rust, Go, PowerShell, Assembly, SQL, TOML, YAML, and INI from common filename endings. `.html` and `.htm` select `html`; `.xhtml` selects `htmlonly`. Scratch buffers, `.txt`, and unknown endings use `text`. Markdown fenced blocks use the named language highlighter when the fence tag is recognized.
 
 The status line shows the current language and line-ending mode compactly in parentheses, such as `(html LF)`, `(python CRLF)`, or `(text CR)`. `/mode text` disables syntax styling for the current buffer. `/mode markdown|python|c|cpp|csharp|java|javascript|typescript|html|htmlonly|css|xml|json|bash|php|perl|ruby|rust|go|powershell|assembly|sql|toml|yaml|ini` selects a manual mode. Short aliases include `md`, `py`, `c++`, `c#`, `js`, `ts`, `html-multi`, `htmlmulti`, `html-only`, `jsonl`, `sh`, `pl`, `rb`, `rs`, `golang`, `pwsh`, `ps1`, `asm`, `yml`, and `dosini`. The default `html` mode highlights JavaScript in `<script>` blocks and `on*` attributes, and CSS in `<style>` blocks and `style` attributes. Use `htmlonly` for markup-only highlighting with embedded code kept string-colored. `/mode auto` resumes filename detection. Bare `/mode` reports whether the current mode is automatic or manual. Manual mode survives buffer switches and save-as operations. `/highlight off` disables highlighting across editor/chat switches for the current process; it does not change configuration.
+
+`/reformat` requires a selection and expands it to complete touched lines. `/reformat-all` reformats the complete buffer and keeps the cursor on its logical line. Both commands change leading indentation only, preserve blank lines and all other bytes, and are one undo step. They use the active language mode and current tab width/style; YAML always uses spaces. Comments, strings, heredocs, Markdown fences, YAML block scalars, and other multiline protected regions do not influence nesting. Reformatting runs in a cancellable background job: press `Esc` to cancel. You may continue editing or switch buffers; stale results are discarded safely.
 
 ## Configuration
 

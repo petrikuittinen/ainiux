@@ -174,6 +174,8 @@ class PieceTable {
 };
 
 struct EditorState {
+    EditorState();
+
     PieceTable text;
     size_t cursor = 0;
     size_t preferred_column = 0;
@@ -192,6 +194,8 @@ struct EditorState {
     LineBreak linebreak = LineBreak::Lf;
 
     static EditorState from_text(std::string content);
+    std::uint64_t buffer_id() const { return buffer_id_; }
+    std::uint64_t revision() const { return revision_; }
     void set_path(std::string value);
     void set_language(highlight::Language value, bool automatic);
     void redetect_language();
@@ -272,6 +276,8 @@ struct EditorState {
     size_t autosave_pending_bytes_ = 0;
     mutable highlight::DocumentCache highlight_cache_;
     mutable WordIndex word_index_;
+    std::uint64_t buffer_id_ = 0;
+    std::uint64_t revision_ = 0;
 };
 
 std::string editor_buffer_display_name(const EditorState& state, size_t index);

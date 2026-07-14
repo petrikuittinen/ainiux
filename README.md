@@ -2,7 +2,7 @@
 
 `pkchat` is a fast, script-friendly command-line chat client for OpenAI and OpenAI-compatible APIs.
 
-Current status: v0.96 CLI with libcurl transport, cancellable runtime jobs, provider registry/profile aliases, `/v1/models`, `/v1/chat/completions`, text-only OpenAI Responses API support, provider-specific reasoning/thinking request compatibility, local JPEG/PNG/GIF image input, interactive text/image attachments, request-only context policies, safe URL insertion, web search with API providers and keyless fallbacks, a simple REPL, a standalone `--editor` mode with multiple file buffers, selection, copy/cut/paste across buffers, grapheme-aware Unicode editing, indexed cross-buffer word completion, multi-language syntax highlighting, and AI continue/editor commands, a full-screen non-blocking TUI foundation, SQLite-backed TUI chat threads, JSON chat import/export save/load, HTML-to-text/Markdown extraction, Markdown assistant-output rendering to HTML or plaintext, automatic system/user TOML-alike configuration loading, and a concurrent JSONL benchmark runner.
+Current status: v0.96 CLI with libcurl transport, cancellable runtime jobs, provider registry/profile aliases, `/v1/models`, `/v1/chat/completions`, text-only OpenAI Responses API support, provider-specific reasoning/thinking request compatibility, local JPEG/PNG/GIF image input, interactive text/image attachments, request-only context policies, safe URL insertion, web search with API providers and keyless fallbacks, a simple REPL, a standalone `--editor` mode with multiple file buffers, selection, copy/cut/paste across buffers, grapheme-aware Unicode editing, indexed cross-buffer word completion, multi-language syntax highlighting and indentation reformatting, and AI continue/editor commands, a full-screen non-blocking TUI foundation, SQLite-backed TUI chat threads, JSON chat import/export save/load, HTML-to-text/Markdown extraction, Markdown assistant-output rendering to HTML or plaintext, automatic system/user TOML-alike configuration loading, and a concurrent JSONL benchmark runner.
 
 ## Build
 
@@ -121,11 +121,15 @@ Modes are detected case-insensitively from common endings, including `.h` as C, 
 /mode yaml
 /mode text
 /mode auto
+/reformat
+/reformat-all
 ```
 
 Canonical modes are `text`, `markdown`, `python`, `c`, `cpp`, `csharp`, `java`, `javascript`, `typescript`, `html`, `htmlonly`, `css`, `xml`, `json`, `bash`, `php`, `perl`, `ruby`, `rust`, `go`, `powershell`, `assembly`, `sql`, `toml`, `yaml`, and `ini`. Accepted aliases include `md`, `py`, `c++`, `cxx`, `c#`, `cs`, `js`, `ts`, `html5`, `html-multi`, `htmlmulti`, `html-only`, `css3`, `jsonl`, `ndjson`, `sh`, `shell`, `pl`, `rb`, `rs`, `golang`, `pwsh`, `ps1`, `asm`, `yml`, and `dosini`. The default `html` mode highlights markup, JavaScript inside `<script>` and `on*=""` event attributes, and CSS inside `<style>` and `style=""` attributes. It preserves nested multiline state and continued tags. Use `htmlonly` when markup-only highlighting is preferred; embedded code is then treated as strings. A selected mode is a manual per-buffer override. `/mode auto` resumes filename detection; save-as only re-detects while the buffer remains automatic. `/highlight` is process-wide and shared when switching between editor and chat. Chat supports `/highlight [on|off]` but not `/mode`. Interactive commands do not rewrite config.
 
 The editor status line displays the active syntax language and line-ending mode compactly, for example `(html LF)` or `(python CRLF)`. Bare `/mode` reports whether language detection is automatic or manually selected.
+
+`/reformat` reformats the leading indentation of the selected lines according to the active language mode; `/reformat-all` does the whole buffer. Reformatting preserves token spacing, trailing whitespace, blank lines, line endings, and string/comment contents, and applies as one undoable edit. Brace-based languages, Ruby, Bash, HTML/XML, SQL, Python, YAML, Markdown, TOML, INI, and Assembly use conservative built-in profiles. YAML indentation is always spaces. Text mode asks you to select a `/mode` instead of guessing. Large operations run in the background; editing and buffer switching remain available, `Esc` cancels, and a result is discarded if its source buffer or indentation settings changed.
 
 Set the startup default with `highlight = on|off` (or a boolean) under `[tui]`. `--nocolors` suppresses syntax colors while selection remains visible. Existing custom themes remain valid when syntax keys are omitted; accessible colors are derived from their existing semantic colors.
 

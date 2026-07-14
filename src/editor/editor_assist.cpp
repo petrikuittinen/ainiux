@@ -401,6 +401,8 @@ std::vector<std::string> assist_command_completions(const EditorAssistConfig& co
     commands.push_back("/linebreak lf");
     commands.push_back("/linebreak cr");
     commands.push_back("/linebreak crlf");
+    commands.push_back("/reformat");
+    commands.push_back("/reformat-all");
     commands.push_back("/provider ");
     commands.push_back("/model ");
     commands.push_back("/save");

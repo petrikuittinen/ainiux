@@ -2,6 +2,7 @@
 #include "editor/detail/editor_common.hpp"
 #include "editor/detail/wrap.hpp"
 
+#include <atomic>
 #include <limits>
 #include <new>
 #include <optional>
@@ -21,6 +22,11 @@ using detail::wrapped_location_for_offset;
 using detail::wrapped_row_count;
 
 namespace {
+
+std::uint64_t next_buffer_id() {
+    static std::atomic<std::uint64_t> next{1};
+    return next.fetch_add(1, std::memory_order_relaxed);
+}
 
 struct IndentChange {
     size_t position = 0;
@@ -95,6 +101,8 @@ IndentRemoval leading_whitespace_removal(const std::string& text,
 
 }  // namespace
 
+EditorState::EditorState() : buffer_id_(next_buffer_id()) {}
+
 EditorState EditorState::from_text(std::string content) {
     EditorState state;
     state.text = PieceTable::from_string(std::move(content));
@@ -132,6 +140,7 @@ void EditorState::restore_snapshot(const EditorSnapshot& snapshot) {
     scroll_line = snapshot.scroll_line;
     scroll_column = snapshot.scroll_column;
     selection.clear(cursor);
+    ++revision_;
 }
 
 void EditorState::revert_to_snapshot(const EditorSnapshot& snapshot) {
@@ -204,6 +213,7 @@ Error EditorState::insert(const std::string& value) {
     word_index_.apply_edit(before.content, insert_position, 0, value);
     remember_undo(std::move(before));
     cursor += value.size();
+    ++revision_;
     dirty = true;
     record_autosave_change(value.size());
     update_preferred_column(*this);
@@ -219,6 +229,7 @@ Error EditorState::insert_without_undo(const std::string& value) {
         return err;
     }
     cursor += value.size();
+    ++revision_;
     // Streaming writes can arrive in many small chunks. Rebuild lazily on the
     // next completion instead of repeatedly materializing the whole piece table.
     word_index_.invalidate();
@@ -278,6 +289,7 @@ Error EditorState::replace_completion(size_t pos,
         remember_undo(std::move(before));
     }
     cursor = pos + value.size();
+    ++revision_;
     selection.clear(cursor);
     dirty = true;
     record_autosave_change(count + value.size());
@@ -308,6 +320,7 @@ Error EditorState::erase_before_cursor() {
     word_index_.apply_edit(before.content, previous, deleted, "");
     remember_undo(std::move(before));
     cursor = previous;
+    ++revision_;
     dirty = true;
     record_autosave_change(deleted);
     update_preferred_column(*this);
@@ -327,6 +340,7 @@ Error EditorState::erase_at_cursor() {
     }
     word_index_.apply_edit(before.content, cursor, deleted, "");
     remember_undo(std::move(before));
+    ++revision_;
     dirty = true;
     record_autosave_change(deleted);
     update_preferred_column(*this);
@@ -507,7 +521,9 @@ Error EditorState::replace_all_from(size_t start,
 
     EditorSnapshot before{before_text, cursor, preferred_column, scroll_line, scroll_column};
     text = PieceTable::from_string(std::move(replaced));
+    word_index_.invalidate();
     remember_undo(std::move(before));
+    ++revision_;
     cursor = std::min(cursor_after_last_replacement, text.size());
     dirty = true;
     record_autosave_change(replacements * (needle.size() + value.size()));

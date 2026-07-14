@@ -77,6 +77,46 @@ def check_new_file_mode(binary, tmpdir, filename, expected_mode):
         raise RuntimeError(f"new {expected_mode} editor exited with status {process.returncode}")
 
 
+def check_language_reformat(binary, tmpdir):
+    path = os.path.join(tmpdir, "reformat.cpp")
+    with open(path, "w", encoding="utf-8") as handle:
+        handle.write("if (ready) {\ncall();\n}\n")
+    master, slave = pty.openpty()
+    process = subprocess.Popen(
+        [binary, "--provider", "none", "--editor", path],
+        stdin=slave,
+        stdout=slave,
+        stderr=slave,
+        close_fds=True,
+    )
+    os.close(slave)
+    output = bytearray()
+    try:
+        time.sleep(0.4)
+        output.extend(drain(master, 1.0))
+        output.extend(send(master, "\x1b"))
+        output.extend(send(master, "/reformat-all\r", delay=0.4))
+        time.sleep(0.4)
+        output.extend(drain(master, 1.0))
+        require_seen(output, "Reformatted 4 line(s)", "reformatting a C++ buffer")
+        output.extend(send(master, "\x13"))
+        require_seen(output, f"Saved {path}", "saving the reformatted C++ buffer")
+        output.extend(send(master, "\x11"))
+        process.wait(timeout=10)
+    finally:
+        if process.poll() is None:
+            process.terminate()
+            process.wait(timeout=2)
+        os.close(master)
+    if process.returncode != 0:
+        raise RuntimeError(f"reformat editor exited with status {process.returncode}")
+    with open(path, "r", encoding="utf-8") as handle:
+        reformatted = handle.read()
+    expected = "if (ready) {\n    call();\n}\n"
+    if reformatted != expected:
+        raise RuntimeError(f"C++ reformat produced {reformatted!r}, expected {expected!r}")
+
+
 def main():
     if len(sys.argv) != 2:
         print("usage: editor_buffers_driver.py BINARY", file=sys.stderr)
@@ -89,6 +129,7 @@ def main():
     check_new_file_mode(binary, tmpdir, "new-document.xhtml", "htmlonly")
     check_new_file_mode(binary, tmpdir, "new-document.php", "php")
     check_new_file_mode(binary, tmpdir, "new-document.yaml", "yaml")
+    check_language_reformat(binary, tmpdir)
     file1 = os.path.join(tmpdir, "file1.txt")
     file2 = os.path.join(tmpdir, "file2.txt")
     with open(file1, "w", encoding="utf-8") as handle:
