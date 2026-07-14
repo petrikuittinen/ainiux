@@ -451,10 +451,6 @@ multiple_image_reply=$("$ROOT/pkchat" "$BASE" --quiet --no-stream -m "$MODEL" -p
     --attach "$local_png" --attach "$local_jpeg" --image-capability allow)
 test "$multiple_image_reply" = "images:2"
 
-repl_insert_image=$(printf '/insert %s\ndescribe-image\ndescribe-image\n/quit\n' "$local_png" | \
-    "$ROOT/pkchat" "$BASE" --quiet --repl --no-stream -m "$MODEL" --image-capability allow)
-repl_insert_image_expected=$(printf 'image-input-ok\nmissing-image-input')
-test "$repl_insert_image" = "$repl_insert_image_expected"
 repl_attach_image=$(printf '/attach %s\ndescribe-image\n/quit\n' "$local_jpeg" | \
     "$ROOT/pkchat" "$BASE" --quiet --repl --no-stream -m "$MODEL" --image-capability allow)
 test "$repl_attach_image" = "image-input-ok"
@@ -653,8 +649,9 @@ repl_start_err="$ROOT/build/repl-start.err"
 printf '/quit\n' | "$ROOT/pkchat" "$BASE" --repl --no-stream -m "$MODEL" \
     >"$ROOT/build/repl-start.out" 2>"$repl_start_err"
 version=$("$ROOT/pkchat" --version | awk '{print $2}')
+program=$("$ROOT/pkchat" --version | awk '{print $1}')
 test "$(sed -n '1p' "$repl_start_err")" = \
-    "pkchat $version REPL | Endpoint: $BASE/v1/chat/completions | Model: $MODEL"
+    "$program $version REPL | Endpoint: $BASE/v1/chat/completions | Model: $MODEL"
 test "$(sed -n '2p' "$repl_start_err")" = "Type /help for commands, /quit to exit."
 if grep 'Using base URL:' "$repl_start_err" >/dev/null; then
     echo "REPL startup should not print a separate normalized base URL line" >&2
@@ -694,8 +691,11 @@ while [ "$i" -lt 50 ]; do
 done
 EMPTY_BASE="http://127.0.0.1:$EMPTY_PORT"
 unknown_err="$ROOT/build/unknown-model.err"
-unknown_model=$("$ROOT/pkchat" "$EMPTY_BASE" --no-stream -p "model?" 2>"$unknown_err")
-test "$unknown_model" = "<missing>"
-grep 'Model: unknown' "$unknown_err" >/dev/null
+if "$ROOT/pkchat" "$EMPTY_BASE" --no-stream -p "model?" \
+    >"$ROOT/build/unknown-model.out" 2>"$unknown_err"; then
+    echo "an endpoint with no models should fail automatic model selection" >&2
+    exit 1
+fi
+grep 'models response did not contain any models' "$unknown_err" >/dev/null
 
 echo "integration tests passed"

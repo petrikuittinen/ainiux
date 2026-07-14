@@ -39,7 +39,8 @@ void handle_tui_command(const std::string& text, TuiCommandContext& ctx, TuiComm
                 "/remove-empty\n"
                 "/pop\n"
                 "/response\n"
-                "/insert PATH or /attach PATH (text or image)\n"
+                "/insert FILE_OR_URL (UTF-8 text at cursor)\n"
+                "/attach PATH (text or image attachment)\n"
                 "/fetch URL\n"
                 "/search QUERY\n"
                 "/theme [THEME]\n"
@@ -345,9 +346,12 @@ void handle_tui_command(const std::string& text, TuiCommandContext& ctx, TuiComm
         handlers.start_response_to_unanswered_user();
         return;
     }
-    if (text == "/insert" || text.rfind("/insert ", 0) == 0 || text == "/attach" ||
-        text.rfind("/attach ", 0) == 0) {
+    if (text == "/insert" || text.rfind("/insert ", 0) == 0) {
         handlers.start_insert(app::detail::trim_ascii(text.substr(7)));
+        return;
+    }
+    if (text == "/attach" || text.rfind("/attach ", 0) == 0) {
+        handlers.start_attach(app::detail::trim_ascii(text.substr(7)));
         return;
     }
     if (text == "/fetch" || text.rfind("/fetch ", 0) == 0) {

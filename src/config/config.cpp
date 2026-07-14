@@ -1638,6 +1638,8 @@ Error apply_document(const Document& document, cli::Options& options) {
                               cli::option_values::image_capability_strings(),
                               candidate.image_capability,
                               cli::option_values::image_capability_description());
+        } else if (name == "input.auto-convert-html-to-md") {
+            err = auto_save_mode(entry, candidate.auto_convert_html_to_markdown);
         } else if (name == "editor.undo_limit") {
             err = nonnegative_int(entry, candidate.editor_undo_limit);
         } else if (name == "editor.huge_file_size_warning") {

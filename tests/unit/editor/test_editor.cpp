@@ -359,6 +359,20 @@ void test_editor_assist_helpers() {
     check(parsed.ok && parsed.kind == pkchat::editor::AssistCommandKind::Prompt &&
               parsed.custom_prompt == "rewrite formally",
           "/prompt captures custom text");
+    check(pkchat::editor::assist_prompt_mode_message() ==
+              "/prompt for selection (s), all (a), insert (i), new buffer (n)",
+          "/prompt offers the standard four scoped AI choices");
+    check(pkchat::editor::assist_prompt_mode_for_key('s') ==
+                  pkchat::editor::AssistPromptMode::Selection &&
+              pkchat::editor::assist_prompt_mode_for_key('A') ==
+                  pkchat::editor::AssistPromptMode::All &&
+              pkchat::editor::assist_prompt_mode_for_key('i') ==
+                  pkchat::editor::AssistPromptMode::Insert &&
+              pkchat::editor::assist_prompt_mode_for_key('N') ==
+                  pkchat::editor::AssistPromptMode::NewBuffer,
+          "/prompt mode keys select all four advertised choices case-insensitively");
+    check(!pkchat::editor::assist_prompt_mode_for_key('c').has_value(),
+          "/prompt no longer accepts the continue-only mode key");
 
     parsed = pkchat::editor::parse_assist_command("/prompt", default_config);
     check(!parsed.ok, "bare /prompt is rejected");
@@ -485,6 +499,76 @@ void test_editor_assist_helpers() {
     check(execution.messages.back().role == "user" &&
               execution.messages.back().content == "<content>hello</content>",
           "spell selection wraps buffer text in content tags for user message");
+
+    pkchat::editor::EditorState prompt_state =
+        pkchat::editor::EditorState::from_text("selected and remaining");
+    prompt_state.selection.anchor = 0;
+    prompt_state.selection.active = 8;
+    execution = pkchat::editor::build_assist_execution(
+        prompt_state,
+        context,
+        pkchat::editor::AssistCommandKind::Prompt,
+        0,
+        std::nullopt,
+        "Rewrite clearly",
+        pkchat::editor::AssistPromptMode::Selection);
+    check(execution.ok && !execution.stream &&
+              execution.edit_kind == pkchat::editor::AssistEditKind::ReplaceInPlace &&
+              execution.replace_start == 0 && execution.replace_count == 8,
+          "/prompt selection replaces the selected text");
+
+    execution = pkchat::editor::build_assist_execution(
+        prompt_state,
+        context,
+        pkchat::editor::AssistCommandKind::Prompt,
+        0,
+        std::nullopt,
+        "Rewrite clearly",
+        pkchat::editor::AssistPromptMode::All);
+    check(execution.ok && !execution.stream &&
+              execution.edit_kind == pkchat::editor::AssistEditKind::ReplaceInPlace &&
+              execution.replace_start == 0 && execution.replace_count == prompt_state.text.size(),
+          "/prompt all replaces the whole buffer");
+
+    execution = pkchat::editor::build_assist_execution(
+        prompt_state,
+        context,
+        pkchat::editor::AssistCommandKind::Prompt,
+        0,
+        std::nullopt,
+        "Rewrite clearly",
+        pkchat::editor::AssistPromptMode::Insert);
+    check(execution.ok && execution.stream &&
+              execution.edit_kind == pkchat::editor::AssistEditKind::StreamInsert &&
+              execution.messages.back().content == "<content>selected</content>",
+          "/prompt insert streams from the selected text at the cursor");
+
+    execution = pkchat::editor::build_assist_execution(
+        prompt_state,
+        context,
+        pkchat::editor::AssistCommandKind::Prompt,
+        0,
+        std::nullopt,
+        "Rewrite clearly",
+        pkchat::editor::AssistPromptMode::NewBuffer);
+    check(execution.ok && execution.stream &&
+              execution.edit_kind == pkchat::editor::AssistEditKind::NewBuffer &&
+              execution.messages.back().content == "<content>selected</content>",
+          "/prompt new buffer streams from the selected text into a new buffer");
+
+    prompt_state.clear_selection();
+    execution = pkchat::editor::build_assist_execution(
+        prompt_state,
+        context,
+        pkchat::editor::AssistCommandKind::Prompt,
+        0,
+        std::nullopt,
+        "Rewrite clearly",
+        pkchat::editor::AssistPromptMode::NewBuffer);
+    check(!execution.ok &&
+              execution.error_message.find("new buffer requires an active selection") !=
+                  std::string::npos,
+          "/prompt new buffer rejects a missing selection");
 
     const pkchat::editor::EditorAssistCommand* default_continue =
         pkchat::editor::find_assist_command(default_config, "/continue");
@@ -2658,8 +2742,12 @@ void test_editor_help_document_and_command() {
           "editor assist path mode starts after /open");
     check(pkchat::editor::editor_assist_path_prefix_length("/saveas foo") == 8,
           "editor assist path mode starts after /saveas");
+    check(pkchat::editor::editor_assist_path_prefix_length("/insert build/") == 8,
+          "editor assist path mode starts after /insert");
     check(pkchat::editor::editor_assist_path_prefix_length("/open") == std::string::npos,
           "editor assist path mode requires a separator after /open");
+    check(pkchat::editor::editor_assist_path_prefix_length("/insert") == std::string::npos,
+          "editor assist path mode requires a separator after /insert");
     check(pkchat::editor::editor_assist_path_prefix_length("/search query") == std::string::npos,
           "editor assist path mode ignores non-file commands");
 }
@@ -2685,12 +2773,49 @@ void test_editor_assist_path_completion() {
     check(input == "/open " + file, "assist path completion completes /open PATH");
 
     completer = pkchat::editor::AssistCompleterState{};
+    input = "/insert " + directory + "/tar";
+    result = pkchat::editor::complete_assist_command(
+        input, completer, pkchat::editor::default_editor_assist_config());
+    check(result.kind == pkchat::editor::CompletionKind::Path && result.error.ok() &&
+              result.match_count == 1,
+          "assist path completion finds a unique file after /insert");
+    check(input == "/insert " + file, "assist path completion completes /insert PATH");
+
+    completer = pkchat::editor::AssistCompleterState{};
     input = "/search " + directory + "/tar";
     result = pkchat::editor::complete_assist_command(input, completer, pkchat::editor::default_editor_assist_config());
     check(result.kind == pkchat::editor::CompletionKind::Command,
           "assist tab completion stays in command mode for /search");
     check(input == "/search " + directory + "/tar",
           "assist tab completion does not complete paths for /search");
+}
+
+void test_editor_minibuffer_paste() {
+    pkchat::editor::MinibufferState minibuffer;
+    check(!pkchat::editor::paste_into_minibuffer(minibuffer, "ignored").ok(),
+          "minibuffer paste requires an active prompt");
+
+    pkchat::editor::start_minibuffer(minibuffer,
+                                     pkchat::editor::MinibufferAction::AssistCommand,
+                                     "Command: ",
+                                     "/insert ");
+    check(pkchat::editor::paste_into_minibuffer(
+              minibuffer, "https://example.com/page?x=1&y=2\r\n").ok(),
+          "command minibuffer accepts a pasted URL with a trailing newline");
+    check(minibuffer.input == "/insert https://example.com/page?x=1&y=2",
+          "command minibuffer strips trailing paste newlines");
+
+    const std::string before_multiline = minibuffer.input;
+    check(!pkchat::editor::paste_into_minibuffer(minibuffer, "first\nsecond").ok(),
+          "command minibuffer rejects multiline paste");
+    check(minibuffer.input == before_multiline,
+          "rejected multiline paste leaves command input unchanged");
+
+    pkchat::editor::start_minibuffer(minibuffer,
+                                     pkchat::editor::MinibufferAction::ConfirmQuit,
+                                     "Quit? ");
+    check(!pkchat::editor::paste_into_minibuffer(minibuffer, "y").ok(),
+          "confirmation minibuffers reject pasted answers");
 }
 
 void test_editor_missing_file_error_message() {
@@ -2859,6 +2984,7 @@ void run_all() {
     test_editor_save_as_overwrite_helpers();
     test_editor_help_document_and_command();
     test_editor_assist_path_completion();
+    test_editor_minibuffer_paste();
     test_editor_missing_file_error_message();
     test_editor_buffer_list_helpers();
     test_editor_markdown_mode_and_structured_highlighting();

@@ -259,6 +259,14 @@ Error apply_chat_setting(cli::Options& options, const std::string& raw_name, con
     for (char& ch : name) {
         ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
     }
+    if (name == "auto-convert-html-to-md") {
+        bool enabled = false;
+        if (!parse_bool_setting(value, enabled)) {
+            return invalid_setting_value(name, "expected yes or no");
+        }
+        options.auto_convert_html_to_markdown = enabled;
+        return ok_error();
+    }
     if (is_null_setting_value(value)) {
         if (name == generation::kMaxTokens || name == generation::kMaxOutputTokens) {
             options.has_max_output_tokens = false;
@@ -298,7 +306,8 @@ Error apply_chat_setting(cli::Options& options, const std::string& raw_name, con
             return ok_error();
         }
         return invalid_setting_value(name,
-                                     "unknown setting; expected " + generation::chat_setting_names_description());
+                                     "unknown setting; expected " + generation::chat_setting_names_description() +
+                                         ", or auto-convert-html-to-md");
     }
     if (name == generation::kMaxTokens || name == generation::kMaxOutputTokens) {
         int parsed = 0;
@@ -384,7 +393,8 @@ Error apply_chat_setting(cli::Options& options, const std::string& raw_name, con
         return ok_error();
     }
     return invalid_setting_value(name,
-                                 "unknown setting; expected " + generation::chat_setting_names_description());
+                                 "unknown setting; expected " + generation::chat_setting_names_description() +
+                                     ", or auto-convert-html-to-md");
 }
 
 std::string settings_json_from_options(const cli::Options& options) {
@@ -413,6 +423,7 @@ std::string settings_json_from_options(const cli::Options& options) {
                          options.show_thinking_traces);
     append_optional_string(out, first, "purpose", options.has_chat_purpose, options.chat_purpose);
     append_optional_int(out, first, "context_tokens", options.has_context_tokens, options.context_tokens);
+    append_json_bool(out, first, "auto_convert_html_to_md", options.auto_convert_html_to_markdown);
     out << '}';
     return out.str();
 }
@@ -459,6 +470,13 @@ Error apply_settings_json(cli::Options& options, const std::string& settings_jso
             options.top_p = top_p->number;
             options.has_top_p = true;
         }
+    }
+    if (const json::Value* convert = root.get("auto_convert_html_to_md")) {
+        if (convert->type != json::Value::Type::Bool) {
+            return {ErrorCode::ProviderSchema,
+                    "chat settings auto_convert_html_to_md must be a boolean"};
+        }
+        options.auto_convert_html_to_markdown = convert->boolean;
     }
     if (const json::Value* top_k = root.get("top_k")) {
         if (top_k->is_null()) {
@@ -624,6 +642,7 @@ std::string format_settings_panel(const cli::Options& options) {
            options.has_show_thinking_traces ? (options.show_thinking_traces ? "trace" : "notrace") : "");
     append("purpose", options.has_chat_purpose ? options.chat_purpose : "");
     append("context_tokens", options.has_context_tokens ? std::to_string(options.context_tokens) : "");
+    append("auto-convert-html-to-md", options.auto_convert_html_to_markdown ? "yes" : "no");
     std::string text = out.str();
     if (!text.empty() && text.back() == '\n') {
         text.pop_back();

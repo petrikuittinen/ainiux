@@ -33,10 +33,10 @@ enum class AssistScope {
 };
 
 enum class AssistPromptMode {
-    Continue,
     Selection,
     All,
     Insert,
+    NewBuffer,
 };
 
 enum class AssistEditKind {
@@ -92,6 +92,7 @@ AssistCompletionResult complete_assist_command(std::string& input,
 ParsedAssistCommand parse_assist_command(const std::string& line, const EditorAssistConfig& config);
 std::string assist_scope_prompt(const EditorAssistCommand& command);
 std::string assist_prompt_mode_message();
+std::optional<AssistPromptMode> assist_prompt_mode_for_key(unsigned char ch);
 AssistExecution build_assist_execution(const EditorState& state,
                                        const AiContinueContext& context,
                                        AssistCommandKind kind,

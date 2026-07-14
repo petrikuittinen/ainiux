@@ -401,6 +401,10 @@ std::vector<std::string> assist_command_completions(const EditorAssistConfig& co
     commands.push_back("/linebreak lf");
     commands.push_back("/linebreak cr");
     commands.push_back("/linebreak crlf");
+    commands.push_back("/insert ");
+    commands.push_back("/auto-convert-html-to-md ");
+    commands.push_back("/auto-convert-html-to-md yes");
+    commands.push_back("/auto-convert-html-to-md no");
     commands.push_back("/reformat");
     commands.push_back("/reformat-all");
     commands.push_back("/provider ");
@@ -723,8 +727,23 @@ std::string assist_scope_prompt(const EditorAssistCommand& command) {
 }
 
 std::string assist_prompt_mode_message() {
-    return "/prompt: continue from cursor (c), insert from selection (i), edit selection (s), "
-           "edit all (a)";
+    return "/prompt for selection (s), all (a), insert (i), new buffer (n)";
+}
+
+std::optional<AssistPromptMode> assist_prompt_mode_for_key(unsigned char ch) {
+    switch (lower_ascii_char(static_cast<char>(ch))) {
+        case 's':
+            return AssistPromptMode::Selection;
+        case 'a':
+            return AssistPromptMode::All;
+        case 'i':
+        case 'l':
+            return AssistPromptMode::Insert;
+        case 'n':
+            return AssistPromptMode::NewBuffer;
+        default:
+            return std::nullopt;
+    }
 }
 
 AssistExecution build_assist_execution(const EditorState& state,
@@ -871,11 +890,6 @@ AssistExecution build_assist_execution(const EditorState& state,
             return fail("Missing /prompt mode");
         }
         switch (*prompt_mode) {
-            case AssistPromptMode::Continue:
-                execution.stream = true;
-                execution.edit_kind = AssistEditKind::StreamInsert;
-                assign_messages(custom_prompt, prefix);
-                break;
             case AssistPromptMode::Selection:
                 if (!state.selection.has_range()) {
                     return fail("/prompt selection requires an active selection");
@@ -902,6 +916,15 @@ AssistExecution build_assist_execution(const EditorState& state,
                 }
                 execution.stream = true;
                 execution.edit_kind = AssistEditKind::StreamInsert;
+                execution.messages =
+                    build_messages(context, custom_prompt, state.selected_text());
+                break;
+            case AssistPromptMode::NewBuffer:
+                if (!state.selection.has_range()) {
+                    return fail("/prompt new buffer requires an active selection");
+                }
+                execution.stream = true;
+                execution.edit_kind = AssistEditKind::NewBuffer;
                 execution.messages =
                     build_messages(context, custom_prompt, state.selected_text());
                 break;

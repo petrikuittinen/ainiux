@@ -22,6 +22,7 @@ enum class TuiEventType {
     StoreSaveDone,
     StoreLoadDone,
     InsertDone,
+    AttachDone,
     FetchDone,
     SearchDone,
     ModelsDone,
@@ -51,6 +52,7 @@ struct TuiEvent {
     std::vector<std::string> models;
     provider::ModelsResult models_result;
     provider::Message inserted_message;
+    std::string inserted_text;
     provider::ImageInput image;
     bool image_attachment = false;
     context::CompactionEvent compaction;

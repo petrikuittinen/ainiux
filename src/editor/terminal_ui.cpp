@@ -18,7 +18,9 @@
 #include <cstring>
 #include <filesystem>
 #include <iostream>
+#include <new>
 #include <sstream>
+#include <stdexcept>
 #include <sys/ioctl.h>
 #include <unistd.h>
 
@@ -257,6 +259,53 @@ void minibuffer_message(MinibufferState& minibuffer, std::string message) {
     minibuffer.prompt.clear();
     minibuffer.input.clear();
     minibuffer.message = std::move(message);
+}
+
+Error paste_into_minibuffer(MinibufferState& minibuffer, const std::string& text) {
+    if (!minibuffer.active) {
+        return {ErrorCode::BadArgs, "no active minibuffer to paste into"};
+    }
+    switch (minibuffer.action) {
+        case MinibufferAction::SaveFile:
+        case MinibufferAction::SaveAsFile:
+        case MinibufferAction::LoadFile:
+        case MinibufferAction::Search:
+        case MinibufferAction::ReplaceSearch:
+        case MinibufferAction::ReplaceWith:
+        case MinibufferAction::AssistCommand:
+            break;
+        case MinibufferAction::None:
+        case MinibufferAction::ConfirmLoad:
+        case MinibufferAction::ConfirmAutosaveRecovery:
+        case MinibufferAction::ConfirmQuit:
+        case MinibufferAction::ConfirmSaveOnQuit:
+        case MinibufferAction::ConfirmOverwrite:
+        case MinibufferAction::AssistScopeChoice:
+        case MinibufferAction::AssistPromptMode:
+            return {ErrorCode::BadArgs, "paste is not accepted by the active prompt"};
+    }
+
+    size_t end = text.size();
+    while (end > 0 && (text[end - 1] == '\r' || text[end - 1] == '\n')) {
+        --end;
+    }
+    for (size_t index = 0; index < end; ++index) {
+        const unsigned char ch = static_cast<unsigned char>(text[index]);
+        if (ch == '\r' || ch == '\n' || ch == '\0') {
+            return {ErrorCode::BadArgs, "minibuffer paste must contain exactly one line"};
+        }
+        if (ch < 0x20U && ch != '\t') {
+            return {ErrorCode::BadArgs, "minibuffer paste contains an unsupported control character"};
+        }
+    }
+    try {
+        minibuffer.input.append(text, 0, end);
+    } catch (const std::bad_alloc&) {
+        return {ErrorCode::Internal, "not enough memory to paste into the minibuffer"};
+    } catch (const std::length_error&) {
+        return {ErrorCode::BadArgs, "pasted minibuffer text is too large"};
+    }
+    return ok_error();
 }
 
 void start_minibuffer(MinibufferState& minibuffer,

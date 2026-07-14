@@ -16,7 +16,7 @@ namespace {
 using InputKind = input::Kind;
 
 void print_repl_help() {
-    std::cerr << "Commands: /help, /quit, /exit, /save [PATH], /load PATH, /insert PATH, /attach PATH, "
+    std::cerr << "Commands: /help, /quit, /exit, /save [PATH], /load PATH, /insert FILE_OR_URL, /attach PATH, "
                  "/fetch URL, /search QUERY, /clear, /system TEXT, /model MODEL\n";
 }
 
@@ -143,11 +143,39 @@ int run_repl(provider::RequestContext context, chat::Session session, std::ostre
                 }
                 continue;
             }
-            if (text == "/insert" || text.rfind("/insert ", 0) == 0 || text == "/attach" ||
-                text.rfind("/attach ", 0) == 0) {
+            if (text == "/insert" || text.rfind("/insert ", 0) == 0) {
+                const std::string source = detail::trim_ascii(text.substr(7));
+                if (source.empty()) {
+                    std::cerr << "Usage: /insert FILE_OR_URL\n";
+                    continue;
+                }
+                input::InsertSourceOptions options;
+                options.max_file_bytes = context.options.max_input_bytes > 0
+                                             ? static_cast<size_t>(context.options.max_input_bytes)
+                                             : 0;
+                options.fetch = fetch_options_for(context.options);
+                options.auto_convert_html_to_markdown =
+                    context.options.auto_convert_html_to_markdown;
+                input::InsertSource inserted;
+                Error err = input::load_insert_source(source, options, inserted);
+                if (!err.ok()) {
+                    print_error(err);
+                    continue;
+                }
+                input::TextContext document;
+                document.source = inserted.url ? "URL " + inserted.source : "file " + inserted.source;
+                document.kind = inserted.converted_html ? InputKind::Markdown : InputKind::Plaintext;
+                document.content = std::move(inserted.content);
+                session.messages.push_back({"user", input::text_context_message(document)});
+                if (!context.options.quiet) {
+                    std::cerr << "Inserted content from " << source << "\n";
+                }
+                continue;
+            }
+            if (text == "/attach" || text.rfind("/attach ", 0) == 0) {
                 const std::string path = detail::trim_ascii(text.substr(7));
                 if (path.empty()) {
-                    std::cerr << "Usage: /insert PATH or /attach PATH\n";
+                    std::cerr << "Usage: /attach PATH\n";
                     continue;
                 }
                 if (path == "stdin") {
@@ -184,14 +212,14 @@ int run_repl(provider::RequestContext context, chat::Session session, std::ostre
                     }
                 } else {
                     LoadedDocument document;
-                    err = load_text_context_file(context.options, path, "/insert", document);
+                    err = load_text_context_file(context.options, path, "/attach", document);
                     if (!err.ok()) {
                         print_error(err);
                         continue;
                     }
                     session.messages.push_back({"user", document_context_message(document)});
                     if (!context.options.quiet) {
-                        std::cerr << "Inserted context from " << path << "\n";
+                        std::cerr << "Attached context from " << path << "\n";
                     }
                 }
                 continue;

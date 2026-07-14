@@ -219,6 +219,51 @@ void test_text_context_loading_and_cancellation() {
           "shared text context loader observes cancellation");
 }
 
+void test_insert_source_accepts_any_utf8_file_ending() {
+    const std::string path = "build/unit-insert-source.weird-extension";
+    {
+        std::ofstream output(path, std::ios::binary | std::ios::trunc);
+        output << u8"first\r\n你好\rthird\n";
+    }
+    pkchat::input::InsertSourceOptions options;
+    options.max_file_bytes = 1024;
+    pkchat::input::InsertSource inserted;
+    pkchat::Error err = pkchat::input::load_insert_source(path, options, inserted);
+    check(err.ok(), "/insert accepts an arbitrary file extension when its contents are UTF-8");
+    check(!inserted.url && !inserted.converted_html &&
+              inserted.content == u8"first\n你好\nthird\n",
+          "/insert preserves UTF-8 text and normalizes CR, LF, and CRLF internally");
+
+    options.max_file_bytes = 4;
+    err = pkchat::input::load_insert_source(path, options, inserted);
+    check(!err.ok() && err.message.find("max_input_bytes") != std::string::npos,
+          "/insert enforces the configured local-file byte limit");
+
+    const std::string invalid_path = "build/unit-insert-invalid.any";
+    {
+        std::ofstream output(invalid_path, std::ios::binary | std::ios::trunc);
+        output << "valid" << static_cast<char>(0xff);
+    }
+    options.max_file_bytes = 1024;
+    err = pkchat::input::load_insert_source(invalid_path, options, inserted);
+    check(!err.ok() && err.message.find("UTF-8") != std::string::npos,
+          "/insert rejects non-UTF-8 files regardless of their extension");
+
+    check(pkchat::input::is_http_url("HTTPS://example.com/page"),
+          "/insert detects HTTP URL schemes case-insensitively");
+    check(!pkchat::input::is_http_url("notes/http://example.com"),
+          "/insert does not mistake a local path containing a URL for a URL");
+    err = pkchat::input::load_insert_source("ftp://example.com/file", options, inserted);
+    check(!err.ok() && err.code == pkchat::ErrorCode::BadUrl,
+          "/insert rejects unsupported URL schemes explicitly");
+
+    pkchat::runtime::CancellationSource cancellation;
+    cancellation.cancel();
+    err = pkchat::input::load_insert_source(path, options, inserted, cancellation.token());
+    check(!err.ok() && err.code == pkchat::ErrorCode::Cancelled,
+          "/insert local-file loading observes cancellation");
+}
+
 }  // namespace
 
 void run_all() {
@@ -226,6 +271,7 @@ void run_all() {
     test_input_file_type_classification();
     test_input_file_io_and_unicode_edge_cases();
     test_text_context_loading_and_cancellation();
+    test_insert_source_accepts_any_utf8_file_ending();
 }
 
 }  // namespace pkchat::test::input

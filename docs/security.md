@@ -68,7 +68,7 @@ The default `--image-capability auto` mode requires both a provider profile whos
 
 ## Text Attachments
 
-`--attach PATH` and REPL/TUI `/insert PATH` or `/attach PATH` send selected local contents to the configured model endpoint. Text files are limited to 1 MiB each by default (`--max-input-bytes N`), rejected when they contain NUL bytes or invalid UTF-8, and converted according to their `.txt`, `.md`, or `.html` extension. Interactive images are queued for the next prompt, checked against provider/model capabilities, bounded by `--max-image-bytes`, and removed from memory after successful use. Converted text and fetched URL context are intentionally part of the chat transcript and can therefore appear in saved chat files; image bytes do not.
+`--attach PATH` and interactive `/attach PATH` may send selected local contents to the configured model endpoint. Attachment behavior and supported text/image types remain provider-facing. Interactive `/insert FILE_OR_URL` instead places bounded UTF-8 text in the current editor buffer or chat draft; local insertion ignores the file ending, rejects NUL and invalid UTF-8, and is not sent anywhere until the user later sends that chat draft. URL insertion is an explicit network operation: only HTTP(S) is accepted, the normal private-address/DNS/proxy/TLS/timeout/size protections apply, and the response must be UTF-8 HTML. HTML becomes Markdown by default; disabling `input.auto-convert-html-to-md` preserves untrusted raw HTML in the draft. Inserted chat text and attachment context can appear in saved transcripts; temporary image bytes do not.
 
 PDF and DOCX are not read as text or uploaded in this slice. Their future input and output converters require explicit dependency, safety, and fidelity decisions.
 

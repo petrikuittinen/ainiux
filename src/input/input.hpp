@@ -4,6 +4,7 @@
 #include <string>
 
 #include "common.hpp"
+#include "fetch/fetch.hpp"
 #include "runtime/runtime.hpp"
 
 namespace pkchat::input {
@@ -33,6 +34,19 @@ struct TextContext {
     std::string content;
 };
 
+struct InsertSourceOptions {
+    size_t max_file_bytes = 1048576;
+    fetch::Options fetch;
+    bool auto_convert_html_to_markdown = true;
+};
+
+struct InsertSource {
+    std::string source;
+    std::string content;
+    bool url = false;
+    bool converted_html = false;
+};
+
 Error classify_file_type(const std::string& path, FileType& type);
 Error load_image_file(const std::string& path,
                       const FileType& type,
@@ -43,6 +57,11 @@ Error load_text_context_file(const std::string& path,
                              size_t max_bytes,
                              TextContext& context,
                              runtime::CancellationToken cancellation = runtime::CancellationToken());
+bool is_http_url(const std::string& source);
+Error load_insert_source(const std::string& source,
+                         const InsertSourceOptions& options,
+                         InsertSource& inserted,
+                         runtime::CancellationToken cancellation = runtime::CancellationToken());
 std::string text_context_message(const TextContext& context);
 
 }  // namespace pkchat::input

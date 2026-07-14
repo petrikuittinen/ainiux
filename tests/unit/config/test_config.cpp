@@ -27,6 +27,8 @@ void test_config_applies_user_settings() {
     pkchat::Error err = pkchat::config::apply_document(parsed.document, options);
     check(err.ok(), "user config fixture passes schema validation");
     check(options.allow_private_url_fetch, "user config enables private URL fetching");
+    check(options.auto_convert_html_to_markdown,
+          "HTML-to-Markdown insertion conversion defaults to enabled");
     check(options.tui_theme == "dark", "user config selects the dark theme");
     check(options.show_thinking_traces, "user config shows thinking traces by default");
 
@@ -56,6 +58,13 @@ void test_config_applies_user_settings() {
               options.editor_ai_continue_read_chars == 8192 &&
               options.editor_ai_continue_max_tokens == 4096,
           "editor config settings apply");
+
+    pkchat::config::ParseResult insert_config = pkchat::config::parse(
+        "[input]\nauto-convert-html-to-md = no\n", "insert.conf");
+    check(insert_config.error.ok(), "insert conversion config fixture parses");
+    err = pkchat::config::apply_document(insert_config.document, options);
+    check(err.ok() && !options.auto_convert_html_to_markdown,
+          "input auto-convert-html-to-md accepts no");
 
     options.editor_assist_config = pkchat::editor::default_editor_assist_config();
     pkchat::config::ParseResult assist_prompt_config = pkchat::config::parse(
@@ -284,7 +293,7 @@ void test_config_model_setting_thinking_budget() {
 void test_config_reads_common_template() {
     pkchat::config::ParseResult parsed = pkchat::config::read_file("config/pkchat.conf");
     check(parsed.error.ok(), "common config file parses");
-    check(parsed.document.entries.size() == 157, "common config has every expected setting");
+    check(parsed.document.entries.size() == 158, "common config has every expected setting");
     pkchat::cli::Options highlight_options;
     pkchat::Error apply_error = pkchat::config::apply_document(parsed.document, highlight_options);
     check(apply_error.ok() && highlight_options.tui_highlight,
@@ -315,6 +324,7 @@ void test_config_reads_common_template() {
               options.editor_undo_limit == 5 &&
               options.editor_huge_file_size_warning == 1073741824LL &&
               options.editor_file_size_limit == -1 && options.editor_auto_save_mode &&
+              options.auto_convert_html_to_markdown &&
               options.editor_auto_save_postfix == "~" && options.editor_auto_save_threshold == 300 &&
               options.editor_auto_save_timeout_seconds == 30 &&
               options.editor_auto_save_size_limit == 10LL * 1024LL * 1024LL &&

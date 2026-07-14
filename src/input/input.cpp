@@ -19,6 +19,93 @@ bool ends_with(const std::string& text, const std::string& suffix) {
            text.compare(text.size() - suffix.size(), suffix.size(), suffix) == 0;
 }
 
+Error validate_insert_text(const std::string& body, const std::string& source_description) {
+    const size_t nul = body.find('\0');
+    if (nul != std::string::npos) {
+        return {ErrorCode::UnsupportedFeature,
+                "cannot insert binary data from " + source_description +
+                    ": NUL byte at offset " + std::to_string(nul)};
+    }
+    size_t invalid_offset = 0;
+    if (!html::is_valid_utf8(body, &invalid_offset)) {
+        return {ErrorCode::UnsupportedFeature,
+                "cannot insert " + source_description +
+                    ": input is not valid UTF-8 (invalid byte at offset " +
+                    std::to_string(invalid_offset) +
+                    "). Convert it to UTF-8 and try again."};
+    }
+    return ok_error();
+}
+
+Error normalize_insert_linebreaks(std::string& body, const std::string& source_description) {
+    if (body.find('\r') == std::string::npos) {
+        return ok_error();
+    }
+    try {
+        std::string normalized;
+        normalized.reserve(body.size());
+        for (size_t index = 0; index < body.size(); ++index) {
+            if (body[index] == '\r') {
+                if (index + 1 < body.size() && body[index + 1] == '\n') {
+                    ++index;
+                }
+                normalized.push_back('\n');
+            } else {
+                normalized.push_back(body[index]);
+            }
+        }
+        body = std::move(normalized);
+    } catch (const std::bad_alloc&) {
+        return {ErrorCode::Internal,
+                "not enough memory to normalize line endings from " + source_description};
+    } catch (const std::length_error&) {
+        return {ErrorCode::FileRead,
+                "inserted text is too large to normalize from " + source_description};
+    }
+    return ok_error();
+}
+
+Error read_insert_file(const std::string& path,
+                       size_t max_bytes,
+                       std::string& body,
+                       runtime::CancellationToken cancellation) {
+    if (max_bytes == 0) {
+        return {ErrorCode::BadArgs, "input.max_input_bytes must be greater than zero for /insert"};
+    }
+    std::ifstream file(path, std::ios::binary);
+    if (!file) {
+        return {ErrorCode::FileRead, "could not open file for insertion: " + path};
+    }
+    std::array<char, 8192> buffer{};
+    while (file) {
+        if (cancellation.cancelled()) {
+            return {ErrorCode::Cancelled, "file insertion cancelled: " + path};
+        }
+        file.read(buffer.data(), static_cast<std::streamsize>(buffer.size()));
+        const std::streamsize count = file.gcount();
+        if (count <= 0) {
+            break;
+        }
+        const size_t chunk_size = static_cast<size_t>(count);
+        if (body.size() > max_bytes || chunk_size > max_bytes - body.size()) {
+            return {ErrorCode::UnsupportedFeature,
+                    "file exceeds input.max_input_bytes limit of " +
+                        std::to_string(max_bytes) + " bytes: " + path};
+        }
+        try {
+            body.append(buffer.data(), chunk_size);
+        } catch (const std::bad_alloc&) {
+            return {ErrorCode::Internal, "not enough memory to insert file: " + path};
+        } catch (const std::length_error&) {
+            return {ErrorCode::FileRead, "file is too large to insert: " + path};
+        }
+    }
+    if (file.bad()) {
+        return {ErrorCode::FileRead, "could not read file for insertion: " + path};
+    }
+    return ok_error();
+}
+
 bool has_prefix(const std::string& data, const std::initializer_list<unsigned char>& prefix) {
     if (data.size() < prefix.size()) {
         return false;
@@ -257,6 +344,74 @@ Error load_text_context_file(const std::string& path,
         return {ErrorCode::Cancelled, "text insertion cancelled: " + resolved};
     }
     context = std::move(loaded);
+    return ok_error();
+}
+
+bool is_http_url(const std::string& source) {
+    const std::string lower = ascii_lower(source);
+    return lower.rfind("http://", 0) == 0 || lower.rfind("https://", 0) == 0;
+}
+
+Error load_insert_source(const std::string& source,
+                         const InsertSourceOptions& options,
+                         InsertSource& inserted,
+                         runtime::CancellationToken cancellation) {
+    if (source.empty()) {
+        return {ErrorCode::BadArgs, "/insert requires a file path or http(s) URL"};
+    }
+
+    InsertSource loaded;
+    loaded.url = is_http_url(source);
+    loaded.source = loaded.url ? source : expand_user_path(source);
+    if (loaded.url) {
+        Error err = fetch::fetch_html(source, options.fetch, loaded.content, cancellation);
+        if (!err.ok()) {
+            return err;
+        }
+        err = validate_insert_text(loaded.content, "URL " + source);
+        if (!err.ok()) {
+            return err;
+        }
+        if (cancellation.cancelled()) {
+            return {ErrorCode::Cancelled, "URL insertion cancelled: " + source};
+        }
+        if (options.auto_convert_html_to_markdown) {
+            try {
+                loaded.content = html::convert(loaded.content, html::OutputFormat::Markdown);
+            } catch (const std::bad_alloc&) {
+                return {ErrorCode::Internal,
+                        "not enough memory to convert HTML from URL: " + source};
+            } catch (const std::length_error&) {
+                return {ErrorCode::UnsupportedFeature,
+                        "converted HTML is too large to insert from URL: " + source};
+            }
+            loaded.converted_html = true;
+        }
+    } else {
+        if (source.find("://") != std::string::npos) {
+            return {ErrorCode::BadUrl,
+                    "/insert URL only supports http:// and https:// sources: " + source};
+        }
+        Error err = read_insert_file(loaded.source, options.max_file_bytes, loaded.content, cancellation);
+        if (!err.ok()) {
+            return err;
+        }
+        err = validate_insert_text(loaded.content, "file " + loaded.source);
+        if (!err.ok()) {
+            return err;
+        }
+    }
+    Error normalize_error = normalize_insert_linebreaks(loaded.content,
+                                                        loaded.url ? "URL " + source
+                                                                   : "file " + loaded.source);
+    if (!normalize_error.ok()) {
+        return normalize_error;
+    }
+    if (cancellation.cancelled()) {
+        return {ErrorCode::Cancelled,
+                std::string(loaded.url ? "URL" : "file") + " insertion cancelled: " + loaded.source};
+    }
+    inserted = std::move(loaded);
     return ok_error();
 }
 

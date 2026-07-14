@@ -35,6 +35,7 @@ struct Options {
     bool no_colors = false;
     bool tui_highlight = true;
     bool allow_private_url_fetch = false;
+    bool auto_convert_html_to_markdown = true;
     bool show_thinking_traces = false;
     bool benchmark = false;
     bool benchmark_validate = false;

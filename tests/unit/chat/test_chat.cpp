@@ -250,6 +250,9 @@ void test_chat_settings_helpers() {
     check(err.ok() && options.thinking_budget == "high" &&
               !pkchat::chat::thinking_budget_is_token_count(options.thinking_budget),
           "chat setting parser applies verbal thinking_budget");
+    err = pkchat::chat::apply_chat_setting(options, "auto-convert-html-to-md", "no");
+    check(err.ok() && !options.auto_convert_html_to_markdown,
+          "chat setting parser can disable HTML-to-Markdown insertion conversion");
 
     pkchat::cli::Options source;
     source.has_top_k = true;
@@ -258,12 +261,13 @@ void test_chat_settings_helpers() {
     source.chat_purpose = "general";
     source.has_thinking_budget = true;
     source.thinking_budget = "medium";
+    source.auto_convert_html_to_markdown = false;
     const std::string encoded = pkchat::chat::settings_json_from_options(source);
     pkchat::cli::Options loaded;
     err = pkchat::chat::apply_settings_json(loaded, encoded);
     check(err.ok() && loaded.has_top_k && loaded.top_k == 40 && loaded.has_chat_purpose &&
               loaded.chat_purpose == "general" && loaded.has_thinking_budget &&
-              loaded.thinking_budget == "medium",
+              loaded.thinking_budget == "medium" && !loaded.auto_convert_html_to_markdown,
           "chat settings JSON round-trips verbal thinking_budget");
 
     source = pkchat::cli::Options{};
@@ -290,6 +294,7 @@ void test_chat_settings_helpers() {
     check(panel.find("temperature=0.9") != std::string::npos &&
               panel.find("thinking=on") != std::string::npos &&
               panel.find("thinking_budget=high") != std::string::npos &&
+              panel.find("auto-convert-html-to-md=no") != std::string::npos &&
               panel.find("top_k=") != std::string::npos &&
               panel.find("top_k=40") == std::string::npos,
           "chat settings panel shows set values and empty unset fields");

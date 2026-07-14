@@ -50,6 +50,7 @@ pkchat::app::InteractiveSession interactive_session_from_editor_startup(
     session.editor_path = options.editor_path;
     session.editor_save_as = options.output_path;
     session.editor_settings = editor_settings_from_options(options);
+    session.context.options = options;
     session.ai_continue = std::move(ai_continue);
     session.assist_config = options.editor_assist_config;
     session.highlight_enabled = options.tui_highlight;

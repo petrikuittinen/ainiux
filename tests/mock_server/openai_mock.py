@@ -343,7 +343,7 @@ class Handler(BaseHTTPRequestHandler):
             reply = "input-context-ok" if input_context_seen else "missing-input-context"
         elif last == "summarize-attachments":
             reply = "attachments-ok" if attachment_alpha_seen and attachment_beta_seen else "missing-attachments"
-        elif last == "summarize-insert":
+        elif last == "summarize-insert" or last.endswith("summarize-insert"):
             reply = "insert-ok" if inserted_context_seen else "missing-insert"
         elif last == "describe-image":
             reply = "image-input-ok" if image_count == 1 else "missing-image-input"

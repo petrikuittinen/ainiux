@@ -105,7 +105,7 @@ size_t editor_assist_path_prefix_length(const std::string& input) {
         ++command_end;
     }
     const std::string command_token = command_token_lower(input, 1, command_end);
-    if (command_token != "open" && command_token != "saveas") {
+    if (command_token != "open" && command_token != "saveas" && command_token != "insert") {
         return std::string::npos;
     }
     if (command_end >= input.size()) {

@@ -1353,8 +1353,8 @@ Context compacted: 42 earlier messages summarized into 1 message. Full transcrip
 
 Start with text files:
 
-- [x] `/insert PATH` and `/attach PATH` in REPL for text and images.
-- [x] `/insert PATH` and `/attach PATH` in TUI through a cancellable runtime job.
+- [x] `/insert FILE_OR_URL` for bounded UTF-8 text and `/attach PATH` for attachments in REPL.
+- [x] Separate cancellable `/insert` cursor insertion and `/attach` jobs in TUI.
 - [x] Repeatable `--attach PATH` for non-interactive CLI prompts.
 - [x] Size limit.
 - [x] Explicit UTF-8 requirement.
@@ -1421,6 +1421,8 @@ Implementation note (2026-06-20): The remaining core slice adds repeated mixed t
 Implementation note (2026-06-20): Interactive `/insert PATH` and `/attach PATH` now accept text or supported images in REPL/TUI. Images are queued for exactly the next prompt and remain request-only. `/fetch URL` inserts safely fetched Markdown; TUI fetching uses the runtime job and cancellation token. TUI `/help` now renders a persistent UI-only command panel instead of a transient status line.
 
 Implementation note (2026-06-20): Non-interactive `--input stdin` and `--attach stdin` accept bounded UTF-8 plaintext from standard input, with validation preventing multiple options from consuming the same stream. `--output stdout` explicitly selects standard output for pipeline composition.
+
+Implementation note (2026-07-14): `/insert` is now a text-editing operation rather than an alias for `/attach`. In editor and full-screen chat modes it inserts at the active cursor through a cancellable worker/event path. Local files accept any ending when their bounded contents are valid UTF-8 and contain no NUL; CR and CRLF normalize to internal LF. HTTP(S) sources reuse URL-fetch security controls and convert UTF-8 HTML to Markdown by default. `[input] auto-convert-html-to-md = no`, chat `/setting auto-convert-html-to-md=no`, or editor `/auto-convert-html-to-md no` retains raw HTML. `/attach` keeps its existing provider context and image-queue behavior.
 
 ## Acceptance criteria
 

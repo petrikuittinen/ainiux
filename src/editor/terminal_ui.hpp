@@ -118,6 +118,7 @@ bool is_assist_minibuffer_action(MinibufferAction action);
 void exit_assist_command_mode(MinibufferState& minibuffer, AssistCompleterState& completer);
 void start_assist_command_mode(MinibufferState& minibuffer, AssistCompleterState& completer);
 void minibuffer_message(MinibufferState& minibuffer, std::string message);
+Error paste_into_minibuffer(MinibufferState& minibuffer, const std::string& text);
 void start_minibuffer(MinibufferState& minibuffer,
                       MinibufferAction action,
                       std::string prompt,

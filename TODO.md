@@ -54,6 +54,8 @@
 
 ## Deferred Document Conversion
 
+- Extend interactive `/attach` to queue multiple heterogeneous attachments with clear per-item status; keep it separate from `/insert` text editing.
+
 1. PDF input (PDF-to-Markdown) and PDF output (Markdown-to-PDF).
 2. MS Word input (`.docx`-to-Markdown) and MS Word output (Markdown-to-`.docx`).
 

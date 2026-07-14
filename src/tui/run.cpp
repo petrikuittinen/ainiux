@@ -683,6 +683,7 @@ app::TuiRunResult run(provider::RequestContext context,
     command_handlers.pop_last_message = pop_last_message;
     command_handlers.start_response_to_unanswered_user = start_response_to_unanswered_user;
     command_handlers.start_insert = [&](const std::string& path) { file_jobs.start_insert(path); };
+    command_handlers.start_attach = [&](const std::string& path) { file_jobs.start_attach(path); };
     command_handlers.start_fetch = [&](const std::string& url) { file_jobs.start_fetch(url); };
     command_handlers.start_search = [&](const std::string& query) { file_jobs.start_search(query); };
     command_handlers.set_thinking_trace_mode = set_thinking_trace_mode;
@@ -974,6 +975,16 @@ app::TuiRunResult run(provider::RequestContext context,
                     break;
                 case TuiEventType::InsertDone:
                     file_job.join();
+                    if (event.error.ok()) {
+                        const Error insert_error = input.insert(event.inserted_text);
+                        status = insert_error.ok() ? "Inserted " + event.text + " at cursor"
+                                                   : detail::error_line(insert_error);
+                    } else {
+                        status = detail::error_line(event.error);
+                    }
+                    break;
+                case TuiEventType::AttachDone:
+                    file_job.join();
                     if (event.error.ok() && event.image_attachment) {
                         pending_images.push_back(std::move(event.image));
                         status = "Attached image for next prompt: " + event.text + " (" +
@@ -981,7 +992,7 @@ app::TuiRunResult run(provider::RequestContext context,
                     } else if (event.error.ok()) {
                         session.messages.push_back(std::move(event.inserted_message));
                         history_scroll = 0;
-                        status = "Inserted context from " + event.text;
+                        status = "Attached context from " + event.text;
                     } else {
                         status = detail::error_line(event.error);
                     }

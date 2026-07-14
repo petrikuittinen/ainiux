@@ -15,6 +15,7 @@
 #include "editor/reformat.hpp"
 #include "editor/terminal_input.hpp"
 #include "editor/terminal_ui.hpp"
+#include "input/input.hpp"
 #include "runtime/runtime.hpp"
 #include "search/search.hpp"
 #include "tui/activity.hpp"
@@ -42,6 +43,23 @@ struct HelpViewSession {
     bool saved_dirty = false;
     highlight::Language saved_language = highlight::Language::Text;
     bool saved_language_automatic = true;
+};
+
+struct InsertEvent {
+    Error error;
+    input::InsertSource inserted;
+};
+
+struct InsertSession {
+    bool active = false;
+    bool cancel_requested = false;
+    std::uint64_t buffer_id = 0;
+    std::uint64_t revision = 0;
+    size_t position = 0;
+    std::string source;
+    runtime::EventQueue<InsertEvent> events;
+    // Join the worker before destroying the event queue it references.
+    runtime::JobHandle job;
 };
 
 }  // namespace
@@ -157,6 +175,7 @@ app::EditorRunResult run_editor(const std::string& path,
     PendingAutosaveRecovery pending_autosave_recovery;
     AssistSession assist_session;
     ReformatSession reformat_session;
+    InsertSession insert_session;
     StoredAssistCommand last_assist_command;
     AssistCompleterState assist_completer;
     PathCompleter minibuffer_path_completer;
@@ -172,6 +191,29 @@ app::EditorRunResult run_editor(const std::string& path,
     TerminalSize last_size = terminal_size();
     size_t activity_frame = 0;
     std::string theme_name = settings.theme_name;
+    input::InsertSourceOptions insert_options;
+    const cli::Options* runtime_options = nullptr;
+    if (interactive != nullptr) {
+        runtime_options = &interactive->context.options;
+    } else if (ai_continue.has_value()) {
+        runtime_options = &ai_continue->request.options;
+    }
+    if (runtime_options != nullptr) {
+        insert_options.max_file_bytes = runtime_options->max_input_bytes > 0
+                                            ? static_cast<size_t>(runtime_options->max_input_bytes)
+                                            : 0;
+        insert_options.fetch.connect_timeout_seconds = runtime_options->connect_timeout_seconds;
+        insert_options.fetch.timeout_seconds = runtime_options->timeout_seconds > 0
+                                                   ? runtime_options->timeout_seconds
+                                                   : 30;
+        insert_options.fetch.max_bytes = runtime_options->max_fetch_bytes;
+        insert_options.fetch.proxy = runtime_options->proxy;
+        insert_options.fetch.insecure_tls = runtime_options->insecure_tls;
+        insert_options.fetch.trace_http = runtime_options->trace_http;
+        insert_options.fetch.allow_private = runtime_options->allow_private_url_fetch;
+        insert_options.auto_convert_html_to_markdown =
+            runtime_options->auto_convert_html_to_markdown;
+    }
     if (settings.themes != nullptr) {
         settings.themes->normalize_name(theme_name, theme_name);
     }
@@ -202,7 +244,7 @@ app::EditorRunResult run_editor(const std::string& path,
         }
         return !help_view.active && !picker.active && !buffer_list_active && !pending_close_confirm &&
                !minibuffer.active && !replace.active && !assist_session.active &&
-               !reformat_session.active;
+               !reformat_session.active && !insert_session.active;
     };
 
     auto request_switch_to_chat = [&]() {
@@ -299,6 +341,10 @@ app::EditorRunResult run_editor(const std::string& path,
         }
         if (reformat_session.active) {
             minibuffer_message(minibuffer, "Wait for reformatting or press Esc to cancel it");
+            return;
+        }
+        if (insert_session.active) {
+            minibuffer_message(minibuffer, "Wait for insertion or press Esc to cancel it");
             return;
         }
         std::string help_text;
@@ -1107,6 +1153,92 @@ app::EditorRunResult run_editor(const std::string& path,
         return true;
     };
 
+    auto start_insert_source = [&](const std::string& source) {
+        if (insert_session.active) {
+            minibuffer_message(minibuffer, "An insertion is already running");
+            return;
+        }
+        if (source.empty()) {
+            minibuffer_message(minibuffer, "Usage: /insert FILE_OR_URL");
+            return;
+        }
+        if (source == "stdin") {
+            minibuffer_message(minibuffer,
+                               "stdin input is only supported by non-interactive --input and --attach");
+            return;
+        }
+        insert_session.active = true;
+        insert_session.cancel_requested = false;
+        insert_session.buffer_id = state.buffer_id();
+        insert_session.revision = state.revision();
+        insert_session.position = state.cursor;
+        insert_session.source = source;
+        const input::InsertSourceOptions options = insert_options;
+        runtime::EventQueue<InsertEvent>& event_queue = insert_session.events;
+        insert_session.job.start([source, options, &event_queue](runtime::CancellationToken token) mutable {
+            InsertEvent event;
+            event.error = input::load_insert_source(source, options, event.inserted, token);
+            event_queue.push(std::move(event));
+        });
+        minibuffer_message(minibuffer,
+                           std::string(input::is_http_url(source) ? "Fetching " : "Reading ") + source +
+                               " for insertion... Esc to cancel");
+    };
+
+    auto process_insert_events = [&]() -> bool {
+        InsertEvent event;
+        if (!insert_session.events.try_pop(event)) {
+            return false;
+        }
+        insert_session.job.join();
+        const bool was_cancelled = insert_session.cancel_requested;
+        EditorState* target = nullptr;
+        if (state.buffer_id() == insert_session.buffer_id) {
+            target = &state;
+        } else {
+            for (size_t index = 0; index < buffers.size(); ++index) {
+                if (index != active_buffer &&
+                    buffers[index].buffer_id() == insert_session.buffer_id) {
+                    target = &buffers[index];
+                    break;
+                }
+            }
+        }
+        insert_session.active = false;
+        if (was_cancelled || event.error.code == ErrorCode::Cancelled) {
+            minibuffer_message(minibuffer, "Insertion cancelled");
+            return true;
+        }
+        if (!event.error.ok()) {
+            minibuffer_message(minibuffer, event.error.message);
+            return true;
+        }
+        if (target == nullptr) {
+            minibuffer_message(minibuffer,
+                               "Insertion discarded because its target buffer was closed");
+            return true;
+        }
+        if (target->revision() != insert_session.revision) {
+            minibuffer_message(minibuffer,
+                               "Insertion discarded because its target buffer changed while loading");
+            return true;
+        }
+        target->cursor = std::min(insert_session.position, target->text.size());
+        target->clear_selection();
+        Error insert_error = target->insert(event.inserted.content);
+        if (!insert_error.ok()) {
+            minibuffer_message(minibuffer, insert_error.message);
+            return true;
+        }
+        if (target == &state) {
+            sync_active_buffer();
+        }
+        minibuffer_message(minibuffer,
+                           "Inserted " + insert_session.source + " at cursor" +
+                               (event.inserted.converted_html ? " as Markdown" : ""));
+        return true;
+    };
+
     auto submit_assist_command = [&]() {
         if (is_editor_help_command(minibuffer.input)) {
             exit_assist_command_mode(minibuffer, assist_completer);
@@ -1181,6 +1313,48 @@ app::EditorRunResult run_editor(const std::string& path,
                 break;
         }
         const std::string command_line = trim_ascii_copy(minibuffer.input);
+        if (command_line == "/insert" || command_line.rfind("/insert ", 0) == 0) {
+            pending_assist = PendingAssist{};
+            exit_assist_command_mode(minibuffer, assist_completer);
+            start_insert_source(command_line.size() <= 7
+                                    ? ""
+                                    : trim_ascii_copy(command_line.substr(7)));
+            return;
+        }
+        if (command_line == "/auto-convert-html-to-md" ||
+            command_line.rfind("/auto-convert-html-to-md ", 0) == 0) {
+            pending_assist = PendingAssist{};
+            exit_assist_command_mode(minibuffer, assist_completer);
+            const std::string requested = command_line.size() <= 24
+                                              ? ""
+                                              : ascii_lower(trim_ascii_copy(command_line.substr(24)));
+            if (requested.empty()) {
+                minibuffer_message(minibuffer,
+                                   std::string("Auto-convert HTML to Markdown: ") +
+                                       (insert_options.auto_convert_html_to_markdown ? "yes" : "no"));
+                return;
+            }
+            if (requested != "yes" && requested != "no" && requested != "on" &&
+                requested != "off" && requested != "true" && requested != "false") {
+                minibuffer_message(minibuffer,
+                                   "Usage: /auto-convert-html-to-md yes|no");
+                return;
+            }
+            insert_options.auto_convert_html_to_markdown =
+                requested == "yes" || requested == "on" || requested == "true";
+            if (interactive != nullptr) {
+                interactive->context.options.auto_convert_html_to_markdown =
+                    insert_options.auto_convert_html_to_markdown;
+            }
+            if (ai_continue.has_value()) {
+                ai_continue->request.options.auto_convert_html_to_markdown =
+                    insert_options.auto_convert_html_to_markdown;
+            }
+            minibuffer_message(minibuffer,
+                               std::string("Auto-convert HTML to Markdown: ") +
+                                   (insert_options.auto_convert_html_to_markdown ? "yes" : "no"));
+            return;
+        }
         if (command_line == "/reformat" || command_line == "/reformat-all") {
             pending_assist = PendingAssist{};
             exit_assist_command_mode(minibuffer, assist_completer);
@@ -1450,6 +1624,21 @@ app::EditorRunResult run_editor(const std::string& path,
         if (ch != '\t') {
             word_completer.reset();
         }
+        if (minibuffer.active && ch == 22) {
+            if (shared_clipboard().empty()) {
+                minibuffer.message = "Clipboard is empty";
+                return;
+            }
+            const Error paste_error = paste_into_minibuffer(minibuffer, shared_clipboard().text());
+            if (paste_error.ok()) {
+                assist_completer = AssistCompleterState{};
+                minibuffer_path_completer.reset();
+                minibuffer.message = "Pasted into minibuffer";
+            } else {
+                minibuffer.message = paste_error.message;
+            }
+            return;
+        }
         if (help_view.active) {
             if (handle_minibuffer_key(state,
                                       minibuffer,
@@ -1539,6 +1728,12 @@ app::EditorRunResult run_editor(const std::string& path,
             reformat_session.cancel_requested = true;
             reformat_session.job.cancel();
             minibuffer_message(minibuffer, "Cancelling reformat...");
+            return;
+        }
+        if (insert_session.active && ch == 27) {
+            insert_session.cancel_requested = true;
+            insert_session.job.cancel();
+            minibuffer_message(minibuffer, "Cancelling insertion...");
             return;
         }
         if (picker.active) {
@@ -1670,30 +1865,14 @@ app::EditorRunResult run_editor(const std::string& path,
                 return;
             }
             if (minibuffer.action == MinibufferAction::AssistPromptMode) {
-                if (ch == 'c' || ch == 'C') {
+                const std::optional<AssistPromptMode> prompt_mode =
+                    assist_prompt_mode_for_key(ch);
+                if (prompt_mode.has_value()) {
                     start_assist(pending_assist.kind,
                                  pending_assist.command_index,
                                  std::nullopt,
                                  pending_assist.custom_prompt,
-                                 AssistPromptMode::Continue);
-                } else if (ch == 's' || ch == 'S') {
-                    start_assist(pending_assist.kind,
-                                 pending_assist.command_index,
-                                 std::nullopt,
-                                 pending_assist.custom_prompt,
-                                 AssistPromptMode::Selection);
-                } else if (ch == 'a' || ch == 'A') {
-                    start_assist(pending_assist.kind,
-                                 pending_assist.command_index,
-                                 std::nullopt,
-                                 pending_assist.custom_prompt,
-                                 AssistPromptMode::All);
-                } else if (ch == 'i' || ch == 'I' || ch == 'l' || ch == 'L') {
-                    start_assist(pending_assist.kind,
-                                 pending_assist.command_index,
-                                 std::nullopt,
-                                 pending_assist.custom_prompt,
-                                 AssistPromptMode::Insert);
+                                 *prompt_mode);
                 }
                 return;
             }
@@ -1881,6 +2060,17 @@ app::EditorRunResult run_editor(const std::string& path,
             minibuffer_message(minibuffer, ui::kConfirmationRetryPrompt);
             return;
         }
+        if (minibuffer.active) {
+            const Error paste_error = paste_into_minibuffer(minibuffer, terminal_text);
+            if (paste_error.ok()) {
+                assist_completer = AssistCompleterState{};
+                minibuffer_path_completer.reset();
+                minibuffer.message = "Pasted into minibuffer";
+            } else {
+                minibuffer.message = paste_error.message;
+            }
+            return;
+        }
         Error paste_error = paste_with_clipboard_preference(state, shared_clipboard(), terminal_text);
         minibuffer_message(minibuffer, paste_error.ok() ? "Pasted" : paste_error.message);
     };
@@ -1937,6 +2127,7 @@ app::EditorRunResult run_editor(const std::string& path,
     while (!quit) {
         const bool assist_updated = process_assist_events();
         const bool reformat_updated = process_reformat_events();
+        const bool insert_updated = process_insert_events();
         if (pending_regenerate_restart) {
             pending_regenerate_restart = false;
             if (last_assist_command.valid) {
@@ -1965,7 +2156,8 @@ app::EditorRunResult run_editor(const std::string& path,
             const TerminalSize current_size = terminal_size();
             if (current_size.rows != last_size.rows || current_size.cols != last_size.cols ||
                 assist_session.job.running() || model_list.job.running() || assist_updated ||
-                reformat_session.job.running() || reformat_updated || model_updated ||
+                reformat_session.job.running() || reformat_updated || insert_session.job.running() ||
+                insert_updated || model_updated ||
                 assist_animating) {
                 last_size = current_size;
                 render_editor();

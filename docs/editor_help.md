@@ -122,12 +122,16 @@ Press **`Esc`** to open the command minibuffer (`Command:`). Type a slash comman
 | `/tab-width [1..32]` | Show or set this buffer's tab width |
 | `/tab-style [spaces|tab]` | Show or set this buffer's indentation style |
 | `/linebreak [lf|cr|crlf]` | Show or set this buffer's save line endings |
+| `/insert FILE_OR_URL` | Insert bounded UTF-8 file text or fetched HTML at the cursor |
+| `/auto-convert-html-to-md [yes|no]` | Show or set URL HTML-to-Markdown conversion for this process |
 | `/provider [NAME]` | Change provider (picker when omitted) |
 | `/model [MODEL]` | Change model (picker when omitted) |
 | `/help` | Toggle this help view |
 | `/quit` | Quit the editor |
 
 Most commands accept a **mode** (prompted if omitted):
+
+`/prompt TEXT` uses the same four choices.
 
 | Mode key | Name | Input to model | Output |
 |----------|------|----------------|--------|
@@ -178,6 +182,8 @@ The status line shows the current language and line-ending mode compactly in par
 - `tab-width` — fallback indentation and display tab width from 1 through 32 (default `4`)
 - `tab-style` — fallback `spaces` or `tab` style (default `spaces`)
 - `linebreak` — default `lf`, `cr`, or `crlf` for new, empty, no-ending, and mixed-ending files (default `lf`)
+
+`[input] auto-convert-html-to-md` controls `/insert URL` and defaults to `yes`. URL insertion accepts only HTTP(S), retains the existing private-address, proxy, timeout, TLS, content-type, and response-size protections, and requires UTF-8 HTML. Set it to `no` to insert raw HTML. Local `/insert` accepts every file ending, but rejects NUL-containing, invalid UTF-8, unreadable, and oversized content. CR and CRLF are normalized to the editor's internal LF representation and use the buffer's chosen linebreak mode when saved.
 
 When you open a file whose auto-save backup (for example `notes.txt~`) is newer than the saved file, pkchat asks whether to recover the backup instead. At startup this prompt appears on stderr before the editor UI; when opening another file in the editor, the minibuffer asks `y` to recover or `n` to load the saved file.
 

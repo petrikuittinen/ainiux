@@ -31,6 +31,7 @@ struct TuiCommandHandlers {
     std::function<void()> pop_last_message;
     std::function<void()> start_response_to_unanswered_user;
     std::function<void(const std::string&)> start_insert;
+    std::function<void(const std::string&)> start_attach;
     std::function<void(const std::string&)> start_fetch;
     std::function<void(const std::string&)> start_search;
     std::function<void(bool)> set_thinking_trace_mode;

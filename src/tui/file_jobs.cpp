@@ -116,12 +116,54 @@ void TuiFileJobs::start_store_save() {
     });
 }
 
-void TuiFileJobs::start_insert(const std::string& path) {
+void TuiFileJobs::start_insert(const std::string& source) {
+    if (busy()) {
+        return;
+    }
+    if (source.empty()) {
+        status = "Usage: /insert FILE_OR_URL";
+        return;
+    }
+    if (source == "stdin") {
+        status = "stdin input is only supported by non-interactive --input and --attach";
+        return;
+    }
+    input::InsertSourceOptions options;
+    options.max_file_bytes = context.options.max_input_bytes > 0
+                                 ? static_cast<size_t>(context.options.max_input_bytes)
+                                 : 0;
+    options.fetch.connect_timeout_seconds = context.options.connect_timeout_seconds;
+    options.fetch.timeout_seconds = context.options.timeout_seconds > 0
+                                        ? context.options.timeout_seconds
+                                        : 30;
+    options.fetch.max_bytes = context.options.max_fetch_bytes;
+    options.fetch.proxy = context.options.proxy;
+    options.fetch.insecure_tls = context.options.insecure_tls;
+    options.fetch.trace_http = context.options.trace_http;
+    options.fetch.allow_private = context.options.allow_private_url_fetch;
+    options.auto_convert_html_to_markdown = context.options.auto_convert_html_to_markdown;
+    runtime::EventQueue<TuiEvent>& event_queue = events;
+    file_job.start([source, options, &event_queue](runtime::CancellationToken token) mutable {
+        TuiEvent event;
+        event.type = TuiEventType::InsertDone;
+        event.text = source;
+        input::InsertSource loaded;
+        event.error = input::load_insert_source(source, options, loaded, token);
+        if (event.error.ok()) {
+            event.inserted_text = std::move(loaded.content);
+        }
+        event_queue.push(std::move(event));
+    });
+    status = std::string(input::is_http_url(source) ? "Fetching " : "Reading ") + source +
+             " for insertion...";
+}
+
+void TuiFileJobs::start_attach(const std::string& path) {
     if (busy()) {
         return;
     }
     if (path.empty()) {
-        status = "Usage: /insert PATH or /attach PATH";
+        status = "Usage: /attach PATH";
         return;
     }
     if (path == "stdin") {
@@ -146,7 +188,7 @@ void TuiFileJobs::start_insert(const std::string& path) {
     runtime::EventQueue<TuiEvent>& event_queue = events;
     file_job.start([path, type, text_limit, image_limit, &event_queue](runtime::CancellationToken token) mutable {
         TuiEvent event;
-        event.type = TuiEventType::InsertDone;
+        event.type = TuiEventType::AttachDone;
         event.text = path;
         if (type.kind == input::Kind::Image) {
             event.image_attachment = true;
@@ -172,7 +214,7 @@ void TuiFileJobs::start_insert(const std::string& path) {
         }
         event_queue.push(std::move(event));
     });
-    status = (type.kind == input::Kind::Image ? "Attaching " : "Inserting ") + path + "...";
+    status = "Attaching " + path + "...";
 }
 
 void TuiFileJobs::start_fetch(const std::string& url) {

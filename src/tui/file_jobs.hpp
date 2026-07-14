@@ -27,7 +27,8 @@ struct TuiFileJobs {
     void start_load(const std::string& path);
     void start_store_load(long long thread_id);
     void start_store_save();
-    void start_insert(const std::string& path);
+    void start_insert(const std::string& source);
+    void start_attach(const std::string& path);
     void start_fetch(const std::string& url);
     void start_search(const std::string& query);
 };
