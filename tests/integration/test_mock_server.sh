@@ -458,6 +458,7 @@ repl_fetch_reply=$(printf '/fetch %s/page\nsummarize-url\n/quit\n' "$BASE" | \
     "$ROOT/pkchat" "$BASE" --quiet --repl --no-stream -m "$MODEL" --allow-private-url-fetch)
 test "$repl_fetch_reply" = "url-context-ok"
 
+python3 "$ROOT/tests/integration/editor_continue_driver.py" "$ROOT/pkchat" "$BASE" "$MODEL"
 python3 "$ROOT/tests/integration/editor_buffers_driver.py" "$ROOT/pkchat"
 python3 "$ROOT/tests/integration/editor_locking_driver.py" "$ROOT/pkchat"
 python3 "$ROOT/tests/integration/editor_text_modes_driver.py" "$ROOT/pkchat"

@@ -63,6 +63,8 @@ struct AssistExecution {
     AssistEditKind edit_kind = AssistEditKind::StreamInsert;
     size_t replace_start = 0;
     size_t replace_count = 0;
+    bool code_completion = false;
+    highlight::Language completion_language = highlight::Language::Text;
 };
 
 struct AssistCompletionResult {
@@ -104,6 +106,8 @@ provider::RequestContext assist_request_context(const AiContinueContext& context
 void start_assist_job(const AiContinueContext& context,
                       const std::vector<provider::Message>& messages,
                       bool stream,
+                      bool code_completion,
+                      highlight::Language completion_language,
                       runtime::EventQueue<ContinueEvent>& events,
                       runtime::JobHandle& job);
 std::string trim_assist_inplace_response(std::string text);
@@ -125,6 +129,28 @@ class AssistStreamFilter {
     bool done_ = false;
     std::string detect_buffer_;
     std::string holdback_;
+};
+
+class CodeAssistStreamFilter {
+   public:
+    explicit CodeAssistStreamFilter(highlight::Language language);
+
+    Error feed(const std::string& chunk, std::string& output);
+    Error finish(std::string& output);
+
+   private:
+    Error decide_leading(bool finishing, std::string& output);
+    void feed_fenced(const std::string& chunk, std::string& output);
+    void process_fenced_line(std::string line, std::string& output);
+
+    std::string language_;
+    bool decided_ = false;
+    bool fenced_ = false;
+    bool done_ = false;
+    std::string leading_;
+    std::string line_buffer_;
+    std::string pending_close_;
+    std::string pending_after_close_;
 };
 
 }  // namespace pkchat::editor

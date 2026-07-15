@@ -45,10 +45,12 @@ def main():
         return 2
 
     binary, base_url, model = sys.argv[1:4]
-    test_path = os.path.join(os.path.dirname(__file__), "continue_test_input.txt")
-    prefix = "The capital of France is "
+    test_path = os.path.join(os.path.dirname(os.path.abspath(binary)), "build", "continue_test_input.py")
+    prefix = "def greet(name):\n    "
+    postfix = "\n\nprint(greet(\"Ada\"))\n"
+    completion = "return f\"Hello, {name}!\"\n"
     with open(test_path, "w", encoding="utf-8") as handle:
-        handle.write(prefix)
+        handle.write(prefix + postfix)
 
     master, slave = pty.openpty()
     process = subprocess.Popen(
@@ -65,13 +67,14 @@ def main():
         time.sleep(0.4)
         output.extend(drain(master, 1.0))
 
-        # Move cursor to end of buffer, then trigger AI continue.
-        output.extend(send(master, b"\x1b[4;5~"))  # Ctrl+End
+        # Place the cursor in the Python gap, then trigger mode-aware AI completion.
+        output.extend(send(master, b"\x1b[1;5H"))  # Ctrl+Home
+        output.extend(send(master, b"\x1b[C" * len(prefix)))
         output.extend(send(master, b"\x00"))  # Ctrl+Space
 
-        deadline = time.time() + 180.0
+        deadline = time.time() + 30.0
         saw_thinking = False
-        saw_stopped = False
+        saw_completion = "Hello, {name}!" in visible_text(output)
         while time.time() < deadline:
             if process.poll() is not None:
                 raise RuntimeError(f"editor exited early with status {process.returncode}")
@@ -84,22 +87,27 @@ def main():
                     print("saw thinking status in minibuffer", file=sys.stderr)
                 if "writing. Press ESC to stop." in text:
                     print("saw writing status in minibuffer", file=sys.stderr)
-                if "stopped and ready" in text:
-                    saw_stopped = True
-                    print("saw stopped and ready", file=sys.stderr)
+                if "Hello, {name}!" in visible_text(output):
+                    saw_completion = True
+                    print("saw streamed Python completion", file=sys.stderr)
                     break
-            elif saw_thinking and not saw_stopped:
+            elif saw_thinking and not saw_completion:
                 continue
-            elif saw_stopped:
+            elif saw_completion:
                 break
 
-        if not saw_stopped:
-            print("timeout waiting for continue; sending Esc to abort", file=sys.stderr)
+        if not saw_completion:
+            print("timeout waiting for code completion; sending Esc to abort", file=sys.stderr)
             output.extend(send(master, b"\x1b"))
-            chunk = drain(master, 5.0)
-            output.extend(chunk)
-            if b"stopped and ready" in chunk:
-                saw_stopped = True
+            output.extend(drain(master, 5.0))
+            raise RuntimeError(
+                "did not observe streamed Python completion; terminal tail="
+                + repr(visible_text(output[-4000:]))
+            )
+
+        # Let the closing fence and [DONE] event finish before saving.
+        time.sleep(0.5)
+        output.extend(drain(master, 1.0))
 
         output.extend(send(master, b"\x13"))  # Ctrl+S save
         output.extend(send(master, b"\x11"))  # Ctrl+Q quit
@@ -116,20 +124,18 @@ def main():
     with open(test_path, "r", encoding="utf-8") as handle:
         final_text = handle.read()
 
+    expected = prefix + completion + postfix
     print("prefix:", repr(prefix))
+    print("postfix:", repr(postfix))
     print("final:", repr(final_text))
-    print("growth:", len(final_text) - len(prefix), "bytes")
+    print("growth:", len(final_text) - len(prefix + postfix), "bytes")
     print("thinking_status_seen:", saw_thinking)
-    print("stopped_status_seen:", saw_stopped)
+    print("completion_seen:", saw_completion)
 
-    if not final_text.startswith(prefix):
-        raise RuntimeError("continued text does not preserve the original prefix")
-    if len(final_text) <= len(prefix):
-        raise RuntimeError("continue did not append any visible text to the file")
-    if not saw_thinking and not saw_stopped:
-        raise RuntimeError("did not observe continue minibuffer status messages")
+    if final_text != expected:
+        raise RuntimeError("code completion did not insert only the generated code between the original halves")
 
-    print("editor continue integration check passed")
+    print("editor code-gap completion integration check passed")
     return 0
 
 

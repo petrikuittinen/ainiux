@@ -28,7 +28,8 @@ bool needs_value(const std::string& opt) {
         "--context", "--context-policy", "--image-capability",
         "--save-chat", "--load-chat", "--dataset", "--category", "--case",
         "--runs", "--warmup", "--limit", "--mode", "--concurrency", "--duration",
-        "--summary-format", "--editor-continue-read", "--editor-continue-max-tokens"};
+        "--summary-format", "--editor-continue-prefix-max-chars",
+        "--editor-continue-postfix-max-chars", "--editor-continue-max-tokens"};
     for (const char* item : with_values) {
         if (opt == item) {
             return true;
@@ -68,12 +69,22 @@ Error parse_int(const std::string& name, const std::string& text, int& out) {
     return ok_error();
 }
 
-Error parse_nonnegative_long(const std::string& name, const std::string& text, long& out) {
-    char* end = nullptr;
-    out = std::strtol(text.c_str(), &end, 10);
-    if (end == text.c_str() || *end != '\0' || out < 0) {
+Error parse_nonnegative_size(const std::string& name, const std::string& text, size_t& out) {
+    if (text.empty()) {
         return {ErrorCode::BadArgs, name + " expects a non-negative integer"};
     }
+    size_t value = 0;
+    for (char ch : text) {
+        if (ch < '0' || ch > '9') {
+            return {ErrorCode::BadArgs, name + " expects a non-negative integer"};
+        }
+        const size_t digit = static_cast<size_t>(ch - '0');
+        if (value > (std::numeric_limits<size_t>::max() - digit) / 10) {
+            return {ErrorCode::BadArgs, name + " value is too large"};
+        }
+        value = value * 10 + digit;
+    }
+    out = value;
     return ok_error();
 }
 
@@ -367,13 +378,18 @@ ParseResult parse_args(int argc, char** argv, const Options& base_options) {
                     return {opts, err};
                 }
                 opts.has_max_output_tokens = true;
-            } else if (opt == "--editor-continue-read") {
-                long read_chars = 0;
-                Error err = parse_nonnegative_long(opt, value, read_chars);
+            } else if (opt == "--editor-continue-prefix-max-chars") {
+                Error err = parse_nonnegative_size(
+                    opt, value, opts.editor_ai_continue_prefix_max_chars);
                 if (!err.ok()) {
                     return {opts, err};
                 }
-                opts.editor_ai_continue_read_chars = static_cast<size_t>(read_chars);
+            } else if (opt == "--editor-continue-postfix-max-chars") {
+                Error err = parse_nonnegative_size(
+                    opt, value, opts.editor_ai_continue_postfix_max_chars);
+                if (!err.ok()) {
+                    return {opts, err};
+                }
             } else if (opt == "--editor-continue-max-tokens") {
                 Error err = parse_int(opt, value, opts.editor_ai_continue_max_tokens);
                 if (!err.ok()) {
@@ -666,8 +682,12 @@ Options:
                                 A provider shortcut/profile may precede --editor without -m/--model;
                                 choose a model inside the editor with /model (like --chat).
                                 Use --provider none for offline local editing.
-      --editor-continue-read N  Characters before the cursor sent for Ctrl+Space /continue;
-                                default 16384; 0 means unlimited.
+      --editor-continue-prefix-max-chars N
+                                Characters before the cursor sent for Ctrl+Space /continue;
+                                default 4000; 0 disables prefix context.
+      --editor-continue-postfix-max-chars N
+                                Characters after the cursor sent for code completion;
+                                default 2000; 0 disables postfix context.
       --editor-continue-max-tokens N
                                 Maximum streamed output tokens for editor AI continue; default 32768.
       --input PATH              Read text/Markdown/HTML, or attach PNG/JPEG/GIF with -p;

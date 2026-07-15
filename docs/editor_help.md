@@ -91,10 +91,22 @@ Requires a configured provider **and** model. If either is missing, `Ctrl+Space`
 
 `Ctrl+Space` runs **`/continue`** in **continue** mode:
 
-1. Sends up to `continue_read_chars` characters immediately before the cursor as context (default 16384; `0` means unlimited)
-2. Streams new text after the cursor (thinking traces stay out of the buffer)
-3. Shows status in the minibuffer: `thinking...`, `writing.`, `stopped and ready`
-4. `Esc` during generation cancels the request but keeps text already streamed
+1. In `text` and `markdown` modes, sends bounded prefix context and continues prose.
+2. In every other `/mode`, sends bounded UTF-8-character context before and after the cursor and requests only insertion code for the canonical active language. This mode split applies even when `/highlight off` is set.
+3. Streams the result at the original cursor without changing the existing postfix or normalizing generated whitespace. A matching or unlabeled Markdown fence may be removed; a mismatched leading fence is rejected.
+4. Omits postfix data when the postfix limit is `0` or the complete remainder is empty/whitespace-only (spaces, tabs, CR/LF, form feed, or vertical tab).
+5. Keeps thinking traces out of the buffer and shows `thinking...` / `writing.` status.
+6. `Esc` cancels generation but keeps partial output; the stream remains one undoable edit.
+
+Context settings:
+
+| Side | Default | Config | CLI | Environment |
+|------|---------|--------|-----|-------------|
+| Prefix | 4000 | `continue_prefix_max_chars` | `--editor-continue-prefix-max-chars N` | `MAX_CONTINUE_PREFIX` |
+| Code postfix | 2000 | `continue_postfix_max_chars` | `--editor-continue-postfix-max-chars N` | `MAX_CONTINUE_POSTFIX` |
+| Output tokens | 32768 | `continue_max_tokens` | `--editor-continue-max-tokens N` | `MAX_AI_CONTINUE_TOKENS` |
+
+For either context side, `0` disables that side; it does not mean unlimited.
 
 ## Slash commands (`Esc` then type command)
 
@@ -106,7 +118,7 @@ Press **`Esc`** to open the command minibuffer (`Command:`). Type a slash comman
 |---------|---------|
 | `/spell` | Fix spelling |
 | `/grammar` | Fix grammar |
-| `/continue` | Continue writing from cursor context |
+| `/continue` | Continue prose or complete a code gap, based on active mode |
 | `/fact` | Check factual accuracy |
 | `/comment` | Suggest improvements |
 | `/rewrite` | Rewrite for spelling, grammar, facts, and style |

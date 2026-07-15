@@ -65,6 +65,30 @@ void test_editor_ai_continue_helpers() {
     check(state.undo(), "undo after stream chunk succeeds");
     check(state.text.str() == "Once upon a time", "undo removes only the normal insert");
 
+    pkchat::editor::EditorState gap =
+        pkchat::editor::EditorState::from_text("beforeAFTER");
+    gap.cursor = 6;
+    const pkchat::editor::EditorSnapshot gap_before = gap.capture_state();
+    check(gap.insert_without_undo(" inserted ").ok() &&
+              gap.text.str() == "before inserted AFTER",
+          "stream insertion leaves the original postfix bytes after inserted code");
+    check(gap.insert_without_undo("code").ok(), "a second streamed code chunk inserts at the gap");
+    gap.finalize_stream_edit(gap_before);
+    check(gap.undo() && gap.text.str() == "beforeAFTER",
+          "all streamed gap-completion chunks are one undoable edit");
+
+    pkchat::editor::EditorState cancelled_gap =
+        pkchat::editor::EditorState::from_text("leftRIGHT");
+    cancelled_gap.cursor = 4;
+    const pkchat::editor::EditorSnapshot cancelled_before = cancelled_gap.capture_state();
+    check(cancelled_gap.insert_without_undo("partial  \n").ok(),
+          "partial code output can be inserted before cancellation");
+    cancelled_gap.finalize_stream_edit(cancelled_before);
+    check(cancelled_gap.text.str() == "leftpartial  \nRIGHT",
+          "cancellation commit keeps partial code and its exact trailing whitespace");
+    check(cancelled_gap.undo() && cancelled_gap.text.str() == "leftRIGHT",
+          "cancelled partial code remains a single undoable edit");
+
     const char* none_argv[] = {"pkchat", "--provider", "none", "--editor"};
     pkchat::cli::ParseResult none_parsed = pkchat::cli::parse_args(4, const_cast<char**>(none_argv));
     check(none_parsed.error.ok(), "none provider editor args parse");
@@ -120,40 +144,86 @@ void test_editor_ai_continue_helpers() {
     pkchat::cli::Options default_options;
     const pkchat::editor::AiContinueSettings default_settings =
         pkchat::editor::ai_continue_settings(default_options);
-    check(default_settings.max_read_chars == pkchat::editor::kDefaultAiContinueReadChars,
-          "default continue read uses the configured 16k default");
+    check(default_settings.max_prefix_chars ==
+                  pkchat::editor::kDefaultAiContinuePrefixMaxChars &&
+              default_settings.max_postfix_chars ==
+                  pkchat::editor::kDefaultAiContinuePostfixMaxChars,
+          "default continue context uses the configured 4000/2000 character limits");
+    pkchat::cli::Options cli_settings_options = default_options;
+    cli_settings_options.editor_ai_continue_prefix_max_chars = 99;
+    cli_settings_options.editor_ai_continue_postfix_max_chars = 88;
+    const pkchat::editor::AiContinueSettings cli_settings =
+        pkchat::editor::ai_continue_settings(cli_settings_options);
+    check(cli_settings.max_prefix_chars == 99 && cli_settings.max_postfix_chars == 88,
+          "effective CLI continuation settings override built-in/config values");
 
-    const char* previous_read = std::getenv("MAX_AI_CONTINUE_READ");
-    const char* previous_tokens = std::getenv("MAX_AI_CONTINUE_TOKENS");
+    const char* previous_prefix_raw = std::getenv("MAX_CONTINUE_PREFIX");
+    const char* previous_postfix_raw = std::getenv("MAX_CONTINUE_POSTFIX");
+    const std::optional<std::string> previous_prefix =
+        previous_prefix_raw == nullptr ? std::nullopt
+                                       : std::optional<std::string>(previous_prefix_raw);
+    const std::optional<std::string> previous_postfix =
+        previous_postfix_raw == nullptr ? std::nullopt
+                                        : std::optional<std::string>(previous_postfix_raw);
+    const char* previous_tokens_raw = std::getenv("MAX_AI_CONTINUE_TOKENS");
+    const std::optional<std::string> previous_tokens =
+        previous_tokens_raw == nullptr ? std::nullopt
+                                       : std::optional<std::string>(previous_tokens_raw);
 #if defined(_WIN32)
-    _putenv_s("MAX_AI_CONTINUE_READ", "16");
+    _putenv_s("MAX_CONTINUE_PREFIX", "16");
+    _putenv_s("MAX_CONTINUE_POSTFIX", "8");
     _putenv_s("MAX_AI_CONTINUE_TOKENS", "2048");
 #else
-    setenv("MAX_AI_CONTINUE_READ", "16", 1);
+    setenv("MAX_CONTINUE_PREFIX", "16", 1);
+    setenv("MAX_CONTINUE_POSTFIX", "8", 1);
     setenv("MAX_AI_CONTINUE_TOKENS", "2048", 1);
 #endif
-    const pkchat::editor::AiContinueSettings env_settings = pkchat::editor::ai_continue_settings(default_options);
-    check(env_settings.max_read_chars == 16, "MAX_AI_CONTINUE_READ overrides default");
+    const pkchat::editor::AiContinueSettings env_settings =
+        pkchat::editor::ai_continue_settings(cli_settings_options);
+    check(env_settings.max_prefix_chars == 16, "MAX_CONTINUE_PREFIX overrides default");
+    check(env_settings.max_postfix_chars == 8, "MAX_CONTINUE_POSTFIX overrides default");
     check(env_settings.max_output_tokens == 2048, "MAX_AI_CONTINUE_TOKENS overrides default");
+#if !defined(_WIN32)
+    setenv("MAX_CONTINUE_PREFIX", "0", 1);
+    setenv("MAX_CONTINUE_POSTFIX", "0", 1);
+#else
+    _putenv_s("MAX_CONTINUE_PREFIX", "0");
+    _putenv_s("MAX_CONTINUE_POSTFIX", "0");
+#endif
+    const pkchat::editor::AiContinueSettings zero_env_settings =
+        pkchat::editor::ai_continue_settings(default_options);
+    check(zero_env_settings.max_prefix_chars == 0 &&
+              zero_env_settings.max_postfix_chars == 0,
+          "zero environment limits disable both context sides");
 #if defined(_WIN32)
-    if (previous_read != nullptr) {
-        _putenv_s("MAX_AI_CONTINUE_READ", previous_read);
+    if (previous_prefix.has_value()) {
+        _putenv_s("MAX_CONTINUE_PREFIX", previous_prefix->c_str());
     } else {
-        _putenv_s("MAX_AI_CONTINUE_READ", "");
+        _putenv_s("MAX_CONTINUE_PREFIX", "");
     }
-    if (previous_tokens != nullptr) {
-        _putenv_s("MAX_AI_CONTINUE_TOKENS", previous_tokens);
+    if (previous_postfix.has_value()) {
+        _putenv_s("MAX_CONTINUE_POSTFIX", previous_postfix->c_str());
+    } else {
+        _putenv_s("MAX_CONTINUE_POSTFIX", "");
+    }
+    if (previous_tokens.has_value()) {
+        _putenv_s("MAX_AI_CONTINUE_TOKENS", previous_tokens->c_str());
     } else {
         _putenv_s("MAX_AI_CONTINUE_TOKENS", "");
     }
 #else
-    if (previous_read != nullptr) {
-        setenv("MAX_AI_CONTINUE_READ", previous_read, 1);
+    if (previous_prefix.has_value()) {
+        setenv("MAX_CONTINUE_PREFIX", previous_prefix->c_str(), 1);
     } else {
-        unsetenv("MAX_AI_CONTINUE_READ");
+        unsetenv("MAX_CONTINUE_PREFIX");
     }
-    if (previous_tokens != nullptr) {
-        setenv("MAX_AI_CONTINUE_TOKENS", previous_tokens, 1);
+    if (previous_postfix.has_value()) {
+        setenv("MAX_CONTINUE_POSTFIX", previous_postfix->c_str(), 1);
+    } else {
+        unsetenv("MAX_CONTINUE_POSTFIX");
+    }
+    if (previous_tokens.has_value()) {
+        setenv("MAX_AI_CONTINUE_TOKENS", previous_tokens->c_str(), 1);
     } else {
         unsetenv("MAX_AI_CONTINUE_TOKENS");
     }
@@ -597,7 +667,7 @@ void test_editor_assist_helpers() {
     check(execution.usage_messages.empty(),
           "/continue continue omits separate usage messages when the full prefix fits the read limit");
 
-    context.settings.max_read_chars = 4096;
+    context.settings.max_prefix_chars = 4096;
     pkchat::editor::EditorState long_state =
         pkchat::editor::EditorState::from_text(std::string(5000, 'a'));
     long_state.cursor = long_state.text.size();
@@ -616,6 +686,116 @@ void test_editor_assist_helpers() {
     check(execution.messages.front().content.rfind("Custom system", 0) == 0 &&
               execution.messages.front().content.find(default_continue->prompt) != std::string::npos,
           "user --system is prepended to assist task system prompt");
+
+    pkchat::editor::EditorState markdown_state =
+        pkchat::editor::EditorState::from_text("# prose tail");
+    markdown_state.cursor = markdown_state.text.size();
+    markdown_state.set_language(pkchat::highlight::Language::Markdown, false);
+    execution = pkchat::editor::build_assist_execution(
+        markdown_state, context, pkchat::editor::AssistCommandKind::Configured,
+        *continue_index, pkchat::editor::AssistScope::Continue, "", std::nullopt);
+    check(!execution.code_completion &&
+              execution.messages.back().content == "<content># prose tail</content>",
+          "Markdown /continue retains prefix-only prose continuation");
+
+    context.settings.max_prefix_chars = 3;
+    context.settings.max_postfix_chars = 4;
+    const std::string beta = "\xCE\xB2";
+    pkchat::editor::EditorState python_state =
+        pkchat::editor::EditorState::from_text(std::string("\xCE\xB1") + beta + "AB  tail\xE5\xB0\xBE");
+    python_state.cursor = std::string("\xCE\xB1").size() + beta.size() + 2;
+    python_state.set_language(pkchat::highlight::Language::Python, false);
+    python_state.highlight_enabled = false;
+    execution = pkchat::editor::build_assist_execution(
+        python_state, context, pkchat::editor::AssistCommandKind::Configured,
+        *continue_index, pkchat::editor::AssistScope::Continue, "", std::nullopt);
+    check(execution.ok && execution.code_completion &&
+              execution.completion_language == pkchat::highlight::Language::Python,
+          "Python /continue uses code completion even with visual highlighting disabled");
+    check(execution.messages.front().content.find("exact python code") != std::string::npos &&
+              execution.messages.front().content.find(default_continue->prompt) == std::string::npos,
+          "code completion uses the dedicated canonical-language instruction, not the prose prompt");
+    const std::string& python_request = execution.messages.back().content;
+    check(python_request.find("LANGUAGE python\n") != std::string::npos &&
+              python_request.find("PREFIX_BYTES 4\n" + beta + "AB\n<CURSOR/>") !=
+                  std::string::npos &&
+              python_request.find("POSTFIX_BYTES 4\n  ta\n") != std::string::npos,
+          "code completion slices multibyte prefix and immediate postfix by UTF-8 characters");
+
+    context.settings.max_postfix_chars = 2;
+    execution = pkchat::editor::build_assist_execution(
+        python_state, context, pkchat::editor::AssistCommandKind::Configured,
+        *continue_index, pkchat::editor::AssistScope::Continue, "", std::nullopt);
+    check(execution.messages.back().content.find("POSTFIX_BYTES 2\n  \n") !=
+              std::string::npos,
+          "bounded postfix is sent exactly even when its immediate slice is whitespace");
+
+    pkchat::editor::EditorState code_start =
+        pkchat::editor::EditorState::from_text("print(value)");
+    code_start.cursor = 0;
+    code_start.set_language(pkchat::highlight::Language::Python, false);
+    context.settings.max_prefix_chars = 5;
+    context.settings.max_postfix_chars = 3;
+    execution = pkchat::editor::build_assist_execution(
+        code_start, context, pkchat::editor::AssistCommandKind::Configured,
+        *continue_index, pkchat::editor::AssistScope::Continue, "", std::nullopt);
+    check(execution.messages.back().content.find("PREFIX_BYTES 0\n\n<CURSOR/>") !=
+                  std::string::npos &&
+              execution.messages.back().content.find("POSTFIX_BYTES 3\npri\n") !=
+                  std::string::npos,
+          "code completion at buffer start sends empty prefix and bounded leading postfix");
+
+    code_start.cursor = code_start.text.size();
+    execution = pkchat::editor::build_assist_execution(
+        code_start, context, pkchat::editor::AssistCommandKind::Configured,
+        *continue_index, pkchat::editor::AssistScope::Continue, "", std::nullopt);
+    check(execution.messages.back().content.find("PREFIX_BYTES 5\nalue)") !=
+                  std::string::npos &&
+              execution.messages.back().content.find("POSTFIX_BYTES") == std::string::npos,
+          "code completion at buffer end sends bounded prefix and omits empty postfix");
+
+    std::string invalid_source = "A";
+    invalid_source.push_back(static_cast<char>(0xFF));
+    invalid_source += "Brest";
+    pkchat::editor::EditorState invalid_state =
+        pkchat::editor::EditorState::from_text(invalid_source);
+    invalid_state.cursor = 3;
+    invalid_state.set_language(pkchat::highlight::Language::Python, false);
+    context.settings.max_prefix_chars = 2;
+    context.settings.max_postfix_chars = 2;
+    execution = pkchat::editor::build_assist_execution(
+        invalid_state, context, pkchat::editor::AssistCommandKind::Configured,
+        *continue_index, pkchat::editor::AssistScope::Continue, "", std::nullopt);
+    std::string invalid_prefix;
+    invalid_prefix.push_back(static_cast<char>(0xFF));
+    invalid_prefix += "B";
+    check(execution.messages.back().content.find("PREFIX_BYTES 2\n" + invalid_prefix) !=
+              std::string::npos,
+          "invalid UTF-8 bytes are preserved and count as one continuation context unit");
+
+    pkchat::editor::EditorState whitespace_postfix =
+        pkchat::editor::EditorState::from_text("abc \t\r\n\f\v");
+    whitespace_postfix.cursor = 3;
+    whitespace_postfix.set_language(pkchat::highlight::Language::Json, false);
+    context.settings.max_prefix_chars = 0;
+    context.settings.max_postfix_chars = 20;
+    execution = pkchat::editor::build_assist_execution(
+        whitespace_postfix, context, pkchat::editor::AssistCommandKind::Configured,
+        *continue_index, pkchat::editor::AssistScope::Continue, "", std::nullopt);
+    check(execution.messages.back().content.find("LANGUAGE json\nPREFIX_BYTES 0\n\n<CURSOR/>") !=
+                  std::string::npos &&
+              execution.messages.back().content.find("POSTFIX_BYTES") == std::string::npos,
+          "disabled prefix is empty and a complete whitespace-only postfix is omitted");
+
+    context.settings.max_postfix_chars = 0;
+    execution = pkchat::editor::build_assist_execution(
+        python_state, context, pkchat::editor::AssistCommandKind::Configured,
+        *continue_index, pkchat::editor::AssistScope::Continue, "", std::nullopt);
+    check(execution.messages.back().content.find("POSTFIX_BYTES") == std::string::npos,
+          "zero postfix limit omits postfix data in code completion");
+
+    context.settings.max_prefix_chars = pkchat::editor::kDefaultAiContinuePrefixMaxChars;
+    context.settings.max_postfix_chars = pkchat::editor::kDefaultAiContinuePostfixMaxChars;
 
     pkchat::cli::Options configured_options;
     configured_options.editor_assist_config = pkchat::editor::default_editor_assist_config();
@@ -876,6 +1056,76 @@ void test_editor_assist_helpers() {
         streamed += stream_filter.finish();
         check(streamed == "continued text",
               "streamed assist output strips split tool-call wrapper artifacts");
+    }
+
+    {
+        pkchat::editor::CodeAssistStreamFilter stream_filter(
+            pkchat::highlight::Language::Python);
+        std::string streamed;
+        std::string output;
+        check(stream_filter.feed("    ret", output).ok(),
+              "raw code stream accepts leading indentation");
+        streamed += output;
+        check(stream_filter.feed("urn 1\n\t", output).ok(),
+              "raw code stream accepts later chunks");
+        streamed += output;
+        check(stream_filter.finish(output).ok(), "raw code stream finishes");
+        streamed += output;
+        check(streamed == "    return 1\n\t",
+              "raw code stream preserves leading indentation and trailing whitespace exactly");
+    }
+    {
+        pkchat::editor::CodeAssistStreamFilter stream_filter(
+            pkchat::highlight::Language::Python);
+        std::string streamed;
+        std::string output;
+        const std::vector<std::string> chunks = {
+            "\n`", "``py", "thon\r", "\n    value = \"\xE4", "\xBD", "\xA0\"\n  \n`", "``\n"};
+        for (const std::string& chunk : chunks) {
+            check(stream_filter.feed(chunk, output).ok(),
+                  "matching fenced code accepts arbitrary stream chunk boundaries");
+            streamed += output;
+        }
+        check(stream_filter.finish(output).ok(), "matching fenced code stream finishes");
+        streamed += output;
+        check(streamed == "    value = \"\xE4\xBD\xA0\"\n  \n",
+              "matching code fence and optional leading blank are stripped without changing body bytes");
+    }
+    {
+        pkchat::editor::CodeAssistStreamFilter stream_filter(
+            pkchat::highlight::Language::Sql);
+        std::string output;
+        std::string streamed;
+        check(stream_filter.feed("```\nSELECT 1;\n```", output).ok(),
+              "blank Markdown fence is accepted for code completion");
+        streamed += output;
+        check(stream_filter.finish(output).ok(), "blank fenced stream finishes");
+        streamed += output;
+        check(streamed == "SELECT 1;\n", "blank Markdown fence is stripped");
+    }
+    {
+        pkchat::editor::CodeAssistStreamFilter stream_filter(
+            pkchat::highlight::Language::Python);
+        std::string output;
+        const pkchat::Error error = stream_filter.feed("```javascript\nalert(1);\n```", output);
+        check(!error.ok() && error.code == pkchat::ErrorCode::ProviderSchema && output.empty(),
+              "explicitly mismatched leading code fence is rejected");
+    }
+    {
+        pkchat::editor::CodeAssistStreamFilter stream_filter(
+            pkchat::highlight::Language::Cpp);
+        const std::string raw = "    const char* fence = \"```\";\n\n";
+        std::string output;
+        std::string streamed;
+        check(stream_filter.feed(raw.substr(0, 3), output).ok(),
+              "raw fence-like code prefix begins streaming");
+        streamed += output;
+        check(stream_filter.feed(raw.substr(3), output).ok(),
+              "raw code containing fence-like text is accepted");
+        streamed += output;
+        check(stream_filter.finish(output).ok(), "raw fence-like code stream finishes");
+        streamed += output;
+        check(streamed == raw, "fence-like text inside raw code is preserved exactly");
     }
 
     {

@@ -133,7 +133,7 @@ Bracketed terminal paste is undoable with `Ctrl+Z` / `Ctrl+U`.
 
 | Shortcut | Action |
 |----------|--------|
-| `Ctrl+Space` | Run `/continue` at cursor |
+| `Ctrl+Space` | Run mode-aware `/continue`: prose in text/Markdown, gap completion in code modes |
 | `Esc` (during generation) | Cancel AI request (keeps streamed text) |
 | `Esc` (idle) | Open command minibuffer (`Command:`) |
 | `Esc` `/help` | Toggle read-only help view |

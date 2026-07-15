@@ -929,8 +929,9 @@ app::EditorRunResult run_editor(const std::string& path,
                 show_finish_message();
             }
         } else {
-            if (assist_session.edit_kind == AssistEditKind::StreamInsert ||
-                assist_session.edit_kind == AssistEditKind::NewBuffer) {
+            if (!assist_session.code_completion &&
+                (assist_session.edit_kind == AssistEditKind::StreamInsert ||
+                 assist_session.edit_kind == AssistEditKind::NewBuffer)) {
                 strip_trailing_assist_close_tag_without_undo(state);
             }
             if (commit_stream_undo && assist_session.saw_visible) {
@@ -1091,6 +1092,7 @@ app::EditorRunResult run_editor(const std::string& path,
         }
         assist_session.active = true;
         assist_session.streaming = execution.stream;
+        assist_session.code_completion = execution.code_completion;
         assist_session.edit_kind = execution.edit_kind;
         assist_session.provider_name = ai_continue->request.profile.name;
         assist_session.model_name = ai_continue->request.options.model;
@@ -1100,7 +1102,12 @@ app::EditorRunResult run_editor(const std::string& path,
         assist_session.replace_count = execution.replace_count;
         assist_session.undo_before = state.capture_state();
         state.clear_selection();
-        start_assist_job(*ai_continue, execution.messages, execution.stream, assist_session.events,
+        start_assist_job(*ai_continue,
+                         execution.messages,
+                         execution.stream,
+                         execution.code_completion,
+                         execution.completion_language,
+                         assist_session.events,
                          assist_session.job);
         set_assist_activity(tui::ActivityKind::Thinking, "thinking... ESC to abort");
     };

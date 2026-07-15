@@ -1845,7 +1845,7 @@ Rewrite:
 
 Continue text:
 
-- [x] Send nearby context around the cursor (`MAX_AI_CONTINUE_READ`, default 4096 characters before the cursor).
+- [x] Send bounded mode-aware context around the cursor (`MAX_CONTINUE_PREFIX`, default 4000 characters before; `MAX_CONTINUE_POSTFIX`, default 2000 after in code modes).
 - [x] Stream generated continuation at the cursor (`Ctrl+Space`; `MAX_AI_CONTINUE_TOKENS`, default 32768).
 - [x] Hide thinking traces from the editor buffer; show `[model] thinking... ESC to abort` in the minibuffer while thinking and `[model] writing. Press ESC to stop.` while visible text streams.
 - [x] `Esc` aborts an in-flight continue request without deleting already streamed text.

@@ -1685,11 +1685,27 @@ Error apply_document(const Document& document, cli::Options& options) {
                 !editor::parse_linebreak(entry.value.string, candidate.editor_linebreak)) {
                 err = schema_error(entry, "expected lf, cr, or crlf");
             }
-        } else if (name == "editor.continue_read_chars") {
+        } else if (name == "editor.continue_prefix_max_chars") {
             long long value = 0;
             err = nonnegative_long_long(entry, value);
+            if (err.ok() && static_cast<unsigned long long>(value) >
+                                static_cast<unsigned long long>(
+                                    std::numeric_limits<size_t>::max())) {
+                err = schema_error(entry, "integer is too large for this platform");
+            }
             if (err.ok()) {
-                candidate.editor_ai_continue_read_chars = static_cast<size_t>(value);
+                candidate.editor_ai_continue_prefix_max_chars = static_cast<size_t>(value);
+            }
+        } else if (name == "editor.continue_postfix_max_chars") {
+            long long value = 0;
+            err = nonnegative_long_long(entry, value);
+            if (err.ok() && static_cast<unsigned long long>(value) >
+                                static_cast<unsigned long long>(
+                                    std::numeric_limits<size_t>::max())) {
+                err = schema_error(entry, "integer is too large for this platform");
+            }
+            if (err.ok()) {
+                candidate.editor_ai_continue_postfix_max_chars = static_cast<size_t>(value);
             }
         } else if (name == "editor.continue_max_tokens") {
             err = nonnegative_int(entry, candidate.editor_ai_continue_max_tokens);

@@ -17,7 +17,8 @@ struct Options;
 namespace pkchat::editor {
 
 struct AiContinueSettings {
-    size_t max_read_chars = kDefaultAiContinueReadChars;
+    size_t max_prefix_chars = kDefaultAiContinuePrefixMaxChars;
+    size_t max_postfix_chars = kDefaultAiContinuePostfixMaxChars;
     int max_output_tokens = kDefaultAiContinueMaxTokens;
 };
 

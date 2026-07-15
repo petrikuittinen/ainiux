@@ -357,6 +357,20 @@ class Handler(BaseHTTPRequestHandler):
                     break
         elif last.startswith("expect-") and last.endswith(("-reasoning", "-thinking")):
             reply = "request-ok"
+        elif last.startswith("PKCHAT_CODE_CONTEXT_V1\n"):
+            expected_prefix = "def greet(name):\n    "
+            expected_postfix = "\n\nprint(greet(\"Ada\"))\n"
+            prefix_frame = f"PREFIX_BYTES {len(expected_prefix.encode('utf-8'))}\n{expected_prefix}\n<CURSOR/>\n"
+            postfix_frame = f"POSTFIX_BYTES {len(expected_postfix.encode('utf-8'))}\n{expected_postfix}\n"
+            if (
+                "LANGUAGE python\n" in last
+                and prefix_frame in last
+                and postfix_frame in last
+            ):
+                reply = "```python\nreturn f\"Hello, {name}!\"\n```"
+            else:
+                print("invalid editor code completion context:", repr(last), flush=True)
+                reply = "```python\nraise RuntimeError(\"bad completion context\")\n```"
 
         if request.get("stream"):
             self.send_response(200)
