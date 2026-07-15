@@ -121,7 +121,7 @@ Press **`Esc`** to open the command minibuffer (`Command:`). Type a slash comman
 | `/replace` | Replace (same as `Ctrl+H`) |
 | `/open [PATH]` | Open file (same as `Ctrl+O`; `Tab` completes paths after the command) |
 | `/new` | Open a new empty editor buffer (same as `Ctrl+N`) |
-| `/list` | List open editor buffers (same as `Ctrl+L`; Enter chooses, Esc cancels) |
+| `/list` | List open editor buffers (same as `Ctrl+L`; Enter chooses, N new, DEL closes selected with y/n prompt, Esc cancels) |
 | `/close` | Close the active editor buffer (same as `Ctrl+W`; prompts if modified) |
 | `/highlight [on|off]` | Show or toggle syntax highlighting for editor and chat |
 | `/mode [MODE|auto]` | Show or set this buffer's syntax mode |

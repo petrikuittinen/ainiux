@@ -18,6 +18,9 @@ struct TuiPickerCallbacks {
     std::function<void()> on_remove_accepted;
     std::function<void()> on_remove_rejected;
     std::function<void(const std::string&)> on_remove_retry;
+    std::function<void()> on_thread_delete_accepted;
+    std::function<void()> on_thread_delete_rejected;
+    std::function<void(const std::string&)> on_thread_delete_retry;
     std::function<void()> on_model_confirm_accepted;
     std::function<void()> on_model_confirm_rejected;
     std::function<void(const std::string&)> on_model_confirm_retry;
@@ -33,6 +36,7 @@ struct TuiPickerInputState {
     std::vector<chat::ThreadSummary>& thread_picker_threads;
     size_t& thread_picker_selected;
     bool input_empty = true;
+    size_t& pending_thread_delete;
 };
 
 bool handle_tui_picker_input(unsigned char ch,

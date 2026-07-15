@@ -3213,7 +3213,7 @@ void test_editor_buffer_list_helpers() {
     buffers.push_back(scratch);
 
     const std::string rendered = pkchat::editor::editor_buffer_list_text(buffers, 1);
-    check(rendered.find("Buffers - Enter opens - N new - Esc cancels") != std::string::npos,
+    check(rendered.find("Buffers - Enter opens - N new - DEL close - Esc cancels") != std::string::npos,
           "editor buffer list includes chooser instructions");
     check(rendered.find("  file1.txt - Ln 1, Col 6") != std::string::npos,
           "editor buffer list renders an inactive clean file");

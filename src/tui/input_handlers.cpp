@@ -264,17 +264,46 @@ PickerEscapeResult handle_list_picker_escape(size_t item_count,
     return PickerEscapeResult::Navigated;
 }
 
-bool handle_thread_picker_escape(std::vector<chat::ThreadSummary>& threads,
-                                 size_t& selected,
-                                 TuiMode& mode,
-                                 std::string& status) {
-    const PickerEscapeResult result =
-        handle_list_picker_escape(threads.size(), selected, status, "Selected thread");
-    if (result == PickerEscapeResult::Cancelled) {
+PickerEscapeResult handle_thread_list_escape(std::vector<chat::ThreadSummary>& threads,
+                                                size_t& selected,
+                                                std::string& status,
+                                                size_t& pending_delete,
+                                                TuiMode& mode) {
+    unsigned char ch = 0;
+    if (!editor::read_terminal_byte(ch, 25)) {
         mode = TuiMode::Chat;
-        status = "Thread list cancelled";
+        return PickerEscapeResult::Cancelled;
     }
-    return true;
+    if (ch == '[') {
+        std::string seq;
+        seq.push_back('[');
+        unsigned char next = 0;
+        while (seq.size() < 8 && editor::read_terminal_byte(next, 25)) {
+            seq.push_back(static_cast<char>(next));
+            if ((next >= 'A' && next <= 'Z') || next == '~') {
+                break;
+            }
+        }
+        if (seq == "[3~") {
+            // Forward delete key (DEL)
+            if (selected < threads.size()) {
+                pending_delete = selected;
+                mode = TuiMode::ThreadDeleteConfirm;
+                status = "Delete thread? y/n (Esc cancels)";
+            }
+            return PickerEscapeResult::Navigated;
+        }
+        // Treat as movement
+        editor::MovementKeyEvent movement;
+        if (editor::parse_movement_sequence(seq, movement) && threads.size() > 0) {
+            selected = ui::move_text_selector_selection(selected, threads.size(), movement.key);
+            status = ui::text_selector_status("Selected thread", selected, threads.size());
+            return PickerEscapeResult::Navigated;
+        }
+    }
+    // Unknown or plain Esc: cancel list
+    mode = TuiMode::Chat;
+    return PickerEscapeResult::Cancelled;
 }
 
 PickerEscapeResult handle_attachment_list_escape(size_t item_count,

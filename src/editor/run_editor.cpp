@@ -210,6 +210,7 @@ app::EditorRunResult run_editor(const std::string& path,
     EditorProviderModelPicker picker;
     EditorModelListRuntime model_list;
     bool pending_close_confirm = false;
+    size_t pending_close_index = static_cast<size_t>(-1);
     TerminalSize last_size = terminal_size();
     size_t activity_frame = 0;
     std::string theme_name = settings.theme_name;
@@ -404,6 +405,8 @@ app::EditorRunResult run_editor(const std::string& path,
         state.highlight_enabled = highlight_enabled;
         buffer_list_active = false;
         buffer_list_selected = active_buffer;
+        pending_close_confirm = false;
+        pending_close_index = static_cast<size_t>(-1);
         minibuffer_message(minibuffer,
                            "Opened buffer " + std::to_string(active_buffer + 1) + "/" +
                                std::to_string(buffers.size()) + ": " +
@@ -531,6 +534,7 @@ app::EditorRunResult run_editor(const std::string& path,
         buffer_list_active = false;
         buffer_list_selected = active_buffer;
         pending_close_confirm = false;
+        pending_close_index = static_cast<size_t>(-1);
         minibuffer_message(minibuffer,
                            "New buffer " + std::to_string(active_buffer + 1) + "/" +
                                std::to_string(buffers.size()) + ": " +
@@ -549,16 +553,19 @@ app::EditorRunResult run_editor(const std::string& path,
         buffer_list_selected = std::min(active_buffer, buffers.empty() ? size_t{0} : buffers.size() - 1);
         buffer_list_active = true;
         pending_close_confirm = false;
+        pending_close_index = static_cast<size_t>(-1);
         minibuffer_message(minibuffer, selected_buffer_status());
     };
 
     auto cancel_buffer_list = [&]() {
         buffer_list_active = false;
         buffer_list_selected = active_buffer;
+        pending_close_confirm = false;
+        pending_close_index = static_cast<size_t>(-1);
         minibuffer_message(minibuffer, "Buffer list cancelled");
     };
 
-    auto close_active_buffer = [&](bool force) {
+    auto perform_buffer_close = [&](size_t index, bool force) {
         if (assist_session.active) {
             minibuffer_message(minibuffer, "Finish or cancel AI assist before closing buffers");
             return;
@@ -566,13 +573,20 @@ app::EditorRunResult run_editor(const std::string& path,
         if (help_view.active) {
             exit_help_view();
         }
-        if (!force && state.dirty) {
+        if (index >= buffers.size()) {
+            return;
+        }
+        if (!force && buffers[index].dirty) {
             pending_close_confirm = true;
-            minibuffer_message(minibuffer, "Buffer modified; close anyway? (y/n) ");
+            pending_close_index = index;
+            const std::string nm = editor_buffer_display_name(buffers[index], index);
+            minibuffer_message(minibuffer, "Close " + nm + " (modified)? (y/n) ");
             return;
         }
         pending_close_confirm = false;
-        if (buffers.size() <= 1) {
+        pending_close_index = static_cast<size_t>(-1);
+        const bool was_only = (buffers.size() <= 1);
+        if (was_only) {
             buffers.clear();
             state = EditorState{};
             state.set_undo_limit(settings.undo_limit);
@@ -582,24 +596,47 @@ app::EditorRunResult run_editor(const std::string& path,
             state.highlight_enabled = highlight_enabled;
             buffers.push_back(state);
             active_buffer = 0;
-            buffer_list_selected = 0;
+            if (buffer_list_active) {
+                buffer_list_selected = 0;
+            }
             minibuffer_message(minibuffer, "Closed buffer; opened scratch buffer");
             return;
         }
-        buffers.erase(buffers.begin() + static_cast<std::ptrdiff_t>(active_buffer));
-        active_buffer = std::min(active_buffer, buffers.size() - 1);
-        state = buffers[active_buffer];
-        buffer_list_selected = active_buffer;
-        minibuffer_message(minibuffer,
-                           "Closed buffer; active " + std::to_string(active_buffer + 1) + "/" +
-                               std::to_string(buffers.size()) + ": " +
-                               editor_buffer_display_name(state, active_buffer));
+        buffers.erase(buffers.begin() + static_cast<std::ptrdiff_t>(index));
+        if (active_buffer > index) {
+            --active_buffer;
+        } else if (active_buffer == index) {
+            active_buffer = std::min(active_buffer, buffers.size() - 1);
+            state = buffers[active_buffer];
+        }
+        if (buffer_list_active) {
+            if (buffer_list_selected > index) {
+                --buffer_list_selected;
+            }
+            buffer_list_selected = std::min(buffer_list_selected, buffers.size() - 1);
+            minibuffer_message(minibuffer, selected_buffer_status());
+        } else {
+            minibuffer_message(minibuffer,
+                               "Closed buffer; active " + std::to_string(active_buffer + 1) + "/" +
+                                   std::to_string(buffers.size()) + ": " +
+                                   editor_buffer_display_name(state, active_buffer));
+        }
+    };
+
+    auto close_active_buffer = [&](bool force) {
+        perform_buffer_close(active_buffer, force);
     };
 
     auto handle_buffer_list_escape = [&]() {
         const std::string sequence = read_escape_suffix();
         if (sequence.empty()) {
             cancel_buffer_list();
+            return;
+        }
+        if (sequence == "[3~") {
+            if (!buffers.empty() && buffer_list_selected < buffers.size()) {
+                perform_buffer_close(buffer_list_selected, false);
+            }
             return;
         }
         MovementKeyEvent movement;
@@ -625,6 +662,8 @@ app::EditorRunResult run_editor(const std::string& path,
         }
         picker.open_providers();
         buffer_list_active = false;
+        pending_close_confirm = false;
+        pending_close_index = static_cast<size_t>(-1);
         minibuffer_message(minibuffer, picker.status_message());
     };
 
@@ -651,6 +690,8 @@ app::EditorRunResult run_editor(const std::string& path,
         }
         picker.open_models(std::move(models));
         buffer_list_active = false;
+        pending_close_confirm = false;
+        pending_close_index = static_cast<size_t>(-1);
         minibuffer_message(minibuffer, picker.status_message());
     };
 
@@ -1045,6 +1086,8 @@ app::EditorRunResult run_editor(const std::string& path,
             assist_session.source_buffer_index = source_buffer_index;
             buffer_list_active = false;
             buffer_list_selected = active_buffer;
+            pending_close_confirm = false;
+            pending_close_index = static_cast<size_t>(-1);
         }
         assist_session.active = true;
         assist_session.streaming = execution.stream;
@@ -1799,6 +1842,25 @@ app::EditorRunResult run_editor(const std::string& path,
             return;
         }
         if (buffer_list_active) {
+            if (pending_close_confirm) {
+                switch (ui::parse_confirmation_key(ch)) {
+                    case ui::ConfirmationKeyResult::Accepted: {
+                        size_t idx = pending_close_index != static_cast<size_t>(-1)
+                                         ? pending_close_index
+                                         : buffer_list_selected;
+                        perform_buffer_close(idx, true);
+                        return;
+                    }
+                    case ui::ConfirmationKeyResult::Rejected:
+                        pending_close_confirm = false;
+                        pending_close_index = static_cast<size_t>(-1);
+                        minibuffer_message(minibuffer, "Close cancelled");
+                        return;
+                    case ui::ConfirmationKeyResult::Pending:
+                        minibuffer_message(minibuffer, ui::kConfirmationRetryPrompt);
+                        return;
+                }
+            }
             if (ch == 17) {
                 quit = true;
                 return;
@@ -1815,15 +1877,25 @@ app::EditorRunResult run_editor(const std::string& path,
                 new_empty_buffer();
                 return;
             }
+            if (ch == 127 || ch == 8) {
+                if (!buffers.empty() && buffer_list_selected < buffers.size()) {
+                    perform_buffer_close(buffer_list_selected, false);
+                }
+                return;
+            }
             return;
         }
         if (pending_close_confirm) {
             switch (ui::parse_confirmation_key(ch)) {
-                case ui::ConfirmationKeyResult::Accepted:
-                    close_active_buffer(true);
+                case ui::ConfirmationKeyResult::Accepted: {
+                    size_t idx = pending_close_index != static_cast<size_t>(-1) ? pending_close_index
+                                                                                : active_buffer;
+                    perform_buffer_close(idx, true);
                     return;
+                }
                 case ui::ConfirmationKeyResult::Rejected:
                     pending_close_confirm = false;
+                    pending_close_index = static_cast<size_t>(-1);
                     minibuffer_message(minibuffer, "Close cancelled");
                     return;
                 case ui::ConfirmationKeyResult::Pending:

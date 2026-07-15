@@ -10,8 +10,8 @@
 namespace pkchat::ui {
 
 constexpr const char kTextSelectorStandardHint[] = "↑↓ move · Enter select · Esc cancel";
-constexpr const char kTextSelectorThreadHint[] = "Newest first · Enter opens · N new · Esc cancels";
-constexpr const char kTextSelectorBufferHint[] = "Buffers - Enter opens - N new - Esc cancels";
+constexpr const char kTextSelectorThreadHint[] = "Newest first · Enter opens · N new · DEL delete · Esc cancels";
+constexpr const char kTextSelectorBufferHint[] = "Buffers - Enter opens - N new - DEL close - Esc cancels";
 constexpr const char kTextSelectorAttachmentHint[] = "↑↓ move · DEL delete · Esc close";
 
 constexpr const char kTextSelectorArrowPrefix[] = u8"› ";

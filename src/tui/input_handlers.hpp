@@ -42,10 +42,11 @@ PickerEscapeResult handle_list_picker_escape(size_t item_count,
                                              std::string& status,
                                              const std::string& selection_label);
 
-bool handle_thread_picker_escape(std::vector<chat::ThreadSummary>& threads,
-                                 size_t& selected,
-                                 TuiMode& mode,
-                                 std::string& status);
+PickerEscapeResult handle_thread_list_escape(std::vector<chat::ThreadSummary>& threads,
+                                                size_t& selected,
+                                                std::string& status,
+                                                size_t& pending_delete,
+                                                TuiMode& mode);
 
 PickerEscapeResult handle_attachment_list_escape(size_t item_count,
                                                  size_t& selected,

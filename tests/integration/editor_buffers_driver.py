@@ -194,7 +194,7 @@ def main():
         require_seen(output, f"Opened {file2}", "opening second buffer")
 
         output.extend(send(master, "\x0c"))  # Ctrl+L buffer list
-        require_seen(output, "Buffers - Enter opens - N new - Esc cancels", "listing buffers")
+        require_seen(output, "Buffers - Enter opens - N new - DEL close - Esc cancels", "listing buffers")
         require_seen(output, "file1.txt", "listing first buffer")
         require_seen(output, "file2.txt", "listing second buffer")
         output.extend(send(master, "\x1b[A"))  # Up to file1

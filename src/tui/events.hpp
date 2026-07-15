@@ -41,6 +41,7 @@ enum class TuiMode {
     HistoryEdit,
     AttachmentList,
     AttachmentDeleteConfirm,
+    ThreadDeleteConfirm,
 };
 
 enum class ModelsRequestPurpose { Preview, Picker };

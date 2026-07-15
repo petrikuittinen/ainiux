@@ -125,6 +125,7 @@ app::TuiRunResult run(provider::RequestContext context,
     std::vector<ChatAttachment> chat_attachments;
     size_t attachment_picker_selected = 0;
     size_t pending_attachment_delete = static_cast<size_t>(-1);
+    size_t pending_thread_delete = static_cast<size_t>(-1);
     size_t attachments_committed_for_turn = 0;
     // Full (with bodies) content for the most recent user turn that had text attachments.
     // Used to send the real data to the model on initial send and immediate regenerates,
@@ -203,6 +204,17 @@ app::TuiRunResult run(provider::RequestContext context,
                        "\nPress y to delete · n or Esc to cancel";
             }
             return std::string("No attachment selected to delete");
+        }
+        if (mode == TuiMode::ThreadDeleteConfirm) {
+            if (pending_thread_delete < thread_picker_threads.size()) {
+                const auto& th = thread_picker_threads[pending_thread_delete];
+                std::string label = th.name.empty() ? ("thread " + std::to_string(th.id)) : th.name;
+                if (!th.last_model.empty()) {
+                    label += " [" + th.last_model + "]";
+                }
+                return "Delete thread:\n  " + label + "\nPress y to delete · n or Esc to cancel";
+            }
+            return std::string("No thread selected to delete");
         }
         if (mode == TuiMode::RemoveConfirm) {
             return remove_confirm_text(session);
@@ -645,6 +657,7 @@ app::TuiRunResult run(provider::RequestContext context,
             return;
         }
         thread_picker_selected = 0;
+        pending_thread_delete = static_cast<size_t>(-1);
         mode = TuiMode::ThreadList;
         history_scroll = 0;
         status = ui::text_selector_status("Selected thread", thread_picker_selected,
@@ -834,6 +847,7 @@ app::TuiRunResult run(provider::RequestContext context,
         mode = TuiMode::Chat;
         thread_picker_threads.clear();
         thread_picker_selected = 0;
+        pending_thread_delete = static_cast<size_t>(-1);
         start_store_load(thread_id);
     };
     picker_callbacks.on_thread_new = [&]() {
@@ -841,6 +855,7 @@ app::TuiRunResult run(provider::RequestContext context,
             mode = TuiMode::Chat;
             thread_picker_threads.clear();
             thread_picker_selected = 0;
+            pending_thread_delete = static_cast<size_t>(-1);
             history_scroll = 0;
         }
     };
@@ -861,6 +876,47 @@ app::TuiRunResult run(provider::RequestContext context,
         status = "Remove cancelled";
     };
     picker_callbacks.on_remove_retry = [&](const std::string& message) { status = message; };
+    picker_callbacks.on_thread_delete_accepted = [&]() {
+        if (pending_thread_delete < thread_picker_threads.size()) {
+            const long long tid = thread_picker_threads[pending_thread_delete].id;
+            Error remove_error = sqlite_store.soft_delete_thread(tid);
+            if (remove_error.ok()) {
+                if (tid == session.thread_id) {
+                    sqlite_store.set_last_thread_id(0);
+                    start_new_thread_from_cli();
+                }
+                thread_picker_threads.erase(thread_picker_threads.begin() +
+                                            static_cast<std::ptrdiff_t>(pending_thread_delete));
+                if (thread_picker_threads.empty()) {
+                    mode = TuiMode::Chat;
+                    thread_picker_selected = 0;
+                    status = "Thread deleted";
+                } else {
+                    if (thread_picker_selected > pending_thread_delete) {
+                        --thread_picker_selected;
+                    }
+                    thread_picker_selected = std::min(thread_picker_selected,
+                                                      thread_picker_threads.size() - 1);
+                    mode = TuiMode::ThreadList;
+                    status = ui::text_selector_status("Selected thread", thread_picker_selected,
+                                                      thread_picker_threads.size());
+                }
+            } else {
+                status = detail::error_line(remove_error);
+                mode = TuiMode::ThreadList;
+            }
+        } else {
+            mode = TuiMode::ThreadList;
+            status = "Nothing to delete";
+        }
+        pending_thread_delete = static_cast<size_t>(-1);
+    };
+    picker_callbacks.on_thread_delete_rejected = [&]() {
+        mode = TuiMode::ThreadList;
+        pending_thread_delete = static_cast<size_t>(-1);
+        status = "Delete cancelled";
+    };
+    picker_callbacks.on_thread_delete_retry = [&](const std::string& message) { status = message; };
     picker_callbacks.on_model_confirm_accepted = [&]() {
         app::refresh_session_metadata(session, context);
         mode = TuiMode::Chat;
@@ -1273,7 +1329,8 @@ app::TuiRunResult run(provider::RequestContext context,
                                                  picker_cancel_quits,
                                                  thread_picker_threads,
                                                  thread_picker_selected,
-                                                 input.text.empty()};
+                                                 input.text.empty(),
+                                                 pending_thread_delete};
                 if (handle_tui_picker_input(ch, picker_state, picker_callbacks)) {
                     continue;
                 }

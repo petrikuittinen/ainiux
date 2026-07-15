@@ -74,6 +74,7 @@ Use `/pop` to remove the last user or assistant message.
 - `↑`/`↓`, `PageUp`/`PageDown`, `Home`/`End` — move selection
 - `Enter` — open thread
 - `N` — new thread
+- `DEL` — delete selected thread (prompts y/n)
 - `Esc` — cancel
 - `Ctrl+Q` — quit
 

@@ -458,6 +458,8 @@ const char* panel_title_for_mode(TuiMode mode) {
             return "Attachments";
         case TuiMode::AttachmentDeleteConfirm:
             return "Delete Attachment";
+        case TuiMode::ThreadDeleteConfirm:
+            return "Delete Thread";
         case TuiMode::RemoveConfirm:
             return "Remove Thread";
         case TuiMode::ModelConfirm:

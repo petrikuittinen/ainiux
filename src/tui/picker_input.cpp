@@ -49,10 +49,16 @@ bool handle_tui_picker_input(unsigned char ch,
             return true;
         }
         if (ch == 27) {
-            handle_thread_picker_escape(state.thread_picker_threads,
-                                      state.thread_picker_selected,
-                                      state.mode,
-                                      state.status);
+            const PickerEscapeResult res =
+                handle_thread_list_escape(state.thread_picker_threads,
+                                          state.thread_picker_selected,
+                                          state.status,
+                                          state.pending_thread_delete,
+                                          state.mode);
+            if (res == PickerEscapeResult::Cancelled) {
+                state.mode = TuiMode::Chat;
+                state.status = "Thread list cancelled";
+            }
             return true;
         }
         if (ch == '\r' || ch == '\n') {
@@ -65,7 +71,32 @@ bool handle_tui_picker_input(unsigned char ch,
             callbacks.on_thread_new();
             return true;
         }
+        if (ch == 127 || ch == 8) {
+            if (state.thread_picker_selected < state.thread_picker_threads.size()) {
+                state.pending_thread_delete = state.thread_picker_selected;
+                state.mode = TuiMode::ThreadDeleteConfirm;
+                state.status = "Delete thread? y/n (Esc cancels)";
+            }
+            return true;
+        }
         return true;
+    }
+    if (state.mode == TuiMode::ThreadDeleteConfirm) {
+        if (ch == 17) {
+            state.quit = true;
+            return true;
+        }
+        switch (ui::parse_confirmation_key(ch)) {
+            case ui::ConfirmationKeyResult::Accepted:
+                callbacks.on_thread_delete_accepted();
+                return true;
+            case ui::ConfirmationKeyResult::Rejected:
+                callbacks.on_thread_delete_rejected();
+                return true;
+            case ui::ConfirmationKeyResult::Pending:
+                callbacks.on_thread_delete_retry("Press y to delete, n or Esc to cancel");
+                return true;
+        }
     }
     if (state.mode == TuiMode::RemoveConfirm) {
         if (ch == 17) {
