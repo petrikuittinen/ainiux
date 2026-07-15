@@ -225,7 +225,11 @@ def main():
 
         output.extend(send(master, "!"))
         output.extend(send(master, "\x17"))  # Ctrl+W close prompt
-        require_seen(output, "Buffer modified; close anyway?", "prompting before modified close")
+        require_seen(
+            output,
+            f"Close {file2} (modified)? (y/n)",
+            "prompting before modified close",
+        )
         output.extend(send(master, "n"))
         require_seen(output, "Close cancelled", "cancelling modified close")
         output.extend(send(master, "\x17"))  # Ctrl+W close prompt again
@@ -239,7 +243,11 @@ def main():
         require_seen(output, "[scratch", "listing new scratch buffer")
         output.extend(send(master, "\r"))
         output.extend(send(master, "\x17"))  # Ctrl+W close modified scratch
-        require_seen(output, "Buffer modified; close anyway?", "prompting before closing scratch")
+        require_seen(
+            output,
+            "Close [scratch 2] (modified)? (y/n)",
+            "prompting before closing scratch",
+        )
         output.extend(send(master, "y"))
         require_seen(output, "Closed buffer", "closing scratch buffer")
 

@@ -2391,9 +2391,7 @@ void test_editor_autosave() {
         backup_file << "unsaved today";
     }
     const auto main_time = std::filesystem::last_write_time(main_path);
-    std::filesystem::last_write_time(backup_path, main_time + std::filesystem::file_time_type::clock::now().time_since_epoch() -
-                                                         main_time.time_since_epoch() +
-                                                         std::filesystem::file_time_type::duration{3600});
+    std::filesystem::last_write_time(backup_path, main_time + std::chrono::seconds(1));
 
     pkchat::editor::EditorSettings recovery_settings;
     const pkchat::editor::AutosaveRecoveryOffer offer =
