@@ -14,6 +14,7 @@
 #include "editor/path_completion.hpp"
 #include "editor/reformat.hpp"
 #include "editor/selection.hpp"
+#include "editor/split.hpp"
 #include "editor/terminal_input.hpp"
 #include "editor/terminal_ui.hpp"
 #include <algorithm>
@@ -2686,6 +2687,68 @@ void test_editor_undo_redo_key_bindings() {
           "kitty Ctrl+R sequence decodes to regenerate key");
 }
 
+void test_editor_split_layout() {
+    using pkchat::editor::Rect;
+    using pkchat::editor::SplitKind;
+    using pkchat::editor::SplitLayout;
+    using pkchat::editor::window_prefix_action;
+
+    check(window_prefix_action('v') == "split-v", "window prefix v is vertical split");
+    check(window_prefix_action('3') == "split-v", "window prefix 3 aliases vertical split");
+    check(window_prefix_action('h') == "split-h", "window prefix h is horizontal split");
+    check(window_prefix_action('2') == "split-h", "window prefix 2 aliases horizontal split");
+    check(window_prefix_action('o') == "other", "window prefix o is other pane");
+    check(window_prefix_action('0') == "close", "window prefix 0 closes pane");
+    check(window_prefix_action('1') == "maximize", "window prefix 1 maximizes pane");
+    check(window_prefix_action(27) == "cancel", "Esc cancels window prefix");
+    check(window_prefix_action(7) == "cancel", "Ctrl+G cancels window prefix");
+    check(window_prefix_action('x').empty(), "unknown window prefix is rejected");
+
+    SplitLayout layout(0);
+    const Rect large{1, 1, 40, 80};
+    check(layout.leaf_count() == 1, "new layout starts with one pane");
+    check(!layout.has_split(), "new layout is not split");
+    check(layout.split_focused(SplitKind::Vertical, large), "vertical split succeeds on large area");
+    check(layout.leaf_count() == 2, "vertical split creates two panes");
+    check(layout.has_split(), "layout reports split after vertical split");
+    check(layout.focused_leaf() == 0, "focus stays on first pane after split");
+
+    const auto panes = layout.layout_panes(large);
+    check(panes.size() == 2, "layout_panes returns two rectangles");
+    check(panes[0].rect.width > 0 && panes[1].rect.width > 0,
+          "both vertical panes have positive width");
+    check(panes[0].rect.col + panes[0].rect.width < panes[1].rect.col,
+          "vertical panes leave a separator column between them");
+
+    layout.focus_next();
+    check(layout.focused_leaf() == 1, "focus_next moves to second pane");
+    layout.focus_next();
+    check(layout.focused_leaf() == 0, "focus_next wraps to first pane");
+
+    layout.set_focused_buffer(3);
+    check(layout.focused_buffer() == 3, "focused pane buffer index updates");
+    layout.on_buffer_removed(3, 0);
+    check(layout.focused_buffer() == 2 || layout.focused_buffer() == 0,
+          "buffer removal remaps focused buffer index");
+
+    layout.maximize_focused();
+    check(layout.leaf_count() == 1 && !layout.has_split(), "maximize collapses to one pane");
+
+    check(layout.split_focused(SplitKind::Horizontal, large), "horizontal split succeeds");
+    check(layout.leaf_count() == 2, "horizontal split creates two panes");
+    const auto h_panes = layout.layout_panes(large);
+    check(h_panes.size() == 2 && h_panes[0].rect.row + h_panes[0].rect.height < h_panes[1].rect.row,
+          "horizontal panes leave a separator row between them");
+
+    check(layout.close_focused(), "close removes a pane when more than one exists");
+    check(layout.leaf_count() == 1, "close leaves a single pane");
+    check(!layout.close_focused(), "close fails when only one pane remains");
+
+    const Rect tiny{1, 1, 2, 10};
+    check(!layout.split_focused(SplitKind::Vertical, tiny),
+          "vertical split is refused when the pane is too narrow");
+}
+
 void test_editor_revert_to_snapshot() {
     pkchat::editor::EditorState state = pkchat::editor::EditorState::from_text("alpha beta");
     state.cursor = state.text.offset_for_line_column(0, 6);
@@ -3898,6 +3961,7 @@ void run_all() {
     test_editor_undo_redo_key_bindings();
     test_editor_revert_to_snapshot();
     test_editor_undo_redo();
+    test_editor_split_layout();
     test_editor_unicode_combining_sequence_wraps_on_grapheme_boundary();
     test_editor_unicode_display_columns_and_offsets();
     test_editor_unicode_emoji_pair_wraps_on_cell_boundaries();

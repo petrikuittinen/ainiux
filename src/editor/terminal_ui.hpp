@@ -2,11 +2,14 @@
 
 #include <termios.h>
 
+#include <functional>
 #include <string>
+#include <vector>
 
 #include "editor/editor.hpp"
 #include "editor/editor_assist.hpp"
 #include "editor/path_completion.hpp"
+#include "editor/split.hpp"
 #include "tui/activity.hpp"
 
 namespace pkchat::tui {
@@ -113,18 +116,40 @@ void render_terminal(EditorState& state,
                      const TerminalThemeStyle& theme_style = {},
                      bool help_view = false,
                      const EditorAssistDisplay* assist_display = nullptr);
+
+// Multi-pane editor layout. panes come from SplitLayout::layout_panes(editor_main_area()).
+// buffer_at(index) must return the EditorState for that buffer index; the focused buffer
+// may be a live working copy rather than the vector entry.
+void render_terminal_splits(
+    const std::vector<SplitPaneRect>& panes,
+    const std::function<const EditorState&(size_t buffer_index)>& buffer_at,
+    EditorState& focused_state,
+    const MinibufferState& minibuffer,
+    const TerminalThemeStyle& theme_style = {},
+    bool help_view = false,
+    const EditorAssistDisplay* assist_display = nullptr,
+    size_t pane_count_hint = 1);
+
 void render_terminal_panel(EditorState& state,
                            const MinibufferState& minibuffer,
                            const TerminalThemeStyle& theme_style,
                            tui::TuiMode mode,
                            int& panel_scroll,
                            const char* panel_title_override = nullptr);
-std::string editor_status_line(const EditorState& state, bool help_view = false);
+std::string editor_status_line(const EditorState& state,
+                               bool help_view = false,
+                               size_t split_pane_count = 1);
+// Content area above status and minibuffer lines.
+Rect editor_main_area();
 void dispatch_escape_sequence(EditorState& state,
                               const std::string& sequence,
                               std::string& status,
-                              const std::string& last_search);
-void handle_escape(EditorState& state, std::string& status, const std::string& last_search);
+                              const std::string& last_search,
+                              const Rect* panel_rect = nullptr);
+void handle_escape(EditorState& state,
+                   std::string& status,
+                   const std::string& last_search,
+                   const Rect* panel_rect = nullptr);
 
 bool is_assist_minibuffer_action(MinibufferAction action);
 void exit_assist_command_mode(MinibufferState& minibuffer, AssistCompleterState& completer);

@@ -13,6 +13,7 @@
 #include "editor/model_list_runtime.hpp"
 #include "editor/path_completion.hpp"
 #include "editor/reformat.hpp"
+#include "editor/split.hpp"
 #include "editor/terminal_input.hpp"
 #include "editor/terminal_ui.hpp"
 #include "input/input.hpp"
@@ -107,6 +108,8 @@ app::EditorRunResult run_editor(const std::string& path,
     bool switch_to_chat = false;
     std::vector<EditorState> buffers;
     size_t active_buffer = 0;
+    SplitLayout split_layout;
+    bool window_prefix_active = false;
     const bool restore_editor_buffers =
         interactive != nullptr && interactive->editor_buffers_initialized &&
         !interactive->editor_buffers.empty();
@@ -118,6 +121,7 @@ app::EditorRunResult run_editor(const std::string& path,
         interactive->editor_active_buffer = 0;
         state = buffers[active_buffer];
         state.highlight_enabled = highlight_enabled;
+        split_layout.reset(active_buffer);
         status = "Editor";
     } else {
         const bool initial_target_exists =
@@ -283,13 +287,29 @@ app::EditorRunResult run_editor(const std::string& path,
         }
     };
 
+    auto focus_buffer_from_split = [&]() {
+        if (buffers.empty()) {
+            return;
+        }
+        const size_t next = std::min(split_layout.focused_buffer(), buffers.size() - 1);
+        if (next == active_buffer) {
+            split_layout.set_focused_buffer(active_buffer);
+            return;
+        }
+        sync_active_buffer();
+        active_buffer = next;
+        state = buffers[active_buffer];
+        state.highlight_enabled = highlight_enabled;
+        split_layout.set_focused_buffer(active_buffer);
+    };
+
     auto can_switch_to_chat = [&]() {
         if (interactive == nullptr) {
             return false;
         }
         return !help_view.active && !picker.active && !buffer_list_active && !pending_close_confirm &&
                !minibuffer.active && !replace.active && !assist_session.active &&
-               !reformat_session.active && !insert_session.active;
+               !reformat_session.active && !insert_session.active && !window_prefix_active;
     };
 
     auto request_switch_to_chat = [&]() {
@@ -360,13 +380,36 @@ app::EditorRunResult run_editor(const std::string& path,
             return;
         }
         state.highlight_enabled = highlight_enabled;
-        render_terminal(state, minibuffer, theme_style, help_view.active, refresh_assist_display());
+        if (help_view.active || !split_layout.has_split()) {
+            render_terminal(state, minibuffer, theme_style, help_view.active, refresh_assist_display());
+            return;
+        }
+        const std::vector<SplitPaneRect> panes = split_layout.layout_panes(editor_main_area());
+        render_terminal_splits(
+            panes,
+            [&](size_t buffer_index) -> const EditorState& {
+                if (buffer_index == active_buffer) {
+                    return state;
+                }
+                if (buffer_index < buffers.size()) {
+                    return buffers[buffer_index];
+                }
+                return state;
+            },
+            state,
+            minibuffer,
+            theme_style,
+            help_view.active,
+            refresh_assist_display(),
+            split_layout.leaf_count());
     };
     render_editor();
 
     auto assist_panel_rect = [&]() {
-        const TerminalSize size = terminal_size();
-        return Rect{1, 1, std::max(1, size.rows - 2), std::max(1, size.cols - 1)};
+        if (split_layout.has_split()) {
+            return split_layout.focused_rect(editor_main_area());
+        }
+        return editor_main_area();
     };
 
     auto exit_help_view = [&]() {
@@ -431,6 +474,7 @@ app::EditorRunResult run_editor(const std::string& path,
         active_buffer = index;
         state = buffers[active_buffer];
         state.highlight_enabled = highlight_enabled;
+        split_layout.set_focused_buffer(active_buffer);
         buffer_list_active = false;
         buffer_list_selected = active_buffer;
         pending_close_confirm = false;
@@ -494,6 +538,7 @@ app::EditorRunResult run_editor(const std::string& path,
         buffers.push_back(next);
         active_buffer = buffers.size() - 1;
         state = next;
+        split_layout.set_focused_buffer(active_buffer);
         buffer_list_selected = active_buffer;
         if (!lock_error.ok()) {
             minibuffer_message(minibuffer, lock_error.message);
@@ -559,6 +604,7 @@ app::EditorRunResult run_editor(const std::string& path,
         buffers.push_back(next);
         active_buffer = buffers.size() - 1;
         state = next;
+        split_layout.set_focused_buffer(active_buffer);
         buffer_list_active = false;
         buffer_list_selected = active_buffer;
         pending_close_confirm = false;
@@ -625,12 +671,15 @@ app::EditorRunResult run_editor(const std::string& path,
             state.highlight_enabled = highlight_enabled;
             buffers.push_back(state);
             active_buffer = 0;
+            split_layout.reset(0);
             if (buffer_list_active) {
                 buffer_list_selected = 0;
             }
             minibuffer_message(minibuffer, "Closed buffer; opened scratch buffer");
             return;
         }
+        const size_t fallback = index > 0 ? index - 1 : 0;
+        split_layout.on_buffer_removed(index, fallback);
         buffers.erase(buffers.begin() + static_cast<std::ptrdiff_t>(index));
         if (active_buffer > index) {
             --active_buffer;
@@ -638,6 +687,8 @@ app::EditorRunResult run_editor(const std::string& path,
             active_buffer = std::min(active_buffer, buffers.size() - 1);
             state = buffers[active_buffer];
         }
+        split_layout.clamp_buffers(buffers.size());
+        focus_buffer_from_split();
         if (buffer_list_active) {
             if (buffer_list_selected > index) {
                 --buffer_list_selected;
@@ -812,7 +863,7 @@ app::EditorRunResult run_editor(const std::string& path,
              minibuffer.action != MinibufferAction::ConfirmAutosaveRecovery)) {
             return false;
         }
-        if (ch == 27 || ch == 7) {
+        if (ch == 27) {
             pending_load_path.clear();
             pending_autosave_recovery = PendingAutosaveRecovery{};
             minibuffer_path_completer.reset();
@@ -1783,7 +1834,7 @@ app::EditorRunResult run_editor(const std::string& path,
                 return;
             }
             if (minibuffer.active && is_assist_minibuffer_action(minibuffer.action)) {
-                if (ch == 27 || ch == 7) {
+                if (ch == 27) {
                     pending_assist = PendingAssist{};
                     exit_assist_command_mode(minibuffer, assist_completer);
                     return;
@@ -1830,7 +1881,8 @@ app::EditorRunResult run_editor(const std::string& path,
                         return;
                     }
                     std::string escape_status;
-                    dispatch_escape_sequence(state, sequence, escape_status, last_search);
+                    const Rect focus_rect = assist_panel_rect();
+                    dispatch_escape_sequence(state, sequence, escape_status, last_search, &focus_rect);
                     if (!escape_status.empty()) {
                         minibuffer_message(minibuffer, escape_status);
                     }
@@ -1942,7 +1994,7 @@ app::EditorRunResult run_editor(const std::string& path,
             }
         }
         if (minibuffer.active && is_assist_minibuffer_action(minibuffer.action)) {
-            if (ch == 27 || ch == 7) {
+            if (ch == 27) {
                 pending_assist = PendingAssist{};
                 exit_assist_command_mode(minibuffer, assist_completer);
                 return;
@@ -2051,6 +2103,66 @@ app::EditorRunResult run_editor(const std::string& path,
             return;
         }
         if (handle_replace_key(state, minibuffer, replace, ch)) {
+            return;
+        }
+
+        // Ctrl+G window-command prefix (Emacs-style): v/h/2/3/o/0/1.
+        if (window_prefix_active) {
+            const std::string action = window_prefix_action(ch);
+            window_prefix_active = false;
+            if (action == "cancel" || action.empty()) {
+                minibuffer_message(minibuffer,
+                                   action == "cancel" ? "Window command cancelled"
+                                                      : "Unknown window command (v/h/o/0/1)");
+                return;
+            }
+            const Rect area = editor_main_area();
+            if (action == "split-v") {
+                if (split_layout.split_focused(SplitKind::Vertical, area)) {
+                    minibuffer_message(minibuffer, "Vertical split (Ctrl+G o other pane)");
+                } else {
+                    minibuffer_message(minibuffer, "Window too small for vertical split");
+                }
+            } else if (action == "split-h") {
+                if (split_layout.split_focused(SplitKind::Horizontal, area)) {
+                    minibuffer_message(minibuffer, "Horizontal split (Ctrl+G o other pane)");
+                } else {
+                    minibuffer_message(minibuffer, "Window too small for horizontal split");
+                }
+            } else if (action == "other") {
+                if (!split_layout.has_split()) {
+                    minibuffer_message(minibuffer, "No other pane");
+                } else {
+                    sync_active_buffer();
+                    split_layout.focus_next();
+                    focus_buffer_from_split();
+                    minibuffer_message(minibuffer,
+                                       "Pane " + std::to_string(split_layout.focused_leaf() + 1) +
+                                           "/" + std::to_string(split_layout.leaf_count()) + ": " +
+                                           editor_buffer_display_name(state, active_buffer));
+                }
+            } else if (action == "close") {
+                if (!split_layout.close_focused()) {
+                    minibuffer_message(minibuffer, "Only one pane");
+                } else {
+                    focus_buffer_from_split();
+                    minibuffer_message(minibuffer, "Closed pane");
+                }
+            } else if (action == "maximize") {
+                split_layout.maximize_focused();
+                focus_buffer_from_split();
+                minibuffer_message(minibuffer, "Maximized pane");
+            }
+            return;
+        }
+        if (ch == 7) {
+            if (help_view.active || picker.active || buffer_list_active || pending_close_confirm ||
+                assist_session.active || reformat_session.active || insert_session.active) {
+                minibuffer_message(minibuffer, "Finish the current action before window commands");
+                return;
+            }
+            window_prefix_active = true;
+            minibuffer_message(minibuffer, "Window: v/3 vertical  h/2 horizontal  o other  0 close  1 max");
             return;
         }
 
@@ -2171,17 +2283,24 @@ app::EditorRunResult run_editor(const std::string& path,
                         return;
                     }
                     std::string escape_status;
-                    dispatch_escape_sequence(state, sequence, escape_status, last_search);
+                    const Rect focus_rect = assist_panel_rect();
+                    dispatch_escape_sequence(state, sequence, escape_status, last_search, &focus_rect);
                     if (!escape_status.empty()) {
                         minibuffer_message(minibuffer, escape_status);
                     }
+                    return;
+                }
+                if (window_prefix_active) {
+                    window_prefix_active = false;
+                    minibuffer_message(minibuffer, "Window command cancelled");
                     return;
                 }
                 start_assist_command_mode(minibuffer, assist_completer);
                 return;
             }
             std::string escape_status;
-            handle_escape(state, escape_status, last_search);
+            const Rect focus_rect = assist_panel_rect();
+            handle_escape(state, escape_status, last_search, &focus_rect);
             if (!escape_status.empty()) {
                 minibuffer_message(minibuffer, escape_status);
             }

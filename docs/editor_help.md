@@ -4,9 +4,24 @@ Standalone editor mode (`pkchat --editor [PATH]`) is a multiline text editor wit
 
 ## Layout
 
-- **Main area** — file content with soft wrap
+- **Main area** — file content with soft wrap (optionally split into panes)
 - **Status line** (reverse video) — path, dirty flag, cursor position, quick hints
 - **Minibuffer** (bottom line) — commands, prompts, AI status, and messages
+
+### Window splits (`Ctrl+G` prefix)
+
+Splits use an Emacs-style two-key sequence. Press **Ctrl+G**, then one of:
+
+| Second key | Action |
+|------------|--------|
+| `v` or `3` | Vertical split (side by side) |
+| `h` or `2` | Horizontal split (stacked) |
+| `o` | Focus other / next pane |
+| `0` | Close the focused pane |
+| `1` | Maximize the focused pane (close others) |
+| `Esc` or `Ctrl+G` | Cancel the window command |
+
+Both panes of a new split show the same buffer at first. Open another file in one pane (`Ctrl+O`) or switch buffers (`Ctrl+L`) to compare two files. Status shows `[N panes]` while more than one pane is open. Cancel for minibuffers and replace mode is **Esc** only (not Ctrl+G).
 
 ## Getting help
 
@@ -205,7 +220,7 @@ Examples:
 /prompt Summarize the buffer in three bullets
 ```
 
-`Esc` or `Ctrl+G` cancels the command minibuffer without running a command.
+`Esc` cancels the command minibuffer without running a command.
 
 ## Local editing without AI
 

@@ -89,7 +89,7 @@ void TerminalSession::restore() {
         active_ = false;
 }
 
-std::string editor_status_line(const EditorState& state, bool help_view) {
+std::string editor_status_line(const EditorState& state, bool help_view, size_t split_pane_count) {
     std::ostringstream out;
     if (help_view) {
         out << "Help (read-only)";
@@ -105,16 +105,28 @@ std::string editor_status_line(const EditorState& state, bool help_view) {
                                     ? "CRLF"
                                     : state.linebreak == LineBreak::Cr ? "CR" : "LF";
         out << "  (" << highlight::language_name(state.language) << ' ' << linebreak << ')';
+        if (split_pane_count > 1) {
+            out << "  [" << split_pane_count << " panes]";
+        }
     }
     const size_t line = state.text.line_for_offset(state.cursor) + 1;
     const size_t column = state.text.display_column_for_offset(state.cursor, state.tab_width) + 1;
     out << "  Ln " << line << ", Col " << column;
     if (help_view) {
         out << "  Esc /help or Ctrl+Q to return";
+    } else if (split_pane_count > 1) {
+        out << "  Ctrl+G o other  Ctrl+Q quit";
     } else {
         out << "  Ctrl+Q quit  Esc /help for help";
     }
     return out.str();
+}
+
+Rect editor_main_area() {
+    const TerminalSize size = terminal_size();
+    const int rows = std::max(3, size.rows);
+    const int cols = std::max(20, size.cols);
+    return Rect{1, 1, std::max(1, rows - 2), std::max(1, cols - 1)};
 }
 
 std::string minibuffer_text(const MinibufferState& minibuffer) {
@@ -876,7 +888,7 @@ bool handle_minibuffer_key(EditorState& state,
     if (is_assist_minibuffer_action(minibuffer.action)) {
         return false;
     }
-    if (ch == 27 || ch == 7) {
+    if (ch == 27) {
         replace = ReplaceSession{};
         pending_load_path.clear();
         pending_autosave_recovery = PendingAutosaveRecovery{};
@@ -1106,7 +1118,7 @@ bool handle_replace_key(EditorState& state,
     if (!replace.active || minibuffer.active) {
         return false;
     }
-    if (ch == 27 || ch == 7) {
+    if (ch == 27) {
         discard_escape_sequence_tail();
         finish_replace_session(replace, minibuffer, "Replace ended");
         return true;
@@ -1132,29 +1144,117 @@ void render_terminal(EditorState& state,
                      const TerminalThemeStyle& theme_style,
                      bool help_view,
                      const EditorAssistDisplay* assist_display) {
+    SplitPaneRect single;
+    single.buffer_index = 0;
+    single.leaf_index = 0;
+    single.rect = editor_main_area();
+    single.focused = true;
+    render_terminal_splits(
+        {single},
+        [&](size_t) -> const EditorState& { return state; },
+        state,
+        minibuffer,
+        theme_style,
+        help_view,
+        assist_display,
+        1);
+}
+
+void render_terminal_splits(
+    const std::vector<SplitPaneRect>& panes,
+    const std::function<const EditorState&(size_t buffer_index)>& buffer_at,
+    EditorState& focused_state,
+    const MinibufferState& minibuffer,
+    const TerminalThemeStyle& theme_style,
+    bool help_view,
+    const EditorAssistDisplay* assist_display,
+    size_t pane_count_hint) {
     const TerminalSize size = terminal_size();
     const int rows = std::max(3, size.rows);
     const int cols = std::max(20, size.cols);
     const int width = std::max(1, cols - 1);
-    Rect panel_rect{1, 1, std::max(1, rows - 2), width};
-    state.ensure_cursor_visible(panel_rect);
-    const RenderedPanel panel = state.render(panel_rect);
+    const Rect main_area = editor_main_area();
+    const size_t pane_count = pane_count_hint > 0 ? pane_count_hint : panes.size();
 
     std::cout << "\x1b[?25l";
-    for (int row = 0; row < panel_rect.height; ++row) {
-        std::cout << "\x1b[" << (panel_rect.row + row) << ";" << panel_rect.col << "H\x1b[K";
-        if (row < static_cast<int>(panel.lines.size())) {
-            const size_t index = static_cast<size_t>(row);
-            const std::vector<RenderedPanel::Span> empty_spans;
-            const std::vector<RenderedPanel::Span>& spans =
-                index < panel.line_spans.size() ? panel.line_spans[index] : empty_spans;
-            write_editor_rendered_line(panel.lines[index], spans, theme_style);
+    // Clear the main content area once so separators and unused cells are blank.
+    for (int row = 0; row < main_area.height; ++row) {
+        std::cout << "\x1b[" << (main_area.row + row) << ";" << main_area.col << "H\x1b[K";
+    }
+
+    int cursor_row = main_area.row;
+    int cursor_col = main_area.col;
+    for (const SplitPaneRect& pane : panes) {
+        if (pane.rect.width <= 0 || pane.rect.height <= 0) {
+            continue;
+        }
+        const EditorState* source = &buffer_at(pane.buffer_index);
+        if (pane.focused) {
+            focused_state.ensure_cursor_visible(pane.rect);
+            source = &focused_state;
+        }
+        const RenderedPanel panel = source->render(pane.rect);
+        for (int row = 0; row < pane.rect.height; ++row) {
+            std::cout << "\x1b[" << (pane.rect.row + row) << ";" << pane.rect.col << "H";
+            if (row < static_cast<int>(panel.lines.size())) {
+                const size_t index = static_cast<size_t>(row);
+                const std::vector<RenderedPanel::Span> empty_spans;
+                const std::vector<RenderedPanel::Span>& spans =
+                    index < panel.line_spans.size() ? panel.line_spans[index] : empty_spans;
+                // Clip to pane width; render() already sizes lines to rect.width.
+                write_editor_rendered_line(panel.lines[index], spans, theme_style);
+            }
+        }
+        // Dim vertical/horizontal edge marker on focused pane border via reverse on last
+        // column of non-focused is intentionally skipped; empty cleared gaps act as dividers.
+        if (pane.focused && panel.cursor.visible) {
+            cursor_row = pane.rect.row + panel.cursor.row;
+            cursor_col = pane.rect.col + panel.cursor.col;
+        }
+    }
+
+    // Draw simple separator glyphs between adjacent panes when multiple exist.
+    if (panes.size() > 1) {
+        for (size_t i = 0; i < panes.size(); ++i) {
+            for (size_t j = i + 1; j < panes.size(); ++j) {
+                const Rect& a = panes[i].rect;
+                const Rect& b = panes[j].rect;
+                // Vertical separator: b starts immediately to the right of a (+1 gap).
+                if (a.row == b.row && a.height == b.height && b.col == a.col + a.width + 1) {
+                    const int sep_col = a.col + a.width;
+                    for (int row = 0; row < a.height; ++row) {
+                        std::cout << "\x1b[" << (a.row + row) << ";" << sep_col << "H│";
+                    }
+                }
+                if (b.row == a.row && b.height == a.height && a.col == b.col + b.width + 1) {
+                    const int sep_col = b.col + b.width;
+                    for (int row = 0; row < b.height; ++row) {
+                        std::cout << "\x1b[" << (b.row + row) << ";" << sep_col << "H│";
+                    }
+                }
+                // Horizontal separator.
+                if (a.col == b.col && a.width == b.width && b.row == a.row + a.height + 1) {
+                    const int sep_row = a.row + a.height;
+                    std::cout << "\x1b[" << sep_row << ";" << a.col << "H";
+                    for (int col = 0; col < a.width; ++col) {
+                        std::cout << "─";
+                    }
+                }
+                if (b.col == a.col && b.width == a.width && a.row == b.row + b.height + 1) {
+                    const int sep_row = b.row + b.height;
+                    std::cout << "\x1b[" << sep_row << ";" << b.col << "H";
+                    for (int col = 0; col < b.width; ++col) {
+                        std::cout << "─";
+                    }
+                }
+            }
         }
     }
 
     const int status_row = rows - 1;
     const int minibuffer_row = rows;
-    const std::string status_text = pad_or_clip_ascii(editor_status_line(state, help_view), width);
+    const std::string status_text =
+        pad_or_clip_ascii(editor_status_line(focused_state, help_view, pane_count), width);
     std::cout << "\x1b[" << status_row << ";1H";
     if (theme_style.use_colors && theme_style.themes != nullptr) {
         std::cout << tui::style_sequence_for(*theme_style.themes, theme_style.theme_name, tui::StyleRole::Status);
@@ -1178,8 +1278,6 @@ void render_terminal(EditorState& state,
     }
     std::cout << "\x1b[K";
 
-    int cursor_row = panel.cursor.visible ? panel_rect.row + panel.cursor.row : panel_rect.row;
-    int cursor_col = panel.cursor.visible ? panel_rect.col + panel.cursor.col : panel_rect.col;
     if (minibuffer.active) {
         cursor_row = minibuffer_row;
         const size_t prompt_width = minibuffer.prompt.size();
@@ -1308,16 +1406,16 @@ std::string read_escape_suffix() {
 void dispatch_escape_sequence(EditorState& state,
                             const std::string& sequence,
                             std::string& status,
-                            const std::string& last_search) {
+                            const std::string& last_search,
+                            const Rect* panel_rect) {
     if (sequence.empty()) {
         return;
     }
 
     MovementKeyEvent movement;
     if (parse_movement_sequence(sequence, movement)) {
-        const TerminalSize size = terminal_size();
-        const Rect panel_rect{1, 1, std::max(1, size.rows - 2), std::max(1, size.cols - 1)};
-        state.apply_movement(movement.key, panel_rect, movement.shift, movement.alt, movement.ctrl);
+        const Rect rect = panel_rect != nullptr ? *panel_rect : editor_main_area();
+        state.apply_movement(movement.key, rect, movement.shift, movement.alt, movement.ctrl);
         return;
     }
 
@@ -1344,8 +1442,11 @@ void dispatch_escape_sequence(EditorState& state,
     }
 }
 
-void handle_escape(EditorState& state, std::string& status, const std::string& last_search) {
-    dispatch_escape_sequence(state, read_escape_suffix(), status, last_search);
+void handle_escape(EditorState& state,
+                   std::string& status,
+                   const std::string& last_search,
+                   const Rect* panel_rect) {
+    dispatch_escape_sequence(state, read_escape_suffix(), status, last_search, panel_rect);
 }
 
 

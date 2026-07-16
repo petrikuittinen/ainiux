@@ -111,7 +111,18 @@ Use `/pop` to remove the last user or assistant message.
 | In replace mode: `Space` | Replace current match |
 | In replace mode: `s` | Skip |
 | In replace mode: `a` | Replace all remaining |
-| In replace mode: `Esc` / `Ctrl+G` | End replace |
+| In replace mode: `Esc` | End replace |
+
+### Window splits (`Ctrl+G` prefix)
+
+| Shortcut | Action |
+|----------|--------|
+| `Ctrl+G` `v` or `Ctrl+G` `3` | Vertical split (left/right) |
+| `Ctrl+G` `h` or `Ctrl+G` `2` | Horizontal split (top/bottom) |
+| `Ctrl+G` `o` | Focus next pane |
+| `Ctrl+G` `0` | Close focused pane |
+| `Ctrl+G` `1` | Maximize focused pane |
+| `Esc` or `Ctrl+G` after prefix | Cancel window command |
 
 ### Editing
 
@@ -137,7 +148,7 @@ Bracketed terminal paste is undoable with `Ctrl+Z` / `Ctrl+U`.
 | `Esc` (during generation) | Cancel AI request (keeps streamed text) |
 | `Esc` (idle) | Open command minibuffer (`Command:`) |
 | `Esc` `/help` | Toggle read-only help view |
-| `Esc` or `Ctrl+G` | Cancel minibuffer / command entry |
+| `Esc` | Cancel minibuffer / command entry |
 
 ### Cursor and selection
 
