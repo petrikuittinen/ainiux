@@ -219,7 +219,7 @@ Press **`Esc`** to open the command minibuffer (`Command:`). Type a command with
 
 Most commands accept a **mode** (prompted if omitted):
 
-`/prompt TEXT` uses the same four choices.
+`/prompt TEXT` uses the same choices (including `v` and `h`).
 
 | Mode key | Name | Input to model | Output |
 |----------|------|----------------|--------|
