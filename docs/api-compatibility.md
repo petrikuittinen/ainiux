@@ -50,14 +50,19 @@ Anthropic's built-in profile uses Anthropic's OpenAI SDK compatibility endpoint,
 ```text
 provider       aliases                 base URL                                               chat  responses  key default              local
 none           offline                 none                                                   no    no         none                   n/a
+openrouter                             https://openrouter.ai/api/v1                          yes   no         OPENROUTER_API_KEY     no
 openai         openai_chat,            https://api.openai.com/v1                              yes   yes        OPENAI_API_KEY          no
                openai_responses*
-openrouter                             https://openrouter.ai/api/v1                          yes   no         OPENROUTER_API_KEY     no
 deepseek                               https://api.deepseek.com                              yes   no         DEEPSEEK_API_KEY       no
 gemini                                 https://generativelanguage.googleapis.com/v1beta/openai yes  no         GEMINI_API_KEY         no
 anthropic                              https://api.anthropic.com/v1                          yes   no         ANTHROPIC_API_KEY      no
 xai            grok                    https://api.x.ai/v1                                   yes   no         XAI_API_KEY            no
 moonshot       kimi                    https://api.moonshot.ai/v1                            yes   no         MOONSHOT_API_KEY       no
+llamacpp       llama_cpp, llama.cpp    http://localhost:8080/v1                              yes   no         none                   yes
+lm_studio      lmstudio, lm-studio     http://localhost:1234/v1                              yes   no         optional               yes
+ollama                                 http://localhost:11434/v1                             yes   no         none                   yes
+vllm                                   http://localhost:8000/v1                              yes   no         token-abc123           yes
+sglang         sg_lang, sg-lang        http://localhost:30000/v1                             yes   no         none                   yes
 groq                                   https://api.groq.com/openai/v1                        yes   no         GROQ_API_KEY           no
 mistral                                https://api.mistral.ai/v1                             yes   no         MISTRAL_API_KEY        no
 together                               https://api.together.ai/v1                            yes   no         TOGETHER_API_KEY       no
@@ -69,10 +74,6 @@ nvidia_nim                             https://integrate.api.nvidia.com/v1      
 zai            z.ai, z_ai              https://api.z.ai/api/paas/v4                         yes   no         ZAI_API_KEY            no
 qwen           dashscope_intl          https://dashscope-intl.aliyuncs.com/compatible-mode/v1 yes no         DASHSCOPE_API_KEY      no
 dashscope                              https://dashscope.aliyuncs.com/compatible-mode/v1    yes   no         DASHSCOPE_API_KEY      no
-lm_studio      lmstudio, lm-studio     http://localhost:1234/v1                              yes   no         optional               yes
-ollama                                 http://localhost:11434/v1                             yes   no         none                   yes
-vllm                                   http://localhost:8000/v1                              yes   no         token-abc123           yes
-llamacpp       llama_cpp, llama.cpp    http://localhost:8080/v1                              yes   no         none                   yes
 custom_openai_chat custom              user supplied                                         yes   yes**      PKCHAT_API_KEY optional yes/no
 ```
 

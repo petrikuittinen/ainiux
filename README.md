@@ -203,7 +203,8 @@ Built-in AI commands include:
 - Ideation: `/brainstorm`, `/hooks`, and `/title`.
 - Long-form and creative writing: `/speech`, `/fiction`, `/blog`, `/article`, `/joke`, and `/roast`.
 - Opinion and parody voices: `/grumpyman` and `/Trump`.
-- Technical and language tasks: `/explain`, `/transliterate`, `/English`, `/Chinese`, and `/Finnish`.
+- Coding: `/explain`, `/fix`, `/refactor`, `/tests`, and `/plan`.
+- Language tasks: `/transliterate`, `/English`, `/Chinese`, and `/Finnish`.
 
 All except `/continue` support `selection`, `all`, `newbuffer`, and `insert`. `/continue` is continue-only and is also bound to `Ctrl+Space`. Type `Esc` to open the command minibuffer, enter a command such as `/spell`, and pkchat prompts for a mode when one is omitted. `Tab` completes commands and mode variants. `/prompt YOUR TASK` runs a custom one-shot prompt with the same scoped choices: selection (`s`), all (`a`), insert (`i`), or new buffer (`n`). `/regenerate` repeats the previous AI command with the same command options where the current buffer state allows it. `/quit` leaves command mode.
 
@@ -434,13 +435,18 @@ Complete built-in provider list:
 | Provider | Aliases | Default base URL | Default key environment |
 | --- | --- | --- | --- |
 | `none` | `offline` | none | none |
-| `openai` | `openai_chat`, `openai_responses` | `https://api.openai.com/v1` | `OPENAI_API_KEY` |
 | `openrouter` | | `https://openrouter.ai/api/v1` | `OPENROUTER_API_KEY` |
+| `openai` | `openai_chat`, `openai_responses` | `https://api.openai.com/v1` | `OPENAI_API_KEY` |
 | `deepseek` | | `https://api.deepseek.com` | `DEEPSEEK_API_KEY` |
 | `gemini` | | `https://generativelanguage.googleapis.com/v1beta/openai` | `GEMINI_API_KEY` |
 | `anthropic` | | `https://api.anthropic.com/v1` | `ANTHROPIC_API_KEY` |
 | `xai` | `grok` | `https://api.x.ai/v1` | `XAI_API_KEY` |
 | `moonshot` | `kimi` | `https://api.moonshot.ai/v1` | `MOONSHOT_API_KEY` |
+| `llamacpp` | `llama_cpp`, `llama.cpp` | `http://localhost:8080/v1` | none |
+| `lm_studio` | `lmstudio`, `lm-studio` | `http://localhost:1234/v1` | optional |
+| `ollama` | | `http://localhost:11434/v1` | none |
+| `vllm` | | `http://localhost:8000/v1` | `token-abc123` |
+| `sglang` | `sg_lang`, `sg-lang` | `http://localhost:30000/v1` | none |
 | `groq` | | `https://api.groq.com/openai/v1` | `GROQ_API_KEY` |
 | `mistral` | | `https://api.mistral.ai/v1` | `MISTRAL_API_KEY` |
 | `together` | | `https://api.together.ai/v1` | `TOGETHER_API_KEY` |
@@ -452,10 +458,6 @@ Complete built-in provider list:
 | `zai` | `z.ai`, `z_ai` | `https://api.z.ai/api/paas/v4` | `ZAI_API_KEY` |
 | `qwen` | `dashscope_intl` | `https://dashscope-intl.aliyuncs.com/compatible-mode/v1` | `DASHSCOPE_API_KEY` |
 | `dashscope` | | `https://dashscope.aliyuncs.com/compatible-mode/v1` | `DASHSCOPE_API_KEY` |
-| `lm_studio` | `lmstudio`, `lm-studio` | `http://localhost:1234/v1` | optional |
-| `ollama` | | `http://localhost:11434/v1` | none |
-| `vllm` | | `http://localhost:8000/v1` | `token-abc123` |
-| `llamacpp` | `llama_cpp`, `llama.cpp` | `http://localhost:8080/v1` | none |
 | `custom_openai_chat` | `custom` | user supplied | `PKCHAT_API_KEY` (optional) |
 
 The model-backed profiles share the same OpenAI-compatible chat adapter where possible, with endpoint paths and key defaults coming from the registry. Provider names and aliases are case-insensitive; hyphens and underscores are interchangeable.
@@ -563,21 +565,21 @@ Interactive REPL and chat files:
 
 In REPL mode, commands include `/help`, `/quit`, `/save PATH`, `/load PATH`, `/insert FILE_OR_URL`, `/attach PATH`, `/fetch URL`, `/search QUERY`, `/clear`, `/system TEXT`, and `/model MODEL`. Because the line-oriented REPL has no editable draft cursor, inserted text is added as visible context; the full-screen chat and editor modes insert directly at the cursor. Prompts and status are written to `stderr`; assistant replies remain on `stdout`.
 
-Standalone multiline editor:
+Standalone multiline editor (`-e` is short for `--editor`):
 
 ```sh
-./pkchat --editor notes.txt
-./pkchat lmstudio --editor notes.txt
+./pkchat -e notes.txt
+./pkchat lmstudio -e notes.txt
 ./pkchat http://localhost:30000/v1 --editor notes.txt
 ./pkchat --editor draft.txt --output saved-draft.txt
 ```
 
 See [Editor Mode](#editor-mode) for layout, AI assist modes, configuration, and key bindings. In the chat TUI, the same editor core uses visual-row movement across soft-wrapped lines instead of the standalone editor's logical-line up/down movement.
 
-Full-screen chat TUI foundation:
+Full-screen chat TUI foundation (`-c` is short for `--chat`):
 
 ```sh
-./pkchat --chat http://localhost:30000 -m MODEL
+./pkchat -c http://localhost:30000 -m MODEL
 ./pkchat --chat lmstudio
 ```
 

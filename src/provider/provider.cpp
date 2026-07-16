@@ -72,10 +72,9 @@ Profile make_profile(const std::string& name,
     profile.dummy_api_key = dummy_api_key;
     profile.compatibility_warning = warning;
     profile.capabilities = profile_capabilities(requires_key, local, !chat_path.empty(), !responses_path.empty(), !models_path.empty());
-    profile.capabilities.images = name == names::kOpenAi || name == "openrouter" || name == "gemini" ||
-                                  name == "xai" || name == "mistral" || name == names::kLmStudio ||
-                                  name == names::kOllama || name == names::kVllm || name == names::kLlamacpp ||
-                                  name == "qwen" || name == names::kCustomOpenAiChat;
+    profile.capabilities.images = local || name == names::kOpenAi || name == "openrouter" || name == "gemini" ||
+                                  name == "xai" || name == "mistral" || name == "qwen" ||
+                                  name == names::kCustomOpenAiChat;
     return profile;
 }
 
@@ -95,6 +94,7 @@ Profile make_offline_profile() {
 const std::vector<Profile>& profile_registry() {
     static const std::vector<Profile> profiles = {
         make_offline_profile(),
+        make_profile("openrouter", {}, "https://openrouter.ai/api/v1", "/chat/completions", "/models", "", {"OPENROUTER_API_KEY", "PKCHAT_API_KEY"}, true, false),
         make_profile(names::kOpenAi,
                      {names::kOpenAiChat, names::kOpenAiResponses},
                      "https://api.openai.com/v1",
@@ -104,23 +104,13 @@ const std::vector<Profile>& profile_registry() {
                      {"OPENAI_API_KEY", "PKCHAT_API_KEY"},
                      true,
                      false),
-        make_profile("openrouter", {}, "https://openrouter.ai/api/v1", "/chat/completions", "/models", "", {"OPENROUTER_API_KEY", "PKCHAT_API_KEY"}, true, false),
         make_profile("deepseek", {}, "https://api.deepseek.com", "/chat/completions", "/models", "", {"DEEPSEEK_API_KEY", "PKCHAT_API_KEY"}, true, false),
         make_profile("gemini", {}, "https://generativelanguage.googleapis.com/v1beta/openai", "/chat/completions", "/models", "", {"GEMINI_API_KEY", "PKCHAT_API_KEY"}, true, false),
         make_profile("anthropic", {}, "https://api.anthropic.com/v1", "/chat/completions", "/models", "", {"ANTHROPIC_API_KEY", "PKCHAT_API_KEY"}, true, false, "", "OpenAI compatibility layer is mainly for testing/comparison."),
         make_profile("xai", {"grok"}, "https://api.x.ai/v1", "/chat/completions", "/models", "", {"XAI_API_KEY", "PKCHAT_API_KEY"}, true, false),
         make_profile("moonshot", {"kimi"}, "https://api.moonshot.ai/v1", "/chat/completions", "/models", "", {"MOONSHOT_API_KEY", "PKCHAT_API_KEY"}, true, false),
-        make_profile("groq", {}, "https://api.groq.com/openai/v1", "/chat/completions", "/models", "", {"GROQ_API_KEY", "PKCHAT_API_KEY"}, true, false),
-        make_profile("mistral", {}, "https://api.mistral.ai/v1", "/chat/completions", "/models", "", {"MISTRAL_API_KEY", "PKCHAT_API_KEY"}, true, false),
-        make_profile("together", {}, "https://api.together.ai/v1", "/chat/completions", "/models", "", {"TOGETHER_API_KEY", "PKCHAT_API_KEY"}, true, false),
-        make_profile("perplexity", {}, "https://api.perplexity.ai", "/chat/completions", "/models", "", {"PERPLEXITY_API_KEY", "PKCHAT_API_KEY"}, true, false, "", "Perplexity canonical Sonar endpoint is /v1/sonar; /chat/completions is the OpenAI SDK-compatible alias."),
-        make_profile("cerebras", {}, "https://api.cerebras.ai/v1", "/chat/completions", "/models", "", {"CEREBRAS_API_KEY", "PKCHAT_API_KEY"}, true, false),
-        make_profile("fireworks", {}, "https://api.fireworks.ai/inference/v1", "/chat/completions", "/models", "", {"FIREWORKS_API_KEY", "PKCHAT_API_KEY"}, true, false),
-        make_profile("deepinfra", {}, "https://api.deepinfra.com/v1/openai", "/chat/completions", "/models", "", {"DEEPINFRA_API_KEY", "DEEPINFRA_TOKEN", "PKCHAT_API_KEY"}, true, false),
-        make_profile("nvidia_nim", {}, "https://integrate.api.nvidia.com/v1", "/chat/completions", "/models", "", {"NVIDIA_NIM_API_KEY", "PKCHAT_API_KEY"}, true, false),
-        make_profile("zai", {"z.ai", "z_ai"}, "https://api.z.ai/api/paas/v4", "/chat/completions", "", "", {"ZAI_API_KEY", "PKCHAT_API_KEY"}, true, false),
-        make_profile("qwen", {"dashscope_intl"}, "https://dashscope-intl.aliyuncs.com/compatible-mode/v1", "/chat/completions", "/models", "", {"DASHSCOPE_API_KEY", "QWEN_API_KEY", "PKCHAT_API_KEY"}, true, false),
-        make_profile("dashscope", {}, "https://dashscope.aliyuncs.com/compatible-mode/v1", "/chat/completions", "/models", "", {"DASHSCOPE_API_KEY", "PKCHAT_API_KEY"}, true, false),
+        // Local OpenAI-compatible servers (after kimi): llama.cpp, LM Studio, Ollama, vLLM, SGLang.
+        make_profile(names::kLlamacpp, {"llama_cpp", "llama.cpp"}, "http://localhost:8080/v1", "/chat/completions", "/models", "", {}, false, true),
         make_profile(names::kLmStudio,
                      {names::kLmStudioAlias},
                      "http://localhost:1234/v1",
@@ -132,7 +122,18 @@ const std::vector<Profile>& profile_registry() {
                      true),
         make_profile(names::kOllama, {}, "http://localhost:11434/v1", "/chat/completions", "/models", "", {}, false, true),
         make_profile(names::kVllm, {}, "http://localhost:8000/v1", "/chat/completions", "/models", "", {}, false, true, "token-abc123"),
-        make_profile(names::kLlamacpp, {"llama_cpp", "llama.cpp"}, "http://localhost:8080/v1", "/chat/completions", "/models", "", {}, false, true),
+        make_profile(names::kSglang, {"sg_lang", "sg-lang"}, "http://localhost:30000/v1", "/chat/completions", "/models", "", {}, false, true),
+        make_profile("groq", {}, "https://api.groq.com/openai/v1", "/chat/completions", "/models", "", {"GROQ_API_KEY", "PKCHAT_API_KEY"}, true, false),
+        make_profile("mistral", {}, "https://api.mistral.ai/v1", "/chat/completions", "/models", "", {"MISTRAL_API_KEY", "PKCHAT_API_KEY"}, true, false),
+        make_profile("together", {}, "https://api.together.ai/v1", "/chat/completions", "/models", "", {"TOGETHER_API_KEY", "PKCHAT_API_KEY"}, true, false),
+        make_profile("perplexity", {}, "https://api.perplexity.ai", "/chat/completions", "/models", "", {"PERPLEXITY_API_KEY", "PKCHAT_API_KEY"}, true, false, "", "Perplexity canonical Sonar endpoint is /v1/sonar; /chat/completions is the OpenAI SDK-compatible alias."),
+        make_profile("cerebras", {}, "https://api.cerebras.ai/v1", "/chat/completions", "/models", "", {"CEREBRAS_API_KEY", "PKCHAT_API_KEY"}, true, false),
+        make_profile("fireworks", {}, "https://api.fireworks.ai/inference/v1", "/chat/completions", "/models", "", {"FIREWORKS_API_KEY", "PKCHAT_API_KEY"}, true, false),
+        make_profile("deepinfra", {}, "https://api.deepinfra.com/v1/openai", "/chat/completions", "/models", "", {"DEEPINFRA_API_KEY", "DEEPINFRA_TOKEN", "PKCHAT_API_KEY"}, true, false),
+        make_profile("nvidia_nim", {}, "https://integrate.api.nvidia.com/v1", "/chat/completions", "/models", "", {"NVIDIA_NIM_API_KEY", "PKCHAT_API_KEY"}, true, false),
+        make_profile("zai", {"z.ai", "z_ai"}, "https://api.z.ai/api/paas/v4", "/chat/completions", "", "", {"ZAI_API_KEY", "PKCHAT_API_KEY"}, true, false),
+        make_profile("qwen", {"dashscope_intl"}, "https://dashscope-intl.aliyuncs.com/compatible-mode/v1", "/chat/completions", "/models", "", {"DASHSCOPE_API_KEY", "QWEN_API_KEY", "PKCHAT_API_KEY"}, true, false),
+        make_profile("dashscope", {}, "https://dashscope.aliyuncs.com/compatible-mode/v1", "/chat/completions", "/models", "", {"DASHSCOPE_API_KEY", "PKCHAT_API_KEY"}, true, false),
         make_profile(names::kCustomOpenAiChat,
                      {names::kCustom},
                      "",
@@ -395,8 +396,7 @@ ReasoningWireFormat reasoning_wire_format_for(const RequestContext& context) {
     if (text_contains_any(model_and_urls, {"api.z.ai", "glm-5.2", "glm_5.2", "zai-org/glm-5.2"})) {
         return ReasoningWireFormat::ZaiThinking;
     }
-    if (profile.empty() || profile == names::kCustomOpenAiChat || profile == names::kLmStudio ||
-        profile == names::kOllama || profile == names::kVllm || profile == names::kLlamacpp) {
+    if (profile.empty() || profile == names::kCustomOpenAiChat || context.profile.local_endpoint) {
         return ReasoningWireFormat::GenericThinking;
     }
     return ReasoningWireFormat::None;
@@ -2755,8 +2755,7 @@ bool profile_auto_selects_default_model(const Profile& profile, const std::strin
     if (profile.offline) {
         return false;
     }
-    if (profile.name == names::kLmStudio || profile.name == names::kOllama || profile.name == names::kVllm ||
-        profile.name == names::kLlamacpp) {
+    if (profile.local_endpoint) {
         return true;
     }
     if (profile.name == names::kCustomOpenAiChat && is_loopback_base_url(base_url)) {

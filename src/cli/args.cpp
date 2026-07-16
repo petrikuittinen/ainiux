@@ -283,13 +283,13 @@ ParseResult parse_args(int argc, char** argv, const Options& base_options) {
             opts.key_stdin = true;
         } else if (arg == "--repl" || arg == "-i") {
             opts.repl = true;
-        } else if (arg == "--chat" || arg == "--tui") {
+        } else if (arg == "--chat" || arg == "-c" || arg == "--tui") {
             opts.tui = true;
         } else if (arg == "--nocolors" || arg == "--no-colors") {
             opts.no_colors = true;
         } else if (arg == "--allow-private-url-fetch") {
             opts.allow_private_url_fetch = true;
-        } else if (arg == "--editor" || opt == "--editor") {
+        } else if (arg == "--editor" || opt == "--editor" || arg == "-e") {
             opts.editor = true;
             if (!value.empty()) {
                 opts.editor_path = value;
@@ -625,9 +625,9 @@ std::string help_text() {
 Usage:
   pkchat [BASE_URL|PROFILE] -p TEXT [options]
   pkchat --list-models [BASE_URL|PROFILE] [options]
-  pkchat --repl [BASE_URL|PROFILE] [options]
-  pkchat --chat [BASE_URL|PROFILE] [options]
-  pkchat [BASE_URL|PROFILE] --editor [PATH] [--output PATH]
+  pkchat -i, --repl [BASE_URL|PROFILE] [options]
+  pkchat -c, --chat [BASE_URL|PROFILE] [options]
+  pkchat [BASE_URL|PROFILE] -e, --editor [PATH] [--output PATH]
   pkchat --input PATH [--output-format md|html|plaintext|json|jsond] [--output PATH]
   pkchat --fetch-url URL [--output-format md|html|plaintext|json|jsond] [--output PATH]
   pkchat --search QUERY [--output-format md|html|plaintext|json|jsond] [--output PATH]
@@ -640,34 +640,46 @@ Examples:
   pkchat --provider openai -m MODEL -p "Hello"
   pkchat --provider lm_studio -m MODEL -p "Hello from local LM Studio"
   pkchat --provider lmstudio --list-models
-  pkchat --provider none --editor notes.txt
-  pkchat lmstudio --editor notes.txt
+  pkchat --prompt-file prompt.txt --system-file system.txt --format json
+  pkchat http://localhost:8000 -p "Write a report" --output-format html --output report.html
+  pkchat openrouter -model MODEL -i
+  pkchat lmstudio -i
+  pkchat -c lmstudio
+  pkchat --chat lmstudio
+  pkchat --repl --load-chat chat.json --save-chat chat.json
+  pkchat -e notes.txt
+  pkchat --editor
+  pkchat --provider none -e notes.txt
+  pkchat lmstudio -e notes.txt
   pkchat openrouter --editor notes.txt
   pkchat http://localhost:1234/v1 --editor draft.md
   pkchat --provider none --input page.html --output-format md
   pkchat --provider none --fetch-url https://example.com --output-format md
   pkchat --provider none --search "web scraping" --output-format plaintext
   pkchat http://localhost:8000 -p "Summarize" --search "latest news"
-  pkchat openrouter -model MODEL -i
-  pkchat lmstudio -i
-  pkchat --chat lmstudio
-  pkchat --editor notes.txt
-  pkchat --editor
-  pkchat --fetch-url https://example.com --output-format md
   pkchat --input page.html --output-format plaintext
   printf 'piped text' | pkchat --input stdin --output stdout
   command | pkchat http://localhost:8000 -p "Summarize" --attach stdin
   pkchat http://localhost:8000 -p "Compare these" --attach one.md --attach two.txt
   pkchat http://localhost:30000 -p "Describe this image" --input photo.png
-  pkchat --prompt-file prompt.txt --system-file system.txt --format json
-  pkchat http://localhost:8000 -p "Write a report" --output-format html --output report.html
-  pkchat --repl --load-chat chat.json --save-chat chat.json
   pkchat benchmark --validate-dataset
   pkchat benchmark --category reasoning --limit 2 --provider lm_studio -m MODEL
   pkchat --benchmark --dataset prompts.jsonl --mode speed --concurrency 4 --duration 60s
   pkchat --benchmark --dataset eval.jsonl --mode quality,refusals --output results/
 
 Options:
+  Mode:
+      --list-models             List models from the configured endpoint.
+  -i, --repl                    Start a simple line-oriented interactive chat.
+  -c, --chat                    Start the full-screen non-blocking terminal chat.
+      --nocolors                Disable TUI color styling.
+  -e, --editor [PATH]           Start the standalone multiline editor; PATH is the file to open.
+                                A provider shortcut/profile may precede -e/--editor without
+                                -m/--model; choose a model inside the editor with /model
+                                (like -c/--chat). Use --provider none for offline local editing.
+      --benchmark               Run benchmark mode (also: pkchat benchmark ...).
+
+  Prompt and generation:
   -p, --prompt TEXT
       --prompt-file PATH        Use '-' to read the prompt from stdin.
   -s, --system TEXT
@@ -681,20 +693,49 @@ Options:
       --presence-penalty FLOAT
       --thinking on|off
       --thinking-budget TOKENS|LABEL
-                                Token count (for example 8192) or a verbal label (for example high).
+                                Token count (for example 8192) or a verbal label
+                                (for example high).
       --purpose general|coding|instruct|creative
       --max-output-tokens N
       --stream | --no-stream
+
+  Output:
       --format text|json|ndjson|jsonl|jsond
       --output-format html|md|plaintext|json|jsond|ndjson
       --output PATH             Use 'stdout' to write to standard output.
-      --repl, -i                Start a simple line-oriented interactive chat.
-      --chat                    Start the full-screen non-blocking terminal chat.
-      --nocolors                Disable TUI color styling.
-      --editor [PATH]           Start the standalone multiline editor; PATH is the file to open.
-                                A provider shortcut/profile may precede --editor without -m/--model;
-                                choose a model inside the editor with /model (like --chat).
-                                Use --provider none for offline local editing.
+
+  Input and attachments:
+      --input PATH              Read text/Markdown/HTML, or attach PNG/JPEG/GIF with -p;
+                                'stdin' reads UTF-8 plaintext from standard input.
+      --attach PATH             Add text/Markdown/HTML or PNG/JPEG/GIF; repeatable;
+                                'stdin' reads UTF-8 plaintext from standard input.
+      --fetch-url URL           Fetch HTML for extraction, or as prompt context with -p.
+      --search QUERY            Run a web search and use results as prompt context with -p.
+      --web-search-provider NAME
+                                auto, tavily, firecrawl, exa, searxng, duckduckgo, or google.
+      --max-web-search-results N
+                                Maximum ranked web search hits to include; default 3.
+                                Override with config web_search.max_results or
+                                MAXIMUM_WEB_SEARCH_RESULTS.
+      --html-format text|markdown
+                                Compatibility alias for old HTML extraction commands.
+      --max-fetch-bytes N       Default 1048576.
+      --max-input-bytes N       Maximum bytes per text input/attachment; default 1048576.
+      --max-image-bytes N       Maximum image file size; default 20971520.
+      --allow-private-url-fetch Allow loopback/private URL fetches.
+
+  Context:
+      --context TOKENS          Model context-window size; k is 1024, M is 1000000.
+      --max-context-bytes N     Request text budget; 0 disables the client budget.
+      --context-policy POLICY   error, truncate-oldest, truncate-middle,
+                                summarize-oldest, summarize-middle, or provider-auto.
+      --image-capability MODE   auto, allow, or deny; allow overrides model detection.
+
+  Chat history:
+      --save-chat PATH          Save JSON chat history after a successful reply.
+      --load-chat PATH          Load JSON chat history before sending.
+
+  Editor AI continue:
       --editor-continue-prefix-max-chars N
                                 Characters before the cursor sent for Ctrl+Space /continue;
                                 default 4000; 0 disables prefix context.
@@ -709,18 +750,8 @@ Options:
                                 default 4096; 0 disables prose postfix context.
       --editor-continue-max-tokens N
                                 Maximum streamed output tokens for editor AI continue; default 32768.
-      --input PATH              Read text/Markdown/HTML, or attach PNG/JPEG/GIF with -p;
-                                'stdin' reads UTF-8 plaintext from standard input.
-      --attach PATH             Add text/Markdown/HTML or PNG/JPEG/GIF; repeatable;
-                                'stdin' reads UTF-8 plaintext from standard input.
-      --fetch-url URL           Fetch HTML for extraction, or as prompt context with -p.
-      --search QUERY            Run a web search and use results as prompt context with -p.
-      --web-search-provider NAME
-                                auto, tavily, firecrawl, exa, searxng, duckduckgo, or google.
-      --max-web-search-results N
-                                Maximum ranked web search hits to include; default 3.
-                                Override with config web_search.max_results or
-                                MAXIMUM_WEB_SEARCH_RESULTS.
+
+  Benchmark:
       --dataset PATH            Benchmark JSONL dataset; default 'builtin'.
       --mode MODE               speed, long-context, quality, refusals; comma-separated.
       --concurrency N           Concurrent benchmark requests; default 1, maximum 256.
@@ -733,21 +764,10 @@ Options:
       --limit N                 Limit selected benchmark cases; 0 means unlimited.
       --validate-dataset        Validate and summarize the dataset without model calls.
       --list-cases              List selected benchmark cases without model calls.
-      --html-format text|markdown
-                                Compatibility alias for old HTML extraction commands.
-      --max-fetch-bytes N       Default 1048576.
-      --max-input-bytes N       Maximum bytes per text input/attachment; default 1048576.
-      --max-image-bytes N       Maximum image file size; default 20971520.
-      --context TOKENS          Model context-window size; k is 1024, M is 1000000.
-      --max-context-bytes N     Request text budget; 0 disables the client budget.
-      --context-policy POLICY   error, truncate-oldest, truncate-middle,
-                                summarize-oldest, summarize-middle, or provider-auto.
-      --image-capability MODE   auto, allow, or deny; allow overrides model detection.
-      --allow-private-url-fetch Allow loopback/private URL fetches.
-      --save-chat PATH          Save JSON chat history after a successful reply.
-      --load-chat PATH          Load JSON chat history before sending.
-      --provider NAME           none (offline), openai, openrouter, zai, qwen,
-                                lm_studio, ollama, vllm, llama.cpp, etc.
+
+  Provider and endpoint:
+      --provider NAME           none (offline), openrouter, openai, kimi, llama.cpp,
+                                lm_studio, ollama, vllm, sglang, zai, qwen, etc.
       --profile NAME            Alias for --provider.
       --api chat|responses      Use Chat Completions (default) or Responses API.
       --responses               Shortcut for --api responses.
@@ -755,22 +775,28 @@ Options:
       --chat-url URL
       --models-url URL
       --responses-url URL       Override the Responses API endpoint.
+
+  Credentials:
       --key-env NAME
       --key-file PATH
       --key-stdin
   -k, --key TEXT                Discouraged; command line keys may be visible locally.
       --header "Name: Value"
+
+  Network:
       --connect-timeout SECONDS
       --timeout SECONDS
       --proxy URL
       --insecure-tls
+      --trace-http
+
+  General:
       --quiet
-  -v, --verbose             Print TTFT and token/s metrics to stderr.
+  -v, --verbose                 Print TTFT and token/s metrics to stderr.
       --debug                   Print configuration diagnostics to stderr.
       --no-config               Skip the automatic user config; keep system config.
-      --trace-http
       --version
-      --help
+  -h, --help
 )";
 }
 

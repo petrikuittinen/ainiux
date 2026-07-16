@@ -142,6 +142,10 @@ Press **`Esc`** to open the command minibuffer (`Command:`). Type a command with
 | `/hooks` | Generate 10 opening hooks |
 | `/title` | Suggest 10 titles |
 | `/explain` | Explain code or technical concepts |
+| `/fix` | Fix code errors and improve fault tolerance |
+| `/refactor` | Simplify and improve code without changing behavior |
+| `/tests` | Write comprehensive tests for the supplied code |
+| `/plan` | Create a concrete TDD implementation plan |
 | `/transliterate` | Convert text between scripts without translating it |
 | `/readability` | Score readability and suggest improvements |
 | `/speech` | Write a structured, compelling speech |

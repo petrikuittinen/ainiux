@@ -963,7 +963,36 @@ void test_provider_capabilities_and_responses_context() {
 
 void test_provider_registry_resolves_added_profiles() {
     std::vector<pkchat::provider::Profile> profiles = pkchat::provider::built_in_profiles();
-    check(profiles.size() >= 24, "provider registry includes offline and compatibility profiles");
+    check(profiles.size() >= 25, "provider registry includes offline and compatibility profiles");
+
+    // Offline first, then openrouter, openai; local servers after kimi in fixed order.
+    check(!profiles.empty() && profiles[0].name == "none", "offline profile is first");
+    check(profiles.size() > 2 && profiles[1].name == "openrouter" && profiles[2].name == "openai",
+          "openrouter is listed before openai");
+    size_t moonshot_idx = profiles.size();
+    size_t llama_idx = profiles.size();
+    size_t lm_idx = profiles.size();
+    size_t ollama_idx = profiles.size();
+    size_t vllm_idx = profiles.size();
+    size_t sglang_idx = profiles.size();
+    for (size_t i = 0; i < profiles.size(); ++i) {
+        if (profiles[i].name == "moonshot") {
+            moonshot_idx = i;
+        } else if (profiles[i].name == "llamacpp") {
+            llama_idx = i;
+        } else if (profiles[i].name == "lm_studio") {
+            lm_idx = i;
+        } else if (profiles[i].name == "ollama") {
+            ollama_idx = i;
+        } else if (profiles[i].name == "vllm") {
+            vllm_idx = i;
+        } else if (profiles[i].name == "sglang") {
+            sglang_idx = i;
+        }
+    }
+    check(moonshot_idx < llama_idx && llama_idx + 1 == lm_idx && lm_idx + 1 == ollama_idx &&
+              ollama_idx + 1 == vllm_idx && vllm_idx + 1 == sglang_idx,
+          "local providers follow kimi as llamacpp, lm_studio, ollama, vllm, sglang");
 
     const char* grok_argv[] = {"pkchat", "grok", "--list-models", "--header", "Authorization: Bearer test"};
     pkchat::cli::ParseResult grok = pkchat::cli::parse_args(5, const_cast<char**>(grok_argv));
@@ -994,6 +1023,18 @@ void test_provider_registry_resolves_added_profiles() {
     pkchat::provider::ContextResult vllm_ctx = pkchat::provider::build_context(vllm.options);
     check(vllm_ctx.error.ok(), "vllm context builds");
     check(vllm_ctx.context.api_key == "token-abc123", "vllm uses configured dummy API key");
+
+    const char* sglang_argv[] = {"pkchat", "sglang", "--list-models"};
+    pkchat::cli::ParseResult sglang = pkchat::cli::parse_args(3, const_cast<char**>(sglang_argv));
+    check(sglang.error.ok(), "sglang shortcut args parse");
+    pkchat::provider::ContextResult sglang_ctx = pkchat::provider::build_context(sglang.options);
+    check(sglang_ctx.error.ok(), "sglang context builds");
+    check(sglang_ctx.context.profile.name == "sglang", "sglang profile selected");
+    check(sglang_ctx.context.base_url == "http://localhost:30000/v1", "sglang defaults to localhost:30000");
+    check(sglang_ctx.context.profile.local_endpoint, "sglang is marked local");
+    check(pkchat::provider::profile_auto_selects_default_model(sglang_ctx.context.profile,
+                                                               sglang_ctx.context.base_url),
+          "sglang auto-selects a default model");
 
     const char* deepinfra_argv[] = {"pkchat", "--provider", "deepinfra", "--list-models", "--header", "Authorization: Bearer test"};
     pkchat::cli::ParseResult deepinfra = pkchat::cli::parse_args(6, const_cast<char**>(deepinfra_argv));

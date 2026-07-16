@@ -14,5 +14,6 @@ inline constexpr const char kLmStudioAlias[] = "lmstudio";
 inline constexpr const char kOllama[] = "ollama";
 inline constexpr const char kVllm[] = "vllm";
 inline constexpr const char kLlamacpp[] = "llamacpp";
+inline constexpr const char kSglang[] = "sglang";
 
 }  // namespace pkchat::provider::names

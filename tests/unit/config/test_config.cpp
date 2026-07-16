@@ -165,13 +165,14 @@ void test_config_applies_user_settings() {
         pkchat::editor::find_assist_command(loaded.options.editor_assist_config, "/spell");
     check(loaded_spell != nullptr && loaded_spell->prompt.find("spelling") != std::string::npos,
           "automatic loading includes built-in editor assist commands");
-    const std::array<const char*, 28> added_assist_commands = {
+    const std::array<const char*, 32> added_assist_commands = {
         "expand",      "shorten",   "summarize", "simplify",  "variations",
         "checklist",   "table",     "keypoints", "sentiment", "quiz",
         "questions",   "risk",      "entities",  "brainstorm", "outline",
         "hooks",       "title",     "explain",   "transliterate", "readability",
         "speech",      "fiction",   "blog",      "article",   "joke",
         "roast",       "grumpyman", "Trump",
+        "fix",         "refactor",  "tests",     "plan",
     };
     for (const char* command_name : added_assist_commands) {
         const pkchat::editor::EditorAssistCommand* editor_command =
@@ -183,8 +184,9 @@ void test_config_applies_user_settings() {
                   !editor_command->prompt.empty(),
               std::string("bundled AI command supports editor and chat naming: ") + command_name);
     }
-    const std::array<const char*, 8> multiline_assist_commands = {
+    const std::array<const char*, 12> multiline_assist_commands = {
         "speech", "fiction", "blog", "article", "joke", "roast", "grumpyman", "Trump",
+        "fix", "refactor", "tests", "plan",
     };
     for (const char* command_name : multiline_assist_commands) {
         const pkchat::editor::EditorAssistCommand* command =

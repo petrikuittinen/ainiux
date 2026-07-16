@@ -30,6 +30,12 @@ void test_cli_chat_parse() {
     check(parsed.options.tui, "chat UI flag parsed");
     check(parsed.options.positional_url == "lmstudio", "chat UI positional profile parsed");
 
+    const char* short_argv[] = {"pkchat", "-c", "lmstudio"};
+    parsed = pkchat::cli::parse_args(3, const_cast<char**>(short_argv));
+    check(parsed.error.ok(), "chat UI short -c args parse");
+    check(parsed.options.tui, "chat UI short -c flag parsed");
+    check(parsed.options.positional_url == "lmstudio", "chat UI short -c positional profile parsed");
+
     const char* alias_argv[] = {"pkchat", "--tui", "lmstudio"};
     parsed = pkchat::cli::parse_args(3, const_cast<char**>(alias_argv));
     check(parsed.error.ok(), "legacy TUI alias args parse");
@@ -73,11 +79,24 @@ void test_cli_editor_parse() {
     check(parsed.options.positional_url.empty(), "editor file is not stored as positional URL");
     check(parsed.options.output_path == "saved.txt", "editor save-as output parsed");
 
+    const char* short_argv[] = {"pkchat", "-e", "notes.txt", "--output", "saved.txt"};
+    parsed = pkchat::cli::parse_args(5, const_cast<char**>(short_argv));
+    check(parsed.error.ok(), "editor short -e args parse");
+    check(parsed.options.editor, "editor short -e flag parsed");
+    check(parsed.options.editor_path == "notes.txt", "editor short -e file path parsed");
+    check(parsed.options.output_path == "saved.txt", "editor short -e save-as output parsed");
+
     const char* provider_argv[] = {"pkchat", "lmstudio", "--editor", "notes.txt"};
     parsed = pkchat::cli::parse_args(4, const_cast<char**>(provider_argv));
     check(parsed.error.ok(), "editor args with provider shortcut parse");
     check(parsed.options.positional_url == "lmstudio", "editor provider shortcut parsed");
     check(parsed.options.editor_path == "notes.txt", "editor file with provider shortcut parsed");
+
+    const char* short_provider_argv[] = {"pkchat", "lmstudio", "-e", "notes.txt"};
+    parsed = pkchat::cli::parse_args(4, const_cast<char**>(short_provider_argv));
+    check(parsed.error.ok(), "editor short -e with provider shortcut parse");
+    check(parsed.options.positional_url == "lmstudio", "editor short -e provider shortcut parsed");
+    check(parsed.options.editor_path == "notes.txt", "editor short -e file with provider shortcut parsed");
 
     const char* url_argv[] = {"pkchat", "http://localhost:1234/v1", "--editor", "draft.md"};
     parsed = pkchat::cli::parse_args(4, const_cast<char**>(url_argv));
@@ -90,6 +109,12 @@ void test_cli_editor_parse() {
     check(parsed.error.ok(), "scratch editor args parse");
     check(parsed.options.editor, "scratch editor flag parsed");
     check(parsed.options.editor_path.empty(), "scratch editor has no file path");
+
+    const char* short_scratch_argv[] = {"pkchat", "-e"};
+    parsed = pkchat::cli::parse_args(2, const_cast<char**>(short_scratch_argv));
+    check(parsed.error.ok(), "scratch editor short -e args parse");
+    check(parsed.options.editor, "scratch editor short -e flag parsed");
+    check(parsed.options.editor_path.empty(), "scratch editor short -e has no file path");
 
     const char* eq_argv[] = {"pkchat", "--editor=notes.txt"};
     parsed = pkchat::cli::parse_args(2, const_cast<char**>(eq_argv));
@@ -147,6 +172,15 @@ void test_cli_help_displays_version() {
           "CLI help documents openrouter editor startup without model");
     check(help.find("choose a model inside the editor with /model") != std::string::npos,
           "CLI help documents deferred editor model selection");
+    check(help.find("-c, --chat") != std::string::npos,
+          "CLI help documents -c short option for --chat");
+    check(help.find("-e, --editor") != std::string::npos,
+          "CLI help documents -e short option for --editor");
+    check(help.find("Mode:") != std::string::npos &&
+              help.find("Prompt and generation:") != std::string::npos &&
+              help.find("Provider and endpoint:") != std::string::npos &&
+              help.find("Benchmark:") != std::string::npos,
+          "CLI help groups options into logical sections");
     check(help.find("--editor-continue-prefix-max-chars") != std::string::npos &&
               help.find("--editor-continue-postfix-max-chars") != std::string::npos &&
               help.find("--editor-continue-prose-prefix-max-chars") != std::string::npos &&
