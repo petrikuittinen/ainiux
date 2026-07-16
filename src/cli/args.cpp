@@ -29,7 +29,8 @@ bool needs_value(const std::string& opt) {
         "--save-chat", "--load-chat", "--dataset", "--category", "--case",
         "--runs", "--warmup", "--limit", "--mode", "--concurrency", "--duration",
         "--summary-format", "--editor-continue-prefix-max-chars",
-        "--editor-continue-postfix-max-chars", "--editor-continue-max-tokens"};
+        "--editor-continue-postfix-max-chars", "--editor-continue-prose-prefix-max-chars",
+        "--editor-continue-prose-postfix-max-chars", "--editor-continue-max-tokens"};
     for (const char* item : with_values) {
         if (opt == item) {
             return true;
@@ -390,6 +391,18 @@ ParseResult parse_args(int argc, char** argv, const Options& base_options) {
                 if (!err.ok()) {
                     return {opts, err};
                 }
+            } else if (opt == "--editor-continue-prose-prefix-max-chars") {
+                Error err = parse_nonnegative_size(
+                    opt, value, opts.editor_ai_continue_prose_prefix_max_chars);
+                if (!err.ok()) {
+                    return {opts, err};
+                }
+            } else if (opt == "--editor-continue-prose-postfix-max-chars") {
+                Error err = parse_nonnegative_size(
+                    opt, value, opts.editor_ai_continue_prose_postfix_max_chars);
+                if (!err.ok()) {
+                    return {opts, err};
+                }
             } else if (opt == "--editor-continue-max-tokens") {
                 Error err = parse_int(opt, value, opts.editor_ai_continue_max_tokens);
                 if (!err.ok()) {
@@ -688,6 +701,12 @@ Options:
       --editor-continue-postfix-max-chars N
                                 Characters after the cursor sent for code completion;
                                 default 2000; 0 disables postfix context.
+      --editor-continue-prose-prefix-max-chars N
+                                Characters before the cursor sent for text/Markdown continuation;
+                                default 16384; 0 disables prose prefix context.
+      --editor-continue-prose-postfix-max-chars N
+                                Characters after the cursor sent for text/Markdown continuation;
+                                default 4096; 0 disables prose postfix context.
       --editor-continue-max-tokens N
                                 Maximum streamed output tokens for editor AI continue; default 32768.
       --input PATH              Read text/Markdown/HTML, or attach PNG/JPEG/GIF with -p;

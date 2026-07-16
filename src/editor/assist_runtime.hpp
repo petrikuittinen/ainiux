@@ -23,6 +23,7 @@ struct AssistSession {
     bool streaming = false;
     bool saw_visible = false;
     bool code_completion = false;
+    bool prose_completion = false;
     AssistEditKind edit_kind = AssistEditKind::StreamInsert;
     EditorSnapshot undo_before;
     std::string provider_name;

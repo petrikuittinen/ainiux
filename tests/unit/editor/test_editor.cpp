@@ -147,24 +147,42 @@ void test_editor_ai_continue_helpers() {
     check(default_settings.max_prefix_chars ==
                   pkchat::editor::kDefaultAiContinuePrefixMaxChars &&
               default_settings.max_postfix_chars ==
-                  pkchat::editor::kDefaultAiContinuePostfixMaxChars,
-          "default continue context uses the configured 4000/2000 character limits");
+                  pkchat::editor::kDefaultAiContinuePostfixMaxChars &&
+              default_settings.max_prose_prefix_chars ==
+                  pkchat::editor::kDefaultAiContinueProsePrefixMaxChars &&
+              default_settings.max_prose_postfix_chars ==
+                  pkchat::editor::kDefaultAiContinueProsePostfixMaxChars,
+          "default continue context uses independent 4000/2000 code and 16384/4096 prose limits");
     pkchat::cli::Options cli_settings_options = default_options;
     cli_settings_options.editor_ai_continue_prefix_max_chars = 99;
     cli_settings_options.editor_ai_continue_postfix_max_chars = 88;
+    cli_settings_options.editor_ai_continue_prose_prefix_max_chars = 77;
+    cli_settings_options.editor_ai_continue_prose_postfix_max_chars = 66;
     const pkchat::editor::AiContinueSettings cli_settings =
         pkchat::editor::ai_continue_settings(cli_settings_options);
-    check(cli_settings.max_prefix_chars == 99 && cli_settings.max_postfix_chars == 88,
+    check(cli_settings.max_prefix_chars == 99 && cli_settings.max_postfix_chars == 88 &&
+              cli_settings.max_prose_prefix_chars == 77 &&
+              cli_settings.max_prose_postfix_chars == 66,
           "effective CLI continuation settings override built-in/config values");
 
     const char* previous_prefix_raw = std::getenv("MAX_CONTINUE_PREFIX");
     const char* previous_postfix_raw = std::getenv("MAX_CONTINUE_POSTFIX");
+    const char* previous_prose_prefix_raw = std::getenv("MAX_CONTINUE_PROSE_PREFIX");
+    const char* previous_prose_postfix_raw = std::getenv("MAX_CONTINUE_PROSE_POSTFIX");
     const std::optional<std::string> previous_prefix =
         previous_prefix_raw == nullptr ? std::nullopt
                                        : std::optional<std::string>(previous_prefix_raw);
     const std::optional<std::string> previous_postfix =
         previous_postfix_raw == nullptr ? std::nullopt
                                         : std::optional<std::string>(previous_postfix_raw);
+    const std::optional<std::string> previous_prose_prefix =
+        previous_prose_prefix_raw == nullptr
+            ? std::nullopt
+            : std::optional<std::string>(previous_prose_prefix_raw);
+    const std::optional<std::string> previous_prose_postfix =
+        previous_prose_postfix_raw == nullptr
+            ? std::nullopt
+            : std::optional<std::string>(previous_prose_postfix_raw);
     const char* previous_tokens_raw = std::getenv("MAX_AI_CONTINUE_TOKENS");
     const std::optional<std::string> previous_tokens =
         previous_tokens_raw == nullptr ? std::nullopt
@@ -172,29 +190,55 @@ void test_editor_ai_continue_helpers() {
 #if defined(_WIN32)
     _putenv_s("MAX_CONTINUE_PREFIX", "16");
     _putenv_s("MAX_CONTINUE_POSTFIX", "8");
+    _putenv_s("MAX_CONTINUE_PROSE_PREFIX", "32");
+    _putenv_s("MAX_CONTINUE_PROSE_POSTFIX", "12");
     _putenv_s("MAX_AI_CONTINUE_TOKENS", "2048");
 #else
     setenv("MAX_CONTINUE_PREFIX", "16", 1);
     setenv("MAX_CONTINUE_POSTFIX", "8", 1);
+    setenv("MAX_CONTINUE_PROSE_PREFIX", "32", 1);
+    setenv("MAX_CONTINUE_PROSE_POSTFIX", "12", 1);
     setenv("MAX_AI_CONTINUE_TOKENS", "2048", 1);
 #endif
     const pkchat::editor::AiContinueSettings env_settings =
         pkchat::editor::ai_continue_settings(cli_settings_options);
     check(env_settings.max_prefix_chars == 16, "MAX_CONTINUE_PREFIX overrides default");
     check(env_settings.max_postfix_chars == 8, "MAX_CONTINUE_POSTFIX overrides default");
+    check(env_settings.max_prose_prefix_chars == 32,
+          "MAX_CONTINUE_PROSE_PREFIX overrides CLI/config prose prefix");
+    check(env_settings.max_prose_postfix_chars == 12,
+          "MAX_CONTINUE_PROSE_POSTFIX overrides CLI/config prose postfix");
     check(env_settings.max_output_tokens == 2048, "MAX_AI_CONTINUE_TOKENS overrides default");
+#if !defined(_WIN32)
+    setenv("MAX_CONTINUE_PROSE_PREFIX", "invalid", 1);
+    setenv("MAX_CONTINUE_PROSE_POSTFIX", "999999999999999999999999999999", 1);
+#else
+    _putenv_s("MAX_CONTINUE_PROSE_PREFIX", "invalid");
+    _putenv_s("MAX_CONTINUE_PROSE_POSTFIX", "999999999999999999999999999999");
+#endif
+    const pkchat::editor::AiContinueSettings invalid_env_settings =
+        pkchat::editor::ai_continue_settings(cli_settings_options);
+    check(invalid_env_settings.max_prose_prefix_chars == 77 &&
+              invalid_env_settings.max_prose_postfix_chars == 66,
+          "invalid and overflowing prose environment limits preserve CLI/config values");
 #if !defined(_WIN32)
     setenv("MAX_CONTINUE_PREFIX", "0", 1);
     setenv("MAX_CONTINUE_POSTFIX", "0", 1);
+    setenv("MAX_CONTINUE_PROSE_PREFIX", "0", 1);
+    setenv("MAX_CONTINUE_PROSE_POSTFIX", "0", 1);
 #else
     _putenv_s("MAX_CONTINUE_PREFIX", "0");
     _putenv_s("MAX_CONTINUE_POSTFIX", "0");
+    _putenv_s("MAX_CONTINUE_PROSE_PREFIX", "0");
+    _putenv_s("MAX_CONTINUE_PROSE_POSTFIX", "0");
 #endif
     const pkchat::editor::AiContinueSettings zero_env_settings =
         pkchat::editor::ai_continue_settings(default_options);
     check(zero_env_settings.max_prefix_chars == 0 &&
-              zero_env_settings.max_postfix_chars == 0,
-          "zero environment limits disable both context sides");
+              zero_env_settings.max_postfix_chars == 0 &&
+              zero_env_settings.max_prose_prefix_chars == 0 &&
+              zero_env_settings.max_prose_postfix_chars == 0,
+          "zero environment limits disable code and prose context sides");
 #if defined(_WIN32)
     if (previous_prefix.has_value()) {
         _putenv_s("MAX_CONTINUE_PREFIX", previous_prefix->c_str());
@@ -205,6 +249,16 @@ void test_editor_ai_continue_helpers() {
         _putenv_s("MAX_CONTINUE_POSTFIX", previous_postfix->c_str());
     } else {
         _putenv_s("MAX_CONTINUE_POSTFIX", "");
+    }
+    if (previous_prose_prefix.has_value()) {
+        _putenv_s("MAX_CONTINUE_PROSE_PREFIX", previous_prose_prefix->c_str());
+    } else {
+        _putenv_s("MAX_CONTINUE_PROSE_PREFIX", "");
+    }
+    if (previous_prose_postfix.has_value()) {
+        _putenv_s("MAX_CONTINUE_PROSE_POSTFIX", previous_prose_postfix->c_str());
+    } else {
+        _putenv_s("MAX_CONTINUE_PROSE_POSTFIX", "");
     }
     if (previous_tokens.has_value()) {
         _putenv_s("MAX_AI_CONTINUE_TOKENS", previous_tokens->c_str());
@@ -221,6 +275,16 @@ void test_editor_ai_continue_helpers() {
         setenv("MAX_CONTINUE_POSTFIX", previous_postfix->c_str(), 1);
     } else {
         unsetenv("MAX_CONTINUE_POSTFIX");
+    }
+    if (previous_prose_prefix.has_value()) {
+        setenv("MAX_CONTINUE_PROSE_PREFIX", previous_prose_prefix->c_str(), 1);
+    } else {
+        unsetenv("MAX_CONTINUE_PROSE_PREFIX");
+    }
+    if (previous_prose_postfix.has_value()) {
+        setenv("MAX_CONTINUE_PROSE_POSTFIX", previous_prose_postfix->c_str(), 1);
+    } else {
+        unsetenv("MAX_CONTINUE_PROSE_POSTFIX");
     }
     if (previous_tokens.has_value()) {
         setenv("MAX_AI_CONTINUE_TOKENS", previous_tokens->c_str(), 1);
@@ -660,14 +724,33 @@ void test_editor_assist_helpers() {
         "",
         std::nullopt);
     check(execution.ok && execution.stream &&
-              execution.edit_kind == pkchat::editor::AssistEditKind::StreamInsert,
+              execution.edit_kind == pkchat::editor::AssistEditKind::StreamInsert &&
+              execution.prose_completion && !execution.code_completion,
           "/continue continue builds streaming execution");
-    check(execution.messages.back().content == "<content>hello wrld</content>",
-          "/continue continue sends tail-before-cursor context as input");
+    check(execution.messages.back().content.find(
+              "PKCHAT_PROSE_CONTEXT_V1\nMODE_BYTES 4\ntext\nPREFIX_BYTES 10\nhello wrld\n"
+              "CURSOR_BYTES 9\n<CURSOR/>\nEND_PKCHAT_PROSE_CONTEXT_V1") !=
+              std::string::npos &&
+              execution.messages.back().content.find("POSTFIX_BYTES") == std::string::npos,
+          "/continue at prose buffer end sends a length-delimited prefix and omits postfix");
+    check(execution.messages.front().content.rfind("Custom system", 0) == 0 &&
+              execution.messages.front().content.find(default_continue->prompt) !=
+                  std::string::npos &&
+              execution.messages.front().content.find("Continue at substantial length") !=
+                  std::string::npos &&
+              execution.messages.front().content.find("concrete examples and relevant numbers") !=
+                  std::string::npos &&
+              execution.messages.front().content.find("make brave, coherent choices and use vivid language") !=
+                  std::string::npos &&
+              execution.messages.front().content.find("Never offer suggestions, alternatives") !=
+                  std::string::npos &&
+              execution.messages.front().content.find("Never summarize, paraphrase, recap, restart, repeat") !=
+                  std::string::npos,
+          "end-of-document prose continuation demands substantial concrete and creative writing");
     check(execution.usage_messages.empty(),
           "/continue continue omits separate usage messages when the full prefix fits the read limit");
 
-    context.settings.max_prefix_chars = 4096;
+    context.settings.max_prose_prefix_chars = 4096;
     pkchat::editor::EditorState long_state =
         pkchat::editor::EditorState::from_text(std::string(5000, 'a'));
     long_state.cursor = long_state.text.size();
@@ -694,9 +777,97 @@ void test_editor_assist_helpers() {
     execution = pkchat::editor::build_assist_execution(
         markdown_state, context, pkchat::editor::AssistCommandKind::Configured,
         *continue_index, pkchat::editor::AssistScope::Continue, "", std::nullopt);
-    check(!execution.code_completion &&
-              execution.messages.back().content == "<content># prose tail</content>",
-          "Markdown /continue retains prefix-only prose continuation");
+    check(execution.prose_completion && !execution.code_completion &&
+              execution.messages.back().content.find("MODE_BYTES 8\nmarkdown\n") !=
+                  std::string::npos,
+          "Markdown /continue uses dedicated prose continuation framing");
+
+    context.settings.max_prose_prefix_chars = 3;
+    context.settings.max_prose_postfix_chars = 4;
+    const std::string prose_beta = "\xCE\xB2";
+    pkchat::editor::EditorState prose_middle = pkchat::editor::EditorState::from_text(
+        std::string("\xCE\xB1") + prose_beta + "AB  ending\xE5\xB0\xBE");
+    prose_middle.cursor = std::string("\xCE\xB1").size() + prose_beta.size() + 2;
+    execution = pkchat::editor::build_assist_execution(
+        prose_middle, context, pkchat::editor::AssistCommandKind::Configured,
+        *continue_index, pkchat::editor::AssistScope::Continue, "", std::nullopt);
+    const std::string& prose_request = execution.messages.back().content;
+    check(prose_request.find("PREFIX_BYTES 4\n" + prose_beta + "AB\nCURSOR_BYTES 9\n<CURSOR/>\n") !=
+                  std::string::npos &&
+              prose_request.find("POSTFIX_BYTES 4\n  en\n") != std::string::npos,
+          "middle prose continuation slices immediate UTF-8 prefix and postfix by characters");
+    check(execution.messages.front().content.find("natural bridge") != std::string::npos &&
+              execution.messages.front().content.find("immutable POSTFIX") != std::string::npos &&
+              execution.messages.front().content.find("Continue at substantial length") ==
+                  std::string::npos,
+          "middle prose continuation requires a developed bridge without the end-only long-form prompt");
+
+    context.settings.max_prose_postfix_chars = 2;
+    execution = pkchat::editor::build_assist_execution(
+        prose_middle, context, pkchat::editor::AssistCommandKind::Configured,
+        *continue_index, pkchat::editor::AssistScope::Continue, "", std::nullopt);
+    check(execution.messages.back().content.find("POSTFIX_BYTES 2\n  \n") !=
+              std::string::npos,
+          "bounded prose postfix preserves an immediate whitespace-only slice exactly");
+
+    prose_middle.cursor = 0;
+    context.settings.max_prose_prefix_chars = 0;
+    context.settings.max_prose_postfix_chars = 3;
+    execution = pkchat::editor::build_assist_execution(
+        prose_middle, context, pkchat::editor::AssistCommandKind::Configured,
+        *continue_index, pkchat::editor::AssistScope::Continue, "", std::nullopt);
+    check(execution.messages.back().content.find("PREFIX_BYTES 0\n\nCURSOR_BYTES 9") !=
+                  std::string::npos &&
+              execution.messages.back().content.find(
+                  std::string("POSTFIX_BYTES 5\n\xCE\xB1\xCE\xB2") + "A\n") !=
+                  std::string::npos,
+          "prose continuation at buffer start supports disabled prefix and bounded UTF-8 postfix");
+
+    std::string invalid_prose_source = "A";
+    invalid_prose_source.push_back(static_cast<char>(0xFF));
+    invalid_prose_source += "Brest";
+    pkchat::editor::EditorState invalid_prose_state =
+        pkchat::editor::EditorState::from_text(invalid_prose_source);
+    invalid_prose_state.cursor = 3;
+    context.settings.max_prose_prefix_chars = 2;
+    context.settings.max_prose_postfix_chars = 2;
+    execution = pkchat::editor::build_assist_execution(
+        invalid_prose_state, context, pkchat::editor::AssistCommandKind::Configured,
+        *continue_index, pkchat::editor::AssistScope::Continue, "", std::nullopt);
+    std::string invalid_prose_prefix;
+    invalid_prose_prefix.push_back(static_cast<char>(0xFF));
+    invalid_prose_prefix += "B";
+    check(execution.messages.back().content.find(
+              "PREFIX_BYTES 2\n" + invalid_prose_prefix + "\nCURSOR_BYTES") !=
+              std::string::npos,
+          "invalid UTF-8 prose bytes are preserved and count as one context unit");
+
+    pkchat::editor::EditorState prose_whitespace_postfix =
+        pkchat::editor::EditorState::from_text("abc \t\r\n\f\v");
+    prose_whitespace_postfix.cursor = 3;
+    context.settings.max_prose_prefix_chars = 3;
+    context.settings.max_prose_postfix_chars = 20;
+    execution = pkchat::editor::build_assist_execution(
+        prose_whitespace_postfix, context, pkchat::editor::AssistCommandKind::Configured,
+        *continue_index, pkchat::editor::AssistScope::Continue, "", std::nullopt);
+    check(execution.messages.back().content.find("POSTFIX_BYTES") == std::string::npos,
+          "complete whitespace-only prose remainder is omitted");
+    check(execution.messages.front().content.find("Continue at substantial length") !=
+              std::string::npos,
+          "whitespace-only remainder uses the end-of-document long-form prose prompt");
+
+    context.settings.max_prose_postfix_chars = 0;
+    prose_middle.cursor = 4;
+    execution = pkchat::editor::build_assist_execution(
+        prose_middle, context, pkchat::editor::AssistCommandKind::Configured,
+        *continue_index, pkchat::editor::AssistScope::Continue, "", std::nullopt);
+    check(execution.messages.back().content.find("POSTFIX_BYTES") == std::string::npos,
+          "zero prose postfix limit omits existing suffix data");
+    check(execution.messages.front().content.find("Continue at substantial length") ==
+                  std::string::npos &&
+              execution.messages.front().content.find("postfix context is disabled") !=
+                  std::string::npos,
+          "disabled prose postfix in the middle does not trigger the end-of-document prompt");
 
     context.settings.max_prefix_chars = 3;
     context.settings.max_postfix_chars = 4;
@@ -796,6 +967,10 @@ void test_editor_assist_helpers() {
 
     context.settings.max_prefix_chars = pkchat::editor::kDefaultAiContinuePrefixMaxChars;
     context.settings.max_postfix_chars = pkchat::editor::kDefaultAiContinuePostfixMaxChars;
+    context.settings.max_prose_prefix_chars =
+        pkchat::editor::kDefaultAiContinueProsePrefixMaxChars;
+    context.settings.max_prose_postfix_chars =
+        pkchat::editor::kDefaultAiContinueProsePostfixMaxChars;
 
     pkchat::cli::Options configured_options;
     configured_options.editor_assist_config = pkchat::editor::default_editor_assist_config();
@@ -820,6 +995,27 @@ void test_editor_assist_helpers() {
           "configured assist_spell overrides the built-in spell prompt");
     check(execution.messages.back().content.find("<content>") == 0,
           "configured assist wraps editor text in content tags");
+
+    pkchat::config::ParseResult custom_continue_config = pkchat::config::parse(
+        "[editor]\nassist_continue = \"Carry the mystery forward.\"\n",
+        "assist-continue.conf");
+    check(custom_continue_config.error.ok() &&
+              pkchat::config::apply_document(
+                  custom_continue_config.document, configured_options).ok(),
+          "custom /continue prompt config applies");
+    context.assist_config = configured_options.editor_assist_config;
+    pkchat::editor::EditorState custom_continue_state =
+        pkchat::editor::EditorState::from_text("The locked door opened.");
+    custom_continue_state.cursor = custom_continue_state.text.size();
+    execution = pkchat::editor::build_assist_execution(
+        custom_continue_state, context, pkchat::editor::AssistCommandKind::Configured,
+        *pkchat::editor::assist_command_index(context.assist_config, "/continue"),
+        pkchat::editor::AssistScope::Continue, "", std::nullopt);
+    check(execution.messages.front().content.find("Carry the mystery forward.") !=
+                  std::string::npos &&
+              execution.messages.front().content.find("Mandatory continuation rules") !=
+                  std::string::npos,
+          "custom /continue prompt remains alongside mandatory prose insertion constraints");
 
     pkchat::config::ParseResult custom_command_config = pkchat::config::parse(
         "[command]\n"
@@ -1056,6 +1252,48 @@ void test_editor_assist_helpers() {
         streamed += stream_filter.finish();
         check(streamed == "continued text",
               "streamed assist output strips split tool-call wrapper artifacts");
+    }
+
+    {
+        pkchat::editor::ProseAssistStreamFilter stream_filter;
+        const std::string raw = "  immediate prose\n\t";
+        std::string streamed = stream_filter.feed(raw.substr(0, 1));
+        streamed += stream_filter.feed(raw.substr(1, 7));
+        streamed += stream_filter.feed(raw.substr(8));
+        streamed += stream_filter.finish();
+        check(streamed == raw,
+              "raw prose stream preserves leading and trailing whitespace exactly");
+    }
+    {
+        pkchat::editor::ProseAssistStreamFilter stream_filter;
+        const std::vector<std::string> chunks = {
+            "<co", "ntent> \xE4", "\xBD", "\xA0 bridge\n\t</con", "tent>"};
+        std::string streamed;
+        for (const std::string& chunk : chunks) {
+            streamed += stream_filter.feed(chunk);
+        }
+        streamed += stream_filter.finish();
+        check(streamed == " \xE4\xBD\xA0 bridge\n\t",
+              "wrapped prose strips only boundary tags across arbitrary chunks and split UTF-8");
+    }
+    {
+        pkchat::editor::ProseAssistStreamFilter stream_filter;
+        const std::string wrapped =
+            "<content>keep <content> and </content> inside, then continue</content>";
+        std::string streamed;
+        for (char byte : wrapped) {
+            streamed += stream_filter.feed(std::string(1, byte));
+        }
+        streamed += stream_filter.finish();
+        check(streamed == "keep <content> and </content> inside, then continue",
+              "wrapped prose preserves tag-like text inside the body");
+    }
+    {
+        pkchat::editor::ProseAssistStreamFilter stream_filter;
+        std::string streamed = stream_filter.feed("<content>partial bridge</con");
+        streamed += stream_filter.finish();
+        check(streamed == "partial bridge</con",
+              "finishing a partial prose stream keeps incomplete wrapper-like output bytes");
     }
 
     {

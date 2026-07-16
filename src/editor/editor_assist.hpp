@@ -64,6 +64,7 @@ struct AssistExecution {
     size_t replace_start = 0;
     size_t replace_count = 0;
     bool code_completion = false;
+    bool prose_completion = false;
     highlight::Language completion_language = highlight::Language::Text;
 };
 
@@ -107,6 +108,7 @@ void start_assist_job(const AiContinueContext& context,
                       const std::vector<provider::Message>& messages,
                       bool stream,
                       bool code_completion,
+                      bool prose_completion,
                       highlight::Language completion_language,
                       runtime::EventQueue<ContinueEvent>& events,
                       runtime::JobHandle& job);
@@ -129,6 +131,23 @@ class AssistStreamFilter {
     bool done_ = false;
     std::string detect_buffer_;
     std::string holdback_;
+};
+
+class ProseAssistStreamFilter {
+   public:
+    std::string feed(const std::string& chunk);
+    std::string finish();
+
+   private:
+    std::string feed_body(const std::string& chunk);
+
+    const std::string open_tag_ = "<content>";
+    const std::string close_tag_ = "</content>";
+    bool decided_ = false;
+    bool wrapped_ = false;
+    bool done_ = false;
+    std::string leading_;
+    std::string trailing_;
 };
 
 class CodeAssistStreamFilter {

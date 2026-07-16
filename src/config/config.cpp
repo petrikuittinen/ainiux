@@ -1707,6 +1707,28 @@ Error apply_document(const Document& document, cli::Options& options) {
             if (err.ok()) {
                 candidate.editor_ai_continue_postfix_max_chars = static_cast<size_t>(value);
             }
+        } else if (name == "editor.continue_prose_prefix_max_chars") {
+            long long value = 0;
+            err = nonnegative_long_long(entry, value);
+            if (err.ok() && static_cast<unsigned long long>(value) >
+                                static_cast<unsigned long long>(
+                                    std::numeric_limits<size_t>::max())) {
+                err = schema_error(entry, "integer is too large for this platform");
+            }
+            if (err.ok()) {
+                candidate.editor_ai_continue_prose_prefix_max_chars = static_cast<size_t>(value);
+            }
+        } else if (name == "editor.continue_prose_postfix_max_chars") {
+            long long value = 0;
+            err = nonnegative_long_long(entry, value);
+            if (err.ok() && static_cast<unsigned long long>(value) >
+                                static_cast<unsigned long long>(
+                                    std::numeric_limits<size_t>::max())) {
+                err = schema_error(entry, "integer is too large for this platform");
+            }
+            if (err.ok()) {
+                candidate.editor_ai_continue_prose_postfix_max_chars = static_cast<size_t>(value);
+            }
         } else if (name == "editor.continue_max_tokens") {
             err = nonnegative_int(entry, candidate.editor_ai_continue_max_tokens);
         } else if (name == "editor.assist_behavior") {

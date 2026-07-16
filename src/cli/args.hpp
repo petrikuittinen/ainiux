@@ -133,6 +133,10 @@ struct Options {
         pkchat::editor::kDefaultAiContinuePrefixMaxChars;
     size_t editor_ai_continue_postfix_max_chars =
         pkchat::editor::kDefaultAiContinuePostfixMaxChars;
+    size_t editor_ai_continue_prose_prefix_max_chars =
+        pkchat::editor::kDefaultAiContinueProsePrefixMaxChars;
+    size_t editor_ai_continue_prose_postfix_max_chars =
+        pkchat::editor::kDefaultAiContinueProsePostfixMaxChars;
     int editor_ai_continue_max_tokens = pkchat::editor::kDefaultAiContinueMaxTokens;
     pkchat::editor::EditorAssistConfig editor_assist_config = pkchat::editor::empty_editor_assist_config();
     long long context_tokens = 0;

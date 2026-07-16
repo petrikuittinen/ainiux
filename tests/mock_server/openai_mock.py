@@ -371,6 +371,34 @@ class Handler(BaseHTTPRequestHandler):
             else:
                 print("invalid editor code completion context:", repr(last), flush=True)
                 reply = "```python\nraise RuntimeError(\"bad completion context\")\n```"
+        elif last.startswith("PKCHAT_PROSE_CONTEXT_V1\n"):
+            expected_prefix = "Mara entered the silent observatory. The clock stopped.\n"
+            expected_postfix = "\nAt dawn, the brass door was sealed again.\n"
+            prefix_frame = (
+                f"PREFIX_BYTES {len(expected_prefix.encode('utf-8'))}\n"
+                f"{expected_prefix}\nCURSOR_BYTES 9\n<CURSOR/>\n"
+            )
+            postfix_frame = (
+                f"POSTFIX_BYTES {len(expected_postfix.encode('utf-8'))}\n"
+                f"{expected_postfix}\n"
+            )
+            prose_rules_seen = any(
+                isinstance(message, dict)
+                and message.get("role") == "system"
+                and "natural bridge" in message.get("content", "")
+                and "Never summarize, paraphrase, recap, restart, repeat" in message.get("content", "")
+                for message in messages
+            )
+            if (
+                "MODE_BYTES 4\ntext\n" in last
+                and prefix_frame in last
+                and postfix_frame in last
+                and prose_rules_seen
+            ):
+                reply = "<content>A hidden panel opened, and she slipped inside before the gears resumed.\n</content>"
+            else:
+                print("invalid editor prose completion context:", repr(last), flush=True)
+                reply = "<content>BAD PROSE CONTEXT</content>"
 
         if request.get("stream"):
             self.send_response(200)

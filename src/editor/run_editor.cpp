@@ -929,7 +929,7 @@ app::EditorRunResult run_editor(const std::string& path,
                 show_finish_message();
             }
         } else {
-            if (!assist_session.code_completion &&
+            if (!assist_session.code_completion && !assist_session.prose_completion &&
                 (assist_session.edit_kind == AssistEditKind::StreamInsert ||
                  assist_session.edit_kind == AssistEditKind::NewBuffer)) {
                 strip_trailing_assist_close_tag_without_undo(state);
@@ -1093,6 +1093,7 @@ app::EditorRunResult run_editor(const std::string& path,
         assist_session.active = true;
         assist_session.streaming = execution.stream;
         assist_session.code_completion = execution.code_completion;
+        assist_session.prose_completion = execution.prose_completion;
         assist_session.edit_kind = execution.edit_kind;
         assist_session.provider_name = ai_continue->request.profile.name;
         assist_session.model_name = ai_continue->request.options.model;
@@ -1106,6 +1107,7 @@ app::EditorRunResult run_editor(const std::string& path,
                          execution.messages,
                          execution.stream,
                          execution.code_completion,
+                         execution.prose_completion,
                          execution.completion_language,
                          assist_session.events,
                          assist_session.job);

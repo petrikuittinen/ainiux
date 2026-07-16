@@ -11,11 +11,17 @@ AiContinueSettings ai_continue_settings(const cli::Options& options) {
     AiContinueSettings settings;
     settings.max_prefix_chars = options.editor_ai_continue_prefix_max_chars;
     settings.max_postfix_chars = options.editor_ai_continue_postfix_max_chars;
+    settings.max_prose_prefix_chars = options.editor_ai_continue_prose_prefix_max_chars;
+    settings.max_prose_postfix_chars = options.editor_ai_continue_prose_postfix_max_chars;
     settings.max_output_tokens = options.editor_ai_continue_max_tokens;
     settings.max_prefix_chars =
         nonnegative_size_from_env("MAX_CONTINUE_PREFIX", settings.max_prefix_chars);
     settings.max_postfix_chars =
         nonnegative_size_from_env("MAX_CONTINUE_POSTFIX", settings.max_postfix_chars);
+    settings.max_prose_prefix_chars = nonnegative_size_from_env(
+        "MAX_CONTINUE_PROSE_PREFIX", settings.max_prose_prefix_chars);
+    settings.max_prose_postfix_chars = nonnegative_size_from_env(
+        "MAX_CONTINUE_PROSE_POSTFIX", settings.max_prose_postfix_chars);
     settings.max_output_tokens =
         positive_int_from_env("MAX_AI_CONTINUE_TOKENS", settings.max_output_tokens);
     return settings;
@@ -102,6 +108,7 @@ void start_continue_job(const AiContinueContext& context,
                      execution.messages,
                      true,
                      execution.code_completion,
+                     execution.prose_completion,
                      execution.completion_language,
                      events,
                      job);

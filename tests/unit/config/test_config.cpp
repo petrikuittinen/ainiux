@@ -46,7 +46,10 @@ void test_config_applies_user_settings() {
         pkchat::config::parse("[editor]\nundo_limit = 7\nhuge_file_size_warning = 2048\nfile_size_limit = -1\n"
                               "tab-width = 8\ntab-style = tab\nlinebreak = crlf\n"
                               "continue_prefix_max_chars = 8192\n"
-                              "continue_postfix_max_chars = 1024\ncontinue_max_tokens = 4096\n",
+                              "continue_postfix_max_chars = 1024\n"
+                              "continue_prose_prefix_max_chars = 16300\n"
+                              "continue_prose_postfix_max_chars = 4000\n"
+                              "continue_max_tokens = 4096\n",
                               "editor.conf");
     check(editor_config.error.ok(), "editor config fixture parses");
     err = pkchat::config::apply_document(editor_config.document, options);
@@ -58,16 +61,33 @@ void test_config_applies_user_settings() {
               options.editor_linebreak == pkchat::editor::LineBreak::Crlf &&
               options.editor_ai_continue_prefix_max_chars == 8192 &&
               options.editor_ai_continue_postfix_max_chars == 1024 &&
+              options.editor_ai_continue_prose_prefix_max_chars == 16300 &&
+              options.editor_ai_continue_prose_postfix_max_chars == 4000 &&
               options.editor_ai_continue_max_tokens == 4096,
           "editor config settings apply");
 
     pkchat::config::ParseResult zero_continue_config = pkchat::config::parse(
-        "[editor]\ncontinue_prefix_max_chars = 0\ncontinue_postfix_max_chars = 0\n",
+        "[editor]\ncontinue_prefix_max_chars = 0\ncontinue_postfix_max_chars = 0\n"
+        "continue_prose_prefix_max_chars = 0\ncontinue_prose_postfix_max_chars = 0\n",
         "editor-zero.conf");
     err = pkchat::config::apply_document(zero_continue_config.document, options);
     check(err.ok() && options.editor_ai_continue_prefix_max_chars == 0 &&
-              options.editor_ai_continue_postfix_max_chars == 0,
-          "zero config limits disable both editor continuation context sides");
+              options.editor_ai_continue_postfix_max_chars == 0 &&
+              options.editor_ai_continue_prose_prefix_max_chars == 0 &&
+              options.editor_ai_continue_prose_postfix_max_chars == 0,
+          "zero config limits disable all editor continuation context sides");
+
+    pkchat::config::ParseResult invalid_prose_continue_config = pkchat::config::parse(
+        "[editor]\ncontinue_prose_prefix_max_chars = -1\n", "editor-prose-invalid.conf");
+    err = pkchat::config::apply_document(invalid_prose_continue_config.document, options);
+    check(!err.ok() && err.message.find("non-negative") != std::string::npos,
+          "negative prose continuation config limit is rejected");
+
+    pkchat::config::ParseResult overflow_prose_continue_config = pkchat::config::parse(
+        "[editor]\ncontinue_prose_postfix_max_chars = 999999999999999999999999999999\n",
+        "editor-prose-overflow.conf");
+    check(!overflow_prose_continue_config.error.ok(),
+          "overflowing prose continuation config limit is rejected while parsing");
 
     pkchat::config::ParseResult removed_continue_config = pkchat::config::parse(
         "[editor]\ncontinue_read_chars = 10\n", "editor-removed.conf");
@@ -77,20 +97,25 @@ void test_config_applies_user_settings() {
 
     pkchat::cli::Options layered;
     pkchat::config::ParseResult system_continue_config = pkchat::config::parse(
-        "[editor]\ncontinue_prefix_max_chars = 10\ncontinue_postfix_max_chars = 20\n",
+        "[editor]\ncontinue_prefix_max_chars = 10\ncontinue_postfix_max_chars = 20\n"
+        "continue_prose_prefix_max_chars = 100\ncontinue_prose_postfix_max_chars = 200\n",
         "system-editor.conf");
     pkchat::config::ParseResult user_continue_config = pkchat::config::parse(
-        "[editor]\ncontinue_prefix_max_chars = 30\n", "user-editor.conf");
+        "[editor]\ncontinue_prefix_max_chars = 30\ncontinue_prose_prefix_max_chars = 300\n",
+        "user-editor.conf");
     check(pkchat::config::apply_document(system_continue_config.document, layered).ok() &&
               pkchat::config::apply_document(user_continue_config.document, layered).ok(),
           "system and user continuation settings layer successfully");
     const char* layered_argv[] = {
-        "pkchat", "--editor-continue-postfix-max-chars", "40"};
+        "pkchat", "--editor-continue-postfix-max-chars", "40",
+        "--editor-continue-prose-postfix-max-chars", "400"};
     const pkchat::cli::ParseResult layered_cli =
-        pkchat::cli::parse_args(3, const_cast<char**>(layered_argv), layered);
+        pkchat::cli::parse_args(5, const_cast<char**>(layered_argv), layered);
     check(layered_cli.error.ok() &&
               layered_cli.options.editor_ai_continue_prefix_max_chars == 30 &&
-              layered_cli.options.editor_ai_continue_postfix_max_chars == 40,
+              layered_cli.options.editor_ai_continue_postfix_max_chars == 40 &&
+              layered_cli.options.editor_ai_continue_prose_prefix_max_chars == 300 &&
+              layered_cli.options.editor_ai_continue_prose_postfix_max_chars == 400,
           "continuation settings follow system then user then CLI precedence");
 
     pkchat::config::ParseResult insert_config = pkchat::config::parse(
@@ -327,7 +352,7 @@ void test_config_model_setting_thinking_budget() {
 void test_config_reads_common_template() {
     pkchat::config::ParseResult parsed = pkchat::config::read_file("config/pkchat.conf");
     check(parsed.error.ok(), "common config file parses");
-    check(parsed.document.entries.size() == 159, "common config has every expected setting");
+    check(parsed.document.entries.size() == 161, "common config has every expected setting");
     pkchat::cli::Options highlight_options;
     pkchat::Error apply_error = pkchat::config::apply_document(parsed.document, highlight_options);
     check(apply_error.ok() && highlight_options.tui_highlight,
@@ -366,6 +391,10 @@ void test_config_reads_common_template() {
                   pkchat::editor::kDefaultAiContinuePrefixMaxChars &&
               options.editor_ai_continue_postfix_max_chars ==
                   pkchat::editor::kDefaultAiContinuePostfixMaxChars &&
+              options.editor_ai_continue_prose_prefix_max_chars ==
+                  pkchat::editor::kDefaultAiContinueProsePrefixMaxChars &&
+              options.editor_ai_continue_prose_postfix_max_chars ==
+                  pkchat::editor::kDefaultAiContinueProsePostfixMaxChars &&
               options.editor_ai_continue_max_tokens == pkchat::editor::kDefaultAiContinueMaxTokens,
           "common config maps to the built-in runtime defaults");
     check(options.model_settings.size() == 12, "common config includes model-setting presets");

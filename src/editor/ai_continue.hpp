@@ -19,6 +19,8 @@ namespace pkchat::editor {
 struct AiContinueSettings {
     size_t max_prefix_chars = kDefaultAiContinuePrefixMaxChars;
     size_t max_postfix_chars = kDefaultAiContinuePostfixMaxChars;
+    size_t max_prose_prefix_chars = kDefaultAiContinueProsePrefixMaxChars;
+    size_t max_prose_postfix_chars = kDefaultAiContinueProsePostfixMaxChars;
     int max_output_tokens = kDefaultAiContinueMaxTokens;
 };
 

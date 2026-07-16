@@ -39,6 +39,7 @@ void clear_assist_session(AssistSession& session) {
     session.streaming = false;
     session.saw_visible = false;
     session.code_completion = false;
+    session.prose_completion = false;
     session.edit_kind = AssistEditKind::StreamInsert;
     session.undo_before = EditorSnapshot{};
     session.provider_name.clear();
