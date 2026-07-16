@@ -237,6 +237,25 @@ bool SplitLayout::split_focused(SplitKind kind, const Rect& outer_area) {
     return true;
 }
 
+bool SplitLayout::split_and_open_buffer(SplitKind kind,
+                                        const Rect& outer_area,
+                                        size_t new_buffer_index) {
+    const size_t source_leaf = focused_leaf();
+    if (!split_focused(kind, outer_area)) {
+        return false;
+    }
+    // After a successful split, focus remains on source_leaf; the sibling is next.
+    const size_t sibling_leaf = source_leaf + 1;
+    Node* sibling = leaf_at(sibling_leaf);
+    if (sibling == nullptr || !sibling->is_leaf) {
+        return false;
+    }
+    sibling->buffer_index = new_buffer_index;
+    remember_previous_leaf(source_leaf);
+    focused_leaf_ = sibling_leaf;
+    return true;
+}
+
 void SplitLayout::focus_next() {
     const size_t count = leaf_count();
     if (count <= 1) {

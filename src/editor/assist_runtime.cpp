@@ -51,6 +51,7 @@ void clear_assist_session(AssistSession& session) {
     session.replace_start = 0;
     session.replace_count = 0;
     session.new_buffer_assist = false;
+    session.opened_split_for_assist = false;
     session.source_buffer_index = 0;
 }
 

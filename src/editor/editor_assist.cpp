@@ -137,8 +137,45 @@ std::optional<AssistScope> parse_scope_token(const std::string& token) {
     if (lower == "newbuffer" || lower == "new" || lower == "n") {
         return AssistScope::NewBuffer;
     }
+    if (lower == "v" || lower == "vsplit" || lower == "vnew") {
+        return AssistScope::NewBufferVSplit;
+    }
+    if (lower == "h" || lower == "hsplit" || lower == "hnew") {
+        return AssistScope::NewBufferHSplit;
+    }
     return std::nullopt;
 }
+
+namespace {
+
+bool is_new_buffer_scope(AssistScope scope) {
+    return scope == AssistScope::NewBuffer || scope == AssistScope::NewBufferVSplit ||
+           scope == AssistScope::NewBufferHSplit;
+}
+
+AssistNewBufferLayout new_buffer_layout_for_scope(AssistScope scope) {
+    switch (scope) {
+        case AssistScope::NewBufferVSplit:
+            return AssistNewBufferLayout::VSplit;
+        case AssistScope::NewBufferHSplit:
+            return AssistNewBufferLayout::HSplit;
+        default:
+            return AssistNewBufferLayout::Alone;
+    }
+}
+
+AssistNewBufferLayout new_buffer_layout_for_prompt_mode(AssistPromptMode mode) {
+    switch (mode) {
+        case AssistPromptMode::NewBufferVSplit:
+            return AssistNewBufferLayout::VSplit;
+        case AssistPromptMode::NewBufferHSplit:
+            return AssistNewBufferLayout::HSplit;
+        default:
+            return AssistNewBufferLayout::Alone;
+    }
+}
+
+}  // namespace
 
 bool command_has_mode(const EditorAssistCommand& command, AssistCommandMode mode) {
     return std::find(command.modes.begin(), command.modes.end(), mode) != command.modes.end();
@@ -161,6 +198,8 @@ void append_mode_completions(const EditorAssistCommand& command,
     }
     if (command_has_mode(command, AssistCommandMode::NewBuffer)) {
         commands.push_back(name + " newbuffer");
+        commands.push_back(name + " v");
+        commands.push_back(name + " h");
     }
 }
 
@@ -1127,8 +1166,9 @@ ParsedAssistCommand parse_assist_command(const std::string& line, const EditorAs
 
         const std::optional<AssistScope> scope = parse_scope_token(arg);
         if (!scope.has_value()) {
-            parsed.error_message = command_display_name(entry) +
-                                   " mode must be selection, all, newbuffer, continue, or insert";
+            parsed.error_message =
+                command_display_name(entry) +
+                " mode must be selection, all, newbuffer, v, h, continue, or insert";
             return parsed;
         }
         if (*scope == AssistScope::Selection && !command_has_mode(entry, AssistCommandMode::Selection)) {
@@ -1148,8 +1188,7 @@ ParsedAssistCommand parse_assist_command(const std::string& line, const EditorAs
             parsed.error_message = command_display_name(entry) + " does not support insert mode";
             return parsed;
         }
-        if (*scope == AssistScope::NewBuffer &&
-            !command_has_mode(entry, AssistCommandMode::NewBuffer)) {
+        if (is_new_buffer_scope(*scope) && !command_has_mode(entry, AssistCommandMode::NewBuffer)) {
             parsed.error_message = command_display_name(entry) + " does not support new buffer mode";
             return parsed;
         }
@@ -1187,12 +1226,14 @@ std::string assist_scope_prompt(const EditorAssistCommand& command) {
     }
     if (command_has_mode(command, AssistCommandMode::NewBuffer)) {
         append("new buffer (n)");
+        append("vsplit (v)");
+        append("hsplit (h)");
     }
     return prompt;
 }
 
 std::string assist_prompt_mode_message() {
-    return "/prompt for selection (s), all (a), insert (i), new buffer (n)";
+    return "/prompt for selection (s), all (a), insert (i), new buffer (n), vsplit (v), hsplit (h)";
 }
 
 std::optional<AssistPromptMode> assist_prompt_mode_for_key(unsigned char ch) {
@@ -1206,6 +1247,10 @@ std::optional<AssistPromptMode> assist_prompt_mode_for_key(unsigned char ch) {
             return AssistPromptMode::Insert;
         case 'n':
             return AssistPromptMode::NewBuffer;
+        case 'v':
+            return AssistPromptMode::NewBufferVSplit;
+        case 'h':
+            return AssistPromptMode::NewBufferHSplit;
         default:
             return std::nullopt;
     }
@@ -1370,7 +1415,7 @@ AssistExecution build_assist_execution(const EditorState& state,
             return execution;
         }
 
-        if (*scope == AssistScope::NewBuffer) {
+        if (is_new_buffer_scope(*scope)) {
             if (!command_has_mode(command, AssistCommandMode::NewBuffer)) {
                 return fail(name + " does not support new buffer mode");
             }
@@ -1379,6 +1424,7 @@ AssistExecution build_assist_execution(const EditorState& state,
             }
             execution.stream = true;
             execution.edit_kind = AssistEditKind::NewBuffer;
+            execution.new_buffer_layout = new_buffer_layout_for_scope(*scope);
             execution.messages =
                 build_messages(context, command.prompt, state.selected_text());
             execution.ok = true;
@@ -1426,11 +1472,14 @@ AssistExecution build_assist_execution(const EditorState& state,
                     build_messages(context, custom_prompt, state.selected_text());
                 break;
             case AssistPromptMode::NewBuffer:
+            case AssistPromptMode::NewBufferVSplit:
+            case AssistPromptMode::NewBufferHSplit:
                 if (!state.selection.has_range()) {
                     return fail("/prompt new buffer requires an active selection");
                 }
                 execution.stream = true;
                 execution.edit_kind = AssistEditKind::NewBuffer;
+                execution.new_buffer_layout = new_buffer_layout_for_prompt_mode(*prompt_mode);
                 execution.messages =
                     build_messages(context, custom_prompt, state.selected_text());
                 break;

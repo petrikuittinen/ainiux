@@ -466,6 +466,14 @@ void test_editor_assist_helpers() {
     check(parsed.ok && parsed.kind == pkchat::editor::AssistCommandKind::Configured &&
               parsed.scope == pkchat::editor::AssistScope::NewBuffer,
           "/fact newbuffer parses");
+    parsed = pkchat::editor::parse_assist_command("/fact v", default_config);
+    check(parsed.ok && parsed.kind == pkchat::editor::AssistCommandKind::Configured &&
+              parsed.scope == pkchat::editor::AssistScope::NewBufferVSplit,
+          "/fact v parses as vertical new-buffer split");
+    parsed = pkchat::editor::parse_assist_command("/spell hsplit", default_config);
+    check(parsed.ok && parsed.kind == pkchat::editor::AssistCommandKind::Configured &&
+              parsed.scope == pkchat::editor::AssistScope::NewBufferHSplit,
+          "/spell hsplit parses as horizontal new-buffer split");
 
     parsed = pkchat::editor::parse_assist_command("/fact n", default_config);
     check(parsed.ok && parsed.kind == pkchat::editor::AssistCommandKind::Configured &&
@@ -507,8 +515,8 @@ void test_editor_assist_helpers() {
               parsed.custom_prompt == "rewrite formally",
           "/prompt captures custom text");
     check(pkchat::editor::assist_prompt_mode_message() ==
-              "/prompt for selection (s), all (a), insert (i), new buffer (n)",
-          "/prompt offers the standard four scoped AI choices");
+              "/prompt for selection (s), all (a), insert (i), new buffer (n), vsplit (v), hsplit (h)",
+          "/prompt offers the standard scoped AI choices including split new-buffer modes");
     check(pkchat::editor::assist_prompt_mode_for_key('s') ==
                   pkchat::editor::AssistPromptMode::Selection &&
               pkchat::editor::assist_prompt_mode_for_key('A') ==
@@ -516,8 +524,12 @@ void test_editor_assist_helpers() {
               pkchat::editor::assist_prompt_mode_for_key('i') ==
                   pkchat::editor::AssistPromptMode::Insert &&
               pkchat::editor::assist_prompt_mode_for_key('N') ==
-                  pkchat::editor::AssistPromptMode::NewBuffer,
-          "/prompt mode keys select all four advertised choices case-insensitively");
+                  pkchat::editor::AssistPromptMode::NewBuffer &&
+              pkchat::editor::assist_prompt_mode_for_key('v') ==
+                  pkchat::editor::AssistPromptMode::NewBufferVSplit &&
+              pkchat::editor::assist_prompt_mode_for_key('H') ==
+                  pkchat::editor::AssistPromptMode::NewBufferHSplit,
+          "/prompt mode keys select advertised choices case-insensitively");
     check(!pkchat::editor::assist_prompt_mode_for_key('c').has_value(),
           "/prompt no longer accepts the continue-only mode key");
 
@@ -553,7 +565,7 @@ void test_editor_assist_helpers() {
           "assist completions include /regenerate");
     for (const char* builtin : {"/spell", "/grammar", "/fact", "/comment", "/rewrite", "/English",
                                 "/Chinese", "/Finnish"}) {
-        for (const char* mode : {"selection", "all", "newbuffer", "insert"}) {
+        for (const char* mode : {"selection", "all", "newbuffer", "insert", "v", "h"}) {
             const std::string variant = std::string(builtin) + " " + mode;
             check(std::find(completions.begin(), completions.end(), variant) != completions.end(),
                   std::string("builtin assist completions include ") + variant);
@@ -572,6 +584,8 @@ void test_editor_assist_helpers() {
         check(scope_prompt.find("selection (s)") != std::string::npos &&
                   scope_prompt.find("all (a)") != std::string::npos &&
                   scope_prompt.find("new buffer (n)") != std::string::npos &&
+                  scope_prompt.find("vsplit (v)") != std::string::npos &&
+                  scope_prompt.find("hsplit (h)") != std::string::npos &&
                   scope_prompt.find("insert (i)") != std::string::npos &&
                   scope_prompt.find("continue (c)") == std::string::npos,
               std::string("default ") + builtin + " scope prompt lists scoped modes without continue");
@@ -596,8 +610,8 @@ void test_editor_assist_helpers() {
     input += "fa";
     completion = pkchat::editor::complete_assist_command(input, completer, default_config);
     check(input == "/fact", "assist tab completion rematches after editing / to /fa");
-    check(completer.active && completer.candidates.size() == 5,
-          "/fa matches /fact and its four scoped variants for cycling");
+    check(completer.active && completer.candidates.size() == 7,
+          "/fa matches /fact and its six scoped variants for cycling");
 
     input = "/";
     completer = pkchat::editor::AssistCompleterState{};
@@ -2748,6 +2762,18 @@ void test_editor_split_layout() {
 
     layout.maximize_focused();
     check(layout.leaf_count() == 1 && !layout.has_split(), "maximize collapses to one pane");
+
+    check(layout.split_and_open_buffer(SplitKind::Horizontal, large, 4),
+          "split_and_open_buffer succeeds on large area");
+    check(layout.leaf_count() == 2 && layout.focused_leaf() == 1,
+          "split_and_open_buffer focuses the new sibling pane");
+    check(layout.focused_buffer() == 4, "split_and_open_buffer assigns the new buffer to the sibling");
+    {
+        const std::optional<size_t> other = layout.other_scroll_leaf();
+        check(other.has_value() && *other == 0,
+              "split_and_open_buffer records the original pane for other-scroll");
+    }
+    layout.maximize_focused();
 
     check(layout.split_focused(SplitKind::Horizontal, large), "horizontal split succeeds");
     check(layout.leaf_count() == 2, "horizontal split creates two panes");

@@ -225,7 +225,9 @@ Most commands accept a **mode** (prompted if omitted):
 |----------|------|----------------|--------|
 | `s` | selection | Selected text | Replace selection in place |
 | `a` | all | Whole buffer | Replace entire buffer in place |
-| `n` | new buffer | Selected text | Stream into a new editor buffer |
+| `n` / `newbuffer` | new buffer | Selected text | Stream into a new editor buffer |
+| `v` / `vsplit` | new buffer + vertical split | Selected text | Stream into a new buffer in a side-by-side pane |
+| `h` / `hsplit` | new buffer + horizontal split | Selected text | Stream into a new buffer in a stacked pane |
 | `i` | insert | Selected text | Stream after cursor |
 
 **Continue** mode (`c`) is only available on **`/continue`**, including `Ctrl+Space`. Other built-in commands do not offer continue.

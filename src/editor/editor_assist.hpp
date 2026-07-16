@@ -30,6 +30,8 @@ enum class AssistScope {
     Continue,
     Insert,
     NewBuffer,
+    NewBufferVSplit,
+    NewBufferHSplit,
 };
 
 enum class AssistPromptMode {
@@ -37,12 +39,21 @@ enum class AssistPromptMode {
     All,
     Insert,
     NewBuffer,
+    NewBufferVSplit,
+    NewBufferHSplit,
 };
 
 enum class AssistEditKind {
     StreamInsert,
     ReplaceInPlace,
     NewBuffer,
+};
+
+// How a NewBuffer assist places the empty target buffer.
+enum class AssistNewBufferLayout {
+    Alone,
+    VSplit,
+    HSplit,
 };
 
 struct ParsedAssistCommand {
@@ -61,6 +72,7 @@ struct AssistExecution {
     std::vector<provider::Message> usage_messages;
     bool stream = false;
     AssistEditKind edit_kind = AssistEditKind::StreamInsert;
+    AssistNewBufferLayout new_buffer_layout = AssistNewBufferLayout::Alone;
     size_t replace_start = 0;
     size_t replace_count = 0;
     bool code_completion = false;

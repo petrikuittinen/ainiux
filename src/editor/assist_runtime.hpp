@@ -35,6 +35,7 @@ struct AssistSession {
     size_t replace_start = 0;
     size_t replace_count = 0;
     bool new_buffer_assist = false;
+    bool opened_split_for_assist = false;
     size_t source_buffer_index = 0;
 };
 

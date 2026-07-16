@@ -976,13 +976,42 @@ app::EditorRunResult run_editor(const std::string& path,
         if (!assist_session.new_buffer_assist) {
             return;
         }
-        const size_t source = assist_session.source_buffer_index;
-        if (active_buffer < buffers.size()) {
-            buffers.erase(buffers.begin() + static_cast<std::ptrdiff_t>(active_buffer));
+        const size_t removed = active_buffer;
+        size_t source = assist_session.source_buffer_index;
+        if (assist_session.opened_split_for_assist && split_layout.has_split()) {
+            // Drop the assist pane first so focus returns to the prior pane.
+            split_layout.close_focused();
         }
-        active_buffer = std::min(source, buffers.size() - 1);
-        state = buffers[active_buffer];
+        if (removed < buffers.size()) {
+            size_t fallback = source < buffers.size() ? source : 0;
+            if (fallback == removed) {
+                fallback = removed > 0 ? removed - 1 : 0;
+            }
+            split_layout.on_buffer_removed(removed, fallback);
+            buffers.erase(buffers.begin() + static_cast<std::ptrdiff_t>(removed));
+            if (source > removed) {
+                --source;
+            } else if (source == removed && !buffers.empty()) {
+                source = std::min(source, buffers.size() - 1);
+            }
+        }
+        if (buffers.empty()) {
+            EditorState scratch;
+            scratch.set_undo_limit(settings.undo_limit);
+            scratch.highlight_enabled = highlight_enabled;
+            buffers.push_back(scratch);
+            active_buffer = 0;
+            split_layout.reset(0);
+            state = buffers[0];
+        } else {
+            active_buffer = std::min(source, buffers.size() - 1);
+            state = buffers[active_buffer];
+            state.highlight_enabled = highlight_enabled;
+            split_layout.clamp_buffers(buffers.size());
+            split_layout.set_focused_buffer(active_buffer);
+        }
         assist_session.new_buffer_assist = false;
+        assist_session.opened_split_for_assist = false;
     };
 
     auto finish_assist_session = [&](const std::string& message,
@@ -990,6 +1019,7 @@ app::EditorRunResult run_editor(const std::string& path,
                                      const std::optional<std::string>& inplace_content,
                                      bool message_includes_label = false) {
         assist_session.new_buffer_assist = false;
+        assist_session.opened_split_for_assist = false;
         assist_session.job.join();
         const auto show_finish_message = [&]() {
             if (message_includes_label) {
@@ -1150,6 +1180,8 @@ app::EditorRunResult run_editor(const std::string& path,
         if (execution.edit_kind == AssistEditKind::NewBuffer) {
             const size_t source_buffer_index = active_buffer;
             sync_active_buffer();
+            // Keep the focused split leaf on the source buffer while we create the target.
+            split_layout.set_focused_buffer(source_buffer_index);
             EditorState next;
             next.set_undo_limit(settings.undo_limit);
             next.text = PieceTable::from_string("");
@@ -1161,10 +1193,29 @@ app::EditorRunResult run_editor(const std::string& path,
             next.clear_selection();
             next.clear_undo_history();
             buffers.push_back(next);
-            active_buffer = buffers.size() - 1;
+            const size_t new_buffer_index = buffers.size() - 1;
+            active_buffer = new_buffer_index;
             state = buffers[active_buffer];
             assist_session.new_buffer_assist = true;
+            assist_session.opened_split_for_assist = false;
             assist_session.source_buffer_index = source_buffer_index;
+            if (execution.new_buffer_layout == AssistNewBufferLayout::VSplit ||
+                execution.new_buffer_layout == AssistNewBufferLayout::HSplit) {
+                const SplitKind kind = execution.new_buffer_layout == AssistNewBufferLayout::VSplit
+                                           ? SplitKind::Vertical
+                                           : SplitKind::Horizontal;
+                if (split_layout.split_and_open_buffer(kind, editor_main_area(), new_buffer_index)) {
+                    assist_session.opened_split_for_assist = true;
+                } else {
+                    // Fall back to a plain new buffer when the window is too small.
+                    split_layout.set_focused_buffer(new_buffer_index);
+                    minibuffer_message(
+                        minibuffer,
+                        "Window too small to split; opened a new buffer instead");
+                }
+            } else {
+                split_layout.set_focused_buffer(new_buffer_index);
+            }
             buffer_list_active = false;
             buffer_list_selected = active_buffer;
             pending_close_confirm = false;
@@ -2121,6 +2172,18 @@ app::EditorRunResult run_editor(const std::string& path,
                     start_assist(pending_assist.kind,
                                  pending_assist.command_index,
                                  AssistScope::NewBuffer,
+                                 "",
+                                 std::nullopt);
+                } else if ((ch == 'v' || ch == 'V') && command_has_mode(AssistCommandMode::NewBuffer)) {
+                    start_assist(pending_assist.kind,
+                                 pending_assist.command_index,
+                                 AssistScope::NewBufferVSplit,
+                                 "",
+                                 std::nullopt);
+                } else if ((ch == 'h' || ch == 'H') && command_has_mode(AssistCommandMode::NewBuffer)) {
+                    start_assist(pending_assist.kind,
+                                 pending_assist.command_index,
+                                 AssistScope::NewBufferHSplit,
                                  "",
                                  std::nullopt);
                 }

@@ -47,6 +47,11 @@ class SplitLayout {
     // Returns false if the focused pane is too small to split.
     bool split_focused(SplitKind kind, const Rect& outer_area);
 
+    // Split the focused leaf, put new_buffer_index in the new sibling pane, and
+    // focus that sibling. The original pane keeps its buffer. Returns false if
+    // the focused pane is too small to split.
+    bool split_and_open_buffer(SplitKind kind, const Rect& outer_area, size_t new_buffer_index);
+
     // Focus the next leaf in preorder (wraps). Records the prior focus as the
     // "other" scroll target for Ctrl+B / Ctrl+D.
     void focus_next();
