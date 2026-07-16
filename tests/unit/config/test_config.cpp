@@ -6,6 +6,7 @@
 #include "editor/editor_prompts.hpp"
 #include "tui/theme_registry.hpp"
 #include "provider/provider.hpp"
+#include <array>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
@@ -164,6 +165,33 @@ void test_config_applies_user_settings() {
         pkchat::editor::find_assist_command(loaded.options.editor_assist_config, "/spell");
     check(loaded_spell != nullptr && loaded_spell->prompt.find("spelling") != std::string::npos,
           "automatic loading includes built-in editor assist commands");
+    const std::array<const char*, 28> added_assist_commands = {
+        "expand",      "shorten",   "summarize", "simplify",  "variations",
+        "checklist",   "table",     "keypoints", "sentiment", "quiz",
+        "questions",   "risk",      "entities",  "brainstorm", "outline",
+        "hooks",       "title",     "explain",   "transliterate", "readability",
+        "speech",      "fiction",   "blog",      "article",   "joke",
+        "roast",       "grumpyman", "Trump",
+    };
+    for (const char* command_name : added_assist_commands) {
+        const pkchat::editor::EditorAssistCommand* editor_command =
+            pkchat::editor::find_assist_command(loaded.options.editor_assist_config, command_name);
+        const pkchat::editor::EditorAssistCommand* chat_command =
+            pkchat::editor::find_assist_command(loaded.options.editor_assist_config,
+                                                "/" + std::string(command_name));
+        check(editor_command != nullptr && editor_command == chat_command &&
+                  !editor_command->prompt.empty(),
+              std::string("bundled AI command supports editor and chat naming: ") + command_name);
+    }
+    const std::array<const char*, 8> multiline_assist_commands = {
+        "speech", "fiction", "blog", "article", "joke", "roast", "grumpyman", "Trump",
+    };
+    for (const char* command_name : multiline_assist_commands) {
+        const pkchat::editor::EditorAssistCommand* command =
+            pkchat::editor::find_assist_command(loaded.options.editor_assist_config, command_name);
+        check(command != nullptr && command->prompt.find('\n') != std::string::npos,
+              std::string("complex AI command preserves its multiline prompt: ") + command_name);
+    }
     check(loaded.options.allow_private_url_fetch && loaded.options.show_thinking_traces &&
               loaded.options.tui_theme == "dark",
           "user settings partially override automatic system settings");

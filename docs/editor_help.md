@@ -124,6 +124,34 @@ Press **`Esc`** to open the command minibuffer (`Command:`). Type a command with
 | `/fact` | Check factual accuracy |
 | `/comment` | Suggest improvements |
 | `/rewrite` | Rewrite for spelling, grammar, facts, and style |
+| `/expand` | Add relevant detail, examples, and elaboration |
+| `/shorten` | Tighten text without losing important meaning or details |
+| `/summarize` | Produce a high-information one-to-three-paragraph summary |
+| `/simplify` | Rewrite in plain language for a typical teenager |
+| `/variations` | Generate five alternative phrasings |
+| `/checklist` | Convert text into a checklist or action items |
+| `/table` | Convert text into a Markdown table |
+| `/keypoints` | Extract the main arguments and key points |
+| `/sentiment` | Analyze emotional tone, sentiment, and possible bias |
+| `/quiz` | Generate 10 multiple-choice questions and an answer key |
+| `/questions` | Generate 10 open-ended questions with model answers |
+| `/risk` | Identify legal, ethical, and reputational risks |
+| `/entities` | Extract names, dates, places, quantities, and specific terms |
+| `/brainstorm` | Generate 10 diverse ideas related to the text |
+| `/outline` | Create a structured outline |
+| `/hooks` | Generate 10 opening hooks |
+| `/title` | Suggest 10 titles |
+| `/explain` | Explain code or technical concepts |
+| `/transliterate` | Convert text between scripts without translating it |
+| `/readability` | Score readability and suggest improvements |
+| `/speech` | Write a structured, compelling speech |
+| `/fiction` | Write a bold short fiction piece with lively dialogue |
+| `/blog` | Write an audience-aware, SEO-conscious blog post |
+| `/article` | Write a comprehensive, sourced article |
+| `/joke` | Write a developed joke with a strong payoff |
+| `/roast` | Write a hard-hitting comedic roast |
+| `/grumpyman` | Write as a blunt, old-fashioned grumpy man |
+| `/Trump` | Write a clearly fictional Trump parody monologue |
 | `/English` | Translate to English |
 | `/Chinese` | Translate to Chinese |
 | `/Finnish` | Translate to Finnish |

@@ -195,7 +195,17 @@ With a configured provider and model, the editor can run one-shot AI tasks from 
 | `n` / `newbuffer` | new buffer | Selected text | Stream into a new editor buffer |
 | `i` / `insert` | insert | Selected text | Stream new text after the cursor |
 
-Built-in commands are `/spell`, `/grammar`, `/continue`, `/fact`, `/comment`, `/rewrite`, `/English`, `/Chinese`, and `/Finnish`. All except `/continue` support `selection`, `all`, `newbuffer`, and `insert`. `/continue` is continue-only and is also bound to `Ctrl+Space`. `/comment` comments on how to improve the text, `/rewrite` rewrites for spelling, grammar, facts, and style, and the language commands translate. Type `Esc` to open the command minibuffer, enter a command such as `/spell`, and pkchat prompts for a mode when one is omitted. `Tab` completes commands and mode variants. `/prompt YOUR TASK` runs a custom one-shot prompt with the same scoped choices: selection (`s`), all (`a`), insert (`i`), or new buffer (`n`). `/regenerate` repeats the previous AI command with the same command options where the current buffer state allows it. `/quit` leaves command mode.
+Built-in AI commands include:
+
+- Editing: `/spell`, `/grammar`, `/continue`, `/comment`, `/rewrite`, `/expand`, `/shorten`, `/simplify`, and `/variations`.
+- Summaries and structure: `/summarize`, `/checklist`, `/table`, `/keypoints`, and `/outline`.
+- Analysis and extraction: `/fact`, `/sentiment`, `/risk`, `/entities`, `/readability`, `/quiz`, and `/questions`.
+- Ideation: `/brainstorm`, `/hooks`, and `/title`.
+- Long-form and creative writing: `/speech`, `/fiction`, `/blog`, `/article`, `/joke`, and `/roast`.
+- Opinion and parody voices: `/grumpyman` and `/Trump`.
+- Technical and language tasks: `/explain`, `/transliterate`, `/English`, `/Chinese`, and `/Finnish`.
+
+All except `/continue` support `selection`, `all`, `newbuffer`, and `insert`. `/continue` is continue-only and is also bound to `Ctrl+Space`. Type `Esc` to open the command minibuffer, enter a command such as `/spell`, and pkchat prompts for a mode when one is omitted. `Tab` completes commands and mode variants. `/prompt YOUR TASK` runs a custom one-shot prompt with the same scoped choices: selection (`s`), all (`a`), insert (`i`), or new buffer (`n`). `/regenerate` repeats the previous AI command with the same command options where the current buffer state allows it. `/quit` leaves command mode.
 
 `Ctrl+Space` and `/continue` are mode-aware. In `text` and `markdown` modes they send bounded context on both sides of the cursor. In the middle of a document, the model is instructed to write only a natural, developed bridge into the immutable postfix. At the end—or when only whitespace follows the cursor—it is told to continue substantially rather than stopping after a generic paragraph: factual writing should use concrete examples and supported numbers, while creative writing should make brave choices with vivid, specific language. It must write the continuation itself, never suggestions, an outline, a recap, or a restart. Every other syntax mode keeps the existing code-gap completion path, using the canonical active language and bounded context on both sides. The untouched postfix stays byte-for-byte after the streamed insertion; a complete empty or whitespace-only remainder is not sent. Visual highlighting may be off—the active `/mode` still controls continuation behavior.
 
