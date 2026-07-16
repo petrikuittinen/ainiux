@@ -437,6 +437,15 @@ void test_editor_assist_helpers() {
               parsed.scope == pkchat::editor::AssistScope::All,
           "/spell all parses");
 
+    parsed = pkchat::editor::parse_assist_command("spell all", default_config);
+    check(parsed.ok && parsed.kind == pkchat::editor::AssistCommandKind::Configured &&
+              parsed.scope == pkchat::editor::AssistScope::All,
+          "slashless editor assist commands parse");
+    parsed = pkchat::editor::parse_assist_command("CHINESE n", default_config);
+    check(parsed.ok && parsed.kind == pkchat::editor::AssistCommandKind::Configured &&
+              parsed.scope == pkchat::editor::AssistScope::NewBuffer,
+          "slashless editor assist commands are case-insensitive");
+
     parsed = pkchat::editor::parse_assist_command("/grammar selection", default_config);
     check(parsed.ok && parsed.kind == pkchat::editor::AssistCommandKind::Configured &&
               parsed.scope == pkchat::editor::AssistScope::Selection,
@@ -606,6 +615,20 @@ void test_editor_assist_helpers() {
     completion = pkchat::editor::complete_assist_command(input, completer, default_config);
     check(!completion.changed && input == "/c" && completer.active,
           "assist tab completion keeps ambiguous mixed-case /c prefix");
+
+    input = "rew";
+    completer = pkchat::editor::AssistCompleterState{};
+    completion = pkchat::editor::complete_assist_command(input, completer, default_config);
+    check(completion.changed && input == "rewrite",
+          "slashless completion preserves the slashless form");
+    input = "ch";
+    completer = pkchat::editor::AssistCompleterState{};
+    completion = pkchat::editor::complete_assist_command(input, completer, default_config);
+    check(completion.changed && input == "Chinese",
+          "slashless completion handles case-insensitive configured names");
+    check(pkchat::editor::editor_assist_path_prefix_length("open notes") == 5 &&
+              pkchat::editor::editor_assist_path_prefix_length("/saveas notes") == 8,
+          "slashless and slashed path commands expose path completion");
 
     pkchat::editor::EditorState state =
         pkchat::editor::EditorState::from_text("hello wrld");

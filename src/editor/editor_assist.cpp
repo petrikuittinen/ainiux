@@ -716,7 +716,7 @@ Error CodeAssistStreamFilter::finish(std::string& output) {
     return ok_error();
 }
 
-const std::vector<AssistCommandMode>& default_builtin_assist_modes() {
+const std::vector<AssistCommandMode>& standard_assist_modes() {
     static const std::vector<AssistCommandMode> modes = {
         AssistCommandMode::Selection,
         AssistCommandMode::All,
@@ -740,7 +740,7 @@ EditorAssistConfig empty_editor_assist_config() {
 EditorAssistConfig default_editor_assist_config() {
     EditorAssistConfig config;
     config.behavior_rules = kDefaultAssistBehaviorRules;
-    const std::vector<AssistCommandMode>& modes = default_builtin_assist_modes();
+    const std::vector<AssistCommandMode>& modes = standard_assist_modes();
     config.commands = {
         {"/spell", modes, kDefaultAssistSpellPrompt},
         {"/grammar", modes, kDefaultAssistGrammarPrompt},
@@ -974,13 +974,32 @@ AssistCompletionResult complete_assist_command(std::string& input,
     state.candidates.clear();
 
     const std::string token = input;
+    const bool slashless = !token.empty() && token.front() != '/';
     const std::string normalized_token = ascii_lower(token);
-    for (const std::string& command : assist_command_completions(config)) {
-        const std::string normalized_command = ascii_lower(command);
-        if (normalized_command.compare(0, normalized_token.size(), normalized_token) == 0) {
-            state.candidates.push_back(command);
+    const std::vector<std::string> all_commands = assist_command_completions(config);
+    std::vector<std::string> matching_commands;
+    std::vector<std::string> matching_configured_commands;
+    for (const std::string& command : all_commands) {
+        std::string candidate = command;
+        if (slashless && !candidate.empty() && candidate.front() == '/') {
+            candidate.erase(candidate.begin());
+        }
+        const std::string normalized_command = ascii_lower(candidate);
+        if (normalized_command.compare(0, normalized_token.size(), normalized_token) != 0) {
+            continue;
+        }
+        matching_commands.push_back(candidate);
+        const size_t separator = candidate.find_first_of(" \t");
+        const std::string command_name = candidate.substr(0, separator);
+        if (assist_command_index(config, command_name).has_value()) {
+            matching_configured_commands.push_back(candidate);
         }
     }
+    // In slashless mode, an AI command takes precedence over a utility command
+    // when both share a short prefix (for example `ch` means `Chinese`).
+    state.candidates = slashless && !matching_configured_commands.empty()
+                           ? std::move(matching_configured_commands)
+                           : std::move(matching_commands);
 
     result.match_count = state.candidates.size();
     result.value = token;
@@ -1007,12 +1026,15 @@ AssistCompletionResult complete_assist_command(std::string& input,
 ParsedAssistCommand parse_assist_command(const std::string& line, const EditorAssistConfig& config) {
     ParsedAssistCommand parsed;
     const std::string trimmed = ascii_trim(line);
-    if (trimmed.empty() || trimmed[0] != '/') {
-        parsed.error_message = "Command must start with /";
+    if (trimmed.empty()) {
+        parsed.error_message = "Command name is required";
         return parsed;
     }
 
-    size_t index = 1;
+    size_t index = 0;
+    while (index < trimmed.size() && trimmed[index] == '/') {
+        ++index;
+    }
     const size_t command_start = index;
     while (index < trimmed.size() && !is_token_separator(trimmed[index])) {
         ++index;
@@ -1020,7 +1042,7 @@ ParsedAssistCommand parse_assist_command(const std::string& line, const EditorAs
     const std::string command_token = trimmed.substr(command_start, index - command_start);
     std::string command = normalized_assist_command_name(command_token);
     if (command.empty()) {
-        parsed.error_message = "Command name is required after /";
+        parsed.error_message = "Command name is required";
         return parsed;
     }
     while (index < trimmed.size() && is_token_separator(trimmed[index])) {

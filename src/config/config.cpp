@@ -366,9 +366,46 @@ class Parser {
                 }
             }
 
-            Error err = parse_line(line, line_number, section, document);
+            std::optional<Value> multiline_value;
+            size_t next_offset = 0;
+            size_t next_line_number = 0;
+            const size_t content = first_non_space(line);
+            if (content < line.size() && line[content] != '#' && line[content] != '[') {
+                const size_t equals = line.find('=', content);
+                if (equals != std::string::npos) {
+                    size_t value_begin = equals + 1;
+                    while (value_begin < line.size() && is_horizontal_space(line[value_begin])) {
+                        ++value_begin;
+                    }
+                    if (line.compare(value_begin, 3, "\"\"\"") == 0) {
+                        Value value;
+                        Error multiline_error = parse_multiline_quoted(
+                            offset + value_begin,
+                            line_number,
+                            value_begin + 1,
+                            value,
+                            next_offset,
+                            next_line_number);
+                        if (!multiline_error.ok()) {
+                            return {{}, multiline_error};
+                        }
+                        multiline_value = std::move(value);
+                    }
+                }
+            }
+
+            Error err = parse_line(line, line_number, section, document,
+                                   multiline_value ? &*multiline_value : nullptr);
             if (!err.ok()) {
                 return {{}, err};
+            }
+            if (multiline_value.has_value()) {
+                offset = next_offset;
+                line_number = next_line_number;
+                if (offset >= input_.size()) {
+                    break;
+                }
+                continue;
             }
             if (newline == std::string::npos) {
                 break;
@@ -389,10 +426,136 @@ class Parser {
         return name == "command" || name == "Model-setting" || name == "theme";
     }
 
+    Error parse_multiline_quoted(size_t opening_offset,
+                                 size_t opening_line,
+                                 size_t opening_column,
+                                 Value& value,
+                                 size_t& next_offset,
+                                 size_t& next_line) const {
+        std::string decoded;
+        size_t pos = opening_offset + 3;
+        size_t line = opening_line;
+        size_t column = opening_column + 3;
+
+        if (pos < input_.size() && input_[pos] == '\n') {
+            ++pos;
+            ++line;
+            column = 1;
+        } else if (pos + 1 < input_.size() && input_[pos] == '\r' &&
+                   input_[pos + 1] == '\n') {
+            pos += 2;
+            ++line;
+            column = 1;
+        }
+
+        while (pos < input_.size()) {
+            if (input_.compare(pos, 3, "\"\"\"") == 0) {
+                pos += 3;
+                column += 3;
+                while (pos < input_.size() && is_horizontal_space(input_[pos])) {
+                    ++pos;
+                    ++column;
+                }
+                if (pos == input_.size()) {
+                    value.type = Value::Type::String;
+                    value.string = std::move(decoded);
+                    next_offset = pos;
+                    next_line = line;
+                    return ok_error();
+                }
+                if (input_[pos] == '\n') {
+                    value.type = Value::Type::String;
+                    value.string = std::move(decoded);
+                    next_offset = pos + 1;
+                    next_line = line + 1;
+                    return ok_error();
+                }
+                if (input_[pos] == '\r') {
+                    if (pos + 1 < input_.size() && input_[pos + 1] == '\n') {
+                        value.type = Value::Type::String;
+                        value.string = std::move(decoded);
+                        next_offset = pos + 2;
+                        next_line = line + 1;
+                        return ok_error();
+                    }
+                    return parse_error(source_path_, line, column,
+                                       "carriage return must be followed by a newline");
+                }
+                return parse_error(source_path_, line, column,
+                                   "unexpected text after multiline quoted string");
+            }
+
+            const char ch = input_[pos];
+            if (ch == '\\') {
+                const size_t escape_line = line;
+                const size_t escape_column = column;
+                ++pos;
+                ++column;
+                if (pos >= input_.size()) {
+                    return parse_error(source_path_, escape_line, escape_column,
+                                       "incomplete multiline quoted-string escape");
+                }
+                switch (input_[pos]) {
+                    case '\\':
+                        decoded.push_back('\\');
+                        break;
+                    case '"':
+                        decoded.push_back('"');
+                        break;
+                    case 'n':
+                        decoded.push_back('\n');
+                        break;
+                    case 'r':
+                        decoded.push_back('\r');
+                        break;
+                    case 't':
+                        decoded.push_back('\t');
+                        break;
+                    default:
+                        return parse_error(source_path_, line, column,
+                                           std::string("unsupported quoted-string escape: \\") +
+                                               input_[pos]);
+                }
+                ++pos;
+                ++column;
+                continue;
+            }
+            if (ch == '\n') {
+                decoded.push_back('\n');
+                ++pos;
+                ++line;
+                column = 1;
+                continue;
+            }
+            if (ch == '\r') {
+                if (pos + 1 >= input_.size() || input_[pos + 1] != '\n') {
+                    return parse_error(source_path_, line, column,
+                                       "carriage return must be followed by a newline");
+                }
+                decoded.push_back('\n');
+                pos += 2;
+                ++line;
+                column = 1;
+                continue;
+            }
+            const unsigned char byte = static_cast<unsigned char>(ch);
+            if (byte == 0 || (byte < 0x20 && ch != '\t')) {
+                return parse_error(source_path_, line, column, "unescaped control character");
+            }
+            decoded.push_back(ch);
+            ++pos;
+            ++column;
+        }
+
+        return parse_error(source_path_, opening_line, opening_column,
+                           "unterminated multiline quoted string");
+    }
+
     Error parse_line(const std::string& line,
                      size_t line_number,
                      std::string& section,
-                     Document& document) {
+                     Document& document,
+                     const Value* pre_parsed_value) {
         const size_t content = first_non_space(line);
         if (content == line.size() || line[content] == '#') {
             return ok_error();
@@ -429,9 +592,13 @@ class Parser {
         }
         const std::string value_text = trim_horizontal(line.substr(value_begin));
         Value value;
-        Error err = parse_value(value_text, source_path_, line_number, value_begin + 1, value);
-        if (!err.ok()) {
-            return err;
+        if (pre_parsed_value != nullptr) {
+            value = *pre_parsed_value;
+        } else {
+            Error err = parse_value(value_text, source_path_, line_number, value_begin + 1, value);
+            if (!err.ok()) {
+                return err;
+            }
         }
 
         std::string qualified;
@@ -732,15 +899,10 @@ Error validate_assist_command_string(const Entry& entry, std::string& command) {
         return err;
     }
     command = trim_config_ascii(entry.value.string);
+    while (!command.empty() && command.front() == '/') {
+        command.erase(command.begin());
+    }
     if (command.empty()) {
-        return schema_error(entry, "command string must not be empty");
-    }
-    if (command.front() != '/') {
-        command.insert(command.begin(), '/');
-    }
-    std::string normalized = command;
-    normalized.erase(normalized.begin());
-    if (normalized.empty()) {
         return schema_error(entry, "command string must include a name after /");
     }
     return ok_error();
@@ -1398,20 +1560,16 @@ Error apply_configured_assist_commands(const Document& document, cli::Options& c
                         std::to_string(partial.source.column) +
                         ": invalid config setting [command]: string is required"};
         }
-        if (!partial.modes.has_value()) {
-            return {ErrorCode::Config,
-                    partial.source.path + ":" + std::to_string(partial.source.line) + ":" +
-                        std::to_string(partial.source.column) +
-                        ": invalid config setting [command] " + *partial.string + ": modes is required"};
-        }
         if (!partial.prompt.has_value()) {
             return {ErrorCode::Config,
                     partial.source.path + ":" + std::to_string(partial.source.line) + ":" +
                         std::to_string(partial.source.column) +
                         ": invalid config setting [command] " + *partial.string + ": prompt is required"};
         }
+        const std::vector<pkchat::editor::AssistCommandMode>& modes =
+            partial.modes.has_value() ? *partial.modes : pkchat::editor::standard_assist_modes();
         merge_assist_command(candidate.editor_assist_config,
-                             {*partial.string, *partial.modes, *partial.prompt});
+                             {*partial.string, modes, *partial.prompt});
     }
     return ok_error();
 }

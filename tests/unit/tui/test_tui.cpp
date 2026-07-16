@@ -147,6 +147,23 @@ void test_configured_assist_slash_command_detection() {
         pkchat::editor::parse_assist_command("/grammar selection", config);
     check(parsed.ok && parsed.kind == pkchat::editor::AssistCommandKind::Configured,
           "chat and editor share parse_assist_command for configured commands");
+
+    pkchat::provider::RequestContext context;
+    pkchat::chat::Session session;
+    pkchat::editor::EditorState input = pkchat::editor::EditorState::from_text("ordinary Chinese text");
+    std::string status;
+    int history_scroll = 0;
+    bool started = false;
+    pkchat::tui::ChatAssistCallbacks callbacks;
+    callbacks.start_turn = [&](const std::string&) { started = true; };
+    const bool slashless_handled = pkchat::tui::try_handle_chat_assist_command(
+        "Chinese", input, config, context, session, status, history_scroll, callbacks);
+    check(!slashless_handled && !started,
+          "slashless assist names remain ordinary chat message text");
+    const bool slashed_handled = pkchat::tui::try_handle_chat_assist_command(
+        "/Chinese", input, config, context, session, status, history_scroll, callbacks);
+    check(slashed_handled && started,
+          "slash-prefixed assist names remain chat commands");
 }
 
 void test_tui_ready_and_generation_status() {

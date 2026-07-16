@@ -25,6 +25,7 @@
 #include "ui/text_selector.hpp"
 
 #include <algorithm>
+#include <cctype>
 #include <charconv>
 #include <chrono>
 #include <functional>
@@ -61,6 +62,25 @@ struct InsertSession {
     // Join the worker before destroying the event queue it references.
     runtime::JobHandle job;
 };
+
+std::string canonical_editor_command_line(const std::string& line) {
+    std::string normalized = trim_ascii_copy(line);
+    if (normalized.empty()) {
+        return normalized;
+    }
+    if (normalized.front() != '/') {
+        normalized.insert(normalized.begin(), '/');
+    }
+    size_t command_end = 1;
+    while (command_end < normalized.size() && normalized[command_end] != ' ' &&
+           normalized[command_end] != '\t' && normalized[command_end] != '\r' &&
+           normalized[command_end] != '\n') {
+        normalized[command_end] = static_cast<char>(
+            std::tolower(static_cast<unsigned char>(normalized[command_end])));
+        ++command_end;
+    }
+    return normalized;
+}
 
 }  // namespace
 
@@ -1411,7 +1431,7 @@ app::EditorRunResult run_editor(const std::string& path,
             case EditorSlashCommand::None:
                 break;
         }
-        const std::string command_line = trim_ascii_copy(minibuffer.input);
+        const std::string command_line = canonical_editor_command_line(minibuffer.input);
         if (command_line == "/insert" || command_line.rfind("/insert ", 0) == 0) {
             pending_assist = PendingAssist{};
             exit_assist_command_mode(minibuffer, assist_completer);

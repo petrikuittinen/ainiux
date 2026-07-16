@@ -203,16 +203,18 @@ Prose prefix/postfix context defaults to 16,384/4,096 UTF-8 characters (`continu
 
 In the chat TUI, the same built-in editor AI commands are available as slash commands. A bare command such as `/Chinese` submits that command's prompt as a normal chat turn. `/Chinese n` (or `newbuffer`) with selected input text switches to the editor and runs the command in **new buffer** mode there.
 
-Custom commands use repeatable `[command]` blocks in config:
+Custom commands use repeatable `[command]` blocks in config. `modes` is
+optional; when omitted it defaults to `selection, all, newbuffer, insert`.
+Editor minibuffer commands accept either spelling (`rewrite all` or
+`/rewrite all`), while chat commands remain slash-only.
 
 ```conf
 [command]
-string = /example
-modes = selection, all, newbuffer, insert
+string = example
 prompt = "Output 5 examples of the user-given topic. Answer inside <content>...</content> tags only."
 ```
 
-A matching `string` replaces a built-in command; new strings add commands. Config mode tokens are `selection`, `all`, `newbuffer` (`new` or `n`), `continue`, `insert`, and `fact`. `local_insert` is accepted as an alias for `insert`. Legacy `[editor]` keys `assist_spell`, `assist_grammar`, `assist_continue`, `assist_fact`, and `assist_behavior` still override the built-in prompts and behavior rules.
+A matching `string` replaces a built-in command; new strings add commands. Config mode tokens are `selection`, `all`, `newbuffer` (`new` or `n`), `continue`, `insert`, and `fact`; `continue` remains continue-only when explicitly selected. Legacy slash-prefixed strings remain valid. Prompts may use escaped TOML-like multiline strings: `prompt = """..."""`; one newline immediately after the opening marker is omitted and internal newlines are preserved. Legacy `[editor]` keys `assist_spell`, `assist_grammar`, `assist_continue`, `assist_fact`, and `assist_behavior` still override the built-in prompts and behavior rules.
 
 ### Editor Controls
 

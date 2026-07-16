@@ -96,15 +96,16 @@ std::string embedded_editor_help_markdown() {
 }
 
 size_t editor_assist_path_prefix_length(const std::string& input) {
-    if (input.empty() || input[0] != '/') {
+    if (input.empty()) {
         return std::string::npos;
     }
 
-    size_t command_end = 1;
+    const size_t command_start = input[0] == '/' ? 1 : 0;
+    size_t command_end = command_start;
     while (command_end < input.size() && !is_token_separator(input[command_end])) {
         ++command_end;
     }
-    const std::string command_token = command_token_lower(input, 1, command_end);
+    const std::string command_token = command_token_lower(input, command_start, command_end);
     if (command_token != "open" && command_token != "saveas" && command_token != "insert") {
         return std::string::npos;
     }
@@ -122,15 +123,16 @@ size_t editor_assist_path_prefix_length(const std::string& input) {
 ParsedEditorSlashCommand parse_editor_slash_command(const std::string& line) {
     ParsedEditorSlashCommand parsed;
     const std::string trimmed = trim_ascii_copy(line);
-    if (trimmed.empty() || trimmed[0] != '/') {
+    if (trimmed.empty()) {
         return parsed;
     }
 
-    size_t command_end = 1;
+    const size_t command_start = trimmed[0] == '/' ? 1 : 0;
+    size_t command_end = command_start;
     while (command_end < trimmed.size() && !is_token_separator(trimmed[command_end])) {
         ++command_end;
     }
-    parsed.command = command_from_token(command_token_lower(trimmed, 1, command_end));
+    parsed.command = command_from_token(command_token_lower(trimmed, command_start, command_end));
     if (parsed.command == EditorSlashCommand::None) {
         return parsed;
     }

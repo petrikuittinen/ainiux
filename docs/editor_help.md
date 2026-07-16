@@ -110,9 +110,9 @@ Context settings:
 
 For any context side, `0` disables that side; it does not mean unlimited. Setting precedence is built-in, system config, user config, CLI, then environment. The output-token setting is shared by prose and code.
 
-## Slash commands (`Esc` then type command)
+## Editor commands (`Esc` then type command)
 
-Press **`Esc`** to open the command minibuffer (`Command:`). Type a slash command and press `Enter`. **`Tab`** completes commands and mode variants. This minibuffer completion is independent from document word completion.
+Press **`Esc`** to open the command minibuffer (`Command:`). Type a command with or without a leading slash and press `Enter` (`rewrite all` and `/rewrite all` are equivalent). **`Tab`** completes commands and mode variants while preserving whether the current prefix is slashless. This minibuffer completion is independent from document word completion. Chat commands remain slash-only.
 
 ### Built-in commands
 
@@ -211,7 +211,18 @@ When you open a file whose auto-save backup (for example `notes.txt~`) is newer 
 
 Existing files and recovered backups detect indentation from at most the first 20 physical lines. A consistent space step selects that tab width, while consistently tab-indented lines select tab style. Ambiguous, mixed, unindented, and one-line files retain the configured fallbacks. `/tab-width` and `/tab-style` always override the detected values for the active buffer.
 
-Repeatable `[command]` blocks add or override slash commands. See `README.md` for examples.
+Repeatable `[command]` blocks add or override editor commands. `string` and `prompt` are required; `modes` defaults to `selection, all, newbuffer, insert` when omitted. `continue` is continue-only when explicitly selected. Prompts may use escaped multiline values such as:
+
+```conf
+[command]
+string = summarize
+prompt = """
+Summarize the selected text.
+Keep the result concise.
+"""
+```
+
+Legacy slash-prefixed `string` values remain valid. See `README.md` for examples.
 
 ## Tips
 

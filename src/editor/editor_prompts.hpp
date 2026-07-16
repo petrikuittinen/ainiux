@@ -28,6 +28,7 @@ struct EditorAssistConfig {
 
 EditorAssistConfig empty_editor_assist_config();
 EditorAssistConfig default_editor_assist_config();
+const std::vector<AssistCommandMode>& standard_assist_modes();
 const EditorAssistCommand* find_assist_command(const EditorAssistConfig& config, const std::string& command);
 std::optional<size_t> assist_command_index(const EditorAssistConfig& config, const std::string& command);
 bool assist_command_requires_scope(const EditorAssistCommand& command);

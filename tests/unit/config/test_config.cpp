@@ -265,6 +265,42 @@ void test_config_parses_supported_values() {
     check(nested != nullptr && nested->value.string == "value", "dotted config section parsed");
 }
 
+void test_config_parses_multiline_strings() {
+    const std::string input =
+        "title = \"\"\"\n"
+        "  first line\r\n"
+        "  second \\\"quoted\\\" # [not a section]\r\n"
+        "  escapes: \\n \\r \\t \\\\"
+        "\r\n"
+        "\"\"\"   \r\n"
+        "next = value\r\n";
+    pkchat::config::ParseResult parsed = pkchat::config::parse(input, "multiline.conf");
+    check(parsed.error.ok(), "config accepts escaped multiline triple-quoted strings");
+    const pkchat::config::Entry* title = parsed.document.find("title");
+    check(title != nullptr &&
+              title->value.string ==
+                  "  first line\n  second \"quoted\" # [not a section]\n  escapes: \n \r \t \\\n",
+          "multiline strings remove only the opening newline and normalize CRLF");
+    const pkchat::config::Entry* next = parsed.document.find("next");
+    check(next != nullptr && next->value.string == "value",
+          "parser resumes at the assignment after a multiline string");
+
+    parsed = pkchat::config::parse("value = \"\"\"unterminated\n", "multiline-end.conf");
+    check(!parsed.error.ok() && parsed.error.message.find("multiline-end.conf:1:") != std::string::npos &&
+              parsed.error.message.find("unterminated") != std::string::npos,
+          "unterminated multiline strings report the opening source location");
+    parsed = pkchat::config::parse("value = \"\"\"bad\\q\"\"\"\n", "multiline-escape.conf");
+    check(!parsed.error.ok() && parsed.error.message.find("multiline-escape.conf:1:16") != std::string::npos &&
+              parsed.error.message.find("escape") != std::string::npos,
+          "multiline strings reject unsupported escapes with a source location");
+    parsed = pkchat::config::parse("value = \"\"\"ok\"\"\" trailing\n", "multiline-trailing.conf");
+    check(!parsed.error.ok() && parsed.error.message.find("multiline-trailing.conf:1:18") !=
+                  std::string::npos &&
+              parsed.error.message.find("unexpected text after multiline quoted string") !=
+                  std::string::npos,
+          "multiline strings reject non-whitespace trailing text");
+}
+
 void test_config_applies_model_settings() {
     pkchat::config::ParseResult parsed = pkchat::config::parse(
         "[Model-setting]\n"
@@ -636,6 +672,25 @@ void test_editor_commands_config() {
     check(err.ok() && overridden_spell != nullptr &&
               overridden_spell->prompt == "Config spell override",
           "config.conf assist_spell overrides editor-commands.conf");
+
+    pkchat::config::ParseResult defaults = pkchat::config::parse(
+        "[command]\nstring = demo\nprompt = \"Demo prompt\"\n", "command-defaults.conf");
+    options = pkchat::cli::Options{};
+    err = pkchat::config::apply_document(defaults.document, options);
+    const pkchat::editor::EditorAssistCommand* demo =
+        pkchat::editor::find_assist_command(options.editor_assist_config, "/DEMO");
+    check(err.ok() && demo != nullptr && demo->modes.size() == 4 &&
+              demo->prompt == "Demo prompt",
+          "missing command modes receive the standard four editor modes");
+    const pkchat::config::ParseResult legacy = pkchat::config::parse(
+        "[command]\nstring = /demo\nmodes = continue\nprompt = \"Legacy\"\n",
+        "command-legacy.conf");
+    options = pkchat::cli::Options{};
+    err = pkchat::config::apply_document(legacy.document, options);
+    demo = pkchat::editor::find_assist_command(options.editor_assist_config, "demo");
+    check(err.ok() && demo != nullptr && demo->modes.size() == 1 &&
+              demo->modes.front() == pkchat::editor::AssistCommandMode::Continue,
+          "legacy slash-prefixed command strings and explicit modes remain authoritative");
 }
 
 void test_config_empty_and_numeric_edge_cases() {
@@ -673,6 +728,7 @@ void run_all() {
     test_config_empty_and_numeric_edge_cases();
     test_config_file_read_errors();
     test_config_parses_supported_values();
+    test_config_parses_multiline_strings();
     test_config_reads_common_template();
     test_config_rejects_invalid_input();
     test_config_schema_rejects_invalid_settings_transactionally();
