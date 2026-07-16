@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstddef>
+#include <optional>
 #include <string>
 #include <utility>
 #include <vector>
@@ -46,7 +47,8 @@ class SplitLayout {
     // Returns false if the focused pane is too small to split.
     bool split_focused(SplitKind kind, const Rect& outer_area);
 
-    // Focus the next leaf in preorder (wraps).
+    // Focus the next leaf in preorder (wraps). Records the prior focus as the
+    // "other" scroll target for Ctrl+B / Ctrl+D.
     void focus_next();
 
     // Close the focused leaf. Returns false when only one leaf remains.
@@ -56,6 +58,11 @@ class SplitLayout {
     void maximize_focused();
 
     void set_focused_buffer(size_t buffer_index);
+
+    // Leaf to scroll with Ctrl+B/Ctrl+D without moving focus: the last pane the
+    // user left (via focus_next or after a split). Falls back to the next pane
+    // when no prior focus is recorded.
+    std::optional<size_t> other_scroll_leaf() const;
 
     // After buffers.erase(removed), renumber leaf buffer indices.
     // Leaves that pointed at the removed buffer take fallback_buffer.
@@ -85,6 +92,12 @@ class SplitLayout {
     // Heap-owned nodes so pointers stay stable across tree rewrites of other nodes.
     std::vector<Node*> nodes_;
     size_t focused_leaf_ = 0;
+    size_t previous_leaf_ = 0;
+    bool has_previous_leaf_ = false;
+
+    void remember_previous_leaf(size_t leaf_index);
+    void clear_previous_leaf();
+    void clamp_previous_leaf();
 
     Node* make_leaf(size_t buffer_index);
     Node* make_split(SplitKind kind, Node* first, Node* second);

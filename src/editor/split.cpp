@@ -42,6 +42,32 @@ void SplitLayout::clear() {
     nodes_.clear();
     root_ = nullptr;
     focused_leaf_ = 0;
+    clear_previous_leaf();
+}
+
+void SplitLayout::remember_previous_leaf(size_t leaf_index) {
+    previous_leaf_ = leaf_index;
+    has_previous_leaf_ = true;
+}
+
+void SplitLayout::clear_previous_leaf() {
+    previous_leaf_ = 0;
+    has_previous_leaf_ = false;
+}
+
+void SplitLayout::clamp_previous_leaf() {
+    const size_t count = leaf_count();
+    if (!has_previous_leaf_ || count <= 1) {
+        clear_previous_leaf();
+        return;
+    }
+    if (previous_leaf_ >= count) {
+        previous_leaf_ = count - 1;
+    }
+    if (previous_leaf_ == focused_leaf()) {
+        // Prefer another pane so Ctrl+B/D still do something.
+        previous_leaf_ = (focused_leaf() + 1) % count;
+    }
 }
 
 SplitLayout::Node* SplitLayout::make_leaf(size_t buffer_index) {
@@ -206,6 +232,8 @@ bool SplitLayout::split_focused(SplitKind kind, const Rect& outer_area) {
     target->second = right;
     // Keep focus on the first child of the new split (original content).
     // Leaf indices: all leaves before focus unchanged; focus stays the same index.
+    // The new sibling is the natural "other pane" for Ctrl+B / Ctrl+D.
+    remember_previous_leaf(focused_leaf_ + 1);
     return true;
 }
 
@@ -213,9 +241,23 @@ void SplitLayout::focus_next() {
     const size_t count = leaf_count();
     if (count <= 1) {
         focused_leaf_ = 0;
+        clear_previous_leaf();
         return;
     }
+    remember_previous_leaf(focused_leaf());
     focused_leaf_ = (focused_leaf() + 1) % count;
+}
+
+std::optional<size_t> SplitLayout::other_scroll_leaf() const {
+    const size_t count = leaf_count();
+    if (count < 2) {
+        return std::nullopt;
+    }
+    const size_t focus = focused_leaf();
+    if (has_previous_leaf_ && previous_leaf_ < count && previous_leaf_ != focus) {
+        return previous_leaf_;
+    }
+    return (focus + 1) % count;
 }
 
 SplitLayout::Node* SplitLayout::close_leaf_in(Node* node,
@@ -268,6 +310,15 @@ bool SplitLayout::close_focused() {
     } else {
         focused_leaf_ = target;
     }
+    // Renumber: leaves after the closed index shift down.
+    if (has_previous_leaf_) {
+        if (previous_leaf_ == target) {
+            clear_previous_leaf();
+        } else if (previous_leaf_ > target) {
+            --previous_leaf_;
+        }
+    }
+    clamp_previous_leaf();
     return removed;
 }
 

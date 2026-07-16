@@ -20,8 +20,12 @@ Splits use an Emacs-style two-key sequence. Press **Ctrl+G**, then one of:
 | `0` | Close the focused pane |
 | `1` | Maximize the focused pane (close others) |
 | `Esc` or `Ctrl+G` | Cancel the window command |
+| `Ctrl+B` | Page up in the **other** pane (last focused, without moving focus) |
+| `Ctrl+D` | Page down in the **other** pane (same target as Ctrl+B) |
 
-Both panes of a new split show the same buffer at first. Open another file in one pane (`Ctrl+O`) or switch buffers (`Ctrl+L`) to compare two files. Status shows `[N panes]` while more than one pane is open. Cancel for minibuffers and replace mode is **Esc** only (not Ctrl+G).
+Both panes of a new split show the same buffer at first. Open another file in one pane (`Ctrl+O`) or switch buffers (`Ctrl+L`) to compare two files. Status shows `[N panes]` while more than one pane is open.
+
+**Other-pane scrolling:** after a split, `Ctrl+B`/`Ctrl+D` page the new sibling. After `Ctrl+G o`, they page the pane you left. With three or more panes, the target is always the last pane you left (not every non-focused pane). Cancel for minibuffers and replace mode is **Esc** only (not Ctrl+G).
 
 ## Getting help
 

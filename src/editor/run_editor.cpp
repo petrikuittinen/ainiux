@@ -2166,6 +2166,47 @@ app::EditorRunResult run_editor(const std::string& path,
             return;
         }
 
+        // Ctrl+B / Ctrl+D: PageUp / PageDown in the previously focused other pane.
+        if ((ch == 2 || ch == 4) && split_layout.has_split() && !help_view.active &&
+            !picker.active && !buffer_list_active) {
+            const std::optional<size_t> other_leaf = split_layout.other_scroll_leaf();
+            if (!other_leaf.has_value()) {
+                minibuffer_message(minibuffer, "No other pane to scroll");
+                return;
+            }
+            const Rect area = editor_main_area();
+            const std::vector<SplitPaneRect> panes = split_layout.layout_panes(area);
+            const SplitPaneRect* target_pane = nullptr;
+            for (const SplitPaneRect& pane : panes) {
+                if (pane.leaf_index == *other_leaf) {
+                    target_pane = &pane;
+                    break;
+                }
+            }
+            if (target_pane == nullptr) {
+                minibuffer_message(minibuffer, "No other pane to scroll");
+                return;
+            }
+            EditorState* target_state = nullptr;
+            if (target_pane->buffer_index == active_buffer) {
+                target_state = &state;
+            } else if (target_pane->buffer_index < buffers.size()) {
+                target_state = &buffers[target_pane->buffer_index];
+            }
+            if (target_state == nullptr) {
+                minibuffer_message(minibuffer, "No other pane to scroll");
+                return;
+            }
+            const MovementKey key =
+                ch == 2 ? MovementKey::PageUp : MovementKey::PageDown;
+            target_state->apply_movement(key, target_pane->rect, false, false, false);
+            minibuffer_message(minibuffer,
+                               std::string(ch == 2 ? "Scrolled other pane up" : "Scrolled other pane down") +
+                                   " (pane " + std::to_string(*other_leaf + 1) + "/" +
+                                   std::to_string(split_layout.leaf_count()) + ")");
+            return;
+        }
+
         if (ch == 16) {
             request_switch_to_chat();
             return;

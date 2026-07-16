@@ -123,6 +123,8 @@ Use `/pop` to remove the last user or assistant message.
 | `Ctrl+G` `0` | Close focused pane |
 | `Ctrl+G` `1` | Maximize focused pane |
 | `Esc` or `Ctrl+G` after prefix | Cancel window command |
+| `Ctrl+B` | Page up in the other pane (last focused; does not move focus) |
+| `Ctrl+D` | Page down in the other pane (same target as Ctrl+B) |
 
 ### Editing
 
@@ -194,7 +196,7 @@ Also: `/provider`, `/model`, `/search QUERY`
 | `Ctrl+E` | Edit last chat message | **Unused** |
 | `Ctrl+R` | Regenerate last answer | **Unused** (redo is `Ctrl+Y` only) |
 | `Esc` (idle) | Cancel in-flight job | Open slash-command minibuffer |
-| `Ctrl+B` / `Ctrl+D` | Scroll chat history back / forward | **Unused** |
+| `Ctrl+B` / `Ctrl+D` | Scroll chat history back / forward | Page up / down in the other split pane |
 | `Alt+PageUp` / `Alt+PageDown` | Scroll chat history (if terminal allows) | **Unused** |
 | `Tab` | Command/path completion | Disabled |
 | `↑` / `↓` | Visual-row movement (soft wrap) | Logical-line movement |

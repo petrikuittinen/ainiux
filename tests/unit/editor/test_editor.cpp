@@ -2712,6 +2712,11 @@ void test_editor_split_layout() {
     check(layout.leaf_count() == 2, "vertical split creates two panes");
     check(layout.has_split(), "layout reports split after vertical split");
     check(layout.focused_leaf() == 0, "focus stays on first pane after split");
+    {
+        const std::optional<size_t> other = layout.other_scroll_leaf();
+        check(other.has_value() && *other == 1,
+              "after split, other_scroll_leaf is the new sibling pane");
+    }
 
     const auto panes = layout.layout_panes(large);
     check(panes.size() == 2, "layout_panes returns two rectangles");
@@ -2722,8 +2727,18 @@ void test_editor_split_layout() {
 
     layout.focus_next();
     check(layout.focused_leaf() == 1, "focus_next moves to second pane");
+    {
+        const std::optional<size_t> other = layout.other_scroll_leaf();
+        check(other.has_value() && *other == 0,
+              "other_scroll_leaf is the previously focused pane after focus_next");
+    }
     layout.focus_next();
     check(layout.focused_leaf() == 0, "focus_next wraps to first pane");
+    {
+        const std::optional<size_t> other = layout.other_scroll_leaf();
+        check(other.has_value() && *other == 1,
+              "other_scroll_leaf tracks the last left pane after wrap");
+    }
 
     layout.set_focused_buffer(3);
     check(layout.focused_buffer() == 3, "focused pane buffer index updates");
@@ -2742,6 +2757,8 @@ void test_editor_split_layout() {
 
     check(layout.close_focused(), "close removes a pane when more than one exists");
     check(layout.leaf_count() == 1, "close leaves a single pane");
+    check(!layout.other_scroll_leaf().has_value(),
+          "other_scroll_leaf is empty with a single pane");
     check(!layout.close_focused(), "close fails when only one pane remains");
 
     const Rect tiny{1, 1, 2, 10};
