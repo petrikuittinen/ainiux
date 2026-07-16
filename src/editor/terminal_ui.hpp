@@ -11,6 +11,7 @@
 
 namespace pkchat::tui {
 class ThemeRegistry;
+enum class TuiMode;
 }
 
 namespace pkchat::editor {
@@ -112,6 +113,12 @@ void render_terminal(EditorState& state,
                      const TerminalThemeStyle& theme_style = {},
                      bool help_view = false,
                      const EditorAssistDisplay* assist_display = nullptr);
+void render_terminal_panel(EditorState& state,
+                           const MinibufferState& minibuffer,
+                           const TerminalThemeStyle& theme_style,
+                           tui::TuiMode mode,
+                           int& panel_scroll,
+                           const char* panel_title_override = nullptr);
 std::string editor_status_line(const EditorState& state, bool help_view = false);
 void dispatch_escape_sequence(EditorState& state,
                               const std::string& sequence,

@@ -393,6 +393,30 @@ void test_tui_theme_parsing_and_contrast() {
     check(switched.ok && switched.selected_theme == "light", "theme command switches themes");
 }
 
+void test_tui_buffer_list_uses_colored_panel_widget() {
+    const std::string text =
+        "Buffers - Enter opens - N new - DEL close - Esc cancels\n> file1.txt - Ln 1, Col 1\n  file2.txt - Ln 2, Col 3";
+    const std::vector<pkchat::tui::StyledLine> lines =
+        pkchat::tui::detail::panel_lines_for_text(text, pkchat::tui::TuiMode::ThreadList, 80, "Buffers");
+
+    check(!lines.empty() && !lines.front().segments.empty() &&
+              lines.front().segments.front().role == pkchat::tui::StyleRole::PanelBorder,
+          "buffer list panel starts with a colored border rule");
+    bool saw_title = false;
+    bool saw_hint = false;
+    bool saw_selected = false;
+    for (const pkchat::tui::StyledLine& line : lines) {
+        for (const pkchat::tui::StyledSegment& segment : line.segments) {
+            saw_title = saw_title || segment.role == pkchat::tui::StyleRole::PanelTitle;
+            saw_hint = saw_hint || segment.role == pkchat::tui::StyleRole::PanelHint;
+            saw_selected = saw_selected || segment.role == pkchat::tui::StyleRole::PanelHighlight;
+        }
+    }
+    check(saw_title, "buffer list panel uses the shared title styling");
+    check(saw_hint, "buffer list panel uses the shared hint styling");
+    check(saw_selected, "buffer list panel uses the shared selected-row styling");
+}
+
 void test_tui_thinking_trace_display() {
     const std::string raw = "<think>internal trace</think>\n\nVisible answer";
     pkchat::tui::ThinkingDisplay shown = pkchat::tui::thinking_display_text(raw, true);
@@ -869,6 +893,7 @@ void run_all() {
     test_tui_pop_last_chat_message_removes_user_or_assistant_only();
     test_tui_regeneration_plan_uses_last_user_turn();
     test_tui_theme_parsing_and_contrast();
+    test_tui_buffer_list_uses_colored_panel_widget();
     test_tui_thinking_trace_display();
     test_tui_markdown_history_highlighting();
 }

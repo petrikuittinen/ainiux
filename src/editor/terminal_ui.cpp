@@ -11,6 +11,7 @@
 #include "editor/selection.hpp"
 #include "editor/terminal_input.hpp"
 #include "tui/activity.hpp"
+#include "tui/detail/render.hpp"
 #include "tui/theme_registry.hpp"
 #include "ui/confirmation.hpp"
 
@@ -1179,6 +1180,105 @@ void render_terminal(EditorState& state,
 
     int cursor_row = panel.cursor.visible ? panel_rect.row + panel.cursor.row : panel_rect.row;
     int cursor_col = panel.cursor.visible ? panel_rect.col + panel.cursor.col : panel_rect.col;
+    if (minibuffer.active) {
+        cursor_row = minibuffer_row;
+        const size_t prompt_width = minibuffer.prompt.size();
+        const size_t input_width = minibuffer.input.size();
+        cursor_col = 1 + static_cast<int>(std::min<size_t>(
+            static_cast<size_t>(std::max(0, width - 1)), prompt_width + input_width));
+    }
+    std::cout << "\x1b[" << cursor_row << ";" << cursor_col << "H\x1b[?25h";
+    std::cout.flush();
+}
+
+void render_terminal_panel(EditorState& state,
+                           const MinibufferState& minibuffer,
+                           const TerminalThemeStyle& theme_style,
+                           tui::TuiMode mode,
+                           int& panel_scroll,
+                           const char* panel_title_override) {
+    const TerminalSize size = terminal_size();
+    const int rows = std::max(3, size.rows);
+    const int cols = std::max(20, size.cols);
+    const int width = std::max(1, cols - 1);
+    const int panel_height = std::max(1, rows - 2);
+    const tui::detail::RenderStyle render_style{theme_style.themes,
+                                                 theme_style.theme_name,
+                                                 theme_style.use_colors};
+    const std::vector<tui::StyledLine> lines =
+        tui::detail::panel_lines_for_text(state.text.str(), mode, width, panel_title_override);
+
+    int highlighted_line = -1;
+    for (size_t index = 0; index < lines.size(); ++index) {
+        if (!lines[index].segments.empty() &&
+            lines[index].segments.front().role == tui::StyleRole::PanelHighlight) {
+            highlighted_line = static_cast<int>(index);
+            break;
+        }
+    }
+
+    const int max_scroll = std::max(0, static_cast<int>(lines.size()) - panel_height);
+    panel_scroll = std::min(std::max(0, panel_scroll), max_scroll);
+    if (highlighted_line >= 0) {
+        if (highlighted_line < panel_scroll) {
+            panel_scroll = highlighted_line;
+        } else if (highlighted_line >= panel_scroll + panel_height) {
+            panel_scroll = highlighted_line - panel_height + 1;
+        }
+        panel_scroll = std::min(std::max(0, panel_scroll), max_scroll);
+    }
+
+    std::cout << "\x1b[?25l";
+    int printed = 0;
+    for (int index = panel_scroll;
+         index < static_cast<int>(lines.size()) && printed < panel_height;
+         ++index, ++printed) {
+        tui::detail::draw_line(1 + printed,
+                               width,
+                               lines[static_cast<size_t>(index)].segments,
+                               tui::StyleRole::PanelBorder,
+                               render_style);
+    }
+    while (printed < panel_height) {
+        tui::detail::draw_line(1 + printed,
+                               width,
+                               "",
+                               tui::StyleRole::PanelBorder,
+                               render_style);
+        ++printed;
+    }
+
+    int cursor_row = 1;
+    if (highlighted_line >= 0) {
+        cursor_row = 1 + highlighted_line - panel_scroll;
+    }
+    int cursor_col = 1;
+    const int status_row = rows - 1;
+    const int minibuffer_row = rows;
+    const std::string status_text = pad_or_clip_ascii(editor_status_line(state, false), width);
+    std::cout << "\x1b[" << status_row << ";1H";
+    if (theme_style.use_colors && theme_style.themes != nullptr) {
+        std::cout << tui::style_sequence_for(*theme_style.themes,
+                                             theme_style.theme_name,
+                                             tui::StyleRole::Status);
+    } else {
+        std::cout << "\x1b[7m";
+    }
+    std::cout << status_text << "\x1b[0m\x1b[K";
+
+    const std::string minibuffer_line = pad_or_clip_ascii(minibuffer_text(minibuffer), width);
+    std::cout << "\x1b[" << minibuffer_row << ";1H";
+    if (theme_style.use_colors && theme_style.themes != nullptr) {
+        std::cout << tui::style_sequence_for(*theme_style.themes,
+                                             theme_style.theme_name,
+                                             tui::StyleRole::Text);
+    }
+    std::cout << minibuffer_line;
+    if (theme_style.use_colors && theme_style.themes != nullptr) {
+        std::cout << "\x1b[0m";
+    }
+    std::cout << "\x1b[K";
+
     if (minibuffer.active) {
         cursor_row = minibuffer_row;
         const size_t prompt_width = minibuffer.prompt.size();

@@ -19,6 +19,7 @@
 #include "runtime/runtime.hpp"
 #include "search/search.hpp"
 #include "tui/activity.hpp"
+#include "tui/events.hpp"
 #include "tui/theme_registry.hpp"
 #include "tui/tui.hpp"
 #include "ui/confirmation.hpp"
@@ -226,6 +227,7 @@ app::EditorRunResult run_editor(const std::string& path,
     HelpViewSession help_view;
     bool buffer_list_active = false;
     size_t buffer_list_selected = 0;
+    int buffer_list_scroll = 0;
     EditorState buffer_list_view;
     EditorProviderModelPicker picker;
     EditorModelListRuntime model_list;
@@ -348,7 +350,13 @@ app::EditorRunResult run_editor(const std::string& path,
         }
         if (buffer_list_active) {
             refresh_buffer_list_view();
-            render_terminal(buffer_list_view, minibuffer, theme_style);
+            render_terminal_panel(buffer_list_view,
+                                  minibuffer,
+                                  theme_style,
+                                  // The editor buffer selector uses the same panel widget as chat /list.
+                                  tui::TuiMode::ThreadList,
+                                  buffer_list_scroll,
+                                  "Buffers");
             return;
         }
         state.highlight_enabled = highlight_enabled;
@@ -571,6 +579,7 @@ app::EditorRunResult run_editor(const std::string& path,
         }
         sync_active_buffer();
         buffer_list_selected = std::min(active_buffer, buffers.empty() ? size_t{0} : buffers.size() - 1);
+        buffer_list_scroll = 0;
         buffer_list_active = true;
         pending_close_confirm = false;
         pending_close_index = static_cast<size_t>(-1);
