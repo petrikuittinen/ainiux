@@ -17,6 +17,10 @@ enum class EditorSlashCommand {
     List,
     Close,
     Chat,
+    VSplit,
+    HSplit,
+    CloseSplit,
+    Maximize,
 };
 
 struct ParsedEditorSlashCommand {

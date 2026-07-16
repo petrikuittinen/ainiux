@@ -3607,6 +3607,12 @@ void test_editor_help_document_and_command() {
           "editor help document documents /list");
     check(help_text.find("/close") != std::string::npos,
           "editor help document documents /close");
+    check(help_text.find("/vsplit") != std::string::npos &&
+              help_text.find("/hsplit") != std::string::npos &&
+              help_text.find("/closesplit") != std::string::npos &&
+              help_text.find("/maximize") != std::string::npos &&
+              help_text.find("/nosplit") != std::string::npos,
+          "editor help document documents split slash commands");
     check(help_text.find("Choose a model with /model") != std::string::npos,
           "editor help document documents deferred model selection");
     check(help_text.find("/provider") != std::string::npos && help_text.find("/model") != std::string::npos,
@@ -3630,6 +3636,16 @@ void test_editor_help_document_and_command() {
           "assist command completions include /list");
     check(std::find(completions.begin(), completions.end(), "/close") != completions.end(),
           "assist command completions include /close");
+    check(std::find(completions.begin(), completions.end(), "/vsplit") != completions.end(),
+          "assist command completions include /vsplit");
+    check(std::find(completions.begin(), completions.end(), "/hsplit") != completions.end(),
+          "assist command completions include /hsplit");
+    check(std::find(completions.begin(), completions.end(), "/closesplit") != completions.end(),
+          "assist command completions include /closesplit");
+    check(std::find(completions.begin(), completions.end(), "/maximize") != completions.end(),
+          "assist command completions include /maximize");
+    check(std::find(completions.begin(), completions.end(), "/nosplit") != completions.end(),
+          "assist command completions include /nosplit");
     check(std::find(completions.begin(), completions.end(), "/provider ") != completions.end(),
           "assist command completions include /provider");
     check(std::find(completions.begin(), completions.end(), "/model ") != completions.end(),
@@ -3687,6 +3703,24 @@ void test_editor_help_document_and_command() {
     slash = pkchat::editor::parse_editor_slash_command("/close file.txt");
     check(slash.command == pkchat::editor::EditorSlashCommand::None,
           "editor /close rejects arguments");
+    slash = pkchat::editor::parse_editor_slash_command("/vsplit");
+    check(slash.command == pkchat::editor::EditorSlashCommand::VSplit && slash.path.empty(),
+          "editor /vsplit slash command is recognized");
+    slash = pkchat::editor::parse_editor_slash_command("/hsplit");
+    check(slash.command == pkchat::editor::EditorSlashCommand::HSplit && slash.path.empty(),
+          "editor /hsplit slash command is recognized");
+    slash = pkchat::editor::parse_editor_slash_command("/closesplit");
+    check(slash.command == pkchat::editor::EditorSlashCommand::CloseSplit && slash.path.empty(),
+          "editor /closesplit slash command is recognized");
+    slash = pkchat::editor::parse_editor_slash_command("/maximize");
+    check(slash.command == pkchat::editor::EditorSlashCommand::Maximize && slash.path.empty(),
+          "editor /maximize slash command is recognized");
+    slash = pkchat::editor::parse_editor_slash_command("/nosplit");
+    check(slash.command == pkchat::editor::EditorSlashCommand::Maximize && slash.path.empty(),
+          "editor /nosplit is an alias for /maximize");
+    slash = pkchat::editor::parse_editor_slash_command("/vsplit extra");
+    check(slash.command == pkchat::editor::EditorSlashCommand::None,
+          "editor /vsplit rejects arguments");
     slash = pkchat::editor::parse_editor_slash_command("/chat");
     check(slash.command == pkchat::editor::EditorSlashCommand::Chat && slash.path.empty(),
           "editor /chat slash command is recognized");

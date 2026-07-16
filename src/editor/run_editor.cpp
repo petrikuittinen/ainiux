@@ -1418,6 +1418,39 @@ app::EditorRunResult run_editor(const std::string& path,
         return true;
     };
 
+    auto apply_vsplit = [&]() {
+        const Rect area = editor_main_area();
+        if (split_layout.split_focused(SplitKind::Vertical, area)) {
+            minibuffer_message(minibuffer, "Vertical split (Ctrl+G o other pane)");
+        } else {
+            minibuffer_message(minibuffer, "Window too small for vertical split");
+        }
+    };
+
+    auto apply_hsplit = [&]() {
+        const Rect area = editor_main_area();
+        if (split_layout.split_focused(SplitKind::Horizontal, area)) {
+            minibuffer_message(minibuffer, "Horizontal split (Ctrl+G o other pane)");
+        } else {
+            minibuffer_message(minibuffer, "Window too small for horizontal split");
+        }
+    };
+
+    auto apply_closesplit = [&]() {
+        if (!split_layout.close_focused()) {
+            minibuffer_message(minibuffer, "Only one pane");
+        } else {
+            focus_buffer_from_split();
+            minibuffer_message(minibuffer, "Closed pane");
+        }
+    };
+
+    auto apply_maximize_split = [&]() {
+        split_layout.maximize_focused();
+        focus_buffer_from_split();
+        minibuffer_message(minibuffer, "Maximized pane");
+    };
+
     auto submit_assist_command = [&]() {
         if (is_editor_help_command(minibuffer.input)) {
             exit_assist_command_mode(minibuffer, assist_completer);
@@ -1487,6 +1520,26 @@ app::EditorRunResult run_editor(const std::string& path,
                 pending_assist = PendingAssist{};
                 exit_assist_command_mode(minibuffer, assist_completer);
                 request_switch_to_chat();
+                return;
+            case EditorSlashCommand::VSplit:
+                pending_assist = PendingAssist{};
+                exit_assist_command_mode(minibuffer, assist_completer);
+                apply_vsplit();
+                return;
+            case EditorSlashCommand::HSplit:
+                pending_assist = PendingAssist{};
+                exit_assist_command_mode(minibuffer, assist_completer);
+                apply_hsplit();
+                return;
+            case EditorSlashCommand::CloseSplit:
+                pending_assist = PendingAssist{};
+                exit_assist_command_mode(minibuffer, assist_completer);
+                apply_closesplit();
+                return;
+            case EditorSlashCommand::Maximize:
+                pending_assist = PendingAssist{};
+                exit_assist_command_mode(minibuffer, assist_completer);
+                apply_maximize_split();
                 return;
             case EditorSlashCommand::None:
                 break;
@@ -2116,19 +2169,10 @@ app::EditorRunResult run_editor(const std::string& path,
                                                       : "Unknown window command (v/h/o/0/1)");
                 return;
             }
-            const Rect area = editor_main_area();
             if (action == "split-v") {
-                if (split_layout.split_focused(SplitKind::Vertical, area)) {
-                    minibuffer_message(minibuffer, "Vertical split (Ctrl+G o other pane)");
-                } else {
-                    minibuffer_message(minibuffer, "Window too small for vertical split");
-                }
+                apply_vsplit();
             } else if (action == "split-h") {
-                if (split_layout.split_focused(SplitKind::Horizontal, area)) {
-                    minibuffer_message(minibuffer, "Horizontal split (Ctrl+G o other pane)");
-                } else {
-                    minibuffer_message(minibuffer, "Window too small for horizontal split");
-                }
+                apply_hsplit();
             } else if (action == "other") {
                 if (!split_layout.has_split()) {
                     minibuffer_message(minibuffer, "No other pane");
@@ -2142,16 +2186,9 @@ app::EditorRunResult run_editor(const std::string& path,
                                            editor_buffer_display_name(state, active_buffer));
                 }
             } else if (action == "close") {
-                if (!split_layout.close_focused()) {
-                    minibuffer_message(minibuffer, "Only one pane");
-                } else {
-                    focus_buffer_from_split();
-                    minibuffer_message(minibuffer, "Closed pane");
-                }
+                apply_closesplit();
             } else if (action == "maximize") {
-                split_layout.maximize_focused();
-                focus_buffer_from_split();
-                minibuffer_message(minibuffer, "Maximized pane");
+                apply_maximize_split();
             }
             return;
         }

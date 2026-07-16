@@ -125,6 +125,10 @@ Use `/pop` to remove the last user or assistant message.
 | `Esc` or `Ctrl+G` after prefix | Cancel window command |
 | `Ctrl+B` | Page up in the other pane (last focused; does not move focus) |
 | `Ctrl+D` | Page down in the other pane (same target as Ctrl+B) |
+| `/vsplit` | Vertical split (same as `Ctrl+G v`) |
+| `/hsplit` | Horizontal split (same as `Ctrl+G h`) |
+| `/closesplit` | Close focused pane (same as `Ctrl+G 0`) |
+| `/maximize` or `/nosplit` | Maximize focused pane (same as `Ctrl+G 1`) |
 
 ### Editing
 
@@ -167,7 +171,7 @@ Bracketed terminal paste is undoable with `Ctrl+Z` / `Ctrl+U`.
 
 Built-in AI: `/spell`, `/grammar`, `/continue`, `/fact`, `/comment`, `/rewrite`, `/English`, `/Chinese`, `/Finnish`, `/prompt`, `/regenerate`
 
-File/editor: `/save`, `/saveas`, `/find`, `/replace`, `/open`, `/new`, `/list`, `/close`, `/help`, `/quit`
+File/editor: `/save`, `/saveas`, `/find`, `/replace`, `/open`, `/new`, `/list`, `/close`, `/vsplit`, `/hsplit`, `/closesplit`, `/maximize` (`/nosplit`), `/help`, `/quit`
 
 Also: `/provider`, `/model`, `/search QUERY`
 

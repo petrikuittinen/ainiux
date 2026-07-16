@@ -53,6 +53,18 @@ EditorSlashCommand command_from_token(const std::string& command_token) {
     if (command_token == "chat") {
         return EditorSlashCommand::Chat;
     }
+    if (command_token == "vsplit") {
+        return EditorSlashCommand::VSplit;
+    }
+    if (command_token == "hsplit") {
+        return EditorSlashCommand::HSplit;
+    }
+    if (command_token == "closesplit") {
+        return EditorSlashCommand::CloseSplit;
+    }
+    if (command_token == "maximize" || command_token == "nosplit") {
+        return EditorSlashCommand::Maximize;
+    }
     return EditorSlashCommand::None;
 }
 
@@ -144,7 +156,10 @@ ParsedEditorSlashCommand parse_editor_slash_command(const std::string& line) {
     if (path_start < trimmed.size()) {
         const std::string path = trim_ascii_copy(trimmed.substr(path_start));
         if (parsed.command == EditorSlashCommand::New || parsed.command == EditorSlashCommand::List ||
-            parsed.command == EditorSlashCommand::Close || parsed.command == EditorSlashCommand::Chat) {
+            parsed.command == EditorSlashCommand::Close || parsed.command == EditorSlashCommand::Chat ||
+            parsed.command == EditorSlashCommand::VSplit || parsed.command == EditorSlashCommand::HSplit ||
+            parsed.command == EditorSlashCommand::CloseSplit ||
+            parsed.command == EditorSlashCommand::Maximize) {
             parsed.command = EditorSlashCommand::None;
             return parsed;
         }

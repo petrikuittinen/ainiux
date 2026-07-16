@@ -23,6 +23,16 @@ Splits use an Emacs-style two-key sequence. Press **Ctrl+G**, then one of:
 | `Ctrl+B` | Page up in the **other** pane (last focused, without moving focus) |
 | `Ctrl+D` | Page down in the **other** pane (same target as Ctrl+B) |
 
+Slash commands (via `Esc` then the command):
+
+| Command | Action |
+|---------|--------|
+| `/vsplit` | Vertical split (side by side); same as `Ctrl+G v` |
+| `/hsplit` | Horizontal split (stacked); same as `Ctrl+G h` |
+| `/closesplit` | Close the focused pane; same as `Ctrl+G 0` |
+| `/maximize` | Keep only the focused pane; same as `Ctrl+G 1` |
+| `/nosplit` | Alias for `/maximize` |
+
 Both panes of a new split show the same buffer at first. Open another file in one pane (`Ctrl+O`) or switch buffers (`Ctrl+L`) to compare two files. Status shows `[N panes]` while more than one pane is open.
 
 **Other-pane scrolling:** after a split, `Ctrl+B`/`Ctrl+D` page the new sibling. After `Ctrl+G o`, they page the pane you left. With three or more panes, the target is always the last pane you left (not every non-focused pane). Cancel for minibuffers and replace mode is **Esc** only (not Ctrl+G).
@@ -188,6 +198,11 @@ Press **`Esc`** to open the command minibuffer (`Command:`). Type a command with
 | `/new` | Open a new empty editor buffer (same as `Ctrl+N`) |
 | `/list` | List open editor buffers (same as `Ctrl+L`; Enter chooses, N new, DEL closes selected with y/n prompt, Esc cancels) |
 | `/close` | Close the active editor buffer (same as `Ctrl+W`; prompts if modified) |
+| `/vsplit` | Vertical split (side by side; same as `Ctrl+G v`) |
+| `/hsplit` | Horizontal split (stacked; same as `Ctrl+G h`) |
+| `/closesplit` | Close the focused pane (same as `Ctrl+G 0`) |
+| `/maximize` | Keep only the focused pane (same as `Ctrl+G 1`) |
+| `/nosplit` | Alias for `/maximize` |
 | `/highlight [on|off]` | Show or toggle syntax highlighting for editor and chat |
 | `/mode [MODE|auto]` | Show or set this buffer's syntax mode |
 | `/reformat` | Reformat leading indentation in the selected lines |

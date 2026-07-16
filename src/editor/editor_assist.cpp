@@ -855,6 +855,11 @@ std::vector<std::string> assist_command_completions(const EditorAssistConfig& co
     commands.push_back("/new");
     commands.push_back("/list");
     commands.push_back("/close");
+    commands.push_back("/vsplit");
+    commands.push_back("/hsplit");
+    commands.push_back("/closesplit");
+    commands.push_back("/maximize");
+    commands.push_back("/nosplit");
     commands.push_back("/prompt ");
     commands.push_back("/regenerate");
     commands.push_back("/search ");
