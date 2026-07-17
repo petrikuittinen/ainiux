@@ -44,6 +44,42 @@ constexpr const char* kDefaultAssistChinesePrompt =
 constexpr const char* kDefaultAssistFinnishPrompt =
     "Translate the text into Finnish. Preserve meaning, structure, names, numbers, and "
     "formatting where practical.";
+constexpr const char* kDefaultAssistGermanPrompt =
+    "Translate the text into German. Use natural contemporary German and preserve meaning, "
+    "structure, names, numbers, and formatting where practical.";
+constexpr const char* kDefaultAssistFrenchPrompt =
+    "Translate the text into French. Use natural contemporary French and preserve meaning, "
+    "structure, names, numbers, and formatting where practical.";
+constexpr const char* kDefaultAssistItalianPrompt =
+    "Translate the text into Italian. Use natural contemporary Italian and preserve meaning, "
+    "structure, names, numbers, and formatting where practical.";
+constexpr const char* kDefaultAssistSpanishPrompt =
+    "Translate the text into Spanish. Use natural contemporary Spanish and preserve meaning, "
+    "structure, names, numbers, and formatting where practical.";
+constexpr const char* kDefaultAssistPortuguesePrompt =
+    "Translate the text into Portuguese. Use natural contemporary Portuguese and preserve meaning, "
+    "structure, names, numbers, and formatting where practical.";
+constexpr const char* kDefaultAssistArabicPrompt =
+    "Translate the text into Arabic. Use natural contemporary Arabic and preserve meaning, "
+    "structure, names, numbers, and formatting where practical.";
+constexpr const char* kDefaultAssistHindiPrompt =
+    "Translate the text into Hindi. Use natural contemporary Hindi and preserve meaning, "
+    "structure, names, numbers, and formatting where practical.";
+constexpr const char* kDefaultAssistJapanesePrompt =
+    "Translate the text into Japanese. Use natural contemporary Japanese and preserve meaning, "
+    "structure, names, numbers, and formatting where practical.";
+constexpr const char* kDefaultAssistKoreanPrompt =
+    "Translate the text into Korean. Use natural contemporary Korean and preserve meaning, "
+    "structure, names, numbers, and formatting where practical.";
+constexpr const char* kDefaultAssistSwedishPrompt =
+    "Translate the text into Swedish. Use natural contemporary Swedish and preserve meaning, "
+    "structure, names, numbers, and formatting where practical.";
+constexpr const char* kDefaultAssistPolishPrompt =
+    "Translate the text into Polish. Use natural contemporary Polish and preserve meaning, "
+    "structure, names, numbers, and formatting where practical.";
+constexpr const char* kDefaultAssistRussianPrompt =
+    "Translate the text into Russian. Use natural contemporary Russian and preserve meaning, "
+    "structure, names, numbers, and formatting where practical.";
 constexpr const char* kContentOpenTag = "<content>";
 constexpr const char* kContentCloseTag = "</content>";
 constexpr const char* kAssistTrailingArtifacts[] = {
@@ -790,6 +826,18 @@ EditorAssistConfig default_editor_assist_config() {
         {"/English", modes, kDefaultAssistEnglishPrompt},
         {"/Chinese", modes, kDefaultAssistChinesePrompt},
         {"/Finnish", modes, kDefaultAssistFinnishPrompt},
+        {"/German", modes, kDefaultAssistGermanPrompt},
+        {"/French", modes, kDefaultAssistFrenchPrompt},
+        {"/Italian", modes, kDefaultAssistItalianPrompt},
+        {"/Spanish", modes, kDefaultAssistSpanishPrompt},
+        {"/Portuguese", modes, kDefaultAssistPortuguesePrompt},
+        {"/Arabic", modes, kDefaultAssistArabicPrompt},
+        {"/Hindi", modes, kDefaultAssistHindiPrompt},
+        {"/Japanese", modes, kDefaultAssistJapanesePrompt},
+        {"/Korean", modes, kDefaultAssistKoreanPrompt},
+        {"/Swedish", modes, kDefaultAssistSwedishPrompt},
+        {"/Polish", modes, kDefaultAssistPolishPrompt},
+        {"/Russian", modes, kDefaultAssistRussianPrompt},
     };
     return config;
 }

@@ -48,7 +48,7 @@ void handle_tui_command(const std::string& text, TuiCommandContext& ctx, TuiComm
                 "/thinking [trace|notrace]\n"
                 "/editor (Ctrl+P; switch to editor mode)\n"
                 "AI commands from editor-commands.conf (/spell, /grammar, /continue,\n"
-                "/Chinese, /prompt, /regenerate, and custom commands)";
+                "/Chinese, /German, /Japanese, /prompt, /regenerate, and custom commands)";
             ctx.status = "Help shown; /help hides it";
         } else {
             ctx.help_text.clear();

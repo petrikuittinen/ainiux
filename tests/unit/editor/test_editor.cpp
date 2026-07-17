@@ -431,6 +431,14 @@ void test_editor_assist_helpers() {
         ainiux::editor::find_assist_command(default_config, "/Finnish");
     check(default_finnish != nullptr && default_finnish->prompt.find("Finnish") != std::string::npos,
           "default editor assist Finnish prompt is populated");
+    for (const char* language : {"/German", "/French", "/Italian", "/Spanish", "/Portuguese",
+                                 "/Arabic", "/Hindi", "/Japanese", "/Korean", "/Swedish",
+                                 "/Polish", "/Russian"}) {
+        const ainiux::editor::EditorAssistCommand* command =
+            ainiux::editor::find_assist_command(default_config, language);
+        check(command != nullptr && !command->prompt.empty(),
+              std::string("default editor assist prompt is populated for ") + language);
+    }
 
     ainiux::editor::ParsedAssistCommand parsed =
         ainiux::editor::parse_assist_command("/spell all", default_config);
@@ -563,8 +571,11 @@ void test_editor_assist_helpers() {
     check(!completions.empty() && completions.front() == "/spell", "assist completions include /spell");
     check(std::find(completions.begin(), completions.end(), "/regenerate") != completions.end(),
           "assist completions include /regenerate");
-    for (const char* builtin : {"/spell", "/grammar", "/fact", "/comment", "/rewrite", "/English",
-                                "/Chinese", "/Finnish"}) {
+    for (const char* builtin :
+         {"/spell",     "/grammar", "/fact",     "/comment",  "/rewrite",  "/English",
+          "/Chinese",   "/Finnish", "/German",   "/French",   "/Italian",  "/Spanish",
+          "/Portuguese","/Arabic",  "/Hindi",    "/Japanese", "/Korean",   "/Swedish",
+          "/Polish",    "/Russian"}) {
         for (const char* mode : {"selection", "all", "newbuffer", "insert", "v", "h"}) {
             const std::string variant = std::string(builtin) + " " + mode;
             check(std::find(completions.begin(), completions.end(), variant) != completions.end(),
@@ -573,8 +584,11 @@ void test_editor_assist_helpers() {
     }
     check(std::find(completions.begin(), completions.end(), "/continue") != completions.end(),
           "builtin assist completions include bare /continue");
-    for (const char* builtin : {"/spell", "/grammar", "/fact", "/comment", "/rewrite", "/English",
-                                "/Chinese", "/Finnish"}) {
+    for (const char* builtin :
+         {"/spell",     "/grammar", "/fact",     "/comment",  "/rewrite",  "/English",
+          "/Chinese",   "/Finnish", "/German",   "/French",   "/Italian",  "/Spanish",
+          "/Portuguese","/Arabic",  "/Hindi",    "/Japanese", "/Korean",   "/Swedish",
+          "/Polish",    "/Russian"}) {
         const ainiux::editor::EditorAssistCommand* command =
             ainiux::editor::find_assist_command(default_config, builtin);
         check(command != nullptr && command->modes.size() == 4,

@@ -1,39 +1,123 @@
-# ainiux
+# Ainiux
 
-`ainiux` is a fast, script-friendly command-line chat client for OpenAI and OpenAI-compatible APIs.
+**Ainiux is a fast, portable AI chat client and AI-powered text editor for the terminal.**
 
-Current status: v0.97 CLI with libcurl transport, cancellable runtime jobs, provider registry/profile aliases, `/v1/models`, `/v1/chat/completions`, text-only OpenAI Responses API support, provider-specific reasoning/thinking request compatibility, local JPEG/PNG/GIF image input, interactive text/image attachments, request-only context policies, safe URL insertion, web search with API providers and keyless fallbacks, a simple REPL, a standalone `--editor` mode with canonical advisory file locking, read-only conflict recovery, external-change warnings, multiple file buffers, selection, copy/cut/paste across buffers, grapheme-aware Unicode editing, indexed cross-buffer word completion, multi-language syntax highlighting and indentation reformatting, and AI continue/editor commands, a full-screen non-blocking TUI foundation, SQLite-backed TUI chat threads, JSON chat import/export save/load, HTML-to-text/Markdown extraction, Markdown assistant-output rendering to HTML or plaintext, automatic system/user TOML-alike configuration loading, a concurrent JSONL benchmark runner, and configurable judge-model benchmark grading.
+Talk to local and cloud models from one tool. Write and rewrite documents with dozens of AI editor commands. Script chat, convert documents, run benchmarks, and keep your keys and data under your control.
 
-## Build
+One binary. No Electron. No browser tab. Built in C++17 for Linux on **x86-64** and **ARM64**.
+
+## What it solves
+
+Most people juggle a web chat, a separate code editor, and half a dozen provider dashboards. Ainiux puts the pieces that matter for real work into one local program:
+
+- **Chat** with the model you already run (LM Studio, Ollama, vLLM, llama.cpp, …) or with cloud providers
+- **Edit** text and code with AI assist that inserts into your buffer, not into a chat sidebar you have to copy-paste from
+- **Script** prompts and pipelines from the shell (`stdout` for model output, `stderr` for status)
+- **Evaluate** models with concurrent JSONL benchmarks and optional judge-model grading
+
+You stay on your machine. API keys stay in the environment or key files. Local servers stay local.
+
+## Why Ainiux stands out
+
+| | What you get |
+| --- | --- |
+| **AI-powered editor** | Standalone `--editor` with **50+ built-in AI commands** (`/spell`, `/grammar`, `/rewrite`, `/summarize`, `/refactor`, translation into many languages, and more). Apply to the selection, whole buffer, insert at cursor, or open a new buffer (including split panes). |
+| **Your own commands** | Add or override commands with simple `[command]` blocks in config—no recompile. |
+| **Many providers, one UX** | OpenAI, OpenRouter, LM Studio, Ollama, vLLM, DeepSeek, Gemini, xAI, Qwen, and many other OpenAI-compatible endpoints through one registry. Switch with `/provider` and `/model`. |
+| **Continue where you are** | `Ctrl+Space` continues prose or code at the cursor with bounded context—not a blank chat. |
+| **Real terminal UI** | Full-screen chat TUI that stays responsive while streaming; SQLite thread library; themes and syntax highlighting. |
+| **Script-friendly CLI** | One-shot prompts, REPL, document convert (`--input` / `--fetch-url`), benchmarks, and grading. |
+| **Local-first** | Works offline with `--provider none` for editing and conversion; optional local models when you want AI. |
+
+> Screenshots and short demos will be added here.
+
+## Naming story
+
+The project started as **pkchat**—a private short name for a personal chat client. As the program grew into a serious editor, benchmark tool, and multi-provider client, that name was already widely used elsewhere.
+
+**Aini** is the name of the author’s youngest child, and it also echoes Chinese **爱你** (*ài nǐ*, “love you”). A short product name built only on *Aini* was attractive but crowded (including other AI assistants and common given names). Longer forms such as **Ainix** were likewise already claimed in overlapping spaces.
+
+**Ainiux** was chosen before going public: personal roots, a distinctive product spelling, and room for a long-term ambition (tool → language → platform). The command-line binary is lowercase **`ainiux`**.
+
+## Install on Ubuntu Linux
+
+Tested on **Ubuntu** for **x86-64** and **ARM64** (including machines such as NVIDIA DGX Spark-class ARM systems).
+
+### 1. Install build dependencies
 
 ```sh
+sudo apt update
+sudo apt install -y build-essential pkg-config git
+sudo apt install -y libsqlite3-0 libsqlite3-dev
+sudo apt install -y libcurl4t64 libcurl4-openssl-dev
+```
+
+Notes:
+
+- On some older Ubuntu releases the curl runtime package may be named `libcurl4` instead of `libcurl4t64`; install the matching `-dev` package either way.
+- You need a C++17 compiler (`g++` from `build-essential` is fine).
+
+### 2. Get the source and build
+
+```sh
+git clone https://github.com/petrikuittinen/ainiux.git
+cd ainiux
 make
+./ainiux --version
 ```
 
-For a smaller release-style executable compiled with `-O3`, `-DNDEBUG`, and stripped symbols:
+Optional release-style binary (`-O3`, `-DNDEBUG`, stripped):
 
 ```sh
 make optimized
 ```
 
-Useful targets:
+### 3. Install system-wide (optional)
 
 ```sh
+sudo make install PREFIX=/usr/local
+```
+
+This installs the `ainiux` binary, configuration templates, themes, editor-command prompts, and benchmark files. Existing administrator config under `/etc/xdg/ainiux/` is not overwritten.
+
+### 4. Quick smoke test
+
+```sh
+# Offline editor (no model endpoint required)
+./ainiux --provider none --editor
+
+# Local OpenAI-compatible server (example)
+./ainiux http://localhost:1234/v1 --list-models
+./ainiux lmstudio -p "Hello from Ainiux"
+```
+
+Set cloud keys only when needed, for example:
+
+```sh
+export OPENAI_API_KEY=...
+export OPENROUTER_API_KEY=...
+```
+
+## Current status
+
+**v0.97** — active development. Core surfaces are usable daily: scriptable CLI, REPL, full-screen chat TUI, AI editor, multi-provider chat, attachments and safe URL fetch, web search hooks, document conversion, concurrent benchmarks, and judge grading.
+
+Under the hood: libcurl HTTP/SSE, cancellable runtime jobs, Chat Completions plus text-only Responses API support, provider-specific reasoning/thinking request mapping, SQLite-backed TUI threads, JSON chat import/export, multi-language syntax highlighting, grapheme-aware editing, and layered TOML-alike configuration.
+
+## Build reference
+
+```sh
+make              # debug-friendly build → ./ainiux
+make optimized    # -O3 -DNDEBUG, stripped
 make test
-make optimized
 make sanitize
 make test-sanitize
 make leak-check
 make clean
-```
-
-Install the binary, system configuration templates, and bundled theme/editor-command/benchmark-prompt files with:
-
-```sh
 make install PREFIX=/usr/local
 ```
 
-The template source is `config/ainiux.conf`. It is installed as `/etc/xdg/ainiux/config.conf` by default; set `SYSCONFDIR` when packaging for a different system configuration root. Installation preserves an existing system config instead of overwriting administrator changes.
+The template source is `config/ainiux.conf`. It is installed as `/etc/xdg/ainiux/config.conf` by default; set `SYSCONFDIR` when packaging for a different system configuration root.
 
 At startup, ainiux loads system `ainiux/config.conf` files from `$XDG_CONFIG_DIRS` (default `/etc/xdg`) and then the user file at `$XDG_CONFIG_HOME/ainiux/config.conf` (normally `~/.config/ainiux/config.conf`). User keys partially override system keys, and command-line arguments override both. `--no-config` skips the user file while retaining administrator-provided system configuration. Missing automatic files are ignored; malformed, unknown, or incorrectly typed settings produce a configuration error with the file and source location. `--help` and `--version` do not load configuration.
 
@@ -206,7 +290,7 @@ Built-in AI commands include:
 - Long-form and creative writing: `/speech`, `/fiction`, `/blog`, `/article`, `/joke`, and `/roast`.
 - Opinion and parody voices: `/grumpyman` and `/Trump`.
 - Coding: `/explain`, `/fix`, `/refactor`, `/tests`, and `/plan`.
-- Language tasks: `/transliterate`, `/English`, `/Chinese`, and `/Finnish`.
+- Language tasks: `/transliterate`, `/English`, `/Chinese`, `/Finnish`, `/German`, `/French`, `/Italian`, `/Spanish`, `/Portuguese`, `/Arabic`, `/Hindi`, `/Japanese`, `/Korean`, `/Swedish`, `/Polish`, and `/Russian`.
 
 All except `/continue` support `selection`, `all`, `newbuffer`, `v`/`hsplit` new-buffer splits, and `insert`. `/continue` is continue-only and is also bound to `Ctrl+Space`. Type `Esc` to open the command minibuffer, enter a command such as `/spell`, and ainiux prompts for a mode when one is omitted. `Tab` completes commands and mode variants. `/prompt YOUR TASK` runs a custom one-shot prompt with the same scoped choices: selection (`s`), all (`a`), insert (`i`), new buffer (`n`), vertical split new buffer (`v`), or horizontal split new buffer (`h`). `/regenerate` repeats the previous AI command with the same command options where the current buffer state allows it. `/quit` leaves command mode.
 

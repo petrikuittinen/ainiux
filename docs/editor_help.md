@@ -188,6 +188,18 @@ Press **`Esc`** to open the command minibuffer (`Command:`). Type a command with
 | `/English` | Translate to English |
 | `/Chinese` | Translate to Chinese |
 | `/Finnish` | Translate to Finnish |
+| `/German` | Translate to German |
+| `/French` | Translate to French |
+| `/Italian` | Translate to Italian |
+| `/Spanish` | Translate to Spanish |
+| `/Portuguese` | Translate to Portuguese |
+| `/Arabic` | Translate to Arabic |
+| `/Hindi` | Translate to Hindi |
+| `/Japanese` | Translate to Japanese |
+| `/Korean` | Translate to Korean |
+| `/Swedish` | Translate to Swedish |
+| `/Polish` | Translate to Polish |
+| `/Russian` | Translate to Russian |
 | `/prompt TEXT` | Custom one-shot AI task |
 | `/regenerate` | Repeat the previous AI command with the same command options |
 | `/save` | Save (same as `Ctrl+S`) |

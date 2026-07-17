@@ -169,7 +169,7 @@ Bracketed terminal paste is undoable with `Ctrl+Z` / `Ctrl+U`.
 
 ### Slash commands (via `Esc` → command minibuffer, `Tab` completes)
 
-Built-in AI: `/spell`, `/grammar`, `/continue`, `/fact`, `/comment`, `/rewrite`, `/English`, `/Chinese`, `/Finnish`, `/prompt`, `/regenerate`
+Built-in AI: `/spell`, `/grammar`, `/continue`, `/fact`, `/comment`, `/rewrite`, `/English`, `/Chinese`, `/Finnish`, `/German`, `/French`, `/Italian`, `/Spanish`, `/Portuguese`, `/Arabic`, `/Hindi`, `/Japanese`, `/Korean`, `/Swedish`, `/Polish`, `/Russian`, `/prompt`, `/regenerate`
 
 File/editor: `/save`, `/saveas`, `/find`, `/replace`, `/open`, `/new`, `/list`, `/close`, `/vsplit`, `/hsplit`, `/closesplit`, `/maximize` (`/nosplit`), `/help`, `/quit`
 
