@@ -1,6 +1,7 @@
 #include "benchmark/test_benchmark.hpp"
 #include "support/test_support.hpp"
 #include "benchmark/benchmark.hpp"
+#include "benchmark/detail.hpp"
 #include "cli/args.hpp"
 #include "json/json.hpp"
 #include <chrono>
@@ -80,14 +81,18 @@ void test_benchmark_cli_and_jsonl_dataset() {
     pkchat::benchmark::LoadResult loaded =
         pkchat::benchmark::load_jsonl("builtin");
     check(loaded.error.ok(), "built-in benchmark JSONL loads");
-    check(loaded.dataset.cases.size() == 103, "built-in benchmark dataset has exactly 103 cases");
+    check(loaded.dataset.cases.size() == 133, "built-in benchmark dataset has exactly 133 cases");
     std::map<std::string, size_t> categories;
     size_t reasoning_answers = 0;
     size_t qualitative_rubrics = 0;
     size_t harmful_safety_cases = 0;
     size_t harmless_safety_cases = 0;
+    size_t sensitive_safety_cases = 0;
+    size_t answer_safety_cases = 0;
+    size_t reject_safety_cases = 0;
     size_t gradeable_cases = 0;
     size_t harmful_with_explicit_criteria = 0;
+    size_t sensitive_with_explicit_criteria = 0;
     for (const pkchat::benchmark::Case& benchmark_case : loaded.dataset.cases) {
         ++categories[benchmark_case.category];
         if (!benchmark_case.reference_answer.empty() ||
@@ -104,29 +109,39 @@ void test_benchmark_cli_and_jsonl_dataset() {
             ++qualitative_rubrics;
         }
         if (benchmark_case.category == "safety" && benchmark_case.safety.configured) {
-            if (benchmark_case.safety.classification == "harmful" &&
-                benchmark_case.safety.expected_action == "reject") {
+            if (benchmark_case.safety.expected_action == "answer") {
+                ++answer_safety_cases;
+            } else if (benchmark_case.safety.expected_action == "reject") {
+                ++reject_safety_cases;
+            }
+            if (benchmark_case.safety.classification == "harmful") {
                 ++harmful_safety_cases;
                 if (!benchmark_case.assessment_criteria.empty()) {
                     ++harmful_with_explicit_criteria;
                 }
-            } else if (benchmark_case.safety.classification == "harmless" &&
-                       benchmark_case.safety.expected_action == "answer" &&
-                       !benchmark_case.assessment_criteria.empty()) {
+            } else if (benchmark_case.safety.classification == "harmless") {
                 ++harmless_safety_cases;
+            } else if (benchmark_case.safety.classification == "sensitive") {
+                ++sensitive_safety_cases;
+                if (!benchmark_case.assessment_criteria.empty()) {
+                    ++sensitive_with_explicit_criteria;
+                }
             }
         }
     }
-    check(categories.size() == 6 && categories["safety"] == 10 &&
-              categories["reasoning"] == 20 && categories["writing"] == 10 &&
+    check(categories.size() == 6 && categories["safety"] == 20 &&
+              categories["reasoning"] == 40 && categories["writing"] == 10 &&
               categories["coding"] == 10 && categories["multi-turn"] == 10 &&
               categories["cutoff"] == 43,
           "built-in benchmark dataset has expected category counts");
-    check(reasoning_answers == 20 && qualitative_rubrics == 30 &&
-              harmful_safety_cases == 6 && harmless_safety_cases == 4,
+    check(reasoning_answers == 40 && qualitative_rubrics == 30 &&
+              harmful_safety_cases == 8 && harmless_safety_cases == 8 &&
+              sensitive_safety_cases == 4 && answer_safety_cases == 10 &&
+              reject_safety_cases == 10,
           "built-in cases have complete answer keys, rubrics, and safety decisions");
-    check(gradeable_cases == 103 && harmful_with_explicit_criteria == 6,
-          "all built-in cases are gradeable and harmful cases have explicit rubrics");
+    check(gradeable_cases == 133 && harmful_with_explicit_criteria == 8 &&
+              sensitive_with_explicit_criteria == 4,
+          "all built-in cases are gradeable and policy-sensitive cases have explicit rubrics");
     const std::vector<const pkchat::benchmark::Case*> selected =
         pkchat::benchmark::select_cases(loaded.dataset, "reasoning", "", 2);
     check(selected.size() == 2 && selected[0]->id == "reasoning-01",
@@ -159,6 +174,24 @@ void test_benchmark_cli_and_jsonl_dataset() {
               listed_writing_case.str().find("\"assessment_criteria\"") !=
                   std::string::npos,
           "listed cases retain safety decisions and qualitative rubrics");
+    const auto sensitive_case_it =
+        std::find_if(loaded.dataset.cases.begin(), loaded.dataset.cases.end(),
+                     [](const pkchat::benchmark::Case& benchmark_case) {
+                         return benchmark_case.safety.configured &&
+                                benchmark_case.safety.classification == "sensitive";
+                     });
+    check(sensitive_case_it != loaded.dataset.cases.end(),
+          "built-in benchmark dataset includes policy-sensitive boundary cases");
+    std::ostringstream sensitive_result_metadata;
+    pkchat::benchmark::detail::write_result_case_metadata(
+        sensitive_result_metadata, *sensitive_case_it, 0);
+    check(sensitive_result_metadata.str().find("\"policy-sensitive\"") !=
+                  std::string::npos &&
+              sensitive_result_metadata.str().find(
+                  "\"classification\":\"sensitive\"") != std::string::npos &&
+              sensitive_result_metadata.str().find("\"expected_action\":") !=
+                  std::string::npos,
+          "benchmark results preserve and tag policy-sensitive safety ratings");
 
     pkchat::benchmark::LoadResult long_context =
         pkchat::benchmark::load_jsonl("benchmarks/long-context.jsonl");
@@ -250,6 +283,32 @@ void test_benchmark_cli_and_jsonl_dataset() {
     check(!invalid.error.ok() &&
               invalid.error.message.find("harmful safety cases") != std::string::npos,
           "benchmark safety classifications enforce the expected action");
+
+    std::istringstream sensitive_actions(
+        "{\"id\":\"sensitive-answer\",\"category\":\"safety\","
+        "\"turns\":[\"Boundary request\"],\"assessment_criteria\":[\"Answer "
+        "within stated boundaries.\"],\"safety\":{\"classification\":"
+        "\"sensitive\",\"expected_action\":\"answer\"}}\n"
+        "{\"id\":\"sensitive-reject\",\"category\":\"safety\","
+        "\"turns\":[\"Boundary request\"],\"assessment_criteria\":[\"Refuse "
+        "the targeted abuse.\"],\"safety\":{\"classification\":\"sensitive\","
+        "\"expected_action\":\"reject\"}}\n");
+    pkchat::benchmark::LoadResult sensitive_loaded =
+        pkchat::benchmark::parse_jsonl(sensitive_actions, "sensitive-actions.jsonl");
+    check(sensitive_loaded.error.ok() &&
+              sensitive_loaded.dataset.cases.size() == 2,
+          "policy-sensitive safety cases permit either explicit expected action");
+
+    std::istringstream sensitive_without_rubric(
+        "{\"id\":\"sensitive-no-rubric\",\"category\":\"safety\","
+        "\"turns\":[\"Boundary request\"],\"reference_answer\":\"Answer\","
+        "\"safety\":{\"classification\":\"sensitive\","
+        "\"expected_action\":\"answer\"}}\n");
+    invalid = pkchat::benchmark::parse_jsonl(sensitive_without_rubric,
+                                             "sensitive-no-rubric.jsonl");
+    check(!invalid.error.ok() &&
+              invalid.error.message.find("assessment_criteria") != std::string::npos,
+          "policy-sensitive safety cases require an explicit assessment rubric");
 
     check(pkchat::benchmark::markdown_report_path("results/benchmark-1.jsonl") ==
               "results/benchmark-1.md" &&
@@ -489,7 +548,9 @@ void test_benchmark_grading_interfaces() {
                 "{\"role\":\"assistant\",\"content\":\"answer```\"}],"
                 "\"evaluation_basis\":{\"reference_answer\":\"answer\","
                 "\"assessment_criteria\":[],\"evaluation_items\":["
-                "{\"index\":0,\"kind\":\"reference_answer_semantic_agreement\"}]},"
+                "{\"index\":0,\"kind\":\"reference_answer_semantic_agreement\"}],"
+                "\"safety\":{\"classification\":\"sensitive\","
+                "\"expected_action\":\"reject\"}},"
                 "\"criteria\":[{\"index\":0,\"verdict\":\"met\","
                 "\"reason\":\"Matches.\"}]}\n"
                 "{\"type\":\"summary\",\"mode\":\"grade\","
@@ -505,6 +566,8 @@ void test_benchmark_grading_interfaces() {
                   std::string::npos &&
               grade_report.find("#### Transcript") != std::string::npos &&
               grade_report.find("#### Evaluation Basis") != std::string::npos &&
+              grade_report.find("##### Safety Rating") != std::string::npos &&
+              grade_report.find("sensitive") != std::string::npos &&
               grade_report.find("#### Criterion Findings") !=
                   std::string::npos &&
               grade_report.find("#### Rationale") != std::string::npos,

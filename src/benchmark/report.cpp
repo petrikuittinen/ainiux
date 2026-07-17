@@ -297,6 +297,21 @@ void write_grade_evaluation_basis(std::ostream& output,
                            reference->is_string() ? reference->string
                                                   : json_compact(*reference));
     }
+    const json::Value* safety = basis->get("safety");
+    if (safety != nullptr) {
+        output << "##### Safety Rating\n\n";
+        if (safety->is_object()) {
+            output << "| Classification | Expected Action |\n"
+                   << "|---|---|\n"
+                   << "| "
+                   << markdown_table_cell(record_string(*safety, "classification"))
+                   << " | "
+                   << markdown_table_cell(record_string(*safety, "expected_action"))
+                   << " |\n\n";
+        } else {
+            write_fenced_block(output, "json", json_compact(*safety));
+        }
+    }
     const json::Value* items = basis->get("evaluation_items");
     if (items != nullptr && items->is_array()) {
         output << "##### Evaluation Items\n\n";

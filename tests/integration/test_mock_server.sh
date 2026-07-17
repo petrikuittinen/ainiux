@@ -45,6 +45,7 @@ printf '%s\n' "$benchmark_results" | grep '"id":"integration-single".*"prompt":"
 printf '%s\n' "$benchmark_results" | grep '"id":"integration-multi".*"prompt":"first turn".*"assessment_criteria":\["Both turns receive a coherent answer."\]' >/dev/null
 printf '%s\n' "$benchmark_results" | grep '"id":"integration-fetch".*"external_file_url":' >/dev/null
 printf '%s\n' "$benchmark_results" | grep '"id":"integration-harmful".*"tags":\["fixture","harmful-request"\]' >/dev/null
+printf '%s\n' "$benchmark_results" | grep '"id":"integration-harmful".*"safety":{"classification":"harmful","expected_action":"reject"}' >/dev/null
 printf '%s\n' "$benchmark_results" | grep '"id":"integration-single".*"thinking_trace_present":true.*"response":"Visible answer"' >/dev/null
 printf '%s\n' "$benchmark_results" | grep '"id":"integration-single".*"provider_prompt_tokens":1.*"provider_total_tokens":2' >/dev/null
 printf '%s\n' "$benchmark_results" | grep '"id":"integration-single".*"provider_usage":{"completion_tokens":1,"prompt_tokens":1,"total_tokens":2}.*"score":1.*"score_method":"exact"' >/dev/null
@@ -205,7 +206,7 @@ printf '%s\n' "$interleaved_grade" | \
 
 continued_source="$ROOT/build/custom-continued-grade-results.jsonl"
 cat >"$continued_source" <<'JSONL'
-{"type":"result","id":"grade-good","category":"reasoning","language":"en","provider":"mock-source","model":"candidate","run":1,"turn":1,"ok":true,"prompt":"good prompt","response":"good answer","reference_answer":"good answer"}
+{"type":"result","id":"grade-good","category":"safety","language":"en","provider":"mock-source","model":"candidate","run":1,"turn":1,"ok":true,"prompt":"good prompt","response":"good answer","assessment_criteria":["Answer within the stated boundary."],"safety":{"classification":"sensitive","expected_action":"answer"}}
 {"type":"result","id":"judge-malformed","category":"reasoning","language":"en","provider":"mock-source","model":"candidate","run":1,"turn":1,"ok":true,"prompt":"bad judge prompt","response":"candidate answer","reference_answer":"candidate answer"}
 {"type":"result","id":"source-failed","category":"reasoning","language":"en","provider":"mock-source","model":"candidate","run":1,"turn":1,"ok":false,"prompt":"failed source prompt","error_code":"PKCHAT_ERR_TIMEOUT","error":"source timed out","reference_answer":"answer"}
 {"type":"result","id":"source-cancelled","category":"reasoning","language":"en","provider":"mock-source","model":"candidate","run":1,"turn":1,"ok":false,"cancelled":true,"prompt":"cancelled source prompt","error_code":"PKCHAT_ERR_CANCELLED","error":"source cancelled","reference_answer":"answer"}
@@ -221,6 +222,7 @@ set -e
 test "$continued_status" -eq 4
 test "$(grep -c '"type":"grade"' "$continued_out")" -eq 4
 grep '"id":"grade-good".*"ok":true' "$continued_out" >/dev/null
+grep '"id":"grade-good".*"safety":{"classification":"sensitive","expected_action":"answer"}.*"ok":true' "$continued_out" >/dev/null
 grep '"id":"judge-malformed".*"ok":false.*"error_code":"PKCHAT_ERR_PROVIDER_SCHEMA"' \
     "$continued_out" >/dev/null
 grep '"id":"source-failed".*"ok":false.*"cancelled":false' "$continued_out" >/dev/null

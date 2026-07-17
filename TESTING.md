@@ -53,7 +53,7 @@ Approximate size today: **900+** unit assertions, **170+** integration checks in
 
 - Chat Completions and Responses API against `openai_mock.py`
 - Streaming, JSON/NDJSON output, thinking-trace redaction
-- REPL, benchmark modes, configurable judge grading, URL fetch safety, attachments, images
+- REPL, benchmark modes, action-balanced safety ratings, configurable judge grading, URL fetch safety, attachments, images
 - TUI insert/attach/fetch driver
 - SQLite TUI workflows: `/new`, autosave/reload, `/list`, `/provider`, `/remove`, stale `last_thread_id`, corrupt database
 

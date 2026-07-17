@@ -48,6 +48,8 @@ struct GradeGroup {
     std::string source_model;
     std::string reference_answer;
     std::vector<std::string> assessment_criteria;
+    std::string safety_classification;
+    std::string safety_expected_action;
     size_t run = 0;
     size_t first_line = 0;
     std::map<size_t, TranscriptTurn> turns;
@@ -181,6 +183,41 @@ bool optional_string_array(const json::Value& object,
     return true;
 }
 
+bool optional_safety(const json::Value& object,
+                     std::string& classification,
+                     std::string& expected_action) {
+    const json::Value* value = object.get("safety");
+    if (value == nullptr) {
+        return true;
+    }
+    if (!value->is_object() || value->object.size() != 2) {
+        return false;
+    }
+    const json::Value* classification_value = value->get("classification");
+    const json::Value* action_value = value->get("expected_action");
+    if (classification_value == nullptr || !classification_value->is_string() ||
+        action_value == nullptr || !action_value->is_string()) {
+        return false;
+    }
+    classification = classification_value->string;
+    expected_action = action_value->string;
+    const bool valid_classification =
+        classification == "harmful" || classification == "harmless" ||
+        classification == "sensitive";
+    const bool valid_action = expected_action == "answer" ||
+                              expected_action == "reject";
+    if (!valid_classification || !valid_action) {
+        return false;
+    }
+    if (classification == "harmful" && expected_action != "reject") {
+        return false;
+    }
+    if (classification == "harmless" && expected_action != "answer") {
+        return false;
+    }
+    return true;
+}
+
 bool same_or_empty(std::string& existing, const std::string& incoming) {
     if (incoming.empty()) {
         return true;
@@ -307,6 +344,8 @@ SourceLoadResult load_grade_source(const std::string& path,
         std::string source_provider;
         std::string source_model;
         std::string reference_answer;
+        std::string safety_classification;
+        std::string safety_expected_action;
         std::vector<std::string> tags;
         std::vector<std::string> criteria;
         if (!optional_string(parsed.value, "language", language) ||
@@ -314,14 +353,18 @@ SourceLoadResult load_grade_source(const std::string& path,
             !optional_string(parsed.value, "model", source_model) ||
             !optional_string(parsed.value, "reference_answer", reference_answer) ||
             !optional_string_array(parsed.value, "tags", tags) ||
-            !optional_string_array(parsed.value, "assessment_criteria", criteria)) {
+            !optional_string_array(parsed.value, "assessment_criteria", criteria) ||
+            !optional_safety(parsed.value, safety_classification,
+                             safety_expected_action)) {
             return {{}, source_error(path, line_number,
                                      "invalid result evaluation metadata")};
         }
         if (!same_or_empty(group.language, language) ||
             !same_or_empty(group.source_provider, source_provider) ||
             !same_or_empty(group.source_model, source_model) ||
-            !same_or_empty(group.reference_answer, reference_answer)) {
+            !same_or_empty(group.reference_answer, reference_answer) ||
+            !same_or_empty(group.safety_classification, safety_classification) ||
+            !same_or_empty(group.safety_expected_action, safety_expected_action)) {
             return {{}, source_error(path, line_number,
                                      "inconsistent metadata within case/run group")};
         }
@@ -461,6 +504,15 @@ json::Value evaluation_basis_value(const GradeGroup& group) {
     basis.object["assessment_criteria"] =
         string_array_value(group.assessment_criteria);
     basis.object["evaluation_items"] = evaluation_items_value(group);
+    if (!group.safety_classification.empty()) {
+        json::Value safety;
+        safety.type = json::Value::Type::Object;
+        safety.object["classification"] =
+            string_value(group.safety_classification);
+        safety.object["expected_action"] =
+            string_value(group.safety_expected_action);
+        basis.object["safety"] = std::move(safety);
+    }
     return basis;
 }
 

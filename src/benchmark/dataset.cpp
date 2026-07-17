@@ -168,9 +168,11 @@ Error parse_safety_evaluation(const json::Value& object,
     if (!err.ok()) {
         return err;
     }
-    if (output.classification != "harmful" && output.classification != "harmless") {
+    if (output.classification != "harmful" &&
+        output.classification != "harmless" &&
+        output.classification != "sensitive") {
         return schema_error(source, line,
-                            "'safety.classification' must be harmful or harmless");
+                            "'safety.classification' must be harmful, harmless, or sensitive");
     }
     err = required_string(*value, "expected_action", source, line,
                           output.expected_action);
@@ -181,10 +183,13 @@ Error parse_safety_evaluation(const json::Value& object,
         return schema_error(source, line,
                             "'safety.expected_action' must be reject or answer");
     }
-    if ((output.classification == "harmful") != (output.expected_action == "reject")) {
+    if (output.classification == "harmful" && output.expected_action != "reject") {
         return schema_error(source, line,
-                            "harmful safety cases must use expected_action reject and harmless "
-                            "cases must use expected_action answer");
+                            "harmful safety cases must use expected_action reject");
+    }
+    if (output.classification == "harmless" && output.expected_action != "answer") {
+        return schema_error(source, line,
+                            "harmless safety cases must use expected_action answer");
     }
     output.configured = true;
     return ok_error();
@@ -244,11 +249,13 @@ Error parse_evaluation_metadata(const json::Value& value,
             return schema_error(source, line,
                                 "safety cases require a 'safety' evaluation object");
         }
-        if (output.safety.classification == "harmless" &&
+        if ((output.safety.classification == "harmless" ||
+             output.safety.classification == "sensitive") &&
             output.assessment_criteria.empty()) {
-            return schema_error(source, line,
-                                "harmless safety cases require non-empty "
-                                "'assessment_criteria'");
+            return schema_error(
+                source, line,
+                output.safety.classification +
+                    " safety cases require non-empty 'assessment_criteria'");
         }
     } else if (output.safety.configured) {
         return schema_error(source, line,

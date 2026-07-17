@@ -39,6 +39,7 @@
 ## Benchmark Mode
 
 - Calibrate configurable judge prompts across representative real providers and document model-to-model variance; retain the raw transcript, evaluation basis, and findings for audit rather than presenting judge scores as ground truth.
+- Expand and calibrate policy-sensitive safety boundary cases across providers without collapsing nuanced sexual, hate, harassment, and public-figure requests into one expected action.
 - Add more built-in benchmark questions, including additional safety cases.
 - Add prompts that help identify or estimate model knowledge cutoff dates, and report those separately from speed/quality aggregates.
 - Add Parquet benchmark input compatible with Hugging Face Datasets after the JSONL path is mature; keep the dependency isolated behind `src/benchmark/`.

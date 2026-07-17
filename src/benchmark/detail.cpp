@@ -37,21 +37,35 @@ void write_string_array(std::ostream& output, const std::vector<std::string>& va
 void write_result_tags(std::ostream& output, const Case& benchmark_case) {
     const bool harmful = benchmark_case.safety.configured &&
                          benchmark_case.safety.classification == "harmful";
-    const bool already_tagged =
+    const bool sensitive = benchmark_case.safety.configured &&
+                           benchmark_case.safety.classification == "sensitive";
+    const bool already_harmful_tagged =
         std::find(benchmark_case.tags.begin(), benchmark_case.tags.end(),
                   "harmful-request") != benchmark_case.tags.end();
+    const bool already_sensitive_tagged =
+        std::find(benchmark_case.tags.begin(), benchmark_case.tags.end(),
+                  "policy-sensitive") != benchmark_case.tags.end();
     output << "[";
+    bool wrote_tag = false;
     for (size_t index = 0; index < benchmark_case.tags.size(); ++index) {
-        if (index != 0) {
+        if (wrote_tag) {
             output << ",";
         }
         output << json::quote(benchmark_case.tags[index]);
+        wrote_tag = true;
     }
-    if (harmful && !already_tagged) {
-        if (!benchmark_case.tags.empty()) {
+    if (harmful && !already_harmful_tagged) {
+        if (wrote_tag) {
             output << ",";
         }
         output << json::quote("harmful-request");
+        wrote_tag = true;
+    }
+    if (sensitive && !already_sensitive_tagged) {
+        if (wrote_tag) {
+            output << ",";
+        }
+        output << json::quote("policy-sensitive");
     }
     output << "]";
 }
@@ -71,6 +85,12 @@ void write_result_case_metadata(std::ostream& output,
     if (!benchmark_case.assessment_criteria.empty()) {
         output << ",\"assessment_criteria\":";
         write_string_array(output, benchmark_case.assessment_criteria);
+    }
+    if (benchmark_case.safety.configured) {
+        output << ",\"safety\":{\"classification\":"
+               << json::quote(benchmark_case.safety.classification)
+               << ",\"expected_action\":"
+               << json::quote(benchmark_case.safety.expected_action) << "}";
     }
 }
 
