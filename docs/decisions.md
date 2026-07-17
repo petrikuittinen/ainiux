@@ -114,7 +114,9 @@ Managed-media expiration uses the media object's last successful thread-save tim
 
 ## Bounded Text Attachments
 
-Repeatable `--attach PATH` and interactive `/attach PATH` reuse the same case-insensitive document classifier and HTML/Markdown/plaintext conversion path as `--input`. Each local text attachment is read incrementally with a default 1 MiB `--max-input-bytes` cap, checked for binary NUL bytes, and validated as UTF-8 before its converted content becomes visible provider context. The raw read buffer is released after conversion; the transcript preserves the converted context that was actually sent.
+Repeatable `--attach PATH` and interactive `/attach PATH` reuse the same case-insensitive document classifier as `--input`. Each local text attachment is read incrementally with a default 1 MiB `--max-input-bytes` cap, checked for binary NUL bytes, and validated as UTF-8. Markdown is the canonical durable representation: plaintext is already valid Markdown, Markdown is retained, and HTML is converted exactly once in the attachment worker. The original path is provenance, not a replay dependency.
+
+SQLite schema v4 adds inline attachment content. Canonical Markdown no larger than `[media] max_size_to_store_to_db` (default 65536 UTF-8 bytes) remains directly in SQLite and is not subject to expiration. Larger Markdown is stored as a SHA-256-addressed `.md` object beside image media, leaving only its digest, size, source, and display metadata in SQLite. The threshold is byte-based because its purpose is to bound database and WAL growth; a character-based threshold could consume four times as much storage for valid UTF-8. Request workers verify and hydrate every retained text attachment before context policy preparation, so compaction accounts for the actual provider text and follow-up/restart requests reuse the one-time conversion.
 
 PDF and DOCX remain unsupported binary types. Bidirectional PDF/Markdown and DOCX/Markdown conversion is deferred rather than approximated by inserting binary data or adding an unreviewed document dependency.
 

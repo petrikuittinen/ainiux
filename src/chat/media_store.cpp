@@ -223,12 +223,20 @@ bool valid_digest(const std::string& digest) {
     return true;
 }
 
-std::string relative_path_for_digest(const std::string& digest) {
-    return "sha256/" + digest.substr(0, 2) + "/" + digest;
+std::string extension_for_mime_type(const std::string& mime_type) {
+    return mime_type == "text/markdown" ? ".md" : std::string();
 }
 
-std::string path_for_digest(const std::string& database_path, const std::string& digest) {
-    return media_root_for_database(database_path) + "/" + relative_path_for_digest(digest);
+std::string relative_path_for_digest(const std::string& digest, const std::string& mime_type) {
+    return "sha256/" + digest.substr(0, 2) + "/" + digest +
+           extension_for_mime_type(mime_type);
+}
+
+std::string path_for_digest(const std::string& database_path,
+                            const std::string& digest,
+                            const std::string& mime_type) {
+    return media_root_for_database(database_path) + "/" +
+           relative_path_for_digest(digest, mime_type);
 }
 
 Error write_all(int fd, const std::string& bytes, const std::string& path) {
@@ -277,7 +285,7 @@ Error read_file(const std::string& path,
         const size_t chunk = static_cast<size_t>(count);
         if (bytes.size() > max_bytes || chunk > max_bytes - bytes.size()) {
             return {ErrorCode::UnsupportedFeature,
-                    "managed media exceeds configured image limit: " + path};
+                    "managed attachment exceeds its configured size limit: " + path};
         }
         bytes.append(buffer.data(), chunk);
     }
@@ -375,7 +383,7 @@ Error store_media_bytes(const std::string& database_path,
         return {ErrorCode::UnsupportedFeature, "cannot persist an empty media attachment"};
     }
     const std::string digest = sha256_hex(bytes);
-    const std::string destination = path_for_digest(database_path, digest);
+    const std::string destination = path_for_digest(database_path, digest, mime_type);
     Error err = ensure_directory(dirname_of(destination));
     if (!err.ok()) {
         return err;
@@ -444,7 +452,7 @@ Error store_media_bytes(const std::string& database_path,
     }
 
     stored.sha256 = digest;
-    stored.storage_ref = relative_path_for_digest(digest);
+    stored.storage_ref = relative_path_for_digest(digest, mime_type);
     stored.mime_type = mime_type;
     stored.byte_size = static_cast<long long>(bytes.size());
     return ok_error();
@@ -476,7 +484,8 @@ Error hydrate_message_images(const std::string& database_path,
                         "message attachment has an invalid managed-media reference"};
             }
             std::string bytes;
-            Error err = read_file(path_for_digest(database_path, image.storage_ref),
+            Error err = read_file(path_for_digest(database_path, image.storage_ref,
+                                                  image.mime_type),
                                   max_image_bytes, bytes, cancellation);
             if (!err.ok()) {
                 const std::string label = image.display_name.empty() ? image.storage_ref : image.display_name;
@@ -499,15 +508,80 @@ Error hydrate_message_images(const std::string& database_path,
     return ok_error();
 }
 
+Error hydrate_message_text_attachments(const std::string& database_path,
+                                       std::vector<provider::Message>& messages,
+                                       size_t max_attachment_bytes,
+                                       runtime::CancellationToken cancellation) {
+    for (provider::Message& message : messages) {
+        if (message.text_attachments.empty()) {
+            continue;
+        }
+        std::string expanded = message.content;
+        if (!expanded.empty() && expanded.back() != '\n') {
+            expanded.push_back('\n');
+        }
+        expanded += "\n# Attached Markdown\n\n";
+        for (size_t index = 0; index < message.text_attachments.size(); ++index) {
+            provider::TextAttachment& attachment = message.text_attachments[index];
+            std::string markdown = attachment.markdown_content;
+            if (markdown.empty() && !attachment.storage_ref.empty()) {
+                if (!valid_digest(attachment.storage_ref)) {
+                    return {ErrorCode::ProviderSchema,
+                            "text attachment has an invalid managed-media reference"};
+                }
+                Error err = read_file(path_for_digest(database_path, attachment.storage_ref,
+                                                      "text/markdown"),
+                                      max_attachment_bytes, markdown, cancellation);
+                if (!err.ok()) {
+                    const std::string label = attachment.display_name.empty()
+                                                  ? attachment.storage_ref
+                                                  : attachment.display_name;
+                    return {err.code, err.message + "\nAttachment: " + label};
+                }
+                if (sha256_hex(markdown) != attachment.storage_ref) {
+                    return {ErrorCode::FileRead,
+                            "managed Markdown hash does not match its database record: " +
+                                attachment.storage_ref};
+                }
+            } else if (markdown.empty() && attachment.byte_size != 0) {
+                return {ErrorCode::ProviderSchema,
+                        "inline Markdown attachment content is missing: " +
+                            attachment.display_name};
+            }
+            if (attachment.byte_size > 0 &&
+                attachment.byte_size != static_cast<long long>(markdown.size())) {
+                return {ErrorCode::FileRead,
+                        "Markdown attachment size does not match its database record: " +
+                            attachment.display_name};
+            }
+            expanded += "---" + attachment.display_name + "---\n";
+            expanded += markdown;
+            if (!markdown.empty() && markdown.back() != '\n') {
+                expanded.push_back('\n');
+            }
+            if (index + 1 < message.text_attachments.size()) {
+                expanded.push_back('\n');
+            }
+            if (cancellation.cancelled()) {
+                return {ErrorCode::Cancelled, "Markdown attachment hydration cancelled"};
+            }
+        }
+        message.content = std::move(expanded);
+        message.text_attachments.clear();
+    }
+    return ok_error();
+}
+
 Error media_file_available(const std::string& database_path,
                            const std::string& sha256,
+                           const std::string& mime_type,
                            long long expected_size,
                            bool& available) {
     available = false;
     if (!valid_digest(sha256)) {
         return {ErrorCode::ProviderSchema, "invalid managed-media SHA-256 reference"};
     }
-    const std::string path = path_for_digest(database_path, sha256);
+    const std::string path = path_for_digest(database_path, sha256, mime_type);
     struct stat st {};
     if (stat(path.c_str(), &st) != 0) {
         if (errno == ENOENT) {
@@ -522,12 +596,13 @@ Error media_file_available(const std::string& database_path,
 
 Error remove_media_file(const std::string& database_path,
                         const std::string& sha256,
+                        const std::string& mime_type,
                         bool& removed) {
     removed = false;
     if (!valid_digest(sha256)) {
         return {ErrorCode::ProviderSchema, "invalid managed-media SHA-256 reference"};
     }
-    const std::string path = path_for_digest(database_path, sha256);
+    const std::string path = path_for_digest(database_path, sha256, mime_type);
     if (unlink(path.c_str()) != 0) {
         if (errno == ENOENT) {
             return ok_error();

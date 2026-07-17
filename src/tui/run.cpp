@@ -130,13 +130,8 @@ app::TuiRunResult run(provider::RequestContext context,
     size_t pending_attachment_delete = static_cast<size_t>(-1);
     size_t pending_thread_delete = static_cast<size_t>(-1);
     size_t attachments_committed_for_turn = 0;
-    // Full (with bodies) content for the most recent user turn that had text attachments.
-    // Used to send the real data to the model on initial send and immediate regenerates,
-    // without storing the bodies in the visible/persisted chat history.
-    std::string pending_full_model_content;
-    // For queued regeneration that was triggered while a job was active.
-    std::string queued_regen_full_content;
     std::vector<provider::ImageInput> queued_regen_images;
+    std::vector<provider::TextAttachment> queued_regen_text_attachments;
     ModelsRequestPurpose models_request_purpose = ModelsRequestPurpose::Preview;
     provider::ModelsResult cached_models;
     bool have_cached_models = false;
@@ -157,9 +152,8 @@ app::TuiRunResult run(provider::RequestContext context,
         chat_attachments.clear();
         attachment_picker_selected = 0;
         attachments_committed_for_turn = 0;
-        pending_full_model_content.clear();
-        queued_regen_full_content.clear();
         queued_regen_images.clear();
+        queued_regen_text_attachments.clear();
         history_scroll = 0;
         const std::string status_label =
             session.read_only
@@ -188,9 +182,8 @@ app::TuiRunResult run(provider::RequestContext context,
         chat_attachments.clear();
         attachment_picker_selected = 0;
         attachments_committed_for_turn = 0;
-        pending_full_model_content.clear();
-        queued_regen_full_content.clear();
         queued_regen_images.clear();
+        queued_regen_text_attachments.clear();
         app::apply_system_prompt(session, context.options.system);
         history_scroll = 0;
     };
@@ -518,46 +511,38 @@ app::TuiRunResult run(provider::RequestContext context,
         std::vector<provider::Message> request_messages = session.messages;
         request_messages.pop_back();
 
-        // If this turn had text attachments, the history message contains only the
-        // filenames (to keep chat history readable). Patch the *copy* we send to the
-        // model with the actual full contents (including file data after the # marker).
-        if (!pending_full_model_content.empty() &&
-            !request_messages.empty() &&
-            request_messages.back().role == "user") {
-            request_messages.back().content = pending_full_model_content;
-        }
-
-        ainiux::context::PreparedMessages prepared = ainiux::context::prepare(
-            request_messages,
-            context.options.context_policy,
-            context.options.max_context_bytes > 0
-                ? static_cast<size_t>(context.options.max_context_bytes)
-                : 0U);
-        if (!prepared.error.ok()) {
-            rollback_pending_turn();
-            active_job = ActiveJob::None;
-            status = detail::error_line(prepared.error);
-            inflight_image_count = 0;
-            attachments_committed_for_turn = 0;
-            pending_full_model_content.clear();
-            return;
-        }
         provider::RequestContext job_context = context;
         const std::string media_database_path = sqlite_available ? sqlite_path : std::string();
         const size_t max_image_bytes = context.options.max_image_bytes > 0
                                            ? static_cast<size_t>(context.options.max_image_bytes)
                                            : 0U;
-        model_job.start([job_context, request_messages = std::move(prepared.messages),
-                         media_database_path, max_image_bytes,
-                         compaction = std::move(prepared.event), compacted = prepared.compacted,
+        const size_t max_attachment_bytes = context.options.max_input_bytes > 0
+                                                ? static_cast<size_t>(context.options.max_input_bytes)
+                                                : 0U;
+        model_job.start([job_context, request_messages = std::move(request_messages),
+                         media_database_path, max_image_bytes, max_attachment_bytes,
                          &events](runtime::CancellationToken token) mutable {
             provider::ChatResult chat_result;
-            Error send_error = chat::hydrate_message_images(
-                media_database_path, request_messages, max_image_bytes, token);
+            Error send_error = chat::hydrate_message_text_attachments(
+                media_database_path, request_messages, max_attachment_bytes, token);
+            ainiux::context::PreparedMessages prepared;
+            if (send_error.ok()) {
+                prepared = ainiux::context::prepare(
+                    request_messages,
+                    job_context.options.context_policy,
+                    job_context.options.max_context_bytes > 0
+                        ? static_cast<size_t>(job_context.options.max_context_bytes)
+                        : 0U);
+                send_error = prepared.error;
+            }
+            if (send_error.ok()) {
+                send_error = chat::hydrate_message_images(
+                    media_database_path, prepared.messages, max_image_bytes, token);
+            }
             if (send_error.ok()) {
                 send_error = provider::send_chat_messages(
-                job_context,
-                request_messages,
+                    job_context,
+                    prepared.messages,
                 [&](const std::string& delta) -> Error {
                     TuiEvent event;
                     event.type = TuiEventType::Delta;
@@ -575,8 +560,8 @@ app::TuiRunResult run(provider::RequestContext context,
             if (send_error.ok()) {
                 event.type = TuiEventType::Done;
                 event.chat = std::move(chat_result);
-                event.compaction = std::move(compaction);
-                event.compacted = compacted;
+                event.compaction = std::move(prepared.event);
+                event.compacted = prepared.compacted;
             } else {
                 event.type = TuiEventType::Error;
                 event.error = send_error;
@@ -587,8 +572,8 @@ app::TuiRunResult run(provider::RequestContext context,
     };
 
     auto start_turn_with_payload = [&](const std::string& history_content,
-                                       const std::string& full_model_content,
                                        const std::vector<provider::ImageInput>& images,
+                                       const std::vector<provider::TextAttachment>& text_attachments,
                                        size_t pending_image_count) {
         if (session.read_only) {
             status = "Thread is read-only: " + session.read_only_reason;
@@ -601,20 +586,23 @@ app::TuiRunResult run(provider::RequestContext context,
         pending_user = session.messages.size();
         pending_user_added_for_job = true;
         inflight_image_count = pending_image_count;
-        session.messages.push_back({"user", history_content, images});
-        pending_full_model_content = full_model_content;
+        session.messages.push_back({"user", history_content, images, text_attachments});
         start_assistant_response();
     };
 
-    auto start_turn_with_full = [&](const std::string& history_content,
-                                    const std::string& full_model_content) {
-        start_turn_with_payload(history_content, full_model_content,
-                                pending_images, pending_images.size());
+    auto start_turn_with_pending_attachments = [&](const std::string& history_content) {
+        std::vector<provider::TextAttachment> text_attachments;
+        text_attachments.reserve(chat_attachments.size());
+        for (const ChatAttachment& attachment : chat_attachments) {
+            text_attachments.push_back(attachment.attachment);
+        }
+        start_turn_with_payload(history_content, pending_images, text_attachments,
+                                pending_images.size());
     };
 
     // One-arg version for call sites and callbacks that don't involve attachment bodies.
     auto start_turn = [&](const std::string& history_content) {
-        start_turn_with_full(history_content, {});
+        start_turn_with_payload(history_content, {}, {}, 0);
     };
 
     auto start_response_to_unanswered_user = [&]() {
@@ -631,8 +619,6 @@ app::TuiRunResult run(provider::RequestContext context,
         pending_user_added_for_job = false;
         inflight_image_count = 0;
         attachments_committed_for_turn = 0;
-        pending_full_model_content.clear();
-        queued_regen_full_content.clear();
         start_assistant_response();
     };
 
@@ -640,11 +626,14 @@ app::TuiRunResult run(provider::RequestContext context,
         regenerate_after_cancel = false;
         queued_regeneration_prompt.clear();
         queued_regen_images.clear();
+        queued_regen_text_attachments.clear();
     };
 
     auto start_queued_regeneration = [&](size_t erase_from) {
         const std::string prompt = queued_regeneration_prompt;
         const std::vector<provider::ImageInput> images = std::move(queued_regen_images);
+        const std::vector<provider::TextAttachment> text_attachments =
+            std::move(queued_regen_text_attachments);
         clear_queued_regeneration();
         if (app::detail::trim_ascii(prompt).empty()) {
             status = "No previous user prompt to regenerate";
@@ -655,8 +644,7 @@ app::TuiRunResult run(provider::RequestContext context,
         }
         attachments_committed_for_turn = 0;
         // Use stashed full content (if any) for the model; history will get the (short) prompt.
-        start_turn_with_payload(prompt, queued_regen_full_content, images, 0);
-        queued_regen_full_content.clear();
+        start_turn_with_payload(prompt, images, text_attachments, 0);
         status = "Regenerating...";
     };
 
@@ -785,10 +773,9 @@ app::TuiRunResult run(provider::RequestContext context,
             queued_regeneration_prompt = prompt;
             if (pending_user != static_cast<size_t>(-1) && pending_user < session.messages.size()) {
                 queued_regen_images = session.messages[pending_user].images;
+                queued_regen_text_attachments =
+                    session.messages[pending_user].text_attachments;
             }
-            // Stash the full (bodies) version for the queued regen so the model receives data,
-            // while the history will re-use the short "prompt" (names only).
-            queued_regen_full_content = pending_full_model_content;
             model_job.cancel();
             status = "Cancelling before regenerate...";
             return;
@@ -803,10 +790,12 @@ app::TuiRunResult run(provider::RequestContext context,
             plan.erase_from < session.messages.size()
                 ? session.messages[plan.erase_from].images
                 : std::vector<provider::ImageInput>();
+        const std::vector<provider::TextAttachment> text_attachments =
+            plan.erase_from < session.messages.size()
+                ? session.messages[plan.erase_from].text_attachments
+                : std::vector<provider::TextAttachment>();
         session.messages.erase(session.messages.begin() + static_cast<long>(plan.erase_from), session.messages.end());
-        // Pass any stashed full content (for the turn being regenerated) so the model gets the bodies.
-        // The first arg is the short history content (names only) that will be stored.
-        start_turn_with_payload(plan.prompt, pending_full_model_content, images, 0);
+        start_turn_with_payload(plan.prompt, images, text_attachments, 0);
         status = "Regenerating...";
     };
 
@@ -909,8 +898,7 @@ app::TuiRunResult run(provider::RequestContext context,
                                       pending_images,
                                       inflight_image_count,
                                       chat_attachments,
-                                      attachments_committed_for_turn,
-                                      pending_full_model_content};
+                                      attachments_committed_for_turn};
 
     auto handle_command = [&](const std::string& text) {
         handle_tui_command(text, command_context, command_handlers);
@@ -1067,37 +1055,13 @@ app::TuiRunResult run(provider::RequestContext context,
             return;
         }
 
-        // User is sending a fresh prompt (not a regeneration). Any stashed full content
-        // for a previous turn is no longer needed (user has moved on to a new prompt).
-        pending_full_model_content.clear();
-        queued_regen_full_content.clear();
-
         const std::string typed_prompt = raw;
 
         std::string display_content = typed_prompt;
-        std::string full_model_content;
 
         if (!chat_attachments.empty()) {
-            // Build the FULL content for the MODEL (includes actual file data after #).
-            // This must never be stored in session.messages (to avoid flooding history).
-            full_model_content = typed_prompt;
-            if (!full_model_content.empty() && full_model_content.back() != '\n') {
-                full_model_content += '\n';
-            }
-            full_model_content += "#\n\n";
-            for (size_t i = 0; i < chat_attachments.size(); ++i) {
-                const auto& att = chat_attachments[i];
-                full_model_content += "---" + att.source + "---\n";
-                full_model_content += att.content;
-                if (!att.content.empty() && att.content.back() != '\n') {
-                    full_model_content += '\n';
-                }
-                if (i + 1 < chat_attachments.size()) {
-                    full_model_content += '\n';  // one line break between attached files
-                }
-            }
-
-            // Build the DISPLAY content for HISTORY: only the typed text + filenames (no bodies).
+            // History stays compact. Durable canonical Markdown is attached to the
+            // message and materialized only in the cancellable request worker.
             if (!display_content.empty()) {
                 display_content += "\n\n";
             }
@@ -1107,14 +1071,10 @@ app::TuiRunResult run(provider::RequestContext context,
             }
 
             attachments_committed_for_turn = chat_attachments.size();
-            // The bodies stay in chat_attachments (and the full_model_content copy above)
-            // until after the model responds and the user starts a new prompt.
         }
 
-        pending_full_model_content = full_model_content;
-
         input = new_input_editor();
-        start_turn_with_full(display_content, full_model_content);
+        start_turn_with_pending_attachments(display_content);
     };
 
     if (!context.profile.offline && !context.options.has_context_tokens &&
@@ -1254,7 +1214,6 @@ app::TuiRunResult run(provider::RequestContext context,
                             // Error before/during; the user message is rolled back.
                             // Do not consume attachments; leave them for the user to re-send.
                             attachments_committed_for_turn = 0;
-                            pending_full_model_content.clear();
                             rollback_pending_turn();
                             status = detail::error_line(event.error);
                         }
@@ -1339,9 +1298,9 @@ app::TuiRunResult run(provider::RequestContext context,
                         pending_images.push_back(std::move(event.image));
                         status = "Attached image for next prompt: " + event.text + " (" +
                                  std::to_string(pending_images.size()) + " pending)";
-                    } else if (event.error.ok() && !event.attached_content.empty()) {
-                        // New chat attachment list behavior
-                        chat_attachments.push_back({event.attached_source, std::move(event.attached_content)});
+                    } else if (event.error.ok() && event.text_attachment_ready) {
+                        chat_attachments.push_back(
+                            {event.attached_source, std::move(event.text_attachment)});
                         history_scroll = 0;
                         status = "Attached " + event.text + " (" +
                                  std::to_string(chat_attachments.size()) + " attachment" +

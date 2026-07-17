@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstddef>
 #include <string>
 #include <vector>
 
@@ -61,6 +62,11 @@ class SqliteStore {
                        const std::string& display_name,
                        const std::string& source_ref,
                        provider::ImageInput& image);
+    Error import_text_attachment(const std::string& markdown,
+                                 size_t max_size_to_store_to_db,
+                                 const std::string& display_name,
+                                 const std::string& source_ref,
+                                 provider::TextAttachment& attachment);
     Error cleanup_media(int expiration_days,
                         long long protected_thread_id,
                         const std::string& reason,

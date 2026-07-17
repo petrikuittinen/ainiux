@@ -131,6 +131,7 @@ struct Options {
     bool max_web_search_results_explicit = false;
     long max_input_bytes = 1048576;
     long max_image_bytes = 20971520;
+    long media_max_size_to_store_to_db = 65536;
     int media_expiration_days = 7;
     int media_auto_expiration_days = 30;
     long max_context_bytes = 0;

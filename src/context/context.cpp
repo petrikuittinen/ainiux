@@ -9,7 +9,17 @@ namespace ainiux::context {
 namespace {
 
 size_t message_bytes(const provider::Message& message) {
-    return message.role.size() + message.content.size() + 16;
+    size_t bytes = message.role.size() + message.content.size() + 16;
+    for (const provider::TextAttachment& attachment : message.text_attachments) {
+        const size_t attachment_bytes = attachment.byte_size > 0
+                                            ? static_cast<size_t>(attachment.byte_size)
+                                            : attachment.markdown_content.size();
+        if (attachment_bytes > std::numeric_limits<size_t>::max() - bytes) {
+            return std::numeric_limits<size_t>::max();
+        }
+        bytes += attachment_bytes;
+    }
+    return bytes;
 }
 
 long long saturating_add(long long left, long long right) {
@@ -117,6 +127,14 @@ long long estimated_text_tokens(const std::vector<provider::Message>& messages) 
     for (const provider::Message& message : messages) {
         total = saturating_add(total, 4);
         total = saturating_add(total, estimated_content_tokens(message.content));
+        for (const provider::TextAttachment& attachment : message.text_attachments) {
+            if (!attachment.markdown_content.empty()) {
+                total = saturating_add(total,
+                                       estimated_content_tokens(attachment.markdown_content));
+            } else if (attachment.byte_size > 0) {
+                total = saturating_add(total, (attachment.byte_size + 3) / 4);
+            }
+        }
     }
     return total;
 }

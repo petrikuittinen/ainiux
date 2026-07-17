@@ -458,6 +458,98 @@ def scenario_media_restart(binary, base, model, home_dir):
     finally:
         conn.close()
 
+
+def scenario_markdown_restart(binary, base, model, home_dir):
+    markdown_home = home_dir + "-markdown-restart"
+    shutil.rmtree(markdown_home, ignore_errors=True)
+    os.makedirs(markdown_home, exist_ok=True)
+    config_dir = os.path.join(markdown_home, ".config", "ainiux")
+    os.makedirs(config_dir, exist_ok=True)
+    with open(os.path.join(config_dir, "config.conf"), "w", encoding="utf-8") as config:
+        config.write(
+            "config_version = 1\n"
+            "[media]\n"
+            "max_size_to_store_to_db = 64\n"
+            "auto_expiration_days = 0\n"
+        )
+    html_path = os.path.join(markdown_home, "large.html")
+    small_path = os.path.join(markdown_home, "small.md")
+    with open(html_path, "w", encoding="utf-8") as attachment:
+        attachment.write(
+            "<html><body><h1>Persistent HTML heading</h1><p>" +
+            ("converted-once " * 12) + "</p></body></html>"
+        )
+    with open(small_path, "w", encoding="utf-8") as attachment:
+        attachment.write("small-native-marker\n")
+
+    transcript = run_tui(
+        binary,
+        base,
+        model,
+        markdown_home,
+        [
+            (f"/attach {html_path}\r", 0.8),
+            (f"/attach {small_path}\r", 0.8),
+            ("markdown-seed\r", 1.2),
+            ("expect-restored-markdown\r", 1.4),
+            ("/quit\r", 0.5),
+        ],
+    )
+    if b"AINIUX_ERR_HTTP_STATUS" in transcript:
+        raise RuntimeError("same-process Markdown follow-up lost attachment context")
+
+    path = db_path(markdown_home)
+    conn = query_db(path)
+    try:
+        threads = active_threads(conn)
+        if len(threads) != 1:
+            raise RuntimeError(f"expected one Markdown thread, found {len(threads)}")
+        thread_id = threads[0]["id"]
+        attachments = conn.execute(
+            "SELECT display_name, inline_content, object_sha256 FROM attachments "
+            "WHERE thread_id = ? AND kind = 'markdown' ORDER BY ordinal, id",
+            (thread_id,),
+        ).fetchall()
+        if len(attachments) != 2:
+            raise RuntimeError(f"expected two Markdown attachments, found {len(attachments)}")
+        inline = next((row for row in attachments if row["display_name"] == small_path), None)
+        managed = next((row for row in attachments if row["display_name"] == html_path), None)
+        if inline is None or inline["inline_content"] != "small-native-marker\n" or inline["object_sha256"]:
+            raise RuntimeError("small Markdown attachment was not stored inline")
+        if managed is None or managed["inline_content"] or not managed["object_sha256"]:
+            raise RuntimeError("large converted HTML attachment was not stored as managed Markdown")
+        digest = managed["object_sha256"]
+        managed_path = os.path.join(
+            markdown_home, ".ainiux", "media", "sha256", digest[:2], digest + ".md"
+        )
+        if not os.path.isfile(managed_path):
+            raise RuntimeError("expected a managed .md attachment object")
+        with open(managed_path, "r", encoding="utf-8") as attachment:
+            converted = attachment.read()
+        if "Persistent HTML heading" not in converted or "<h1>" in converted:
+            raise RuntimeError("managed HTML attachment was not converted once to Markdown")
+    finally:
+        conn.close()
+
+    # Changing the source after import must not affect durable replay.
+    with open(html_path, "w", encoding="utf-8") as attachment:
+        attachment.write("<h1>CHANGED SOURCE MUST NOT BE USED</h1>")
+    transcript = run_tui(
+        binary,
+        base,
+        model,
+        markdown_home,
+        [
+            ("/list\r", 0.6),
+            ("\r", 1.0),
+            ("expect-restored-markdown\r", 1.5),
+            ("/quit\r", 0.5),
+        ],
+    )
+    if b"AINIUX_ERR_HTTP_STATUS" in transcript:
+        raise RuntimeError("restored Markdown thread failed durable replay validation")
+
+
 def scenario_corrupt_database(binary, base, model, home_dir):
     path = db_path(home_dir)
     os.makedirs(os.path.dirname(path), exist_ok=True)
@@ -502,6 +594,7 @@ def main():
 
     scenarios = {
         "media-restart": scenario_media_restart,
+        "markdown-restart": scenario_markdown_restart,
         "seed-alpha": scenario_seed_alpha,
         "fresh-start": scenario_fresh_start,
         "beta-list-load": scenario_beta_and_list_load,

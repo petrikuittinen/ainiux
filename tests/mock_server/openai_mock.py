@@ -133,6 +133,24 @@ class Handler(BaseHTTPRequestHandler):
                     count += 1
         return count
 
+    def _chat_text(self, request):
+        chunks = []
+        for message in request.get("messages", []):
+            if not isinstance(message, dict):
+                continue
+            content = message.get("content", "")
+            if isinstance(content, str):
+                chunks.append(content)
+                continue
+            if not isinstance(content, list):
+                continue
+            for part in content:
+                if isinstance(part, dict) and part.get("type") == "text":
+                    text = part.get("text", "")
+                    if isinstance(text, str):
+                        chunks.append(text)
+        return "\n".join(chunks)
+
     def _fail_validation(self, message):
         self._send(400, json.dumps({"error": {"message": message}}))
         return False
@@ -165,6 +183,16 @@ class Handler(BaseHTTPRequestHandler):
             )
         if last == "expect-restored-image" and self._chat_image_count(request) < 1:
             return self._fail_validation("restored chat: expected a historical image")
+        if last == "expect-restored-markdown":
+            text = self._chat_text(request)
+            if "Persistent HTML heading" not in text or "small-native-marker" not in text:
+                return self._fail_validation(
+                    "restored chat: expected historical inline and managed Markdown"
+                )
+            if "<h1>" in text:
+                return self._fail_validation(
+                    "restored chat: HTML attachment was not converted to Markdown"
+                )
         if last == "expect-anthropic-thinking":
             if request.get("thinking") != {"type": "enabled", "budget_tokens": 2048}:
                 return self._fail_validation("anthropic: expected thinking enabled with budget_tokens=2048")

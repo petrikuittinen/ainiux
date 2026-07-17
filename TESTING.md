@@ -91,6 +91,7 @@ Write attempts to paths containing `mock-enospc` fail with `ENOSPC`. Optional `A
 ### `tests/integration/tui_sqlite_driver.py`
 
 PTY driver for TUI commands. Uses an isolated `HOME` so the database is created at `$HOME/.ainiux/ainiux.db` and verified with Python `sqlite3`.
+It covers managed-image restart/expiration and canonical Markdown attachment replay: small inline Markdown, one-time HTML conversion to file-backed `.md`, same-process follow-ups, source changes after import, and restored-thread requests.
 
 ## Known gaps
 

@@ -74,6 +74,17 @@ void test_context_policies_preserve_full_messages() {
               ainiux::context::estimated_text_tokens(visible_only),
           "context token estimate includes assistant thinking traces");
 
+    ainiux::provider::TextAttachment attachment;
+    attachment.markdown_content = std::string(128, 'm');
+    attachment.byte_size = 128;
+    const std::vector<ainiux::provider::Message> with_attachment = {
+        {"user", "question", {}, {attachment}}};
+    check(ainiux::context::estimated_text_bytes(with_attachment) >
+              ainiux::context::estimated_text_bytes({{"user", "question"}}) &&
+              ainiux::context::estimated_text_tokens(with_attachment) >
+                  ainiux::context::estimated_text_tokens({{"user", "question"}}),
+          "context estimates include durable Markdown attachments before hydration");
+
     const std::vector<ainiux::provider::Message> unicode = {
         {"user", "你好 مرحبا"}};
     check(ainiux::context::estimated_text_tokens(unicode) > 0,

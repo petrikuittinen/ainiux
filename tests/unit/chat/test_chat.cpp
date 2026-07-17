@@ -296,6 +296,153 @@ void test_chat_managed_media_cleanup_and_read_only_threads() {
           "a manually missing media file locks its thread without hiding the transcript");
 }
 
+void test_chat_markdown_attachment_storage_tiers() {
+    const std::string directory = "build/unit-markdown-attachments";
+    const std::string path = directory + "/ainiux.db";
+    std::filesystem::remove_all(directory);
+    std::filesystem::create_directories(directory);
+
+    ainiux::chat::SqliteStore store;
+    ainiux::Error err = store.open(path);
+    check(err.ok(), "Markdown attachment SQLite store opens");
+
+    ainiux::provider::RequestContext context;
+    context.profile.name = "lm_studio";
+    context.base_url = "http://localhost:1234/v1";
+    context.options.model = "local-model";
+
+    ainiux::provider::TextAttachment small;
+    err = store.import_text_attachment("# Small\n\ninline", 64, "small.md",
+                                       "/tmp/small.md", small);
+    check(err.ok() && small.storage_ref.empty() &&
+              small.markdown_content == "# Small\n\ninline",
+          "small canonical Markdown remains inline");
+    ainiux::chat::Session inline_session = ainiux::chat::new_session(context);
+    inline_session.messages.push_back({"user", "Use the small file", {}, {small}});
+    inline_session.messages.push_back({"assistant", "ok"});
+    err = store.save_session(inline_session);
+    check(err.ok(), "thread with inline Markdown saves");
+
+    const std::string large_markdown = "# Large\n\n" + std::string(96, 'x');
+    ainiux::provider::TextAttachment large;
+    err = store.import_text_attachment(large_markdown, 32, "large.html",
+                                       "/tmp/large.html", large);
+    check(err.ok() && large.markdown_content.empty() && large.storage_ref.size() == 64,
+          "large canonical Markdown uses a managed reference");
+    const std::string large_path = ainiux::chat::media_root_for_database(path) +
+                                   "/sha256/" + large.storage_ref.substr(0, 2) + "/" +
+                                   large.storage_ref + ".md";
+    check(std::filesystem::is_regular_file(large_path),
+          "large canonical Markdown is stored as a .md media object");
+    ainiux::chat::Session managed_session = ainiux::chat::new_session(context);
+    managed_session.messages.push_back({"user", "Use the large file", {}, {large}});
+    managed_session.messages.push_back({"assistant", "ok"});
+    err = store.save_session(managed_session);
+    check(err.ok(), "thread with managed Markdown saves");
+
+    ainiux::chat::Session loaded_inline;
+    err = store.load_session(inline_session.thread_id, loaded_inline);
+    check(err.ok() && loaded_inline.messages[0].text_attachments.size() == 1 &&
+              loaded_inline.messages[0].text_attachments[0].markdown_content ==
+                  small.markdown_content,
+          "SQLite restores inline canonical Markdown");
+    err = ainiux::chat::hydrate_message_text_attachments(path, loaded_inline.messages, 1024);
+    check(err.ok() && loaded_inline.messages[0].content.find("# Small") != std::string::npos &&
+              loaded_inline.messages[0].text_attachments.empty(),
+          "request hydration expands inline Markdown once");
+
+    ainiux::chat::Session loaded_managed;
+    err = store.load_session(managed_session.thread_id, loaded_managed);
+    check(err.ok() && loaded_managed.messages[0].text_attachments.size() == 1 &&
+              loaded_managed.messages[0].text_attachments[0].storage_ref == large.storage_ref,
+          "SQLite restores managed Markdown references");
+    err = ainiux::chat::hydrate_message_text_attachments(path, loaded_managed.messages, 1024);
+    check(err.ok() && loaded_managed.messages[0].content.find(large_markdown) != std::string::npos,
+          "request hydration verifies and expands managed Markdown");
+
+    sqlite3* raw_db = nullptr;
+    int rc = sqlite3_open(path.c_str(), &raw_db);
+    check(rc == SQLITE_OK && raw_db != nullptr, "Markdown database opens for aging");
+    if (raw_db != nullptr) {
+        char* message = nullptr;
+        rc = sqlite3_exec(raw_db,
+                          "UPDATE media_objects SET last_used_at = '2020-01-01T00:00:00Z';",
+                          nullptr, nullptr, &message);
+        check(rc == SQLITE_OK, message == nullptr ? "managed Markdown can be aged" : message);
+        sqlite3_free(message);
+        sqlite3_close(raw_db);
+    }
+    ainiux::chat::MediaCleanupResult cleanup;
+    err = store.cleanup_media(7, 0, "Markdown expired", cleanup);
+    check(err.ok() && cleanup.objects_expired == 1 && cleanup.threads_locked == 1 &&
+              !std::filesystem::exists(large_path),
+          "cleanup expires only file-backed Markdown and locks its thread");
+    loaded_inline = {};
+    err = store.load_session(inline_session.thread_id, loaded_inline);
+    check(err.ok() && !loaded_inline.read_only,
+          "inline Markdown never expires with managed media cleanup");
+}
+
+void test_chat_sqlite_v4_markdown_migration() {
+    const std::string path = "build/unit-markdown-migration.db";
+    std::filesystem::remove(path);
+    std::filesystem::remove(path + "-wal");
+    std::filesystem::remove(path + "-shm");
+    {
+        ainiux::chat::SqliteStore store;
+        ainiux::Error err = store.open(path);
+        check(err.ok(), "v4 migration fixture database opens");
+    }
+    sqlite3* raw_db = nullptr;
+    int rc = sqlite3_open(path.c_str(), &raw_db);
+    check(rc == SQLITE_OK && raw_db != nullptr, "v4 migration fixture reopens raw");
+    if (raw_db != nullptr) {
+        char* message = nullptr;
+        rc = sqlite3_exec(raw_db, R"SQL(
+ALTER TABLE attachments RENAME TO attachments_v4;
+CREATE TABLE attachments (
+    id INTEGER PRIMARY KEY,
+    thread_id INTEGER NOT NULL REFERENCES threads(id) ON DELETE CASCADE,
+    message_id INTEGER REFERENCES messages(id) ON DELETE CASCADE,
+    ordinal INTEGER NOT NULL DEFAULT 0,
+    kind TEXT NOT NULL,
+    mime_type TEXT NOT NULL DEFAULT '',
+    display_name TEXT NOT NULL DEFAULT '',
+    metadata_json TEXT NOT NULL DEFAULT '{}',
+    storage_ref TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL,
+    object_sha256 TEXT REFERENCES media_objects(sha256),
+    source_ref TEXT NOT NULL DEFAULT '',
+    byte_size INTEGER NOT NULL DEFAULT 0
+);
+DROP TABLE attachments_v4;
+DELETE FROM schema_migrations WHERE version = 4;
+)SQL", nullptr, nullptr, &message);
+        check(rc == SQLITE_OK,
+              message == nullptr ? "v3 attachment schema fixture is created" : message);
+        sqlite3_free(message);
+        sqlite3_close(raw_db);
+    }
+    ainiux::chat::SqliteStore migrated;
+    ainiux::Error err = migrated.open(path);
+    check(err.ok(), "v3 database migrates to v4");
+    raw_db = nullptr;
+    rc = sqlite3_open(path.c_str(), &raw_db);
+    check(rc == SQLITE_OK && raw_db != nullptr, "migrated database opens for assertion");
+    if (raw_db != nullptr) {
+        sqlite3_stmt* statement = nullptr;
+        rc = sqlite3_prepare_v2(
+            raw_db,
+            "SELECT COUNT(*) FROM pragma_table_info('attachments') WHERE name = 'inline_content';",
+            -1, &statement, nullptr);
+        check(rc == SQLITE_OK && sqlite3_step(statement) == SQLITE_ROW &&
+                  sqlite3_column_int(statement, 0) == 1,
+              "v4 migration adds inline Markdown content exactly once");
+        sqlite3_finalize(statement);
+        sqlite3_close(raw_db);
+    }
+}
+
 void test_chat_sqlite_missing_thread_and_corrupt_database() {
     const std::string path = "build/unit-corrupt-ainiux.db";
     std::filesystem::remove(path);
@@ -628,6 +775,8 @@ void run_all() {
     test_chat_session_has_chat_messages();
     test_chat_sqlite_store_round_trip_and_listing();
     test_chat_managed_media_cleanup_and_read_only_threads();
+    test_chat_markdown_attachment_storage_tiers();
+    test_chat_sqlite_v4_markdown_migration();
     test_chat_sqlite_thread_name_from_first_user_prompt();
     test_chat_sqlite_remove_empty_threads();
     test_chat_sqlite_missing_thread_and_corrupt_database();

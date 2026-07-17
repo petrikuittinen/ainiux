@@ -218,7 +218,7 @@ void TuiFileJobs::start_attach(const std::string& path) {
     }
     const bool is_url = input::is_http_url(path);
     if (is_url) {
-        // URLs for attach: fetch as text/HTML, convert if appropriate, store as chat attachment content
+        // URL text is converted once to the canonical Markdown replay format.
         fetch::Options options;
         options.connect_timeout_seconds = context.options.connect_timeout_seconds;
         options.timeout_seconds = context.options.timeout_seconds > 0 ? context.options.timeout_seconds : 30;
@@ -227,10 +227,13 @@ void TuiFileJobs::start_attach(const std::string& path) {
         options.insecure_tls = context.options.insecure_tls;
         options.trace_http = context.options.trace_http;
         options.allow_private = context.options.allow_private_url_fetch;
-        const bool auto_convert = context.options.auto_convert_html_to_markdown;
         const long text_limit = context.options.max_input_bytes;
+        const long inline_limit = context.options.media_max_size_to_store_to_db;
+        const bool persist_attachment = sqlite_available;
+        const std::string media_database_path = sqlite_path;
         runtime::EventQueue<TuiEvent>& event_queue = events;
-        file_job.start([path, options, auto_convert, text_limit, &event_queue](
+        file_job.start([path, options, text_limit, inline_limit, persist_attachment,
+                        media_database_path, &event_queue](
                            runtime::CancellationToken token) mutable {
             TuiEvent event;
             event.type = TuiEventType::AttachDone;
@@ -243,19 +246,37 @@ void TuiFileJobs::start_attach(const std::string& path) {
                     event.error = {ErrorCode::UnsupportedFeature,
                                    "attachment from URL exceeds --max-input-bytes limit"};
                 } else {
-                    if (auto_convert) {
-                        try {
-                            body = html::convert(body, html::OutputFormat::Markdown);
-                        } catch (const std::bad_alloc&) {
-                            event.error = {ErrorCode::Internal,
-                                           "not enough memory to convert HTML from URL: " + path};
-                        } catch (const std::length_error&) {
-                            event.error = {ErrorCode::UnsupportedFeature,
-                                           "converted HTML is too large to attach from URL: " + path};
+                    try {
+                        body = html::convert(body, html::OutputFormat::Markdown);
+                    } catch (const std::bad_alloc&) {
+                        event.error = {ErrorCode::Internal,
+                                       "not enough memory to convert HTML from URL: " + path};
+                    } catch (const std::length_error&) {
+                        event.error = {ErrorCode::UnsupportedFeature,
+                                       "converted HTML is too large to attach from URL: " + path};
+                    }
+                    if (event.error.ok() && text_limit > 0 &&
+                        body.size() > static_cast<size_t>(text_limit)) {
+                        event.error = {ErrorCode::UnsupportedFeature,
+                                       "converted attachment from URL exceeds --max-input-bytes limit"};
+                    }
+                    if (event.error.ok() && persist_attachment) {
+                        chat::SqliteStore store;
+                        event.error = store.open(media_database_path);
+                        if (event.error.ok()) {
+                            event.error = store.import_text_attachment(
+                                body, static_cast<size_t>(inline_limit), path, path,
+                                event.text_attachment);
                         }
+                    } else if (event.error.ok()) {
+                        event.text_attachment.markdown_content = std::move(body);
+                        event.text_attachment.display_name = path;
+                        event.text_attachment.source_ref = path;
+                        event.text_attachment.byte_size = static_cast<long long>(
+                            event.text_attachment.markdown_content.size());
                     }
                     if (event.error.ok()) {
-                        event.attached_content = std::move(body);
+                        event.text_attachment_ready = true;
                     }
                 }
             }
@@ -279,11 +300,11 @@ void TuiFileJobs::start_attach(const std::string& path) {
     }
     const long text_limit = context.options.max_input_bytes;
     const long image_limit = context.options.max_image_bytes;
-    const bool auto_convert = context.options.auto_convert_html_to_markdown;
-    const bool persist_image = sqlite_available;
+    const long inline_limit = context.options.media_max_size_to_store_to_db;
+    const bool persist_attachment = sqlite_available;
     const std::string media_database_path = sqlite_path;
     runtime::EventQueue<TuiEvent>& event_queue = events;
-    file_job.start([path, type, text_limit, image_limit, auto_convert, persist_image,
+    file_job.start([path, type, text_limit, image_limit, inline_limit, persist_attachment,
                     media_database_path, &event_queue](
                        runtime::CancellationToken token) mutable {
         TuiEvent event;
@@ -293,7 +314,7 @@ void TuiFileJobs::start_attach(const std::string& path) {
             event.image_attachment = true;
             if (image_limit <= 0) {
                 event.error = {ErrorCode::BadArgs, "--max-image-bytes must be greater than zero"};
-            } else if (persist_image) {
+            } else if (persist_attachment) {
                 std::string bytes;
                 event.error = input::load_image_file_bytes(
                     path, type, static_cast<size_t>(image_limit), bytes, token);
@@ -316,11 +337,11 @@ void TuiFileJobs::start_attach(const std::string& path) {
         } else if (text_limit <= 0) {
             event.error = {ErrorCode::BadArgs, "--max-input-bytes must be greater than zero"};
         } else {
-            // Load raw for local file, then optionally convert HTML based on setting
+            // Convert once at import; Markdown is the native replay format.
             std::string body;
             event.error = input::read_local_text_file_for_attach(path, static_cast<size_t>(text_limit), body, token);
             if (event.error.ok()) {
-                if (type.kind == input::Kind::Html && auto_convert) {
+                if (type.kind == input::Kind::Html) {
                     try {
                         body = html::convert(body, html::OutputFormat::Markdown);
                     } catch (const std::bad_alloc&) {
@@ -331,9 +352,28 @@ void TuiFileJobs::start_attach(const std::string& path) {
                                        "converted HTML is too large: " + path};
                     }
                 }
+                if (event.error.ok() && body.size() > static_cast<size_t>(text_limit)) {
+                    event.error = {ErrorCode::UnsupportedFeature,
+                                   "converted attachment exceeds --max-input-bytes limit: " + path};
+                }
+                if (event.error.ok() && persist_attachment) {
+                    chat::SqliteStore store;
+                    event.error = store.open(media_database_path);
+                    if (event.error.ok()) {
+                        event.error = store.import_text_attachment(
+                            body, static_cast<size_t>(inline_limit), path,
+                            expand_user_path(path), event.text_attachment);
+                    }
+                } else if (event.error.ok()) {
+                    event.text_attachment.markdown_content = std::move(body);
+                    event.text_attachment.display_name = path;
+                    event.text_attachment.source_ref = expand_user_path(path);
+                    event.text_attachment.byte_size = static_cast<long long>(
+                        event.text_attachment.markdown_content.size());
+                }
                 if (event.error.ok()) {
                     event.attached_source = path;
-                    event.attached_content = std::move(body);
+                    event.text_attachment_ready = true;
                 }
             }
         }

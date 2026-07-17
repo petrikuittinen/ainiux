@@ -150,7 +150,6 @@ void handle_tui_command(const std::string& text, TuiCommandContext& ctx, TuiComm
         ctx.inflight_image_count = 0;
         ctx.chat_attachments.clear();
         ctx.attachments_committed_for_turn = 0;
-        ctx.pending_full_model_content.clear();
         app::apply_system_prompt(ctx.session, ctx.context.options.system);
         ctx.history_scroll = 0;
         ctx.status = "Chat history cleared";

@@ -69,9 +69,10 @@ struct TuiEvent {
     bool quiet_success = false;
     chat::MediaCleanupResult media_cleanup;
     bool automatic_cleanup = false;
-    // For chat /attach list of text attachments
+    // Canonical Markdown prepared by chat /attach.
     std::string attached_source;
-    std::string attached_content;
+    provider::TextAttachment text_attachment;
+    bool text_attachment_ready = false;
 };
 
 enum class EscapeResult {

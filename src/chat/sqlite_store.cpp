@@ -17,7 +17,7 @@
 namespace ainiux::chat {
 namespace {
 
-constexpr int kSchemaVersion = 3;
+constexpr int kSchemaVersion = 4;
 constexpr const char kDefaultThreadName[] = "New chat";
 constexpr size_t kMaxThreadNameLength = 40;
 
@@ -581,6 +581,37 @@ INSERT OR IGNORE INTO schema_migrations(version, applied_at)
         }
         version = 3;
     }
+    if (version < 4) {
+        Transaction migration(db, path);
+        err = migration.begin();
+        if (!err.ok()) {
+            return err;
+        }
+        Error inspect_error;
+        if (!table_has_column(db, path, "attachments", "inline_content", inspect_error)) {
+            if (!inspect_error.ok()) {
+                return inspect_error;
+            }
+            err = exec_sql(db, path,
+                           "ALTER TABLE attachments ADD COLUMN inline_content TEXT NOT NULL DEFAULT '';",
+                           "could not add inline Markdown attachment content");
+            if (!err.ok()) {
+                return err;
+            }
+        }
+        err = exec_sql(db, path,
+                       "INSERT OR IGNORE INTO schema_migrations(version, applied_at) "
+                       "VALUES(4, strftime('%Y-%m-%dT%H:%M:%SZ','now'));",
+                       "could not record SQLite schema migration 4");
+        if (!err.ok()) {
+            return err;
+        }
+        err = migration.commit();
+        if (!err.ok()) {
+            return err;
+        }
+        version = 4;
+    }
     return ok_error();
 }
 
@@ -627,7 +658,7 @@ Error insert_attachment(sqlite3* db,
         image.byte_size = stored.byte_size;
     } else {
         bool available = false;
-        Error media_error = media_file_available(path, image.storage_ref,
+        Error media_error = media_file_available(path, image.storage_ref, image.mime_type,
                                                  image.byte_size, available);
         if (!media_error.ok()) {
             return media_error;
@@ -702,6 +733,110 @@ Error load_images_for_message(sqlite3* db,
             image.base64_data = stmt.column_text(1);
         }
         images.push_back(std::move(image));
+    }
+}
+
+Error insert_text_attachment(sqlite3* db,
+                             const std::string& path,
+                             long long thread_id,
+                             long long message_id,
+                             long long ordinal,
+                             const provider::TextAttachment& attachment,
+                             const std::string& created_at) {
+    if (!attachment.storage_ref.empty()) {
+        bool available = false;
+        Error err = media_file_available(path, attachment.storage_ref, "text/markdown",
+                                         attachment.byte_size, available);
+        if (!err.ok()) {
+            return err;
+        }
+        if (!available) {
+            return {ErrorCode::FileRead,
+                    "cannot save message because managed Markdown is unavailable: " +
+                        attachment.storage_ref};
+        }
+        StoredMedia stored;
+        stored.sha256 = attachment.storage_ref;
+        stored.storage_ref = "sha256/" + attachment.storage_ref.substr(0, 2) + "/" +
+                             attachment.storage_ref + ".md";
+        stored.mime_type = "text/markdown";
+        stored.byte_size = attachment.byte_size;
+        err = upsert_media_object(db, path, stored, "markdown", created_at);
+        if (!err.ok()) {
+            return err;
+        }
+        Statement stmt(db, path);
+        err = stmt.prepare(
+            "INSERT INTO attachments(thread_id, message_id, ordinal, kind, mime_type, display_name, "
+            "metadata_json, storage_ref, created_at, object_sha256, source_ref, byte_size, inline_content) "
+            "VALUES(?1, ?2, ?3, 'markdown', 'text/markdown', ?4, '{}', '', ?5, ?6, ?7, ?8, '');");
+        if (!err.ok()) {
+            return err;
+        }
+        return BindChain(stmt)
+            .int64(1, thread_id)
+            .int64(2, message_id)
+            .int64(3, ordinal)
+            .text(4, attachment.display_name)
+            .text(5, created_at)
+            .text(6, attachment.storage_ref)
+            .text(7, attachment.source_ref)
+            .int64(8, attachment.byte_size)
+            .step_done("could not insert managed Markdown attachment");
+    }
+
+    Statement stmt(db, path);
+    Error err = stmt.prepare(
+        "INSERT INTO attachments(thread_id, message_id, ordinal, kind, mime_type, display_name, "
+        "metadata_json, storage_ref, created_at, object_sha256, source_ref, byte_size, inline_content) "
+        "VALUES(?1, ?2, ?3, 'markdown', 'text/markdown', ?4, '{}', '', ?5, NULL, ?6, ?7, ?8);");
+    if (!err.ok()) {
+        return err;
+    }
+    return BindChain(stmt)
+        .int64(1, thread_id)
+        .int64(2, message_id)
+        .int64(3, ordinal)
+        .text(4, attachment.display_name)
+        .text(5, created_at)
+        .text(6, attachment.source_ref)
+        .int64(7, static_cast<long long>(attachment.markdown_content.size()))
+        .text(8, attachment.markdown_content)
+        .step_done("could not insert inline Markdown attachment");
+}
+
+Error load_text_attachments_for_message(
+    sqlite3* db,
+    const std::string& path,
+    long long message_id,
+    std::vector<provider::TextAttachment>& attachments) {
+    Statement stmt(db, path);
+    Error err = stmt.prepare(
+        "SELECT display_name, source_ref, byte_size, inline_content, "
+        "COALESCE(object_sha256, '') FROM attachments "
+        "WHERE message_id = ?1 AND kind = 'markdown' ORDER BY ordinal, id;");
+    if (!err.ok()) {
+        return err;
+    }
+    err = BindChain(stmt).int64(1, message_id).error();
+    if (!err.ok()) {
+        return err;
+    }
+    while (true) {
+        const int rc = stmt.step();
+        if (rc == SQLITE_DONE) {
+            return ok_error();
+        }
+        if (rc != SQLITE_ROW) {
+            return sqlite_error(db, path, "could not load SQLite text attachments", rc);
+        }
+        provider::TextAttachment attachment;
+        attachment.display_name = stmt.column_text(0);
+        attachment.source_ref = stmt.column_text(1);
+        attachment.byte_size = stmt.column_int64(2);
+        attachment.markdown_content = stmt.column_text(3);
+        attachment.storage_ref = stmt.column_text(4);
+        attachments.push_back(std::move(attachment));
     }
 }
 
@@ -981,6 +1116,12 @@ Error SqliteStore::save_session(Session& session) {
                                     message.images[image_index], session.updated_at);
             if (!err.ok()) return err;
         }
+        for (size_t text_index = 0; text_index < message.text_attachments.size(); ++text_index) {
+            err = insert_text_attachment(db_, path_, session.thread_id, message_id,
+                                         static_cast<long long>(text_index),
+                                         message.text_attachments[text_index], session.updated_at);
+            if (!err.ok()) return err;
+        }
     }
 
     if (!session.usage_json.empty() && session.usage_json != "null" && session.usage_json != "{}") {
@@ -1099,7 +1240,12 @@ Error SqliteStore::load_session(long long thread_id, Session& session) {
         std::vector<provider::ImageInput> images;
         err = load_images_for_message(db_, path_, messages.column_int64(0), images);
         if (!err.ok()) return err;
-        loaded.messages.push_back({messages.column_text(1), messages.column_text(2), std::move(images)});
+        std::vector<provider::TextAttachment> text_attachments;
+        err = load_text_attachments_for_message(db_, path_, messages.column_int64(0),
+                                                text_attachments);
+        if (!err.ok()) return err;
+        loaded.messages.push_back({messages.column_text(1), messages.column_text(2),
+                                   std::move(images), std::move(text_attachments)});
     }
 
     if (!loaded.read_only) {
@@ -1127,11 +1273,57 @@ Error SqliteStore::load_session(long long thread_id, Session& session) {
                                        : object.column_text(2);
                 } else {
                     Error media_error = media_file_available(path_, image.storage_ref,
+                                                             image.mime_type,
                                                              object.column_int64(0), available);
                     if (!media_error.ok()) {
                         media_reason = media_error.message;
                     } else if (!available) {
                         media_reason = "a managed attachment file is missing";
+                    }
+                }
+                if (media_reason.empty()) {
+                    continue;
+                }
+                loaded.read_only = true;
+                loaded.read_only_reason = media_reason;
+                Statement mark(db_, path_);
+                err = mark.prepare(
+                    "UPDATE threads SET read_only = 1, read_only_reason = ?1 WHERE id = ?2;");
+                if (!err.ok()) return err;
+                err = BindChain(mark).text(1, media_reason).int64(2, thread_id)
+                          .step_done("could not mark thread read-only");
+                if (!err.ok()) return err;
+                break;
+            }
+            for (const provider::TextAttachment& attachment : message.text_attachments) {
+                if (loaded.read_only || attachment.storage_ref.empty()) {
+                    continue;
+                }
+                Statement object(db_, path_);
+                err = object.prepare(
+                    "SELECT byte_size, deleted_at, delete_reason FROM media_objects WHERE sha256 = ?1;");
+                if (!err.ok()) return err;
+                err = BindChain(object).text(1, attachment.storage_ref).error();
+                if (!err.ok()) return err;
+                const int object_rc = object.step();
+                bool available = false;
+                std::string media_reason;
+                if (object_rc == SQLITE_DONE) {
+                    media_reason = "managed Markdown metadata is missing";
+                } else if (object_rc != SQLITE_ROW) {
+                    return sqlite_error(db_, path_, "could not inspect managed Markdown", object_rc);
+                } else if (!object.column_text(1).empty()) {
+                    media_reason = object.column_text(2).empty()
+                                       ? "a managed Markdown attachment has expired"
+                                       : object.column_text(2);
+                } else {
+                    Error media_error = media_file_available(path_, attachment.storage_ref,
+                                                             "text/markdown",
+                                                             object.column_int64(0), available);
+                    if (!media_error.ok()) {
+                        media_reason = media_error.message;
+                    } else if (!available) {
+                        media_reason = "a managed Markdown attachment file is missing";
                     }
                 }
                 if (media_reason.empty()) {
@@ -1259,6 +1451,37 @@ Error SqliteStore::import_media(const std::string& bytes,
     return ok_error();
 }
 
+Error SqliteStore::import_text_attachment(const std::string& markdown,
+                                          size_t max_size_to_store_to_db,
+                                          const std::string& display_name,
+                                          const std::string& source_ref,
+                                          provider::TextAttachment& attachment) {
+    if (db_ == nullptr) {
+        return {ErrorCode::Internal, "SQLite database is not open"};
+    }
+    provider::TextAttachment imported;
+    imported.display_name = display_name;
+    imported.source_ref = source_ref;
+    imported.byte_size = static_cast<long long>(markdown.size());
+    if (markdown.size() <= max_size_to_store_to_db) {
+        imported.markdown_content = markdown;
+        attachment = std::move(imported);
+        return ok_error();
+    }
+    StoredMedia stored;
+    Error err = store_media_bytes(path_, markdown, "text/markdown", stored);
+    if (!err.ok()) {
+        return err;
+    }
+    err = upsert_media_object(db_, path_, stored, "markdown", current_timestamp_utc());
+    if (!err.ok()) {
+        return err;
+    }
+    imported.storage_ref = stored.sha256;
+    attachment = std::move(imported);
+    return ok_error();
+}
+
 Error SqliteStore::cleanup_media(int expiration_days,
                                  long long protected_thread_id,
                                  const std::string& reason,
@@ -1337,7 +1560,7 @@ Error SqliteStore::cleanup_media(int expiration_days,
 
     Statement tombstones(db_, path_);
     err = tombstones.prepare(
-        "SELECT sha256, byte_size FROM media_objects WHERE deleted_at IS NOT NULL;");
+        "SELECT sha256, byte_size, mime_type FROM media_objects WHERE deleted_at IS NOT NULL;");
     if (!err.ok()) return err;
     while (true) {
         if (cancellation.cancelled()) {
@@ -1350,7 +1573,8 @@ Error SqliteStore::cleanup_media(int expiration_days,
             return sqlite_error(db_, path_, "could not list expired media files", rc);
         }
         bool removed = false;
-        err = remove_media_file(path_, tombstones.column_text(0), removed);
+        err = remove_media_file(path_, tombstones.column_text(0),
+                                tombstones.column_text(2), removed);
         if (!err.ok()) {
             return err;
         }

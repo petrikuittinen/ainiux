@@ -34,13 +34,21 @@ Error hydrate_message_images(const std::string& database_path,
                              size_t max_image_bytes,
                              runtime::CancellationToken cancellation = runtime::CancellationToken());
 
+Error hydrate_message_text_attachments(
+    const std::string& database_path,
+    std::vector<provider::Message>& messages,
+    size_t max_attachment_bytes,
+    runtime::CancellationToken cancellation = runtime::CancellationToken());
+
 Error media_file_available(const std::string& database_path,
                            const std::string& sha256,
+                           const std::string& mime_type,
                            long long expected_size,
                            bool& available);
 
 Error remove_media_file(const std::string& database_path,
                         const std::string& sha256,
+                        const std::string& mime_type,
                         bool& removed);
 
 }  // namespace ainiux::chat

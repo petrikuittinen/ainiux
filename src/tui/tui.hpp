@@ -20,7 +20,7 @@ enum class ActivityKind { None, Thinking, Streaming };
 
 struct ChatAttachment {
     std::string source;  // original path or URL string for display in ---marker---
-    std::string content; // text content (Markdown if converted from HTML)
+    provider::TextAttachment attachment;
 };
 
 struct Layout {

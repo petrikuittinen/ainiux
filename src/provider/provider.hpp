@@ -79,18 +79,32 @@ struct ImageInput {
           base64_data(std::move(input_base64_data)) {}
 };
 
+struct TextAttachment {
+    // Markdown is the canonical replay format for text-like attachments.
+    // Small attachments keep markdown_content in SQLite; larger attachments
+    // use a managed-media SHA-256 storage_ref and are hydrated in a worker.
+    std::string markdown_content;
+    std::string storage_ref;
+    std::string display_name;
+    std::string source_ref;
+    long long byte_size = 0;
+};
+
 struct Message {
     std::string role;
     std::string content;
     std::vector<ImageInput> images;
+    std::vector<TextAttachment> text_attachments;
 
     Message() = default;
     Message(std::string message_role,
             std::string message_content,
-            std::vector<ImageInput> message_images = {})
+            std::vector<ImageInput> message_images = {},
+            std::vector<TextAttachment> message_text_attachments = {})
         : role(std::move(message_role)),
           content(std::move(message_content)),
-          images(std::move(message_images)) {}
+          images(std::move(message_images)),
+          text_attachments(std::move(message_text_attachments)) {}
 };
 
 struct ChatResult {

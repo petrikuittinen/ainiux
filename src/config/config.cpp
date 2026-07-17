@@ -1878,6 +1878,8 @@ Error apply_document(const Document& document, cli::Options& options) {
             err = nonnegative_int(entry, candidate.media_expiration_days);
         } else if (name == "media.auto_expiration_days") {
             err = nonnegative_int(entry, candidate.media_auto_expiration_days);
+        } else if (name == "media.max_size_to_store_to_db") {
+            err = nonnegative_long(entry, candidate.media_max_size_to_store_to_db);
         } else if (name == "editor.undo_limit") {
             err = nonnegative_int(entry, candidate.editor_undo_limit);
         } else if (name == "editor.huge_file_size_warning") {
