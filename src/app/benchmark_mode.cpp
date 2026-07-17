@@ -145,6 +145,11 @@ int run_benchmark_mode(const cli::Options& options) {
         print_error({ErrorCode::BadArgs, "--validate-dataset and --list-cases cannot be combined"});
         return exit_code_for(ErrorCode::BadArgs);
     }
+    if (options.grade_input_explicit) {
+        print_error({ErrorCode::BadArgs,
+                     "--grade-input can only be used with --grade"});
+        return exit_code_for(ErrorCode::BadArgs);
+    }
     if (!options.prompt.empty() || !options.prompt_file.empty() || !options.system.empty() ||
         !options.system_file.empty() || options.repl || options.tui || options.editor ||
         options.list_models || has_document_source(options) || !options.attachment_paths.empty()) {

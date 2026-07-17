@@ -49,6 +49,7 @@ int run_document_extract(const cli::Options& options, std::ostream& out);
 int run_search_extract(const cli::Options& options, std::ostream& out);
 std::string search_context_message(const cli::Options& options, const search::SearchResponse& response);
 int run_benchmark_mode(const cli::Options& options);
+int run_grade_mode(const cli::Options& options);
 
 void refresh_session_metadata(chat::Session& session, const provider::RequestContext& context);
 void apply_system_prompt(chat::Session& session, const std::string& system);

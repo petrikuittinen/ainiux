@@ -2,7 +2,7 @@
 
 `pkchat` is a fast, script-friendly command-line chat client for OpenAI and OpenAI-compatible APIs.
 
-Current status: v0.97 CLI with libcurl transport, cancellable runtime jobs, provider registry/profile aliases, `/v1/models`, `/v1/chat/completions`, text-only OpenAI Responses API support, provider-specific reasoning/thinking request compatibility, local JPEG/PNG/GIF image input, interactive text/image attachments, request-only context policies, safe URL insertion, web search with API providers and keyless fallbacks, a simple REPL, a standalone `--editor` mode with canonical advisory file locking, read-only conflict recovery, external-change warnings, multiple file buffers, selection, copy/cut/paste across buffers, grapheme-aware Unicode editing, indexed cross-buffer word completion, multi-language syntax highlighting and indentation reformatting, and AI continue/editor commands, a full-screen non-blocking TUI foundation, SQLite-backed TUI chat threads, JSON chat import/export save/load, HTML-to-text/Markdown extraction, Markdown assistant-output rendering to HTML or plaintext, automatic system/user TOML-alike configuration loading, and a concurrent JSONL benchmark runner.
+Current status: v0.97 CLI with libcurl transport, cancellable runtime jobs, provider registry/profile aliases, `/v1/models`, `/v1/chat/completions`, text-only OpenAI Responses API support, provider-specific reasoning/thinking request compatibility, local JPEG/PNG/GIF image input, interactive text/image attachments, request-only context policies, safe URL insertion, web search with API providers and keyless fallbacks, a simple REPL, a standalone `--editor` mode with canonical advisory file locking, read-only conflict recovery, external-change warnings, multiple file buffers, selection, copy/cut/paste across buffers, grapheme-aware Unicode editing, indexed cross-buffer word completion, multi-language syntax highlighting and indentation reformatting, and AI continue/editor commands, a full-screen non-blocking TUI foundation, SQLite-backed TUI chat threads, JSON chat import/export save/load, HTML-to-text/Markdown extraction, Markdown assistant-output rendering to HTML or plaintext, automatic system/user TOML-alike configuration loading, a concurrent JSONL benchmark runner, and configurable judge-model benchmark grading.
 
 ## Build
 
@@ -27,7 +27,7 @@ make leak-check
 make clean
 ```
 
-Install the binary, system configuration templates, and bundled theme/editor-command files with:
+Install the binary, system configuration templates, and bundled theme/editor-command/benchmark-prompt files with:
 
 ```sh
 make install PREFIX=/usr/local
@@ -241,7 +241,7 @@ The first benchmark slice uses JSONL for datasets and results. The built-in data
 {"id":"reasoning-01","category":"reasoning","language":"en","tags":["arithmetic"],"turns":["Question text"],"reference_answer":"Answer with explanation","expect":{"type":"exact","value":"Answer"}}
 ```
 
-`id`, `category`, and the non-empty string array `turns` are required. `language`, string-array `tags`, `fetch_url`, and deterministic `expect` scoring hooks are optional. Evaluation metadata is category-specific: reasoning, math, trivia, and cutoff cases require a non-empty `reference_answer`; writing, coding, multi-turn, and long-context cases require a non-empty string array named `assessment_criteria`. Safety cases require `safety.classification` (`harmful` or `harmless`) and the matching `safety.expected_action` (`reject` or `answer`); harmless cases also require `assessment_criteria`. IDs must be unique; unknown fields, invalid UTF-8, malformed JSON, incomplete evaluation metadata, empty turns, files over 16 MiB, and lines over 1 MiB are rejected before a model request. Multi-turn cases retain each generated assistant response before sending the next turn.
+`id`, `category`, and the non-empty string array `turns` are required. `language`, string-array `tags`, `fetch_url`, and deterministic `expect` scoring hooks are optional. Every case must provide at least one non-empty `reference_answer` or `assessment_criteria`, in addition to category rules: reasoning, math, trivia, and cutoff cases require a reference answer; writing, coding, multi-turn, and long-context cases require assessment criteria. Safety cases require `safety.classification` (`harmful` or `harmless`) and the matching `safety.expected_action` (`reject` or `answer`); all ten built-in safety cases have explicit rubrics, including the six harmful refusal cases. IDs must be unique; unknown fields, invalid UTF-8, malformed JSON, incomplete evaluation metadata, empty turns, files over 16 MiB, and lines over 1 MiB are rejected before a model request. Multi-turn cases retain each generated assistant response before sending the next turn.
 
 ```sh
 ./pkchat benchmark --validate-dataset
@@ -321,42 +321,53 @@ Automatic `--mode cutoff` inference and separate cutoff summaries are planned; t
 
 ### Grading Benchmark Results
 
-Automatic scoring is limited. `pkchat` only auto-scores cases that define an `expect` hook such as `{"type":"contains","value":"March 14, 2023"}`. Most built-in cases, including all cutoff cases, carry `reference_answer` metadata for review but leave `"score": null` unless `expect` is present. That is expected.
+`--grade` uses a judge model to grade complete case/run transcripts against their reference answers and assessment criteria. Run a benchmark and then grade the newest matching result file in the same output directory:
 
-**Option 1: read the Markdown report**
+```sh
+./pkchat --benchmark --provider PROVIDER --model MODEL \
+  --dataset builtin --category reasoning --output results/
+
+./pkchat --grade --provider PROVIDER --model JUDGE_MODEL \
+  --category reasoning --output results/
+```
+
+Without `--grade-input`, pkchat selects the newest valid `benchmark-*.jsonl` containing the requested category/case. Modification time wins and lexical path order breaks ties. Custom-named files require `--grade-input FILE`. `--category`, `--case`, `--limit`, `--concurrency`, and `--summary-format` are shared with benchmark mode; dataset/run controls are rejected in grading mode. Judge calls default to non-streaming and temperature zero unless explicitly overridden.
+
+One judge request receives the ordered user/assistant transcript for one measured case run. Interleaved source records and repeated runs are grouped correctly. Failed or cancelled source runs are recorded as ungraded errors. Judge HTTP and response-schema failures do not stop other selected grades, but the command exits nonzero after writing all records and its summary. `Ctrl+C` cancels active calls, joins workers, writes an interrupted summary, and exits 130.
+
+Directory output creates collision-safe files such as:
+
+```text
+results/grade-benchmark-<source-timestamp>-<grade-timestamp>.jsonl
+results/grade-benchmark-<source-timestamp>-<grade-timestamp>.md
+```
+
+An explicit `.jsonl` output receives a same-basename Markdown companion. Grade JSONL includes source/judge identity, transcript, evaluation basis, score, verdict, rationale, and per-criterion findings; the Markdown report renders the same evidence for audit.
+
+#### Grading prompt configuration
+
+All model-facing grading prompts are runtime data in `config/benchmarks.conf`; there is no compiled fallback prompt. The required keys are `[grading].system_prompt` and `[grading].case_prompt`. The case prompt must contain `{{benchmark_case_json}}` exactly once. pkchat serializes the untrusted benchmark payload and replaces only that placeholder.
+
+Layers are applied per key in this order: bundled `config/benchmarks.conf` (or installed `share/pkchat/benchmarks.conf`), system `$XDG_CONFIG_DIRS/pkchat/benchmarks.conf`, then user `$XDG_CONFIG_HOME/pkchat/benchmarks.conf`. `PKCHAT_BENCHMARKS` overrides the bundled-file lookup path. `--no-config` skips the user prompt file while retaining bundled and system prompts. `make install` preserves `/etc/xdg/pkchat/benchmarks.conf` and also installs the runtime fallback under `share/pkchat/benchmarks.conf`. `--debug` reports prompt-file discovery without printing prompt contents.
+
+Custom prompts are trusted configuration. A weak override can make prompt-injection attacks from benchmark text more effective or can change grading semantics between runs. Keep the system prompt's untrusted-data boundary, require exact JSON-only output in the case prompt, review administrator/user overrides, and retain prompt files with the grade artifacts when reproducibility matters. The judge response must be one JSON object with an integer `score` from 0–100, a `pass|partial|fail` verdict, a non-empty rationale, and exactly one indexed `met|partial|not_met` finding with a non-empty reason for every evaluation item.
+
+Deterministic `expect` hooks still populate benchmark-run scores before judge grading. Cases without `expect` leave the benchmark result score null; `--grade` supplies the separate rubric/reference-based assessment.
+
+**Read the Markdown reports**
 
 Open `results/benchmark-<timestamp>.md`. Each case shows the prompt, correct answer, model response, timing, and token usage side by side.
 
-**Option 2: judge with another model**
+**Manual grading remains available through ordinary prompt mode**
 
-Pipe the JSONL results to a stronger model:
+For a fully user-supplied grading workflow, pipe any result format to the usual prompt mode:
 
 ```sh
-RESULT=$(ls -t results/benchmark-*.jsonl | head -1)
-
-cat "$RESULT" | ./pkchat openrouter \
-  --model "your-judge-model" \
-  --no-stream \
-  --temperature 0 \
-  --attach stdin \
-  -p 'You are grading a knowledge-cutoff benchmark.
-
-For each JSONL record with category "cutoff":
-1. Compare "response" to "reference_answer".
-2. Classify as: correct, partially_correct, incorrect, refused_or_unknown, or hallucinated_beyond_cutoff.
-3. Use the month tag (for example 2024-11) as the event month.
-4. At the end, estimate the model knowledge cutoff window:
-   - last_month_confidently_correct
-   - first_month_clearly_wrong_or_hallucinated
-   - brief reasoning
-
-Output Markdown with a per-case table and a final cutoff summary.' \
-  --output results/cutoff-judgement.md
+cat custom-results.jsonl | ./pkchat --provider PROVIDER --model MODEL \
+  --attach stdin -p "USER-SUPPLIED GRADING PROMPT"
 ```
 
-Replace `openrouter` and `your-judge-model` with whichever judge endpoint and model you use. The same pattern works for `reasoning`, `writing`, and other categories: ask the judge to compare `response` against `reference_answer` or `assessment_criteria`.
-
-**Option 3: quick JSONL scan**
+**Quick JSONL scan**
 
 ```sh
 jq -r 'select(.type=="result") | [.id, .tags[1], .reference_answer, .response] | @tsv' \
@@ -378,7 +389,7 @@ The default `builtin` corpus is embedded from `benchmarks/builtin.jsonl` at buil
 
 Each result records estimated and provider-reported token counts, raw provider usage, HTTP status, DNS/connect/TLS/TTFB/first-body timing when libcurl exposes it, TTFT source, decode and wall throughput, response, scoring, and error state. During execution, finite runs report bounded completion milestones and speed mode periodically reports elapsed duration and finished requests. Final summaries include completed/failed/cancelled counts, token totals, average TTFT, aggregate throughput, and nearest-rank p50/p90/p99 for TTFT, total/decode latency, decode token/s, and wall token/s.
 
-Optional `expect` hooks operate on the visible response after thinking traces are removed. Use `{"type":"exact","value":"..."}` or `{"type":"contains","value":"..."}`; `turn` selects a one-based multi-turn response and defaults to the final turn. An array may configure different turns, with at most one scorer per turn. `reference_answer`, `assessment_criteria`, and `safety` are judge-ready metadata and do not yet produce an automatic score. The built-in corpus has answer keys or rubrics for every case, and its safety cases explicitly distinguish harmful requests that must be rejected from harmless requests that must be answered and assessed. Regex-based refusal/reasoning checks, rubric-based judge scoring, and Parquet/Hugging Face Datasets input remain planned.
+Optional `expect` hooks operate on the visible response after thinking traces are removed. Use `{"type":"exact","value":"..."}` or `{"type":"contains","value":"..."}`; `turn` selects a one-based multi-turn response and defaults to the final turn. An array may configure different turns, with at most one scorer per turn. `reference_answer`, `assessment_criteria`, and `safety` feed the configurable `--grade` judge path. The built-in corpus has answer keys or rubrics for every case, and its safety cases explicitly distinguish harmful requests that must be rejected from harmless requests that must be answered and assessed. Regex-based deterministic refusal/reasoning checks and Parquet/Hugging Face Datasets input remain planned.
 
 ## Examples
 

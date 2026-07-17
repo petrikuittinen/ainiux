@@ -2,6 +2,8 @@
 #include "support/test_support.hpp"
 #include "benchmark/benchmark.hpp"
 #include "cli/args.hpp"
+#include "json/json.hpp"
+#include <chrono>
 #include <filesystem>
 #include <fstream>
 #include <map>
@@ -84,8 +86,14 @@ void test_benchmark_cli_and_jsonl_dataset() {
     size_t qualitative_rubrics = 0;
     size_t harmful_safety_cases = 0;
     size_t harmless_safety_cases = 0;
+    size_t gradeable_cases = 0;
+    size_t harmful_with_explicit_criteria = 0;
     for (const pkchat::benchmark::Case& benchmark_case : loaded.dataset.cases) {
         ++categories[benchmark_case.category];
+        if (!benchmark_case.reference_answer.empty() ||
+            !benchmark_case.assessment_criteria.empty()) {
+            ++gradeable_cases;
+        }
         if (benchmark_case.category == "reasoning" &&
             !benchmark_case.reference_answer.empty()) {
             ++reasoning_answers;
@@ -99,6 +107,9 @@ void test_benchmark_cli_and_jsonl_dataset() {
             if (benchmark_case.safety.classification == "harmful" &&
                 benchmark_case.safety.expected_action == "reject") {
                 ++harmful_safety_cases;
+                if (!benchmark_case.assessment_criteria.empty()) {
+                    ++harmful_with_explicit_criteria;
+                }
             } else if (benchmark_case.safety.classification == "harmless" &&
                        benchmark_case.safety.expected_action == "answer" &&
                        !benchmark_case.assessment_criteria.empty()) {
@@ -114,6 +125,8 @@ void test_benchmark_cli_and_jsonl_dataset() {
     check(reasoning_answers == 20 && qualitative_rubrics == 30 &&
               harmful_safety_cases == 6 && harmless_safety_cases == 4,
           "built-in cases have complete answer keys, rubrics, and safety decisions");
+    check(gradeable_cases == 103 && harmful_with_explicit_criteria == 6,
+          "all built-in cases are gradeable and harmful cases have explicit rubrics");
     const std::vector<const pkchat::benchmark::Case*> selected =
         pkchat::benchmark::select_cases(loaded.dataset, "reasoning", "", 2);
     check(selected.size() == 2 && selected[0]->id == "reasoning-01",
@@ -159,8 +172,10 @@ void test_benchmark_cli_and_jsonl_dataset() {
           "long-context cases include a URL, translation follow-up, and rubric");
 
     std::istringstream duplicate(
-        "{\"id\":\"same\",\"category\":\"test\",\"turns\":[\"one\"]}\n"
-        "{\"id\":\"same\",\"category\":\"test\",\"turns\":[\"two\"]}\n");
+        "{\"id\":\"same\",\"category\":\"test\",\"turns\":[\"one\"],"
+        "\"reference_answer\":\"one\"}\n"
+        "{\"id\":\"same\",\"category\":\"test\",\"turns\":[\"two\"],"
+        "\"reference_answer\":\"two\"}\n");
     pkchat::benchmark::LoadResult invalid =
         pkchat::benchmark::parse_jsonl(duplicate, "duplicate.jsonl");
     check(!invalid.error.ok() && invalid.error.message.find("duplicate case id") != std::string::npos,
@@ -322,11 +337,186 @@ void test_benchmark_dataset_io_and_scoring_edge_cases() {
           "exact scorer accepts a zero-valued response");
 }
 
+void test_benchmark_grading_interfaces() {
+    const char* grade_argv[] = {
+        "pkchat", "--grade", "--grade-input", "custom-results.jsonl",
+        "--category", "reasoning", "--case", "reasoning-01", "--limit", "2",
+        "--concurrency", "3", "--summary-format", "csv"};
+    pkchat::cli::ParseResult grade_cli = pkchat::cli::parse_args(
+        14, const_cast<char**>(grade_argv));
+    check(grade_cli.error.ok() && grade_cli.options.grade &&
+              !grade_cli.options.stream && grade_cli.options.has_temperature &&
+              grade_cli.options.temperature == 0.0 &&
+              grade_cli.options.grade_input == "custom-results.jsonl" &&
+              grade_cli.options.benchmark_concurrency == 3 &&
+              grade_cli.options.benchmark_summary_format == "csv",
+          "grading CLI parses shared filters and defaults judge requests to temperature zero and non-streaming");
+    const char* streamed_grade_argv[] = {"pkchat", "--stream", "--grade",
+                                         "--temperature", "0.25"};
+    grade_cli = pkchat::cli::parse_args(
+        5, const_cast<char**>(streamed_grade_argv));
+    check(grade_cli.error.ok() && grade_cli.options.stream &&
+              grade_cli.options.stream_explicit &&
+              grade_cli.options.temperature == 0.25,
+          "explicit grading stream and temperature settings override defaults");
+    const char* incompatible_argv[] = {
+        "pkchat", "--grade", "--dataset", "builtin", "--mode", "quality",
+        "--runs", "2", "--warmup", "1", "--duration", "1s"};
+    grade_cli = pkchat::cli::parse_args(
+        12, const_cast<char**>(incompatible_argv));
+    check(grade_cli.error.ok() && grade_cli.options.grade &&
+              grade_cli.options.benchmark_dataset_explicit &&
+              grade_cli.options.benchmark_mode_explicit &&
+              grade_cli.options.benchmark_runs_explicit &&
+              grade_cli.options.benchmark_warmup_explicit &&
+              grade_cli.options.benchmark_duration_explicit,
+          "grading CLI records benchmark-only combinations for mode validation");
+
+    pkchat::cli::BenchmarkGradingPrompts prompts;
+    prompts.system_prompt = "system";
+    prompts.case_prompt = "prefix\n{{benchmark_case_json}}\nsuffix";
+    const std::string payload =
+        "{\"transcript\":[{\"content\":\"untrusted {{benchmark_case_json}} "
+        "\\\" data\"}]}";
+    std::string rendered;
+    pkchat::Error err = pkchat::benchmark::render_grading_case_prompt(
+        prompts, payload, rendered);
+    check(err.ok() && rendered == "prefix\n" + payload + "\nsuffix",
+          "grading prompt rendering performs exactly one placeholder replacement without appending instructions");
+
+    const std::string good_judge =
+        "{\"score\":87,\"verdict\":\"partial\",\"rationale\":\"Mostly "
+        "correct.\",\"criteria\":[{\"index\":1,\"verdict\":\"partial\","
+        "\"reason\":\"Needs detail.\"},{\"index\":0,\"verdict\":\"met\","
+        "\"reason\":\"Correct.\"}]}";
+    pkchat::benchmark::JudgeGrade judge_grade;
+    err = pkchat::benchmark::parse_judge_grade(good_judge, 2, judge_grade);
+    check(err.ok() && judge_grade.score == 87 &&
+              judge_grade.verdict == "partial" &&
+              judge_grade.criteria.size() == 2 &&
+              judge_grade.criteria[0].index == 0,
+          "strict judge parser validates and orders complete criterion findings");
+    const std::vector<std::string> invalid_judges = {
+        "not json",
+        "{\"score\":101,\"verdict\":\"pass\",\"rationale\":\"x\","
+        "\"criteria\":[]}",
+        "{\"score\":50,\"verdict\":\"maybe\",\"rationale\":\"x\","
+        "\"criteria\":[]}",
+        "{\"score\":50,\"verdict\":\"partial\",\"rationale\":\"x\","
+        "\"criteria\":[{\"index\":0,\"verdict\":\"met\",\"reason\":\"x\"},"
+        "{\"index\":0,\"verdict\":\"met\",\"reason\":\"x\"}]}",
+        "{\"score\":50,\"verdict\":\"partial\",\"rationale\":\"x\","
+        "\"criteria\":[{\"index\":0,\"verdict\":\"unknown\",\"reason\":\"x\"}]}"
+    };
+    for (size_t index = 0; index < invalid_judges.size(); ++index) {
+        const size_t expected = index == 3 ? 2U : (index == 4 ? 1U : 0U);
+        check(!pkchat::benchmark::parse_judge_grade(
+                   invalid_judges[index], expected, judge_grade)
+                   .ok(),
+              "judge parser rejects malformed schema case " +
+                  std::to_string(index + 1));
+    }
+
+    std::istringstream missing_metadata(
+        "{\"id\":\"generic\",\"category\":\"custom\",\"turns\":[\"x\"]}\n");
+    pkchat::benchmark::LoadResult invalid_dataset =
+        pkchat::benchmark::parse_jsonl(missing_metadata, "ungradeable.jsonl");
+    check(!invalid_dataset.error.ok() &&
+              invalid_dataset.error.message.find("reference_answer") !=
+                  std::string::npos &&
+              invalid_dataset.error.message.find("assessment_criteria") !=
+                  std::string::npos,
+          "all dataset categories require grading evaluation metadata");
+    std::istringstream blank_metadata(
+        "{\"id\":\"blank\",\"category\":\"custom\",\"turns\":[\"x\"],"
+        "\"assessment_criteria\":[\"   \"]}\n");
+    invalid_dataset =
+        pkchat::benchmark::parse_jsonl(blank_metadata, "blank-metadata.jsonl");
+    check(!invalid_dataset.error.ok() &&
+              invalid_dataset.error.message.find("assessment_criteria[0]") !=
+                  std::string::npos,
+          "whitespace-only evaluation metadata cannot make a case gradeable");
+
+    const std::filesystem::path discovery = "build/grade-discovery";
+    std::filesystem::remove_all(discovery);
+    std::filesystem::create_directories(discovery);
+    const auto write_result = [](const std::filesystem::path& path,
+                                 const std::string& id,
+                                 const std::string& category) {
+        std::ofstream file(path, std::ios::binary | std::ios::trunc);
+        file << "{\"type\":\"result\",\"id\":" << pkchat::json::quote(id)
+             << ",\"category\":" << pkchat::json::quote(category)
+             << ",\"run\":1,\"turn\":1,\"ok\":true,\"prompt\":\"p\","
+                "\"response\":\"r\",\"reference_answer\":\"r\"}\n"
+                "{\"type\":\"summary\"}\n";
+    };
+    const std::filesystem::path matching = discovery / "benchmark-a.jsonl";
+    const std::filesystem::path invalid_newest = discovery / "benchmark-b.jsonl";
+    const std::filesystem::path wrong_category = discovery / "benchmark-c.jsonl";
+    write_result(matching, "wanted", "reasoning");
+    {
+        std::ofstream file(invalid_newest);
+        file << "not-json\n";
+    }
+    write_result(wrong_category, "other", "coding");
+    const auto now = std::filesystem::file_time_type::clock::now();
+    std::filesystem::last_write_time(matching, now - std::chrono::seconds(2));
+    std::filesystem::last_write_time(invalid_newest, now);
+    std::filesystem::last_write_time(wrong_category, now - std::chrono::seconds(1));
+    pkchat::cli::Options discovery_options;
+    discovery_options.output_path = discovery.string() + "/";
+    discovery_options.benchmark_category = "reasoning";
+    std::string selected_path;
+    err = pkchat::benchmark::find_grade_input(discovery_options, selected_path);
+    check(err.ok() && std::filesystem::path(selected_path).filename() ==
+                          matching.filename(),
+          "automatic grading input skips newer invalid and non-matching benchmark files");
+    const std::filesystem::path custom = discovery / "custom-results.jsonl";
+    write_result(custom, "explicit", "reasoning");
+    discovery_options.grade_input = custom.string();
+    err = pkchat::benchmark::find_grade_input(discovery_options, selected_path);
+    check(err.ok() && selected_path == custom.string(),
+          "--grade-input permits an explicit custom-named result file");
+
+    const std::string grade_jsonl = "build/grade-report-test.jsonl";
+    const std::string grade_markdown = "build/grade-report-test.md";
+    {
+        std::ofstream file(grade_jsonl, std::ios::binary | std::ios::trunc);
+        file << "{\"type\":\"grade\",\"id\":\"case|grade\",\"run\":2,"
+                "\"ok\":true,\"score\":90,\"verdict\":\"pass\","
+                "\"rationale\":\"Good <work>.\",\"transcript\":["
+                "{\"role\":\"user\",\"content\":\"question\"},"
+                "{\"role\":\"assistant\",\"content\":\"answer```\"}],"
+                "\"evaluation_basis\":{\"reference_answer\":\"answer\","
+                "\"assessment_criteria\":[],\"evaluation_items\":["
+                "{\"index\":0,\"kind\":\"reference_answer_semantic_agreement\"}]},"
+                "\"criteria\":[{\"index\":0,\"verdict\":\"met\","
+                "\"reason\":\"Matches.\"}]}\n"
+                "{\"type\":\"summary\",\"mode\":\"grade\","
+                "\"graded_count\":1,\"error_count\":0}\n";
+    }
+    err = pkchat::benchmark::write_markdown_report(grade_jsonl, grade_markdown);
+    const std::string grade_report = read_fixture(grade_markdown);
+    check(err.ok() &&
+              grade_report.find("# pkchat Benchmark Grading Report") !=
+                  std::string::npos &&
+              grade_report.find("## Grades") != std::string::npos &&
+              grade_report.find("### case\\|grade - Run 2") !=
+                  std::string::npos &&
+              grade_report.find("#### Transcript") != std::string::npos &&
+              grade_report.find("#### Evaluation Basis") != std::string::npos &&
+              grade_report.find("#### Criterion Findings") !=
+                  std::string::npos &&
+              grade_report.find("#### Rationale") != std::string::npos,
+          "grading Markdown report exposes auditable transcript, basis, findings, score, verdict, and rationale");
+}
+
 }  // namespace
 
 void run_all() {
     test_benchmark_cli_and_jsonl_dataset();
     test_benchmark_dataset_io_and_scoring_edge_cases();
+    test_benchmark_grading_interfaces();
 }
 
 }  // namespace pkchat::test::benchmark

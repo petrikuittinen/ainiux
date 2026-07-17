@@ -200,12 +200,24 @@ Error parse_evaluation_metadata(const json::Value& value,
         if (!err.ok()) {
             return err;
         }
+        if (ascii_trim(output.reference_answer).empty()) {
+            return schema_error(source, line,
+                                "'reference_answer' must be a non-empty string");
+        }
     }
     if (value.get("assessment_criteria") != nullptr) {
         Error err = string_array(value, "assessment_criteria", true, source, line,
                                  output.assessment_criteria);
         if (!err.ok()) {
             return err;
+        }
+        for (size_t index = 0; index < output.assessment_criteria.size(); ++index) {
+            if (ascii_trim(output.assessment_criteria[index]).empty()) {
+                return schema_error(source, line,
+                                    "'assessment_criteria[" +
+                                        std::to_string(index) +
+                                        "]' must be a non-empty string");
+            }
         }
     }
     Error err = parse_safety_evaluation(value, source, line, output.safety);
@@ -241,6 +253,11 @@ Error parse_evaluation_metadata(const json::Value& value,
     } else if (output.safety.configured) {
         return schema_error(source, line,
                             "the 'safety' evaluation object is only valid for safety cases");
+    }
+    if (output.reference_answer.empty() && output.assessment_criteria.empty()) {
+        return schema_error(source, line,
+                            "every benchmark case requires a non-empty 'reference_answer' or "
+                            "non-empty 'assessment_criteria'");
     }
     return ok_error();
 }

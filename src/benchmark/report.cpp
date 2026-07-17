@@ -255,6 +255,92 @@ void write_markdown_assessment_criteria(std::ostream& output,
     output << "\n";
 }
 
+void write_grade_transcript(std::ostream& output, const json::Value& record) {
+    const json::Value* transcript = record.get("transcript");
+    if (transcript == nullptr || !transcript->is_array()) {
+        return;
+    }
+    output << "#### Transcript\n\n";
+    size_t message_number = 0;
+    for (const json::Value& message : transcript->array) {
+        ++message_number;
+        const std::string role = message.is_object()
+                                     ? record_string(message, "role")
+                                     : std::string();
+        const std::string content = message.is_object()
+                                        ? record_string(message, "content")
+                                        : json_compact(message);
+        output << "##### "
+               << markdown_heading_text(role.empty()
+                                            ? "Message " + std::to_string(message_number)
+                                            : role == "user" ? "User" : "Assistant")
+               << "\n\n";
+        write_fenced_block(output, "text", content);
+    }
+}
+
+void write_grade_evaluation_basis(std::ostream& output,
+                                  const json::Value& record) {
+    const json::Value* basis = record.get("evaluation_basis");
+    if (basis == nullptr) {
+        return;
+    }
+    output << "#### Evaluation Basis\n\n";
+    if (!basis->is_object()) {
+        write_fenced_block(output, "json", json_compact(*basis));
+        return;
+    }
+    const json::Value* reference = basis->get("reference_answer");
+    if (reference != nullptr && !reference->is_null()) {
+        output << "##### Reference Answer\n\n";
+        write_fenced_block(output, "text",
+                           reference->is_string() ? reference->string
+                                                  : json_compact(*reference));
+    }
+    const json::Value* items = basis->get("evaluation_items");
+    if (items != nullptr && items->is_array()) {
+        output << "##### Evaluation Items\n\n";
+        for (const json::Value& item : items->array) {
+            const json::Value* index = item.is_object() ? item.get("index") : nullptr;
+            const json::Value* criterion =
+                item.is_object() ? item.get("criterion") : nullptr;
+            const json::Value* kind = item.is_object() ? item.get("kind") : nullptr;
+            output << "- ";
+            if (index != nullptr) {
+                output << markdown_table_cell(json_compact(*index)) << ": ";
+            }
+            if (criterion != nullptr && criterion->is_string()) {
+                output << markdown_table_cell(criterion->string);
+            } else if (kind != nullptr && kind->is_string()) {
+                output << markdown_table_cell(kind->string);
+            } else {
+                output << markdown_table_cell(json_compact(item));
+            }
+            output << "\n";
+        }
+        output << "\n";
+    }
+}
+
+void write_grade_findings(std::ostream& output, const json::Value& record) {
+    const json::Value* findings = record.get("criteria");
+    if (findings == nullptr || !findings->is_array()) {
+        return;
+    }
+    output << "#### Criterion Findings\n\n"
+           << "| Index | Verdict | Reason |\n|---:|---|---|\n";
+    for (const json::Value& finding : findings->array) {
+        const json::Value* index = finding.is_object() ? finding.get("index") : nullptr;
+        output << "| "
+               << markdown_table_cell(index == nullptr ? std::string()
+                                                        : json_compact(*index))
+               << " | " << markdown_table_cell(record_string(finding, "verdict"))
+               << " | " << markdown_table_cell(record_string(finding, "reason"))
+               << " |\n";
+    }
+    output << "\n";
+}
+
 }  // namespace
 
 std::string markdown_report_path(const std::string& jsonl_path) {
@@ -319,7 +405,10 @@ Error write_markdown_report(const std::string& jsonl_path,
         return {ErrorCode::FileWrite,
                 "could not open benchmark Markdown report for writing: " + markdown_path};
     }
-    output << "# pkchat Benchmark Report\n\n"
+    const bool grading_report = have_overview &&
+                                record_string(overview, "mode") == "grade";
+    output << (grading_report ? "# pkchat Benchmark Grading Report\n\n"
+                              : "# pkchat Benchmark Report\n\n")
            << "**JSONL source:** " << markdown_heading_text(jsonl_path) << "\n\n";
     if (have_overview) {
         output << "## "
@@ -329,6 +418,7 @@ Error write_markdown_report(const std::string& jsonl_path,
     }
 
     bool wrote_results_heading = false;
+    bool wrote_grades_heading = false;
     bool wrote_cases_heading = false;
     size_t detail_number = 0;
     err = for_each_report_record(
@@ -338,6 +428,33 @@ Error write_markdown_report(const std::string& jsonl_path,
                 return ok_error();
             }
             ++detail_number;
+            if (type == "grade") {
+                if (!wrote_grades_heading) {
+                    output << "## Grades\n\n";
+                    wrote_grades_heading = true;
+                }
+                const std::string id = record_string(record, "id");
+                const long long run = record_integer(record, "run");
+                output << "### "
+                       << markdown_heading_text(id.empty()
+                                                    ? "Grade " + std::to_string(detail_number)
+                                                    : id);
+                if (run >= 0) {
+                    output << " - Run " << run;
+                }
+                output << "\n\n";
+                write_markdown_table(output, record,
+                                     {"transcript", "evaluation_basis", "criteria",
+                                      "rationale", "error"});
+                write_grade_transcript(output, record);
+                write_grade_evaluation_basis(output, record);
+                write_grade_findings(output, record);
+                write_special_markdown_field(output, record, "rationale",
+                                             "Rationale", "text");
+                write_special_markdown_field(output, record, "error", "Error",
+                                             "text");
+                return ok_error();
+            }
             if (type == "result") {
                 if (!wrote_results_heading) {
                     output << "## Results\n\n";

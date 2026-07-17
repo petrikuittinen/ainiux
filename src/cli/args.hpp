@@ -15,6 +15,11 @@ namespace pkchat::cli {
 
 enum class OutputFormat { Text, Json, Ndjson };
 
+struct BenchmarkGradingPrompts {
+    std::string system_prompt;
+    std::string case_prompt;
+};
+
 struct Options {
     bool help = false;
     bool version = false;
@@ -38,9 +43,16 @@ struct Options {
     bool auto_convert_html_to_markdown = true;
     bool show_thinking_traces = false;
     bool benchmark = false;
+    bool grade = false;
     bool benchmark_validate = false;
     bool benchmark_list = false;
     bool benchmark_options_seen = false;
+    bool benchmark_dataset_explicit = false;
+    bool benchmark_mode_explicit = false;
+    bool benchmark_runs_explicit = false;
+    bool benchmark_warmup_explicit = false;
+    bool benchmark_duration_explicit = false;
+    bool grade_input_explicit = false;
 
     std::string positional_url;
     std::string prompt;
@@ -82,11 +94,13 @@ struct Options {
     std::string tui_theme = "dark";
     tui::ThemeRegistry tui_themes = tui::default_theme_registry();
     std::string benchmark_dataset = "builtin";
+    std::string grade_input;
     std::string benchmark_category;
     std::string benchmark_case;
     std::string benchmark_mode = "quality";
     std::string benchmark_summary_format = "table";
     OutputFormat format = OutputFormat::Text;
+    BenchmarkGradingPrompts benchmark_grading_prompts;
 
     double temperature = 0.0;
     bool has_temperature = false;

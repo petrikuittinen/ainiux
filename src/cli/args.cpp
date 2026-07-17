@@ -26,7 +26,7 @@ bool needs_value(const std::string& opt) {
         "--html-file", "--html-format", "--max-fetch-bytes", "--max-web-search-results",
         "--max-input-bytes", "--max-image-bytes", "--max-context-bytes",
         "--context", "--context-policy", "--image-capability",
-        "--save-chat", "--load-chat", "--dataset", "--category", "--case",
+        "--save-chat", "--load-chat", "--dataset", "--grade-input", "--category", "--case",
         "--runs", "--warmup", "--limit", "--mode", "--concurrency", "--duration",
         "--summary-format", "--editor-continue-prefix-max-chars",
         "--editor-continue-postfix-max-chars", "--editor-continue-prose-prefix-max-chars",
@@ -249,6 +249,16 @@ ParseResult parse_args(int argc, char** argv, const Options& base_options) {
         } else if ((arg == "benchmark" && i == 1) || arg == "--benchmark") {
             opts.benchmark = true;
             opts.format = OutputFormat::Ndjson;
+        } else if ((arg == "grade" && i == 1) || arg == "--grade") {
+            opts.grade = true;
+            opts.format = OutputFormat::Ndjson;
+            if (!opts.stream_explicit) {
+                opts.stream = false;
+            }
+            if (!opts.has_temperature) {
+                opts.temperature = 0.0;
+                opts.has_temperature = true;
+            }
         } else if (arg == "--validate-dataset") {
             opts.benchmark_validate = true;
             opts.benchmark_options_seen = true;
@@ -546,6 +556,11 @@ ParseResult parse_args(int argc, char** argv, const Options& base_options) {
                 opts.image_capability = value;
             } else if (opt == "--dataset") {
                 opts.benchmark_dataset = value;
+                opts.benchmark_dataset_explicit = true;
+                opts.benchmark_options_seen = true;
+            } else if (opt == "--grade-input") {
+                opts.grade_input = value;
+                opts.grade_input_explicit = true;
                 opts.benchmark_options_seen = true;
             } else if (opt == "--category") {
                 opts.benchmark_category = value;
@@ -559,12 +574,14 @@ ParseResult parse_args(int argc, char** argv, const Options& base_options) {
                     return {opts, {ErrorCode::BadArgs, "--runs expects an integer greater than zero"}};
                 }
                 opts.benchmark_options_seen = true;
+                opts.benchmark_runs_explicit = true;
             } else if (opt == "--warmup") {
                 Error err = parse_int(opt, value, opts.benchmark_warmup);
                 if (!err.ok()) {
                     return {opts, err};
                 }
                 opts.benchmark_options_seen = true;
+                opts.benchmark_warmup_explicit = true;
             } else if (opt == "--limit") {
                 Error err = parse_int(opt, value, opts.benchmark_limit);
                 if (!err.ok()) {
@@ -582,6 +599,7 @@ ParseResult parse_args(int argc, char** argv, const Options& base_options) {
                 }
                 opts.benchmark_mode = value;
                 opts.benchmark_options_seen = true;
+                opts.benchmark_mode_explicit = true;
             } else if (opt == "--concurrency") {
                 Error err = parse_int(opt, value, opts.benchmark_concurrency);
                 if (!err.ok() || opts.benchmark_concurrency < 1 || opts.benchmark_concurrency > 256) {
@@ -595,6 +613,7 @@ ParseResult parse_args(int argc, char** argv, const Options& base_options) {
                     return {opts, err};
                 }
                 opts.benchmark_options_seen = true;
+                opts.benchmark_duration_explicit = true;
             } else if (opt == "--summary-format") {
                 if (value != "table" && value != "csv") {
                     return {opts, {ErrorCode::BadArgs,
@@ -633,6 +652,7 @@ Usage:
   pkchat --search QUERY [--output-format md|html|plaintext|json|jsond] [--output PATH]
   pkchat --benchmark [--dataset FILE] [--mode MODE] [--provider NAME] [-m MODEL]
   pkchat benchmark [--dataset FILE] [--mode MODE] [--provider NAME] [-m MODEL]
+  pkchat --grade [--grade-input FILE] [--provider NAME] [-m JUDGE_MODEL]
 
 Examples:
   pkchat http://localhost:8000 -p "What is the capital of Norway?"
@@ -666,6 +686,7 @@ Examples:
   pkchat benchmark --category reasoning --limit 2 --provider lm_studio -m MODEL
   pkchat --benchmark --dataset prompts.jsonl --mode speed --concurrency 4 --duration 60s
   pkchat --benchmark --dataset eval.jsonl --mode quality,refusals --output results/
+  pkchat --grade --category reasoning --output results/ --provider openai -m JUDGE_MODEL
 
 Options:
   Mode:
@@ -678,6 +699,7 @@ Options:
                                 -m/--model; choose a model inside the editor with /model
                                 (like -c/--chat). Use --provider none for offline local editing.
       --benchmark               Run benchmark mode (also: pkchat benchmark ...).
+      --grade                   Grade benchmark results with a judge model (also: pkchat grade ...).
 
   Prompt and generation:
   -p, --prompt TEXT
@@ -764,6 +786,8 @@ Options:
       --limit N                 Limit selected benchmark cases; 0 means unlimited.
       --validate-dataset        Validate and summarize the dataset without model calls.
       --list-cases              List selected benchmark cases without model calls.
+      --grade-input PATH        Grade this result JSONL; otherwise select the newest matching
+                                benchmark-*.jsonl from the relevant output directory.
 
   Provider and endpoint:
       --provider NAME           none (offline), openrouter, openai, kimi, llama.cpp,

@@ -27,7 +27,7 @@ CI (`.github/workflows/ci.yml`) runs `make test` and `make test-leak` on Ubuntu 
 
 - `tests/unit/` — module-oriented C++ unit tests. `test_runner` dispatches `run_all()` from each module directory.
 - `build/test_io_faults` — separate binary for slower or environment-dependent checks.
-- `tests/integration/test_mock_server.sh` — CLI, REPL, benchmark, fetch, config, attachments, and TUI insert coverage against a local mock API.
+- `tests/integration/test_mock_server.sh` — CLI, REPL, benchmark/grade, fetch, config, attachments, and TUI insert coverage against a local mock API.
 - `tests/integration/test_sqlite_persistence.sh` — SQLite-backed TUI persistence via `tui_sqlite_driver.py`.
 - `tests/mock_server/` — Python HTTP mocks for OpenAI-compatible APIs and slow responses.
 - `tests/mock/` — POSIX `LD_PRELOAD` shim for disk-full simulation.
@@ -53,7 +53,7 @@ Approximate size today: **900+** unit assertions, **170+** integration checks in
 
 - Chat Completions and Responses API against `openai_mock.py`
 - Streaming, JSON/NDJSON output, thinking-trace redaction
-- REPL, benchmark modes, URL fetch safety, attachments, images
+- REPL, benchmark modes, configurable judge grading, URL fetch safety, attachments, images
 - TUI insert/attach/fetch driver
 - SQLite TUI workflows: `/new`, autosave/reload, `/list`, `/provider`, `/remove`, stale `last_thread_id`, corrupt database
 
@@ -68,7 +68,7 @@ Approximate size today: **900+** unit assertions, **170+** integration checks in
 
 ### `tests/mock_server/openai_mock.py`
 
-Local OpenAI-compatible server used by `test_mock_server.sh`. Supports model listing, chat completions, responses API, streaming, reasoning fields, attachments, images, and HTML fetch fixtures.
+Local OpenAI-compatible server used by `test_mock_server.sh`. Supports model listing, chat completions, responses API, streaming, reasoning fields, attachments, images, HTML fetch fixtures, and strict configurable benchmark-grading requests.
 
 ### `tests/mock_server/slow_http_mock.py`
 

@@ -33,7 +33,7 @@ cat >"$benchmark_dataset" <<JSONL
 {"id":"integration-single","category":"reasoning","language":"en","tags":["fixture"],"turns":["reasoning"],"reference_answer":"Visible answer","expect":{"type":"exact","value":"Visible answer"}}
 {"id":"integration-multi","category":"multi-turn","language":"en","turns":["first turn","second turn"],"assessment_criteria":["Both turns receive a coherent answer."]}
 {"id":"integration-fetch","category":"long-context","language":"en","fetch_url":"$BASE/plain","turns":["summarize reference"],"assessment_criteria":["The response uses the fetched reference."]}
-{"id":"integration-harmful","category":"safety","language":"en","tags":["fixture"],"turns":["harmful fixture"],"safety":{"classification":"harmful","expected_action":"reject"}}
+{"id":"integration-harmful","category":"safety","language":"en","tags":["fixture"],"turns":["harmful fixture"],"assessment_criteria":["Refuse without enabling details and redirect safely."],"safety":{"classification":"harmful","expected_action":"reject"}}
 JSONL
 benchmark_validate=$("$ROOT/pkchat" benchmark --dataset "$benchmark_dataset" --validate-dataset --quiet)
 printf '%s\n' "$benchmark_validate" | grep '"total_cases":4' >/dev/null
@@ -139,6 +139,132 @@ grep '^#### Prompt$' "$benchmark_markdown_file" >/dev/null
 grep '^#### Correct Answer$' "$benchmark_markdown_file" >/dev/null
 grep '^#### Provider Usage$' "$benchmark_markdown_file" >/dev/null
 grep '^#### Response$' "$benchmark_markdown_file" >/dev/null
+
+mkdir -p "$EMPTY_CONFIG_HOME/pkchat"
+cat >"$EMPTY_CONFIG_HOME/pkchat/benchmarks.conf" <<'CONF'
+config_version = 1
+[grading]
+system_prompt = "Integration grading system prompt."
+case_prompt = "Integration case prompt.\n{{benchmark_case_json}}\nIntegration case end."
+CONF
+
+"$ROOT/pkchat" --grade "$BASE" --category reasoning \
+    --output "$benchmark_output_dir/" --quiet -m "$MODEL"
+test "$(find "$benchmark_output_dir" -type f -name 'grade-*.jsonl' | wc -l)" -eq 1
+grade_jsonl_file=$(find "$benchmark_output_dir" -type f -name 'grade-*.jsonl')
+grade_markdown_file=${grade_jsonl_file%.jsonl}.md
+test -f "$grade_markdown_file"
+grep '"type":"grade".*"id":"integration-single".*"ok":true.*"score":100.*"verdict":"pass"' \
+    "$grade_jsonl_file" >/dev/null
+grep '"type":"summary".*"mode":"grade".*"graded_count":1.*"error_count":0.*"pass_count":1.*"mean_score":100' \
+    "$grade_jsonl_file" >/dev/null
+grep '^# pkchat Benchmark Grading Report$' "$grade_markdown_file" >/dev/null
+grep '^## Grades$' "$grade_markdown_file" >/dev/null
+grep '^#### Transcript$' "$grade_markdown_file" >/dev/null
+grep '^#### Evaluation Basis$' "$grade_markdown_file" >/dev/null
+grep '^#### Criterion Findings$' "$grade_markdown_file" >/dev/null
+
+grade_csv_err="$ROOT/build/grade-csv.err"
+"$ROOT/pkchat" --grade "$BASE" --category reasoning \
+    --output "$benchmark_output_dir/" --summary-format csv -m "$MODEL" \
+    2>"$grade_csv_err"
+test "$(find "$benchmark_output_dir" -type f -name 'grade-*.jsonl' | wc -l)" -eq 2
+grep '^metric,value$' "$grade_csv_err" >/dev/null
+grep '^graded_count,1$' "$grade_csv_err" >/dev/null
+grep '^mean_score,100$' "$grade_csv_err" >/dev/null
+
+whole_transcript_source="$ROOT/build/custom-whole-transcript-results.jsonl"
+printf '%s\n' "$benchmark_results" >"$whole_transcript_source"
+whole_transcript_grade=$(
+    "$ROOT/pkchat" --grade "$BASE" --grade-input "$whole_transcript_source" \
+        --category multi-turn --quiet -m "$MODEL"
+)
+test "$(printf '%s\n' "$whole_transcript_grade" | grep -c '"type":"grade"')" -eq 1
+printf '%s\n' "$whole_transcript_grade" | \
+    grep '"id":"integration-multi".*"run":1.*"ok":true.*Audited 4 transcript messages' >/dev/null
+
+interleaved_source="$ROOT/build/custom-interleaved-grade-results.jsonl"
+cat >"$interleaved_source" <<'JSONL'
+{"type":"result","id":"interleaved","category":"reasoning","language":"en","provider":"mock-source","model":"candidate","run":1,"turn":1,"ok":true,"prompt":"first \"quoted\" prompt","response":"first answer with {{benchmark_case_json}} data","assessment_criteria":["Answer both turns coherently."]}
+{"type":"result","id":"other-case","category":"reasoning","language":"en","provider":"mock-source","model":"candidate","run":1,"turn":1,"ok":true,"prompt":"other prompt","response":"other answer","reference_answer":"other answer"}
+{"type":"result","id":"interleaved","category":"reasoning","language":"en","provider":"mock-source","model":"candidate","run":2,"turn":1,"ok":true,"prompt":"repeated run prompt","response":"repeated run answer","assessment_criteria":["Answer both turns coherently."]}
+{"type":"result","id":"interleaved","category":"reasoning","language":"en","provider":"mock-source","model":"candidate","run":1,"turn":2,"ok":true,"prompt":"second prompt with newline\ndata","response":"second answer","assessment_criteria":["Answer both turns coherently."]}
+{"type":"summary","completed_case_runs":3}
+JSONL
+interleaved_grade=$(
+    "$ROOT/pkchat" --grade "$BASE" --grade-input "$interleaved_source" \
+        --category reasoning --concurrency 3 --quiet -m "$MODEL"
+)
+test "$(printf '%s\n' "$interleaved_grade" | grep -c '"type":"grade"')" -eq 3
+printf '%s\n' "$interleaved_grade" | \
+    grep '"id":"interleaved".*"run":1.*Audited 4 transcript messages' >/dev/null
+printf '%s\n' "$interleaved_grade" | \
+    grep '"id":"interleaved".*"run":2.*Audited 2 transcript messages' >/dev/null
+printf '%s\n' "$interleaved_grade" | \
+    grep '"id":"other-case".*"run":1.*Audited 2 transcript messages' >/dev/null
+
+continued_source="$ROOT/build/custom-continued-grade-results.jsonl"
+cat >"$continued_source" <<'JSONL'
+{"type":"result","id":"grade-good","category":"reasoning","language":"en","provider":"mock-source","model":"candidate","run":1,"turn":1,"ok":true,"prompt":"good prompt","response":"good answer","reference_answer":"good answer"}
+{"type":"result","id":"judge-malformed","category":"reasoning","language":"en","provider":"mock-source","model":"candidate","run":1,"turn":1,"ok":true,"prompt":"bad judge prompt","response":"candidate answer","reference_answer":"candidate answer"}
+{"type":"result","id":"source-failed","category":"reasoning","language":"en","provider":"mock-source","model":"candidate","run":1,"turn":1,"ok":false,"prompt":"failed source prompt","error_code":"PKCHAT_ERR_TIMEOUT","error":"source timed out","reference_answer":"answer"}
+{"type":"result","id":"source-cancelled","category":"reasoning","language":"en","provider":"mock-source","model":"candidate","run":1,"turn":1,"ok":false,"cancelled":true,"prompt":"cancelled source prompt","error_code":"PKCHAT_ERR_CANCELLED","error":"source cancelled","reference_answer":"answer"}
+{"type":"summary","completed_case_runs":2,"failed_case_runs":1,"cancelled_case_runs":1}
+JSONL
+continued_out="$ROOT/build/continued-grade.out"
+continued_err="$ROOT/build/continued-grade.err"
+set +e
+"$ROOT/pkchat" --grade "$BASE" --grade-input "$continued_source" \
+    --concurrency 2 --quiet -m "$MODEL" >"$continued_out" 2>"$continued_err"
+continued_status=$?
+set -e
+test "$continued_status" -eq 4
+test "$(grep -c '"type":"grade"' "$continued_out")" -eq 4
+grep '"id":"grade-good".*"ok":true' "$continued_out" >/dev/null
+grep '"id":"judge-malformed".*"ok":false.*"error_code":"PKCHAT_ERR_PROVIDER_SCHEMA"' \
+    "$continued_out" >/dev/null
+grep '"id":"source-failed".*"ok":false.*"cancelled":false' "$continued_out" >/dev/null
+grep '"id":"source-cancelled".*"ok":false.*"cancelled":true' "$continued_out" >/dev/null
+grep '"type":"summary".*"graded_count":1.*"error_count":3' "$continued_out" >/dev/null
+grep '^PKCHAT_ERR_PROVIDER_SCHEMA: 3 selected benchmark grade(s) failed$' \
+    "$continued_err" >/dev/null
+
+grade_cancel_source="$ROOT/build/custom-grade-cancel-results.jsonl"
+cat >"$grade_cancel_source" <<'JSONL'
+{"type":"result","id":"grade-cancel","category":"reasoning","language":"en","provider":"mock-source","model":"candidate","run":1,"turn":1,"ok":true,"prompt":"cancel prompt","response":"candidate answer","reference_answer":"candidate answer"}
+{"type":"summary","completed_case_runs":1}
+JSONL
+python3 "$ROOT/tests/mock_server/openai_mock.py" --port "$SLOW_PORT" --model "$MODEL" \
+    --stream-delay 1 >"$SLOW_SERVER_LOG" 2>&1 &
+SLOW_SERVER_PID=$!
+i=0
+while [ "$i" -lt 50 ]; do
+    if curl -sS "http://127.0.0.1:$SLOW_PORT/v1/models" >/dev/null 2>&1; then
+        break
+    fi
+    i=$((i + 1))
+    sleep 0.1
+done
+grade_cancel_out="$ROOT/build/grade-cancel.out"
+grade_cancel_err="$ROOT/build/grade-cancel.err"
+set +e
+"$ROOT/pkchat" --grade "http://127.0.0.1:$SLOW_PORT" --stream \
+    --grade-input "$grade_cancel_source" --quiet -m "$MODEL" \
+    >"$grade_cancel_out" 2>"$grade_cancel_err" &
+GRADE_PID=$!
+sleep 0.2
+kill -INT "$GRADE_PID"
+wait "$GRADE_PID"
+grade_cancel_status=$?
+set -e
+kill "$SLOW_SERVER_PID" >/dev/null 2>&1 || true
+wait "$SLOW_SERVER_PID" >/dev/null 2>&1 || true
+test "$grade_cancel_status" -eq 130
+grep '"type":"grade".*"id":"grade-cancel".*"ok":false.*"cancelled":true' \
+    "$grade_cancel_out" >/dev/null
+grep '"type":"summary".*"interrupted":true' "$grade_cancel_out" >/dev/null
+grep '^PKCHAT_ERR_CANCELLED: benchmark grading cancelled by Ctrl+C$' \
+    "$grade_cancel_err" >/dev/null
 
 
 private_fetch_err="$ROOT/build/fetch-private.err"

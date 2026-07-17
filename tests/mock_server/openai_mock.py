@@ -399,6 +399,49 @@ class Handler(BaseHTTPRequestHandler):
             else:
                 print("invalid editor prose completion context:", repr(last), flush=True)
                 reply = "<content>BAD PROSE CONTEXT</content>"
+        elif (
+            len(messages) == 2
+            and isinstance(messages[0], dict)
+            and messages[0].get("role") == "system"
+            and messages[0].get("content") == "Integration grading system prompt."
+            and last.startswith("Integration case prompt.\n")
+            and last.endswith("\nIntegration case end.")
+        ):
+            payload_text = last[
+                len("Integration case prompt.\n") : -len("\nIntegration case end.")
+            ]
+            try:
+                grade_payload = json.loads(payload_text)
+                evaluation_items = grade_payload["evaluation_basis"]["evaluation_items"]
+                transcript = grade_payload["transcript"]
+                if not isinstance(evaluation_items, list) or not isinstance(transcript, list):
+                    raise ValueError("invalid grading arrays")
+                if grade_payload.get("id") != "grade-cancel" and (
+                    request.get("stream") is not False or request.get("temperature") != 0
+                ):
+                    raise ValueError("grading must default to stream=false and temperature=0")
+                if grade_payload.get("id") == "judge-malformed":
+                    reply = "{malformed judge output"
+                else:
+                    reply = json.dumps(
+                        {
+                            "score": 100,
+                            "verdict": "pass",
+                            "rationale": f"Audited {len(transcript)} transcript messages.",
+                            "criteria": [
+                                {
+                                    "index": index,
+                                    "verdict": "met",
+                                    "reason": "The response satisfies this evaluation item.",
+                                }
+                                for index in range(len(evaluation_items))
+                            ],
+                        },
+                        ensure_ascii=False,
+                    )
+            except (KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
+                print("invalid grading request:", repr(last), repr(exc), flush=True)
+                reply = "{invalid grading request"
 
         if request.get("stream"):
             self.send_response(200)

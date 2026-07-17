@@ -1620,6 +1620,55 @@ Error apply_themes_document_impl(const Document& document, cli::Options& options
     return ok_error();
 }
 
+Error apply_benchmarks_document_impl(const Document& document, cli::Options& options) {
+    cli::Options candidate = options;
+    constexpr const char* kPlaceholder = "{{benchmark_case_json}}";
+    for (const auto& item : document.entries) {
+        const std::string& name = item.first;
+        const Entry& entry = item.second;
+        if (name == "config_version") {
+            Error err = require_type(entry, Value::Type::Integer);
+            if (!err.ok()) {
+                return err;
+            }
+            if (entry.value.integer != 1) {
+                return schema_error(entry,
+                                    "unsupported config version " +
+                                        std::to_string(entry.value.integer) +
+                                        "; supported version is 1");
+            }
+            continue;
+        }
+        if (name != "grading.system_prompt" && name != "grading.case_prompt") {
+            return schema_error(entry, "unknown benchmark-prompt setting");
+        }
+        Error err = require_type(entry, Value::Type::String);
+        if (!err.ok()) {
+            return err;
+        }
+        if (trim_config_ascii(entry.value.string).empty()) {
+            return schema_error(entry, "grading prompt must not be empty");
+        }
+        if (name == "grading.system_prompt") {
+            candidate.benchmark_grading_prompts.system_prompt = entry.value.string;
+            continue;
+        }
+        const size_t first = entry.value.string.find(kPlaceholder);
+        if (first == std::string::npos) {
+            return schema_error(entry,
+                                "grading.case_prompt must contain {{benchmark_case_json}} exactly once");
+        }
+        if (entry.value.string.find(kPlaceholder, first + std::char_traits<char>::length(kPlaceholder)) !=
+            std::string::npos) {
+            return schema_error(entry,
+                                "grading.case_prompt must contain {{benchmark_case_json}} exactly once");
+        }
+        candidate.benchmark_grading_prompts.case_prompt = entry.value.string;
+    }
+    options = std::move(candidate);
+    return ok_error();
+}
+
 }  // namespace
 
 Error apply_editor_commands_document(const Document& document, cli::Options& options) {
@@ -1628,6 +1677,33 @@ Error apply_editor_commands_document(const Document& document, cli::Options& opt
 
 Error apply_themes_document(const Document& document, cli::Options& options) {
     return apply_themes_document_impl(document, options);
+}
+
+Error apply_benchmarks_document(const Document& document, cli::Options& options) {
+    return apply_benchmarks_document_impl(document, options);
+}
+
+Error validate_benchmark_grading_prompts(const cli::BenchmarkGradingPrompts& prompts) {
+    if (trim_config_ascii(prompts.system_prompt).empty()) {
+        return {ErrorCode::Config,
+                "benchmark grading system prompt is unavailable; install config/benchmarks.conf "
+                "or share/pkchat/benchmarks.conf, or configure [grading].system_prompt"};
+    }
+    if (trim_config_ascii(prompts.case_prompt).empty()) {
+        return {ErrorCode::Config,
+                "benchmark grading case prompt is unavailable; install config/benchmarks.conf "
+                "or share/pkchat/benchmarks.conf, or configure [grading].case_prompt"};
+    }
+    constexpr const char* kPlaceholder = "{{benchmark_case_json}}";
+    const size_t first = prompts.case_prompt.find(kPlaceholder);
+    if (first == std::string::npos ||
+        prompts.case_prompt.find(kPlaceholder,
+                                 first + std::char_traits<char>::length(kPlaceholder)) !=
+            std::string::npos) {
+        return {ErrorCode::Config,
+                "benchmark grading case prompt must contain {{benchmark_case_json}} exactly once"};
+    }
+    return ok_error();
 }
 
 const Entry* Document::find(const std::string& qualified_key) const {
@@ -2060,12 +2136,118 @@ std::vector<std::string> bundled_themes_paths() {
     return paths;
 }
 
+std::string user_benchmarks_path(const Environment& environment) {
+    if (absolute_path(environment.xdg_config_home)) {
+        return (std::filesystem::path(environment.xdg_config_home) / "pkchat" /
+                "benchmarks.conf")
+            .string();
+    }
+    if (!absolute_path(environment.home)) {
+        return {};
+    }
+    return (std::filesystem::path(environment.home) / ".config" / "pkchat" /
+            "benchmarks.conf")
+        .string();
+}
+
+std::vector<std::string> system_benchmarks_paths(const Environment& environment) {
+    const std::string dirs =
+        environment.xdg_config_dirs.empty() ? "/etc/xdg" : environment.xdg_config_dirs;
+    return config_paths_from_dirs(dirs, "benchmarks.conf");
+}
+
+std::vector<std::string> bundled_benchmarks_paths() {
+    std::vector<std::string> paths;
+    if (const char* override_path = std::getenv("PKCHAT_BENCHMARKS")) {
+        if (override_path[0] != '\0') {
+            paths.emplace_back(override_path);
+        }
+    }
+    paths.emplace_back("config/benchmarks.conf");
+    paths.emplace_back("/usr/local/share/pkchat/benchmarks.conf");
+    paths.emplace_back("/usr/share/pkchat/benchmarks.conf");
+    return paths;
+}
+
 LoadResult load_automatic(const cli::Options& base_options,
                           const Environment& environment,
                           bool load_user_config) {
     LoadResult result{base_options, {}, {}, ok_error()};
     result.options.editor_assist_config = pkchat::editor::empty_editor_assist_config();
     result.options.tui_themes = tui::default_theme_registry();
+
+    auto load_benchmarks_path = [&](const std::string& path,
+                                    ConfigScope scope,
+                                    bool& loaded) -> Error {
+        std::error_code filesystem_error;
+        const bool exists = std::filesystem::exists(path, filesystem_error);
+        if (filesystem_error) {
+            result.diagnostics.push_back(
+                {scope, ConfigFileKind::Benchmarks, ConfigFileState::Error, path});
+            return {ErrorCode::Config, "could not inspect benchmark-prompt file: " + path};
+        }
+        if (!exists) {
+            result.diagnostics.push_back(
+                {scope, ConfigFileKind::Benchmarks, ConfigFileState::Missing, path});
+            return ok_error();
+        }
+        ParseResult parsed = read_file(path);
+        if (!parsed.error.ok()) {
+            result.diagnostics.push_back(
+                {scope, ConfigFileKind::Benchmarks, ConfigFileState::Error, path});
+            return parsed.error;
+        }
+        Error err = apply_benchmarks_document(parsed.document, result.options);
+        if (!err.ok()) {
+            result.diagnostics.push_back(
+                {scope, ConfigFileKind::Benchmarks, ConfigFileState::Error, path});
+            return err;
+        }
+        loaded = true;
+        result.loaded_paths.push_back(path);
+        result.diagnostics.push_back(
+            {scope, ConfigFileKind::Benchmarks, ConfigFileState::Loaded, path});
+        return ok_error();
+    };
+
+    bool bundled_benchmarks_loaded = false;
+    for (const std::string& path : bundled_benchmarks_paths()) {
+        Error err = load_benchmarks_path(path, ConfigScope::Bundled,
+                                         bundled_benchmarks_loaded);
+        if (!err.ok()) {
+            result.error = std::move(err);
+            return result;
+        }
+        if (bundled_benchmarks_loaded) {
+            break;
+        }
+    }
+    bool benchmark_prompts_loaded = bundled_benchmarks_loaded;
+    for (const std::string& path : system_benchmarks_paths(environment)) {
+        Error err = load_benchmarks_path(path, ConfigScope::System,
+                                         benchmark_prompts_loaded);
+        if (!err.ok()) {
+            result.error = std::move(err);
+            return result;
+        }
+    }
+    const std::string user_benchmarks = user_benchmarks_path(environment);
+    if (user_benchmarks.empty()) {
+        result.diagnostics.push_back(
+            {ConfigScope::User, ConfigFileKind::Benchmarks,
+             ConfigFileState::Unavailable, {}});
+    } else if (!load_user_config) {
+        result.diagnostics.push_back(
+            {ConfigScope::User, ConfigFileKind::Benchmarks, ConfigFileState::Skipped,
+             user_benchmarks});
+    } else {
+        Error err = load_benchmarks_path(user_benchmarks, ConfigScope::User,
+                                         benchmark_prompts_loaded);
+        if (!err.ok()) {
+            result.error = std::move(err);
+            return result;
+        }
+    }
 
     auto load_themes_path = [&](const std::string& path, ConfigScope scope, bool& any_loaded) -> Error {
         std::error_code filesystem_error;

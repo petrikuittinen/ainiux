@@ -91,8 +91,16 @@ int main(int argc, char** argv) {
         return pkchat::app::exit_code_for(parsed.error.code);
     }
     pkchat::cli::Options options = parsed.options;
+    if (options.benchmark && options.grade) {
+        pkchat::app::print_error({pkchat::ErrorCode::BadArgs,
+                                  "--benchmark and --grade cannot be combined"});
+        return pkchat::app::exit_code_for(pkchat::ErrorCode::BadArgs);
+    }
     if (options.benchmark) {
         return pkchat::app::run_benchmark_mode(options);
+    }
+    if (options.grade) {
+        return pkchat::app::run_grade_mode(options);
     }
     if (options.benchmark_options_seen) {
         pkchat::app::print_error({pkchat::ErrorCode::BadArgs,

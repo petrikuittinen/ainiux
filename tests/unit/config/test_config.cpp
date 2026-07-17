@@ -152,12 +152,13 @@ void test_config_applies_user_settings() {
     pkchat::config::Environment environment{config_home, system_home, "/nonexistent"};
     pkchat::config::LoadResult loaded = pkchat::config::load_automatic(pkchat::cli::Options{}, environment);
     check(loaded.error.ok(), "automatic user config loading succeeds");
-    check(loaded.loaded_paths.size() == 4 &&
-              loaded.loaded_paths[0].find("themes.conf") != std::string::npos &&
-              loaded.loaded_paths[1].find("editor-commands.conf") != std::string::npos &&
-              loaded.loaded_paths[2] == system_home + "/pkchat/config.conf" &&
-              loaded.loaded_paths[3] == config_home + "/pkchat/config.conf",
-          "automatic loading applies bundled themes and editor commands before system and user config");
+    check(loaded.loaded_paths.size() == 5 &&
+              loaded.loaded_paths[0].find("benchmarks.conf") != std::string::npos &&
+              loaded.loaded_paths[1].find("themes.conf") != std::string::npos &&
+              loaded.loaded_paths[2].find("editor-commands.conf") != std::string::npos &&
+              loaded.loaded_paths[3] == system_home + "/pkchat/config.conf" &&
+              loaded.loaded_paths[4] == config_home + "/pkchat/config.conf",
+          "automatic loading applies bundled prompt/UI files before system and user config");
     check(loaded.options.tui_themes.has("dark") && loaded.options.tui_themes.has("light") &&
               loaded.options.tui_themes.has("sepia"),
           "automatic loading includes built-in themes");
@@ -203,11 +204,12 @@ void test_config_applies_user_settings() {
     check(system_only.error.ok() && !system_only.options.allow_private_url_fetch &&
               !system_only.options.show_thinking_traces && system_only.options.tui_theme == "light",
           "disabling user config retains the automatic system config");
-    check(system_only.loaded_paths.size() == 3 &&
-              system_only.loaded_paths[0].find("themes.conf") != std::string::npos &&
-              system_only.loaded_paths[1].find("editor-commands.conf") != std::string::npos &&
-              system_only.loaded_paths[2] == system_home + "/pkchat/config.conf",
-          "disabling user config still loads bundled themes, editor commands, and system config");
+    check(system_only.loaded_paths.size() == 4 &&
+              system_only.loaded_paths[0].find("benchmarks.conf") != std::string::npos &&
+              system_only.loaded_paths[1].find("themes.conf") != std::string::npos &&
+              system_only.loaded_paths[2].find("editor-commands.conf") != std::string::npos &&
+              system_only.loaded_paths[3] == system_home + "/pkchat/config.conf",
+          "disabling user config still loads bundled prompts/UI files and system config");
     bool skipped_user_config = false;
     for (const pkchat::config::ConfigDiagnostic& diagnostic : system_only.diagnostics) {
         if (diagnostic.scope == pkchat::config::ConfigScope::User &&
@@ -329,6 +331,159 @@ void test_config_parses_multiline_strings() {
               parsed.error.message.find("unexpected text after multiline quoted string") !=
                   std::string::npos,
           "multiline strings reject non-whitespace trailing text");
+}
+
+void test_benchmark_prompt_configuration() {
+    pkchat::config::ParseResult bundled =
+        pkchat::config::read_file("config/benchmarks.conf");
+    check(bundled.error.ok(), "bundled benchmark prompt config parses");
+    pkchat::cli::Options options;
+    pkchat::Error err =
+        pkchat::config::apply_benchmarks_document(bundled.document, options);
+    check(err.ok() &&
+              options.benchmark_grading_prompts.system_prompt.find('\n') !=
+                  std::string::npos &&
+              options.benchmark_grading_prompts.case_prompt.find(
+                  "{{benchmark_case_json}}") != std::string::npos,
+          "benchmark prompt config preserves multiline prompt content");
+    check(pkchat::config::validate_benchmark_grading_prompts(
+              options.benchmark_grading_prompts)
+              .ok(),
+          "complete benchmark grading prompts validate");
+
+    pkchat::config::ParseResult system = pkchat::config::parse(
+        "[grading]\nsystem_prompt = \"system prompt override\"\n",
+        "system-benchmarks.conf");
+    pkchat::config::ParseResult user = pkchat::config::parse(
+        "[grading]\ncase_prompt = \"user {{benchmark_case_json}} prompt\"\n",
+        "user-benchmarks.conf");
+    err = pkchat::config::apply_benchmarks_document(system.document, options);
+    check(err.ok(), "partial system benchmark prompt override applies");
+    err = pkchat::config::apply_benchmarks_document(user.document, options);
+    check(err.ok() && options.benchmark_grading_prompts.system_prompt ==
+                          "system prompt override" &&
+              options.benchmark_grading_prompts.case_prompt ==
+                  "user {{benchmark_case_json}} prompt",
+          "benchmark prompt keys merge independently in precedence order");
+
+    pkchat::config::ParseResult invalid = pkchat::config::parse(
+        "[grading]\ncase_prompt = \"no placeholder\"\n", "missing.conf");
+    err = pkchat::config::apply_benchmarks_document(invalid.document, options);
+    check(!err.ok() && err.message.find("missing.conf:2:1") != std::string::npos &&
+              err.message.find("exactly once") != std::string::npos,
+          "benchmark case prompt requires one placeholder with source location");
+    invalid = pkchat::config::parse(
+        "[grading]\ncase_prompt = \"{{benchmark_case_json}} and "
+        "{{benchmark_case_json}}\"\n",
+        "duplicate-placeholder.conf");
+    err = pkchat::config::apply_benchmarks_document(invalid.document, options);
+    check(!err.ok() && err.message.find("exactly once") != std::string::npos,
+          "benchmark case prompt rejects a duplicate placeholder");
+    invalid = pkchat::config::parse(
+        "[grading]\nsystem_prompt = \"   \"\n", "empty-prompt.conf");
+    err = pkchat::config::apply_benchmarks_document(invalid.document, options);
+    check(!err.ok() && err.message.find("must not be empty") != std::string::npos,
+          "benchmark prompt config rejects whitespace-only prompts");
+    invalid = pkchat::config::parse(
+        "[grading]\ntyop = value\n", "unknown-benchmark-key.conf");
+    err = pkchat::config::apply_benchmarks_document(invalid.document, options);
+    check(!err.ok() &&
+              err.message.find("unknown-benchmark-key.conf:2:1") !=
+                  std::string::npos,
+          "benchmark prompt config rejects unknown keys with source locations");
+    check(!pkchat::config::validate_benchmark_grading_prompts({}).ok(),
+          "missing effective grading prompts are diagnosed only when validated");
+
+    const std::string root =
+        std::filesystem::absolute("build/benchmark-prompt-config")
+            .lexically_normal()
+            .string();
+    const std::string system_root = root + "/system";
+    const std::string user_root = root + "/user";
+    std::filesystem::remove_all(root);
+    std::filesystem::create_directories(system_root + "/pkchat");
+    std::filesystem::create_directories(user_root + "/pkchat");
+    {
+        std::ofstream file(system_root + "/pkchat/benchmarks.conf");
+        file << "[grading]\nsystem_prompt = \"automatic system prompt\"\n";
+    }
+    {
+        std::ofstream file(user_root + "/pkchat/benchmarks.conf");
+        file << "[grading]\ncase_prompt = \"automatic user "
+                "{{benchmark_case_json}} prompt\"\n";
+    }
+    const pkchat::config::Environment environment{user_root, system_root,
+                                                   "/nonexistent"};
+    pkchat::config::LoadResult automatic = pkchat::config::load_automatic(
+        pkchat::cli::Options{}, environment, true);
+    check(automatic.error.ok() &&
+              automatic.options.benchmark_grading_prompts.system_prompt ==
+                  "automatic system prompt" &&
+              automatic.options.benchmark_grading_prompts.case_prompt ==
+                  "automatic user {{benchmark_case_json}} prompt",
+          "automatic benchmark prompts load bundled then system then user overrides");
+    bool saw_bundled_prompt_diagnostic = false;
+    bool saw_user_prompt_diagnostic = false;
+    for (const pkchat::config::ConfigDiagnostic& diagnostic :
+         automatic.diagnostics) {
+        if (diagnostic.kind != pkchat::config::ConfigFileKind::Benchmarks) {
+            continue;
+        }
+        saw_bundled_prompt_diagnostic =
+            saw_bundled_prompt_diagnostic ||
+            (diagnostic.scope == pkchat::config::ConfigScope::Bundled &&
+             diagnostic.state == pkchat::config::ConfigFileState::Loaded);
+        saw_user_prompt_diagnostic =
+            saw_user_prompt_diagnostic ||
+            (diagnostic.scope == pkchat::config::ConfigScope::User &&
+             diagnostic.state == pkchat::config::ConfigFileState::Loaded);
+    }
+    check(saw_bundled_prompt_diagnostic && saw_user_prompt_diagnostic,
+          "benchmark prompt configuration exposes bundled and user diagnostics");
+    pkchat::config::LoadResult without_user = pkchat::config::load_automatic(
+        pkchat::cli::Options{}, environment, false);
+    check(without_user.error.ok() &&
+              without_user.options.benchmark_grading_prompts.system_prompt ==
+                  "automatic system prompt" &&
+              without_user.options.benchmark_grading_prompts.case_prompt !=
+                  "automatic user {{benchmark_case_json}} prompt",
+          "--no-config skips user benchmark prompts but retains bundled and system prompts");
+    bool saw_skipped_user_prompts = false;
+    for (const pkchat::config::ConfigDiagnostic& diagnostic :
+         without_user.diagnostics) {
+        saw_skipped_user_prompts =
+            saw_skipped_user_prompts ||
+            (diagnostic.kind == pkchat::config::ConfigFileKind::Benchmarks &&
+             diagnostic.scope == pkchat::config::ConfigScope::User &&
+             diagnostic.state == pkchat::config::ConfigFileState::Skipped);
+    }
+    check(saw_skipped_user_prompts,
+          "--no-config reports the user benchmark prompt file as skipped");
+
+    const std::string override_path = root + "/override.conf";
+    {
+        std::ofstream file(override_path);
+        file << "[grading]\nsystem_prompt = \"environment system\"\n"
+                "case_prompt = \"environment {{benchmark_case_json}} case\"\n";
+    }
+    const char* previous_override = std::getenv("PKCHAT_BENCHMARKS");
+    const bool had_previous_override = previous_override != nullptr;
+    const std::string saved_override =
+        previous_override == nullptr ? std::string() : previous_override;
+    setenv("PKCHAT_BENCHMARKS", override_path.c_str(), 1);
+    pkchat::config::LoadResult overridden = pkchat::config::load_automatic(
+        pkchat::cli::Options{}, {"", "/nonexistent", "/nonexistent"}, false);
+    if (had_previous_override) {
+        setenv("PKCHAT_BENCHMARKS", saved_override.c_str(), 1);
+    } else {
+        unsetenv("PKCHAT_BENCHMARKS");
+    }
+    check(overridden.error.ok() &&
+              overridden.options.benchmark_grading_prompts.system_prompt ==
+                  "environment system" &&
+              overridden.options.benchmark_grading_prompts.case_prompt ==
+                  "environment {{benchmark_case_json}} case",
+          "PKCHAT_BENCHMARKS overrides the bundled benchmark prompt path");
 }
 
 void test_config_applies_model_settings() {
@@ -759,6 +914,7 @@ void run_all() {
     test_config_file_read_errors();
     test_config_parses_supported_values();
     test_config_parses_multiline_strings();
+    test_benchmark_prompt_configuration();
     test_config_reads_common_template();
     test_config_rejects_invalid_input();
     test_config_schema_rejects_invalid_settings_transactionally();

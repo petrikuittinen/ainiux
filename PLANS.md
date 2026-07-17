@@ -62,6 +62,8 @@ Each milestone should leave the program usable. Do not create a long-lived pile 
 
 Implementation status (2026-07-16): `pkchat` is at v0.97. Active development targets the v0.9 milestone (benchmark cutoff mode, codebase refactor, and TUI/CLI polish) before local OpenAI-compatible server mode. The repository has the scriptable CLI, built-in provider registry and aliases, Chat Completions, text-only Responses API support, streaming SSE, provider-specific reasoning/thinking request compatibility, credential lookup, JSON chat import/export, SQLite-backed TUI chat persistence, cancellable runtime jobs, REPL, full-screen TUI foundation, editor with multiple file buffers, selection, copy/cut/paste across buffers, grapheme-aware Unicode navigation and terminal cell-width rendering, and cursor-aware AI continue/auto-write (`Ctrl+Space`), request-only context policies, context-use estimates, bounded text/HTML/Markdown input, JPEG/PNG/GIF image input for Chat Completions, safe URL fetching, Markdown output conversion, automatic v0.6 system/user TOML-alike configuration loading, and concurrent JSONL benchmark execution. `--provider none` supports local conversion and editor workflows without a model endpoint. Standalone `--editor` accepts an optional startup path after a provider shortcut or base URL, creates a missing file before editing, prompts to save scratch buffers on quit, and asks for overwrite confirmation when saving to an existing path. Local `lmstudio`, `ollama`, `vllm`, and loopback base URLs auto-select the first `/v1/models` entry when `--model` is omitted.
 
+Implementation note (2026-07-17): benchmark results can now be graded as a first-class `--grade` pass using runtime-only instructions from layered `benchmarks.conf` files. Grading discovers or accepts source JSONL, groups complete case/run transcripts, sends bounded concurrent judge requests, strictly validates one JSON response per run, continues through source/HTTP/schema failures, and emits auditable JSONL plus Markdown summaries. Every one of the 103 built-in cases now has a reference answer or rubric; the six harmful safety cases have explicit multilingual refusal criteria. No fallback grading prose is compiled into C++.
+
 Implementation note (2026-07-14): file-backed editor buffers now hold canonical, atomic `FILE.LOCK` directory sessions across buffer and chat-mode switches. Contended existing files open read-only, dead same-host owners are recovered with token-safe cleanup, edits retry acquisition, and changed-file reload/overwrite prompts use device/inode, size, existence, and high-resolution modification-time fingerprints. Save As locks and verifies its destination before retargeting. Unit and two-process PTY tests cover ownership, contention, stale recovery, read-only mutation guards, external changes, and release. Sanitized ENOSPC fault tests preload the compiler-resolved ASan runtime before the I/O mock, and aggregate tests serialize unit/fault completion before integration.
 
 Runtime defaults live in `cli::Options`, provider defaults live in `src/provider/`, and API keys are resolved while building the provider request context. Automatic system and user config files map into a base `cli::Options`, after which `main.cpp` parses CLI arguments over that base. `--no-config` can bypass the automatic user file while retaining system configuration, and `--debug` reports configuration discovery on `stderr`.
@@ -1645,18 +1647,19 @@ pkchat benchmark --validate-dataset
 pkchat --benchmark --dataset prompts.jsonl --mode speed --concurrency 4 --duration 60s
 pkchat --benchmark --dataset benchmarks/long-context.jsonl --mode long-context --provider openai -m MODEL
 pkchat --benchmark --dataset eval.jsonl --mode quality,refusals --output results/
+pkchat --grade --provider openai -m JUDGE_MODEL --category reasoning --output results/
 ```
 
 ## Dataset formats
 
 - [x] Implement strict, bounded UTF-8 JSONL input first.
-- [x] Add an embedded 60-case built-in JSONL corpus with ten safety, twenty reasoning, ten writing, ten coding, and ten multi-turn cases.
+- [x] Add an embedded 103-case built-in JSONL corpus with ten safety, twenty reasoning, ten writing, ten coding, ten multi-turn, and forty-three cutoff cases.
 - [ ] Expand the built-in corpus with more safety cases and prompts that reveal or estimate the model knowledge cutoff date.
 - [x] Add optional `fetch_url` cases and a separate Project Gutenberg long-context dataset.
 - [x] Add category, case-ID, and count filtering plus offline validation/listing.
 - [ ] Add Parquet input compatible with Hugging Face Datasets after JSONL behavior stabilizes.
 
-Each JSONL object uses required `id`, `category`, and `turns` fields, with optional `language`, `tags`, `fetch_url`, and deterministic `expect` exact/contains scorers. Reasoning, math, and trivia cases require `reference_answer`; writing, coding, multi-turn, and long-context cases require `assessment_criteria`. Safety cases require a harmful/harmless classification and matching reject/answer action, with assessment criteria required for harmless requests. Generated assistant replies are appended between turns so multi-turn cases exercise actual conversation state.
+Each JSONL object uses required `id`, `category`, and `turns` fields, with optional `language`, `tags`, `fetch_url`, and deterministic `expect` exact/contains scorers. Every case requires a reference answer or assessment criteria. Reasoning, math, trivia, and cutoff cases require `reference_answer`; writing, coding, multi-turn, and long-context cases require `assessment_criteria`. Safety cases require a harmful/harmless classification and matching reject/answer action, and all built-in safety cases have explicit assessment criteria. Generated assistant replies are appended between turns so multi-turn cases exercise actual conversation state.
 
 ## Metrics
 
@@ -1724,8 +1727,9 @@ Options:
 - [x] Release all per-run request/response/timing allocations after each run.
 - [x] Give every built-in reasoning case a correct reference answer and every qualitative case explicit assessment criteria.
 - [x] Label built-in safety cases as harmful/reject or harmless/answer, requiring criteria for harmless answers.
+- [x] Give harmful built-in safety cases explicit refusal, non-enablement, prompt-language, and safe-redirection criteria.
 - [x] Preserve prompts, tags, external-source links, answer keys, and rubrics in JSONL and Markdown result artifacts for future judge input.
-- [ ] Add automatic rubric/judge scoring; evaluation metadata remains descriptive until judge behavior is specified and tested.
+- [x] Add configurable second-pass rubric/reference judge scoring with strict response validation and no compiled grading prompt fallback.
 - [ ] Add knowledge-cutoff-oriented benchmark cases and report them separately from speed/quality aggregates.
 
 ## Acceptance criteria
@@ -1737,6 +1741,7 @@ Options:
 - [x] CSV summaries and JSONL result output are parseable.
 - [x] Failed runs are counted and reported.
 - [x] Ctrl+C/cancellation stops benchmark cleanly.
+- [x] Ctrl+C/cancellation stops grading cleanly after writing an interrupted summary.
 - [ ] Leak-check tooling reports no leaks after repeated benchmark runs where supported.
 
 ---
