@@ -9,7 +9,7 @@
 
 #include <sstream>
 
-namespace pkchat::tui {
+namespace ainiux::tui {
 
 namespace {
 
@@ -348,4 +348,4 @@ PickerEscapeResult handle_attachment_list_escape(size_t item_count,
     return PickerEscapeResult::Cancelled;
 }
 
-}  // namespace pkchat::tui
+}  // namespace ainiux::tui

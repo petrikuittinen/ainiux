@@ -10,7 +10,7 @@
 #include "tui/events.hpp"
 #include "tui/tui.hpp"
 
-namespace pkchat::tui {
+namespace ainiux::tui {
 
 std::vector<std::string> selectable_provider_ids();
 std::string provider_picker_text(const std::vector<std::string>& provider_ids, size_t selected);
@@ -54,4 +54,4 @@ PickerEscapeResult handle_attachment_list_escape(size_t item_count,
                                                  size_t& pending_delete,
                                                  TuiMode& mode);
 
-}  // namespace pkchat::tui
+}  // namespace ainiux::tui

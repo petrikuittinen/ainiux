@@ -1,7 +1,7 @@
 #pragma once
 
-namespace pkchat::test::runtime {
+namespace ainiux::test::runtime {
 
 void run_all();
 
-}  // namespace pkchat::test::runtime
+}  // namespace ainiux::test::runtime

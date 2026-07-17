@@ -2,7 +2,7 @@
 
 #include <string>
 
-namespace pkchat::output {
+namespace ainiux::output {
 
 struct ThinkingChunk {
     std::string visible;
@@ -23,4 +23,4 @@ class ThinkingTraceSplitter {
 
 ThinkingChunk split_thinking_traces(const std::string& text);
 
-}  // namespace pkchat::output
+}  // namespace ainiux::output

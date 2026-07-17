@@ -2,7 +2,7 @@
 
 #include "provider/model_list_job.hpp"
 
-namespace pkchat::editor {
+namespace ainiux::editor {
 
 void EditorModelListRuntime::start(const provider::RequestContext& context) {
     provider::start_list_models_job(job, context, [this](Error error, provider::ModelsResult models) {
@@ -32,4 +32,4 @@ bool EditorModelListRuntime::process(const std::function<void(std::vector<std::s
     return true;
 }
 
-}  // namespace pkchat::editor
+}  // namespace ainiux::editor

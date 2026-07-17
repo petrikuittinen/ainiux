@@ -2,7 +2,7 @@
 
 #include <string>
 
-namespace pkchat::markdown {
+namespace ainiux::markdown {
 
 enum class OutputFormat {
     Plaintext,
@@ -18,4 +18,4 @@ std::string to_html_fragment(const std::string& markdown);
 std::string to_html_document(const std::string& markdown);
 std::string to_plaintext(const std::string& markdown);
 
-}  // namespace pkchat::markdown
+}  // namespace ainiux::markdown

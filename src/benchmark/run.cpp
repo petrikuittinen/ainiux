@@ -20,7 +20,7 @@
 #include "output/thinking.hpp"
 #include "runtime/runtime.hpp"
 
-namespace pkchat::benchmark {
+namespace ainiux::benchmark {
 namespace {
 
 struct PreparedCase {
@@ -216,8 +216,8 @@ RunOutcome run_case(const provider::RequestContext& request_context,
         }
         messages.push_back({"assistant", result.content});
         if (!warmup) {
-            const ::pkchat::output::ThinkingChunk separated =
-                ::pkchat::output::split_thinking_traces(result.content);
+            const ::ainiux::output::ThinkingChunk separated =
+                ::ainiux::output::split_thinking_traces(result.content);
             const double token_rate = provider::tokens_per_second(
                 result, request_context.options.stream);
             const double wall_token_rate = detail::wall_tokens_per_second(result);
@@ -797,4 +797,4 @@ Error run(const provider::RequestContext& context,
                            " benchmark case run(s) failed"};
 }
 
-}  // namespace pkchat::benchmark
+}  // namespace ainiux::benchmark

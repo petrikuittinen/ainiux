@@ -6,7 +6,7 @@
 #include <cctype>
 #include <sstream>
 
-namespace pkchat::tui {
+namespace ainiux::tui {
 
 namespace {
 
@@ -87,4 +87,4 @@ void restore_cli_context(provider::RequestContext& context, const provider::Requ
     context = cli_context;
 }
 
-}  // namespace pkchat::tui
+}  // namespace ainiux::tui

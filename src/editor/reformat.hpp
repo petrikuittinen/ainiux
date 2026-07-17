@@ -8,7 +8,7 @@
 #include <cstddef>
 #include <string>
 
-namespace pkchat::editor {
+namespace ainiux::editor {
 
 struct ReformatRequest {
     std::string content;
@@ -58,4 +58,4 @@ void start_reformat_job(ReformatRequest request,
                         runtime::EventQueue<ReformatEvent>& events,
                         runtime::JobHandle& job);
 
-}  // namespace pkchat::editor
+}  // namespace ainiux::editor

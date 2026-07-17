@@ -6,7 +6,7 @@
 #include <cstdint>
 #include <vector>
 
-namespace pkchat::editor::detail {
+namespace ainiux::editor::detail {
 
 struct DecodedChar {
     uint32_t codepoint = 0xFFFDU;
@@ -495,4 +495,4 @@ std::string pad_or_clip_ascii(const std::string& text, int width) {
     return out;
 }
 
-}  // namespace pkchat::editor::detail
+}  // namespace ainiux::editor::detail

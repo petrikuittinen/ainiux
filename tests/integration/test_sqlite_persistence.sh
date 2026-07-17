@@ -2,7 +2,7 @@
 set -eu
 
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
-PORT="${PKCHAT_SQLITE_TEST_PORT:-18181}"
+PORT="${AINIUX_SQLITE_TEST_PORT:-18181}"
 MODEL="mock-model"
 SERVER_LOG="$ROOT/build/sqlite_mock_server.log"
 HOME_DIR="$ROOT/build/sqlite-integration-home"
@@ -27,6 +27,6 @@ done
 
 BASE="http://127.0.0.1:$PORT"
 python3 "$ROOT/tests/integration/tui_sqlite_driver.py" \
-    "$ROOT/pkchat" "$BASE" "$MODEL" "$HOME_DIR" all
+    "$ROOT/ainiux" "$BASE" "$MODEL" "$HOME_DIR" all
 
 echo "sqlite persistence integration tests passed"

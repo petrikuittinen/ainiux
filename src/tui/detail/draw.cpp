@@ -13,7 +13,7 @@
 #include <unistd.h>
 #include <vector>
 
-namespace pkchat::tui::detail {
+namespace ainiux::tui::detail {
 
 namespace {
 
@@ -353,7 +353,7 @@ std::vector<StyledSegment> markdown_outside_thinking_segments(
 }
 
 StyleRole status_role_for_text(const std::string& status) {
-    if (starts_with(status, "PKCHAT_ERR_") || starts_with(status, "Unknown command") ||
+    if (starts_with(status, "AINIUX_ERR_") || starts_with(status, "Unknown command") ||
         starts_with(status, "Usage:") || starts_with(status, "Cannot ") ||
         starts_with(status, "No previous") || starts_with(status, "A model job") ||
         starts_with(status, "A file job") || starts_with(status, "terminal input error")) {
@@ -554,4 +554,4 @@ std::vector<StyledLine> panel_lines_for_text(const std::string& text,
     return lines;
 }
 
-}  // namespace pkchat::tui::detail
+}  // namespace ainiux::tui::detail

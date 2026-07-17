@@ -17,7 +17,7 @@
 #include <signal.h>
 #include <unistd.h>
 
-namespace pkchat::editor {
+namespace ainiux::editor {
 namespace {
 
 constexpr const char* kOwnerFileName = "owner";
@@ -370,4 +370,4 @@ std::string editor_lock_owner_summary(const EditorLockAttempt& attempt) {
     return out.str();
 }
 
-}  // namespace pkchat::editor
+}  // namespace ainiux::editor

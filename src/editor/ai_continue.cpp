@@ -5,7 +5,7 @@
 #include "editor/editor_assist.hpp"
 #include "tui/tui.hpp"
 
-namespace pkchat::editor {
+namespace ainiux::editor {
 
 AiContinueSettings ai_continue_settings(const cli::Options& options) {
     AiContinueSettings settings;
@@ -114,4 +114,4 @@ void start_continue_job(const AiContinueContext& context,
                      job);
 }
 
-}  // namespace pkchat::editor
+}  // namespace ainiux::editor

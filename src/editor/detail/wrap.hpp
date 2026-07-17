@@ -6,7 +6,7 @@
 
 #include "editor/editor.hpp"
 
-namespace pkchat::editor::detail {
+namespace ainiux::editor::detail {
 
 struct WrapSegment {
     size_t start = 0;
@@ -65,4 +65,4 @@ size_t offset_for_wrapped_location(const PieceTable& text,
                                    size_t tab_width = 4);
 std::string pad_or_clip_ascii(const std::string& text, int width);
 
-}  // namespace pkchat::editor::detail
+}  // namespace ainiux::editor::detail

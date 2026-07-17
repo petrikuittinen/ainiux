@@ -8,7 +8,7 @@
 
 struct sqlite3;
 
-namespace pkchat::chat {
+namespace ainiux::chat {
 
 struct DatabasePathResult {
     std::string path;
@@ -58,4 +58,4 @@ class SqliteStore {
 
 DatabasePathResult default_sqlite_database_path();
 
-}  // namespace pkchat::chat
+}  // namespace ainiux::chat

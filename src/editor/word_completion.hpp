@@ -8,7 +8,7 @@
 #include <string>
 #include <vector>
 
-namespace pkchat::editor {
+namespace ainiux::editor {
 
 struct EditorState;
 
@@ -65,4 +65,4 @@ class WordCompleter {
 
 std::string word_completion_status(const WordCompletionResult& result);
 
-}  // namespace pkchat::editor
+}  // namespace ainiux::editor

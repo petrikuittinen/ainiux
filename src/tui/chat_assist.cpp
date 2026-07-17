@@ -4,7 +4,7 @@
 #include "editor/assist_runtime.hpp"
 #include "search/search.hpp"
 
-namespace pkchat::tui {
+namespace ainiux::tui {
 
 std::optional<std::string> chat_assist_turn_prompt(const editor::ParsedAssistCommand& parsed,
                                                    const editor::EditorAssistConfig& config) {
@@ -121,4 +121,4 @@ bool handle_chat_assist_continue_key(const editor::EditorAssistConfig& assist_co
     return true;
 }
 
-}  // namespace pkchat::tui
+}  // namespace ainiux::tui

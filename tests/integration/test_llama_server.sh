@@ -2,8 +2,8 @@
 set -eu
 
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
-BASE="${PKCHAT_LLAMA_SERVER_URL:-http://127.0.0.1:30000}"
-MODEL="${PKCHAT_LLAMA_SERVER_MODEL:-}"
+BASE="${AINIUX_LLAMA_SERVER_URL:-http://127.0.0.1:30000}"
+MODEL="${AINIUX_LLAMA_SERVER_MODEL:-}"
 
 if ! curl -fsS "$BASE/v1/models" >/dev/null 2>&1; then
     echo "skipping llama-server integration test: $BASE/v1/models is unavailable" >&2
@@ -26,19 +26,19 @@ raise SystemExit("no model id found in llama-server /v1/models response")
 ')
 fi
 
-models_markdown=$("$ROOT/pkchat" "$BASE" --list-models)
+models_markdown=$("$ROOT/ainiux" "$BASE" --list-models)
 printf '%s\n' "$models_markdown" | grep '131,072 tokens\|131072 tokens' >/dev/null
 
-auto_model_out=$("$ROOT/pkchat" "$BASE" --quiet --no-stream -p "ping")
+auto_model_out=$("$ROOT/ainiux" "$BASE" --quiet --no-stream -p "ping")
 test -n "$auto_model_out"
 
 verbose_err="$ROOT/build/llama-server-verbose.err"
-verbose_out=$("$ROOT/pkchat" "$BASE" -v --stream -m "$MODEL" -p "hello" 2>"$verbose_err")
+verbose_out=$("$ROOT/ainiux" "$BASE" -v --stream -m "$MODEL" -p "hello" 2>"$verbose_err")
 test -n "$verbose_out"
 grep 'context: ' "$verbose_err" | grep '%)' >/dev/null
 
 wrong_verbose_err="$ROOT/build/llama-server-wrong-model.err"
-wrong_verbose_out=$("$ROOT/pkchat" "$BASE" -v --stream -m "definitely-not-a-model" -p "hello" 2>"$wrong_verbose_err")
+wrong_verbose_out=$("$ROOT/ainiux" "$BASE" -v --stream -m "definitely-not-a-model" -p "hello" 2>"$wrong_verbose_err")
 test -n "$wrong_verbose_out"
 grep 'context: ' "$wrong_verbose_err" | grep '%)' >/dev/null
 

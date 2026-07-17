@@ -6,7 +6,7 @@
 #include <iomanip>
 #include <sstream>
 
-namespace pkchat::tui {
+namespace ainiux::tui {
 namespace {
 
 std::string provider_model_status_label(const std::string& provider_name, const std::string& model_name) {
@@ -62,7 +62,7 @@ std::string ready_status() {
 
 std::string sqlite_unavailable_status(const std::string& reason) {
     if (reason.empty()) {
-        return "Saved chat database unavailable; move ~/.pkchat/pkchat.db aside and restart pkchat";
+        return "Saved chat database unavailable; move ~/.ainiux/ainiux.db aside and restart ainiux";
     }
     return "Saved chat database unavailable: " + reason;
 }
@@ -78,7 +78,9 @@ std::string chat_startup_status(const provider::RequestContext& context) {
     if (context.options.model.empty()) {
         return "Choose a model with /model · Change provider with /provider";
     }
-    return provider_model_status_message(context, "ready · Change provider with /provider · Open saved threads with /list");
+    // Keep this short enough that "/list" remains visible on an 80-column status line
+    // after the "[provider / model] " prefix (integration tests assert on that hint).
+    return provider_model_status_message(context, "ready · /provider · /list");
 }
 
 std::string generation_ready_status(const std::string& provider_name,
@@ -186,4 +188,4 @@ bool pop_last_chat_message(chat::Session& session, std::string& removed_role) {
     return false;
 }
 
-}  // namespace pkchat::tui
+}  // namespace ainiux::tui

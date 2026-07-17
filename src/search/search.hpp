@@ -7,7 +7,7 @@
 #include "common.hpp"
 #include "runtime/runtime.hpp"
 
-namespace pkchat::search {
+namespace ainiux::search {
 
 struct SearchResult {
     std::string title;
@@ -69,4 +69,4 @@ Error parse_searxng_response(const std::string& body,
                              int max_results,
                              std::vector<SearchResult>& results);
 
-}  // namespace pkchat::search
+}  // namespace ainiux::search

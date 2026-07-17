@@ -3,7 +3,7 @@
 #include <cstddef>
 #include <string>
 
-namespace pkchat::editor {
+namespace ainiux::editor {
 
 struct Selection {
     size_t anchor = 0;
@@ -44,4 +44,4 @@ struct MovementKeyEvent {
 
 bool parse_movement_sequence(const std::string& sequence, MovementKeyEvent& out);
 
-}  // namespace pkchat::editor
+}  // namespace ainiux::editor

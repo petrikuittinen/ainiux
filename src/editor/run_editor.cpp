@@ -36,7 +36,7 @@
 #include <vector>
 #include <unistd.h>
 
-namespace pkchat::editor {
+namespace ainiux::editor {
 namespace {
 
 struct HelpViewSession {
@@ -2628,4 +2628,4 @@ app::EditorRunResult run_editor(const std::string& path,
     return {0, app::InteractiveUiTarget::Quit};
 }
 
-}  // namespace pkchat::editor
+}  // namespace ainiux::editor

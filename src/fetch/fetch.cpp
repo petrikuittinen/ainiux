@@ -6,7 +6,7 @@
 #include "html/html.hpp"
 #include "http/http.hpp"
 
-namespace pkchat::fetch {
+namespace ainiux::fetch {
 namespace {
 
 bool ends_with(const std::string& text, const std::string& suffix) {
@@ -280,4 +280,4 @@ Error fetch_text(const std::string& url,
     return ok_error();
 }
 
-}  // namespace pkchat::fetch
+}  // namespace ainiux::fetch

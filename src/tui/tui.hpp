@@ -9,12 +9,12 @@
 #include "provider/provider.hpp"
 #include "tui/theme_types.hpp"
 
-namespace pkchat::app {
+namespace ainiux::app {
 struct TuiRunResult;
 struct InteractiveSession;
 }
 
-namespace pkchat::tui {
+namespace ainiux::tui {
 
 enum class ActivityKind { None, Thinking, Streaming };
 
@@ -82,8 +82,8 @@ RegenerationPlan regeneration_plan_for_session(const chat::Session& session);
 bool last_unanswered_user_message(const chat::Session& session, std::size_t& index);
 bool last_editable_chat_message(const chat::Session& session, std::size_t& index);
 bool pop_last_chat_message(chat::Session& session, std::string& removed_role);
-pkchat::app::TuiRunResult run(provider::RequestContext context,
+ainiux::app::TuiRunResult run(provider::RequestContext context,
                               chat::Session session,
-                              pkchat::app::InteractiveSession* interactive = nullptr);
+                              ainiux::app::InteractiveSession* interactive = nullptr);
 
-}  // namespace pkchat::tui
+}  // namespace ainiux::tui

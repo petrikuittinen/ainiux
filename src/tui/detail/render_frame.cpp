@@ -8,7 +8,7 @@
 #include <utility>
 #include <vector>
 
-namespace pkchat::tui::detail {
+namespace ainiux::tui::detail {
 
 editor::EditorState empty_input_editor(size_t undo_limit) {
     editor::EditorState input = editor::EditorState::from_text("");
@@ -138,4 +138,4 @@ void render(const chat::Session& session,
     std::cout.flush();
 }
 
-}  // namespace pkchat::tui::detail
+}  // namespace ainiux::tui::detail

@@ -5,7 +5,7 @@
 #include "context/policy.hpp"
 #include "editor/autosave.hpp"
 #include "editor/editor_prompts.hpp"
-#include "pkchat/model_setting.hpp"
+#include "ainiux/model_setting.hpp"
 #include "tui/theme_registry.hpp"
 
 #include <array>
@@ -20,7 +20,7 @@
 #include <sstream>
 #include <utility>
 
-namespace pkchat::config {
+namespace ainiux::config {
 namespace {
 
 bool is_horizontal_space(char ch) {
@@ -704,7 +704,7 @@ Error auto_save_byte_size(const Entry& entry, long long& output) {
     if (!entry.value.is_string()) {
         return schema_error(entry, "expected an integer or byte size such as 10M");
     }
-    Error err = pkchat::editor::parse_byte_size(entry.value.string, output);
+    Error err = ainiux::editor::parse_byte_size(entry.value.string, output);
     if (!err.ok()) {
         return schema_error(entry, err.message);
     }
@@ -837,13 +837,13 @@ Error auto_save_mode(const Entry& entry, bool& output) {
     return schema_error(entry, "expected on, off, true, false, yes, or no");
 }
 
-pkchat::editor::EditorAssistCommand* find_assist_command_by_name(pkchat::editor::EditorAssistConfig& config,
+ainiux::editor::EditorAssistCommand* find_assist_command_by_name(ainiux::editor::EditorAssistConfig& config,
                                                                 const std::string& command) {
     std::string normalized = lower_config_ascii(trim_config_ascii(command));
     while (!normalized.empty() && normalized.front() == '/') {
         normalized.erase(normalized.begin());
     }
-    for (pkchat::editor::EditorAssistCommand& entry : config.commands) {
+    for (ainiux::editor::EditorAssistCommand& entry : config.commands) {
         std::string entry_name = lower_config_ascii(trim_config_ascii(entry.command));
         while (!entry_name.empty() && entry_name.front() == '/') {
             entry_name.erase(entry_name.begin());
@@ -855,7 +855,7 @@ pkchat::editor::EditorAssistCommand* find_assist_command_by_name(pkchat::editor:
     return nullptr;
 }
 
-Error parse_assist_command_modes(const Entry& entry, std::vector<pkchat::editor::AssistCommandMode>& modes) {
+Error parse_assist_command_modes(const Entry& entry, std::vector<ainiux::editor::AssistCommandMode>& modes) {
     Error err = require_type(entry, Value::Type::String);
     if (!err.ok()) {
         return err;
@@ -872,17 +872,17 @@ Error parse_assist_command_modes(const Entry& entry, std::vector<pkchat::editor:
             continue;
         }
         if (token == "continue") {
-            modes.push_back(pkchat::editor::AssistCommandMode::Continue);
+            modes.push_back(ainiux::editor::AssistCommandMode::Continue);
         } else if (token == "selection") {
-            modes.push_back(pkchat::editor::AssistCommandMode::Selection);
+            modes.push_back(ainiux::editor::AssistCommandMode::Selection);
         } else if (token == "all") {
-            modes.push_back(pkchat::editor::AssistCommandMode::All);
+            modes.push_back(ainiux::editor::AssistCommandMode::All);
         } else if (token == "insert" || token == "local_insert" || token == "localinsert") {
-            modes.push_back(pkchat::editor::AssistCommandMode::Insert);
+            modes.push_back(ainiux::editor::AssistCommandMode::Insert);
         } else if (token == "fact") {
-            modes.push_back(pkchat::editor::AssistCommandMode::Fact);
+            modes.push_back(ainiux::editor::AssistCommandMode::Fact);
         } else if (token == "newbuffer" || token == "new" || token == "n") {
-            modes.push_back(pkchat::editor::AssistCommandMode::NewBuffer);
+            modes.push_back(ainiux::editor::AssistCommandMode::NewBuffer);
         } else {
             return schema_error(entry, "expected continue, selection, all, insert, newbuffer, or fact");
         }
@@ -908,8 +908,8 @@ Error validate_assist_command_string(const Entry& entry, std::string& command) {
     return ok_error();
 }
 
-void merge_assist_command(pkchat::editor::EditorAssistConfig& config, pkchat::editor::EditorAssistCommand command) {
-    if (pkchat::editor::EditorAssistCommand* existing = find_assist_command_by_name(config, command.command)) {
+void merge_assist_command(ainiux::editor::EditorAssistConfig& config, ainiux::editor::EditorAssistCommand command) {
+    if (ainiux::editor::EditorAssistCommand* existing = find_assist_command_by_name(config, command.command)) {
         *existing = std::move(command);
         return;
     }
@@ -917,13 +917,13 @@ void merge_assist_command(pkchat::editor::EditorAssistConfig& config, pkchat::ed
 }
 
 Error apply_legacy_assist_prompt(const Entry& entry,
-                                 pkchat::editor::EditorAssistConfig& config,
+                                 ainiux::editor::EditorAssistConfig& config,
                                  const std::string& command_name) {
     Error err = require_type(entry, Value::Type::String);
     if (!err.ok()) {
         return err;
     }
-    if (pkchat::editor::EditorAssistCommand* command = find_assist_command_by_name(config, command_name)) {
+    if (ainiux::editor::EditorAssistCommand* command = find_assist_command_by_name(config, command_name)) {
         command->prompt = entry.value.string;
     }
     return ok_error();
@@ -1297,7 +1297,7 @@ std::vector<std::string> config_paths_from_dirs(const std::string& dirs, const c
         const size_t end = colon == std::string::npos ? dirs.size() : colon;
         const std::string dir = dirs.substr(begin, end - begin);
         if (absolute_path(dir)) {
-            priority_order.push_back((std::filesystem::path(dir) / "pkchat" / filename).string());
+            priority_order.push_back((std::filesystem::path(dir) / "ainiux" / filename).string());
         }
         if (colon == std::string::npos) {
             break;
@@ -1496,7 +1496,7 @@ Error apply_configured_model_settings(const Document& document, cli::Options& ca
 Error apply_configured_assist_commands(const Document& document, cli::Options& candidate) {
     struct PartialCommand {
         std::optional<std::string> string;
-        std::optional<std::vector<pkchat::editor::AssistCommandMode>> modes;
+        std::optional<std::vector<ainiux::editor::AssistCommandMode>> modes;
         std::optional<std::string> prompt;
         SourceLocation source;
     };
@@ -1532,7 +1532,7 @@ Error apply_configured_assist_commands(const Document& document, cli::Options& c
             }
             partial.string = std::move(command);
         } else if (key == "modes") {
-            std::vector<pkchat::editor::AssistCommandMode> modes;
+            std::vector<ainiux::editor::AssistCommandMode> modes;
             Error err = parse_assist_command_modes(entry, modes);
             if (!err.ok()) {
                 return err;
@@ -1566,8 +1566,8 @@ Error apply_configured_assist_commands(const Document& document, cli::Options& c
                         std::to_string(partial.source.column) +
                         ": invalid config setting [command] " + *partial.string + ": prompt is required"};
         }
-        const std::vector<pkchat::editor::AssistCommandMode>& modes =
-            partial.modes.has_value() ? *partial.modes : pkchat::editor::standard_assist_modes();
+        const std::vector<ainiux::editor::AssistCommandMode>& modes =
+            partial.modes.has_value() ? *partial.modes : ainiux::editor::standard_assist_modes();
         merge_assist_command(candidate.editor_assist_config,
                              {*partial.string, modes, *partial.prompt});
     }
@@ -1687,12 +1687,12 @@ Error validate_benchmark_grading_prompts(const cli::BenchmarkGradingPrompts& pro
     if (trim_config_ascii(prompts.system_prompt).empty()) {
         return {ErrorCode::Config,
                 "benchmark grading system prompt is unavailable; install config/benchmarks.conf "
-                "or share/pkchat/benchmarks.conf, or configure [grading].system_prompt"};
+                "or share/ainiux/benchmarks.conf, or configure [grading].system_prompt"};
     }
     if (trim_config_ascii(prompts.case_prompt).empty()) {
         return {ErrorCode::Config,
                 "benchmark grading case prompt is unavailable; install config/benchmarks.conf "
-                "or share/pkchat/benchmarks.conf, or configure [grading].case_prompt"};
+                "or share/ainiux/benchmarks.conf, or configure [grading].case_prompt"};
     }
     constexpr const char* kPlaceholder = "{{benchmark_case_json}}";
     const size_t first = prompts.case_prompt.find(kPlaceholder);
@@ -1856,10 +1856,10 @@ Error apply_document(const Document& document, cli::Options& options) {
             }
         } else if (name == "output.render_format") {
             err = require_type(entry, Value::Type::String);
-            if (err.ok() && !pkchat::markdown::parse_output_format(entry.value.string, candidate.output_format)) {
+            if (err.ok() && !ainiux::markdown::parse_output_format(entry.value.string, candidate.output_format)) {
                 err = schema_error(entry, "expected html, md, or plaintext");
             } else if (err.ok()) {
-                const bool rendered = candidate.output_format != pkchat::markdown::OutputFormat::Markdown;
+                const bool rendered = candidate.output_format != ainiux::markdown::OutputFormat::Markdown;
                 candidate.output_format_explicit = rendered;
                 candidate.rendered_output_format_explicit = rendered;
             }
@@ -2065,12 +2065,12 @@ Environment process_environment() {
 
 std::string user_config_path(const Environment& environment) {
     if (absolute_path(environment.xdg_config_home)) {
-        return (std::filesystem::path(environment.xdg_config_home) / "pkchat" / "config.conf").string();
+        return (std::filesystem::path(environment.xdg_config_home) / "ainiux" / "config.conf").string();
     }
     if (!absolute_path(environment.home)) {
         return {};
     }
-    return (std::filesystem::path(environment.home) / ".config" / "pkchat" / "config.conf").string();
+    return (std::filesystem::path(environment.home) / ".config" / "ainiux" / "config.conf").string();
 }
 
 std::vector<std::string> system_config_paths(const Environment& environment) {
@@ -2080,13 +2080,13 @@ std::vector<std::string> system_config_paths(const Environment& environment) {
 
 std::string user_editor_commands_path(const Environment& environment) {
     if (absolute_path(environment.xdg_config_home)) {
-        return (std::filesystem::path(environment.xdg_config_home) / "pkchat" / "editor-commands.conf")
+        return (std::filesystem::path(environment.xdg_config_home) / "ainiux" / "editor-commands.conf")
             .string();
     }
     if (!absolute_path(environment.home)) {
         return {};
     }
-    return (std::filesystem::path(environment.home) / ".config" / "pkchat" / "editor-commands.conf")
+    return (std::filesystem::path(environment.home) / ".config" / "ainiux" / "editor-commands.conf")
         .string();
 }
 
@@ -2097,25 +2097,25 @@ std::vector<std::string> system_editor_commands_paths(const Environment& environ
 
 std::vector<std::string> bundled_editor_commands_paths() {
     std::vector<std::string> paths;
-    if (const char* override_path = std::getenv("PKCHAT_EDITOR_COMMANDS")) {
+    if (const char* override_path = std::getenv("AINIUX_EDITOR_COMMANDS")) {
         if (override_path[0] != '\0') {
             paths.emplace_back(override_path);
         }
     }
     paths.emplace_back("config/editor-commands.conf");
-    paths.emplace_back("/usr/local/share/pkchat/editor-commands.conf");
-    paths.emplace_back("/usr/share/pkchat/editor-commands.conf");
+    paths.emplace_back("/usr/local/share/ainiux/editor-commands.conf");
+    paths.emplace_back("/usr/share/ainiux/editor-commands.conf");
     return paths;
 }
 
 std::string user_themes_path(const Environment& environment) {
     if (absolute_path(environment.xdg_config_home)) {
-        return (std::filesystem::path(environment.xdg_config_home) / "pkchat" / "themes.conf").string();
+        return (std::filesystem::path(environment.xdg_config_home) / "ainiux" / "themes.conf").string();
     }
     if (!absolute_path(environment.home)) {
         return {};
     }
-    return (std::filesystem::path(environment.home) / ".config" / "pkchat" / "themes.conf").string();
+    return (std::filesystem::path(environment.home) / ".config" / "ainiux" / "themes.conf").string();
 }
 
 std::vector<std::string> system_themes_paths(const Environment& environment) {
@@ -2125,27 +2125,27 @@ std::vector<std::string> system_themes_paths(const Environment& environment) {
 
 std::vector<std::string> bundled_themes_paths() {
     std::vector<std::string> paths;
-    if (const char* override_path = std::getenv("PKCHAT_THEMES")) {
+    if (const char* override_path = std::getenv("AINIUX_THEMES")) {
         if (override_path[0] != '\0') {
             paths.emplace_back(override_path);
         }
     }
     paths.emplace_back("config/themes.conf");
-    paths.emplace_back("/usr/local/share/pkchat/themes.conf");
-    paths.emplace_back("/usr/share/pkchat/themes.conf");
+    paths.emplace_back("/usr/local/share/ainiux/themes.conf");
+    paths.emplace_back("/usr/share/ainiux/themes.conf");
     return paths;
 }
 
 std::string user_benchmarks_path(const Environment& environment) {
     if (absolute_path(environment.xdg_config_home)) {
-        return (std::filesystem::path(environment.xdg_config_home) / "pkchat" /
+        return (std::filesystem::path(environment.xdg_config_home) / "ainiux" /
                 "benchmarks.conf")
             .string();
     }
     if (!absolute_path(environment.home)) {
         return {};
     }
-    return (std::filesystem::path(environment.home) / ".config" / "pkchat" /
+    return (std::filesystem::path(environment.home) / ".config" / "ainiux" /
             "benchmarks.conf")
         .string();
 }
@@ -2158,14 +2158,14 @@ std::vector<std::string> system_benchmarks_paths(const Environment& environment)
 
 std::vector<std::string> bundled_benchmarks_paths() {
     std::vector<std::string> paths;
-    if (const char* override_path = std::getenv("PKCHAT_BENCHMARKS")) {
+    if (const char* override_path = std::getenv("AINIUX_BENCHMARKS")) {
         if (override_path[0] != '\0') {
             paths.emplace_back(override_path);
         }
     }
     paths.emplace_back("config/benchmarks.conf");
-    paths.emplace_back("/usr/local/share/pkchat/benchmarks.conf");
-    paths.emplace_back("/usr/share/pkchat/benchmarks.conf");
+    paths.emplace_back("/usr/local/share/ainiux/benchmarks.conf");
+    paths.emplace_back("/usr/share/ainiux/benchmarks.conf");
     return paths;
 }
 
@@ -2173,7 +2173,7 @@ LoadResult load_automatic(const cli::Options& base_options,
                           const Environment& environment,
                           bool load_user_config) {
     LoadResult result{base_options, {}, {}, ok_error()};
-    result.options.editor_assist_config = pkchat::editor::empty_editor_assist_config();
+    result.options.editor_assist_config = ainiux::editor::empty_editor_assist_config();
     result.options.tui_themes = tui::default_theme_registry();
 
     auto load_benchmarks_path = [&](const std::string& path,
@@ -2401,7 +2401,7 @@ LoadResult load_automatic(const cli::Options& base_options,
     }
 
     if (!editor_commands_loaded) {
-        result.options.editor_assist_config = pkchat::editor::default_editor_assist_config();
+        result.options.editor_assist_config = ainiux::editor::default_editor_assist_config();
     }
 
     const std::vector<std::string> paths = system_config_paths(environment);
@@ -2483,4 +2483,4 @@ const char* value_type_name(Value::Type type) {
     return "string";
 }
 
-}  // namespace pkchat::config
+}  // namespace ainiux::config

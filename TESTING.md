@@ -1,4 +1,4 @@
-# Testing pkchat
+# Testing ainiux
 
 This document describes how to run the automated test suite, what it covers, and which mocks are used.
 
@@ -19,7 +19,7 @@ Useful targets:
 | `make test-integration` | Mock-server end-to-end script plus SQLite TUI persistence script |
 | `make test-integration-sqlite` | SQLite TUI persistence only |
 | `make test-sanitize` | AddressSanitizer/UBSan build of the full `make test` path |
-| `make test-leak` | Valgrind on `test_runner`, `test_io_faults`, and `pkchat --version` |
+| `make test-leak` | Valgrind on `test_runner`, `test_io_faults`, and `ainiux --version` |
 
 CI (`.github/workflows/ci.yml`) runs `make test` and `make test-leak` on Ubuntu with libcurl, libsqlite3, Python 3, and Valgrind installed.
 
@@ -83,14 +83,14 @@ Used by `build/test_io_faults` for real local timeout tests:
 Built by the Makefile and preloaded for ENOSPC tests:
 
 ```sh
-PKCHAT_MOCK_ENOSPC=1 LD_PRELOAD=build/posix_io_mock.so build/test_io_faults --enospc
+AINIUX_MOCK_ENOSPC=1 LD_PRELOAD=build/posix_io_mock.so build/test_io_faults --enospc
 ```
 
-Write attempts to paths containing `mock-enospc` fail with `ENOSPC`. Optional `PKCHAT_MOCK_EACCES=1` blocks writes to `mock-eacces` paths.
+Write attempts to paths containing `mock-enospc` fail with `ENOSPC`. Optional `AINIUX_MOCK_EACCES=1` blocks writes to `mock-eacces` paths.
 
 ### `tests/integration/tui_sqlite_driver.py`
 
-PTY driver for TUI commands. Uses an isolated `HOME` so the database is created at `$HOME/.pkchat/pkchat.db` and verified with Python `sqlite3`.
+PTY driver for TUI commands. Uses an isolated `HOME` so the database is created at `$HOME/.ainiux/ainiux.db` and verified with Python `sqlite3`.
 
 ## Known gaps
 

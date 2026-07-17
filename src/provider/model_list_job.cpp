@@ -1,6 +1,6 @@
 #include "provider/model_list_job.hpp"
 
-namespace pkchat::provider {
+namespace ainiux::provider {
 
 void start_list_models_job(runtime::JobHandle& job,
                            RequestContext context,
@@ -13,4 +13,4 @@ void start_list_models_job(runtime::JobHandle& job,
     });
 }
 
-}  // namespace pkchat::provider
+}  // namespace ainiux::provider

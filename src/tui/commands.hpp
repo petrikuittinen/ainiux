@@ -13,7 +13,7 @@
 #include "tui/theme_registry.hpp"
 #include "tui/tui.hpp"
 
-namespace pkchat::tui {
+namespace ainiux::tui {
 
 struct TuiCommandHandlers {
     std::function<void()> quit;
@@ -66,4 +66,4 @@ struct TuiCommandContext {
 
 void handle_tui_command(const std::string& text, TuiCommandContext& ctx, TuiCommandHandlers& handlers);
 
-}  // namespace pkchat::tui
+}  // namespace ainiux::tui

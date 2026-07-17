@@ -1,12 +1,12 @@
 #include "tui/activity.hpp"
 
-#include "pkchat/version.hpp"
+#include "ainiux/version.hpp"
 #include "provider/provider.hpp"
 
 #include <algorithm>
 
 
-namespace pkchat::tui {
+namespace ainiux::tui {
 namespace {
 
 constexpr const char* kThinkingFrames[] = {
@@ -171,4 +171,4 @@ ActivityKind activity_kind_for_pending_assistant(const chat::Session& session,
     return ActivityKind::Streaming;
 }
 
-}  // namespace pkchat::tui
+}  // namespace ainiux::tui

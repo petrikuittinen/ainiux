@@ -12,7 +12,7 @@
 #include <string>
 #include <vector>
 
-namespace pkchat::test::mock {
+namespace ainiux::test::mock {
 
 namespace {
 
@@ -128,4 +128,4 @@ std::string SlowHttpServer::base_url() const {
     return "http://127.0.0.1:" + std::to_string(port_);
 }
 
-}  // namespace pkchat::test::mock
+}  // namespace ainiux::test::mock

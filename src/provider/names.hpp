@@ -1,6 +1,6 @@
 #pragma once
 
-namespace pkchat::provider::names {
+namespace ainiux::provider::names {
 
 inline constexpr const char kNone[] = "none";
 inline constexpr const char kOffline[] = "offline";
@@ -16,4 +16,4 @@ inline constexpr const char kVllm[] = "vllm";
 inline constexpr const char kLlamacpp[] = "llamacpp";
 inline constexpr const char kSglang[] = "sglang";
 
-}  // namespace pkchat::provider::names
+}  // namespace ainiux::provider::names

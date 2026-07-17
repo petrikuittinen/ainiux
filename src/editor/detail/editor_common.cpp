@@ -4,13 +4,13 @@
 
 #include "common.hpp"
 
-namespace pkchat::editor {
+namespace ainiux::editor {
 
 void update_preferred_column(EditorState& state) {
     state.preferred_column = state.text.display_column_for_offset(state.cursor, state.tab_width);
 }
 
-std::string trim_ascii_copy(std::string text) { return pkchat::ascii_trim(std::move(text)); }
+std::string trim_ascii_copy(std::string text) { return ainiux::ascii_trim(std::move(text)); }
 
 namespace detail {
 
@@ -58,4 +58,4 @@ size_t selection_end_exclusive_for(const Selection& selection, const PieceTable&
 
 }  // namespace detail
 
-}  // namespace pkchat::editor
+}  // namespace ainiux::editor

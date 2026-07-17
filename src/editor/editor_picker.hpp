@@ -6,7 +6,7 @@
 
 #include "editor/editor.hpp"
 
-namespace pkchat::editor {
+namespace ainiux::editor {
 
 struct EditorProviderModelPicker {
     bool active = false;
@@ -26,4 +26,4 @@ struct EditorProviderModelPicker {
     bool handle_escape(const std::string& sequence, std::string& status_out);
 };
 
-}  // namespace pkchat::editor
+}  // namespace ainiux::editor

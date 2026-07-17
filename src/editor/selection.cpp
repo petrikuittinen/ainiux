@@ -2,7 +2,7 @@
 
 #include <cctype>
 
-namespace pkchat::editor {
+namespace ainiux::editor {
 
 namespace {
 
@@ -259,4 +259,4 @@ bool parse_movement_sequence(const std::string& sequence, MovementKeyEvent& out)
     return false;
 }
 
-}  // namespace pkchat::editor
+}  // namespace ainiux::editor

@@ -6,14 +6,14 @@
 #include <utility>
 
 #include "chat/settings.hpp"
-#include "pkchat/model_setting.hpp"
+#include "ainiux/model_setting.hpp"
 #include "context/context.hpp"
 #include "json/json.hpp"
 #include "markdown/markdown.hpp"
 #include "output/thinking.hpp"
-#include "pkchat/version.hpp"
+#include "ainiux/version.hpp"
 
-namespace pkchat::app {
+namespace ainiux::app {
 
 namespace {
 
@@ -309,4 +309,4 @@ Error send_session_turn(provider::RequestContext& context,
     return ok_error();
 }
 
-}  // namespace pkchat::app
+}  // namespace ainiux::app

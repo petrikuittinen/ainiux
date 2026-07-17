@@ -160,7 +160,7 @@ def main():
         return 2
 
     binary = sys.argv[1]
-    tmpdir = tempfile.mkdtemp(prefix="pkchat-editor-buffers-")
+    tmpdir = tempfile.mkdtemp(prefix="ainiux-editor-buffers-")
     check_new_file_mode(binary, tmpdir, "new-document.md", "markdown")
     check_new_file_mode(binary, tmpdir, "new-document.html", "html")
     check_new_file_mode(binary, tmpdir, "new-document.xhtml", "htmlonly")

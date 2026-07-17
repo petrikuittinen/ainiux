@@ -1,7 +1,7 @@
 #pragma once
 
-namespace pkchat::test::json {
+namespace ainiux::test::json {
 
 void run_all();
 
-}  // namespace pkchat::test::json
+}  // namespace ainiux::test::json

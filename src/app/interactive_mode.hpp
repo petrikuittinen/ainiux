@@ -10,7 +10,7 @@
 #include "editor/editor_prompts.hpp"
 #include "provider/provider.hpp"
 
-namespace pkchat::app {
+namespace ainiux::app {
 
 enum class InteractiveMode {
     Editor,
@@ -67,4 +67,4 @@ void ensure_chat_session_initialized(InteractiveSession& session);
 
 int run_interactive(InteractiveSession session);
 
-}  // namespace pkchat::app
+}  // namespace ainiux::app

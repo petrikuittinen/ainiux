@@ -1,7 +1,7 @@
 #pragma once
 
-namespace pkchat::test::search {
+namespace ainiux::test::search {
 
 void run_all();
 
-}  // namespace pkchat::test::search
+}  // namespace ainiux::test::search

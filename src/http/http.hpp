@@ -7,7 +7,7 @@
 #include "common.hpp"
 #include "runtime/runtime.hpp"
 
-namespace pkchat::http {
+namespace ainiux::http {
 
 using BodyCallback = std::function<Error(const std::string&)>;
 
@@ -48,4 +48,4 @@ struct Result {
 
 Result perform(const Request& request, const std::vector<std::string>& secrets);
 
-}  // namespace pkchat::http
+}  // namespace ainiux::http

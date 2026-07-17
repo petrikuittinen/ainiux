@@ -6,7 +6,7 @@
 #include <chrono>
 #include <string>
 
-namespace pkchat::editor {
+namespace ainiux::editor {
 
 Error parse_byte_size(const std::string& text, long long& out);
 
@@ -42,4 +42,4 @@ std::string autosave_recovery_prompt_message(const std::string& path,
 bool confirm_autosave_recovery_before_terminal(const std::string& path,
                                                const std::string& autosave_path);
 
-}  // namespace pkchat::editor
+}  // namespace ainiux::editor

@@ -6,7 +6,7 @@
 #include "editor/editor.hpp"
 #include "tui/tui.hpp"
 
-namespace pkchat::app {
+namespace ainiux::app {
 
 void sync_editor_provider_to_shared(InteractiveSession& session,
                                     const std::optional<editor::AiContinueContext>& ai_continue) {
@@ -66,4 +66,4 @@ int run_interactive(InteractiveSession session) {
     }
 }
 
-}  // namespace pkchat::app
+}  // namespace ainiux::app

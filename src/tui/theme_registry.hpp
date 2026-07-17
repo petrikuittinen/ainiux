@@ -6,7 +6,7 @@
 #include "highlight/highlight.hpp"
 #include "tui/theme_types.hpp"
 
-namespace pkchat::tui {
+namespace ainiux::tui {
 
 struct ThemePalette {
     std::string name;
@@ -83,4 +83,4 @@ StylePair style_pair_for(const ThemePalette& palette, StyleRole role);
 StylePair style_pair_for(const ThemeRegistry& registry, const std::string& theme_name, StyleRole role);
 std::string style_sequence_for(const ThemeRegistry& registry, const std::string& theme_name, StyleRole role);
 
-}  // namespace pkchat::tui
+}  // namespace ainiux::tui

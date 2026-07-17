@@ -9,7 +9,7 @@
 #include "editor/editor.hpp"
 #include "editor/editor_prompts.hpp"
 
-namespace pkchat::editor {
+namespace ainiux::editor {
 
 enum class CompletionKind {
     None,
@@ -73,4 +73,4 @@ PathCompletionResult complete_path_input(std::string& input,
                                          PathCompleter& completer,
                                          const std::function<bool()>& cancelled = {});
 
-}  // namespace pkchat::editor
+}  // namespace ainiux::editor

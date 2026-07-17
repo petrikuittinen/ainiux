@@ -4,7 +4,7 @@
 #include <string>
 #include <vector>
 
-namespace pkchat {
+namespace ainiux {
 
 enum class ErrorCode {
     Ok = 0,
@@ -49,4 +49,4 @@ int positive_int_from_env(const char* name, int default_value);
 size_t positive_size_from_env(const char* name, size_t default_value);
 size_t nonnegative_size_from_env(const char* name, size_t default_value);
 
-}  // namespace pkchat
+}  // namespace ainiux

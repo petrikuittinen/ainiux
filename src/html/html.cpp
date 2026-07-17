@@ -9,7 +9,7 @@
 
 #include "common.hpp"
 
-namespace pkchat::html {
+namespace ainiux::html {
 namespace {
 
 bool ascii_iequal_at(const std::string& text, size_t pos, const std::string& needle) {
@@ -936,4 +936,4 @@ std::string convert(const std::string& input, OutputFormat format) {
     return writer.finish();
 }
 
-}  // namespace pkchat::html
+}  // namespace ainiux::html

@@ -5,7 +5,7 @@
 #include "cli/args.hpp"
 #include "tui/detail/render.hpp"
 
-namespace pkchat::tui {
+namespace ainiux::tui {
 
 bool apply_selected_provider(provider::RequestContext& context,
                              chat::Session& session,
@@ -26,4 +26,4 @@ bool apply_selected_provider(provider::RequestContext& context,
     return true;
 }
 
-}  // namespace pkchat::tui
+}  // namespace ainiux::tui

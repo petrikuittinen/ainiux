@@ -8,7 +8,7 @@
 #include <iostream>
 #include <limits>
 
-namespace pkchat::editor {
+namespace ainiux::editor {
 namespace {
 
 bool parse_positive_digits(const std::string& text, long long& out) {
@@ -207,4 +207,4 @@ bool confirm_autosave_recovery_before_terminal(const std::string& path,
     return value == "y" || value == "Y" || value == "yes" || value == "YES";
 }
 
-}  // namespace pkchat::editor
+}  // namespace ainiux::editor

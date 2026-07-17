@@ -11,7 +11,7 @@
 #include "html/html.hpp"
 #include "json/json.hpp"
 
-namespace pkchat::benchmark {
+namespace ainiux::benchmark {
 namespace {
 
 Error schema_error(const std::string& source, size_t line, const std::string& detail) {
@@ -451,4 +451,4 @@ void write_case_json(std::ostream& output, const Case& benchmark_case) {
     output << "}\n";
 }
 
-}  // namespace pkchat::benchmark
+}  // namespace ainiux::benchmark

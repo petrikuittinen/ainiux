@@ -4,7 +4,7 @@
 
 #include "editor/editor.hpp"
 
-namespace pkchat::editor {
+namespace ainiux::editor {
 
 void update_preferred_column(EditorState& state);
 std::string trim_ascii_copy(std::string text);
@@ -15,4 +15,4 @@ size_t selection_end_exclusive_for(const Selection& selection, const PieceTable&
 
 }  // namespace detail
 
-}  // namespace pkchat::editor
+}  // namespace ainiux::editor

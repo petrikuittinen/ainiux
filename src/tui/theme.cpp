@@ -4,7 +4,7 @@
 #include <cctype>
 #include <cmath>
 
-namespace pkchat::tui {
+namespace ainiux::tui {
 namespace {
 
 std::string lowercase_copy(const std::string& text) {
@@ -439,4 +439,4 @@ double contrast_ratio(Rgb foreground, Rgb background) {
     return (lighter + 0.05) / (darker + 0.05);
 }
 
-}  // namespace pkchat::tui
+}  // namespace ainiux::tui

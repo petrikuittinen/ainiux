@@ -6,7 +6,7 @@
 
 #include "common.hpp"
 
-namespace pkchat::json {
+namespace ainiux::json {
 
 struct Value {
     enum class Type { Null, Bool, Number, String, Array, Object };
@@ -44,4 +44,4 @@ std::string stringify(const Value& value);
 std::string escape_string(const std::string& input);
 std::string quote(const std::string& input);
 
-}  // namespace pkchat::json
+}  // namespace ainiux::json

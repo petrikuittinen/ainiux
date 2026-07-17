@@ -8,7 +8,7 @@
 #include "provider/provider.hpp"
 #include "runtime/runtime.hpp"
 
-namespace pkchat::editor {
+namespace ainiux::editor {
 
 struct EditorModelsEvent {
     Error error;
@@ -24,4 +24,4 @@ struct EditorModelListRuntime {
                  const std::function<void(const std::string&)>& on_error);
 };
 
-}  // namespace pkchat::editor
+}  // namespace ainiux::editor

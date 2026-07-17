@@ -53,7 +53,7 @@ def main():
         return 2
 
     binary = sys.argv[1]
-    tmpdir = tempfile.mkdtemp(prefix="pkchat-editor-text-modes-")
+    tmpdir = tempfile.mkdtemp(prefix="ainiux-editor-text-modes-")
     path = os.path.join(tmpdir, "crlf.txt")
     second_path = os.path.join(tmpdir, "lf.txt")
     with open(path, "wb") as handle:

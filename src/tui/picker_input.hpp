@@ -8,7 +8,7 @@
 #include "chat/sqlite_store.hpp"
 #include "tui/events.hpp"
 
-namespace pkchat::tui {
+namespace ainiux::tui {
 
 struct TuiPickerCallbacks {
     std::function<void(const std::string&)> on_provider_selected;
@@ -43,4 +43,4 @@ bool handle_tui_picker_input(unsigned char ch,
                              TuiPickerInputState& state,
                              const TuiPickerCallbacks& callbacks);
 
-}  // namespace pkchat::tui
+}  // namespace ainiux::tui

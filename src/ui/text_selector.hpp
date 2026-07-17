@@ -7,7 +7,7 @@
 
 #include "editor/selection.hpp"
 
-namespace pkchat::ui {
+namespace ainiux::ui {
 
 constexpr const char kTextSelectorStandardHint[] = "↑↓ move · Enter select · Esc cancel";
 constexpr const char kTextSelectorThreadHint[] = "Newest first · Enter opens · N new · DEL delete · Esc cancels";
@@ -50,4 +50,4 @@ SelectorMovementResult handle_selector_escape_sequence(const std::string& sequen
                                                        std::string& status,
                                                        const std::string& selection_label);
 
-}  // namespace pkchat::ui
+}  // namespace ainiux::ui

@@ -4,7 +4,7 @@
 
 #include <sstream>
 
-namespace pkchat::editor {
+namespace ainiux::editor {
 
 std::string editor_buffer_display_name(const EditorState& state, size_t index) {
     if (!state.path.empty()) {
@@ -39,4 +39,4 @@ size_t move_editor_buffer_selection(size_t selected, size_t count, MovementKey k
     return ui::move_text_selector_selection(selected, count, key);
 }
 
-}  // namespace pkchat::editor
+}  // namespace ainiux::editor

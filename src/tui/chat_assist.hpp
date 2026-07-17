@@ -10,7 +10,7 @@
 #include "editor/editor_prompts.hpp"
 #include "provider/provider.hpp"
 
-namespace pkchat::tui {
+namespace ainiux::tui {
 
 struct ChatEditorNewBufferAssist {
     size_t command_index = 0;
@@ -40,4 +40,4 @@ bool handle_chat_assist_continue_key(const editor::EditorAssistConfig& assist_co
                                      std::string& status,
                                      const ChatAssistCallbacks& callbacks);
 
-}  // namespace pkchat::tui
+}  // namespace ainiux::tui

@@ -11,7 +11,7 @@
 #include "editor/path_completion.hpp"
 #include "provider/provider.hpp"
 
-namespace pkchat::tui {
+namespace ainiux::tui {
 
 enum class TuiEventType {
     Delta,
@@ -75,4 +75,4 @@ enum class EscapeResult {
     Handled,
 };
 
-}  // namespace pkchat::tui
+}  // namespace ainiux::tui

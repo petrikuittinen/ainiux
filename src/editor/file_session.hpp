@@ -6,7 +6,7 @@
 
 #include "common.hpp"
 
-namespace pkchat::editor {
+namespace ainiux::editor {
 
 struct FileFingerprint {
     bool exists = false;
@@ -67,4 +67,4 @@ EditorLockAttempt acquire_editor_file_lock(const std::string& path);
 Error read_editor_lock_owner(const std::string& lock_directory, EditorLockOwner& out);
 std::string editor_lock_owner_summary(const EditorLockAttempt& attempt);
 
-}  // namespace pkchat::editor
+}  // namespace ainiux::editor

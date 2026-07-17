@@ -8,9 +8,9 @@
 #include "cli/option_values.hpp"
 #include "context/policy.hpp"
 #include "chat/generation_settings.hpp"
-#include "pkchat/version.hpp"
+#include "ainiux/version.hpp"
 
-namespace pkchat::cli {
+namespace ainiux::cli {
 
 namespace {
 
@@ -372,7 +372,7 @@ ParseResult parse_args(int argc, char** argv, const Options& base_options) {
                 }
                 opts.has_enable_thinking = true;
             } else if (opt == "--thinking-budget") {
-                Error err = pkchat::chat::apply_chat_setting(opts, "thinking_budget", value);
+                Error err = ainiux::chat::apply_chat_setting(opts, "thinking_budget", value);
                 if (!err.ok()) {
                     return {opts, err};
                 }
@@ -435,7 +435,7 @@ ParseResult parse_args(int argc, char** argv, const Options& base_options) {
                 } else if (value == "ndjson" || value == "jsond") {
                     opts.format = OutputFormat::Ndjson;
                     opts.output_format_explicit = true;
-                } else if (pkchat::markdown::parse_output_format(value, opts.output_format)) {
+                } else if (ainiux::markdown::parse_output_format(value, opts.output_format)) {
                     opts.output_format_explicit = true;
                     opts.rendered_output_format_explicit = true;
                 } else {
@@ -642,51 +642,51 @@ std::string help_text() {
     return app_version_label() + R"( - script-friendly OpenAI-compatible chat CLI
 
 Usage:
-  pkchat [BASE_URL|PROFILE] -p TEXT [options]
-  pkchat --list-models [BASE_URL|PROFILE] [options]
-  pkchat -i, --repl [BASE_URL|PROFILE] [options]
-  pkchat -c, --chat [BASE_URL|PROFILE] [options]
-  pkchat [BASE_URL|PROFILE] -e, --editor [PATH] [--output PATH]
-  pkchat --input PATH [--output-format md|html|plaintext|json|jsond] [--output PATH]
-  pkchat --fetch-url URL [--output-format md|html|plaintext|json|jsond] [--output PATH]
-  pkchat --search QUERY [--output-format md|html|plaintext|json|jsond] [--output PATH]
-  pkchat --benchmark [--dataset FILE] [--mode MODE] [--provider NAME] [-m MODEL]
-  pkchat benchmark [--dataset FILE] [--mode MODE] [--provider NAME] [-m MODEL]
-  pkchat --grade [--grade-input FILE] [--provider NAME] [-m JUDGE_MODEL]
+  ainiux [BASE_URL|PROFILE] -p TEXT [options]
+  ainiux --list-models [BASE_URL|PROFILE] [options]
+  ainiux -i, --repl [BASE_URL|PROFILE] [options]
+  ainiux -c, --chat [BASE_URL|PROFILE] [options]
+  ainiux [BASE_URL|PROFILE] -e, --editor [PATH] [--output PATH]
+  ainiux --input PATH [--output-format md|html|plaintext|json|jsond] [--output PATH]
+  ainiux --fetch-url URL [--output-format md|html|plaintext|json|jsond] [--output PATH]
+  ainiux --search QUERY [--output-format md|html|plaintext|json|jsond] [--output PATH]
+  ainiux --benchmark [--dataset FILE] [--mode MODE] [--provider NAME] [-m MODEL]
+  ainiux benchmark [--dataset FILE] [--mode MODE] [--provider NAME] [-m MODEL]
+  ainiux --grade [--grade-input FILE] [--provider NAME] [-m JUDGE_MODEL]
 
 Examples:
-  pkchat http://localhost:8000 -p "What is the capital of Norway?"
-  pkchat --base-url http://localhost:8000/v1 -p "Hello"
-  pkchat --provider openai -m MODEL -p "Hello"
-  pkchat --provider lm_studio -m MODEL -p "Hello from local LM Studio"
-  pkchat --provider lmstudio --list-models
-  pkchat --prompt-file prompt.txt --system-file system.txt --format json
-  pkchat http://localhost:8000 -p "Write a report" --output-format html --output report.html
-  pkchat openrouter -model MODEL -i
-  pkchat lmstudio -i
-  pkchat -c lmstudio
-  pkchat --chat lmstudio
-  pkchat --repl --load-chat chat.json --save-chat chat.json
-  pkchat -e notes.txt
-  pkchat --editor
-  pkchat --provider none -e notes.txt
-  pkchat lmstudio -e notes.txt
-  pkchat openrouter --editor notes.txt
-  pkchat http://localhost:1234/v1 --editor draft.md
-  pkchat --provider none --input page.html --output-format md
-  pkchat --provider none --fetch-url https://example.com --output-format md
-  pkchat --provider none --search "web scraping" --output-format plaintext
-  pkchat http://localhost:8000 -p "Summarize" --search "latest news"
-  pkchat --input page.html --output-format plaintext
-  printf 'piped text' | pkchat --input stdin --output stdout
-  command | pkchat http://localhost:8000 -p "Summarize" --attach stdin
-  pkchat http://localhost:8000 -p "Compare these" --attach one.md --attach two.txt
-  pkchat http://localhost:30000 -p "Describe this image" --input photo.png
-  pkchat benchmark --validate-dataset
-  pkchat benchmark --category reasoning --limit 2 --provider lm_studio -m MODEL
-  pkchat --benchmark --dataset prompts.jsonl --mode speed --concurrency 4 --duration 60s
-  pkchat --benchmark --dataset eval.jsonl --mode quality,refusals --output results/
-  pkchat --grade --category reasoning --output results/ --provider openai -m JUDGE_MODEL
+  ainiux http://localhost:8000 -p "What is the capital of Norway?"
+  ainiux --base-url http://localhost:8000/v1 -p "Hello"
+  ainiux --provider openai -m MODEL -p "Hello"
+  ainiux --provider lm_studio -m MODEL -p "Hello from local LM Studio"
+  ainiux --provider lmstudio --list-models
+  ainiux --prompt-file prompt.txt --system-file system.txt --format json
+  ainiux http://localhost:8000 -p "Write a report" --output-format html --output report.html
+  ainiux openrouter -model MODEL -i
+  ainiux lmstudio -i
+  ainiux -c lmstudio
+  ainiux --chat lmstudio
+  ainiux --repl --load-chat chat.json --save-chat chat.json
+  ainiux -e notes.txt
+  ainiux --editor
+  ainiux --provider none -e notes.txt
+  ainiux lmstudio -e notes.txt
+  ainiux openrouter --editor notes.txt
+  ainiux http://localhost:1234/v1 --editor draft.md
+  ainiux --provider none --input page.html --output-format md
+  ainiux --provider none --fetch-url https://example.com --output-format md
+  ainiux --provider none --search "web scraping" --output-format plaintext
+  ainiux http://localhost:8000 -p "Summarize" --search "latest news"
+  ainiux --input page.html --output-format plaintext
+  printf 'piped text' | ainiux --input stdin --output stdout
+  command | ainiux http://localhost:8000 -p "Summarize" --attach stdin
+  ainiux http://localhost:8000 -p "Compare these" --attach one.md --attach two.txt
+  ainiux http://localhost:30000 -p "Describe this image" --input photo.png
+  ainiux benchmark --validate-dataset
+  ainiux benchmark --category reasoning --limit 2 --provider lm_studio -m MODEL
+  ainiux --benchmark --dataset prompts.jsonl --mode speed --concurrency 4 --duration 60s
+  ainiux --benchmark --dataset eval.jsonl --mode quality,refusals --output results/
+  ainiux --grade --category reasoning --output results/ --provider openai -m JUDGE_MODEL
 
 Options:
   Mode:
@@ -698,8 +698,8 @@ Options:
                                 A provider shortcut/profile may precede -e/--editor without
                                 -m/--model; choose a model inside the editor with /model
                                 (like -c/--chat). Use --provider none for offline local editing.
-      --benchmark               Run benchmark mode (also: pkchat benchmark ...).
-      --grade                   Grade benchmark results with a judge model (also: pkchat grade ...).
+      --benchmark               Run benchmark mode (also: ainiux benchmark ...).
+      --grade                   Grade benchmark results with a judge model (also: ainiux grade ...).
 
   Prompt and generation:
   -p, --prompt TEXT
@@ -824,4 +824,4 @@ Options:
 )";
 }
 
-}  // namespace pkchat::cli
+}  // namespace ainiux::cli

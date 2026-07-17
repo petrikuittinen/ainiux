@@ -19,7 +19,7 @@
 
 ## Chat Persistence
 
-- Add focused integration coverage for SQLite-backed TUI chat storage in `~/.pkchat/pkchat.db`, including automatic save/load, `/new`, `/remove`, `/provider`, and `/list` picker behavior.
+- Add focused integration coverage for SQLite-backed TUI chat storage in `~/.ainiux/ainiux.db`, including automatic save/load, `/new`, `/remove`, `/provider`, and `/list` picker behavior.
 - Harden SQLite autosave scheduling so an explicit JSON `/save` or slow file job can be followed by a deferred SQLite save instead of skipping that autosave.
 - Add recovery behavior when `app_state.last_thread_id` points at a deleted or missing thread.
 - Keep explicit JSON save/load as import/export compatibility, not the primary local chat library.

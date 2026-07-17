@@ -24,10 +24,10 @@ JUDGE_MODEL=$2
 BENCHMARK_JSONL=$3
 
 ROOT=$(CDPATH= cd -- "$(dirname "$0")" && pwd)
-PKCHAT=$ROOT/pkchat
+AINIUX=$ROOT/ainiux
 
-if [ ! -x "$PKCHAT" ]; then
-    echo "find_cutoff.sh: pkchat binary not found or not executable: $PKCHAT" >&2
+if [ ! -x "$AINIUX" ]; then
+    echo "find_cutoff.sh: ainiux binary not found or not executable: $AINIUX" >&2
     echo "Build it first with: make" >&2
     exit 1
 fi
@@ -53,7 +53,7 @@ if [ "$OUTPUT_PATH" = "$OUTPUT_DIR/cutoff-judgement-.md" ]; then
     OUTPUT_PATH=$OUTPUT_DIR/cutoff-judgement.md
 fi
 
-cat "$BENCHMARK_JSONL" | "$PKCHAT" --provider "$JUDGE_PROVIDER" \
+cat "$BENCHMARK_JSONL" | "$AINIUX" --provider "$JUDGE_PROVIDER" \
     --model "$JUDGE_MODEL" \
     --no-stream \
     --temperature 0 \

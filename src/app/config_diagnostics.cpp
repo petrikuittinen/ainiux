@@ -2,7 +2,7 @@
 
 #include <iostream>
 
-namespace pkchat::app {
+namespace ainiux::app {
 
 void print_config_diagnostics(const config::LoadResult& configured) {
     for (const config::ConfigDiagnostic& diagnostic : configured.diagnostics) {
@@ -43,4 +43,4 @@ void print_config_diagnostics(const config::LoadResult& configured) {
     }
 }
 
-}  // namespace pkchat::app
+}  // namespace ainiux::app

@@ -4,8 +4,8 @@
 
 #include "common.hpp"
 
-namespace pkchat::app::detail {
+namespace ainiux::app::detail {
 
-std::string trim_ascii(std::string text) { return pkchat::ascii_trim(std::move(text)); }
+std::string trim_ascii(std::string text) { return ainiux::ascii_trim(std::move(text)); }
 
-}  // namespace pkchat::app::detail
+}  // namespace ainiux::app::detail

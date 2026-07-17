@@ -10,13 +10,13 @@ Implemented for built-in OpenAI-compatible profiles:
 - streaming responses with SSE `data:` events and `choices[0].delta.content`
 - local PNG/JPEG/GIF input using user content arrays with `text` and `image_url` data-URL parts
 
-If the user does not provide `-m/--model`, `pkchat` calls the models endpoint before chat starts and uses the first returned model id. If the response has no model ids, the chat request omits the model field and user-facing startup status reports `Model: unknown`.
+If the user does not provide `-m/--model`, `ainiux` calls the models endpoint before chat starts and uses the first returned model id. If the response has no model ids, the chat request omits the model field and user-facing startup status reports `Model: unknown`.
 
 Image request formatting supports multiple input images. In `auto` mode, the client combines registry-level provider capability with recognized vision-model names. Unknown compatible models require `--image-capability allow`, while `deny` disables image input. This is conservative client-side detection rather than a live provider capability protocol; endpoints can still reject formats their active model cannot decode. Responses API image input is not implemented in this slice.
 
 ## Responses API
 
-Implemented text-only support is available with `--api responses`, `--responses`, or the `openai_responses` profile shortcut. The built-in OpenAI profile maps this to `POST https://api.openai.com/v1/responses`. Custom base URLs can also use the standard `/responses` path. For chat-only provider profiles, `pkchat` returns `PKCHAT_ERR_UNSUPPORTED_FEATURE` unless the user supplies an explicit `--responses-url URL`.
+Implemented text-only support is available with `--api responses`, `--responses`, or the `openai_responses` profile shortcut. The built-in OpenAI profile maps this to `POST https://api.openai.com/v1/responses`. Custom base URLs can also use the standard `/responses` path. For chat-only provider profiles, `ainiux` returns `AINIUX_ERR_UNSUPPORTED_FEATURE` unless the user supplies an explicit `--responses-url URL`.
 
 Current Responses support maps `output_text` and streaming `response.output_text.delta` into the same internal assistant message/delta model used by Chat Completions. Reasoning summary deltas are rendered as `<think>...</think>` blocks when providers emit them. Images, files, tools, provider-side context management, and capability probing are not implemented yet.
 
@@ -41,7 +41,7 @@ custom/local fallback       enable_thinking and thinking_budget unless a known m
 
 Numeric budgets are preserved where the provider documents token-budget control: OpenRouter `reasoning.max_tokens`, Anthropic `thinking.budget_tokens`, and Qwen/DashScope `thinking_budget`. For effort-only APIs, numeric budgets are mapped onto a deterministic scale: `0 -> none`, `<=1024 -> low`, `<=8192 -> medium`, `<=24576 -> high`, and larger values to `xhigh` where supported. Qwen/DashScope verbal labels are converted back to approximate token budgets on the same scale.
 
-Provider-specific limits still apply. For example, Gemini can disable thinking only on some models, Kimi K2.7 models always think and reject a `thinking` override, DeepSeek V4 and GLM-5.2 map lower efforts to `high`, and some OpenAI models only support a subset of effort values. `pkchat` does not yet perform live model capability probing for reasoning controls.
+Provider-specific limits still apply. For example, Gemini can disable thinking only on some models, Kimi K2.7 models always think and reject a `thinking` override, DeepSeek V4 and GLM-5.2 map lower efforts to `high`, and some OpenAI models only support a subset of effort values. `ainiux` does not yet perform live model capability probing for reasoning controls.
 
 Anthropic's built-in profile uses Anthropic's OpenAI SDK compatibility endpoint, which Anthropic documents as mainly for testing/comparison. It maps request-side `thinking` controls, but native Claude Messages support is still needed for full extended/adaptive thinking behavior, signatures, and preserved reasoning state.
 
@@ -74,10 +74,10 @@ nvidia_nim                             https://integrate.api.nvidia.com/v1      
 zai            z.ai, z_ai              https://api.z.ai/api/paas/v4                         yes   no         ZAI_API_KEY            no
 qwen           dashscope_intl          https://dashscope-intl.aliyuncs.com/compatible-mode/v1 yes no         DASHSCOPE_API_KEY      no
 dashscope                              https://dashscope.aliyuncs.com/compatible-mode/v1    yes   no         DASHSCOPE_API_KEY      no
-custom_openai_chat custom              user supplied                                         yes   yes**      PKCHAT_API_KEY optional yes/no
+custom_openai_chat custom              user supplied                                         yes   yes**      AINIUX_API_KEY optional yes/no
 ```
 
-The `none` profile is an explicit model-offline mode. It accepts no model endpoint, performs no model discovery or chat HTTP requests, and returns `PKCHAT_ERR_UNSUPPORTED_FEATURE` for those operations. Standalone editor, local HTML/Markdown/plaintext conversion, URL extraction, and non-model REPL/TUI commands remain available without configuring an endpoint. Explicit URL fetching still performs the requested non-model HTTP operation.
+The `none` profile is an explicit model-offline mode. It accepts no model endpoint, performs no model discovery or chat HTTP requests, and returns `AINIUX_ERR_UNSUPPORTED_FEATURE` for those operations. Standalone editor, local HTML/Markdown/plaintext conversion, URL extraction, and non-model REPL/TUI commands remain available without configuring an endpoint. Explicit URL fetching still performs the requested non-model HTTP operation.
 
 `openai_responses` selects the OpenAI profile and `--api responses`.
 
@@ -97,6 +97,6 @@ Provider aliases:
 
 Default base URL: `http://localhost:1234/v1`.
 
-LM Studio keys are optional. If `LMSTUDIO_API_KEY`, `LM_STUDIO_API_KEY`, `PKCHAT_API_KEY`, or an explicit key option is configured, `pkchat` sends a Bearer token.
+LM Studio keys are optional. If `LMSTUDIO_API_KEY`, `LM_STUDIO_API_KEY`, `AINIUX_API_KEY`, or an explicit key option is configured, `ainiux` sends a Bearer token.
 
 If LM Studio or another local server is bound to a LAN-visible address, protect it with appropriate local network controls.

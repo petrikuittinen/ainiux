@@ -2,7 +2,7 @@
 
 #include <iostream>
 
-namespace pkchat::app {
+namespace ainiux::app {
 
 std::ostream* output_stream(const cli::Options& options, std::ofstream& file, Error& error) {
     if (options.output_path.empty() || options.output_path == "stdout") {
@@ -16,4 +16,4 @@ std::ostream* output_stream(const cli::Options& options, std::ofstream& file, Er
     return &file;
 }
 
-}  // namespace pkchat::app
+}  // namespace ainiux::app

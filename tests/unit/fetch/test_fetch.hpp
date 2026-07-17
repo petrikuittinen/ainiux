@@ -1,7 +1,7 @@
 #pragma once
 
-namespace pkchat::test::fetch {
+namespace ainiux::test::fetch {
 
 void run_all();
 
-}  // namespace pkchat::test::fetch
+}  // namespace ainiux::test::fetch

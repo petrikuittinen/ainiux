@@ -1,6 +1,6 @@
 #include "cli/option_values.hpp"
 
-namespace pkchat::cli::option_values {
+namespace ainiux::cli::option_values {
 
 const std::vector<const char*>& image_capabilities() {
     static const std::vector<const char*> kValues = {
@@ -33,4 +33,4 @@ bool is_image_capability(const std::string& value) {
     return false;
 }
 
-}  // namespace pkchat::cli::option_values
+}  // namespace ainiux::cli::option_values

@@ -3,7 +3,7 @@
 #include <cstddef>
 #include <string>
 
-namespace pkchat::ui {
+namespace ainiux::ui {
 
 constexpr const char kConfirmationRetryPrompt[] = "Type y or n: ";
 
@@ -17,4 +17,4 @@ enum class ConfirmationKeyResult { Pending, Accepted, Rejected };
 
 ConfirmationKeyResult parse_confirmation_key(unsigned char ch, bool treat_esc_as_reject = true);
 
-}  // namespace pkchat::ui
+}  // namespace ainiux::ui

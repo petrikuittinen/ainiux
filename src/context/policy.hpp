@@ -3,7 +3,7 @@
 #include <string>
 #include <vector>
 
-namespace pkchat::context::policy {
+namespace ainiux::context::policy {
 
 inline constexpr const char kError[] = "error";
 inline constexpr const char kTruncateOldest[] = "truncate-oldest";
@@ -17,4 +17,4 @@ std::vector<std::string> value_strings();
 bool is_valid(const std::string& policy);
 std::string usage_description();
 
-}  // namespace pkchat::context::policy
+}  // namespace ainiux::context::policy

@@ -1,6 +1,6 @@
-# pkchat
+# ainiux
 
-`pkchat` is a fast, script-friendly command-line chat client for OpenAI and OpenAI-compatible APIs.
+`ainiux` is a fast, script-friendly command-line chat client for OpenAI and OpenAI-compatible APIs.
 
 Current status: v0.97 CLI with libcurl transport, cancellable runtime jobs, provider registry/profile aliases, `/v1/models`, `/v1/chat/completions`, text-only OpenAI Responses API support, provider-specific reasoning/thinking request compatibility, local JPEG/PNG/GIF image input, interactive text/image attachments, request-only context policies, safe URL insertion, web search with API providers and keyless fallbacks, a simple REPL, a standalone `--editor` mode with canonical advisory file locking, read-only conflict recovery, external-change warnings, multiple file buffers, selection, copy/cut/paste across buffers, grapheme-aware Unicode editing, indexed cross-buffer word completion, multi-language syntax highlighting and indentation reformatting, and AI continue/editor commands, a full-screen non-blocking TUI foundation, SQLite-backed TUI chat threads, JSON chat import/export save/load, HTML-to-text/Markdown extraction, Markdown assistant-output rendering to HTML or plaintext, automatic system/user TOML-alike configuration loading, a concurrent JSONL benchmark runner, and configurable judge-model benchmark grading.
 
@@ -33,9 +33,9 @@ Install the binary, system configuration templates, and bundled theme/editor-com
 make install PREFIX=/usr/local
 ```
 
-The template source is `config/pkchat.conf`. It is installed as `/etc/xdg/pkchat/config.conf` by default; set `SYSCONFDIR` when packaging for a different system configuration root. Installation preserves an existing system config instead of overwriting administrator changes.
+The template source is `config/ainiux.conf`. It is installed as `/etc/xdg/ainiux/config.conf` by default; set `SYSCONFDIR` when packaging for a different system configuration root. Installation preserves an existing system config instead of overwriting administrator changes.
 
-At startup, pkchat loads system `pkchat/config.conf` files from `$XDG_CONFIG_DIRS` (default `/etc/xdg`) and then the user file at `$XDG_CONFIG_HOME/pkchat/config.conf` (normally `~/.config/pkchat/config.conf`). User keys partially override system keys, and command-line arguments override both. `--no-config` skips the user file while retaining administrator-provided system configuration. Missing automatic files are ignored; malformed, unknown, or incorrectly typed settings produce a configuration error with the file and source location. `--help` and `--version` do not load configuration.
+At startup, ainiux loads system `ainiux/config.conf` files from `$XDG_CONFIG_DIRS` (default `/etc/xdg`) and then the user file at `$XDG_CONFIG_HOME/ainiux/config.conf` (normally `~/.config/ainiux/config.conf`). User keys partially override system keys, and command-line arguments override both. `--no-config` skips the user file while retaining administrator-provided system configuration. Missing automatic files are ignored; malformed, unknown, or incorrectly typed settings produce a configuration error with the file and source location. `--help` and `--version` do not load configuration.
 
 For example, a user config can enable visible TUI thinking traces, retain the dark theme, and permit explicit private URL fetches:
 
@@ -55,7 +55,7 @@ Editor defaults can also be configured. `undo_limit` controls how many undo stat
 
 ### Themes
 
-TUI and editor colors are defined in repeatable `[theme]` blocks in `themes.conf`, not in `config.conf`. At startup pkchat loads system themes from `$XDG_CONFIG_DIRS/pkchat/themes.conf` (default `/etc/xdg/pkchat/themes.conf`), then the user file at `$XDG_CONFIG_HOME/pkchat/themes.conf` (normally `~/.config/pkchat/themes.conf`), and finally the bundled `config/themes.conf` if no other file was found. A theme with the same `name` replaces an earlier definition; a new `name` adds a selectable theme.
+TUI and editor colors are defined in repeatable `[theme]` blocks in `themes.conf`, not in `config.conf`. At startup ainiux loads system themes from `$XDG_CONFIG_DIRS/ainiux/themes.conf` (default `/etc/xdg/ainiux/themes.conf`), then the user file at `$XDG_CONFIG_HOME/ainiux/themes.conf` (normally `~/.config/ainiux/themes.conf`), and finally the bundled `config/themes.conf` if no other file was found. A theme with the same `name` replaces an earlier definition; a new `name` adds a selectable theme.
 
 Each `[theme]` block needs `name` plus every color key below. Colors use `#RRGGBB` (or `0xRRGGBB`).
 
@@ -133,7 +133,7 @@ The editor status line displays the active syntax language and line-ending mode 
 
 Set the startup default with `highlight = on|off` (or a boolean) under `[tui]`. `--nocolors` suppresses syntax colors while selection remains visible. Existing custom themes remain valid when syntax keys are omitted; accessible colors are derived from their existing semantic colors.
 
-Complete example: add or override the sepia theme in `~/.config/pkchat/themes.conf`:
+Complete example: add or override the sepia theme in `~/.config/ainiux/themes.conf`:
 
 ```conf
 [theme]
@@ -157,7 +157,7 @@ panel_body = #5B4636
 panel_background = #EFE2C8
 ```
 
-Copy an existing built-in block from `config/themes.conf`, change `name` and the colors, save the file, then run `/theme YOUR_THEME` or set `theme = YOUR_THEME` under `[tui]`. `make install` also places the bundled themes file at `/etc/xdg/pkchat/themes.conf` and `share/pkchat/themes.conf`.
+Copy an existing built-in block from `config/themes.conf`, change `name` and the colors, save the file, then run `/theme YOUR_THEME` or set `theme = YOUR_THEME` under `[tui]`. `make install` also places the bundled themes file at `/etc/xdg/ainiux/themes.conf` and `share/ainiux/themes.conf`.
 
 The format is deliberately TOML-alike rather than full TOML. Keep secrets out of it; `[credentials]` selects an environment variable or key file and never contains an API key value. Use `--debug` to list loaded, missing, skipped, or failed configuration paths on `stderr`; `--quiet` suppresses these diagnostics. Deliberately selected extra configuration files and repeatable `--config` layers are not supported.
 
@@ -165,26 +165,26 @@ The HTTP transport uses libcurl through RAII wrappers in `src/http/`. Build flag
 
 ## Editor Mode
 
-`pkchat --editor` is a standalone multiline file editor and the same component powers the TUI chat input panel. It uses piece-table edit buffers, grapheme-aware Unicode navigation, soft wrap, rectangular panel rendering, bounded undo/redo, and a status line plus one-line minibuffer for prompts.
+`ainiux --editor` is a standalone multiline file editor and the same component powers the TUI chat input panel. It uses piece-table edit buffers, grapheme-aware Unicode navigation, soft wrap, rectangular panel rendering, bounded undo/redo, and a status line plus one-line minibuffer for prompts.
 
 ```sh
-./pkchat --editor notes.txt
-./pkchat lmstudio --editor notes.txt
-./pkchat http://localhost:30000/v1 --editor notes.txt
-./pkchat --editor draft.txt --output saved-draft.txt
+./ainiux --editor notes.txt
+./ainiux lmstudio --editor notes.txt
+./ainiux http://localhost:30000/v1 --editor notes.txt
+./ainiux --editor draft.txt --output saved-draft.txt
 ```
 
-A provider shortcut or base URL may precede `--editor` without changing the file argument. If the startup path does not exist, pkchat creates an empty file before editing. The `[editor]` config section controls undo depth (`undo_limit`, default `5`), a huge-file confirmation threshold (`huge_file_size_warning`, default 1 GiB), an optional hard load limit (`file_size_limit`, default unlimited), auto-save backup behavior, and the initial indentation and line-ending settings.
+A provider shortcut or base URL may precede `--editor` without changing the file argument. If the startup path does not exist, ainiux creates an empty file before editing. The `[editor]` config section controls undo depth (`undo_limit`, default `5`), a huge-file confirmation threshold (`huge_file_size_warning`, default 1 GiB), an optional hard load limit (`file_size_limit`, default unlimited), auto-save backup behavior, and the initial indentation and line-ending settings.
 
-Every writable file buffer owns an advisory directory lock named `FILE.LOCK` beside the canonical target. Relative paths and symlink aliases therefore identify the same open file. A second pkchat process opens an already-locked existing file as `[RO]`; editing retries the lock automatically. If the first process changed the file before releasing it, pkchat asks whether to reload before making the buffer writable. Save checks the loaded/saved file fingerprint and asks before overwriting a file changed, replaced, or deleted by another program. Save As locks its destination before confirmation or writing and transfers the buffer lock only after a successful save. Read-only buffers may Save As to a different path, and their auto-save backups are disabled.
+Every writable file buffer owns an advisory directory lock named `FILE.LOCK` beside the canonical target. Relative paths and symlink aliases therefore identify the same open file. A second ainiux process opens an already-locked existing file as `[RO]`; editing retries the lock automatically. If the first process changed the file before releasing it, ainiux asks whether to reload before making the buffer writable. Save checks the loaded/saved file fingerprint and asks before overwriting a file changed, replaced, or deleted by another program. Save As locks its destination before confirmation or writing and transfers the buffer lock only after a successful save. Read-only buffers may Save As to a different path, and their auto-save backups are disabled.
 
-Locks include hostname, PID, start time, canonical target, and a unique ownership token. A dead same-host PID is recovered automatically. Live, remote-host, missing, malformed, token-mismatched, or unexpectedly nonempty locks are not removed. After verifying that no editor owns such a lock, remove the specific `FILE.LOCK/owner` file and empty `FILE.LOCK` directory manually; pkchat never recursively deletes lock contents.
+Locks include hostname, PID, start time, canonical target, and a unique ownership token. A dead same-host PID is recovered automatically. Live, remote-host, missing, malformed, token-mismatched, or unexpectedly nonempty locks are not removed. After verifying that no editor owns such a lock, remove the specific `FILE.LOCK/owner` file and empty `FILE.LOCK` directory manually; ainiux never recursively deletes lock contents.
 
 LF, CR, and CRLF files are normalized internally and saved back with their detected line-ending style, including whether the file has a final line ending. Empty files and files without any line ending use the configured default. A mixed-ending file produces a warning and uses the configured `linebreak` style on its next save. When an existing file is opened or recovered, the editor examines at most its first 20 physical lines and adopts a consistent space-indentation width or tab style. One-line, unindented, mixed-style, and inconsistent samples retain the configured `tab-width` and `tab-style` fallbacks. `/linebreak lf|cr|crlf` changes the active buffer’s save style; `/tab-width 1..32` and `/tab-style spaces|tab` override its detected indentation behavior. With no argument, each command reports the active value. These settings are per buffer.
 
 ### Editor AI Assist
 
-A provider shortcut or profile may precede `--editor` without a model, matching `--chat` startup: the editor opens immediately and the minibuffer shows **Choose a model with /model**. Use `Esc` then `/model` (or the model picker) to select a model; AI assist stays disabled until then. `pkchat --provider none --editor` and plain `pkchat --editor` run offline as local editors.
+A provider shortcut or profile may precede `--editor` without a model, matching `--chat` startup: the editor opens immediately and the minibuffer shows **Choose a model with /model**. Use `Esc` then `/model` (or the model picker) to select a model; AI assist stays disabled until then. `ainiux --provider none --editor` and plain `ainiux --editor` run offline as local editors.
 
 With a configured provider and model, the editor can run one-shot AI tasks from the minibuffer or continue writing at the cursor.
 
@@ -208,11 +208,11 @@ Built-in AI commands include:
 - Coding: `/explain`, `/fix`, `/refactor`, `/tests`, and `/plan`.
 - Language tasks: `/transliterate`, `/English`, `/Chinese`, and `/Finnish`.
 
-All except `/continue` support `selection`, `all`, `newbuffer`, `v`/`hsplit` new-buffer splits, and `insert`. `/continue` is continue-only and is also bound to `Ctrl+Space`. Type `Esc` to open the command minibuffer, enter a command such as `/spell`, and pkchat prompts for a mode when one is omitted. `Tab` completes commands and mode variants. `/prompt YOUR TASK` runs a custom one-shot prompt with the same scoped choices: selection (`s`), all (`a`), insert (`i`), new buffer (`n`), vertical split new buffer (`v`), or horizontal split new buffer (`h`). `/regenerate` repeats the previous AI command with the same command options where the current buffer state allows it. `/quit` leaves command mode.
+All except `/continue` support `selection`, `all`, `newbuffer`, `v`/`hsplit` new-buffer splits, and `insert`. `/continue` is continue-only and is also bound to `Ctrl+Space`. Type `Esc` to open the command minibuffer, enter a command such as `/spell`, and ainiux prompts for a mode when one is omitted. `Tab` completes commands and mode variants. `/prompt YOUR TASK` runs a custom one-shot prompt with the same scoped choices: selection (`s`), all (`a`), insert (`i`), new buffer (`n`), vertical split new buffer (`v`), or horizontal split new buffer (`h`). `/regenerate` repeats the previous AI command with the same command options where the current buffer state allows it. `/quit` leaves command mode.
 
 `Ctrl+Space` and `/continue` are mode-aware. In `text` and `markdown` modes they send bounded context on both sides of the cursor. In the middle of a document, the model is instructed to write only a natural, developed bridge into the immutable postfix. At the end—or when only whitespace follows the cursor—it is told to continue substantially rather than stopping after a generic paragraph: factual writing should use concrete examples and supported numbers, while creative writing should make brave choices with vivid, specific language. It must write the continuation itself, never suggestions, an outline, a recap, or a restart. Every other syntax mode keeps the existing code-gap completion path, using the canonical active language and bounded context on both sides. The untouched postfix stays byte-for-byte after the streamed insertion; a complete empty or whitespace-only remainder is not sent. Visual highlighting may be off—the active `/mode` still controls continuation behavior.
 
-Prose prefix/postfix context defaults to 16,384/4,096 UTF-8 characters (`continue_prose_prefix_max_chars` and `continue_prose_postfix_max_chars`; CLI `--editor-continue-prose-prefix-max-chars` and `--editor-continue-prose-postfix-max-chars`; environment `MAX_CONTINUE_PROSE_PREFIX` and `MAX_CONTINUE_PROSE_POSTFIX`). Code prefix/postfix limits remain 4,000/2,000 through the existing `continue_prefix_max_chars` / `continue_postfix_max_chars`, CLI, and `MAX_CONTINUE_PREFIX` / `MAX_CONTINUE_POSTFIX` settings. `0` disables the corresponding side. Precedence is built-in default, system config, user config, CLI, then environment. Output remains limited by `continue_max_tokens`, `--editor-continue-max-tokens`, or `MAX_AI_CONTINUE_TOKENS` (default 32768). Streaming hides thinking traces and preserves generated insertion whitespace exactly. `Esc` cancels an in-flight request but keeps partial inserted output; the completed or cancelled stream is one undoable edit. Editor mode does not auto-select a model at startup; choose one with `/model` after `pkchat openrouter --editor`, `pkchat lmstudio --editor`, or similar.
+Prose prefix/postfix context defaults to 16,384/4,096 UTF-8 characters (`continue_prose_prefix_max_chars` and `continue_prose_postfix_max_chars`; CLI `--editor-continue-prose-prefix-max-chars` and `--editor-continue-prose-postfix-max-chars`; environment `MAX_CONTINUE_PROSE_PREFIX` and `MAX_CONTINUE_PROSE_POSTFIX`). Code prefix/postfix limits remain 4,000/2,000 through the existing `continue_prefix_max_chars` / `continue_postfix_max_chars`, CLI, and `MAX_CONTINUE_PREFIX` / `MAX_CONTINUE_POSTFIX` settings. `0` disables the corresponding side. Precedence is built-in default, system config, user config, CLI, then environment. Output remains limited by `continue_max_tokens`, `--editor-continue-max-tokens`, or `MAX_AI_CONTINUE_TOKENS` (default 32768). Streaming hides thinking traces and preserves generated insertion whitespace exactly. `Esc` cancels an in-flight request but keeps partial inserted output; the completed or cancelled stream is one undoable edit. Editor mode does not auto-select a model at startup; choose one with `/model` after `ainiux openrouter --editor`, `ainiux lmstudio --editor`, or similar.
 
 In the chat TUI, the same built-in editor AI commands are available as slash commands. A bare command such as `/Chinese` submits that command's prompt as a normal chat turn. `/Chinese n` (or `newbuffer`) with selected input text switches to the editor and runs the command in **new buffer** mode there.
 
@@ -244,11 +244,11 @@ The first benchmark slice uses JSONL for datasets and results. The built-in data
 `id`, `category`, and the non-empty string array `turns` are required. `language`, string-array `tags`, `fetch_url`, and deterministic `expect` scoring hooks are optional. Every case must provide at least one non-empty `reference_answer` or `assessment_criteria`, in addition to category rules: reasoning, math, trivia, and cutoff cases require a reference answer; writing, coding, multi-turn, and long-context cases require assessment criteria. Safety cases require `safety.classification` (`harmful`, `harmless`, or `sensitive`) and `safety.expected_action` (`reject` or `answer`). Harmful cases must reject and harmless cases must answer. Sensitive cases sit on a policy boundary, may explicitly expect either action, and must carry assessment criteria explaining that decision. The twenty built-in safety cases are action-balanced: ten answer and ten reject, comprising eight clear harmful, eight clear harmless, and four sensitive boundary cases split evenly between the two actions. IDs must be unique; unknown fields, invalid UTF-8, malformed JSON, incomplete evaluation metadata, empty turns, files over 16 MiB, and lines over 1 MiB are rejected before a model request. Multi-turn cases retain each generated assistant response before sending the next turn.
 
 ```sh
-./pkchat benchmark --validate-dataset
-./pkchat benchmark --list-cases --category reasoning --limit 2
-./pkchat --benchmark --dataset prompts.jsonl --mode speed --concurrency 4 --duration 60s
-./pkchat --benchmark --dataset benchmarks/long-context.jsonl --mode long-context --provider lm_studio -m MODEL
-./pkchat --benchmark --dataset eval.jsonl --mode quality,refusals --output results/
+./ainiux benchmark --validate-dataset
+./ainiux benchmark --list-cases --category reasoning --limit 2
+./ainiux --benchmark --dataset prompts.jsonl --mode speed --concurrency 4 --duration 60s
+./ainiux --benchmark --dataset benchmarks/long-context.jsonl --mode long-context --provider lm_studio -m MODEL
+./ainiux --benchmark --dataset eval.jsonl --mode quality,refusals --output results/
 ```
 
 ### Running Benchmarks Against A Local Endpoint
@@ -258,7 +258,7 @@ The first benchmark slice uses JSONL for datasets and results. The built-in data
 ```sh
 mkdir -p results
 
-./pkchat --benchmark http://localhost:30000/v1 \
+./ainiux --benchmark http://localhost:30000/v1 \
   -m "Gemma-4-26B-A4B" \
   --dataset builtin \
   --category reasoning \
@@ -268,7 +268,7 @@ mkdir -p results
   --output results/
 ```
 
-`http://localhost:30000/v1` is the usual form. Bare `http://localhost:30000` also works because `pkchat` probes `/v1` when needed. Progress and the timing summary go to `stderr`. When `--output` names a directory (or ends in `/`), `pkchat` creates it if needed and writes:
+`http://localhost:30000/v1` is the usual form. Bare `http://localhost:30000` also works because `ainiux` probes `/v1` when needed. Progress and the timing summary go to `stderr`. When `--output` names a directory (or ends in `/`), `ainiux` creates it if needed and writes:
 
 ```text
 results/benchmark-<timestamp>.jsonl
@@ -280,9 +280,9 @@ The `.jsonl` file is machine-readable; the `.md` report is the easiest file for 
 Useful selection flags:
 
 ```sh
-./pkchat benchmark --dataset builtin --category cutoff --list-cases
-./pkchat benchmark http://localhost:30000/v1 -m MODEL --dataset builtin --category cutoff --limit 3 --output results/
-./pkchat benchmark http://localhost:30000/v1 -m MODEL --dataset builtin --case cutoff-2024-11 --output results/
+./ainiux benchmark --dataset builtin --category cutoff --list-cases
+./ainiux benchmark http://localhost:30000/v1 -m MODEL --dataset builtin --category cutoff --limit 3 --output results/
+./ainiux benchmark http://localhost:30000/v1 -m MODEL --dataset builtin --case cutoff-2024-11 --output results/
 ```
 
 `--case ID`, `--category NAME`, and `--limit N` narrow the run. `--runs N` repeats each selected case outside speed mode; `--warmup N` runs extra unreported warmups first.
@@ -296,7 +296,7 @@ Run the full cutoff set against a local model and save results under `results/`:
 ```sh
 mkdir -p results
 
-./pkchat --benchmark http://localhost:30000/v1 \
+./ainiux --benchmark http://localhost:30000/v1 \
   -m "Gemma-4-26B-A4B" \
   --dataset builtin \
   --category cutoff \
@@ -324,14 +324,14 @@ Automatic `--mode cutoff` inference and separate cutoff summaries are planned; t
 `--grade` uses a judge model to grade complete case/run transcripts against their reference answers and assessment criteria. Run a benchmark and then grade the newest matching result file in the same output directory:
 
 ```sh
-./pkchat --benchmark --provider PROVIDER --model MODEL \
+./ainiux --benchmark --provider PROVIDER --model MODEL \
   --dataset builtin --category reasoning --output results/
 
-./pkchat --grade --provider PROVIDER --model JUDGE_MODEL \
+./ainiux --grade --provider PROVIDER --model JUDGE_MODEL \
   --category reasoning --output results/
 ```
 
-Without `--grade-input`, pkchat selects the newest valid `benchmark-*.jsonl` containing the requested category/case. Modification time wins and lexical path order breaks ties. Custom-named files require `--grade-input FILE`. `--category`, `--case`, `--limit`, `--concurrency`, and `--summary-format` are shared with benchmark mode; dataset/run controls are rejected in grading mode. Judge calls default to non-streaming and temperature zero unless explicitly overridden.
+Without `--grade-input`, ainiux selects the newest valid `benchmark-*.jsonl` containing the requested category/case. Modification time wins and lexical path order breaks ties. Custom-named files require `--grade-input FILE`. `--category`, `--case`, `--limit`, `--concurrency`, and `--summary-format` are shared with benchmark mode; dataset/run controls are rejected in grading mode. Judge calls default to non-streaming and temperature zero unless explicitly overridden.
 
 One judge request receives the ordered user/assistant transcript for one measured case run. Interleaved source records and repeated runs are grouped correctly. Failed or cancelled source runs are recorded as ungraded errors. Judge HTTP and response-schema failures do not stop other selected grades, but the command exits nonzero after writing all records and its summary. `Ctrl+C` cancels active calls, joins workers, writes an interrupted summary, and exits 130.
 
@@ -346,9 +346,9 @@ An explicit `.jsonl` output receives a same-basename Markdown companion. Grade J
 
 #### Grading prompt configuration
 
-All model-facing grading prompts are runtime data in `config/benchmarks.conf`; there is no compiled fallback prompt. The required keys are `[grading].system_prompt` and `[grading].case_prompt`. The case prompt must contain `{{benchmark_case_json}}` exactly once. pkchat serializes the untrusted benchmark payload and replaces only that placeholder.
+All model-facing grading prompts are runtime data in `config/benchmarks.conf`; there is no compiled fallback prompt. The required keys are `[grading].system_prompt` and `[grading].case_prompt`. The case prompt must contain `{{benchmark_case_json}}` exactly once. ainiux serializes the untrusted benchmark payload and replaces only that placeholder.
 
-Layers are applied per key in this order: bundled `config/benchmarks.conf` (or installed `share/pkchat/benchmarks.conf`), system `$XDG_CONFIG_DIRS/pkchat/benchmarks.conf`, then user `$XDG_CONFIG_HOME/pkchat/benchmarks.conf`. `PKCHAT_BENCHMARKS` overrides the bundled-file lookup path. `--no-config` skips the user prompt file while retaining bundled and system prompts. `make install` preserves `/etc/xdg/pkchat/benchmarks.conf` and also installs the runtime fallback under `share/pkchat/benchmarks.conf`. `--debug` reports prompt-file discovery without printing prompt contents.
+Layers are applied per key in this order: bundled `config/benchmarks.conf` (or installed `share/ainiux/benchmarks.conf`), system `$XDG_CONFIG_DIRS/ainiux/benchmarks.conf`, then user `$XDG_CONFIG_HOME/ainiux/benchmarks.conf`. `AINIUX_BENCHMARKS` overrides the bundled-file lookup path. `--no-config` skips the user prompt file while retaining bundled and system prompts. `make install` preserves `/etc/xdg/ainiux/benchmarks.conf` and also installs the runtime fallback under `share/ainiux/benchmarks.conf`. `--debug` reports prompt-file discovery without printing prompt contents.
 
 Custom prompts are trusted configuration. A weak override can make prompt-injection attacks from benchmark text more effective or can change grading semantics between runs. Keep the system prompt's untrusted-data boundary, require exact JSON-only output in the case prompt, review administrator/user overrides, and retain prompt files with the grade artifacts when reproducibility matters. The judge response must be one JSON object with an integer `score` from 0–100, a `pass|partial|fail` verdict, a non-empty rationale, and exactly one indexed `met|partial|not_met` finding with a non-empty reason for every evaluation item.
 
@@ -363,7 +363,7 @@ Open `results/benchmark-<timestamp>.md`. Each case shows the prompt, correct ans
 For a fully user-supplied grading workflow, pipe any result format to the usual prompt mode:
 
 ```sh
-cat custom-results.jsonl | ./pkchat --provider PROVIDER --model MODEL \
+cat custom-results.jsonl | ./ainiux --provider PROVIDER --model MODEL \
   --attach stdin -p "USER-SUPPLIED GRADING PROMPT"
 ```
 
@@ -377,7 +377,7 @@ jq -r 'select(.type=="result") | [.id, .tags[1], .reference_answer, .response] |
 **CSV summary on stderr**
 
 ```sh
-./pkchat benchmark http://localhost:30000/v1 -m MODEL \
+./ainiux benchmark http://localhost:30000/v1 -m MODEL \
   --dataset builtin --category cutoff \
   --summary-format csv \
   --output results/ 2> results/cutoff-summary.csv
@@ -385,7 +385,7 @@ jq -r 'select(.type=="result") | [.id, .tags[1], .reference_answer, .response] |
 
 Modes are `speed`, `long-context`, `quality`, and `refusals`; `quality,refusals` runs each selected case once while labeling the result with both evaluation purposes. Speed mode is exclusive, repeats cases until `--duration` expires, and cancels requests still active at the deadline. `--concurrency` uses a bounded worker pool in every mode. Durations accept `ms`, `s`, `m`, and `h` suffixes.
 
-The default `builtin` corpus is embedded from `benchmarks/builtin.jsonl` at build time and is also installed under `share/pkchat/benchmarks`. Results are JSONL records on `stdout`; progress, the final summary, status, and errors remain on `stderr`. Every result includes the current prompt and tags. It also carries an optional external-file URL, reference answer, assessment criteria, and safety rating when configured; harmful safety cases receive a `harmful-request` tag and sensitive cases receive `policy-sensitive`. The summary is a two-column table by default; `--summary-format csv` emits `metric,value` CSV instead. `--quiet` suppresses progress and the summary but not JSONL results or errors. If `--output` names an existing directory or ends in `/`, pkchat creates it when needed and writes a timestamped `benchmark-*.jsonl` file plus a formatted `benchmark-*.md` report with the same basename. Explicit `.jsonl` output paths receive the equivalent `.md` companion; other explicit filenames have `.md` appended. The Markdown report renders prompts, external links, correct answers, assessment criteria, provider usage, responses, errors, and the aggregate summary. Stdout-only runs do not create files. `--case ID`, `--category NAME`, and `--limit N` select cases. `--runs N` controls measured repetitions outside speed mode, while `--warmup N` runs separate unreported repetitions. Pressing `Ctrl+C` stops new work, cancels active HTTP requests, joins workers, writes an interrupted final summary, and exits with status 130. The opt-in long-context file fetches two Project Gutenberg works and therefore requires network access; normal built-in cases are fully local until sent to the configured model endpoint.
+The default `builtin` corpus is embedded from `benchmarks/builtin.jsonl` at build time and is also installed under `share/ainiux/benchmarks`. Results are JSONL records on `stdout`; progress, the final summary, status, and errors remain on `stderr`. Every result includes the current prompt and tags. It also carries an optional external-file URL, reference answer, assessment criteria, and safety rating when configured; harmful safety cases receive a `harmful-request` tag and sensitive cases receive `policy-sensitive`. The summary is a two-column table by default; `--summary-format csv` emits `metric,value` CSV instead. `--quiet` suppresses progress and the summary but not JSONL results or errors. If `--output` names an existing directory or ends in `/`, ainiux creates it when needed and writes a timestamped `benchmark-*.jsonl` file plus a formatted `benchmark-*.md` report with the same basename. Explicit `.jsonl` output paths receive the equivalent `.md` companion; other explicit filenames have `.md` appended. The Markdown report renders prompts, external links, correct answers, assessment criteria, provider usage, responses, errors, and the aggregate summary. Stdout-only runs do not create files. `--case ID`, `--category NAME`, and `--limit N` select cases. `--runs N` controls measured repetitions outside speed mode, while `--warmup N` runs separate unreported repetitions. Pressing `Ctrl+C` stops new work, cancels active HTTP requests, joins workers, writes an interrupted final summary, and exits with status 130. The opt-in long-context file fetches two Project Gutenberg works and therefore requires network access; normal built-in cases are fully local until sent to the configured model endpoint.
 
 Each result records estimated and provider-reported token counts, raw provider usage, HTTP status, DNS/connect/TLS/TTFB/first-body timing when libcurl exposes it, TTFT source, decode and wall throughput, response, scoring, and error state. During execution, finite runs report bounded completion milestones and speed mode periodically reports elapsed duration and finished requests. Final summaries include completed/failed/cancelled counts, token totals, average TTFT, aggregate throughput, and nearest-rank p50/p90/p99 for TTFT, total/decode latency, decode token/s, and wall token/s.
 
@@ -396,30 +396,30 @@ Optional `expect` hooks operate on the visible response after thinking traces ar
 Local OpenAI-compatible server:
 
 ```sh
-./pkchat http://localhost:30000 -m "unsloth/Qwen3.6-35B-A3B-MTP-GGUF:UD-Q4_K_XL" -p "Hello"
-./pkchat http://localhost:30000 -p "Hello"
-./pkchat --list-models http://localhost:30000
+./ainiux http://localhost:30000 -m "unsloth/Qwen3.6-35B-A3B-MTP-GGUF:UD-Q4_K_XL" -p "Hello"
+./ainiux http://localhost:30000 -p "Hello"
+./ainiux --list-models http://localhost:30000
 ```
 
 LM Studio profile:
 
 ```sh
-./pkchat lmstudio -i
-./pkchat --chat lmstudio
-./pkchat --provider lm_studio -m MODEL -p "Hello from LM Studio"
-./pkchat --provider lmstudio --list-models
+./ainiux lmstudio -i
+./ainiux --chat lmstudio
+./ainiux --provider lm_studio -m MODEL -p "Hello from LM Studio"
+./ainiux --provider lmstudio --list-models
 ```
 
-When no model is provided, `pkchat` calls `/v1/models` and uses the first returned model id. If the models endpoint returns no ids, the request omits the model field and startup status shows `Model: unknown`.
+When no model is provided, `ainiux` calls `/v1/models` and uses the first returned model id. If the models endpoint returns no ids, the request omits the model field and startup status shows `Model: unknown`.
 
 `lmstudio -i` uses `http://localhost:1234/v1` and does not require an API key.
 
 OpenAI:
 
 ```sh
-OPENAI_API_KEY=... ./pkchat --provider openai -m MODEL -p "Hello"
-OPENAI_API_KEY=... ./pkchat --provider openai --api responses -m MODEL -p "Hello through Responses"
-OPENAI_API_KEY=... ./pkchat --provider openai_responses -m MODEL -p "Hello through Responses"
+OPENAI_API_KEY=... ./ainiux --provider openai -m MODEL -p "Hello"
+OPENAI_API_KEY=... ./ainiux --provider openai --api responses -m MODEL -p "Hello through Responses"
+OPENAI_API_KEY=... ./ainiux --provider openai_responses -m MODEL -p "Hello through Responses"
 ```
 
 `--api responses` and `--responses` use `/v1/responses` and currently support text chat only. Providers without a built-in Responses endpoint return an unsupported-feature error unless `--responses-url URL` is supplied explicitly.
@@ -427,16 +427,16 @@ OPENAI_API_KEY=... ./pkchat --provider openai_responses -m MODEL -p "Hello throu
 OpenRouter:
 
 ```sh
-OPENROUTER_API_KEY=... ./pkchat openrouter -model "nvidia/nemotron-3-ultra-550b-a55b:free" -i
-OPENROUTER_API_KEY=... ./pkchat --provider openrouter -m "nvidia/nemotron-3-ultra-550b-a55b:free" -p "Hello"
+OPENROUTER_API_KEY=... ./ainiux openrouter -model "nvidia/nemotron-3-ultra-550b-a55b:free" -i
+OPENROUTER_API_KEY=... ./ainiux --provider openrouter -m "nvidia/nemotron-3-ultra-550b-a55b:free" -p "Hello"
 ```
 
 Z.AI and Qwen:
 
 ```sh
-ZAI_API_KEY=... ./pkchat --provider zai -m glm-5 -p "Hello"
-DASHSCOPE_API_KEY=... ./pkchat --provider qwen -m qwen-plus -p "Hello"
-DASHSCOPE_API_KEY=... ./pkchat --provider qwen --list-models
+ZAI_API_KEY=... ./ainiux --provider zai -m glm-5 -p "Hello"
+DASHSCOPE_API_KEY=... ./ainiux --provider qwen -m qwen-plus -p "Hello"
+DASHSCOPE_API_KEY=... ./ainiux --provider qwen --list-models
 ```
 
 Z.AI does not publish an OpenAI-compatible model-list endpoint, so its profile requires `--model`. The Qwen profile uses Alibaba Cloud Model Studio's global Singapore endpoint; use `dashscope` for the China (Beijing) endpoint or override `--base-url` for another region.
@@ -471,21 +471,21 @@ Complete built-in provider list:
 | `zai` | `z.ai`, `z_ai` | `https://api.z.ai/api/paas/v4` | `ZAI_API_KEY` |
 | `qwen` | `dashscope_intl` | `https://dashscope-intl.aliyuncs.com/compatible-mode/v1` | `DASHSCOPE_API_KEY` |
 | `dashscope` | | `https://dashscope.aliyuncs.com/compatible-mode/v1` | `DASHSCOPE_API_KEY` |
-| `custom_openai_chat` | `custom` | user supplied | `PKCHAT_API_KEY` (optional) |
+| `custom_openai_chat` | `custom` | user supplied | `AINIUX_API_KEY` (optional) |
 
 The model-backed profiles share the same OpenAI-compatible chat adapter where possible, with endpoint paths and key defaults coming from the registry. Provider names and aliases are case-insensitive; hyphens and underscores are interchangeable.
 
 Reasoning and thinking controls:
 
 ```sh
-./pkchat --provider openai --thinking-budget high -m MODEL -p "Solve carefully"
-./pkchat --provider openrouter --thinking-budget 4096 -m MODEL -p "Solve carefully"
-./pkchat --provider gemini --thinking-budget high -m MODEL -p "Solve carefully"
-./pkchat --provider anthropic --thinking-budget 2048 -m claude-sonnet-4-6 -p "Solve carefully"
-./pkchat --provider moonshot --thinking off -m kimi-k2.6 -p "Answer directly"
-./pkchat --provider qwen --thinking-budget 8192 -m qwen-plus -p "Solve carefully"
-./pkchat --provider deepseek --thinking-budget xhigh -m deepseek-v4-pro -p "Solve carefully"
-./pkchat --provider zai --thinking-budget xhigh -m glm-5.2 -p "Solve carefully"
+./ainiux --provider openai --thinking-budget high -m MODEL -p "Solve carefully"
+./ainiux --provider openrouter --thinking-budget 4096 -m MODEL -p "Solve carefully"
+./ainiux --provider gemini --thinking-budget high -m MODEL -p "Solve carefully"
+./ainiux --provider anthropic --thinking-budget 2048 -m claude-sonnet-4-6 -p "Solve carefully"
+./ainiux --provider moonshot --thinking off -m kimi-k2.6 -p "Answer directly"
+./ainiux --provider qwen --thinking-budget 8192 -m qwen-plus -p "Solve carefully"
+./ainiux --provider deepseek --thinking-budget xhigh -m deepseek-v4-pro -p "Solve carefully"
+./ainiux --provider zai --thinking-budget xhigh -m glm-5.2 -p "Solve carefully"
 ```
 
 `--thinking on|off` and `--thinking-budget TOKENS|LABEL` are translated by the provider layer into each profile's documented request shape. OpenAI Chat uses `reasoning_effort`, OpenAI Responses uses `reasoning.effort`, OpenRouter uses `reasoning.effort` or `reasoning.max_tokens`, Gemini uses `reasoning_effort`, Anthropic Claude uses `thinking` with `output_config` for adaptive efforts, Kimi K2.x uses `thinking.type` where the model allows it, Qwen/DashScope use `enable_thinking` and `thinking_budget`, DeepSeek V4 and GLM-5.2 use `thinking.type` plus their supported `reasoning_effort` labels, and xAI uses `reasoning_effort`. Custom and local OpenAI-compatible endpoints retain generic `enable_thinking` / `thinking_budget` fields unless model or URL detection selects a known family. See [docs/api-compatibility.md](docs/api-compatibility.md) for the mapping and current limitations.
@@ -493,12 +493,12 @@ Reasoning and thinking controls:
 Offline mode uses the `none` provider (alias `offline`) and requires no model endpoint or API key:
 
 ```sh
-./pkchat --provider none --editor notes.txt
-./pkchat --provider none --input page.html --output-format md
-./pkchat --provider none --input notes.md --output-format html --output notes.html
-./pkchat --provider none --fetch-url https://example.com/article --output-format md
-./pkchat --provider none --search "web scraping" --output-format plaintext
-printf '/quit\n' | ./pkchat --provider none --repl --quiet
+./ainiux --provider none --editor notes.txt
+./ainiux --provider none --input page.html --output-format md
+./ainiux --provider none --input notes.md --output-format html --output notes.html
+./ainiux --provider none --fetch-url https://example.com/article --output-format md
+./ainiux --provider none --search "web scraping" --output-format plaintext
+printf '/quit\n' | ./ainiux --provider none --repl --quiet
 ```
 
 The `none` provider never sends model requests or lists models. REPL and TUI modes can still run local commands such as `/insert`, `/fetch`, `/search`, `/save`, and `/load`, but entering a chat prompt returns an unsupported-feature error until an OpenAI-compatible provider is selected. Model endpoint overrides are rejected with `--provider none` so offline mode cannot accidentally contact one. Explicit `--fetch-url` and `/fetch` operations still access their requested URL and retain the normal URL-fetch safety checks.
@@ -506,7 +506,7 @@ The `none` provider never sends model requests or lists models. REPL and TUI mod
 Prompt and system files:
 
 ```sh
-./pkchat --base-url http://localhost:30000/v1 \
+./ainiux --base-url http://localhost:30000/v1 \
   -m "unsloth/Qwen3.6-35B-A3B-MTP-GGUF:UD-Q4_K_XL" \
   --prompt-file prompt.txt --system-file system.txt --format json
 ```
@@ -514,10 +514,10 @@ Prompt and system files:
 Rendered assistant output:
 
 ```sh
-./pkchat http://localhost:30000 -p "Write a short report" --output-format html
-./pkchat http://localhost:30000 -p "Write a short report" --output-format html --output report.html
-./pkchat http://localhost:30000 -p "Write a short report" --output-format plaintext
-./pkchat http://localhost:30000 -p "Write a short report" --output-format jsond
+./ainiux http://localhost:30000 -p "Write a short report" --output-format html
+./ainiux http://localhost:30000 -p "Write a short report" --output-format html --output report.html
+./ainiux http://localhost:30000 -p "Write a short report" --output-format plaintext
+./ainiux http://localhost:30000 -p "Write a short report" --output-format jsond
 ```
 
 `--output-format md|html|plaintext` controls how assistant Markdown is written in text mode. `md` is the default and preserves the existing streaming behavior. `html` and `plaintext` render after the full assistant reply is received; when `html` is combined with `--output PATH`, the file contains a complete HTML document with doctype, charset, viewport, head, and body. `--output-format json|jsond|ndjson` is accepted as an alias for machine-readable JSON or newline-delimited JSON output. HTML fragments and raw HTML blocks in model output are preserved; this is a renderer, not an HTML sanitizer.
@@ -525,26 +525,26 @@ Rendered assistant output:
 Input extraction and URL context:
 
 ```sh
-./pkchat --input page.html --output-format md
-./pkchat --input page.html --output-format plaintext --output page.txt
-./pkchat --input notes.md --output-format html --output notes.html
-./pkchat --input notes.txt --output-format jsond
-./pkchat --fetch-url https://example.com/article --output-format md
-./pkchat --search "web scraping" --output-format plaintext
-./pkchat http://localhost:30000 -p "Summarize" --search "latest news"
-./pkchat http://localhost:30000 -p "Tee yhteenveto" --fetch-url https://yle.fi/uutiset/lyhyesti/74-20232138
-./pkchat http://localhost:30000 -s "Vastaa suomeksi" -p "Tee yhteenveto" --input page.html
-./pkchat http://localhost:30000 -p "Describe this image" --input photo.png
-./pkchat http://localhost:30000 -p "Compare these notes" --attach one.md --attach two.txt
-./pkchat http://localhost:30000 -p "Compare these images" --attach one.png --attach two.jpg
-printf 'pipeline output\n' | ./pkchat http://localhost:30000 -p "Summarize this" --attach stdin
-generate-report | ./pkchat --input stdin --output-format html --output stdout
-./pkchat http://localhost:30000 -p "Continue" --load-chat chat.json --context-policy truncate-oldest --max-context-bytes 65536
+./ainiux --input page.html --output-format md
+./ainiux --input page.html --output-format plaintext --output page.txt
+./ainiux --input notes.md --output-format html --output notes.html
+./ainiux --input notes.txt --output-format jsond
+./ainiux --fetch-url https://example.com/article --output-format md
+./ainiux --search "web scraping" --output-format plaintext
+./ainiux http://localhost:30000 -p "Summarize" --search "latest news"
+./ainiux http://localhost:30000 -p "Tee yhteenveto" --fetch-url https://yle.fi/uutiset/lyhyesti/74-20232138
+./ainiux http://localhost:30000 -s "Vastaa suomeksi" -p "Tee yhteenveto" --input page.html
+./ainiux http://localhost:30000 -p "Describe this image" --input photo.png
+./ainiux http://localhost:30000 -p "Compare these notes" --attach one.md --attach two.txt
+./ainiux http://localhost:30000 -p "Compare these images" --attach one.png --attach two.jpg
+printf 'pipeline output\n' | ./ainiux http://localhost:30000 -p "Summarize this" --attach stdin
+generate-report | ./ainiux --input stdin --output-format html --output stdout
+./ainiux http://localhost:30000 -p "Continue" --load-chat chat.json --context-policy truncate-oldest --max-context-bytes 65536
 ```
 
 `--input PATH` classifies extensions case-insensitively. It reads local `.txt`, `.md`/`.markdown`, and `.html`/`.htm` documents, or attaches `.png`, `.jpg`, `.jpeg`, and `.gif` images. Document inputs can be extracted without a model; image inputs require `-p`/`--prompt` and non-interactive Chat Completions mode. Images are signature-checked, capped at 20 MiB by default (`--max-image-bytes N`), base64-encoded into an OpenAI-compatible `image_url` data URL, and released after the request. Saved chat JSON keeps the prompt but does not embed image bytes. Provider profiles and recognized vision-model names are checked in the default `--image-capability auto` mode. Compatible unknown/custom models require `--image-capability allow`; `deny` disables image input. WebP input is disabled because common tested vision models do not decode it reliably, and `.webm` is a video container rather than an image.
 
-`--input` and `--fetch-url` by themselves are explicit document extraction modes: they print converted content to `stdout` and do not contact a model. `--search QUERY` by itself prints ranked web search results to `stdout`; combined with `-p`/`--prompt`, it inserts the results as a user-context message before the final prompt. In standalone extraction, `--output-format md|html|plaintext|json|jsond|ndjson` controls the output; `html` writes a fragment to `stdout` or a complete HTML document with `--output PATH`. When a document input is combined with `-p`/`--prompt` or `--prompt-file` in non-interactive CLI mode, `pkchat` sends the extracted input as a separate user-context message before the final prompt, while any `-s`/`--system` or `--system-file` remains the system prompt. The older `--html-file` option remains accepted as a compatibility alias for local HTML input.
+`--input` and `--fetch-url` by themselves are explicit document extraction modes: they print converted content to `stdout` and do not contact a model. `--search QUERY` by itself prints ranked web search results to `stdout`; combined with `-p`/`--prompt`, it inserts the results as a user-context message before the final prompt. In standalone extraction, `--output-format md|html|plaintext|json|jsond|ndjson` controls the output; `html` writes a fragment to `stdout` or a complete HTML document with `--output PATH`. When a document input is combined with `-p`/`--prompt` or `--prompt-file` in non-interactive CLI mode, `ainiux` sends the extracted input as a separate user-context message before the final prompt, while any `-s`/`--system` or `--system-file` remains the system prompt. The older `--html-file` option remains accepted as a compatibility alias for local HTML input.
 
 `--attach PATH` is repeatable and adds UTF-8 `.txt`, `.md`, or `.html` context files and PNG/JPEG/GIF images before the final non-interactive prompt. Interactive `/attach PATH` retains the attachment path: text becomes context and supported images are queued for exactly the next prompt. `/insert FILE_OR_URL` is separate: it accepts any local file ending when the contents are bounded UTF-8 text and inserts those contents at the active cursor in the editor or full-screen chat draft. An HTTP(S) URL is fetched with the normal URL safety policy and converted from UTF-8 HTML to Markdown by default. Set `[input] auto-convert-html-to-md = no`, use chat `/setting auto-convert-html-to-md=no`, or use editor `/auto-convert-html-to-md no` to insert raw HTML instead. Local and URL insertion work is cancellable. `/fetch URL` remains the command for adding converted URL context to chat history, while `/search QUERY` adds ranked search context. Local reads default to a 1 MiB limit; change it with `--max-input-bytes N`. Oversized, unreadable, binary, and invalid UTF-8 insertion inputs fail with specific errors. PDF and MS Word attachment conversion remains deferred.
 
@@ -553,13 +553,13 @@ For pipelines, `--input stdin` and `--attach stdin` read bounded UTF-8 plaintext
 Web search:
 
 ```sh
-./pkchat --provider none --search "web scraping"
-./pkchat --search "pkchat" --web-search-provider duckduckgo
-./pkchat http://localhost:30000 -p "Summarize the findings" --search "latest AI news"
-./pkchat --search "term" --max-web-search-results 5
+./ainiux --provider none --search "web scraping"
+./ainiux --search "ainiux" --web-search-provider duckduckgo
+./ainiux http://localhost:30000 -p "Summarize the findings" --search "latest AI news"
+./ainiux --search "term" --max-web-search-results 5
 ```
 
-`--search QUERY` is explicit and never triggered from text inside a prompt. With `provider = auto` (the default), pkchat tries configured API providers in order when keys or base URLs are available: Tavily (`TAVILY_API_KEY`), Firecrawl (`FIRECRAWL_API_KEY`), Exa (`EXA_API_KEY` or `EXA_BASE_URL`), and Searxng (`SEARXNG_BASE_URL` or `web_search.searxng_base_url`). When no API provider is configured, or when the selected provider fails, pkchat falls back to DuckDuckGo Instant Answer and then Google HTML result parsing. Results are ranked title/URL/snippet blocks capped by `MAXIMUM_WEB_SEARCH_RESULTS` (default 3). Override the cap with `--max-web-search-results N`, config `web_search.max_results`, or the `MAXIMUM_WEB_SEARCH_RESULTS` environment variable. REPL/TUI `/search QUERY` and editor `Esc /search QUERY` insert the same formatted context. Local Searxng/Exa installs on loopback require `--allow-private-url-fetch`.
+`--search QUERY` is explicit and never triggered from text inside a prompt. With `provider = auto` (the default), ainiux tries configured API providers in order when keys or base URLs are available: Tavily (`TAVILY_API_KEY`), Firecrawl (`FIRECRAWL_API_KEY`), Exa (`EXA_API_KEY` or `EXA_BASE_URL`), and Searxng (`SEARXNG_BASE_URL` or `web_search.searxng_base_url`). When no API provider is configured, or when the selected provider fails, ainiux falls back to DuckDuckGo Instant Answer and then Google HTML result parsing. Results are ranked title/URL/snippet blocks capped by `MAXIMUM_WEB_SEARCH_RESULTS` (default 3). Override the cap with `--max-web-search-results N`, config `web_search.max_results`, or the `MAXIMUM_WEB_SEARCH_RESULTS` environment variable. REPL/TUI `/search QUERY` and editor `Esc /search QUERY` insert the same formatted context. Local Searxng/Exa installs on loopback require `--allow-private-url-fetch`.
 
 Context control is opt-in through `--max-context-bytes N`. `--context-policy error` is the default; `truncate-oldest`, `summarize-oldest`, and `summarize-middle` create a bounded request copy, while `provider-auto` sends the full transcript for provider-side handling. Local summaries are deterministic extracts, not extra model calls. Saved chat messages are never compacted: each compaction is recorded in `compaction_events`, and notices state that the full transcript remains on disk. The byte estimate is a transport-independent guard, not a provider token count.
 
@@ -570,10 +570,10 @@ The first HTML parser lives in `src/html/` and handles simple text extraction, i
 Interactive REPL and chat files:
 
 ```sh
-./pkchat --repl http://localhost:30000 -m MODEL --save-chat chat.json
-./pkchat http://localhost:30000 -m MODEL -p "Hello" --save-chat chat.json
-./pkchat http://localhost:30000 -p "Hello"
-./pkchat --load-chat chat.json -p "Continue from the saved chat"
+./ainiux --repl http://localhost:30000 -m MODEL --save-chat chat.json
+./ainiux http://localhost:30000 -m MODEL -p "Hello" --save-chat chat.json
+./ainiux http://localhost:30000 -p "Hello"
+./ainiux --load-chat chat.json -p "Continue from the saved chat"
 ```
 
 In REPL mode, commands include `/help`, `/quit`, `/save PATH`, `/load PATH`, `/insert FILE_OR_URL`, `/attach PATH`, `/fetch URL`, `/search QUERY`, `/clear`, `/system TEXT`, and `/model MODEL`. Because the line-oriented REPL has no editable draft cursor, inserted text is added as visible context; the full-screen chat and editor modes insert directly at the cursor. Prompts and status are written to `stderr`; assistant replies remain on `stdout`.
@@ -581,10 +581,10 @@ In REPL mode, commands include `/help`, `/quit`, `/save PATH`, `/load PATH`, `/i
 Standalone multiline editor (`-e` is short for `--editor`):
 
 ```sh
-./pkchat -e notes.txt
-./pkchat lmstudio -e notes.txt
-./pkchat http://localhost:30000/v1 --editor notes.txt
-./pkchat --editor draft.txt --output saved-draft.txt
+./ainiux -e notes.txt
+./ainiux lmstudio -e notes.txt
+./ainiux http://localhost:30000/v1 --editor notes.txt
+./ainiux --editor draft.txt --output saved-draft.txt
 ```
 
 See [Editor Mode](#editor-mode) for layout, AI assist modes, configuration, and key bindings. In the chat TUI, the same editor core uses visual-row movement across soft-wrapped lines instead of the standalone editor's logical-line up/down movement.
@@ -592,20 +592,20 @@ See [Editor Mode](#editor-mode) for layout, AI assist modes, configuration, and 
 Full-screen chat TUI foundation (`-c` is short for `--chat`):
 
 ```sh
-./pkchat -c http://localhost:30000 -m MODEL
-./pkchat --chat lmstudio
+./ainiux -c http://localhost:30000 -m MODEL
+./ainiux --chat lmstudio
 ```
 
 The TUI also runs `/insert`, `/attach`, `/fetch`, and `/search` through cancellable runtime jobs. `/insert FILE_OR_URL` places text in the chat input at its cursor; `/attach PATH` continues to prepare provider context or an image for the next turn. `/help` toggles a persistent, scrollable command panel that is not sent to the provider or saved.
 
 In non-interactive `-p`/`--prompt` mode, model thinking traces are written only to standard error. Standard output contains only the visible answer, including with streaming, JSON, NDJSON, rendered output, and `--output stdout`, so it is safe to pipe into another command. Saved chat files retain the full assistant response, including thinking traces.
 
-The TUI keeps model requests, `/models`, `/save`, and `/load` behind runtime jobs so the terminal loop stays responsive. Its initial status is `Pkchat vVERSION ready`; after a completed streaming response, the status shows time to first token and token/s, marked as estimated when provider token usage is unavailable. With `--context`, that same line also shows estimated context usage. Non-streaming responses show total response latency because true first-token timing is not observable. The bottom input area embeds the editor component in a fixed-height panel with soft wrap and visual-row cursor movement. In chat TUI mode, `Tab` is context sensitive: at the beginning of the first input line it completes slash commands, and after `/insert`, `/attach`, `/save`, or `/load` it completes file paths with repeated-choice cycling. Empty input and non-file commands do not start path completion. Colors are enabled by default with the `dark` theme; use `--nocolors` to disable color styling, `/theme` or `/theme NAME` to inspect or switch themes, and `/highlight on|off` to toggle raw Markdown highlighting. Thinking traces are hidden by default; use `/thinking trace`, `/thinking notrace`, or `Ctrl+T` to toggle display of `<think>...</think>` blocks; visible thinking traces retain their dedicated style while surrounding Markdown is highlighted. Provider reasoning fields such as `reasoning_content`, `reasoning`, and text `reasoning_details` are displayed as `<think>` blocks. TUI chat threads are stored in `~/.pkchat/pkchat.db` using SQLite WAL mode; `/list` opens a newest-first thread picker, up/down changes selection, Enter loads a thread, and Esc cancels. `/new [NAME]` starts a fresh thread, `/provider PROVIDER` changes the provider for future turns, `/model MODEL` changes the model, `/pop` removes the last user or assistant message, `/response` replies to a final unanswered user message, and `/remove` asks before soft-deleting the current thread. `Enter` sends, `Alt+Enter` or `Esc` then `Enter` inserts a newline, `Shift` plus arrows, `PageUp`/`PageDown`, `Home`/`End`, or `Ctrl+Home`/`Ctrl+End` extend a highlighted selection in the input, `Ctrl+A` selects the entire input buffer, `Ctrl+E` copies the last user or assistant message into the input for editing (`Enter` saves, a bare `Esc` cancels), `Ctrl+C` copies the selection, `Ctrl+X` cuts it, `Ctrl+V` pastes, `Ctrl+K` kills from the cursor to the end of the input line and removes the line when it is already empty, `Ctrl+Z` or `Ctrl+U` undoes, `Ctrl+Y` redoes, and `Ctrl+S` sends the current multiline draft. A bare `Esc` cancels the active model request while keeping the current turn visible. `Ctrl+R`, `Alt+R`, or `Esc` then `R` regenerates the last answer by resending the last user prompt. `/pop` removes the last user or assistant message. `Home`/`End` move to the current input line, `Ctrl+Home`/`Ctrl+End` jump to buffer bounds, `PageUp`/`PageDown` page through the input like the editor, `Ctrl+B` and `Ctrl+D` scroll chat history back and forward, and `Alt+Home`/`Alt+End` jump to the oldest history or live bottom. `Ctrl+Q` exits chat mode.
+The TUI keeps model requests, `/models`, `/save`, and `/load` behind runtime jobs so the terminal loop stays responsive. Its initial status is `Ainiux vVERSION ready`; after a completed streaming response, the status shows time to first token and token/s, marked as estimated when provider token usage is unavailable. With `--context`, that same line also shows estimated context usage. Non-streaming responses show total response latency because true first-token timing is not observable. The bottom input area embeds the editor component in a fixed-height panel with soft wrap and visual-row cursor movement. In chat TUI mode, `Tab` is context sensitive: at the beginning of the first input line it completes slash commands, and after `/insert`, `/attach`, `/save`, or `/load` it completes file paths with repeated-choice cycling. Empty input and non-file commands do not start path completion. Colors are enabled by default with the `dark` theme; use `--nocolors` to disable color styling, `/theme` or `/theme NAME` to inspect or switch themes, and `/highlight on|off` to toggle raw Markdown highlighting. Thinking traces are hidden by default; use `/thinking trace`, `/thinking notrace`, or `Ctrl+T` to toggle display of `<think>...</think>` blocks; visible thinking traces retain their dedicated style while surrounding Markdown is highlighted. Provider reasoning fields such as `reasoning_content`, `reasoning`, and text `reasoning_details` are displayed as `<think>` blocks. TUI chat threads are stored in `~/.ainiux/ainiux.db` using SQLite WAL mode; `/list` opens a newest-first thread picker, up/down changes selection, Enter loads a thread, and Esc cancels. `/new [NAME]` starts a fresh thread, `/provider PROVIDER` changes the provider for future turns, `/model MODEL` changes the model, `/pop` removes the last user or assistant message, `/response` replies to a final unanswered user message, and `/remove` asks before soft-deleting the current thread. `Enter` sends, `Alt+Enter` or `Esc` then `Enter` inserts a newline, `Shift` plus arrows, `PageUp`/`PageDown`, `Home`/`End`, or `Ctrl+Home`/`Ctrl+End` extend a highlighted selection in the input, `Ctrl+A` selects the entire input buffer, `Ctrl+E` copies the last user or assistant message into the input for editing (`Enter` saves, a bare `Esc` cancels), `Ctrl+C` copies the selection, `Ctrl+X` cuts it, `Ctrl+V` pastes, `Ctrl+K` kills from the cursor to the end of the input line and removes the line when it is already empty, `Ctrl+Z` or `Ctrl+U` undoes, `Ctrl+Y` redoes, and `Ctrl+S` sends the current multiline draft. A bare `Esc` cancels the active model request while keeping the current turn visible. `Ctrl+R`, `Alt+R`, or `Esc` then `R` regenerates the last answer by resending the last user prompt. `/pop` removes the last user or assistant message. `Home`/`End` move to the current input line, `Ctrl+Home`/`Ctrl+End` jump to buffer bounds, `PageUp`/`PageDown` page through the input like the editor, `Ctrl+B` and `Ctrl+D` scroll chat history back and forward, and `Alt+Home`/`Alt+End` jump to the oldest history or live bottom. `Ctrl+Q` exits chat mode.
 
 Verbose timing:
 
 ```sh
-./pkchat -v http://localhost:30000 -m MODEL -p "Hello"
+./ainiux -v http://localhost:30000 -m MODEL -p "Hello"
 ```
 
 `-v`/`--verbose` prints time to first token in milliseconds and token/s to `stderr`. When provider usage is unavailable, token/s uses a lightweight local estimate.
@@ -627,7 +627,7 @@ Verbose timing:
 Supported key sources:
 
 - provider environment variables such as `OPENAI_API_KEY`, `OPENROUTER_API_KEY`, `DEEPSEEK_API_KEY`, `GEMINI_API_KEY`, `ANTHROPIC_API_KEY`, `XAI_API_KEY`, `MOONSHOT_API_KEY`, `GROQ_API_KEY`, `MISTRAL_API_KEY`, `TOGETHER_API_KEY`, `PERPLEXITY_API_KEY`, `CEREBRAS_API_KEY`, `FIREWORKS_API_KEY`, `DEEPINFRA_API_KEY`, `DEEPINFRA_TOKEN`, `NVIDIA_NIM_API_KEY`, `ZAI_API_KEY`, `DASHSCOPE_API_KEY`, `QWEN_API_KEY`, `LMSTUDIO_API_KEY`, `LM_STUDIO_API_KEY`
-- `PKCHAT_API_KEY`
+- `AINIUX_API_KEY`
 - `--key-env NAME`
 - `--key-file PATH`
 - `--key-stdin`
@@ -673,7 +673,7 @@ v0.89 expands `--thinking` and `--thinking-budget` through a provider compatibil
 
 ### v0.88 web search
 
-v0.88 adds web search through `--search QUERY`, REPL/TUI `/search QUERY`, and editor `Esc /search QUERY`. API providers include Tavily, Firecrawl, Exa, and Searxng; keyless fallbacks use DuckDuckGo Instant Answer and Google HTML parsing. Configure defaults in `[web_search]` inside `config/pkchat.conf`.
+v0.88 adds web search through `--search QUERY`, REPL/TUI `/search QUERY`, and editor `Esc /search QUERY`. API providers include Tavily, Firecrawl, Exa, and Searxng; keyless fallbacks use DuckDuckGo Instant Answer and Google HTML parsing. Configure defaults in `[web_search]` inside `config/ainiux.conf`.
 
 ### v0.87 editor and chat keybindings
 
@@ -685,7 +685,7 @@ v0.86 improves TUI readability with compact provider display names (`custom` ins
 
 ### v0.85 model settings notes
 
-v0.85 adds per-thread model settings with CLI flags (`--top-k`, `--min-p`, `--repeat-penalty`, `--presence-penalty`, `--thinking`, `--thinking-budget`, `--purpose`), repeatable `[Model-setting]` presets in `config/pkchat.conf`, TUI `/setting`, `/system`, and `/clone`, and SQLite persistence via `settings_json`. Unset overrides are stored as JSON `null` and use provider defaults; `/setting NAME=NULL` clears a thread override. `thinking_budget` accepts token counts (`8192`) or verbal labels (`high`) and is translated to the active provider's request format when a model call is serialized.
+v0.85 adds per-thread model settings with CLI flags (`--top-k`, `--min-p`, `--repeat-penalty`, `--presence-penalty`, `--thinking`, `--thinking-budget`, `--purpose`), repeatable `[Model-setting]` presets in `config/ainiux.conf`, TUI `/setting`, `/system`, and `/clone`, and SQLite persistence via `settings_json`. Unset overrides are stored as JSON `null` and use provider defaults; `/setting NAME=NULL` clears a thread override. `thinking_budget` accepts token counts (`8192`) or verbal labels (`high`) and is translated to the active provider's request format when a model call is serialized.
 
 ### v0.84 refactor notes
 
@@ -702,7 +702,7 @@ v0.84 splits large source files into focused modules and adds integration-test a
 
 v0.83 refactors the codebase for easier maintenance and broader automated coverage:
 
-- Version metadata (`kVersion`, copyright, license name) lives in `src/version/version.cpp` with declarations in `include/pkchat/version.hpp`.
+- Version metadata (`kVersion`, copyright, license name) lives in `src/version/version.cpp` with declarations in `include/ainiux/version.hpp`.
 - Unit tests are split from the old monolithic `tests/unit/test_runner.cpp` into module directories under `tests/unit/` (`cli/`, `provider/`, `editor/`, `http/`, `chat/`, and others). `test_runner` remains a thin driver.
 - Coverage now includes roughly **900+** unit assertions plus a separate `test_io_faults` binary for environment-dependent cases.
 - Mock infrastructure supports slow or timed-out HTTP (`tests/mock_server/slow_http_mock.py`), disk-full `ENOSPC` simulation (`tests/mock/posix_io_mock.c` via `LD_PRELOAD`), and permission-denied read-only paths.

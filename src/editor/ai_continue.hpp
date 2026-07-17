@@ -8,13 +8,13 @@
 #include "editor/editor.hpp"
 #include "editor/editor_prompts.hpp"
 
-namespace pkchat::cli {
+namespace ainiux::cli {
 struct Options;
 }
 #include "provider/provider.hpp"
 #include "runtime/runtime.hpp"
 
-namespace pkchat::editor {
+namespace ainiux::editor {
 
 struct AiContinueSettings {
     size_t max_prefix_chars = kDefaultAiContinuePrefixMaxChars;
@@ -64,4 +64,4 @@ void start_continue_job(const AiContinueContext& context,
                         runtime::EventQueue<ContinueEvent>& events,
                         runtime::JobHandle& job);
 
-}  // namespace pkchat::editor
+}  // namespace ainiux::editor

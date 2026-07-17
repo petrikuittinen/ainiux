@@ -16,16 +16,16 @@
 #include "editor/word_completion.hpp"
 #include "highlight/highlight.hpp"
 
-namespace pkchat::app {
+namespace ainiux::app {
 struct EditorRunResult;
 struct InteractiveSession;
 }
 
-namespace pkchat::tui {
+namespace ainiux::tui {
 class ThemeRegistry;
 }
 
-namespace pkchat::editor {
+namespace ainiux::editor {
 
 struct Rect {
     int row = 1;
@@ -342,11 +342,11 @@ Error save_file(const std::string& path, const PieceTable& text);
 Error save_file(const std::string& path, const PieceTable& text, LineBreak linebreak);
 Error ensure_empty_file(const std::string& path);
 
-pkchat::app::EditorRunResult run_editor(const std::string& path,
+ainiux::app::EditorRunResult run_editor(const std::string& path,
                                         const std::string& save_as,
                                         const EditorSettings& settings,
                                         std::optional<AiContinueContext> ai_continue,
                                         const EditorAssistConfig& assist_config,
-                                        pkchat::app::InteractiveSession* interactive = nullptr);
+                                        ainiux::app::InteractiveSession* interactive = nullptr);
 
-}  // namespace pkchat::editor
+}  // namespace ainiux::editor

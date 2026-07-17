@@ -9,7 +9,7 @@
 #include "input/input.hpp"
 #include "search/search.hpp"
 
-namespace pkchat::app {
+namespace ainiux::app {
 
 namespace {
 
@@ -276,4 +276,4 @@ int run_repl(provider::RequestContext context, chat::Session session, std::ostre
     return 0;
 }
 
-}  // namespace pkchat::app
+}  // namespace ainiux::app

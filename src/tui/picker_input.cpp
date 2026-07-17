@@ -3,7 +3,7 @@
 #include "tui/input_handlers.hpp"
 #include "ui/confirmation.hpp"
 
-namespace pkchat::tui {
+namespace ainiux::tui {
 
 bool handle_tui_picker_input(unsigned char ch,
                              TuiPickerInputState& state,
@@ -141,4 +141,4 @@ bool handle_tui_picker_input(unsigned char ch,
     return false;
 }
 
-}  // namespace pkchat::tui
+}  // namespace ainiux::tui

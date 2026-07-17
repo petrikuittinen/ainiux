@@ -357,7 +357,7 @@ class Handler(BaseHTTPRequestHandler):
                     break
         elif last.startswith("expect-") and last.endswith(("-reasoning", "-thinking")):
             reply = "request-ok"
-        elif last.startswith("PKCHAT_CODE_CONTEXT_V1\n"):
+        elif last.startswith("AINIUX_CODE_CONTEXT_V1\n"):
             expected_prefix = "def greet(name):\n    "
             expected_postfix = "\n\nprint(greet(\"Ada\"))\n"
             prefix_frame = f"PREFIX_BYTES {len(expected_prefix.encode('utf-8'))}\n{expected_prefix}\n<CURSOR/>\n"
@@ -371,7 +371,7 @@ class Handler(BaseHTTPRequestHandler):
             else:
                 print("invalid editor code completion context:", repr(last), flush=True)
                 reply = "```python\nraise RuntimeError(\"bad completion context\")\n```"
-        elif last.startswith("PKCHAT_PROSE_CONTEXT_V1\n"):
+        elif last.startswith("AINIUX_PROSE_CONTEXT_V1\n"):
             expected_prefix = "Mara entered the silent observatory. The clock stopped.\n"
             expected_postfix = "\nAt dawn, the brass door was sealed again.\n"
             prefix_frame = (

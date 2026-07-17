@@ -3,16 +3,16 @@
 #include "html/html.hpp"
 #include <string>
 
-namespace pkchat::test::html {
+namespace ainiux::test::html {
 
 namespace {
 
-using pkchat::test::check;
-using pkchat::test::read_fixture;
+using ainiux::test::check;
+using ainiux::test::read_fixture;
 
 void test_llm_typical_html_to_markdown_fixture() {
     const std::string input = read_fixture("tests/fixtures/llm_typical.html");
-    const std::string output = pkchat::html::convert(input, pkchat::html::OutputFormat::Markdown);
+    const std::string output = ainiux::html::convert(input, ainiux::html::OutputFormat::Markdown);
 
     check(output.find("# LLM Typical HTML Fixture") != std::string::npos,
           "llm_typical HTML converts the title heading");
@@ -44,7 +44,7 @@ void test_llm_typical_html_to_markdown_fixture() {
 
 void test_comprehensive_html_to_markdown_fixture() {
     const std::string input = read_fixture("tests/fixtures/comprehensive.html");
-    const std::string output = pkchat::html::convert(input, pkchat::html::OutputFormat::Markdown);
+    const std::string output = ainiux::html::convert(input, ainiux::html::OutputFormat::Markdown);
 
     check(output.find("# Comprehensive HTML Fixture") != std::string::npos,
           "comprehensive HTML converts level-one heading");
@@ -76,7 +76,7 @@ void test_html_large_ignored_blocks() {
     html += "</script><style>";
     html += std::string(200000, '>');
     html += "</style><p>After <a href=\"https://example.com\">link</a></p>";
-    const std::string out = pkchat::html::convert(html, pkchat::html::OutputFormat::Markdown);
+    const std::string out = ainiux::html::convert(html, ainiux::html::OutputFormat::Markdown);
     check(out.find("# Before") != std::string::npos, "HTML large ignored block keeps preceding text");
     check(out.find("After [link](https://example.com)") != std::string::npos,
           "HTML large ignored block keeps following text");
@@ -84,24 +84,24 @@ void test_html_large_ignored_blocks() {
 
 void test_html_malformed_documents() {
     const std::string no_doctype = "<html><body><h1>No doctype</h1><p>Body text</p></body></html>";
-    std::string out = pkchat::html::convert(no_doctype, pkchat::html::OutputFormat::Markdown);
+    std::string out = ainiux::html::convert(no_doctype, ainiux::html::OutputFormat::Markdown);
     check(out.find("# No doctype") != std::string::npos, "HTML conversion does not require a DOCTYPE");
     check(out.find("Body text") != std::string::npos, "HTML without DOCTYPE keeps body text");
 
     const std::string unclosed = "<html><body><h1>I forgot to close this...<p>Next paragraph";
-    out = pkchat::html::convert(unclosed, pkchat::html::OutputFormat::Markdown);
+    out = ainiux::html::convert(unclosed, ainiux::html::OutputFormat::Markdown);
     check(out.find("# I forgot to close this...") != std::string::npos,
           "HTML unclosed heading keeps heading text");
     check(out.find("Next paragraph") != std::string::npos, "HTML unclosed tags keep following text");
 
     const std::string misquoted = "<p>Before <img width=\"100 height=\"100\"> after</p>";
-    out = pkchat::html::convert(misquoted, pkchat::html::OutputFormat::Text);
+    out = ainiux::html::convert(misquoted, ainiux::html::OutputFormat::Text);
     check(out.find("Before after") != std::string::npos,
           "HTML misquoted image attributes do not swallow surrounding text");
     check(out.find("width") == std::string::npos, "HTML misquoted image tag is stripped as a tag");
 
     const std::string misspelled = "<p><strnog>not bold</strnog> and <emphasis>not italic</emphasis></p>";
-    out = pkchat::html::convert(misspelled, pkchat::html::OutputFormat::Markdown);
+    out = ainiux::html::convert(misspelled, ainiux::html::OutputFormat::Markdown);
     check(out.find("not bold and not italic") != std::string::npos,
           "HTML misspelled tags are ignored while keeping text");
     check(out.find("**") == std::string::npos && out.find("*not italic*") == std::string::npos,
@@ -114,7 +114,7 @@ void test_html_markdown_conversion() {
         "<body><h1>Title &amp; More</h1><p>Hello <strong>bold</strong> and <em>em</em> "
         "<a href=\"https://example.com?q=1&amp;x=2\">link</a>.</p>"
         "<h2>Next</h2><p><b>heavy</b> <italic>tilt</italic></p></body></html>";
-    const std::string out = pkchat::html::convert(html, pkchat::html::OutputFormat::Markdown);
+    const std::string out = ainiux::html::convert(html, ainiux::html::OutputFormat::Markdown);
     check(out.find("# Title & More") != std::string::npos, "HTML h1 converts to Markdown heading");
     check(out.find("Hello **bold** and *em* [link](https://example.com?q=1&x=2).") != std::string::npos,
           "HTML inline tags convert to Markdown");
@@ -127,7 +127,7 @@ void test_html_text_conversion() {
     const std::string html =
         "<h1>Title &amp; More</h1><p>Hello <strong>bold</strong> and <em>em</em> "
         "<a href='https://example.com/docs'>docs</a>.</p>";
-    const std::string out = pkchat::html::convert(html, pkchat::html::OutputFormat::Text);
+    const std::string out = ainiux::html::convert(html, ainiux::html::OutputFormat::Text);
     check(out.find("Title & More") != std::string::npos, "HTML text output keeps heading text");
     check(out.find("Hello bold and em docs (https://example.com/docs).") != std::string::npos,
           "HTML text output keeps link URL next to link text");
@@ -138,46 +138,46 @@ void test_html_text_conversion() {
 void test_html_utf8_validation() {
     const std::string utf8 = u8"<h1>Привет 中文</h1>";
     size_t offset = 0;
-    check(pkchat::html::is_valid_utf8(utf8, &offset), "HTML validator accepts valid UTF-8 Russian and Chinese text");
+    check(ainiux::html::is_valid_utf8(utf8, &offset), "HTML validator accepts valid UTF-8 Russian and Chinese text");
     check(offset == utf8.size(), "HTML validator reports end offset for valid UTF-8");
 
     const std::string windows1251_russian = std::string("<h1>") + "\xCF\xF0\xE8\xE2\xE5\xF2" + "</h1>";
     offset = 0;
-    check(!pkchat::html::is_valid_utf8(windows1251_russian, &offset),
+    check(!ainiux::html::is_valid_utf8(windows1251_russian, &offset),
           "HTML validator rejects Windows-1251 Russian bytes");
     check(offset == 4, "HTML validator reports the first invalid Windows-1251 byte offset");
 
     const std::string gbk_chinese = std::string("<h1>") + "\xD6\xD0\xCE\xC4" + "</h1>";
     offset = 0;
-    check(!pkchat::html::is_valid_utf8(gbk_chinese, &offset), "HTML validator rejects GBK Chinese bytes");
+    check(!ainiux::html::is_valid_utf8(gbk_chinese, &offset), "HTML validator rejects GBK Chinese bytes");
     check(offset == 4, "HTML validator reports the first invalid GBK byte offset");
 }
 
 void test_html_empty_unicode_and_format_parsing() {
-    check(pkchat::html::convert("", pkchat::html::OutputFormat::Markdown).empty(),
+    check(ainiux::html::convert("", ainiux::html::OutputFormat::Markdown).empty(),
           "HTML conversion of empty input returns empty output");
     const std::string unicode_html = u8"<p>مرحبا 你好 👨‍👩‍👧‍👦</p>";
-    const std::string markdown = pkchat::html::convert(unicode_html, pkchat::html::OutputFormat::Markdown);
+    const std::string markdown = ainiux::html::convert(unicode_html, ainiux::html::OutputFormat::Markdown);
     check(markdown.find(u8"مرحبا") != std::string::npos &&
               markdown.find(u8"你好") != std::string::npos &&
               markdown.find(u8"👨‍👩‍👧‍👦") != std::string::npos,
           "HTML conversion preserves Arabic, Chinese, and complex emoji text");
 
     const std::string long_html = "<p>" + std::string(100000, 'x') + "</p>";
-    const std::string long_out = pkchat::html::convert(long_html, pkchat::html::OutputFormat::Text);
+    const std::string long_out = ainiux::html::convert(long_html, ainiux::html::OutputFormat::Text);
     check(long_out.size() >= 100000,
           "HTML conversion preserves very long text bodies");
 
-    pkchat::html::OutputFormat format = pkchat::html::OutputFormat::Markdown;
-    check(pkchat::html::parse_output_format("markdown", format) &&
-              format == pkchat::html::OutputFormat::Markdown,
+    ainiux::html::OutputFormat format = ainiux::html::OutputFormat::Markdown;
+    check(ainiux::html::parse_output_format("markdown", format) &&
+              format == ainiux::html::OutputFormat::Markdown,
           "HTML output format parser accepts markdown");
-    check(pkchat::html::parse_output_format("text", format) &&
-              format == pkchat::html::OutputFormat::Text,
+    check(ainiux::html::parse_output_format("text", format) &&
+              format == ainiux::html::OutputFormat::Text,
           "HTML output format parser accepts text");
-    check(!pkchat::html::parse_output_format("pdf", format),
+    check(!ainiux::html::parse_output_format("pdf", format),
           "HTML output format parser rejects unsupported formats");
-    check(!pkchat::html::parse_output_format("", format),
+    check(!ainiux::html::parse_output_format("", format),
           "HTML output format parser rejects empty format names");
 }
 
@@ -194,4 +194,4 @@ void run_all() {
     test_html_utf8_validation();
 }
 
-}  // namespace pkchat::test::html
+}  // namespace ainiux::test::html

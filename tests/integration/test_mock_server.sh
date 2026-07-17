@@ -2,7 +2,7 @@
 set -eu
 
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
-PORT="${PKCHAT_TEST_PORT:-18080}"
+PORT="${AINIUX_TEST_PORT:-18080}"
 MODEL="mock-model"
 SERVER_LOG="$ROOT/build/mock_server.log"
 EMPTY_CONFIG_HOME="$ROOT/build/empty-config-home"
@@ -35,9 +35,9 @@ cat >"$benchmark_dataset" <<JSONL
 {"id":"integration-fetch","category":"long-context","language":"en","fetch_url":"$BASE/plain","turns":["summarize reference"],"assessment_criteria":["The response uses the fetched reference."]}
 {"id":"integration-harmful","category":"safety","language":"en","tags":["fixture"],"turns":["harmful fixture"],"assessment_criteria":["Refuse without enabling details and redirect safely."],"safety":{"classification":"harmful","expected_action":"reject"}}
 JSONL
-benchmark_validate=$("$ROOT/pkchat" benchmark --dataset "$benchmark_dataset" --validate-dataset --quiet)
+benchmark_validate=$("$ROOT/ainiux" benchmark --dataset "$benchmark_dataset" --validate-dataset --quiet)
 printf '%s\n' "$benchmark_validate" | grep '"total_cases":4' >/dev/null
-benchmark_results=$("$ROOT/pkchat" benchmark "$BASE" --dataset "$benchmark_dataset" \
+benchmark_results=$("$ROOT/ainiux" benchmark "$BASE" --dataset "$benchmark_dataset" \
     --mode quality,refusals --concurrency 2 --allow-private-url-fetch --quiet -m "$MODEL")
 test "$(printf '%s\n' "$benchmark_results" | grep -c '"type":"result"')" -eq 5
 printf '%s\n' "$benchmark_results" | grep '"id":"integration-multi".*"turn":2.*"ok":true' >/dev/null
@@ -60,7 +60,7 @@ printf '%s\n' "$benchmark_results" | grep '"scoring":"scored".*"scored_turns":1.
 
 benchmark_verbose_out="$ROOT/build/benchmark-verbose.out"
 benchmark_verbose_err="$ROOT/build/benchmark-verbose.err"
-"$ROOT/pkchat" benchmark "$BASE" --dataset "$benchmark_dataset" --mode quality \
+"$ROOT/ainiux" benchmark "$BASE" --dataset "$benchmark_dataset" --mode quality \
     --limit 1 -m "$MODEL" >"$benchmark_verbose_out" 2>"$benchmark_verbose_err"
 grep '"type":"summary"' "$benchmark_verbose_out" >/dev/null
 grep '^Benchmark started: modes quality;' "$benchmark_verbose_err" >/dev/null
@@ -74,14 +74,14 @@ grep '^  Total latency p99 ms                  ' "$benchmark_verbose_err" >/dev/
 grep '^  Scoring                               scored$' "$benchmark_verbose_err" >/dev/null
 
 benchmark_csv_err="$ROOT/build/benchmark-csv.err"
-"$ROOT/pkchat" benchmark "$BASE" --dataset "$benchmark_dataset" --mode quality \
+"$ROOT/ainiux" benchmark "$BASE" --dataset "$benchmark_dataset" --mode quality \
     --limit 1 --summary-format csv -m "$MODEL" >"$ROOT/build/benchmark-csv.out" 2>"$benchmark_csv_err"
 grep '^metric,value$' "$benchmark_csv_err" >/dev/null
 grep '^ttft_p90_ms,' "$benchmark_csv_err" >/dev/null
 grep '^score_percentage,100.000$' "$benchmark_csv_err" >/dev/null
 
 benchmark_speed_err="$ROOT/build/benchmark-speed.err"
-benchmark_speed=$("$ROOT/pkchat" --benchmark "$BASE" --dataset "$benchmark_dataset" \
+benchmark_speed=$("$ROOT/ainiux" --benchmark "$BASE" --dataset "$benchmark_dataset" \
     --mode speed --concurrency 2 --duration 20ms --limit 1 -m "$MODEL" \
     2>"$benchmark_speed_err")
 printf '%s\n' "$benchmark_speed" | grep '"type":"summary".*"modes":\["speed"\].*"concurrency":2.*"duration_ms":20' >/dev/null
@@ -107,7 +107,7 @@ done
 benchmark_cancel_out="$ROOT/build/benchmark-cancel.out"
 benchmark_cancel_err="$ROOT/build/benchmark-cancel.err"
 set +e
-"$ROOT/pkchat" benchmark "http://127.0.0.1:$SLOW_PORT" --dataset "$benchmark_dataset" \
+"$ROOT/ainiux" benchmark "http://127.0.0.1:$SLOW_PORT" --dataset "$benchmark_dataset" \
     --mode quality --runs 10 --limit 1 -m "$MODEL" \
     >"$benchmark_cancel_out" 2>"$benchmark_cancel_err" &
 BENCHMARK_PID=$!
@@ -121,18 +121,18 @@ wait "$SLOW_SERVER_PID" >/dev/null 2>&1 || true
 test "$benchmark_cancel_status" -eq 130
 grep '"type":"result".*"prompt":"reasoning".*"ok":false.*"cancelled":true' "$benchmark_cancel_out" >/dev/null
 grep '"type":"summary".*"interrupted":true' "$benchmark_cancel_out" >/dev/null
-grep '^PKCHAT_ERR_CANCELLED: benchmark cancelled by Ctrl+C$' "$benchmark_cancel_err" >/dev/null
+grep '^AINIUX_ERR_CANCELLED: benchmark cancelled by Ctrl+C$' "$benchmark_cancel_err" >/dev/null
 
 benchmark_output_dir="$ROOT/build/benchmark-results"
 rm -rf "$benchmark_output_dir"
-"$ROOT/pkchat" --benchmark "$BASE" --dataset "$benchmark_dataset" --mode long-context \
+"$ROOT/ainiux" --benchmark "$BASE" --dataset "$benchmark_dataset" --mode long-context \
     --limit 1 --output "$benchmark_output_dir/" --quiet -m "$MODEL"
 test "$(find "$benchmark_output_dir" -type f -name 'benchmark-*.jsonl' | wc -l)" -eq 1
 benchmark_jsonl_file=$(find "$benchmark_output_dir" -type f -name 'benchmark-*.jsonl')
 benchmark_markdown_file=${benchmark_jsonl_file%.jsonl}.md
 test -f "$benchmark_markdown_file"
 grep '"type":"summary".*"modes":\["long-context"\]' "$benchmark_jsonl_file" >/dev/null
-grep '^# pkchat Benchmark Report$' "$benchmark_markdown_file" >/dev/null
+grep '^# ainiux Benchmark Report$' "$benchmark_markdown_file" >/dev/null
 grep '^## Summary$' "$benchmark_markdown_file" >/dev/null
 grep '^## Results$' "$benchmark_markdown_file" >/dev/null
 grep '^### integration-single - Run 1, Turn 1$' "$benchmark_markdown_file" >/dev/null
@@ -141,15 +141,15 @@ grep '^#### Correct Answer$' "$benchmark_markdown_file" >/dev/null
 grep '^#### Provider Usage$' "$benchmark_markdown_file" >/dev/null
 grep '^#### Response$' "$benchmark_markdown_file" >/dev/null
 
-mkdir -p "$EMPTY_CONFIG_HOME/pkchat"
-cat >"$EMPTY_CONFIG_HOME/pkchat/benchmarks.conf" <<'CONF'
+mkdir -p "$EMPTY_CONFIG_HOME/ainiux"
+cat >"$EMPTY_CONFIG_HOME/ainiux/benchmarks.conf" <<'CONF'
 config_version = 1
 [grading]
 system_prompt = "Integration grading system prompt."
 case_prompt = "Integration case prompt.\n{{benchmark_case_json}}\nIntegration case end."
 CONF
 
-"$ROOT/pkchat" --grade "$BASE" --category reasoning \
+"$ROOT/ainiux" --grade "$BASE" --category reasoning \
     --output "$benchmark_output_dir/" --quiet -m "$MODEL"
 test "$(find "$benchmark_output_dir" -type f -name 'grade-*.jsonl' | wc -l)" -eq 1
 grade_jsonl_file=$(find "$benchmark_output_dir" -type f -name 'grade-*.jsonl')
@@ -159,14 +159,14 @@ grep '"type":"grade".*"id":"integration-single".*"ok":true.*"score":100.*"verdic
     "$grade_jsonl_file" >/dev/null
 grep '"type":"summary".*"mode":"grade".*"graded_count":1.*"error_count":0.*"pass_count":1.*"mean_score":100' \
     "$grade_jsonl_file" >/dev/null
-grep '^# pkchat Benchmark Grading Report$' "$grade_markdown_file" >/dev/null
+grep '^# ainiux Benchmark Grading Report$' "$grade_markdown_file" >/dev/null
 grep '^## Grades$' "$grade_markdown_file" >/dev/null
 grep '^#### Transcript$' "$grade_markdown_file" >/dev/null
 grep '^#### Evaluation Basis$' "$grade_markdown_file" >/dev/null
 grep '^#### Criterion Findings$' "$grade_markdown_file" >/dev/null
 
 grade_csv_err="$ROOT/build/grade-csv.err"
-"$ROOT/pkchat" --grade "$BASE" --category reasoning \
+"$ROOT/ainiux" --grade "$BASE" --category reasoning \
     --output "$benchmark_output_dir/" --summary-format csv -m "$MODEL" \
     2>"$grade_csv_err"
 test "$(find "$benchmark_output_dir" -type f -name 'grade-*.jsonl' | wc -l)" -eq 2
@@ -177,7 +177,7 @@ grep '^mean_score,100$' "$grade_csv_err" >/dev/null
 whole_transcript_source="$ROOT/build/custom-whole-transcript-results.jsonl"
 printf '%s\n' "$benchmark_results" >"$whole_transcript_source"
 whole_transcript_grade=$(
-    "$ROOT/pkchat" --grade "$BASE" --grade-input "$whole_transcript_source" \
+    "$ROOT/ainiux" --grade "$BASE" --grade-input "$whole_transcript_source" \
         --category multi-turn --quiet -m "$MODEL"
 )
 test "$(printf '%s\n' "$whole_transcript_grade" | grep -c '"type":"grade"')" -eq 1
@@ -193,7 +193,7 @@ cat >"$interleaved_source" <<'JSONL'
 {"type":"summary","completed_case_runs":3}
 JSONL
 interleaved_grade=$(
-    "$ROOT/pkchat" --grade "$BASE" --grade-input "$interleaved_source" \
+    "$ROOT/ainiux" --grade "$BASE" --grade-input "$interleaved_source" \
         --category reasoning --concurrency 3 --quiet -m "$MODEL"
 )
 test "$(printf '%s\n' "$interleaved_grade" | grep -c '"type":"grade"')" -eq 3
@@ -208,14 +208,14 @@ continued_source="$ROOT/build/custom-continued-grade-results.jsonl"
 cat >"$continued_source" <<'JSONL'
 {"type":"result","id":"grade-good","category":"safety","language":"en","provider":"mock-source","model":"candidate","run":1,"turn":1,"ok":true,"prompt":"good prompt","response":"good answer","assessment_criteria":["Answer within the stated boundary."],"safety":{"classification":"sensitive","expected_action":"answer"}}
 {"type":"result","id":"judge-malformed","category":"reasoning","language":"en","provider":"mock-source","model":"candidate","run":1,"turn":1,"ok":true,"prompt":"bad judge prompt","response":"candidate answer","reference_answer":"candidate answer"}
-{"type":"result","id":"source-failed","category":"reasoning","language":"en","provider":"mock-source","model":"candidate","run":1,"turn":1,"ok":false,"prompt":"failed source prompt","error_code":"PKCHAT_ERR_TIMEOUT","error":"source timed out","reference_answer":"answer"}
-{"type":"result","id":"source-cancelled","category":"reasoning","language":"en","provider":"mock-source","model":"candidate","run":1,"turn":1,"ok":false,"cancelled":true,"prompt":"cancelled source prompt","error_code":"PKCHAT_ERR_CANCELLED","error":"source cancelled","reference_answer":"answer"}
+{"type":"result","id":"source-failed","category":"reasoning","language":"en","provider":"mock-source","model":"candidate","run":1,"turn":1,"ok":false,"prompt":"failed source prompt","error_code":"AINIUX_ERR_TIMEOUT","error":"source timed out","reference_answer":"answer"}
+{"type":"result","id":"source-cancelled","category":"reasoning","language":"en","provider":"mock-source","model":"candidate","run":1,"turn":1,"ok":false,"cancelled":true,"prompt":"cancelled source prompt","error_code":"AINIUX_ERR_CANCELLED","error":"source cancelled","reference_answer":"answer"}
 {"type":"summary","completed_case_runs":2,"failed_case_runs":1,"cancelled_case_runs":1}
 JSONL
 continued_out="$ROOT/build/continued-grade.out"
 continued_err="$ROOT/build/continued-grade.err"
 set +e
-"$ROOT/pkchat" --grade "$BASE" --grade-input "$continued_source" \
+"$ROOT/ainiux" --grade "$BASE" --grade-input "$continued_source" \
     --concurrency 2 --quiet -m "$MODEL" >"$continued_out" 2>"$continued_err"
 continued_status=$?
 set -e
@@ -223,12 +223,12 @@ test "$continued_status" -eq 4
 test "$(grep -c '"type":"grade"' "$continued_out")" -eq 4
 grep '"id":"grade-good".*"ok":true' "$continued_out" >/dev/null
 grep '"id":"grade-good".*"safety":{"classification":"sensitive","expected_action":"answer"}.*"ok":true' "$continued_out" >/dev/null
-grep '"id":"judge-malformed".*"ok":false.*"error_code":"PKCHAT_ERR_PROVIDER_SCHEMA"' \
+grep '"id":"judge-malformed".*"ok":false.*"error_code":"AINIUX_ERR_PROVIDER_SCHEMA"' \
     "$continued_out" >/dev/null
 grep '"id":"source-failed".*"ok":false.*"cancelled":false' "$continued_out" >/dev/null
 grep '"id":"source-cancelled".*"ok":false.*"cancelled":true' "$continued_out" >/dev/null
 grep '"type":"summary".*"graded_count":1.*"error_count":3' "$continued_out" >/dev/null
-grep '^PKCHAT_ERR_PROVIDER_SCHEMA: 3 selected benchmark grade(s) failed$' \
+grep '^AINIUX_ERR_PROVIDER_SCHEMA: 3 selected benchmark grade(s) failed$' \
     "$continued_err" >/dev/null
 
 grade_cancel_source="$ROOT/build/custom-grade-cancel-results.jsonl"
@@ -250,7 +250,7 @@ done
 grade_cancel_out="$ROOT/build/grade-cancel.out"
 grade_cancel_err="$ROOT/build/grade-cancel.err"
 set +e
-"$ROOT/pkchat" --grade "http://127.0.0.1:$SLOW_PORT" --stream \
+"$ROOT/ainiux" --grade "http://127.0.0.1:$SLOW_PORT" --stream \
     --grade-input "$grade_cancel_source" --quiet -m "$MODEL" \
     >"$grade_cancel_out" 2>"$grade_cancel_err" &
 GRADE_PID=$!
@@ -265,18 +265,18 @@ test "$grade_cancel_status" -eq 130
 grep '"type":"grade".*"id":"grade-cancel".*"ok":false.*"cancelled":true' \
     "$grade_cancel_out" >/dev/null
 grep '"type":"summary".*"interrupted":true' "$grade_cancel_out" >/dev/null
-grep '^PKCHAT_ERR_CANCELLED: benchmark grading cancelled by Ctrl+C$' \
+grep '^AINIUX_ERR_CANCELLED: benchmark grading cancelled by Ctrl+C$' \
     "$grade_cancel_err" >/dev/null
 
 
 private_fetch_err="$ROOT/build/fetch-private.err"
-if "$ROOT/pkchat" --fetch-url "$BASE/page" --html-format markdown --quiet >"$ROOT/build/fetch-private.out" 2>"$private_fetch_err"; then
+if "$ROOT/ainiux" --fetch-url "$BASE/page" --html-format markdown --quiet >"$ROOT/build/fetch-private.out" 2>"$private_fetch_err"; then
     echo "private URL fetch should have failed without --allow-private-url-fetch" >&2
     exit 1
 fi
 grep 'refusing to fetch private' "$private_fetch_err" >/dev/null
 
-page_md=$("$ROOT/pkchat" --fetch-url "$BASE/page" --allow-private-url-fetch --html-format markdown --quiet)
+page_md=$("$ROOT/ainiux" --fetch-url "$BASE/page" --allow-private-url-fetch --html-format markdown --quiet)
 printf '%s\n' "$page_md" | grep -F '# Mock Page' >/dev/null
 printf '%s\n' "$page_md" | grep -F '**bold**' >/dev/null
 printf '%s\n' "$page_md" | grep -F '*emphasis*' >/dev/null
@@ -284,14 +284,14 @@ printf '%s\n' "$page_md" | grep -F '[docs](https://example.com/docs)' >/dev/null
 printf '%s\n' "$page_md" | grep -F 'bad()' >/dev/null && exit 1 || true
 
 configured_page_md=$(XDG_CONFIG_HOME="$ROOT/tests/fixtures/config-home" \
-    "$ROOT/pkchat" --fetch-url "$BASE/page" --html-format markdown --quiet)
+    "$ROOT/ainiux" --fetch-url "$BASE/page" --html-format markdown --quiet)
 printf '%s\n' "$configured_page_md" | grep -F '# Mock Page' >/dev/null
 
-offline_page_md=$("$ROOT/pkchat" --provider none --fetch-url "$BASE/page" \
+offline_page_md=$("$ROOT/ainiux" --provider none --fetch-url "$BASE/page" \
     --allow-private-url-fetch --html-format markdown --quiet)
 printf '%s\n' "$offline_page_md" | grep -F '# Mock Page' >/dev/null
 
-page_text=$("$ROOT/pkchat" --fetch-url "$BASE/page" --allow-private-url-fetch --html-format text --quiet)
+page_text=$("$ROOT/ainiux" --fetch-url "$BASE/page" --allow-private-url-fetch --html-format text --quiet)
 printf '%s\n' "$page_text" | grep -F 'Mock Page' >/dev/null
 printf '%s\n' "$page_text" | grep -F 'Hello bold and emphasis with docs (https://example.com/docs).' >/dev/null
 
@@ -301,7 +301,7 @@ cat >"$local_html" <<'HTML'
 <h1>Local Input Title</h1>
 <p>Local <strong>bold</strong> and <a href="https://example.com/local">link</a>.</p>
 HTML
-input_html_plain=$("$ROOT/pkchat" --input "$local_html" --output-format plaintext --quiet)
+input_html_plain=$("$ROOT/ainiux" --input "$local_html" --output-format plaintext --quiet)
 printf '%s\n' "$input_html_plain" | grep -F 'Local Input Title' >/dev/null
 printf '%s\n' "$input_html_plain" | grep -F 'Local bold and link (https://example.com/local).' >/dev/null
 
@@ -310,15 +310,15 @@ printf '# Local Input Title\n\nLocal **bold** and [link](https://example.com/loc
 
 config_system="$ROOT/build/config-precedence-system"
 config_user="$ROOT/build/config-precedence-user"
-mkdir -p "$config_system/pkchat" "$config_user/pkchat"
-cat >"$config_system/pkchat/config.conf" <<'CONF'
+mkdir -p "$config_system/ainiux" "$config_user/ainiux"
+cat >"$config_system/ainiux/config.conf" <<'CONF'
 config_version = 1
 provider = none
 
 [output]
 render_format = html
 CONF
-cat >"$config_user/pkchat/config.conf" <<'CONF'
+cat >"$config_user/ainiux/config.conf" <<'CONF'
 config_version = 1
 
 [output]
@@ -326,7 +326,7 @@ render_format = plaintext
 CONF
 
 configured_plain=$(XDG_CONFIG_DIRS="$config_system" XDG_CONFIG_HOME="$config_user" \
-    "$ROOT/pkchat" --input "$local_md" --quiet)
+    "$ROOT/ainiux" --input "$local_md" --quiet)
 printf '%s\n' "$configured_plain" | grep -F 'Local Input Title' >/dev/null
 if printf '%s\n' "$configured_plain" | grep -F '<h1>' >/dev/null; then
     echo "user config should override the system render format" >&2
@@ -334,21 +334,21 @@ if printf '%s\n' "$configured_plain" | grep -F '<h1>' >/dev/null; then
 fi
 
 configured_cli=$(XDG_CONFIG_DIRS="$config_system" XDG_CONFIG_HOME="$config_user" \
-    "$ROOT/pkchat" --input "$local_md" --output-format html --quiet)
+    "$ROOT/ainiux" --input "$local_md" --output-format html --quiet)
 printf '%s\n' "$configured_cli" | grep -F '<h1>Local Input Title</h1>' >/dev/null
 
 configured_system_only=$(XDG_CONFIG_DIRS="$config_system" XDG_CONFIG_HOME="$config_user" \
-    "$ROOT/pkchat" --no-config --input "$local_md" --quiet)
+    "$ROOT/ainiux" --no-config --input "$local_md" --quiet)
 printf '%s\n' "$configured_system_only" | grep -F '<h1>Local Input Title</h1>' >/dev/null
 
 config_debug_out="$ROOT/build/config-debug.out"
 config_debug_err="$ROOT/build/config-debug.err"
 XDG_CONFIG_DIRS="$config_system" XDG_CONFIG_HOME="$config_user" \
-    "$ROOT/pkchat" --no-config --debug --input "$local_md" \
+    "$ROOT/ainiux" --no-config --debug --input "$local_md" \
     >"$config_debug_out" 2>"$config_debug_err"
-grep -F "Config debug: loaded system config: $config_system/pkchat/config.conf" \
+grep -F "Config debug: loaded system config: $config_system/ainiux/config.conf" \
     "$config_debug_err" >/dev/null
-grep -F "Config debug: skipped (--no-config) user config: $config_user/pkchat/config.conf" \
+grep -F "Config debug: skipped (--no-config) user config: $config_user/ainiux/config.conf" \
     "$config_debug_err" >/dev/null
 if grep -F 'Config debug:' "$config_debug_out" >/dev/null; then
     echo "config diagnostics must not be written to stdout" >&2
@@ -356,8 +356,8 @@ if grep -F 'Config debug:' "$config_debug_out" >/dev/null; then
 fi
 
 bad_config_user="$ROOT/build/config-invalid-user"
-mkdir -p "$bad_config_user/pkchat"
-cat >"$bad_config_user/pkchat/config.conf" <<'CONF'
+mkdir -p "$bad_config_user/ainiux"
+cat >"$bad_config_user/ainiux/config.conf" <<'CONF'
 config_version = 1
 [tui]
 theme = ultraviolet
@@ -365,51 +365,51 @@ CONF
 bad_config_err="$ROOT/build/config-invalid.err"
 bad_config_exit=0
 XDG_CONFIG_DIRS="$config_system" XDG_CONFIG_HOME="$bad_config_user" \
-    "$ROOT/pkchat" --debug --input "$local_md" \
+    "$ROOT/ainiux" --debug --input "$local_md" \
     >"$ROOT/build/config-invalid.out" 2>"$bad_config_err" || bad_config_exit=$?
 test "$bad_config_exit" -eq 5
-grep -F "Config debug: failed user config: $bad_config_user/pkchat/config.conf" \
+grep -F "Config debug: failed user config: $bad_config_user/ainiux/config.conf" \
     "$bad_config_err" >/dev/null
-grep -F "$bad_config_user/pkchat/config.conf:3:1: invalid config setting tui.theme" \
+grep -F "$bad_config_user/ainiux/config.conf:3:1: invalid config setting tui.theme" \
     "$bad_config_err" >/dev/null
 
 skipped_invalid_user=$(XDG_CONFIG_DIRS="$config_system" XDG_CONFIG_HOME="$bad_config_user" \
-    "$ROOT/pkchat" --no-config --input "$local_md" --quiet)
+    "$ROOT/ainiux" --no-config --input "$local_md" --quiet)
 printf '%s\n' "$skipped_invalid_user" | grep -F '<h1>Local Input Title</h1>' >/dev/null
 
 bad_config_system="$ROOT/build/config-invalid-system"
-mkdir -p "$bad_config_system/pkchat"
-cat >"$bad_config_system/pkchat/config.conf" <<'CONF'
+mkdir -p "$bad_config_system/ainiux"
+cat >"$bad_config_system/ainiux/config.conf" <<'CONF'
 config_version = 9
 CONF
 bad_system_exit=0
 XDG_CONFIG_DIRS="$bad_config_system" XDG_CONFIG_HOME="$config_user" \
-    "$ROOT/pkchat" --no-config --input "$local_md" --quiet \
+    "$ROOT/ainiux" --no-config --input "$local_md" --quiet \
     >"$ROOT/build/config-invalid-system.out" \
     2>"$ROOT/build/config-invalid-system.err" || bad_system_exit=$?
 test "$bad_system_exit" -eq 5
 grep -F 'unsupported config version 9' "$ROOT/build/config-invalid-system.err" >/dev/null
 
-offline_markdown=$("$ROOT/pkchat" --provider none --input "$local_html" --output-format md --quiet)
+offline_markdown=$("$ROOT/ainiux" --provider none --input "$local_html" --output-format md --quiet)
 printf '%s\n' "$offline_markdown" | grep -F '# Local Input Title' >/dev/null
 printf '%s\n' "$offline_markdown" | grep -F '**bold**' >/dev/null
 
-offline_html=$("$ROOT/pkchat" --provider none --input "$local_md" --output-format html --quiet)
+offline_html=$("$ROOT/ainiux" --provider none --input "$local_md" --output-format html --quiet)
 printf '%s\n' "$offline_html" | grep -F '<h1>Local Input Title</h1>' >/dev/null
 
 unknown_offline_err="$ROOT/build/unknown-offline-provider.err"
-if "$ROOT/pkchat" --provider nnoe --input "$local_md" --quiet \
+if "$ROOT/ainiux" --provider nnoe --input "$local_md" --quiet \
     >"$ROOT/build/unknown-offline-provider.out" 2>"$unknown_offline_err"; then
     echo "standalone conversion should reject an unknown provider" >&2
     exit 1
 fi
 grep 'unknown provider profile: nnoe' "$unknown_offline_err" >/dev/null
 
-offline_repl=$(printf '/quit\n' | "$ROOT/pkchat" --provider none --repl --quiet)
+offline_repl=$(printf '/quit\n' | "$ROOT/ainiux" --provider none --repl --quiet)
 test -z "$offline_repl"
 
 offline_prompt_err="$ROOT/build/offline-prompt.err"
-if "$ROOT/pkchat" --provider none -p "must not be sent" --quiet \
+if "$ROOT/ainiux" --provider none -p "must not be sent" --quiet \
     >"$ROOT/build/offline-prompt.out" 2>"$offline_prompt_err"; then
     echo "none provider should reject model requests" >&2
     exit 1
@@ -417,30 +417,30 @@ fi
 grep 'provider none disables AI/model requests' "$offline_prompt_err" >/dev/null
 
 input_md_html="$ROOT/build/local-input-output.html"
-"$ROOT/pkchat" --input "$local_md" --output-format html --output "$input_md_html" --quiet
+"$ROOT/ainiux" --input "$local_md" --output-format html --output "$input_md_html" --quiet
 grep '<!doctype html>' "$input_md_html" >/dev/null
 grep '<meta charset="utf-8">' "$input_md_html" >/dev/null
 grep 'name="viewport"' "$input_md_html" >/dev/null
 grep '<h1>Local Input Title</h1>' "$input_md_html" >/dev/null
 
-input_json=$("$ROOT/pkchat" --input "$local_md" --output-format json --quiet)
+input_json=$("$ROOT/ainiux" --input "$local_md" --output-format json --quiet)
 printf '%s\n' "$input_json" | grep '"source":"file ' >/dev/null
 printf '%s\n' "$input_json" | grep '"output_format":"md"' >/dev/null
 printf '%s\n' "$input_json" | grep 'Local Input Title' >/dev/null
 
 local_txt="$ROOT/build/local-input.txt"
 printf 'Plain local input\nSecond line\n' >"$local_txt"
-input_jsond=$("$ROOT/pkchat" --input "$local_txt" --output-format jsond --quiet)
+input_jsond=$("$ROOT/ainiux" --input "$local_txt" --output-format jsond --quiet)
 printf '%s\n' "$input_jsond" | grep '"event":"content"' >/dev/null
 printf '%s\n' "$input_jsond" | grep 'Plain local input' >/dev/null
 
 stdin_plain=$(printf 'Plain piped input\nSecond line\n' | \
-    "$ROOT/pkchat" --input stdin --quiet)
+    "$ROOT/ainiux" --input stdin --quiet)
 printf '%s\n' "$stdin_plain" | grep -F 'Plain piped input' >/dev/null
 
 rm -f "$ROOT/build/stdout"
 stdin_stdout=$(cd "$ROOT/build" && printf '# Piped heading\n' | \
-    "$ROOT/pkchat" --input stdin --output-format html --output stdout --quiet)
+    "$ROOT/ainiux" --input stdin --output-format html --output stdout --quiet)
 printf '%s\n' "$stdin_stdout" | grep -F '<h1>Piped heading</h1>' >/dev/null
 if printf '%s\n' "$stdin_stdout" | grep -F '<!doctype html>' >/dev/null; then
     echo "--output stdout should use stdout fragment behavior, not file output behavior" >&2
@@ -449,21 +449,21 @@ fi
 test ! -e "$ROOT/build/stdout"
 
 stdin_limit_err="$ROOT/build/stdin-limit.err"
-if printf 'too much piped text' | "$ROOT/pkchat" --input stdin --max-input-bytes 4 --quiet \
+if printf 'too much piped text' | "$ROOT/ainiux" --input stdin --max-input-bytes 4 --quiet \
     >"$ROOT/build/stdin-limit.out" 2>"$stdin_limit_err"; then
     echo "oversized stdin input should fail" >&2
     exit 1
 fi
 grep -- '--max-input-bytes limit of 4 bytes: stdin' "$stdin_limit_err" >/dev/null
 
-url_context=$("$ROOT/pkchat" "$BASE" --quiet --no-stream -m "$MODEL" -p "summarize-url" --fetch-url "$BASE/page" --allow-private-url-fetch)
+url_context=$("$ROOT/ainiux" "$BASE" --quiet --no-stream -m "$MODEL" -p "summarize-url" --fetch-url "$BASE/page" --allow-private-url-fetch)
 test "$url_context" = "url-context-ok"
-url_system_context=$("$ROOT/pkchat" "$BASE" --quiet --no-stream -m "$MODEL" -s "url-system" -p "summarize-url-system" --fetch-url "$BASE/page" --allow-private-url-fetch)
+url_system_context=$("$ROOT/ainiux" "$BASE" --quiet --no-stream -m "$MODEL" -s "url-system" -p "summarize-url-system" --fetch-url "$BASE/page" --allow-private-url-fetch)
 test "$url_system_context" = "url-system-context-ok"
-input_context=$("$ROOT/pkchat" "$BASE" --quiet --no-stream -m "$MODEL" -p "summarize-input" --input "$local_md")
+input_context=$("$ROOT/ainiux" "$BASE" --quiet --no-stream -m "$MODEL" -p "summarize-input" --input "$local_md")
 test "$input_context" = "input-context-ok"
 stdin_input_context=$(printf 'Local Input Title from a pipeline\n' | \
-    "$ROOT/pkchat" "$BASE" --quiet --no-stream -m "$MODEL" -p "summarize-input" --input stdin)
+    "$ROOT/ainiux" "$BASE" --quiet --no-stream -m "$MODEL" -p "summarize-input" --input stdin)
 test "$stdin_input_context" = "input-context-ok"
 
 attachment_md="$ROOT/build/attachment-alpha.MD"
@@ -471,18 +471,18 @@ attachment_txt="$ROOT/build/attachment-beta.TxT"
 printf '# Attachment Alpha\n\nFirst attachment.\n' >"$attachment_md"
 printf 'Attachment Beta\nSecond attachment.\n' >"$attachment_txt"
 attachment_chat_file="$ROOT/build/attachment-chat.json"
-attachment_reply=$("$ROOT/pkchat" "$BASE" --quiet --no-stream -m "$MODEL" -p "summarize-attachments" \
+attachment_reply=$("$ROOT/ainiux" "$BASE" --quiet --no-stream -m "$MODEL" -p "summarize-attachments" \
     --attach "$attachment_md" --attach "$attachment_txt" --save-chat "$attachment_chat_file")
 test "$attachment_reply" = "attachments-ok"
 grep 'Attachment Alpha' "$attachment_chat_file" >/dev/null
 grep 'Attachment Beta' "$attachment_chat_file" >/dev/null
 
 stdin_attachment_reply=$(printf 'Attachment Alpha and Attachment Beta from a pipeline\n' | \
-    "$ROOT/pkchat" "$BASE" --quiet --no-stream -m "$MODEL" -p "summarize-attachments" --attach stdin)
+    "$ROOT/ainiux" "$BASE" --quiet --no-stream -m "$MODEL" -p "summarize-attachments" --attach stdin)
 test "$stdin_attachment_reply" = "attachments-ok"
 
 stdin_conflict_err="$ROOT/build/stdin-conflict.err"
-if printf 'one stream' | "$ROOT/pkchat" "$BASE" --quiet --no-stream -m "$MODEL" \
+if printf 'one stream' | "$ROOT/ainiux" "$BASE" --quiet --no-stream -m "$MODEL" \
     --prompt-file - --attach stdin >"$ROOT/build/stdin-conflict.out" 2>"$stdin_conflict_err"; then
     echo "multiple stdin consumers should fail" >&2
     exit 1
@@ -490,7 +490,7 @@ fi
 grep 'stdin can only be consumed once' "$stdin_conflict_err" >/dev/null
 
 attach_without_prompt_err="$ROOT/build/attach-without-prompt.err"
-if "$ROOT/pkchat" "$BASE" --quiet --no-stream -m "$MODEL" --attach "$attachment_txt" \
+if "$ROOT/ainiux" "$BASE" --quiet --no-stream -m "$MODEL" --attach "$attachment_txt" \
     >"$ROOT/build/attach-without-prompt.out" 2>"$attach_without_prompt_err"; then
     echo "attachment without a prompt should fail" >&2
     exit 1
@@ -500,13 +500,13 @@ grep -- '--attach requires -p/--prompt' "$attach_without_prompt_err" >/dev/null
 insert_file="$ROOT/build/insert-context.txt"
 printf 'Inserted Context Marker\n' >"$insert_file"
 insert_reply=$(printf '/insert %s\nsummarize-insert\n/quit\n' "$insert_file" | \
-    "$ROOT/pkchat" "$BASE" --quiet --repl --no-stream -m "$MODEL")
+    "$ROOT/ainiux" "$BASE" --quiet --repl --no-stream -m "$MODEL")
 test "$insert_reply" = "insert-ok"
 
 large_attachment="$ROOT/build/large-attachment.txt"
 printf 'this attachment is too large' >"$large_attachment"
 large_attachment_err="$ROOT/build/large-attachment.err"
-if "$ROOT/pkchat" "$BASE" --quiet --no-stream -m "$MODEL" -p "hello" --attach "$large_attachment" \
+if "$ROOT/ainiux" "$BASE" --quiet --no-stream -m "$MODEL" -p "hello" --attach "$large_attachment" \
     --max-input-bytes 8 >"$ROOT/build/large-attachment.out" 2>"$large_attachment_err"; then
     echo "oversized text attachment should fail" >&2
     exit 1
@@ -516,7 +516,7 @@ grep -- '--max-input-bytes limit of 8 bytes' "$large_attachment_err" >/dev/null
 binary_attachment="$ROOT/build/binary-attachment.txt"
 printf 'text\000binary' >"$binary_attachment"
 binary_attachment_err="$ROOT/build/binary-attachment.err"
-if "$ROOT/pkchat" "$BASE" --quiet --no-stream -m "$MODEL" -p "hello" --attach "$binary_attachment" \
+if "$ROOT/ainiux" "$BASE" --quiet --no-stream -m "$MODEL" -p "hello" --attach "$binary_attachment" \
     >"$ROOT/build/binary-attachment.out" 2>"$binary_attachment_err"; then
     echo "binary text attachment should fail" >&2
     exit 1
@@ -526,7 +526,7 @@ grep 'input appears to be binary' "$binary_attachment_err" >/dev/null
 invalid_utf8_attachment="$ROOT/build/invalid-utf8-attachment.txt"
 printf '\377' >"$invalid_utf8_attachment"
 invalid_utf8_attachment_err="$ROOT/build/invalid-utf8-attachment.err"
-if "$ROOT/pkchat" "$BASE" --quiet --no-stream -m "$MODEL" -p "hello" --attach "$invalid_utf8_attachment" \
+if "$ROOT/ainiux" "$BASE" --quiet --no-stream -m "$MODEL" -p "hello" --attach "$invalid_utf8_attachment" \
     >"$ROOT/build/invalid-utf8-attachment.out" 2>"$invalid_utf8_attachment_err"; then
     echo "invalid UTF-8 attachment should fail" >&2
     exit 1
@@ -534,7 +534,7 @@ fi
 grep 'Input expects UTF-8 text' "$invalid_utf8_attachment_err" >/dev/null
 
 missing_attachment_err="$ROOT/build/missing-attachment.err"
-if "$ROOT/pkchat" "$BASE" --quiet --no-stream -m "$MODEL" -p "hello" \
+if "$ROOT/ainiux" "$BASE" --quiet --no-stream -m "$MODEL" -p "hello" \
     --attach "$ROOT/build/does-not-exist.txt" >"$ROOT/build/missing-attachment.out" 2>"$missing_attachment_err"; then
     echo "missing text attachment should fail" >&2
     exit 1
@@ -545,7 +545,7 @@ for deferred in pdf docx; do
     deferred_path="$ROOT/build/deferred.$deferred"
     printf 'not implemented' >"$deferred_path"
     deferred_err="$ROOT/build/deferred-$deferred.err"
-    if "$ROOT/pkchat" "$BASE" --quiet --no-stream -m "$MODEL" -p "hello" --attach "$deferred_path" \
+    if "$ROOT/ainiux" "$BASE" --quiet --no-stream -m "$MODEL" -p "hello" --attach "$deferred_path" \
         >"$ROOT/build/deferred-$deferred.out" 2>"$deferred_err"; then
         echo "$deferred attachment should remain unsupported" >&2
         exit 1
@@ -556,7 +556,7 @@ done
 local_png="$ROOT/build/local-image.PnG"
 printf '\211PNG\r\n\032\nmock-image' >"$local_png"
 image_chat_file="$ROOT/build/image-chat.json"
-image_reply=$("$ROOT/pkchat" "$BASE" --quiet --no-stream -m "$MODEL" -p "describe-image" --input "$local_png" \
+image_reply=$("$ROOT/ainiux" "$BASE" --quiet --no-stream -m "$MODEL" -p "describe-image" --input "$local_png" \
     --image-capability allow --save-chat "$image_chat_file")
 test "$image_reply" = "image-input-ok"
 grep 'describe-image' "$image_chat_file" >/dev/null
@@ -566,7 +566,7 @@ if grep 'data:image/png;base64' "$image_chat_file" >/dev/null; then
 fi
 
 unknown_image_err="$ROOT/build/unknown-image-capability.err"
-if "$ROOT/pkchat" "$BASE" --quiet --no-stream -m "$MODEL" -p "describe-image" --input "$local_png" \
+if "$ROOT/ainiux" "$BASE" --quiet --no-stream -m "$MODEL" -p "describe-image" --input "$local_png" \
     >"$ROOT/build/unknown-image-capability.out" 2>"$unknown_image_err"; then
     echo "unknown models should require an image capability override" >&2
     exit 1
@@ -575,25 +575,25 @@ grep 'not recognized as image-capable' "$unknown_image_err" >/dev/null
 
 local_jpeg="$ROOT/build/local-image.JPEG"
 printf '\377\330\377mock-jpeg' >"$local_jpeg"
-multiple_image_reply=$("$ROOT/pkchat" "$BASE" --quiet --no-stream -m "$MODEL" -p "describe-images" \
+multiple_image_reply=$("$ROOT/ainiux" "$BASE" --quiet --no-stream -m "$MODEL" -p "describe-images" \
     --attach "$local_png" --attach "$local_jpeg" --image-capability allow)
 test "$multiple_image_reply" = "images:2"
 
 repl_attach_image=$(printf '/attach %s\ndescribe-image\n/quit\n' "$local_jpeg" | \
-    "$ROOT/pkchat" "$BASE" --quiet --repl --no-stream -m "$MODEL" --image-capability allow)
+    "$ROOT/ainiux" "$BASE" --quiet --repl --no-stream -m "$MODEL" --image-capability allow)
 test "$repl_attach_image" = "image-input-ok"
 repl_fetch_reply=$(printf '/fetch %s/page\nsummarize-url\n/quit\n' "$BASE" | \
-    "$ROOT/pkchat" "$BASE" --quiet --repl --no-stream -m "$MODEL" --allow-private-url-fetch)
+    "$ROOT/ainiux" "$BASE" --quiet --repl --no-stream -m "$MODEL" --allow-private-url-fetch)
 test "$repl_fetch_reply" = "url-context-ok"
 
-python3 "$ROOT/tests/integration/editor_continue_driver.py" "$ROOT/pkchat" "$BASE" "$MODEL"
-python3 "$ROOT/tests/integration/editor_prose_continue_driver.py" "$ROOT/pkchat" "$BASE" "$MODEL"
-python3 "$ROOT/tests/integration/editor_buffers_driver.py" "$ROOT/pkchat"
-python3 "$ROOT/tests/integration/editor_locking_driver.py" "$ROOT/pkchat"
-python3 "$ROOT/tests/integration/editor_text_modes_driver.py" "$ROOT/pkchat"
+python3 "$ROOT/tests/integration/editor_continue_driver.py" "$ROOT/ainiux" "$BASE" "$MODEL"
+python3 "$ROOT/tests/integration/editor_prose_continue_driver.py" "$ROOT/ainiux" "$BASE" "$MODEL"
+python3 "$ROOT/tests/integration/editor_buffers_driver.py" "$ROOT/ainiux"
+python3 "$ROOT/tests/integration/editor_locking_driver.py" "$ROOT/ainiux"
+python3 "$ROOT/tests/integration/editor_text_modes_driver.py" "$ROOT/ainiux"
 
 image_extract_err="$ROOT/build/image-extract.err"
-if "$ROOT/pkchat" --input "$local_png" --quiet >"$ROOT/build/image-extract.out" 2>"$image_extract_err"; then
+if "$ROOT/ainiux" --input "$local_png" --quiet >"$ROOT/build/image-extract.out" 2>"$image_extract_err"; then
     echo "standalone image extraction should require a prompt" >&2
     exit 1
 fi
@@ -601,7 +601,7 @@ grep 'combine --input IMAGE with -p' "$image_extract_err" >/dev/null
 
 webm_err="$ROOT/build/webm-input.err"
 printf 'RIFFmockWEBM' >"$ROOT/build/not-an-image.webm"
-if "$ROOT/pkchat" "$BASE" --quiet --no-stream -m "$MODEL" -p "describe-image" --input "$ROOT/build/not-an-image.webm" >"$ROOT/build/webm-input.out" 2>"$webm_err"; then
+if "$ROOT/ainiux" "$BASE" --quiet --no-stream -m "$MODEL" -p "describe-image" --input "$ROOT/build/not-an-image.webm" >"$ROOT/build/webm-input.out" 2>"$webm_err"; then
     echo "WebM input should not be classified as an image" >&2
     exit 1
 fi
@@ -610,33 +610,33 @@ grep 'supported endings' "$webm_err" >/dev/null
 legacy_html="$ROOT/build/windows1251-russian.html"
 printf '<h1>\317\360\350\342\345\362</h1>' >"$legacy_html"
 legacy_err="$ROOT/build/nonutf-html.err"
-if "$ROOT/pkchat" --input "$legacy_html" --output-format plaintext --quiet >"$ROOT/build/nonutf-html.out" 2>"$legacy_err"; then
+if "$ROOT/ainiux" --input "$legacy_html" --output-format plaintext --quiet >"$ROOT/build/nonutf-html.out" 2>"$legacy_err"; then
     echo "non-UTF-8 HTML extraction should have failed" >&2
     exit 1
 fi
 grep 'HTML extraction expects UTF-8 input' "$legacy_err" >/dev/null
 grep 'charset conversion is not implemented yet' "$legacy_err" >/dev/null
 
-models=$("$ROOT/pkchat" --list-models "$BASE" --quiet)
+models=$("$ROOT/ainiux" --list-models "$BASE" --quiet)
 printf '%s' "$models" | grep -F "| $MODEL |" >/dev/null
 printf '%s' "$models" | grep -F "**Provider:**" >/dev/null
 
-reply=$("$ROOT/pkchat" "$BASE" --quiet --no-stream -m "$MODEL" -p "hello")
+reply=$("$ROOT/ainiux" "$BASE" --quiet --no-stream -m "$MODEL" -p "hello")
 test "$reply" = "Hello"
-auto_model=$("$ROOT/pkchat" "$BASE" --quiet --no-stream -p "model?")
+auto_model=$("$ROOT/ainiux" "$BASE" --quiet --no-stream -p "model?")
 
 test "$auto_model" = "$MODEL"
-json=$("$ROOT/pkchat" "$BASE" --quiet --no-stream -m "$MODEL" -p "hello" --format json)
+json=$("$ROOT/ainiux" "$BASE" --quiet --no-stream -m "$MODEL" -p "hello" --format json)
 printf '%s' "$json" | grep '"content":"Hello"' >/dev/null
 
-html_reply=$("$ROOT/pkchat" "$BASE" --quiet --stream -m "$MODEL" -p "markdown" --output-format html)
+html_reply=$("$ROOT/ainiux" "$BASE" --quiet --stream -m "$MODEL" -p "markdown" --output-format html)
 printf '%s
 ' "$html_reply" | grep -F '<h1>Mock Title</h1>' >/dev/null
 printf '%s
 ' "$html_reply" | grep -F '<strong>bold</strong>' >/dev/null
 printf '%s
 ' "$html_reply" | grep -F '<a href="https://example.com/docs">docs</a>' >/dev/null
-plain_reply=$("$ROOT/pkchat" "$BASE" --quiet --no-stream -m "$MODEL" -p "markdown" --output-format plaintext)
+plain_reply=$("$ROOT/ainiux" "$BASE" --quiet --no-stream -m "$MODEL" -p "markdown" --output-format plaintext)
 printf '%s
 ' "$plain_reply" | grep -F 'Mock Title' >/dev/null
 printf '%s
@@ -644,77 +644,77 @@ printf '%s
 printf '%s
 ' "$plain_reply" | grep -F '**bold**' >/dev/null && exit 1 || true
 html_file="$ROOT/build/assistant-output.html"
-"$ROOT/pkchat" "$BASE" --quiet --no-stream -m "$MODEL" -p "markdown" --output-format html --output "$html_file"
+"$ROOT/ainiux" "$BASE" --quiet --no-stream -m "$MODEL" -p "markdown" --output-format html --output "$html_file"
 grep '<!doctype html>' "$html_file" >/dev/null
 grep '<meta charset="utf-8">' "$html_file" >/dev/null
 grep 'name="viewport"' "$html_file" >/dev/null
 grep '<h1>Mock Title</h1>' "$html_file" >/dev/null
 
-stream=$("$ROOT/pkchat" "$BASE" --quiet --stream -m "$MODEL" -p "hello")
+stream=$("$ROOT/ainiux" "$BASE" --quiet --stream -m "$MODEL" -p "hello")
 test "$stream" = "Hello"
 
-responses_reply=$("$ROOT/pkchat" "$BASE" --quiet --api responses --no-stream -m "$MODEL" -p "hello")
+responses_reply=$("$ROOT/ainiux" "$BASE" --quiet --api responses --no-stream -m "$MODEL" -p "hello")
 test "$responses_reply" = "Hello"
-responses_stream=$("$ROOT/pkchat" "$BASE" --quiet --api responses --stream -m "$MODEL" -p "hello")
+responses_stream=$("$ROOT/ainiux" "$BASE" --quiet --api responses --stream -m "$MODEL" -p "hello")
 test "$responses_stream" = "Hello"
-responses_json=$("$ROOT/pkchat" "$BASE" --quiet --api responses --no-stream -m "$MODEL" -p "hello" --format json)
+responses_json=$("$ROOT/ainiux" "$BASE" --quiet --api responses --no-stream -m "$MODEL" -p "hello" --format json)
 printf '%s' "$responses_json" | grep '"content":"Hello"' >/dev/null
 
-shape_openai=$("$ROOT/pkchat" --provider openai --base-url "$BASE" --quiet --no-stream \
+shape_openai=$("$ROOT/ainiux" --provider openai --base-url "$BASE" --quiet --no-stream \
     -m "$MODEL" --thinking-budget high -p "expect-openai-chat-reasoning" \
     --header "Authorization: Bearer test")
 test "$shape_openai" = "request-ok"
-shape_openai_responses=$("$ROOT/pkchat" --provider openai --base-url "$BASE" --quiet \
+shape_openai_responses=$("$ROOT/ainiux" --provider openai --base-url "$BASE" --quiet \
     --api responses --no-stream -m "$MODEL" --thinking-budget 4096 \
     -p "expect-openai-responses-reasoning" --header "Authorization: Bearer test")
 test "$shape_openai_responses" = "request-ok"
-shape_anthropic=$("$ROOT/pkchat" --provider anthropic --base-url "$BASE" --quiet \
+shape_anthropic=$("$ROOT/ainiux" --provider anthropic --base-url "$BASE" --quiet \
     --no-stream -m "claude-sonnet-4-6" --thinking-budget 2048 \
     -p "expect-anthropic-thinking" --header "Authorization: Bearer test")
 test "$shape_anthropic" = "request-ok"
-shape_gemini=$("$ROOT/pkchat" --provider gemini --base-url "$BASE" --quiet --no-stream \
+shape_gemini=$("$ROOT/ainiux" --provider gemini --base-url "$BASE" --quiet --no-stream \
     -m "gemini-3.5-flash" --thinking-budget 4096 -p "expect-gemini-reasoning" \
     --header "Authorization: Bearer test")
 test "$shape_gemini" = "request-ok"
-shape_kimi=$("$ROOT/pkchat" --provider moonshot --base-url "$BASE" --quiet --no-stream \
+shape_kimi=$("$ROOT/ainiux" --provider moonshot --base-url "$BASE" --quiet --no-stream \
     -m "kimi-k2.6" --thinking off -p "expect-kimi-thinking" \
     --header "Authorization: Bearer test")
 test "$shape_kimi" = "request-ok"
-shape_deepseek=$("$ROOT/pkchat" --provider deepseek --base-url "$BASE" --quiet \
+shape_deepseek=$("$ROOT/ainiux" --provider deepseek --base-url "$BASE" --quiet \
     --no-stream -m "deepseek-v4-pro" --thinking-budget xhigh \
     -p "expect-deepseek-v4-thinking" --header "Authorization: Bearer test")
 test "$shape_deepseek" = "request-ok"
-shape_qwen=$("$ROOT/pkchat" --provider qwen --base-url "$BASE" --quiet --no-stream \
+shape_qwen=$("$ROOT/ainiux" --provider qwen --base-url "$BASE" --quiet --no-stream \
     -m "qwen3.7-plus" --thinking-budget high -p "expect-qwen-thinking" \
     --header "Authorization: Bearer test")
 test "$shape_qwen" = "request-ok"
-shape_glm=$("$ROOT/pkchat" --provider zai --base-url "$BASE" --quiet --no-stream \
+shape_glm=$("$ROOT/ainiux" --provider zai --base-url "$BASE" --quiet --no-stream \
     -m "glm-5.2" --thinking-budget xhigh -p "expect-glm-thinking" \
     --header "Authorization: Bearer test")
 test "$shape_glm" = "request-ok"
 
 reasoning_trace='<think>internal trace</think>'
 reasoning_err="$ROOT/build/reasoning.err"
-reasoning_reply=$("$ROOT/pkchat" "$BASE" --quiet --no-stream -m "$MODEL" -p "reasoning" 2>"$reasoning_err")
+reasoning_reply=$("$ROOT/ainiux" "$BASE" --quiet --no-stream -m "$MODEL" -p "reasoning" 2>"$reasoning_err")
 test "$reasoning_reply" = "Visible answer"
 test "$(cat "$reasoning_err")" = "$reasoning_trace"
-reasoning_stream=$("$ROOT/pkchat" "$BASE" --quiet --stream -m "$MODEL" -p "reasoning" 2>"$reasoning_err")
+reasoning_stream=$("$ROOT/ainiux" "$BASE" --quiet --stream -m "$MODEL" -p "reasoning" 2>"$reasoning_err")
 test "$reasoning_stream" = "Visible answer"
 test "$(cat "$reasoning_err")" = "$reasoning_trace"
-responses_reasoning=$("$ROOT/pkchat" "$BASE" --quiet --api responses --no-stream -m "$MODEL" -p "reasoning" 2>"$reasoning_err")
+responses_reasoning=$("$ROOT/ainiux" "$BASE" --quiet --api responses --no-stream -m "$MODEL" -p "reasoning" 2>"$reasoning_err")
 test "$responses_reasoning" = "Visible answer"
 test "$(cat "$reasoning_err")" = "$reasoning_trace"
-responses_reasoning_stream=$("$ROOT/pkchat" "$BASE" --quiet --api responses --stream -m "$MODEL" -p "reasoning" 2>"$reasoning_err")
+responses_reasoning_stream=$("$ROOT/ainiux" "$BASE" --quiet --api responses --stream -m "$MODEL" -p "reasoning" 2>"$reasoning_err")
 test "$responses_reasoning_stream" = "Visible answer"
 test "$(cat "$reasoning_err")" = "$reasoning_trace"
-reasoning_json=$("$ROOT/pkchat" "$BASE" --quiet --no-stream -m "$MODEL" -p "reasoning" --format json 2>"$reasoning_err")
+reasoning_json=$("$ROOT/ainiux" "$BASE" --quiet --no-stream -m "$MODEL" -p "reasoning" --format json 2>"$reasoning_err")
 printf '%s' "$reasoning_json" | grep '"content":"Visible answer"' >/dev/null
 if printf '%s' "$reasoning_json" | grep -q 'internal trace'; then
     echo "thinking trace leaked into JSON stdout" >&2
     exit 1
 fi
 test "$(cat "$reasoning_err")" = "$reasoning_trace"
-reasoning_ndjson=$("$ROOT/pkchat" "$BASE" --quiet --stream -m "$MODEL" -p "reasoning" --format ndjson 2>"$reasoning_err")
+reasoning_ndjson=$("$ROOT/ainiux" "$BASE" --quiet --stream -m "$MODEL" -p "reasoning" --format ndjson 2>"$reasoning_err")
 printf '%s' "$reasoning_ndjson" | grep 'Visible answer' >/dev/null
 if printf '%s' "$reasoning_ndjson" | grep -q 'internal trace'; then
     echo "thinking trace leaked into NDJSON stdout" >&2
@@ -722,38 +722,38 @@ if printf '%s' "$reasoning_ndjson" | grep -q 'internal trace'; then
 fi
 test "$(cat "$reasoning_err")" = "$reasoning_trace"
 reasoning_chat_file="$ROOT/build/reasoning-chat.json"
-"$ROOT/pkchat" "$BASE" --quiet --no-stream -m "$MODEL" -p "reasoning" \
+"$ROOT/ainiux" "$BASE" --quiet --no-stream -m "$MODEL" -p "reasoning" \
     --save-chat "$reasoning_chat_file" >/dev/null 2>"$reasoning_err"
 test "$(cat "$reasoning_err")" = "$reasoning_trace"
 grep '<think>internal trace</think>' "$reasoning_chat_file" >/dev/null
-previous_assistant=$("$ROOT/pkchat" "$BASE" --quiet --no-stream -m "$MODEL" --load-chat "$reasoning_chat_file" -p "previous-assistant")
+previous_assistant=$("$ROOT/ainiux" "$BASE" --quiet --no-stream -m "$MODEL" --load-chat "$reasoning_chat_file" -p "previous-assistant")
 test "$previous_assistant" = "Visible answer"
 
-ndjson=$("$ROOT/pkchat" "$BASE" --quiet --stream -m "$MODEL" -p "hello" --format ndjson)
+ndjson=$("$ROOT/ainiux" "$BASE" --quiet --stream -m "$MODEL" -p "hello" --format ndjson)
 printf '%s\n' "$ndjson" | grep '"event":"delta"' >/dev/null
 printf '%s\n' "$ndjson" | grep '"event":"done"' >/dev/null
 
-jsond=$("$ROOT/pkchat" "$BASE" --quiet --stream -m "$MODEL" -p "hello" --output-format jsond)
+jsond=$("$ROOT/ainiux" "$BASE" --quiet --stream -m "$MODEL" -p "hello" --output-format jsond)
 printf '%s\n' "$jsond" | grep '"event":"delta"' >/dev/null
 printf '%s\n' "$jsond" | grep '"event":"done"' >/dev/null
 
 verbose_err="$ROOT/build/verbose.err"
-verbose_out=$("$ROOT/pkchat" "$BASE" -v --stream -m "$MODEL" -p "hello" 2>"$verbose_err")
+verbose_out=$("$ROOT/ainiux" "$BASE" -v --stream -m "$MODEL" -p "hello" 2>"$verbose_err")
 test "$verbose_out" = "Hello"
 grep 'TTFT: ' "$verbose_err" | grep ', context: ' | grep '%)' >/dev/null
 
 
 CHAT_FILE="$ROOT/build/chat.json"
-reply=$("$ROOT/pkchat" "$BASE" --quiet --no-stream -m "$MODEL" -p "hello" --save-chat "$CHAT_FILE")
+reply=$("$ROOT/ainiux" "$BASE" --quiet --no-stream -m "$MODEL" -p "hello" --save-chat "$CHAT_FILE")
 test "$reply" = "Hello"
 grep '"schema_version"' "$CHAT_FILE" >/dev/null
 grep '"role": "assistant"' "$CHAT_FILE" >/dev/null
 
-loaded_reply=$("$ROOT/pkchat" "$BASE" --quiet --no-stream -m "$MODEL" --load-chat "$CHAT_FILE" -p "count-messages")
+loaded_reply=$("$ROOT/ainiux" "$BASE" --quiet --no-stream -m "$MODEL" --load-chat "$CHAT_FILE" -p "count-messages")
 test "$loaded_reply" = "messages:3"
 
 COMPACT_CHAT_FILE="$ROOT/build/compact-chat.json"
-compacted_reply=$("$ROOT/pkchat" "$BASE" --quiet --no-stream -m "$MODEL" --load-chat "$CHAT_FILE" \
+compacted_reply=$("$ROOT/ainiux" "$BASE" --quiet --no-stream -m "$MODEL" --load-chat "$CHAT_FILE" \
     -p "count-messages" --context-policy truncate-oldest --max-context-bytes 45 --save-chat "$COMPACT_CHAT_FILE")
 test "$compacted_reply" = "messages:1"
 grep '"policy":"truncate-oldest"' "$COMPACT_CHAT_FILE" >/dev/null
@@ -761,7 +761,7 @@ grep '"messages_compacted":2' "$COMPACT_CHAT_FILE" >/dev/null
 grep '"content": "hello"' "$COMPACT_CHAT_FILE" >/dev/null
 
 context_error="$ROOT/build/context-error.err"
-if "$ROOT/pkchat" "$BASE" --quiet --no-stream -m "$MODEL" -p "hello" \
+if "$ROOT/ainiux" "$BASE" --quiet --no-stream -m "$MODEL" -p "hello" \
     --context-policy error --max-context-bytes 1 >"$ROOT/build/context-error.out" 2>"$context_error"; then
     echo "oversized context with error policy should fail" >&2
     exit 1
@@ -771,16 +771,16 @@ grep 'request context is approximately' "$context_error" >/dev/null
 REPL_FILE="$ROOT/build/repl-chat.json"
 repl_out=$(printf 'repl-one
 /quit
-' | "$ROOT/pkchat" "$BASE" --quiet --repl --no-stream -m "$MODEL" --save-chat "$REPL_FILE")
+' | "$ROOT/ainiux" "$BASE" --quiet --repl --no-stream -m "$MODEL" --save-chat "$REPL_FILE")
 test "$repl_out" = "repl-one-reply"
 grep 'repl-one' "$REPL_FILE" >/dev/null
 grep 'repl-one-reply' "$REPL_FILE" >/dev/null
 
 repl_start_err="$ROOT/build/repl-start.err"
-printf '/quit\n' | "$ROOT/pkchat" "$BASE" --repl --no-stream -m "$MODEL" \
+printf '/quit\n' | "$ROOT/ainiux" "$BASE" --repl --no-stream -m "$MODEL" \
     >"$ROOT/build/repl-start.out" 2>"$repl_start_err"
-version=$("$ROOT/pkchat" --version | awk '{print $2}')
-program=$("$ROOT/pkchat" --version | awk '{print $1}')
+version=$("$ROOT/ainiux" --version | awk '{print $2}')
+program=$("$ROOT/ainiux" --version | awk '{print $1}')
 test "$(sed -n '1p' "$repl_start_err")" = \
     "$program $version REPL | Endpoint: $BASE/v1/chat/completions | Model: $MODEL"
 test "$(sed -n '2p' "$repl_start_err")" = "Type /help for commands, /quit to exit."
@@ -791,7 +791,7 @@ fi
 
 TUI_FILE="$ROOT/build/tui-insert-chat.json"
 python3 "$ROOT/tests/integration/tui_insert_driver.py" \
-    "$ROOT/pkchat" "$BASE" "$MODEL" "$insert_file" "$local_png" "$BASE/page" "$TUI_FILE"
+    "$ROOT/ainiux" "$BASE" "$MODEL" "$insert_file" "$local_png" "$BASE/page" "$TUI_FILE"
 grep 'Inserted Context Marker' "$TUI_FILE" >/dev/null
 grep 'insert-ok' "$TUI_FILE" >/dev/null
 grep 'image-input-ok' "$TUI_FILE" >/dev/null
@@ -805,7 +805,7 @@ fi
 
 lmstudio_shortcut_out=$(printf 'repl-one
 /quit
-' | "$ROOT/pkchat" lmstudio --base-url "$BASE" --quiet --repl --no-stream)
+' | "$ROOT/ainiux" lmstudio --base-url "$BASE" --quiet --repl --no-stream)
 test "$lmstudio_shortcut_out" = "repl-one-reply"
 EMPTY_PORT=$((PORT + 1))
 EMPTY_SERVER_LOG="$ROOT/build/mock_server_empty_models.log"
@@ -822,7 +822,7 @@ while [ "$i" -lt 50 ]; do
 done
 EMPTY_BASE="http://127.0.0.1:$EMPTY_PORT"
 unknown_err="$ROOT/build/unknown-model.err"
-if "$ROOT/pkchat" "$EMPTY_BASE" --no-stream -p "model?" \
+if "$ROOT/ainiux" "$EMPTY_BASE" --no-stream -p "model?" \
     >"$ROOT/build/unknown-model.out" 2>"$unknown_err"; then
     echo "an endpoint with no models should fail automatic model selection" >&2
     exit 1

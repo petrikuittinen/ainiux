@@ -1,7 +1,7 @@
 #pragma once
 
-namespace pkchat::test::security {
+namespace ainiux::test::security {
 
 void run_all();
 
-}  // namespace pkchat::test::security
+}  // namespace ainiux::test::security

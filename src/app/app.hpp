@@ -15,7 +15,7 @@
 #include "markdown/markdown.hpp"
 #include "provider/provider.hpp"
 
-namespace pkchat::app {
+namespace ainiux::app {
 
 int exit_code_for(ErrorCode code);
 void print_error(const Error& error);
@@ -73,4 +73,4 @@ int run_repl(provider::RequestContext context, chat::Session session, std::ostre
 
 void print_config_diagnostics(const config::LoadResult& configured);
 
-}  // namespace pkchat::app
+}  // namespace ainiux::app

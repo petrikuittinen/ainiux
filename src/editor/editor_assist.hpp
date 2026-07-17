@@ -13,7 +13,7 @@
 #include "provider/provider.hpp"
 #include "runtime/runtime.hpp"
 
-namespace pkchat::editor {
+namespace ainiux::editor {
 
 enum class AssistCommandKind {
     Unknown,
@@ -184,4 +184,4 @@ class CodeAssistStreamFilter {
     std::string pending_after_close_;
 };
 
-}  // namespace pkchat::editor
+}  // namespace ainiux::editor

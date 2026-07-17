@@ -10,7 +10,7 @@
 #include <string>
 #include <utility>
 
-namespace pkchat::editor {
+namespace ainiux::editor {
 
 using detail::WrapSegment;
 using detail::WrappedLocation;
@@ -1110,4 +1110,4 @@ RenderedPanel EditorState::render(const Rect& rect) const {
 }
 
 
-}  // namespace pkchat::editor
+}  // namespace ainiux::editor

@@ -1,6 +1,6 @@
 #include "tui/tui.hpp"
 
-namespace pkchat::tui {
+namespace ainiux::tui {
 
 int history_scroll_for_thread_beginning() {
     return std::numeric_limits<int>::max();
@@ -84,4 +84,4 @@ ThinkingDisplay thinking_display_text(const std::string& content, bool show_trac
     return display;
 }
 
-}  // namespace pkchat::tui
+}  // namespace ainiux::tui

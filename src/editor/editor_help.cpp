@@ -9,7 +9,7 @@
 #include <sstream>
 #include <vector>
 
-namespace pkchat::editor {
+namespace ainiux::editor {
 namespace {
 
 bool is_token_separator(char ch) {
@@ -80,22 +80,22 @@ std::string read_file_text(const std::string& path) {
 
 std::vector<std::string> editor_help_search_paths() {
     std::vector<std::string> paths;
-    if (const char* override_path = std::getenv("PKCHAT_EDITOR_HELP")) {
+    if (const char* override_path = std::getenv("AINIUX_EDITOR_HELP")) {
         if (override_path[0] != '\0') {
             paths.emplace_back(override_path);
         }
     }
     if (const char* xdg_data = std::getenv("XDG_DATA_HOME")) {
         if (xdg_data[0] != '\0') {
-            paths.push_back(std::string(xdg_data) + "/pkchat/editor_help.md");
+            paths.push_back(std::string(xdg_data) + "/ainiux/editor_help.md");
         }
     } else if (const char* home = std::getenv("HOME")) {
         if (home[0] != '\0') {
-            paths.push_back(std::string(home) + "/.local/share/pkchat/editor_help.md");
+            paths.push_back(std::string(home) + "/.local/share/ainiux/editor_help.md");
         }
     }
-    paths.emplace_back("/usr/local/share/pkchat/editor_help.md");
-    paths.emplace_back("/usr/share/pkchat/editor_help.md");
+    paths.emplace_back("/usr/local/share/ainiux/editor_help.md");
+    paths.emplace_back("/usr/share/ainiux/editor_help.md");
     paths.emplace_back("docs/editor_help.md");
     paths.emplace_back("editor_help.md");
     return paths;
@@ -198,4 +198,4 @@ Error load_editor_help_markdown(std::string& out) {
     return ok_error();
 }
 
-}  // namespace pkchat::editor
+}  // namespace ainiux::editor

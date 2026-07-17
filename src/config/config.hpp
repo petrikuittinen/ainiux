@@ -10,7 +10,7 @@
 #include "common.hpp"
 #include "tui/theme_registry.hpp"
 
-namespace pkchat::config {
+namespace ainiux::config {
 
 constexpr size_t kMaxConfigBytes = 1024 * 1024;
 
@@ -102,4 +102,4 @@ LoadResult load_automatic(const cli::Options& base_options,
                           bool load_user_config = true);
 const char* value_type_name(Value::Type type);
 
-}  // namespace pkchat::config
+}  // namespace ainiux::config

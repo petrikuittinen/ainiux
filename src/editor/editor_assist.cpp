@@ -10,7 +10,7 @@
 #include <sstream>
 #include <utility>
 
-namespace pkchat::editor {
+namespace ainiux::editor {
 namespace {
 
 constexpr const char* kDefaultAssistBehaviorRules =
@@ -346,7 +346,7 @@ std::vector<provider::Message> build_code_completion_messages(
     }
 
     std::ostringstream framed;
-    framed << "PKCHAT_CODE_CONTEXT_V1\nLANGUAGE " << canonical_language << "\nPREFIX_BYTES "
+    framed << "AINIUX_CODE_CONTEXT_V1\nLANGUAGE " << canonical_language << "\nPREFIX_BYTES "
            << prefix.size() << "\n";
     framed.write(prefix.data(), static_cast<std::streamsize>(prefix.size()));
     framed << "\n<CURSOR/>\n";
@@ -355,7 +355,7 @@ std::vector<provider::Message> build_code_completion_messages(
         framed.write(postfix->data(), static_cast<std::streamsize>(postfix->size()));
         framed << "\n";
     }
-    framed << "END_PKCHAT_CODE_CONTEXT_V1";
+    framed << "END_AINIUX_CODE_CONTEXT_V1";
     return {{"system", std::move(system)}, {"user", framed.str()}};
 }
 
@@ -405,7 +405,7 @@ std::vector<provider::Message> build_prose_completion_messages(
     }
 
     std::ostringstream framed;
-    framed << "PKCHAT_PROSE_CONTEXT_V1\nMODE_BYTES " << mode.size() << "\n";
+    framed << "AINIUX_PROSE_CONTEXT_V1\nMODE_BYTES " << mode.size() << "\n";
     framed.write(mode.data(), static_cast<std::streamsize>(mode.size()));
     framed << "\nPREFIX_BYTES " << prefix.size() << "\n";
     framed.write(prefix.data(), static_cast<std::streamsize>(prefix.size()));
@@ -416,7 +416,7 @@ std::vector<provider::Message> build_prose_completion_messages(
         framed.write(postfix->data(), static_cast<std::streamsize>(postfix->size()));
         framed << "\n";
     }
-    framed << "END_PKCHAT_PROSE_CONTEXT_V1";
+    framed << "END_AINIUX_PROSE_CONTEXT_V1";
     return {{"system", std::move(system)}, {"user", framed.str()}};
 }
 
@@ -1512,7 +1512,7 @@ void start_assist_job(const AiContinueContext& context,
     job.start([job_context, messages, stream, code_completion, prose_completion, completion_language,
                &events](runtime::CancellationToken token) mutable {
         provider::ChatResult chat;
-        pkchat::output::ThinkingTraceSplitter splitter;
+        ainiux::output::ThinkingTraceSplitter splitter;
         AssistStreamFilter content_stripper;
         ProseAssistStreamFilter prose_stripper;
         CodeAssistStreamFilter code_stripper(completion_language);
@@ -1543,7 +1543,7 @@ void start_assist_job(const AiContinueContext& context,
             if (!stream) {
                 return ok_error();
             }
-            pkchat::output::ThinkingChunk chunk = splitter.feed(delta);
+            ainiux::output::ThinkingChunk chunk = splitter.feed(delta);
             if (!chunk.trace.empty() && chunk.visible.empty()) {
                 push_thinking();
             }
@@ -1568,7 +1568,7 @@ void start_assist_job(const AiContinueContext& context,
         Error send_error = provider::send_chat_messages(job_context, messages, on_delta, chat, token);
         if (send_error.ok()) {
             if (stream) {
-                pkchat::output::ThinkingChunk final = splitter.finish();
+                ainiux::output::ThinkingChunk final = splitter.finish();
                 if (!final.trace.empty() && final.visible.empty()) {
                     push_thinking();
                 }
@@ -1624,7 +1624,7 @@ void start_assist_job(const AiContinueContext& context,
 }
 
 std::string trim_assist_inplace_response(std::string text) {
-    text = pkchat::output::split_thinking_traces(std::move(text)).visible;
+    text = ainiux::output::split_thinking_traces(std::move(text)).visible;
     text = strip_assist_content_tags(std::move(text));
     return ascii_trim(std::move(text));
 }
@@ -1650,4 +1650,4 @@ void strip_trailing_assist_close_tag_without_undo(EditorState& state) {
     state.dirty = true;
 }
 
-}  // namespace pkchat::editor
+}  // namespace ainiux::editor

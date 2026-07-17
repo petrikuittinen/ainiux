@@ -23,29 +23,29 @@
 #include "ui/test_text_selector.hpp"
 
 int main() {
-    pkchat::test::output::run_all();
-    pkchat::test::config::run_all();
-    pkchat::test::cli::run_all();
-    pkchat::test::benchmark::run_all();
-    pkchat::test::input::run_all();
-    pkchat::test::context::run_all();
-    pkchat::test::http::run_all();
-    pkchat::test::fetch::run_all();
-    pkchat::test::search::run_all();
-    pkchat::test::html::run_all();
-    pkchat::test::highlight::run_all();
-    pkchat::test::markdown::run_all();
-    pkchat::test::provider::run_all();
-    pkchat::test::json::run_all();
-    pkchat::test::chat::run_all();
-    pkchat::test::runtime::run_all();
-    pkchat::test::security::run_all();
-    pkchat::test::ui::run_all();
-    pkchat::test::editor::run_all();
-    pkchat::test::tui::run_all();
+    ainiux::test::output::run_all();
+    ainiux::test::config::run_all();
+    ainiux::test::cli::run_all();
+    ainiux::test::benchmark::run_all();
+    ainiux::test::input::run_all();
+    ainiux::test::context::run_all();
+    ainiux::test::http::run_all();
+    ainiux::test::fetch::run_all();
+    ainiux::test::search::run_all();
+    ainiux::test::html::run_all();
+    ainiux::test::highlight::run_all();
+    ainiux::test::markdown::run_all();
+    ainiux::test::provider::run_all();
+    ainiux::test::json::run_all();
+    ainiux::test::chat::run_all();
+    ainiux::test::runtime::run_all();
+    ainiux::test::security::run_all();
+    ainiux::test::ui::run_all();
+    ainiux::test::editor::run_all();
+    ainiux::test::tui::run_all();
 
-    if (pkchat::test::failures != 0) {
-        std::cerr << pkchat::test::failures << " unit test(s) failed\n";
+    if (ainiux::test::failures != 0) {
+        std::cerr << ainiux::test::failures << " unit test(s) failed\n";
         return 1;
     }
     std::cout << "unit tests passed\n";

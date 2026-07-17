@@ -1,4 +1,4 @@
-# pkchat Refactor And Risk Analysis
+# ainiux Refactor And Risk Analysis
 
 Date: 2026-07-09
 
@@ -89,7 +89,7 @@ If these are fixtures, move them under `tests/fixtures/` with descriptive names.
 
 ### Cutoff helper placement
 
-`find_cutoff` is a symlink to `find_cutoff.sh`, and the script shells out to the local `pkchat` binary. That may be useful, but it does not belong at repo root long term.
+`find_cutoff` is a symlink to `find_cutoff.sh`, and the script shells out to the local `ainiux` binary. That may be useful, but it does not belong at repo root long term.
 
 Suggested actions:
 

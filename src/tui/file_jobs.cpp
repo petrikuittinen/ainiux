@@ -9,7 +9,7 @@
 #include "tui/detail/render.hpp"
 #include "tui/tui.hpp"
 
-namespace pkchat::tui {
+namespace ainiux::tui {
 
 bool TuiFileJobs::busy(bool quiet) const {
     if (!file_job.running()) {
@@ -341,4 +341,4 @@ void TuiFileJobs::start_search(const std::string& query) {
     status = "Searching " + query + "...";
 }
 
-}  // namespace pkchat::tui
+}  // namespace ainiux::tui

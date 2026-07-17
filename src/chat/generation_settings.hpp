@@ -3,7 +3,7 @@
 #include <string>
 #include <vector>
 
-namespace pkchat::chat::generation {
+namespace ainiux::chat::generation {
 
 inline constexpr const char kTemperature[] = "temperature";
 inline constexpr const char kTopK[] = "top_k";
@@ -34,4 +34,4 @@ std::vector<std::string> chat_purpose_strings();
 std::string chat_purpose_description();
 bool is_chat_purpose(const std::string& purpose);
 
-}  // namespace pkchat::chat::generation
+}  // namespace ainiux::chat::generation

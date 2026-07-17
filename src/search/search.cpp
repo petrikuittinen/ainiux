@@ -8,7 +8,7 @@
 #include <cstdlib>
 #include <sstream>
 
-namespace pkchat::search {
+namespace ainiux::search {
 namespace {
 
 constexpr const char* kUserAgent =
@@ -1035,4 +1035,4 @@ Error search(const std::string& query,
     return {ErrorCode::HttpStatus, message.str()};
 }
 
-}  // namespace pkchat::search
+}  // namespace ainiux::search

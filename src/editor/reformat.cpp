@@ -9,7 +9,7 @@
 #include <string_view>
 #include <vector>
 
-namespace pkchat::editor {
+namespace ainiux::editor {
 namespace {
 
 enum class Profile {
@@ -621,4 +621,4 @@ void start_reformat_job(ReformatRequest request,
     });
 }
 
-}  // namespace pkchat::editor
+}  // namespace ainiux::editor

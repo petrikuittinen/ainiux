@@ -6,7 +6,7 @@
 #include "common.hpp"
 #include "context/context.hpp"
 
-namespace pkchat::tui {
+namespace ainiux::tui {
 
 bool active_context_has_provider_selection(const provider::RequestContext& active);
 
@@ -23,4 +23,4 @@ Error apply_loaded_session_to_context(provider::RequestContext& context, const c
 
 void restore_cli_context(provider::RequestContext& context, const provider::RequestContext& cli_context);
 
-}  // namespace pkchat::tui
+}  // namespace ainiux::tui

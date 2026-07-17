@@ -25,7 +25,7 @@
 #include <sys/ioctl.h>
 #include <unistd.h>
 
-namespace pkchat::editor {
+namespace ainiux::editor {
 namespace {
 
 bool minibuffer_supports_path_completion(MinibufferAction action) {
@@ -1450,4 +1450,4 @@ void handle_escape(EditorState& state,
 }
 
 
-}  // namespace pkchat::editor
+}  // namespace ainiux::editor

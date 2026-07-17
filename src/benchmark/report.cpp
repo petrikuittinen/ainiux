@@ -11,7 +11,7 @@
 
 #include "json/json.hpp"
 
-namespace pkchat::benchmark {
+namespace ainiux::benchmark {
 namespace {
 
 constexpr size_t kMaxReportLineBytes = 64U * 1024U * 1024U;
@@ -422,8 +422,8 @@ Error write_markdown_report(const std::string& jsonl_path,
     }
     const bool grading_report = have_overview &&
                                 record_string(overview, "mode") == "grade";
-    output << (grading_report ? "# pkchat Benchmark Grading Report\n\n"
-                              : "# pkchat Benchmark Report\n\n")
+    output << (grading_report ? "# ainiux Benchmark Grading Report\n\n"
+                              : "# ainiux Benchmark Report\n\n")
            << "**JSONL source:** " << markdown_heading_text(jsonl_path) << "\n\n";
     if (have_overview) {
         output << "## "
@@ -533,4 +533,4 @@ Error write_markdown_report(const std::string& jsonl_path,
     return ok_error();
 }
 
-}  // namespace pkchat::benchmark
+}  // namespace ainiux::benchmark

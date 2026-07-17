@@ -1,6 +1,6 @@
 #pragma once
 
-namespace pkchat::tui {
+namespace ainiux::tui {
 
 struct Rgb {
     int r = 0;
@@ -47,4 +47,4 @@ struct StylePair {
     Rgb background;
 };
 
-}  // namespace pkchat::tui
+}  // namespace ainiux::tui

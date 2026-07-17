@@ -12,7 +12,7 @@
 #include <sstream>
 #include <utility>
 
-namespace pkchat::editor {
+namespace ainiux::editor {
 namespace {
 
 struct Decoded {
@@ -590,4 +590,4 @@ std::string word_completion_status(const WordCompletionResult& result) {
     return status.str();
 }
 
-}  // namespace pkchat::editor
+}  // namespace ainiux::editor

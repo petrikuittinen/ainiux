@@ -14,7 +14,7 @@
 #include "runtime/runtime.hpp"
 #include "tui/tui.hpp"
 
-namespace pkchat::editor {
+namespace ainiux::editor {
 
 struct AssistSession {
     runtime::JobHandle job;
@@ -75,4 +75,4 @@ bool is_configured_assist_slash_command(const std::string& line, const EditorAss
 std::string chat_assist_command_name(const EditorAssistCommand& command);
 std::vector<std::string> chat_assist_command_completions(const EditorAssistConfig& config);
 
-}  // namespace pkchat::editor
+}  // namespace ainiux::editor

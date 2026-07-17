@@ -95,7 +95,7 @@ def main() -> int:
     print("// Regenerate with tools/generate_editor_unicode_data.py; do not edit by hand.")
     print("#include <cstdint>")
     print()
-    print("namespace pkchat::editor::unicode_data {")
+    print("namespace ainiux::editor::unicode_data {")
     print("struct UnicodeRange { std::uint32_t first; std::uint32_t last; };")
     print("struct FoldMapping { std::uint32_t source; std::uint32_t values[3]; std::uint8_t length; };")
     emit_ranges("kWordRanges", word_ranges)
@@ -108,7 +108,7 @@ def main() -> int:
             f"0x{padded[2]:X}U}}, {len(mapping)}}},"
         )
     print("};")
-    print("}  // namespace pkchat::editor::unicode_data")
+    print("}  // namespace ainiux::editor::unicode_data")
     return 0
 
 

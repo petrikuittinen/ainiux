@@ -11,7 +11,7 @@
 #include "benchmark/benchmark.hpp"
 #include "json/json.hpp"
 
-namespace pkchat::app {
+namespace ainiux::app {
 
 namespace {
 
@@ -249,4 +249,4 @@ int run_benchmark_mode(const cli::Options& options) {
     return 0;
 }
 
-}  // namespace pkchat::app
+}  // namespace ainiux::app

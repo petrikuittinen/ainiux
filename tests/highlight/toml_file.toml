@@ -1,5 +1,5 @@
 # TOML syntax-highlighting fixture
-title = "pkchat"
+title = "ainiux"
 version = "0.96"
 enabled = true
 ports = [8000, 8080]
@@ -10,7 +10,7 @@ host = "127.0.0.1"
 timeout_seconds = 30.5
 
 [database.connection]
-url = "postgresql://localhost/pkchat"
+url = "postgresql://localhost/ainiux"
 pool_size = 8
 
 [[providers]]

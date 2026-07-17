@@ -1,6 +1,6 @@
 #include "ui/confirmation.hpp"
 
-namespace pkchat::ui {
+namespace ainiux::ui {
 
 bool yes_answer(const std::string& value) {
     return value == "y" || value == "Y" || value == "yes" || value == "YES";
@@ -32,4 +32,4 @@ ConfirmationKeyResult parse_confirmation_key(unsigned char ch, bool treat_esc_as
     return ConfirmationKeyResult::Pending;
 }
 
-}  // namespace pkchat::ui
+}  // namespace ainiux::ui

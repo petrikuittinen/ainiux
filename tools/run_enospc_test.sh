@@ -47,4 +47,4 @@ if [ "$sanitized" = true ]; then
     preload=$asan:$mock
 fi
 
-PKCHAT_MOCK_ENOSPC=1 LD_PRELOAD=$preload exec "$binary" --enospc
+AINIUX_MOCK_ENOSPC=1 LD_PRELOAD=$preload exec "$binary" --enospc

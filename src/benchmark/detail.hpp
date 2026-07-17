@@ -8,7 +8,7 @@
 #include "fetch/fetch.hpp"
 #include "provider/provider.hpp"
 
-namespace pkchat::benchmark {
+namespace ainiux::benchmark {
 
 struct Case;
 
@@ -29,4 +29,4 @@ double wall_tokens_per_second(const provider::ChatResult& result);
 size_t worker_count_for(size_t tasks, int requested);
 
 }  // namespace detail
-}  // namespace pkchat::benchmark
+}  // namespace ainiux::benchmark

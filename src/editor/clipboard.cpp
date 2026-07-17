@@ -1,6 +1,6 @@
 #include "editor/clipboard.hpp"
 
-namespace pkchat::editor {
+namespace ainiux::editor {
 
 void publish_terminal_clipboard(const std::string& text);
 
@@ -18,4 +18,4 @@ Clipboard& shared_clipboard() {
     return clipboard;
 }
 
-}  // namespace pkchat::editor
+}  // namespace ainiux::editor

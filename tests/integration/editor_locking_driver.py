@@ -66,7 +66,7 @@ def main():
         print("usage: editor_locking_driver.py BINARY", file=sys.stderr)
         return 2
     binary = sys.argv[1]
-    with tempfile.TemporaryDirectory(prefix="pkchat-editor-lock-") as directory:
+    with tempfile.TemporaryDirectory(prefix="ainiux-editor-lock-") as directory:
         path = os.path.join(directory, "shared.txt")
         with open(path, "w", encoding="utf-8") as handle:
             handle.write("original")

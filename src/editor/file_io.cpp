@@ -10,7 +10,7 @@
 #include <new>
 #include <unistd.h>
 
-namespace pkchat::editor {
+namespace ainiux::editor {
 
 namespace {
 
@@ -359,4 +359,4 @@ Error ensure_empty_file(const std::string& path) {
 }
 
 
-}  // namespace pkchat::editor
+}  // namespace ainiux::editor

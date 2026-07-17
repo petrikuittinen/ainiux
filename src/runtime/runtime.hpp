@@ -10,7 +10,7 @@
 #include <thread>
 #include <utility>
 
-namespace pkchat::runtime {
+namespace ainiux::runtime {
 
 class CancellationToken {
    public:
@@ -108,4 +108,4 @@ class JobHandle {
     std::atomic<bool> running_{false};
 };
 
-}  // namespace pkchat::runtime
+}  // namespace ainiux::runtime

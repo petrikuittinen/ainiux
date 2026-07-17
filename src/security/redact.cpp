@@ -2,7 +2,7 @@
 
 #include "common.hpp"
 
-namespace pkchat {
+namespace ainiux {
 
 std::string redact_secrets(std::string text, const std::vector<std::string>& secrets) {
     for (const std::string& secret : secrets) {
@@ -24,4 +24,4 @@ bool is_sensitive_header_name(const std::string& name) {
            lower == "cookie" || lower == "set-cookie";
 }
 
-}  // namespace pkchat
+}  // namespace ainiux

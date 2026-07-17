@@ -8,10 +8,10 @@
 #include "editor/editor.hpp"
 #include "editor/editor_prompts.hpp"
 #include "markdown/markdown.hpp"
-#include "pkchat/model_setting.hpp"
+#include "ainiux/model_setting.hpp"
 #include "tui/theme_registry.hpp"
 
-namespace pkchat::cli {
+namespace ainiux::cli {
 
 enum class OutputFormat { Text, Json, Ndjson };
 
@@ -83,7 +83,7 @@ struct Options {
     std::string input_path;
     std::string html_file;
     std::string html_format = "markdown";
-    pkchat::markdown::OutputFormat output_format = pkchat::markdown::OutputFormat::Markdown;
+    ainiux::markdown::OutputFormat output_format = ainiux::markdown::OutputFormat::Markdown;
     bool output_format_explicit = false;
     bool rendered_output_format_explicit = false;
     std::string save_chat_path;
@@ -132,27 +132,27 @@ struct Options {
     long max_input_bytes = 1048576;
     long max_image_bytes = 20971520;
     long max_context_bytes = 0;
-    int editor_undo_limit = static_cast<int>(pkchat::editor::kDefaultUndoLimit);
-    long long editor_huge_file_size_warning = pkchat::editor::kDefaultHugeFileSizeWarningBytes;
-    long long editor_file_size_limit = pkchat::editor::kNoEditorFileSizeLimit;
+    int editor_undo_limit = static_cast<int>(ainiux::editor::kDefaultUndoLimit);
+    long long editor_huge_file_size_warning = ainiux::editor::kDefaultHugeFileSizeWarningBytes;
+    long long editor_file_size_limit = ainiux::editor::kNoEditorFileSizeLimit;
     bool editor_auto_save_mode = true;
-    std::string editor_auto_save_postfix = pkchat::editor::kDefaultAutoSavePostfix;
-    size_t editor_auto_save_threshold = pkchat::editor::kDefaultAutoSaveThreshold;
-    int editor_auto_save_timeout_seconds = pkchat::editor::kDefaultAutoSaveTimeoutSeconds;
-    long long editor_auto_save_size_limit = pkchat::editor::kDefaultAutoSaveSizeLimit;
-    size_t editor_tab_width = pkchat::editor::kDefaultTabWidth;
-    pkchat::editor::TabStyle editor_tab_style = pkchat::editor::TabStyle::Spaces;
-    pkchat::editor::LineBreak editor_linebreak = pkchat::editor::LineBreak::Lf;
+    std::string editor_auto_save_postfix = ainiux::editor::kDefaultAutoSavePostfix;
+    size_t editor_auto_save_threshold = ainiux::editor::kDefaultAutoSaveThreshold;
+    int editor_auto_save_timeout_seconds = ainiux::editor::kDefaultAutoSaveTimeoutSeconds;
+    long long editor_auto_save_size_limit = ainiux::editor::kDefaultAutoSaveSizeLimit;
+    size_t editor_tab_width = ainiux::editor::kDefaultTabWidth;
+    ainiux::editor::TabStyle editor_tab_style = ainiux::editor::TabStyle::Spaces;
+    ainiux::editor::LineBreak editor_linebreak = ainiux::editor::LineBreak::Lf;
     size_t editor_ai_continue_prefix_max_chars =
-        pkchat::editor::kDefaultAiContinuePrefixMaxChars;
+        ainiux::editor::kDefaultAiContinuePrefixMaxChars;
     size_t editor_ai_continue_postfix_max_chars =
-        pkchat::editor::kDefaultAiContinuePostfixMaxChars;
+        ainiux::editor::kDefaultAiContinuePostfixMaxChars;
     size_t editor_ai_continue_prose_prefix_max_chars =
-        pkchat::editor::kDefaultAiContinueProsePrefixMaxChars;
+        ainiux::editor::kDefaultAiContinueProsePrefixMaxChars;
     size_t editor_ai_continue_prose_postfix_max_chars =
-        pkchat::editor::kDefaultAiContinueProsePostfixMaxChars;
-    int editor_ai_continue_max_tokens = pkchat::editor::kDefaultAiContinueMaxTokens;
-    pkchat::editor::EditorAssistConfig editor_assist_config = pkchat::editor::empty_editor_assist_config();
+        ainiux::editor::kDefaultAiContinueProsePostfixMaxChars;
+    int editor_ai_continue_max_tokens = ainiux::editor::kDefaultAiContinueMaxTokens;
+    ainiux::editor::EditorAssistConfig editor_assist_config = ainiux::editor::empty_editor_assist_config();
     long long context_tokens = 0;
     int benchmark_runs = 1;
     int benchmark_warmup = 0;
@@ -175,4 +175,4 @@ ParseResult parse_args(int argc, char** argv, const Options& base_options);
 std::string help_text();
 const char* format_name(OutputFormat format);
 
-}  // namespace pkchat::cli
+}  // namespace ainiux::cli

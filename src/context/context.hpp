@@ -7,7 +7,7 @@
 #include "common.hpp"
 #include "provider/provider.hpp"
 
-namespace pkchat::context {
+namespace ainiux::context {
 
 struct CompactionEvent {
     std::string timestamp;
@@ -34,4 +34,4 @@ PreparedMessages prepare(const std::vector<provider::Message>& messages,
                          const std::string& policy,
                          size_t max_bytes);
 
-}  // namespace pkchat::context
+}  // namespace ainiux::context

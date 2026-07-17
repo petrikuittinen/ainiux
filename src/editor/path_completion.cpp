@@ -8,7 +8,7 @@
 #include <filesystem>
 #include <system_error>
 
-namespace pkchat::editor {
+namespace ainiux::editor {
 namespace {
 
 bool is_token_separator(char ch) {
@@ -488,4 +488,4 @@ std::string path_completion_status(const PathCompletionResult& result) {
     return std::to_string(result.match_count) + " paths match; Tab again to cycle";
 }
 
-}  // namespace pkchat::editor
+}  // namespace ainiux::editor

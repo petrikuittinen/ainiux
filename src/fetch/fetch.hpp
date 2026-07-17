@@ -5,7 +5,7 @@
 #include "common.hpp"
 #include "runtime/runtime.hpp"
 
-namespace pkchat::fetch {
+namespace ainiux::fetch {
 
 struct Options {
     long connect_timeout_seconds = 10;
@@ -30,4 +30,4 @@ Error fetch_text(const std::string& url,
                  std::string& text,
                  runtime::CancellationToken cancellation = runtime::CancellationToken());
 
-}  // namespace pkchat::fetch
+}  // namespace ainiux::fetch

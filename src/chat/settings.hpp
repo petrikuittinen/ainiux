@@ -6,9 +6,9 @@
 #include "chat/session.hpp"
 #include "cli/args.hpp"
 #include "common.hpp"
-#include "pkchat/model_setting.hpp"
+#include "ainiux/model_setting.hpp"
 
-namespace pkchat::chat {
+namespace ainiux::chat {
 
 bool model_pattern_matches(const std::string& pattern, const std::string& model);
 const ModelSetting* find_model_setting(const std::string& model,
@@ -25,4 +25,4 @@ std::string format_settings_panel(const cli::Options& options);
 bool thinking_budget_is_token_count(const std::string& value);
 void append_thinking_budget_json(std::ostringstream& out, const std::string& value);
 
-}  // namespace pkchat::chat
+}  // namespace ainiux::chat

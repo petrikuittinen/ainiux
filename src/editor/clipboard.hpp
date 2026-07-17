@@ -2,7 +2,7 @@
 
 #include <string>
 
-namespace pkchat::editor {
+namespace ainiux::editor {
 
 class Clipboard {
    public:
@@ -17,4 +17,4 @@ class Clipboard {
 
 Clipboard& shared_clipboard();
 
-}  // namespace pkchat::editor
+}  // namespace ainiux::editor

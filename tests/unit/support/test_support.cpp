@@ -4,7 +4,7 @@
 #include <iostream>
 #include <iterator>
 
-namespace pkchat::test {
+namespace ainiux::test {
 
 int failures = 0;
 
@@ -21,4 +21,4 @@ std::string read_fixture(const std::string& path) {
     return std::string(std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>());
 }
 
-}  // namespace pkchat::test
+}  // namespace ainiux::test

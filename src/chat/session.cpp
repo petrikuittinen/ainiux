@@ -15,7 +15,7 @@
 #include "chat/settings.hpp"
 #include "json/json.hpp"
 
-namespace pkchat::chat {
+namespace ainiux::chat {
 
 namespace {
 
@@ -311,4 +311,4 @@ Error save_session_atomic(const std::string& path, Session session) {
     return ok_error();
 }
 
-}  // namespace pkchat::chat
+}  // namespace ainiux::chat

@@ -4,7 +4,7 @@
 
 #include "common.hpp"
 
-namespace pkchat::tui {
+namespace ainiux::tui {
 
 class TerminalSession {
    public:
@@ -21,4 +21,4 @@ class TerminalSession {
     bool active_ = false;
 };
 
-}  // namespace pkchat::tui
+}  // namespace ainiux::tui

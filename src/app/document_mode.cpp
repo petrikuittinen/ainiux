@@ -12,7 +12,7 @@
 #include "markdown/markdown.hpp"
 #include "search/search.hpp"
 
-namespace pkchat::app {
+namespace ainiux::app {
 
 namespace {
 
@@ -442,4 +442,4 @@ int run_search_extract(const cli::Options& options, std::ostream& out) {
     return 0;
 }
 
-}  // namespace pkchat::app
+}  // namespace ainiux::app

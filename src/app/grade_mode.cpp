@@ -9,7 +9,7 @@
 
 #include "benchmark/benchmark.hpp"
 
-namespace pkchat::app {
+namespace ainiux::app {
 namespace {
 
 volatile std::sig_atomic_t g_grade_interrupt = 0;
@@ -252,4 +252,4 @@ int run_grade_mode(const cli::Options& options) {
     return 0;
 }
 
-}  // namespace pkchat::app
+}  // namespace ainiux::app

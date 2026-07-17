@@ -8,7 +8,7 @@
 
 #include "editor/editor.hpp"
 
-namespace pkchat::editor {
+namespace ainiux::editor {
 
 // Horizontal: stacked top/bottom (divider runs horizontally).
 // Vertical: side-by-side left/right (divider runs vertically).
@@ -124,4 +124,4 @@ class SplitLayout {
 // "cancel", or empty for unknown.
 std::string window_prefix_action(unsigned char ch);
 
-}  // namespace pkchat::editor
+}  // namespace ainiux::editor

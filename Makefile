@@ -17,7 +17,7 @@ OPTIMIZED_CXXFLAGS := $(filter-out -O% $(DEBUG_FLAG_PATTERNS),$(CXXFLAGS)) -O3 -
 OPTIMIZED_LDFLAGS := $(LDFLAGS) -s
 
 OBJ_DIR := $(BUILD_DIR)/obj
-BIN := pkchat
+BIN := ainiux
 TEST_BIN := $(BUILD_DIR)/test_runner
 IO_FAULT_BIN := $(BUILD_DIR)/test_io_faults
 POSIX_IO_MOCK := $(BUILD_DIR)/posix_io_mock.so
@@ -26,23 +26,23 @@ IO_FAULT_OBJ := $(OBJ_DIR)/tests/unit/test_io_faults.o \
                 $(OBJ_DIR)/tests/unit/mock/slow_server.o \
                 $(OBJ_DIR)/tests/unit/http/test_http_network.o \
                 $(OBJ_DIR)/tests/unit/support/test_support.o
-COMMON_CONFIG := config/pkchat.conf
+COMMON_CONFIG := config/ainiux.conf
 EDITOR_COMMANDS_CONFIG := config/editor-commands.conf
 THEMES_CONFIG := config/themes.conf
 BENCHMARKS_CONFIG := config/benchmarks.conf
-COMMON_CONFIG_DIR := $(DESTDIR)$(SYSCONFDIR)/xdg/pkchat
+COMMON_CONFIG_DIR := $(DESTDIR)$(SYSCONFDIR)/xdg/ainiux
 COMMON_CONFIG_PATH := $(COMMON_CONFIG_DIR)/config.conf
 EDITOR_COMMANDS_CONFIG_PATH := $(COMMON_CONFIG_DIR)/editor-commands.conf
 THEMES_CONFIG_PATH := $(COMMON_CONFIG_DIR)/themes.conf
 BENCHMARKS_CONFIG_PATH := $(COMMON_CONFIG_DIR)/benchmarks.conf
-EDITOR_COMMANDS_INSTALL := $(DESTDIR)$(PREFIX)/share/pkchat/editor-commands.conf
-THEMES_INSTALL := $(DESTDIR)$(PREFIX)/share/pkchat/themes.conf
-BENCHMARKS_INSTALL := $(DESTDIR)$(PREFIX)/share/pkchat/benchmarks.conf
-BENCHMARK_DATA_DIR := $(DESTDIR)$(PREFIX)/share/pkchat/benchmarks
+EDITOR_COMMANDS_INSTALL := $(DESTDIR)$(PREFIX)/share/ainiux/editor-commands.conf
+THEMES_INSTALL := $(DESTDIR)$(PREFIX)/share/ainiux/themes.conf
+BENCHMARKS_INSTALL := $(DESTDIR)$(PREFIX)/share/ainiux/benchmarks.conf
+BENCHMARK_DATA_DIR := $(DESTDIR)$(PREFIX)/share/ainiux/benchmarks
 BUILTIN_BENCHMARK_HEADER := $(GENERATED_DIR)/builtin_dataset.hpp
 EDITOR_HELP_SRC := docs/editor_help.md
 EDITOR_HELP_HEADER := $(GENERATED_DIR)/embedded_editor_help.hpp
-EDITOR_HELP_INSTALL := $(DESTDIR)$(PREFIX)/share/pkchat/editor_help.md
+EDITOR_HELP_INSTALL := $(DESTDIR)$(PREFIX)/share/ainiux/editor_help.md
 BUILTIN_DATASET_PARTS := benchmarks/builtin/safety.jsonl \
                          benchmarks/builtin/reasoning.jsonl \
                          benchmarks/builtin/writing.jsonl \
@@ -91,10 +91,10 @@ $(BUILTIN_DATASET): $(BUILTIN_DATASET_PARTS)
 $(BUILTIN_BENCHMARK_HEADER): $(BUILTIN_DATASET)
 	@mkdir -p $(dir $@)
 	@{ \
-		printf '%s\n' '#pragma once' 'namespace pkchat::benchmark {' \
-			'inline constexpr char kBuiltinDatasetJsonl[] = R"PKCHAT_JSONL('; \
+		printf '%s\n' '#pragma once' 'namespace ainiux::benchmark {' \
+			'inline constexpr char kBuiltinDatasetJsonl[] = R"AINIUX_JSONL('; \
 		cat $<; \
-		printf '%s\n' ')PKCHAT_JSONL";' '}  // namespace pkchat::benchmark'; \
+		printf '%s\n' ')AINIUX_JSONL";' '}  // namespace ainiux::benchmark'; \
 	} >$@.tmp
 	@mv $@.tmp $@
 
@@ -103,10 +103,10 @@ $(OBJ_DIR)/src/benchmark/dataset.o: $(BUILTIN_BENCHMARK_HEADER)
 $(EDITOR_HELP_HEADER): $(EDITOR_HELP_SRC)
 	@mkdir -p $(dir $@)
 	@{ \
-		printf '%s\n' '#pragma once' 'namespace pkchat::editor {' \
-			'inline constexpr char kEditorHelpMarkdown[] = R"PKCHAT_HELP('; \
+		printf '%s\n' '#pragma once' 'namespace ainiux::editor {' \
+			'inline constexpr char kEditorHelpMarkdown[] = R"AINIUX_HELP('; \
 		cat $<; \
-		printf '%s\n' ')PKCHAT_HELP";' '}  // namespace pkchat::editor'; \
+		printf '%s\n' ')AINIUX_HELP";' '}  // namespace ainiux::editor'; \
 	} >$@.tmp
 	@mv $@.tmp $@
 
@@ -184,7 +184,7 @@ install: $(BIN) $(COMMON_CONFIG) $(EDITOR_COMMANDS_CONFIG) $(THEMES_CONFIG) $(BE
 	fi
 	install -d "$(BENCHMARK_DATA_DIR)"
 	install -m 0644 $(BUILTIN_DATASET) benchmarks/long-context.jsonl $(BUILTIN_DATASET_PARTS) "$(BENCHMARK_DATA_DIR)"
-	install -d "$(DESTDIR)$(PREFIX)/share/pkchat"
+	install -d "$(DESTDIR)$(PREFIX)/share/ainiux"
 	install -m 0644 "$(EDITOR_HELP_SRC)" "$(EDITOR_HELP_INSTALL)"
 	install -m 0644 "$(EDITOR_COMMANDS_CONFIG)" "$(EDITOR_COMMANDS_INSTALL)"
 	install -m 0644 "$(THEMES_CONFIG)" "$(THEMES_INSTALL)"

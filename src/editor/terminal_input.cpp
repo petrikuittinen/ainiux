@@ -8,7 +8,7 @@
 #include <sys/select.h>
 #include <unistd.h>
 
-namespace pkchat::editor {
+namespace ainiux::editor {
 namespace {
 
 std::deque<unsigned char> g_input_queue;
@@ -290,4 +290,4 @@ void publish_terminal_clipboard(const std::string& text) {
     std::cout.flush();
 }
 
-}  // namespace pkchat::editor
+}  // namespace ainiux::editor

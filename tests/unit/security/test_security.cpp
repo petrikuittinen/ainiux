@@ -4,35 +4,35 @@
 #include <string>
 #include <vector>
 
-namespace pkchat::test::security {
+namespace ainiux::test::security {
 
 namespace {
 
-using pkchat::test::check;
+using ainiux::test::check;
 
 void test_redact_secrets_edge_cases() {
-    check(pkchat::redact_secrets("Bearer secret-token", {"secret-token"}) ==
+    check(ainiux::redact_secrets("Bearer secret-token", {"secret-token"}) ==
               "Bearer [REDACTED]",
           "redact_secrets replaces configured secrets");
-    check(pkchat::redact_secrets("unchanged text", {}) == "unchanged text",
+    check(ainiux::redact_secrets("unchanged text", {}) == "unchanged text",
           "redact_secrets leaves text unchanged when secret list is empty");
-    check(pkchat::redact_secrets("unchanged text", {""}) == "unchanged text",
+    check(ainiux::redact_secrets("unchanged text", {""}) == "unchanged text",
           "redact_secrets ignores empty secret entries");
-    check(pkchat::redact_secrets("", {"anything"}) == "",
+    check(ainiux::redact_secrets("", {"anything"}) == "",
           "redact_secrets handles empty input text");
-    check(pkchat::redact_secrets("aa aa", {"a"}) == "[REDACTED][REDACTED] [REDACTED][REDACTED]",
+    check(ainiux::redact_secrets("aa aa", {"a"}) == "[REDACTED][REDACTED] [REDACTED][REDACTED]",
           "redact_secrets replaces repeated overlapping secret matches");
-    check(pkchat::redact_secrets("你好 secret-token مرحبا", {"secret-token"}) ==
+    check(ainiux::redact_secrets("你好 secret-token مرحبا", {"secret-token"}) ==
               "你好 [REDACTED] مرحبا",
           "redact_secrets preserves surrounding Unicode text");
 }
 
 void test_sensitive_header_names() {
-    check(pkchat::is_sensitive_header_name("Authorization"), "Authorization is sensitive");
-    check(pkchat::is_sensitive_header_name("x-api-key"), "x-api-key is sensitive");
-    check(pkchat::is_sensitive_header_name("Set-Cookie"), "Set-Cookie is sensitive");
-    check(!pkchat::is_sensitive_header_name("Content-Type"), "Content-Type is not sensitive");
-    check(!pkchat::is_sensitive_header_name(""), "empty header name is not sensitive");
+    check(ainiux::is_sensitive_header_name("Authorization"), "Authorization is sensitive");
+    check(ainiux::is_sensitive_header_name("x-api-key"), "x-api-key is sensitive");
+    check(ainiux::is_sensitive_header_name("Set-Cookie"), "Set-Cookie is sensitive");
+    check(!ainiux::is_sensitive_header_name("Content-Type"), "Content-Type is not sensitive");
+    check(!ainiux::is_sensitive_header_name(""), "empty header name is not sensitive");
 }
 
 }  // namespace
@@ -42,4 +42,4 @@ void run_all() {
     test_sensitive_header_names();
 }
 
-}  // namespace pkchat::test::security
+}  // namespace ainiux::test::security

@@ -6,7 +6,7 @@
 #include <sstream>
 #include <utility>
 
-namespace pkchat::json {
+namespace ainiux::json {
 
 const Value* Value::get(const std::string& key) const {
     if (type != Type::Object) {
@@ -435,4 +435,4 @@ std::string escape_string(const std::string& input) {
 
 std::string quote(const std::string& input) { return "\"" + escape_string(input) + "\""; }
 
-}  // namespace pkchat::json
+}  // namespace ainiux::json

@@ -4,7 +4,7 @@
 
 #include <algorithm>
 
-namespace pkchat::editor {
+namespace ainiux::editor {
 namespace {
 
 constexpr const char* kContentOpenTag = "<content>";
@@ -202,4 +202,4 @@ std::vector<std::string> chat_assist_command_completions(const EditorAssistConfi
     return commands;
 }
 
-}  // namespace pkchat::editor
+}  // namespace ainiux::editor

@@ -9,7 +9,7 @@
 
 #include "json/json.hpp"
 
-namespace pkchat::benchmark::detail {
+namespace ainiux::benchmark::detail {
 
 fetch::Options fetch_options_for(const cli::Options& options) {
     fetch::Options fetch_options;
@@ -146,4 +146,4 @@ size_t worker_count_for(size_t tasks, int requested) {
     return std::max<size_t>(1, std::min(tasks, static_cast<size_t>(requested)));
 }
 
-}  // namespace pkchat::benchmark::detail
+}  // namespace ainiux::benchmark::detail

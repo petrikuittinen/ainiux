@@ -11,11 +11,11 @@
 #include <string>
 #include <system_error>
 
-namespace pkchat::test::io {
+namespace ainiux::test::io {
 
 namespace {
 
-using pkchat::test::check;
+using ainiux::test::check;
 
 void chmod_path(const std::string& path, std::filesystem::perms perms) {
     std::error_code error;
@@ -37,12 +37,12 @@ private:
     std::filesystem::perms perms_;
 };
 
-pkchat::chat::Session make_session() {
-    pkchat::provider::RequestContext context;
+ainiux::chat::Session make_session() {
+    ainiux::provider::RequestContext context;
     context.profile.name = "custom_openai_chat";
     context.base_url = "http://localhost:8000/v1";
     context.options.model = "mock-model";
-    pkchat::chat::Session session = pkchat::chat::new_session(context);
+    ainiux::chat::Session session = ainiux::chat::new_session(context);
     session.created_at = "2026-06-28T00:00:00Z";
     session.updated_at = session.created_at;
     session.messages.push_back({"user", u8"مرحبا"});
@@ -58,14 +58,14 @@ void test_readonly_chat_load_and_save() {
     std::filesystem::create_directories(dir);
     PermissionGuard dir_guard(dir, restore_dir_perms);
     PermissionGuard file_guard(path, restore_file_perms);
-    pkchat::chat::Session session = make_session();
-    pkchat::Error err = pkchat::chat::save_session_atomic(path, session);
+    ainiux::chat::Session session = make_session();
+    ainiux::Error err = ainiux::chat::save_session_atomic(path, session);
     check(err.ok(), "chat session saves before read-only fixture is applied");
 
     chmod_path(path, std::filesystem::perms::none);
-    pkchat::chat::Session loaded;
-    err = pkchat::chat::load_session(path, loaded);
-    check(!err.ok() && err.code == pkchat::ErrorCode::FileRead &&
+    ainiux::chat::Session loaded;
+    err = ainiux::chat::load_session(path, loaded);
+    check(!err.ok() && err.code == ainiux::ErrorCode::FileRead &&
               err.message.find("could not open chat file for reading") != std::string::npos,
           "permission-denied chat file load reports a file-read error");
 
@@ -73,8 +73,8 @@ void test_readonly_chat_load_and_save() {
     chmod_path(dir, std::filesystem::perms::owner_read | std::filesystem::perms::owner_exec |
                           std::filesystem::perms::group_read | std::filesystem::perms::group_exec |
                           std::filesystem::perms::others_read | std::filesystem::perms::others_exec);
-    err = pkchat::chat::save_session_atomic(path, session);
-    check(!err.ok() && err.code == pkchat::ErrorCode::FileWrite,
+    err = ainiux::chat::save_session_atomic(path, session);
+    check(!err.ok() && err.code == ainiux::ErrorCode::FileWrite,
           "read-only directory blocks chat session save");
 }
 
@@ -93,51 +93,51 @@ void test_readonly_editor_load_and_save() {
     }
 
     chmod_path(path, std::filesystem::perms::none);
-    pkchat::editor::PieceTable table;
-    pkchat::Error err = pkchat::editor::load_file(path, table);
-    check(!err.ok() && err.code == pkchat::ErrorCode::FileRead &&
+    ainiux::editor::PieceTable table;
+    ainiux::Error err = ainiux::editor::load_file(path, table);
+    check(!err.ok() && err.code == ainiux::ErrorCode::FileRead &&
               err.message.find("could not open editor file for reading") != std::string::npos,
           "permission-denied editor file load reports a file-read error");
 
     chmod_path(path, restore_file_perms);
-    table = pkchat::editor::PieceTable::from_string("save me");
+    table = ainiux::editor::PieceTable::from_string("save me");
     chmod_path(dir, std::filesystem::perms::owner_read | std::filesystem::perms::owner_exec |
                           std::filesystem::perms::group_read | std::filesystem::perms::group_exec |
                           std::filesystem::perms::others_read | std::filesystem::perms::others_exec);
-    err = pkchat::editor::save_file(dir + "/new-save.txt", table);
-    check(!err.ok() && err.code == pkchat::ErrorCode::FileWrite,
+    err = ainiux::editor::save_file(dir + "/new-save.txt", table);
+    check(!err.ok() && err.code == ainiux::ErrorCode::FileWrite,
           "read-only directory blocks editor save of a new file");
 }
 
 void test_enospc_chat_save() {
-    const char* mock_flag = std::getenv("PKCHAT_MOCK_ENOSPC");
+    const char* mock_flag = std::getenv("AINIUX_MOCK_ENOSPC");
     if (mock_flag == nullptr || std::string(mock_flag) != "1") {
-        check(false, "ENOSPC mock tests require PKCHAT_MOCK_ENOSPC=1 and LD_PRELOAD posix_io_mock");
+        check(false, "ENOSPC mock tests require AINIUX_MOCK_ENOSPC=1 and LD_PRELOAD posix_io_mock");
         return;
     }
 
     const std::string path = "build/mock-enospc/chat.json";
     std::filesystem::create_directories("build/mock-enospc");
-    pkchat::chat::Session session = make_session();
-    pkchat::Error err = pkchat::chat::save_session_atomic(path, session);
-    check(!err.ok() && err.code == pkchat::ErrorCode::FileWrite &&
+    ainiux::chat::Session session = make_session();
+    ainiux::Error err = ainiux::chat::save_session_atomic(path, session);
+    check(!err.ok() && err.code == ainiux::ErrorCode::FileWrite &&
               (err.message.find("No space left on device") != std::string::npos ||
                err.message.find("could not open temporary chat file") != std::string::npos),
           "ENOSPC mock blocks chat session save");
 }
 
 void test_enospc_editor_save() {
-    const char* mock_flag = std::getenv("PKCHAT_MOCK_ENOSPC");
+    const char* mock_flag = std::getenv("AINIUX_MOCK_ENOSPC");
     if (mock_flag == nullptr || std::string(mock_flag) != "1") {
-        check(false, "ENOSPC mock tests require PKCHAT_MOCK_ENOSPC=1 and LD_PRELOAD posix_io_mock");
+        check(false, "ENOSPC mock tests require AINIUX_MOCK_ENOSPC=1 and LD_PRELOAD posix_io_mock");
         return;
     }
 
     const std::string path = "build/mock-enospc/editor.txt";
     std::filesystem::create_directories("build/mock-enospc");
-    pkchat::editor::PieceTable table = pkchat::editor::PieceTable::from_string("disk full");
-    pkchat::Error err = pkchat::editor::save_file(path, table);
-    const bool write_failed = !err.ok() && err.code == pkchat::ErrorCode::FileWrite;
+    ainiux::editor::PieceTable table = ainiux::editor::PieceTable::from_string("disk full");
+    ainiux::Error err = ainiux::editor::save_file(path, table);
+    const bool write_failed = !err.ok() && err.code == ainiux::ErrorCode::FileWrite;
     const bool mentions_open = err.message.find("could not open editor file for writing") != std::string::npos;
     const bool mentions_write = err.message.find("failed while writing editor buffer") != std::string::npos;
     const bool mentions_close = err.message.find("failed while closing editor file after writing") != std::string::npos;
@@ -157,4 +157,4 @@ void run_enospc_all() {
     test_enospc_editor_save();
 }
 
-}  // namespace pkchat::test::io
+}  // namespace ainiux::test::io

@@ -11,7 +11,7 @@
 
 #include "html/html.hpp"
 
-namespace pkchat::input {
+namespace ainiux::input {
 namespace {
 
 bool ends_with(const std::string& text, const std::string& suffix) {
@@ -493,4 +493,4 @@ Error read_local_text_file_for_attach(const std::string& path,
     return ok_error();
 }
 
-}  // namespace pkchat::input
+}  // namespace ainiux::input

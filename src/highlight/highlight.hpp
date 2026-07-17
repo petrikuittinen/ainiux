@@ -4,7 +4,7 @@
 #include <string>
 #include <vector>
 
-namespace pkchat::highlight {
+namespace ainiux::highlight {
 
 enum class Language {
     Text,
@@ -141,4 +141,4 @@ std::vector<HighlightedLine> highlight_document(Language language,
                                                 const std::string& text,
                                                 size_t byte_budget = kDefaultFrameBudgetBytes);
 
-}  // namespace pkchat::highlight
+}  // namespace ainiux::highlight

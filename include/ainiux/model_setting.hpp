@@ -2,7 +2,7 @@
 
 #include <string>
 
-namespace pkchat {
+namespace ainiux {
 
 struct ModelSetting {
     std::string model;
@@ -17,4 +17,4 @@ struct ModelSetting {
     std::string thinking_budget;
 };
 
-}  // namespace pkchat
+}  // namespace ainiux

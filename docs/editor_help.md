@@ -1,6 +1,6 @@
-# pkchat Editor Help v0.97
+# ainiux Editor Help v0.97
 
-Standalone editor mode (`pkchat --editor [PATH]`) is a multiline text editor with Unicode-aware navigation, search/replace, and optional AI assist when a provider and model are configured.
+Standalone editor mode (`ainiux --editor [PATH]`) is a multiline text editor with Unicode-aware navigation, search/replace, and optional AI assist when a provider and model are configured.
 
 ## Layout
 
@@ -68,9 +68,9 @@ Replace mode after `Ctrl+H`: `Space` replaces match, `s` skips, `a` replaces all
 
 Writable file buffers hold an advisory `FILE.LOCK` directory for their complete lifetime, including buffer and chat-mode switches. Opening an actively or unverifiably locked existing file produces a `[RO]` status. Search, selection, copy, settings, and AI output to a new buffer remain available; content-changing operations are blocked. The first attempted edit retries the lock. If the on-disk file changed while the buffer was read-only, accept the reload prompt to use the current disk contents and repeat the edit, or decline to remain read-only.
 
-Before saving the current path, pkchat compares the file with its load/save fingerprint and asks before overwriting an external change, replacement, or deletion. It rechecks after confirmation. Save As acquires the destination lock first; it is also the way to turn a read-only buffer into a writable buffer at a new path. Auto-save is disabled for read-only buffers.
+Before saving the current path, ainiux compares the file with its load/save fingerprint and asks before overwriting an external change, replacement, or deletion. It rechecks after confirmation. Save As acquires the destination lock first; it is also the way to turn a read-only buffer into a writable buffer at a new path. Auto-save is disabled for read-only buffers.
 
-Dead same-host lock owners are recovered automatically. Remote, live, malformed, missing-metadata, token-mismatched, and unexpectedly nonempty locks are left in place. Only after verifying that no pkchat process owns the file, manually remove the known `FILE.LOCK/owner` file and then its empty `FILE.LOCK` directory.
+Dead same-host lock owners are recovered automatically. Remote, live, malformed, missing-metadata, token-mismatched, and unexpectedly nonempty locks are left in place. Only after verifying that no ainiux process owns the file, manually remove the known `FILE.LOCK/owner` file and then its empty `FILE.LOCK` directory.
 
 ## Editing
 
@@ -104,15 +104,15 @@ Hold `Shift` while using arrow keys, `Page Up`/`Page Down`, `Home`/`End`, or `Ct
 Start the editor with a provider shortcut or profile, then choose a model inside the editor — the same flow as `--chat`:
 
 ```text
-pkchat openrouter --editor notes.txt
-pkchat lmstudio --editor draft.md
+ainiux openrouter --editor notes.txt
+ainiux lmstudio --editor draft.md
 ```
 
 When a provider is set but no model is chosen yet, the minibuffer shows **Choose a model with /model**. File editing still works; AI commands stay disabled until a model is selected.
 
 Use `Esc` then `/provider` or `/model` to change provider or model. `/provider` with no argument opens a provider picker; `/model` with no argument loads `/v1/models` and opens a model picker.
 
-`pkchat --provider none --editor` (or plain `pkchat --editor`) runs as a local editor with no network access. Use `/provider` and `/model` later to enable AI assist.
+`ainiux --provider none --editor` (or plain `ainiux --editor`) runs as a local editor with no network access. Use `/provider` and `/model` later to enable AI assist.
 
 ## AI continue (`Ctrl+Space`)
 
@@ -245,7 +245,7 @@ Examples:
 
 ## Local editing without AI
 
-`pkchat --provider none --editor` and plain `pkchat --editor` work offline. File editing, search, replace, undo, and clipboard still work. AI commands and `Ctrl+Space` report that a provider is required until `/provider` and `/model` are configured.
+`ainiux --provider none --editor` and plain `ainiux --editor` work offline. File editing, search, replace, undo, and clipboard still work. AI commands and `Ctrl+Space` report that a provider is required until `/provider` and `/model` are configured.
 
 With a provider but no model, editing still works; AI commands report **No model chosen. Use /model to choose one**.
 
@@ -259,7 +259,7 @@ The status line shows the current language and line-ending mode compactly in par
 
 ## Configuration
 
-`[editor]` in `pkchat` config:
+`[editor]` in `ainiux` config:
 
 - `undo_limit` — undo depth (default 5)
 - `huge_file_size_warning` — confirm before loading huge files (default 1 GiB)
@@ -275,7 +275,7 @@ The status line shows the current language and line-ending mode compactly in par
 
 `[input] auto-convert-html-to-md` controls `/insert URL` and defaults to `yes`. URL insertion accepts only HTTP(S), retains the existing private-address, proxy, timeout, TLS, content-type, and response-size protections, and requires UTF-8 HTML. Set it to `no` to insert raw HTML. Local `/insert` accepts every file ending, but rejects NUL-containing, invalid UTF-8, unreadable, and oversized content. CR and CRLF are normalized to the editor's internal LF representation and use the buffer's chosen linebreak mode when saved.
 
-When you open a file whose auto-save backup (for example `notes.txt~`) is newer than the saved file, pkchat asks whether to recover the backup instead. At startup this prompt appears on stderr before the editor UI; when opening another file in the editor, the minibuffer asks `y` to recover or `n` to load the saved file.
+When you open a file whose auto-save backup (for example `notes.txt~`) is newer than the saved file, ainiux asks whether to recover the backup instead. At startup this prompt appears on stderr before the editor UI; when opening another file in the editor, the minibuffer asks `y` to recover or `n` to load the saved file.
 
 Existing files and recovered backups detect indentation from at most the first 20 physical lines. A consistent space step selects that tab width, while consistently tab-indented lines select tab style. Ambiguous, mixed, unindented, and one-line files retain the configured fallbacks. `/tab-width` and `/tab-style` always override the detected values for the active buffer.
 

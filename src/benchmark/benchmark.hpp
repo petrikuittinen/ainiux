@@ -10,7 +10,7 @@
 #include "common.hpp"
 #include "provider/provider.hpp"
 
-namespace pkchat::benchmark {
+namespace ainiux::benchmark {
 
 constexpr size_t kMaxDatasetBytes = 16U * 1024U * 1024U;
 constexpr size_t kMaxLineBytes = 1024U * 1024U;
@@ -101,4 +101,4 @@ ScoreResult score_response(const Case& benchmark_case,
                            size_t turn,
                            const std::string& response);
 
-}  // namespace pkchat::benchmark
+}  // namespace ainiux::benchmark

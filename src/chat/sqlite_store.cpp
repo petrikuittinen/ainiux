@@ -12,7 +12,7 @@
 #include <unistd.h>
 #include <utility>
 
-namespace pkchat::chat {
+namespace ainiux::chat {
 namespace {
 
 constexpr int kSchemaVersion = 2;
@@ -42,7 +42,7 @@ Error sqlite_error(sqlite3* db, const std::string& path, const std::string& acti
         case SQLITE_NOTADB:
         case SQLITE_SCHEMA:
             return {ErrorCode::ProviderSchema,
-                    message + ". Suggestion: move the database aside and restart pkchat."};
+                    message + ". Suggestion: move the database aside and restart ainiux."};
         case SQLITE_FULL:
         case SQLITE_IOERR:
             return {ErrorCode::FileWrite, message};
@@ -477,7 +477,7 @@ INSERT OR IGNORE INTO schema_migrations(version, applied_at)
     long long version = stmt.column_int64(0);
     if (version > kSchemaVersion) {
         return {ErrorCode::ProviderSchema,
-                "SQLite database schema is newer than this pkchat build: " + path};
+                "SQLite database schema is newer than this ainiux build: " + path};
     }
     if (version < 2) {
         err = migrate_thread_names_v2(db, path);
@@ -552,9 +552,9 @@ Error load_images_for_message(sqlite3* db,
 DatabasePathResult default_sqlite_database_path() {
     const char* home = std::getenv("HOME");
     if (home == nullptr || std::string(home).empty()) {
-        return {"", {ErrorCode::Config, "HOME is not set; cannot locate ~/.pkchat/pkchat.db"}};
+        return {"", {ErrorCode::Config, "HOME is not set; cannot locate ~/.ainiux/ainiux.db"}};
     }
-    return {std::string(home) + "/.pkchat/pkchat.db", ok_error()};
+    return {std::string(home) + "/.ainiux/ainiux.db", ok_error()};
 }
 
 SqliteStore::~SqliteStore() {
@@ -1070,4 +1070,4 @@ Error SqliteStore::soft_delete_empty_threads(long long& deleted_count,
     return ok_error();
 }
 
-}  // namespace pkchat::chat
+}  // namespace ainiux::chat

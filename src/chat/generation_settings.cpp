@@ -1,6 +1,6 @@
 #include "chat/generation_settings.hpp"
 
-namespace pkchat::chat::generation {
+namespace ainiux::chat::generation {
 
 const std::vector<const char*>& chat_setting_names() {
     static const std::vector<const char*> kNames = {
@@ -84,4 +84,4 @@ bool is_chat_purpose(const std::string& purpose) {
     return false;
 }
 
-}  // namespace pkchat::chat::generation
+}  // namespace ainiux::chat::generation

@@ -14,15 +14,15 @@ The initial implementation uses C++17 and a plain Makefile to keep the binary po
 
 ## System Configuration Template
 
-v0.6 begins with one canonical, system-wide TOML-alike template at `config/pkchat.conf`. It mirrors the existing runtime defaults without duplicating built-in provider registry records or setting optional sampling parameters. `make install` installs it to `${SYSCONFDIR}/xdg/pkchat/config.conf`, normally `/etc/xdg/pkchat/config.conf`, with mode `0644` and does not overwrite an existing administrator-managed file.
+v0.6 begins with one canonical, system-wide TOML-alike template at `config/ainiux.conf`. It mirrors the existing runtime defaults without duplicating built-in provider registry records or setting optional sampling parameters. `make install` installs it to `${SYSCONFDIR}/xdg/ainiux/config.conf`, normally `/etc/xdg/ainiux/config.conf`, with mode `0644` and does not overwrite an existing administrator-managed file.
 
 `src/config/` owns the dependency-free parser, schema mapper, and automatic layer loader. It reads regular files with a 1 MiB default cap and produces an owned map keyed by fully qualified setting name. Boolean, signed 64-bit integer, finite float, quoted string, and bare string values remain typed, and every entry retains its source path and byte-based line/column location. Parsing validates UTF-8 and rejects duplicate keys or malformed syntax without returning a partially populated document.
 
-Automatic layers follow XDG precedence: system files are applied in reverse `$XDG_CONFIG_DIRS` order, then `$XDG_CONFIG_HOME/pkchat/config.conf` or the `HOME` fallback. Each document is schema-validated into a temporary `cli::Options` copy before it replaces the effective options, preventing partial application. The ordinary CLI parser then runs over that configured base so command-line values remain authoritative. TUI theme and thinking-trace visibility are ordinary effective options; provider credentials remain references resolved later by the provider layer.
+Automatic layers follow XDG precedence: system files are applied in reverse `$XDG_CONFIG_DIRS` order, then `$XDG_CONFIG_HOME/ainiux/config.conf` or the `HOME` fallback. Each document is schema-validated into a temporary `cli::Options` copy before it replaces the effective options, preventing partial application. The ordinary CLI parser then runs over that configured base so command-line values remain authoritative. TUI theme and thinking-trace visibility are ordinary effective options; provider credentials remain references resolved later by the provider layer.
 
 `--no-config` narrowly disables the automatic user file while retaining system configuration. This gives users a simple way to troubleshoot or bypass personal defaults without bypassing administrator policy. Arbitrary `--config PATH` layering is intentionally omitted until there is a concrete need. `--debug` reports considered configuration paths and their loaded, missing, skipped, or failed state on `stderr`; it never prints configuration values.
 
-Benchmark judge instructions are a separate runtime configuration document, `benchmarks.conf`, rather than ordinary application defaults or C++ literals. The bundled file (or `PKCHAT_BENCHMARKS` override) is applied first, followed by system XDG files and then the user XDG file; individual prompt keys merge so either prompt can be overridden independently. `--no-config` skips only the user layer. The specialized schema accepts `config_version`, `grading.system_prompt`, and `grading.case_prompt`, retains multiline bytes, and requires the case placeholder exactly once. Missing effective prompts do not disable ordinary modes, but `--grade` reports an actionable configuration error. Installation preserves the administrator template under `${SYSCONFDIR}/xdg/pkchat/benchmarks.conf` and installs the same runtime fallback under `share/pkchat/benchmarks.conf`.
+Benchmark judge instructions are a separate runtime configuration document, `benchmarks.conf`, rather than ordinary application defaults or C++ literals. The bundled file (or `AINIUX_BENCHMARKS` override) is applied first, followed by system XDG files and then the user XDG file; individual prompt keys merge so either prompt can be overridden independently. `--no-config` skips only the user layer. The specialized schema accepts `config_version`, `grading.system_prompt`, and `grading.case_prompt`, retains multiline bytes, and requires the case placeholder exactly once. Missing effective prompts do not disable ordinary modes, but `--grade` reports an actionable configuration error. Installation preserves the administrator template under `${SYSCONFDIR}/xdg/ainiux/benchmarks.conf` and installs the same runtime fallback under `share/ainiux/benchmarks.conf`.
 
 
 ## Provider Registry and API Adapters
@@ -42,11 +42,11 @@ v0.2 stores explicit chat files via `--save-chat PATH` and `--load-chat PATH` be
 
 ## SQLite Chat Persistence
 
-The automatic local TUI chat library uses `libsqlite3` and stores its database at `~/.pkchat/pkchat.db`. SQLite is a standard system library on the target POSIX-like platforms and keeps the dependency smaller than adding a bespoke storage engine. The schema stores one row per message rather than one JSON transcript blob so thread listing, transcript replay, regeneration, attachments, usage records, and compaction events have stable identifiers and indexes. WAL mode is enabled for the local database, with short transactions and a short busy timeout so indexed `/list` queries can run synchronously without waiting indefinitely on a lock.
+The automatic local TUI chat library uses `libsqlite3` and stores its database at `~/.ainiux/ainiux.db`. SQLite is a standard system library on the target POSIX-like platforms and keeps the dependency smaller than adding a bespoke storage engine. The schema stores one row per message rather than one JSON transcript blob so thread listing, transcript replay, regeneration, attachments, usage records, and compaction events have stable identifiers and indexes. WAL mode is enabled for the local database, with short transactions and a short busy timeout so indexed `/list` queries can run synchronously without waiting indefinitely on a lock.
 
 ## Runtime Jobs
 
-v0.3 introduces `src/runtime/` with a small cancellation token, thread-safe event queue, and RAII `JobHandle`. The first users are the full-screen TUI foundation and cancellable provider requests. HTTP requests carry a cancellation token down to libcurl and abort through `CURLOPT_XFERINFOFUNCTION`, returning `PKCHAT_ERR_CANCELLED` instead of a generic transport error.
+v0.3 introduces `src/runtime/` with a small cancellation token, thread-safe event queue, and RAII `JobHandle`. The first users are the full-screen TUI foundation and cancellable provider requests. HTTP requests carry a cancellation token down to libcurl and abort through `CURLOPT_XFERINFOFUNCTION`, returning `AINIUX_ERR_CANCELLED` instead of a generic transport error.
 
 The initial model is one worker thread per active job. It is intentionally small: the owning UI loop receives events and remains the only code that mutates terminal/session state. This can grow into a queue or pooled runtime when TUI/web workloads need it.
 
@@ -152,7 +152,7 @@ The benchmark built-in JSONL corpus is split into category files under `benchmar
 
 ## Version Metadata and Test Layout (v0.83)
 
-v0.83 moves version constants out of headers into `src/version/version.cpp` so `kVersion`, copyright, and license strings have one owned definition. `include/pkchat/version.hpp` keeps only the extern declarations.
+v0.83 moves version constants out of headers into `src/version/version.cpp` so `kVersion`, copyright, and license strings have one owned definition. `include/ainiux/version.hpp` keeps only the extern declarations.
 
 The unit-test driver was refactored from one large `tests/unit/test_runner.cpp` into per-module files under `tests/unit/<module>/`, each exposing a `run_all()` entry point. `test_runner` now only dispatches those suites. This keeps new tests close to the code they exercise and makes failures easier to locate.
 

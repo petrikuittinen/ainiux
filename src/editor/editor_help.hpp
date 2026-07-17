@@ -4,7 +4,7 @@
 
 #include "common.hpp"
 
-namespace pkchat::editor {
+namespace ainiux::editor {
 
 enum class EditorSlashCommand {
     None,
@@ -35,4 +35,4 @@ ParsedEditorSlashCommand parse_editor_slash_command(const std::string& line);
 // Returns the index in input where the path token starts, or npos when not in path mode.
 size_t editor_assist_path_prefix_length(const std::string& input);
 
-}  // namespace pkchat::editor
+}  // namespace ainiux::editor

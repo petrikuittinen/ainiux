@@ -7,7 +7,7 @@
 #include "chat/session.hpp"
 #include "tui/tui.hpp"
 
-namespace pkchat::tui {
+namespace ainiux::tui {
 
 const char* input_label_status_message();
 std::string input_label_text();
@@ -33,4 +33,4 @@ ActivityKind activity_kind_for_pending_assistant(const chat::Session& session,
 
 std::string session_status_label(const chat::Session& session);
 
-}  // namespace pkchat::tui
+}  // namespace ainiux::tui

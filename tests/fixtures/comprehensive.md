@@ -43,7 +43,7 @@ Standalone image: ![Standalone placeholder](https://example.com/assets/standalon
 function greet(name) {
   return `Hello, ${name}!`;
 }
-console.log(greet("pkchat"));
+console.log(greet("ainiux"));
 ```
 
 ## Table
@@ -57,7 +57,7 @@ console.log(greet("pkchat"));
 ## Mixed Formatting
 
 Text can be **bold**, *italic*, ++underlined++, and linked to
-[the pkchat example page](https://example.com/pkchat#markdown).
+[the ainiux example page](https://example.com/ainiux#markdown).
 
 ### Third-Level Heading
 

@@ -3,7 +3,7 @@
 #include <cstdint>
 #include <string>
 
-namespace pkchat::test::mock {
+namespace ainiux::test::mock {
 
 class SlowHttpServer {
    public:
@@ -29,4 +29,4 @@ class SlowHttpServer {
 
 int pick_free_port();
 
-}  // namespace pkchat::test::mock
+}  // namespace ainiux::test::mock

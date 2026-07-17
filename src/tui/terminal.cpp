@@ -8,7 +8,7 @@
 #include <sys/ioctl.h>
 #include <unistd.h>
 
-namespace pkchat::tui {
+namespace ainiux::tui {
 
 TerminalSession::~TerminalSession() {
     restore();
@@ -51,4 +51,4 @@ void TerminalSession::restore() {
     active_ = false;
 }
 
-}  // namespace pkchat::tui
+}  // namespace ainiux::tui

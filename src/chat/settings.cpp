@@ -9,7 +9,7 @@
 
 #include "json/json.hpp"
 
-namespace pkchat::chat {
+namespace ainiux::chat {
 namespace {
 
 bool parse_bool_setting(const std::string& value, bool& output) {
@@ -650,4 +650,4 @@ std::string format_settings_panel(const cli::Options& options) {
     return text;
 }
 
-}  // namespace pkchat::chat
+}  // namespace ainiux::chat

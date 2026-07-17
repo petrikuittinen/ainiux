@@ -1,4 +1,4 @@
-# pkchat keyboard shortcuts
+# ainiux keyboard shortcuts
 
 Current bindings as implemented in `src/tui/run.cpp`, `src/tui/input_handlers.cpp`, `src/editor/run_editor.cpp`, `src/editor/terminal_input.cpp`, and `docs/editor_help.md`.
 
@@ -86,7 +86,7 @@ Use `/pop` to remove the last user or assistant message.
 
 ---
 
-## `--editor` mode (standalone `pkchat --editor`)
+## `--editor` mode (standalone `ainiux --editor`)
 
 ### File and buffer management
 

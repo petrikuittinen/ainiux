@@ -10,7 +10,7 @@
 #include "tui/theme_registry.hpp"
 #include "tui/tui.hpp"
 
-namespace pkchat::tui::detail {
+namespace ainiux::tui::detail {
 
 struct RenderStyle {
     const ThemeRegistry* themes = nullptr;
@@ -58,4 +58,4 @@ void render(const chat::Session& session,
             const RenderStyle& style,
             const char* panel_title_override = nullptr);
 
-}  // namespace pkchat::tui::detail
+}  // namespace ainiux::tui::detail

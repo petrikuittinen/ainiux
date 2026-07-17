@@ -16,12 +16,12 @@
 #include <unistd.h>
 
 static bool mock_enospc_enabled(void) {
-    const char* value = getenv("PKCHAT_MOCK_ENOSPC");
+    const char* value = getenv("AINIUX_MOCK_ENOSPC");
     return value != NULL && strcmp(value, "1") == 0;
 }
 
 static bool mock_eacces_enabled(void) {
-    const char* value = getenv("PKCHAT_MOCK_EACCES");
+    const char* value = getenv("AINIUX_MOCK_EACCES");
     return value != NULL && strcmp(value, "1") == 0;
 }
 

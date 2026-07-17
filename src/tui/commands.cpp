@@ -4,11 +4,11 @@
 #include "app/detail.hpp"
 #include "chat/generation_settings.hpp"
 #include "chat/settings.hpp"
-#include "pkchat/model_setting.hpp"
+#include "ainiux/model_setting.hpp"
 #include "tui/detail/render.hpp"
 #include "tui/theme_registry.hpp"
 
-namespace pkchat::tui {
+namespace ainiux::tui {
 
 void handle_tui_command(const std::string& text, TuiCommandContext& ctx, TuiCommandHandlers& handlers) {
     if (text == "/quit" || text == "/exit") {
@@ -368,4 +368,4 @@ void handle_tui_command(const std::string& text, TuiCommandContext& ctx, TuiComm
     ctx.status = "Unknown command: " + text;
 }
 
-}  // namespace pkchat::tui
+}  // namespace ainiux::tui

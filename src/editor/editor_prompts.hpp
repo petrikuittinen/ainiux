@@ -4,7 +4,7 @@
 #include <string>
 #include <vector>
 
-namespace pkchat::editor {
+namespace ainiux::editor {
 
 enum class AssistCommandMode {
     Continue,
@@ -34,4 +34,4 @@ std::optional<size_t> assist_command_index(const EditorAssistConfig& config, con
 bool assist_command_requires_scope(const EditorAssistCommand& command);
 bool assist_command_runs_without_scope(const EditorAssistCommand& command);
 
-}  // namespace pkchat::editor
+}  // namespace ainiux::editor

@@ -8,7 +8,7 @@
 
 ## Editor Advisory Locks
 
-Writable editor buffers coordinate pkchat processes with an atomic, user-only `FILE.LOCK` directory beside the canonical target. Owner metadata is bounded and contains no API credentials: schema version, hostname, PID, start time, canonical target, and a unique ownership token. Cleanup rereads and matches the token, unlinks only the known metadata file, and removes only the now-empty directory. It never recursively deletes lock contents.
+Writable editor buffers coordinate ainiux processes with an atomic, user-only `FILE.LOCK` directory beside the canonical target. Owner metadata is bounded and contains no API credentials: schema version, hostname, PID, start time, canonical target, and a unique ownership token. Cleanup rereads and matches the token, unlinks only the known metadata file, and removes only the now-empty directory. It never recursively deletes lock contents.
 
 This is advisory coordination, not an operating-system write prohibition: unrelated programs can still alter the target. Device/inode, size, existence, and high-resolution modification-time fingerprints make those changes visible before editing a formerly read-only buffer or saving. Only a PID proven dead on the same hostname is recovered automatically. Remote, live, malformed, missing, token-mismatched, or nonempty locks require the user to verify ownership before manual removal.
 
@@ -18,14 +18,14 @@ Automatic system and user configuration files may select a credential environmen
 
 `--no-config` skips only the automatic user file; system configuration remains effective. `--debug` prints configuration paths and load states to `stderr`, but not parsed values, credential contents, or authorization headers. Paths can still reveal local account or directory names, so avoid debug logs when that metadata is sensitive.
 
-`url_fetch.allow_private_addresses = true` relaxes SSRF protections for explicit CLI/TUI fetches and should only be enabled when local-network access is intended. `network.insecure_tls = true` prints a warning whenever effective. User configuration normally lives at `~/.config/pkchat/config.conf`; protect it appropriately if it contains a sensitive key-file path or private endpoint URL.
+`url_fetch.allow_private_addresses = true` relaxes SSRF protections for explicit CLI/TUI fetches and should only be enabled when local-network access is intended. `network.insecure_tls = true` prints a warning whenever effective. User configuration normally lives at `~/.config/ainiux/config.conf`; protect it appropriately if it contains a sensitive key-file path or private endpoint URL.
 
 
 ## Chat Files
 
 `--save-chat PATH` writes the transcript, provider name, base URL, model, settings, messages, usage, and compaction metadata. API keys and authorization headers are not saved. New chat files are written through a temporary file, fsynced where supported, renamed over the target, and created with mode `0600`.
 
-The TUI local chat library stores threads in `~/.pkchat/pkchat.db` using SQLite. The directory is created with mode `0700` and the database file with user-only permissions where supported. It stores prompts, responses, provider/base URL/model metadata, attachments, usage JSON, and compaction events, but not API keys, authorization headers, cookies, or configured key-file contents.
+The TUI local chat library stores threads in `~/.ainiux/ainiux.db` using SQLite. The directory is created with mode `0700` and the database file with user-only permissions where supported. It stores prompts, responses, provider/base URL/model metadata, attachments, usage JSON, and compaction events, but not API keys, authorization headers, cookies, or configured key-file contents.
 
 
 ## Rendered HTML Output

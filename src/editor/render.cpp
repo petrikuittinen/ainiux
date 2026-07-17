@@ -6,7 +6,7 @@
 #include <optional>
 #include <vector>
 
-namespace pkchat::editor {
+namespace ainiux::editor {
 
 using detail::WrapSegment;
 using detail::WrappedCursor;
@@ -193,4 +193,4 @@ RenderedPanel render_panel(const PieceTable& text,
 }
 
 
-}  // namespace pkchat::editor
+}  // namespace ainiux::editor

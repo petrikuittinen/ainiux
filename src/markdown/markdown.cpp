@@ -7,9 +7,9 @@
 #include <vector>
 
 #include "common.hpp"
-#include "pkchat/version.hpp"
+#include "ainiux/version.hpp"
 
-namespace pkchat::markdown {
+namespace ainiux::markdown {
 namespace {
 
 enum class RenderMode {
@@ -981,4 +981,4 @@ std::string render(const std::string& markdown, OutputFormat format, bool comple
     return markdown;
 }
 
-}  // namespace pkchat::markdown
+}  // namespace ainiux::markdown

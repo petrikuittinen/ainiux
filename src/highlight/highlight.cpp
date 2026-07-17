@@ -6,7 +6,7 @@
 #include <regex>
 #include <unordered_set>
 
-namespace pkchat::highlight {
+namespace ainiux::highlight {
 namespace {
 
 struct Candidate {
@@ -2772,4 +2772,4 @@ std::vector<HighlightedLine> highlight_document(Language language,
     return result;
 }
 
-}  // namespace pkchat::highlight
+}  // namespace ainiux::highlight

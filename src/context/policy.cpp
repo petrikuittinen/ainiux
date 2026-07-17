@@ -1,6 +1,6 @@
 #include "context/policy.hpp"
 
-namespace pkchat::context::policy {
+namespace ainiux::context::policy {
 
 const std::vector<const char*>& values() {
     static const std::vector<const char*> kValues = {
@@ -37,4 +37,4 @@ std::string usage_description() {
            "or provider-auto";
 }
 
-}  // namespace pkchat::context::policy
+}  // namespace ainiux::context::policy

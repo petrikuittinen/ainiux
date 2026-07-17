@@ -2,13 +2,13 @@
 //
 // Licensed under the Modified MIT License. See LICENSE in the repository root.
 
-#include "pkchat/version.hpp"
+#include "ainiux/version.hpp"
 
 #include <string>
 
-namespace pkchat {
+namespace ainiux {
 
-const char appName[] = "Pkchat";
+const char appName[] = "Ainiux";
 
 const char versionNumber[] = "0.97";
 
@@ -21,4 +21,4 @@ const std::string& app_version_label() {
     return label;
 }
 
-}  // namespace pkchat
+}  // namespace ainiux

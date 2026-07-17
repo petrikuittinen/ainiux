@@ -1,19 +1,19 @@
 #include "markdown/test_markdown.hpp"
 #include "support/test_support.hpp"
 #include "markdown/markdown.hpp"
-#include "pkchat/version.hpp"
+#include "ainiux/version.hpp"
 #include <string>
 
-namespace pkchat::test::markdown {
+namespace ainiux::test::markdown {
 
 namespace {
 
-using pkchat::test::check;
-using pkchat::test::read_fixture;
+using ainiux::test::check;
+using ainiux::test::read_fixture;
 
 void test_llm_typical_markdown_to_html_fixture() {
     const std::string input = read_fixture("tests/fixtures/llm_typical.md");
-    const std::string html = pkchat::markdown::to_html_fragment(input);
+    const std::string html = ainiux::markdown::to_html_fragment(input);
 
     check(html.find("<h1>LLM Typical Markdown Fixture</h1>") != std::string::npos,
           "llm_typical Markdown converts the title heading");
@@ -46,7 +46,7 @@ void test_llm_typical_markdown_to_html_fixture() {
 
 void test_comprehensive_markdown_to_html_fixture() {
     const std::string input = read_fixture("tests/fixtures/comprehensive.md");
-    const std::string output = pkchat::markdown::to_html_document(input);
+    const std::string output = ainiux::markdown::to_html_document(input);
 
     check(output.find("<h1>Comprehensive Markdown Fixture</h1>") != std::string::npos,
           "comprehensive Markdown converts level-one heading");
@@ -88,7 +88,7 @@ void test_markdown_html_rendering() {
         "if (a < b) return;\n"
         "```\n\n"
         "<div>raw</div>\n";
-    const std::string html = pkchat::markdown::to_html_fragment(md);
+    const std::string html = ainiux::markdown::to_html_fragment(md);
     check(html.find("<h1>Title &amp; More</h1>") != std::string::npos, "Markdown h1 converts to HTML");
     check(html.find("<strong>bold</strong>") != std::string::npos, "Markdown bold converts to strong");
     check(html.find("<em>em</em>") != std::string::npos, "Markdown italic converts to em");
@@ -115,52 +115,52 @@ void test_markdown_html_rendering() {
 
 void test_markdown_plaintext_and_document_rendering() {
     const std::string md = "## Heading\n\nParagraph with **bold** and [docs](https://example.com).\n\n```\n**not bold**\n```\n";
-    const std::string plain = pkchat::markdown::to_plaintext(md);
+    const std::string plain = ainiux::markdown::to_plaintext(md);
     check(plain.find("Heading") != std::string::npos && plain.find("##") == std::string::npos,
           "Markdown plaintext strips heading marker");
     check(plain.find("Paragraph with bold and docs (https://example.com).") != std::string::npos,
           "Markdown plaintext strips inline markup and keeps link URL");
     check(plain.find("**not bold**") != std::string::npos, "Markdown plaintext keeps code block content");
 
-    const std::string doc = pkchat::markdown::to_html_document("# Saved");
+    const std::string doc = ainiux::markdown::to_html_document("# Saved");
     check(doc.find("<!doctype html>") == 0, "Markdown HTML document starts with doctype");
     check(doc.find(R"PK(<meta charset="utf-8">)PK") != std::string::npos, "Markdown HTML document includes charset");
     check(doc.find(R"PK(name="viewport")PK") != std::string::npos, "Markdown HTML document includes viewport");
-    check(doc.find("<title>" + pkchat::app_version_label() + " output</title>") != std::string::npos,
+    check(doc.find("<title>" + ainiux::app_version_label() + " output</title>") != std::string::npos,
           "Markdown HTML document title displays the current app version");
     check(doc.find("<h1>Saved</h1>") != std::string::npos, "Markdown HTML document includes rendered body");
 }
 
 void test_markdown_empty_unicode_and_format_parsing() {
-    check(pkchat::markdown::to_html_fragment("").empty(),
+    check(ainiux::markdown::to_html_fragment("").empty(),
           "Markdown HTML fragment conversion of empty input returns empty output");
-    check(pkchat::markdown::to_plaintext("").empty(),
+    check(ainiux::markdown::to_plaintext("").empty(),
           "Markdown plaintext conversion of empty input returns empty output");
 
     const std::string unicode_md = u8"## عنوان\n\n你好 👨‍👩‍👧‍👦";
-    const std::string html = pkchat::markdown::to_html_fragment(unicode_md);
+    const std::string html = ainiux::markdown::to_html_fragment(unicode_md);
     check(html.find(u8"你好") != std::string::npos &&
               html.find(u8"👨‍👩‍👧‍👦") != std::string::npos,
           "Markdown HTML conversion preserves Chinese and complex emoji text");
-    const std::string plain = pkchat::markdown::to_plaintext(unicode_md);
+    const std::string plain = ainiux::markdown::to_plaintext(unicode_md);
     check(plain.find(u8"你好") != std::string::npos &&
               plain.find("##") == std::string::npos,
           "Markdown plaintext conversion preserves Unicode while stripping markup");
 
     const std::string long_md = std::string(100000, 'a');
-    check(pkchat::markdown::to_plaintext(long_md).size() >= 100000,
+    check(ainiux::markdown::to_plaintext(long_md).size() >= 100000,
           "Markdown plaintext conversion preserves very long text");
 
-    pkchat::markdown::OutputFormat format = pkchat::markdown::OutputFormat::Html;
-    check(pkchat::markdown::parse_output_format("html", format) &&
-              format == pkchat::markdown::OutputFormat::Html,
+    ainiux::markdown::OutputFormat format = ainiux::markdown::OutputFormat::Html;
+    check(ainiux::markdown::parse_output_format("html", format) &&
+              format == ainiux::markdown::OutputFormat::Html,
           "Markdown output format parser accepts html");
-    check(pkchat::markdown::parse_output_format("plaintext", format) &&
-              format == pkchat::markdown::OutputFormat::Plaintext,
+    check(ainiux::markdown::parse_output_format("plaintext", format) &&
+              format == ainiux::markdown::OutputFormat::Plaintext,
           "Markdown output format parser accepts plaintext");
-    check(!pkchat::markdown::parse_output_format("pdf", format),
+    check(!ainiux::markdown::parse_output_format("pdf", format),
           "Markdown output format parser rejects unsupported formats");
-    check(!pkchat::markdown::parse_output_format("", format),
+    check(!ainiux::markdown::parse_output_format("", format),
           "Markdown output format parser rejects empty format names");
 }
 
@@ -174,4 +174,4 @@ void run_all() {
     test_markdown_plaintext_and_document_rendering();
 }
 
-}  // namespace pkchat::test::markdown
+}  // namespace ainiux::test::markdown

@@ -4,7 +4,7 @@
 #include "chat/generation_settings.hpp"
 #include "chat/settings.hpp"
 #include "chat/sqlite_store.hpp"
-#include "pkchat/model_setting.hpp"
+#include "ainiux/model_setting.hpp"
 #include "json/json.hpp"
 #include <filesystem>
 #include <fstream>
@@ -12,25 +12,25 @@
 #include <string>
 #include <vector>
 
-namespace pkchat::test::chat {
+namespace ainiux::test::chat {
 
 namespace {
 
-using pkchat::test::check;
-using pkchat::test::read_fixture;
+using ainiux::test::check;
+using ainiux::test::read_fixture;
 
 void test_chat_session_json_round_trip() {
-    pkchat::provider::RequestContext context;
+    ainiux::provider::RequestContext context;
     context.profile.name = "custom_openai_chat";
     context.base_url = "http://localhost:8000/v1";
     context.options.model = "mock-model";
     context.options.stream = false;
     context.options.context_tokens = 65536;
-    pkchat::chat::Session session = pkchat::chat::new_session(context);
+    ainiux::chat::Session session = ainiux::chat::new_session(context);
     check(session.settings_json.find("\"context_tokens\":null") != std::string::npos,
           "configured context window is not stored as a thread override");
     context.options.has_context_tokens = true;
-    session = pkchat::chat::new_session(context);
+    session = ainiux::chat::new_session(context);
     check(session.settings_json.find("\"context_tokens\":65536") != std::string::npos,
           "explicit context window override is persisted in settings_json");
     session.created_at = "2026-06-14T00:00:00Z";
@@ -40,17 +40,17 @@ void test_chat_session_json_round_trip() {
     session.compaction_events.push_back({"2026-06-14T00:01:00Z", "truncate-oldest", 2, 1000, 500,
                                          "Context compacted for test"});
 
-    const std::string encoded = pkchat::chat::session_to_json(session);
-    pkchat::json::ParseResult parsed = pkchat::json::parse(encoded);
+    const std::string encoded = ainiux::chat::session_to_json(session);
+    ainiux::json::ParseResult parsed = ainiux::json::parse(encoded);
     check(parsed.error.ok(), "chat session JSON parses");
-    const pkchat::json::Value* messages = parsed.value.get("messages");
+    const ainiux::json::Value* messages = parsed.value.get("messages");
     check(messages != nullptr && messages->is_array() && messages->array.size() == 2, "chat messages persisted");
 
     const std::string path = "build/unit-chat.json";
-    pkchat::Error err = pkchat::chat::save_session_atomic(path, session);
+    ainiux::Error err = ainiux::chat::save_session_atomic(path, session);
     check(err.ok(), "chat session saves atomically");
-    pkchat::chat::Session loaded;
-    err = pkchat::chat::load_session(path, loaded);
+    ainiux::chat::Session loaded;
+    err = ainiux::chat::load_session(path, loaded);
     check(err.ok(), "chat session loads");
     check(loaded.messages.size() == 2, "loaded chat has messages");
     check(!loaded.messages.empty() && loaded.messages[0].content == "hello", "loaded user message preserved");
@@ -63,28 +63,28 @@ void test_chat_session_rejects_corrupt_json() {
     std::ofstream out(path, std::ios::binary | std::ios::trunc);
     out << "{bad json";
     out.close();
-    pkchat::chat::Session session;
-    pkchat::Error err = pkchat::chat::load_session(path, session);
+    ainiux::chat::Session session;
+    ainiux::Error err = ainiux::chat::load_session(path, session);
     check(!err.ok(), "corrupt chat file rejected");
-    check(err.code == pkchat::ErrorCode::JsonParse, "corrupt chat file reports JSON parse error");
+    check(err.code == ainiux::ErrorCode::JsonParse, "corrupt chat file reports JSON parse error");
 }
 
 void test_chat_sqlite_store_round_trip_and_listing() {
-    const std::string path = "build/unit-pkchat.db";
+    const std::string path = "build/unit-ainiux.db";
     std::filesystem::remove(path);
     std::filesystem::remove(path + "-wal");
     std::filesystem::remove(path + "-shm");
 
-    pkchat::chat::SqliteStore store;
-    pkchat::Error err = store.open(path);
+    ainiux::chat::SqliteStore store;
+    ainiux::Error err = store.open(path);
     check(err.ok(), "SQLite chat store opens");
     check(store.path() == path, "SQLite chat store records database path");
 
-    pkchat::provider::RequestContext context;
+    ainiux::provider::RequestContext context;
     context.profile.name = "lm_studio";
     context.base_url = "http://localhost:1234/v1";
     context.options.model = "local-model";
-    pkchat::chat::Session session = pkchat::chat::new_session(context);
+    ainiux::chat::Session session = ainiux::chat::new_session(context);
     session.messages.push_back({"system", "Be concise"});
     session.messages.push_back({"user", "first prompt", {{"image/png", "base64-image"}}});
     session.messages.push_back({"assistant", "first answer"});
@@ -102,7 +102,7 @@ void test_chat_sqlite_store_round_trip_and_listing() {
     err = store.last_thread_id(last_id, found);
     check(err.ok() && found && last_id == session.thread_id, "SQLite store records last active thread");
 
-    pkchat::chat::Session loaded;
+    ainiux::chat::Session loaded;
     err = store.load_session(session.thread_id, loaded);
     check(err.ok(), "SQLite chat session loads");
     check(loaded.thread_id == session.thread_id && loaded.name == session.name,
@@ -129,13 +129,13 @@ void test_chat_sqlite_store_round_trip_and_listing() {
     check(err.ok() && loaded.messages.size() == 2 && loaded.messages.back().role == "user",
           "SQLite save after assistant pop preserves remaining messages");
 
-    pkchat::chat::Session second = pkchat::chat::new_session(context);
+    ainiux::chat::Session second = ainiux::chat::new_session(context);
     second.messages.push_back({"user", "newest prompt"});
     second.messages.push_back({"assistant", "newest answer"});
     err = store.save_session(second);
     check(err.ok(), "SQLite second chat session saves");
 
-    std::vector<pkchat::chat::ThreadSummary> threads;
+    std::vector<ainiux::chat::ThreadSummary> threads;
     err = store.list_threads(threads, 20);
     check(err.ok(), "SQLite thread list query succeeds");
     check(threads.size() == 2, "SQLite thread list returns saved threads");
@@ -154,7 +154,7 @@ void test_chat_sqlite_store_round_trip_and_listing() {
 }
 
 void test_chat_sqlite_missing_thread_and_corrupt_database() {
-    const std::string path = "build/unit-corrupt-pkchat.db";
+    const std::string path = "build/unit-corrupt-ainiux.db";
     std::filesystem::remove(path);
     std::filesystem::remove(path + "-wal");
     std::filesystem::remove(path + "-shm");
@@ -163,18 +163,18 @@ void test_chat_sqlite_missing_thread_and_corrupt_database() {
         std::ofstream out(path, std::ios::binary | std::ios::trunc);
         out << "not-a-sqlite-database";
     }
-    pkchat::chat::SqliteStore corrupt_store;
-    pkchat::Error err = corrupt_store.open(path);
+    ainiux::chat::SqliteStore corrupt_store;
+    ainiux::Error err = corrupt_store.open(path);
     check(!err.ok(), "corrupt SQLite database open fails");
 
     std::filesystem::remove(path);
-    pkchat::chat::SqliteStore store;
+    ainiux::chat::SqliteStore store;
     err = store.open(path);
     check(err.ok(), "fresh SQLite database opens for missing-thread test");
 
-    pkchat::chat::Session missing;
+    ainiux::chat::Session missing;
     err = store.load_session(424242, missing);
-    check(!err.ok() && err.code == pkchat::ErrorCode::FileRead &&
+    check(!err.ok() && err.code == ainiux::ErrorCode::FileRead &&
               err.message.find("SQLite chat thread not found: 424242") != std::string::npos,
           "missing SQLite thread reports a file-read error with thread id");
 
@@ -190,71 +190,71 @@ void test_chat_sqlite_missing_thread_and_corrupt_database() {
 }
 
 void test_chat_session_file_failures_and_unicode() {
-    pkchat::chat::Session session;
-    pkchat::Error err = pkchat::chat::load_session("build/missing-chat-session.json", session);
-    check(!err.ok() && err.code == pkchat::ErrorCode::FileRead,
+    ainiux::chat::Session session;
+    ainiux::Error err = ainiux::chat::load_session("build/missing-chat-session.json", session);
+    check(!err.ok() && err.code == ainiux::ErrorCode::FileRead,
           "missing chat file reports a file-read error");
 
-    pkchat::provider::RequestContext context;
+    ainiux::provider::RequestContext context;
     context.profile.name = "custom_openai_chat";
     context.base_url = "http://localhost:8000/v1";
     context.options.model = "mock-model";
-    session = pkchat::chat::new_session(context);
+    session = ainiux::chat::new_session(context);
     session.created_at = "2026-06-28T00:00:00Z";
     session.updated_at = session.created_at;
     session.messages.push_back({"user", ""});
     session.messages.push_back({"assistant", u8"مرحبا 你好 👨‍👩‍👧‍👦"});
 
     const std::string path = "build/unit-empty-and-unicode-chat.json";
-    err = pkchat::chat::save_session_atomic(path, session);
+    err = ainiux::chat::save_session_atomic(path, session);
     check(err.ok(), "chat session with empty and Unicode messages saves");
-    pkchat::chat::Session loaded;
-    err = pkchat::chat::load_session(path, loaded);
+    ainiux::chat::Session loaded;
+    err = ainiux::chat::load_session(path, loaded);
     check(err.ok() && loaded.messages.size() == 2 &&
               loaded.messages[0].content.empty() &&
               loaded.messages[1].content == u8"مرحبا 你好 👨‍👩‍👧‍👦",
           "chat session round-trip preserves empty and Unicode message content");
 
-    err = pkchat::chat::save_session_atomic("build/no-such-dir/chat.json", session);
-    check(!err.ok() && err.code == pkchat::ErrorCode::FileWrite,
+    err = ainiux::chat::save_session_atomic("build/no-such-dir/chat.json", session);
+    check(!err.ok() && err.code == ainiux::ErrorCode::FileWrite,
           "chat save to a missing parent directory reports a file-write error");
 }
 
 void test_chat_settings_helpers() {
-    check(pkchat::chat::model_pattern_matches("Qwen3.6-*", "Qwen3.6-35B-A3B"),
+    check(ainiux::chat::model_pattern_matches("Qwen3.6-*", "Qwen3.6-35B-A3B"),
           "model pattern wildcard matches a concrete model");
-    check(!pkchat::chat::model_pattern_matches("Qwen3.6-*", "Qwen3.5-4B"),
+    check(!ainiux::chat::model_pattern_matches("Qwen3.6-*", "Qwen3.5-4B"),
           "model pattern wildcard rejects a different family");
 
-    const std::vector<pkchat::ModelSetting> presets = {
+    const std::vector<ainiux::ModelSetting> presets = {
         {"Qwen3.6-*", "coding", "", 0.6, 20, 0.95, 0.0, 1.0, 0.0},
         {"Qwen3.6-35B-A3B", "coding", "", 0.4, 10, 0.8, 0.0, 1.0, 0.0},
     };
-    const pkchat::ModelSetting* preset =
-        pkchat::chat::find_model_setting("Qwen3.6-35B-A3B", "coding", presets);
+    const ainiux::ModelSetting* preset =
+        ainiux::chat::find_model_setting("Qwen3.6-35B-A3B", "coding", presets);
     check(preset != nullptr && preset->temperature == 0.4,
           "model preset lookup prefers the longest matching pattern");
 
-    pkchat::cli::Options options;
-    pkchat::Error err = pkchat::chat::apply_chat_setting(options, "temperature", "0.9");
+    ainiux::cli::Options options;
+    ainiux::Error err = ainiux::chat::apply_chat_setting(options, "temperature", "0.9");
     check(err.ok() && options.has_temperature && options.temperature == 0.9,
           "chat setting parser applies temperature");
-    err = pkchat::chat::apply_chat_setting(options, "thinking", "on");
+    err = ainiux::chat::apply_chat_setting(options, "thinking", "on");
     check(err.ok() && options.has_enable_thinking && options.enable_thinking,
           "chat setting parser applies thinking");
-    err = pkchat::chat::apply_chat_setting(options, "thinking_budget", "8192");
+    err = ainiux::chat::apply_chat_setting(options, "thinking_budget", "8192");
     check(err.ok() && options.has_thinking_budget && options.thinking_budget == "8192" &&
-              pkchat::chat::thinking_budget_is_token_count(options.thinking_budget),
+              ainiux::chat::thinking_budget_is_token_count(options.thinking_budget),
           "chat setting parser applies numeric thinking_budget");
-    err = pkchat::chat::apply_chat_setting(options, "thinking_budget", "high");
+    err = ainiux::chat::apply_chat_setting(options, "thinking_budget", "high");
     check(err.ok() && options.thinking_budget == "high" &&
-              !pkchat::chat::thinking_budget_is_token_count(options.thinking_budget),
+              !ainiux::chat::thinking_budget_is_token_count(options.thinking_budget),
           "chat setting parser applies verbal thinking_budget");
-    err = pkchat::chat::apply_chat_setting(options, "auto-convert-html-to-md", "no");
+    err = ainiux::chat::apply_chat_setting(options, "auto-convert-html-to-md", "no");
     check(err.ok() && !options.auto_convert_html_to_markdown,
           "chat setting parser can disable HTML-to-Markdown insertion conversion");
 
-    pkchat::cli::Options source;
+    ainiux::cli::Options source;
     source.has_top_k = true;
     source.top_k = 40;
     source.has_chat_purpose = true;
@@ -262,35 +262,35 @@ void test_chat_settings_helpers() {
     source.has_thinking_budget = true;
     source.thinking_budget = "medium";
     source.auto_convert_html_to_markdown = false;
-    const std::string encoded = pkchat::chat::settings_json_from_options(source);
-    pkchat::cli::Options loaded;
-    err = pkchat::chat::apply_settings_json(loaded, encoded);
+    const std::string encoded = ainiux::chat::settings_json_from_options(source);
+    ainiux::cli::Options loaded;
+    err = ainiux::chat::apply_settings_json(loaded, encoded);
     check(err.ok() && loaded.has_top_k && loaded.top_k == 40 && loaded.has_chat_purpose &&
               loaded.chat_purpose == "general" && loaded.has_thinking_budget &&
               loaded.thinking_budget == "medium" && !loaded.auto_convert_html_to_markdown,
           "chat settings JSON round-trips verbal thinking_budget");
 
-    source = pkchat::cli::Options{};
+    source = ainiux::cli::Options{};
     source.has_thinking_budget = true;
     source.thinking_budget = "4096";
-    err = pkchat::chat::apply_settings_json(loaded, pkchat::chat::settings_json_from_options(source));
+    err = ainiux::chat::apply_settings_json(loaded, ainiux::chat::settings_json_from_options(source));
     check(err.ok() && loaded.thinking_budget == "4096" &&
-              pkchat::chat::thinking_budget_is_token_count(loaded.thinking_budget),
+              ainiux::chat::thinking_budget_is_token_count(loaded.thinking_budget),
           "chat settings JSON round-trips numeric thinking_budget");
 
-    err = pkchat::chat::apply_chat_setting(options, "temperature", "NULL");
+    err = ainiux::chat::apply_chat_setting(options, "temperature", "NULL");
     check(err.ok() && !options.has_temperature, "chat setting NULL clears temperature override");
     options.has_temperature = true;
     options.temperature = 0.9;
-    const std::string with_nulls = pkchat::chat::settings_json_from_options(options);
+    const std::string with_nulls = ainiux::chat::settings_json_from_options(options);
     check(with_nulls.find("\"top_k\":null") != std::string::npos,
           "chat settings JSON emits null for unset overrides");
-    pkchat::cli::Options cleared;
-    err = pkchat::chat::apply_settings_json(cleared, with_nulls);
+    ainiux::cli::Options cleared;
+    err = ainiux::chat::apply_settings_json(cleared, with_nulls);
     check(err.ok() && cleared.has_temperature && cleared.temperature == 0.9 && !cleared.has_top_k,
           "chat settings JSON null values clear overrides on load");
 
-    const std::string panel = pkchat::chat::format_settings_panel(options);
+    const std::string panel = ainiux::chat::format_settings_panel(options);
     check(panel.find("temperature=0.9") != std::string::npos &&
               panel.find("thinking=on") != std::string::npos &&
               panel.find("thinking_budget=high") != std::string::npos &&
@@ -299,8 +299,8 @@ void test_chat_settings_helpers() {
               panel.find("top_k=40") == std::string::npos,
           "chat settings panel shows set values and empty unset fields");
 
-    pkchat::cli::Options empty_panel_options;
-    const std::string empty_panel = pkchat::chat::format_settings_panel(empty_panel_options);
+    ainiux::cli::Options empty_panel_options;
+    const std::string empty_panel = ainiux::chat::format_settings_panel(empty_panel_options);
     check(empty_panel.find("temperature=\n") != std::string::npos &&
               empty_panel.find("purpose=\n") != std::string::npos &&
               empty_panel.find("default") == std::string::npos,
@@ -308,42 +308,42 @@ void test_chat_settings_helpers() {
 }
 
 void test_chat_session_has_chat_messages() {
-    pkchat::chat::Session session;
-    check(!pkchat::chat::session_has_chat_messages(session),
+    ainiux::chat::Session session;
+    check(!ainiux::chat::session_has_chat_messages(session),
           "chat session helper treats an empty session as non-chat");
     session.messages.push_back({"system", "Be concise"});
-    check(!pkchat::chat::session_has_chat_messages(session),
+    check(!ainiux::chat::session_has_chat_messages(session),
           "chat session helper ignores system-only sessions");
     session.messages.push_back({"user", "hello"});
-    check(pkchat::chat::session_has_chat_messages(session),
+    check(ainiux::chat::session_has_chat_messages(session),
           "chat session helper detects user messages");
 }
 
 void test_chat_sqlite_remove_empty_threads() {
-    const std::string path = "build/unit-pkchat-empty-threads.db";
+    const std::string path = "build/unit-ainiux-empty-threads.db";
     std::filesystem::remove(path);
     std::filesystem::remove(path + "-wal");
     std::filesystem::remove(path + "-shm");
 
-    pkchat::chat::SqliteStore store;
-    pkchat::Error err = store.open(path);
+    ainiux::chat::SqliteStore store;
+    ainiux::Error err = store.open(path);
     check(err.ok(), "SQLite empty-thread cleanup store opens");
 
-    pkchat::provider::RequestContext context;
+    ainiux::provider::RequestContext context;
     context.profile.name = "lm_studio";
     context.base_url = "http://localhost:1234/v1";
     context.options.model = "local-model";
 
-    pkchat::chat::Session system_only = pkchat::chat::new_session(context);
+    ainiux::chat::Session system_only = ainiux::chat::new_session(context);
     system_only.messages.push_back({"system", "Be concise"});
     err = store.save_session(system_only);
     check(err.ok(), "SQLite system-only thread saves");
 
-    pkchat::chat::Session no_messages = pkchat::chat::new_session(context);
+    ainiux::chat::Session no_messages = ainiux::chat::new_session(context);
     err = store.save_session(no_messages);
     check(err.ok(), "SQLite messageless thread saves");
 
-    pkchat::chat::Session with_user = pkchat::chat::new_session(context);
+    ainiux::chat::Session with_user = ainiux::chat::new_session(context);
     with_user.messages.push_back({"user", "hello"});
     with_user.messages.push_back({"assistant", "hi"});
     err = store.save_session(with_user);
@@ -355,7 +355,7 @@ void test_chat_sqlite_remove_empty_threads() {
     check(err.ok() && deleted_count == 2 && !current_removed,
           "SQLite empty-thread cleanup removes system-only and messageless threads");
 
-    std::vector<pkchat::chat::ThreadSummary> threads;
+    std::vector<ainiux::chat::ThreadSummary> threads;
     err = store.list_threads(threads, 20);
     check(err.ok() && threads.size() == 1 && threads[0].id == with_user.thread_id,
           "SQLite empty-thread cleanup keeps threads with user or assistant messages");
@@ -366,7 +366,7 @@ void test_chat_sqlite_remove_empty_threads() {
     check(err.ok() && deleted_count == 0 && !current_removed,
           "SQLite empty-thread cleanup is idempotent when nothing remains");
 
-    pkchat::chat::Session another_empty = pkchat::chat::new_session(context);
+    ainiux::chat::Session another_empty = ainiux::chat::new_session(context);
     another_empty.messages.push_back({"system", "Another system prompt"});
     err = store.save_session(another_empty);
     check(err.ok(), "SQLite second system-only thread saves");
@@ -379,21 +379,21 @@ void test_chat_sqlite_remove_empty_threads() {
 }
 
 void test_chat_sqlite_thread_name_from_first_user_prompt() {
-    const std::string path = "build/unit-thread-name-pkchat.db";
+    const std::string path = "build/unit-thread-name-ainiux.db";
     std::filesystem::remove(path);
     std::filesystem::remove(path + "-wal");
     std::filesystem::remove(path + "-shm");
 
-    pkchat::provider::RequestContext context;
+    ainiux::provider::RequestContext context;
     context.profile.name = "lm_studio";
     context.base_url = "http://localhost:1234/v1";
     context.options.model = "local-model";
 
-    pkchat::chat::SqliteStore store;
-    pkchat::Error err = store.open(path);
+    ainiux::chat::SqliteStore store;
+    ainiux::Error err = store.open(path);
     check(err.ok(), "SQLite thread-name test database opens");
 
-    pkchat::chat::Session session = pkchat::chat::new_session(context);
+    ainiux::chat::Session session = ainiux::chat::new_session(context);
     err = store.save_session(session);
     check(err.ok() && session.name == "New chat", "SQLite empty thread keeps the default name");
     const long long thread_id = session.thread_id;
@@ -404,14 +404,14 @@ void test_chat_sqlite_thread_name_from_first_user_prompt() {
           "SQLite thread name updates from the first user prompt after an early autosave");
 
     const std::string long_prompt(48, 'x');
-    pkchat::chat::Session long_session = pkchat::chat::new_session(context);
+    ainiux::chat::Session long_session = ainiux::chat::new_session(context);
     long_session.name = "New chat";
     long_session.messages.push_back({"user", long_prompt});
     err = store.save_session(long_session);
     check(err.ok() && long_session.name.size() == 40 && long_session.name == long_prompt.substr(0, 40),
           "SQLite thread name truncates the first user prompt to 40 characters");
 
-    pkchat::chat::Session named_session = pkchat::chat::new_session(context);
+    ainiux::chat::Session named_session = ainiux::chat::new_session(context);
     named_session.name = "Custom title";
     named_session.messages.push_back({"user", "ignored for explicit names"});
     err = store.save_session(named_session);
@@ -419,8 +419,8 @@ void test_chat_sqlite_thread_name_from_first_user_prompt() {
           "SQLite thread name keeps an explicit user-provided title");
 
     {
-        pkchat::chat::SqliteStore legacy_store;
-        const std::string legacy_path = "build/unit-thread-name-legacy-pkchat.db";
+        ainiux::chat::SqliteStore legacy_store;
+        const std::string legacy_path = "build/unit-thread-name-legacy-ainiux.db";
         std::filesystem::remove(legacy_path);
         std::filesystem::remove(legacy_path + "-wal");
         std::filesystem::remove(legacy_path + "-shm");
@@ -428,7 +428,7 @@ void test_chat_sqlite_thread_name_from_first_user_prompt() {
         err = legacy_store.open(legacy_path);
         check(err.ok(), "SQLite legacy thread-name database opens");
 
-        pkchat::chat::Session legacy = pkchat::chat::new_session(context);
+        ainiux::chat::Session legacy = ainiux::chat::new_session(context);
         err = legacy_store.save_session(legacy);
         check(err.ok() && legacy.thread_id > 0, "SQLite legacy empty thread saves");
         const long long legacy_thread_id = legacy.thread_id;
@@ -458,7 +458,7 @@ void test_chat_sqlite_thread_name_from_first_user_prompt() {
         err = legacy_store.open(legacy_path);
         check(err.ok(), "SQLite legacy thread-name database reopens for migration");
 
-        std::vector<pkchat::chat::ThreadSummary> threads;
+        std::vector<ainiux::chat::ThreadSummary> threads;
         err = legacy_store.list_threads(threads, 20);
         check(err.ok() && threads.size() == 1 && threads[0].name == "legacy prompt",
               "SQLite migration backfills thread names from the first user prompt");
@@ -468,11 +468,11 @@ void test_chat_sqlite_thread_name_from_first_user_prompt() {
 }
 
 void test_generation_settings_metadata() {
-    check(pkchat::chat::generation::is_chat_setting_name(pkchat::chat::generation::kTopP),
+    check(ainiux::chat::generation::is_chat_setting_name(ainiux::chat::generation::kTopP),
           "generation metadata recognizes top_p");
-    check(!pkchat::chat::generation::is_chat_setting_name("bogus_setting"),
+    check(!ainiux::chat::generation::is_chat_setting_name("bogus_setting"),
           "generation metadata rejects unknown chat settings");
-    check(pkchat::chat::generation::is_chat_purpose(pkchat::chat::generation::kPurposeCoding),
+    check(ainiux::chat::generation::is_chat_purpose(ainiux::chat::generation::kPurposeCoding),
           "generation metadata recognizes coding purpose");
 }
 
@@ -491,4 +491,4 @@ void run_all() {
     test_generation_settings_metadata();
 }
 
-}  // namespace pkchat::test::chat
+}  // namespace ainiux::test::chat

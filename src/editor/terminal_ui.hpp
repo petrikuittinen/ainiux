@@ -12,12 +12,12 @@
 #include "editor/split.hpp"
 #include "tui/activity.hpp"
 
-namespace pkchat::tui {
+namespace ainiux::tui {
 class ThemeRegistry;
 enum class TuiMode;
 }
 
-namespace pkchat::editor {
+namespace ainiux::editor {
 
 struct TerminalSize {
     int rows = 24;
@@ -214,4 +214,4 @@ void request_load_editor_from_path(EditorState& state,
 
 std::string read_escape_suffix();
 
-}  // namespace pkchat::editor
+}  // namespace ainiux::editor

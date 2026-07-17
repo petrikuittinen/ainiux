@@ -7,7 +7,7 @@
 #include <utility>
 #include <vector>
 
-namespace pkchat::editor {
+namespace ainiux::editor {
 
 using detail::byte_offset_for_display_column;
 using detail::display_column_for_text;
@@ -316,4 +316,4 @@ void PieceTable::rebuild_line_cache() const {
 }
 
 
-}  // namespace pkchat::editor
+}  // namespace ainiux::editor

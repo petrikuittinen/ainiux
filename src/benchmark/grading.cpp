@@ -22,7 +22,7 @@
 #include "output/thinking.hpp"
 #include "runtime/runtime.hpp"
 
-namespace pkchat::benchmark {
+namespace ainiux::benchmark {
 namespace {
 
 constexpr size_t kMaxGradeSourceBytes = 256U * 1024U * 1024U;
@@ -948,8 +948,8 @@ Error grade(const provider::RequestContext& context,
                     ++statistics.errors;
                     continue;
                 }
-                const ::pkchat::output::ThinkingChunk separated =
-                    ::pkchat::output::split_thinking_traces(result.content);
+                const ::ainiux::output::ThinkingChunk separated =
+                    ::ainiux::output::split_thinking_traces(result.content);
                 JudgeGrade judge_grade;
                 err = parse_judge_grade(separated.visible, criterion_count(group),
                                         judge_grade);
@@ -1051,4 +1051,4 @@ Error grade(const provider::RequestContext& context,
     return ok_error();
 }
 
-}  // namespace pkchat::benchmark
+}  // namespace ainiux::benchmark

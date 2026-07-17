@@ -1,6 +1,6 @@
 #include "tui/tui.hpp"
 
-namespace pkchat::tui {
+namespace ainiux::tui {
 
 Layout layout_for_terminal(int terminal_rows, int terminal_cols) {
     Layout layout;
@@ -21,4 +21,4 @@ Layout layout_for_terminal(int terminal_rows, int terminal_cols) {
     return layout;
 }
 
-}  // namespace pkchat::tui
+}  // namespace ainiux::tui

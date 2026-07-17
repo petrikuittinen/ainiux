@@ -7,7 +7,7 @@
 #include "fetch/fetch.hpp"
 #include "runtime/runtime.hpp"
 
-namespace pkchat::input {
+namespace ainiux::input {
 
 enum class Kind {
     Plaintext,
@@ -72,4 +72,4 @@ Error read_local_text_file_for_attach(const std::string& path,
                                       std::string& content,
                                       runtime::CancellationToken cancellation = runtime::CancellationToken());
 
-}  // namespace pkchat::input
+}  // namespace ainiux::input

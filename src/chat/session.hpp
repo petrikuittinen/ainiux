@@ -7,7 +7,7 @@
 #include "context/context.hpp"
 #include "provider/provider.hpp"
 
-namespace pkchat::chat {
+namespace ainiux::chat {
 
 struct Session {
     long long thread_id = 0;
@@ -31,4 +31,4 @@ Error load_session(const std::string& path, Session& session);
 Error save_session_atomic(const std::string& path, Session session);
 std::string session_to_json(const Session& session);
 
-}  // namespace pkchat::chat
+}  // namespace ainiux::chat

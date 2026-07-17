@@ -6,7 +6,7 @@
 #include "common.hpp"
 #include "editor/clipboard.hpp"
 
-namespace pkchat::editor {
+namespace ainiux::editor {
 
 struct EditorState;
 
@@ -45,4 +45,4 @@ bool is_editor_redo_key(unsigned char ch);
 
 void publish_terminal_clipboard(const std::string& text);
 
-}  // namespace pkchat::editor
+}  // namespace ainiux::editor

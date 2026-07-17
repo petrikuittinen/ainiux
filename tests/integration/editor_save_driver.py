@@ -76,7 +76,7 @@ def verify_save(binary, path, text, csi_ctrl_s=False):
 
 def main():
     binary = sys.argv[1]
-    tmpdir = tempfile.mkdtemp(prefix="pkchat-editor-save-")
+    tmpdir = tempfile.mkdtemp(prefix="ainiux-editor-save-")
     new_path = os.path.join(tmpdir, "new.txt")
     existing_path = os.path.join(tmpdir, "existing.txt")
     with open(existing_path, "w", encoding="utf-8") as handle:

@@ -5,7 +5,7 @@
 #include <algorithm>
 #include <sstream>
 
-namespace pkchat::ui {
+namespace ainiux::ui {
 namespace {
 
 size_t clamp_selection(size_t selected, size_t item_count) {
@@ -97,4 +97,4 @@ SelectorMovementResult handle_selector_escape_sequence(const std::string& sequen
     return SelectorMovementResult::Navigated;
 }
 
-}  // namespace pkchat::ui
+}  // namespace ainiux::ui

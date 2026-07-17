@@ -7,12 +7,12 @@
 #include <string>
 #include <vector>
 
-namespace pkchat::test::highlight {
+namespace ainiux::test::highlight {
 namespace {
 
-using pkchat::highlight::Language;
-using pkchat::highlight::Span;
-using pkchat::highlight::TokenRole;
+using ainiux::highlight::Language;
+using ainiux::highlight::Span;
+using ainiux::highlight::TokenRole;
 
 bool has_role(const std::vector<Span>& spans, TokenRole role) {
     return std::any_of(spans.begin(), spans.end(), [&](const Span& span) { return span.role == role; });
@@ -57,14 +57,14 @@ void test_mode_parsing_and_detection() {
     };
     for (const auto& alias : aliases) {
         Language language = Language::Text;
-        check(pkchat::highlight::parse_language(alias.first, language) && language == alias.second,
+        check(ainiux::highlight::parse_language(alias.first, language) && language == alias.second,
               std::string("highlight parses mode alias: ") + alias.first);
     }
     Language language = Language::Text;
-    check(!pkchat::highlight::parse_language("kotlin", language),
+    check(!ainiux::highlight::parse_language("kotlin", language),
           "highlight rejects unsupported language modes");
-    check(std::string(pkchat::highlight::language_name(Language::Html)) == "html" &&
-              std::string(pkchat::highlight::language_name(Language::HtmlOnly)) == "htmlonly",
+    check(std::string(ainiux::highlight::language_name(Language::Html)) == "html" &&
+              std::string(ainiux::highlight::language_name(Language::HtmlOnly)) == "htmlonly",
           "HTML modes expose their canonical names");
     const std::vector<std::pair<Language, const char*>> canonical_names = {
         {Language::Php, "php"},           {Language::Perl, "perl"},
@@ -75,7 +75,7 @@ void test_mode_parsing_and_detection() {
         {Language::Ini, "ini"},
     };
     for (const auto& canonical : canonical_names) {
-        check(std::string(pkchat::highlight::language_name(canonical.first)) == canonical.second,
+        check(std::string(ainiux::highlight::language_name(canonical.first)) == canonical.second,
               std::string("highlight exposes canonical mode name: ") + canonical.second);
     }
 
@@ -113,12 +113,12 @@ void test_mode_parsing_and_detection() {
         {"settings.ini", Language::Ini}, {"project.cfg", Language::Ini}, {".editorconfig", Language::Ini},
     };
     for (const auto& path : paths) {
-        check(pkchat::highlight::detect_language(path.first) == path.second,
+        check(ainiux::highlight::detect_language(path.first) == path.second,
               std::string("highlight detects language from path: ") + path.first);
     }
-    check(pkchat::highlight::detect_language("notes.txt") == Language::Text,
+    check(ainiux::highlight::detect_language("notes.txt") == Language::Text,
           "highlight treats txt as text");
-    check(pkchat::highlight::detect_language("") == Language::Text,
+    check(ainiux::highlight::detect_language("") == Language::Text,
           "highlight treats scratch buffers as text");
 }
 
@@ -187,7 +187,7 @@ void test_programming_language_roles() {
              {TokenRole::Property, TokenRole::Number, TokenRole::Comment}, "INI"},
     };
     for (const Fixture& fixture : fixtures) {
-        const auto highlighted = pkchat::highlight::highlight_line(fixture.language, fixture.line);
+        const auto highlighted = ainiux::highlight::highlight_line(fixture.language, fixture.line);
         for (TokenRole role : fixture.roles) {
             check(has_role(highlighted.spans, role),
                   std::string(fixture.name) + " emits requested semantic token role");
@@ -195,20 +195,20 @@ void test_programming_language_roles() {
     }
 
     const std::string c_line = "const char *text = \"return 123\";";
-    const auto c = pkchat::highlight::highlight_line(Language::C, c_line);
+    const auto c = ainiux::highlight::highlight_line(Language::C, c_line);
     check(has_role_at(c.spans, c_line.find("return"), TokenRole::String) &&
               !has_role_at(c.spans, c_line.find("return"), TokenRole::Keyword),
           "strings take precedence over lower-priority C keyword and number rules");
 
     const std::string php_template = "<h1 class=\"title\"><?= $title ?></h1>";
-    const auto php = pkchat::highlight::highlight_line(Language::Php, php_template);
+    const auto php = ainiux::highlight::highlight_line(Language::Php, php_template);
     check(has_role(php.spans, TokenRole::Tag) && has_role(php.spans, TokenRole::Attribute) &&
               has_role(php.spans, TokenRole::Preprocessor) &&
               has_role(php.spans, TokenRole::Variable),
           "PHP highlights surrounding template markup and PHP delimiters");
 
     const std::string arm = "mov x0, #1  # exit status";
-    const auto assembly = pkchat::highlight::highlight_line(Language::Assembly, arm);
+    const auto assembly = ainiux::highlight::highlight_line(Language::Assembly, arm);
     check(has_role_at(assembly.spans, arm.find("#1"), TokenRole::Number) &&
               has_role_at(assembly.spans, arm.rfind('#'), TokenRole::Comment),
           "Assembly distinguishes ARM immediates from hash comments");
@@ -217,7 +217,7 @@ void test_programming_language_roles() {
 void test_markup_and_embedded_languages() {
     const std::string html =
         "<script type=\"module\">const answer = 42;</script><p class=\"x\">Hi</p>";
-    const auto html_line = pkchat::highlight::highlight_line(Language::Html, html);
+    const auto html_line = ainiux::highlight::highlight_line(Language::Html, html);
     check(has_role(html_line.spans, TokenRole::Tag), "HTML highlights tag names and delimiters");
     check(has_role(html_line.spans, TokenRole::Attribute), "HTML highlights attributes");
     check(has_role(html_line.spans, TokenRole::String), "HTML highlights attribute values");
@@ -226,7 +226,7 @@ void test_markup_and_embedded_languages() {
     check(has_role_at(html_line.spans, html.find("42"), TokenRole::Number),
           "HTML highlights JavaScript numbers inside script elements");
 
-    const auto plain_html = pkchat::highlight::highlight_line(Language::HtmlOnly, html);
+    const auto plain_html = ainiux::highlight::highlight_line(Language::HtmlOnly, html);
     check(has_role_at(plain_html.spans, html.find("const"), TokenRole::String) &&
               !has_role_at(plain_html.spans, html.find("const"), TokenRole::Keyword),
           "htmlonly mode keeps script bodies as markup strings");
@@ -235,7 +235,7 @@ void test_markup_and_embedded_languages() {
         "<button style=\"color: #fff; margin: 2px\" "
         "onclick=\"const value = 17; run(value);\">Go</button>";
     const auto inline_line =
-        pkchat::highlight::highlight_line(Language::Html, inline_code);
+        ainiux::highlight::highlight_line(Language::Html, inline_code);
     check(has_role_at(inline_line.spans, inline_code.find("color"), TokenRole::Property) &&
               has_role_at(inline_line.spans, inline_code.find("#fff"), TokenRole::Literal) &&
               has_role_at(inline_line.spans, inline_code.find("2px"), TokenRole::Number),
@@ -248,7 +248,7 @@ void test_markup_and_embedded_languages() {
     check(has_role_at(inline_line.spans, style_quote, TokenRole::String),
           "HTML preserves the string role on inline-code quotes");
 
-    const auto plain_inline = pkchat::highlight::highlight_line(Language::HtmlOnly, inline_code);
+    const auto plain_inline = ainiux::highlight::highlight_line(Language::HtmlOnly, inline_code);
     check(has_role_at(plain_inline.spans, inline_code.find("color"), TokenRole::String) &&
               !has_role_at(plain_inline.spans, inline_code.find("color"), TokenRole::Property) &&
               has_role_at(plain_inline.spans, inline_code.find("const"), TokenRole::String) &&
@@ -256,25 +256,25 @@ void test_markup_and_embedded_languages() {
           "htmlonly mode does not delegate inline CSS or JavaScript");
 
     const std::string jsx = "return <button onClick={run}>Go</button>;";
-    const auto jsx_line = pkchat::highlight::highlight_line(Language::TypeScript, jsx);
+    const auto jsx_line = ainiux::highlight::highlight_line(Language::TypeScript, jsx);
     check(has_role(jsx_line.spans, TokenRole::Tag) && has_role(jsx_line.spans, TokenRole::Attribute),
           "TypeScript/JSX highlights tags and attributes");
 
     const std::string xml = "<xs:element name=\"message\" type=\"xs:string\"/>";
-    const auto xml_line = pkchat::highlight::highlight_line(Language::Xml, xml);
+    const auto xml_line = ainiux::highlight::highlight_line(Language::Xml, xml);
     check(has_role(xml_line.spans, TokenRole::Tag) && has_role(xml_line.spans, TokenRole::Attribute),
           "XML highlights namespace-qualified tags and attributes");
 }
 
 void test_multiline_language_states() {
-    const auto c = pkchat::highlight::highlight_document(
+    const auto c = ainiux::highlight::highlight_document(
         Language::C, "/* open\nreturn 17;\n*/ int value = 3;");
     check(c.size() == 3 && c[1].spans.size() == 1 && c[1].spans[0].role == TokenRole::Comment,
           "C block comments suppress lower-priority tokens across lines");
     check(has_role(c[2].spans, TokenRole::Type) && has_role(c[2].spans, TokenRole::Number),
           "C highlighting resumes after a block comment closes");
 
-    const auto python = pkchat::highlight::highlight_document(
+    const auto python = ainiux::highlight::highlight_document(
         Language::Python, "value = \"\"\"open\nreturn 17\n\"\"\"\nprint(value)");
     check(python.size() == 4 && python[1].spans.size() == 1 &&
               python[1].spans[0].role == TokenRole::String,
@@ -282,50 +282,50 @@ void test_multiline_language_states() {
     check(has_role(python[3].spans, TokenRole::Function),
           "Python highlighting resumes after a triple string");
 
-    const auto bash = pkchat::highlight::highlight_document(
+    const auto bash = ainiux::highlight::highlight_document(
         Language::Bash, "cat <<EOF\nreturn $HOME\nEOF\necho done");
     check(bash.size() == 4 && bash[1].spans.size() == 1 && bash[1].spans[0].role == TokenRole::String,
           "Bash heredoc bodies preserve explicit multiline state");
     check(has_role(bash[2].spans, TokenRole::Preprocessor), "Bash highlights heredoc terminators");
 
-    const auto xml = pkchat::highlight::highlight_document(
+    const auto xml = ainiux::highlight::highlight_document(
         Language::Xml, "<![CDATA[<not-a-tag>\ncontinued\n]]><real id=\"1\"/>");
     check(xml.size() == 3 && xml[1].spans.size() == 1 && xml[1].spans[0].role == TokenRole::String,
           "XML CDATA preserves multiline state");
     check(has_role(xml[2].spans, TokenRole::Tag), "XML resumes tag highlighting after CDATA");
 
-    const auto html = pkchat::highlight::highlight_document(
+    const auto html = ainiux::highlight::highlight_document(
         Language::Html, "<style>\n/* open\n*/ color: #2563eb;\n</style>");
     check(html.size() == 4 && has_role(html[1].spans, TokenRole::Comment),
           "HTML style blocks delegate multiline comment state to CSS");
     check(has_role(html[2].spans, TokenRole::Property) && has_role(html[2].spans, TokenRole::Literal),
           "HTML style blocks resume CSS tokens after comments");
 
-    const auto multiline_tag = pkchat::highlight::highlight_document(
+    const auto multiline_tag = ainiux::highlight::highlight_document(
         Language::Html,
         "<button\n style=\"color: #fff; margin: 2px\"\n"
         " onclick=\"const value = 17; run(value);\">Go</button>");
     check(multiline_tag.size() == 3 &&
-              multiline_tag[0].next_state.block == pkchat::highlight::LineState::Block::Tag,
+              multiline_tag[0].next_state.block == ainiux::highlight::LineState::Block::Tag,
           "HTML retains an unfinished opening-tag state");
     check(has_role(multiline_tag[1].spans, TokenRole::Property) &&
-              multiline_tag[1].next_state.block == pkchat::highlight::LineState::Block::Tag,
+              multiline_tag[1].next_state.block == ainiux::highlight::LineState::Block::Tag,
           "HTML highlights CSS attributes on a continued tag");
     check(has_role(multiline_tag[2].spans, TokenRole::Keyword) &&
-              multiline_tag[2].next_state.block == pkchat::highlight::LineState::Block::None,
+              multiline_tag[2].next_state.block == ainiux::highlight::LineState::Block::None,
           "HTML highlights JavaScript attributes and closes a continued tag");
 
-    const auto multiline_script_tag = pkchat::highlight::highlight_document(
+    const auto multiline_script_tag = ainiux::highlight::highlight_document(
         Language::Html,
         "<script\n type=\"module\">const value = 17;</script>");
     check(multiline_script_tag.size() == 2 &&
-              multiline_script_tag[0].next_state.block == pkchat::highlight::LineState::Block::Tag &&
+              multiline_script_tag[0].next_state.block == ainiux::highlight::LineState::Block::Tag &&
               has_role(multiline_script_tag[1].spans, TokenRole::Keyword) &&
               has_role(multiline_script_tag[1].spans, TokenRole::Number) &&
-              multiline_script_tag[1].next_state.block == pkchat::highlight::LineState::Block::None,
+              multiline_script_tag[1].next_state.block == ainiux::highlight::LineState::Block::None,
           "HTML starts embedded JavaScript after a continued script tag closes");
 
-    const auto fenced_html = pkchat::highlight::highlight_document(
+    const auto fenced_html = ainiux::highlight::highlight_document(
         Language::Markdown,
         "```html\n<script>\n/* open\nstill comment\n*/ const value = 17;\n"
         "</script>\n```");
@@ -337,36 +337,36 @@ void test_multiline_language_states() {
               has_role(fenced_html[4].spans, TokenRole::Number),
           "HTML fences resume JavaScript tokens after a nested comment closes");
 
-    const auto php = pkchat::highlight::highlight_document(
+    const auto php = ainiux::highlight::highlight_document(
         Language::Php, "$text = <<<TXT\nreturn 17\nTXT;\necho $text;");
     check(php.size() == 4 && has_role(php[0].spans, TokenRole::Preprocessor) &&
               php[1].spans.size() == 1 && php[1].spans[0].role == TokenRole::String &&
               has_role(php[2].spans, TokenRole::Preprocessor),
           "PHP heredocs preserve multiline string state");
 
-    const auto perl = pkchat::highlight::highlight_document(
+    const auto perl = ainiux::highlight::highlight_document(
         Language::Perl, "=pod\nreturn 17\n=cut\nmy $value = 1;");
     check(perl.size() == 4 && has_role(perl[1].spans, TokenRole::Comment) &&
               has_role(perl[3].spans, TokenRole::Keyword),
           "Perl POD comments preserve multiline state and resume code");
-    const auto perl_heredoc = pkchat::highlight::highlight_document(
+    const auto perl_heredoc = ainiux::highlight::highlight_document(
         Language::Perl, "print <<TEXT;\nreturn 17\nTEXT\nsay 'done';");
     check(perl_heredoc.size() == 4 && has_role(perl_heredoc[1].spans, TokenRole::String) &&
               has_role(perl_heredoc[2].spans, TokenRole::Preprocessor),
           "Perl heredocs preserve multiline string state");
 
-    const auto ruby = pkchat::highlight::highlight_document(
+    const auto ruby = ainiux::highlight::highlight_document(
         Language::Ruby, "=begin\nreturn 17\n=end\ndef run = 1");
     check(ruby.size() == 4 && has_role(ruby[1].spans, TokenRole::Comment) &&
               has_role(ruby[3].spans, TokenRole::Keyword),
           "Ruby block comments preserve multiline state and resume code");
-    const auto ruby_heredoc = pkchat::highlight::highlight_document(
+    const auto ruby_heredoc = ainiux::highlight::highlight_document(
         Language::Ruby, "text = <<~TEXT\n  return 17\n  TEXT\nputs(text)");
     check(ruby_heredoc.size() == 4 && has_role(ruby_heredoc[1].spans, TokenRole::String) &&
               has_role(ruby_heredoc[2].spans, TokenRole::Preprocessor),
           "Ruby squiggly heredocs accept indented terminators");
 
-    const auto rust = pkchat::highlight::highlight_document(
+    const auto rust = ainiux::highlight::highlight_document(
         Language::Rust, "/* outer\n/* nested */\nstill */ fn run() {}\nlet raw = r##\"open\ntext\nclose\"##;");
     check(rust.size() == 6 && has_role(rust[1].spans, TokenRole::Comment) &&
               has_role(rust[2].spans, TokenRole::Comment) &&
@@ -375,45 +375,45 @@ void test_multiline_language_states() {
     check(has_role(rust[4].spans, TokenRole::String) && has_role(rust[5].spans, TokenRole::String),
           "Rust raw strings preserve hash-delimited multiline state");
 
-    const auto go = pkchat::highlight::highlight_document(
+    const auto go = ainiux::highlight::highlight_document(
         Language::Go, "value := `open\nreturn 17\n`\nfmt.Println(value)");
     check(go.size() == 4 && has_role(go[1].spans, TokenRole::String) &&
               has_role(go[2].spans, TokenRole::String) && has_role(go[3].spans, TokenRole::Function),
           "Go raw strings preserve multiline state and resume code");
 
-    const auto powershell = pkchat::highlight::highlight_document(
+    const auto powershell = ainiux::highlight::highlight_document(
         Language::PowerShell, "$text = @\"\nreturn 17\n\"@\nWrite-Output $text");
     check(powershell.size() == 4 && has_role(powershell[1].spans, TokenRole::String) &&
               has_role(powershell[2].spans, TokenRole::Preprocessor) &&
               has_role(powershell[3].spans, TokenRole::Function),
           "PowerShell here-strings preserve multiline state and resume commands");
-    const auto powershell_comment = pkchat::highlight::highlight_document(
+    const auto powershell_comment = ainiux::highlight::highlight_document(
         Language::PowerShell, "<# open\nreturn 17\n#> function Get-Value {}");
     check(powershell_comment.size() == 3 && has_role(powershell_comment[1].spans, TokenRole::Comment) &&
               has_role(powershell_comment[2].spans, TokenRole::Comment) &&
               has_role(powershell_comment[2].spans, TokenRole::Keyword),
           "PowerShell block comments preserve state and resume code");
 
-    const auto sql = pkchat::highlight::highlight_document(
+    const auto sql = ainiux::highlight::highlight_document(
         Language::Sql, "DO $body$\nBEGIN\nRETURN 17;\nEND\n$body$;\nSELECT 1;");
     check(sql.size() == 6 && has_role(sql[1].spans, TokenRole::String) &&
               has_role(sql[4].spans, TokenRole::String) && has_role(sql[5].spans, TokenRole::Keyword),
           "SQL dollar-quoted strings preserve multiline state and resume statements");
-    const auto sql_comment = pkchat::highlight::highlight_document(
+    const auto sql_comment = ainiux::highlight::highlight_document(
         Language::Sql, "/* open\nSELECT 17\n*/ SELECT 1;");
     check(sql_comment.size() == 3 && has_role(sql_comment[1].spans, TokenRole::Comment) &&
               has_role(sql_comment[2].spans, TokenRole::Comment) &&
               has_role(sql_comment[2].spans, TokenRole::Keyword),
           "SQL block comments preserve state and resume statements");
 
-    const auto toml = pkchat::highlight::highlight_document(
+    const auto toml = ainiux::highlight::highlight_document(
         Language::Toml, "text = \"\"\"open\nreturn 17\n\"\"\"\nenabled = true");
     check(toml.size() == 4 && has_role(toml[1].spans, TokenRole::String) &&
               has_role(toml[2].spans, TokenRole::String) &&
               has_role(toml[3].spans, TokenRole::Literal),
           "TOML multiline strings preserve state and resume values");
 
-    const auto yaml = pkchat::highlight::highlight_document(
+    const auto yaml = ainiux::highlight::highlight_document(
         Language::Yaml, "message: |\n  return 17\nnext: true");
     check(yaml.size() == 3 && has_role(yaml[1].spans, TokenRole::String) &&
               has_role(yaml[2].spans, TokenRole::Property) &&
@@ -428,8 +428,8 @@ void test_markdown_inline_and_structure() {
         "> quoted\n"
         "- item\n"
         "<span title=\"x\">raw</span>";
-    const std::vector<pkchat::highlight::HighlightedLine> lines =
-        pkchat::highlight::highlight_document(Language::Markdown, text);
+    const std::vector<ainiux::highlight::HighlightedLine> lines =
+        ainiux::highlight::highlight_document(Language::Markdown, text);
     check(lines.size() == 5, "Markdown highlighter preserves document line count");
     check(has_role(lines[0].spans, TokenRole::Heading), "Markdown highlights ATX headings");
     check(has_role(lines[1].spans, TokenRole::Emphasis), "Markdown highlights emphasis");
@@ -442,8 +442,8 @@ void test_markdown_inline_and_structure() {
     check(has_role(lines[4].spans, TokenRole::Tag), "Markdown highlights raw HTML tags");
 
     const std::string inline_link = "See [link text](http://example.com \"title\") here";
-    const std::vector<pkchat::highlight::HighlightedLine> link_lines =
-        pkchat::highlight::highlight_document(Language::Markdown, inline_link);
+    const std::vector<ainiux::highlight::HighlightedLine> link_lines =
+        ainiux::highlight::highlight_document(Language::Markdown, inline_link);
     const size_t url_start = inline_link.find("http://");
     check(link_lines.size() == 1 && has_role(link_lines[0].spans, TokenRole::Link),
           "Markdown keeps link text and delimiters in the link role");
@@ -463,20 +463,20 @@ void test_markdown_emphasis_delimiters_are_complete() {
                                    "_emphasis_",
                                    "__bold text__",
                                    "~~strikethrough~~"}) {
-        const std::vector<pkchat::highlight::HighlightedLine> lines =
-            pkchat::highlight::highlight_document(Language::Markdown, text);
+        const std::vector<ainiux::highlight::HighlightedLine> lines =
+            ainiux::highlight::highlight_document(Language::Markdown, text);
         check(lines.size() == 1 &&
                   has_exact_span(lines[0].spans, 0, text.size(), TokenRole::Emphasis),
               "Markdown highlights every opening and closing emphasis delimiter byte: " + text);
     }
 
-    pkchat::highlight::DocumentCache cache;
+    ainiux::highlight::DocumentCache cache;
     cache.update({"**bold text*"}, Language::Markdown);
-    size_t budget = pkchat::highlight::kDefaultFrameBudgetBytes;
+    size_t budget = ainiux::highlight::kDefaultFrameBudgetBytes;
     check(cache.highlight_through(0, budget),
           "Markdown cache highlights an unfinished strong-emphasis edit");
     cache.update({"**bold text**"}, Language::Markdown);
-    budget = pkchat::highlight::kDefaultFrameBudgetBytes;
+    budget = ainiux::highlight::kDefaultFrameBudgetBytes;
     check(cache.highlight_through(0, budget) && cache.line(0) != nullptr &&
               has_exact_span(cache.line(0)->spans, 0, 13, TokenRole::Emphasis),
           "Markdown cache includes the final asterisk after incremental typing");
@@ -490,8 +490,8 @@ void test_markdown_multiline_state_and_precedence() {
         "# not a heading\n"
         "```\n"
         "after";
-    const std::vector<pkchat::highlight::HighlightedLine> lines =
-        pkchat::highlight::highlight_document(Language::Markdown, text);
+    const std::vector<ainiux::highlight::HighlightedLine> lines =
+        ainiux::highlight::highlight_document(Language::Markdown, text);
     check(has_role(lines[0].spans, TokenRole::Comment), "Markdown opens multiline HTML comments");
     const size_t hidden_emphasis = lines[0].spans.empty() ? 0 : text.find("*not");
     (void)hidden_emphasis;
@@ -505,7 +505,7 @@ void test_markdown_multiline_state_and_precedence() {
           "Markdown unknown fenced languages stay plain and suppress heading rules");
     check(has_role(lines[4].spans, TokenRole::Preprocessor), "Markdown highlights closing fences");
 
-    const auto tagged = pkchat::highlight::highlight_document(
+    const auto tagged = ainiux::highlight::highlight_document(
         Language::Markdown, "```py\ndef greet(name: str):\n    return True\n```\n~~~not-a-mode\nconst x = 1\n~~~");
     check(tagged.size() == 7 && has_role(tagged[1].spans, TokenRole::Keyword) &&
               has_role(tagged[1].spans, TokenRole::Function) &&
@@ -515,13 +515,13 @@ void test_markdown_multiline_state_and_precedence() {
           "Markdown fenced highlighter retains embedded language state");
     check(tagged[5].spans.empty(), "Markdown leaves unknown tagged fences as plain text");
 
-    const auto partial = pkchat::highlight::highlight_document(
+    const auto partial = ainiux::highlight::highlight_document(
         Language::Markdown, "```js\nconst value = 17");
     check(partial.size() == 2 && has_role(partial[1].spans, TokenRole::Keyword) &&
-              partial[1].next_state.block == pkchat::highlight::LineState::Block::Fence,
+              partial[1].next_state.block == ainiux::highlight::LineState::Block::Fence,
           "Markdown keeps streaming partial fences open while highlighting received code");
 
-    const auto nested_rust = pkchat::highlight::highlight_document(
+    const auto nested_rust = ainiux::highlight::highlight_document(
         Language::Markdown,
         "```rust\n/* outer\n/* nested\nstill nested\n*/\nstill outer\n*/ fn run() {}\n```");
     check(nested_rust.size() == 8 && has_role(nested_rust[5].spans, TokenRole::Comment) &&
@@ -534,8 +534,8 @@ void test_setext_unicode_invalid_bytes_and_budget() {
     std::string text = u8"你好 ÄÖÅ é 👨‍👩‍👧‍👦\n---\n";
     text.push_back(static_cast<char>(0xFF));
     text += " *ok*";
-    const std::vector<pkchat::highlight::HighlightedLine> lines =
-        pkchat::highlight::highlight_document(Language::Markdown, text);
+    const std::vector<ainiux::highlight::HighlightedLine> lines =
+        ainiux::highlight::highlight_document(Language::Markdown, text);
     check(lines.size() == 3, "Markdown highlighter preserves Unicode and invalid-byte lines");
     check(lines[0].spans.size() == 1 && lines[0].spans[0].role == TokenRole::Heading,
           "Markdown highlights setext heading text retroactively");
@@ -546,26 +546,26 @@ void test_setext_unicode_invalid_bytes_and_budget() {
     std::string invalid_code = u8"const Привет = 17; ";
     invalid_code.push_back(static_cast<char>(0xFF));
     invalid_code += " return true;";
-    const auto code = pkchat::highlight::highlight_line(Language::JavaScript, invalid_code);
+    const auto code = ainiux::highlight::highlight_line(Language::JavaScript, invalid_code);
     check(has_role(code.spans, TokenRole::Keyword) && has_role(code.spans, TokenRole::Literal),
           "programming-language highlighting preserves Unicode and scans past invalid UTF-8");
 
-    const std::string long_line(pkchat::highlight::kMaximumHighlightedLineBytes + 1, '*');
-    const pkchat::highlight::HighlightedLine limited =
-        pkchat::highlight::highlight_line(Language::Markdown, long_line);
+    const std::string long_line(ainiux::highlight::kMaximumHighlightedLineBytes + 1, '*');
+    const ainiux::highlight::HighlightedLine limited =
+        ainiux::highlight::highlight_line(Language::Markdown, long_line);
     check(limited.work_limited && limited.spans.empty(),
           "Markdown long-line highlighting falls back to plain text");
-    const pkchat::highlight::HighlightedLine limited_code =
-        pkchat::highlight::highlight_line(Language::Python, long_line);
+    const ainiux::highlight::HighlightedLine limited_code =
+        ainiux::highlight::highlight_line(Language::Python, long_line);
     check(limited_code.work_limited && limited_code.spans.empty(),
           "programming-language long lines fall back to plain text");
 }
 
 void test_incremental_cache_invalidation() {
-    pkchat::highlight::DocumentCache cache;
+    ainiux::highlight::DocumentCache cache;
     std::vector<std::string> lines = {"plain", "*em*", "tail"};
     cache.update(lines, Language::Markdown);
-    size_t budget = pkchat::highlight::kDefaultFrameBudgetBytes;
+    size_t budget = ainiux::highlight::kDefaultFrameBudgetBytes;
     check(cache.highlight_through(2, budget) && cache.valid_line_count() == 3,
           "Markdown document cache highlights requested lines");
     check(cache.line(1) != nullptr && has_role(cache.line(1)->spans, TokenRole::Emphasis),
@@ -575,10 +575,10 @@ void test_incremental_cache_invalidation() {
     cache.update(lines, Language::Markdown);
     check(cache.valid_line_count() <= 1,
           "Markdown document cache invalidates from before an edited line");
-    budget = pkchat::highlight::kDefaultFrameBudgetBytes;
+    budget = ainiux::highlight::kDefaultFrameBudgetBytes;
     check(cache.highlight_through(2, budget), "Markdown document cache re-highlights after edit");
     check(cache.line(2) != nullptr && cache.line(2)->next_state.block ==
-                                          pkchat::highlight::LineState::Block::HtmlComment,
+                                          ainiux::highlight::LineState::Block::HtmlComment,
           "Markdown cache propagates changed multiline state");
 
     cache.clear();
@@ -603,4 +603,4 @@ void run_all() {
     test_incremental_cache_invalidation();
 }
 
-}  // namespace pkchat::test::highlight
+}  // namespace ainiux::test::highlight

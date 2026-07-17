@@ -9,7 +9,7 @@
 #include "runtime/runtime.hpp"
 #include "tui/events.hpp"
 
-namespace pkchat::tui {
+namespace ainiux::tui {
 
 struct TuiFileJobs {
     runtime::JobHandle& file_job;
@@ -33,4 +33,4 @@ struct TuiFileJobs {
     void start_search(const std::string& query);
 };
 
-}  // namespace pkchat::tui
+}  // namespace ainiux::tui

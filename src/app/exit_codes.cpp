@@ -2,7 +2,7 @@
 
 #include <iostream>
 
-namespace pkchat::app {
+namespace ainiux::app {
 
 int exit_code_for(ErrorCode code) {
     switch (code) {
@@ -43,4 +43,4 @@ void print_error(const Error& error) {
     std::cerr << error_code_name(error.code) << ": " << error.message << "\n";
 }
 
-}  // namespace pkchat::app
+}  // namespace ainiux::app

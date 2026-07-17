@@ -1,6 +1,6 @@
 #include "runtime/runtime.hpp"
 
-namespace pkchat::runtime {
+namespace ainiux::runtime {
 
 CancellationToken::CancellationToken() : flag_(std::make_shared<std::atomic<bool>>(false)) {}
 
@@ -54,4 +54,4 @@ bool JobHandle::running() const {
     return running_.load(std::memory_order_acquire);
 }
 
-}  // namespace pkchat::runtime
+}  // namespace ainiux::runtime

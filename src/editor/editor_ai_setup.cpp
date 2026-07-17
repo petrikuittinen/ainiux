@@ -3,7 +3,7 @@
 #include "cli/args.hpp"
 #include "tui/tui.hpp"
 
-namespace pkchat::editor {
+namespace ainiux::editor {
 
 bool editor_ai_has_provider(const std::optional<AiContinueContext>& context) {
     return context.has_value() && !context->request.profile.offline;
@@ -81,4 +81,4 @@ Error apply_editor_model(std::optional<AiContinueContext>& context, const std::s
     return ok_error();
 }
 
-}  // namespace pkchat::editor
+}  // namespace ainiux::editor

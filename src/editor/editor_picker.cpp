@@ -3,7 +3,7 @@
 #include "tui/input_handlers.hpp"
 #include "ui/text_selector.hpp"
 
-namespace pkchat::editor {
+namespace ainiux::editor {
 
 std::string EditorProviderModelPicker::selection_label() const {
     return for_provider ? "Selected provider" : "Selected model";
@@ -65,4 +65,4 @@ bool EditorProviderModelPicker::handle_escape(const std::string& sequence, std::
     return false;
 }
 
-}  // namespace pkchat::editor
+}  // namespace ainiux::editor

@@ -11,7 +11,7 @@
 #include "http/http.hpp"
 #include "runtime/runtime.hpp"
 
-namespace pkchat::provider {
+namespace ainiux::provider {
 
 enum class ApiKind { ChatCompletions, Responses };
 
@@ -165,4 +165,4 @@ Error send_chat_messages(const RequestContext& context,
                          runtime::CancellationToken cancellation = runtime::CancellationToken());
 std::string normalize_base_url(const std::string& url, bool* changed, Error& error);
 
-}  // namespace pkchat::provider
+}  // namespace ainiux::provider

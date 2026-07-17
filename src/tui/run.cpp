@@ -19,7 +19,7 @@
 #include "app/interactive_mode.hpp"
 #include "app/detail.hpp"
 #include "chat/settings.hpp"
-#include "pkchat/model_setting.hpp"
+#include "ainiux/model_setting.hpp"
 #include "chat/sqlite_store.hpp"
 #include "cli/args.hpp"
 #include "context/context.hpp"
@@ -39,7 +39,7 @@
 #include <sys/select.h>
 #include <unistd.h>
 
-namespace pkchat::tui {
+namespace ainiux::tui {
 
 using detail::RenderStyle;
 
@@ -478,7 +478,7 @@ app::TuiRunResult run(provider::RequestContext context,
             request_messages.back().content = pending_full_model_content;
         }
 
-        pkchat::context::PreparedMessages prepared = pkchat::context::prepare(
+        ainiux::context::PreparedMessages prepared = ainiux::context::prepare(
             request_messages,
             context.options.context_policy,
             context.options.max_context_bytes > 0
@@ -1608,4 +1608,4 @@ app::TuiRunResult run(provider::RequestContext context,
     return {0, app::InteractiveUiTarget::Quit};
 }
 
-}  // namespace pkchat::tui
+}  // namespace ainiux::tui

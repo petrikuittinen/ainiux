@@ -1,6 +1,6 @@
 #include "benchmark/benchmark.hpp"
 
-namespace pkchat::benchmark {
+namespace ainiux::benchmark {
 
 ScoreResult score_response(const Case& benchmark_case,
                            size_t turn,
@@ -22,4 +22,4 @@ ScoreResult score_response(const Case& benchmark_case,
     return {};
 }
 
-}  // namespace pkchat::benchmark
+}  // namespace ainiux::benchmark

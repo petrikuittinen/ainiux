@@ -6,7 +6,7 @@
 // Regenerate with tools/generate_editor_unicode_data.py; do not edit by hand.
 #include <cstdint>
 
-namespace pkchat::editor::unicode_data {
+namespace ainiux::editor::unicode_data {
 struct UnicodeRange { std::uint32_t first; std::uint32_t last; };
 struct FoldMapping { std::uint32_t source; std::uint32_t values[3]; std::uint8_t length; };
 inline constexpr UnicodeRange kWordRanges[] = {
@@ -2989,4 +2989,4 @@ inline constexpr FoldMapping kCaseFolds[] = {
     {0x1E920U, {0x1E942U, 0x0U, 0x0U}, 1},
     {0x1E921U, {0x1E943U, 0x0U, 0x0U}, 1},
 };
-}  // namespace pkchat::editor::unicode_data
+}  // namespace ainiux::editor::unicode_data

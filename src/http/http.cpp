@@ -15,7 +15,7 @@
 
 #include "security/redact.hpp"
 
-namespace pkchat::http {
+namespace ainiux::http {
 
 namespace {
 
@@ -459,4 +459,4 @@ Result perform(const Request& request, const std::vector<std::string>& secrets) 
     return {state.response, ok_error()};
 }
 
-}  // namespace pkchat::http
+}  // namespace ainiux::http

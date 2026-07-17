@@ -3,7 +3,7 @@
 #include <algorithm>
 #include <cctype>
 
-namespace pkchat::editor {
+namespace ainiux::editor {
 
 SplitLayout::SplitLayout() {
     reset(0);
@@ -407,4 +407,4 @@ std::string window_prefix_action(unsigned char ch) {
     return "";
 }
 
-}  // namespace pkchat::editor
+}  // namespace ainiux::editor

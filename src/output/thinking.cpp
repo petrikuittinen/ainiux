@@ -2,7 +2,7 @@
 
 #include <algorithm>
 
-namespace pkchat::output {
+namespace ainiux::output {
 namespace {
 
 constexpr const char* kOpenTag = "<think>";
@@ -131,4 +131,4 @@ ThinkingChunk split_thinking_traces(const std::string& text) {
     return result;
 }
 
-}  // namespace pkchat::output
+}  // namespace ainiux::output

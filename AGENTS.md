@@ -1,12 +1,12 @@
 # AGENTS.md
 
-Project: `pkchat`
+Project: `ainiux`
 
 Repository-level instructions for AI coding agents. Treat this as current project guidance. The user's latest explicit instruction always wins. For milestones and history use `PLANS.md`; for user-facing usage use `README.md`; for design rationale use `docs/decisions.md`; for open work use `TODO.md`.
 
 ## Mission
 
-Build and maintain `pkchat`: a fast, portable command-line and terminal chat client for OpenAI and OpenAI-compatible APIs, with a first-class standalone editor, document conversion, benchmarks, and judge grading.
+Build and maintain `ainiux`: a fast, portable command-line and terminal chat client for OpenAI and OpenAI-compatible APIs, with a first-class standalone editor, document conversion, benchmarks, and judge grading.
 
 The program must stay excellent as a scriptable CLI. Keep the core engine independent from UI surfaces so the same request, provider, streaming, persistence, runtime/job, cancellation, memory-management, and error-handling code is reused by:
 
@@ -44,7 +44,7 @@ Status: **v0.97** (see `README.md` and `PLANS.md` implementation notes). Active 
 - Provider-specific reasoning/thinking request mapping (`--thinking`, `--thinking-budget`)
 - `--provider none` offline profile for conversion/editor without a model endpoint
 - Credential lookup from env / key file / stdin; redaction in logs and artifacts
-- JSON chat import/export (`--save-chat` / `--load-chat`); SQLite-backed TUI chat library at `~/.pkchat/pkchat.db`
+- JSON chat import/export (`--save-chat` / `--load-chat`); SQLite-backed TUI chat library at `~/.ainiux/ainiux.db`
 - Cancellable runtime jobs; libcurl HTTP + incremental SSE streaming
 - Request-only context policies; full transcript preserved on disk
 - Bounded text/HTML/Markdown attachments; JPEG/PNG/GIF image input (Chat Completions)
@@ -58,7 +58,7 @@ Status: **v0.97** (see `README.md` and `PLANS.md` implementation notes). Active 
 
 - Local OpenAI-compatible **server** mode (`--server` in `PLANS.md` v0.90)
 - Browser local web UI (`src/web/` reserved; `docs/web-mode.md` is still a stub plan)
-- Autonomous **agent** mode (`pkchat agent`, v1.0) with sandbox/approval
+- Autonomous **agent** mode (`ainiux agent`, v1.0) with sandbox/approval
 - PDF / DOCX conversion modules
 - Native Anthropic Messages adapter; full live capability probing for all models
 - ncurses-based TUI (current UI uses POSIX `termios` + ANSI)
@@ -112,12 +112,12 @@ This is the **authoritative** layout. Put new code in the matching module. Do no
 ├── Makefile
 ├── LICENSE
 ├── config/                      # bundled install templates
-│   ├── pkchat.conf
+│   ├── ainiux.conf
 │   ├── themes.conf
 │   ├── editor-commands.conf
 │   └── benchmarks.conf
 ├── benchmarks/                  # JSONL datasets (builtin parts + long-context)
-├── include/pkchat/
+├── include/ainiux/
 │   ├── version.hpp
 │   └── model_setting.hpp
 ├── src/
@@ -176,7 +176,7 @@ Use as few external libraries as practical. Every new dependency must be justifi
 Current baseline:
 
 - **libcurl** — HTTP/HTTPS, proxies, timeouts, streaming callbacks (`src/http/`).
-- **libsqlite3** — TUI chat library (`src/chat/sqlite_store.*`, `~/.pkchat/pkchat.db`).
+- **libsqlite3** — TUI chat library (`src/chat/sqlite_store.*`, `~/.ainiux/ainiux.db`).
 - **In-tree JSON facade** (`src/json/`) — request escaping and response parsing; expand or vendor a reviewed library only with an explicit decision.
 - **POSIX termios + ANSI** — TUI and editor terminal I/O. **No ncurses dependency** today. The editor renderer is independent of the terminal harness.
 - **Generated Unicode tables** — editor word completion / properties under `src/editor/detail/` (see `tools/generate_editor_unicode_data.py`). Full `utf8proc` / `libgrapheme` integration is future work, not required for ordinary changes.
@@ -214,7 +214,7 @@ deepinfra, nvidia_nim, zai, qwen, dashscope
 custom_openai_chat (custom)
 ```
 
-Treat LM Studio as a first-class local profile (default `http://localhost:1234/v1`, optional key via `LMSTUDIO_API_KEY` / `LM_STUDIO_API_KEY` / `PKCHAT_API_KEY`). Keep `lm_studio` separate from `llamacpp` in profile names even if adapters share code.
+Treat LM Studio as a first-class local profile (default `http://localhost:1234/v1`, optional key via `LMSTUDIO_API_KEY` / `LM_STUDIO_API_KEY` / `AINIUX_API_KEY`). Keep `lm_studio` separate from `llamacpp` in profile names even if adapters share code.
 
 `--provider none` has no base URL or model transport. Use it for local conversion and editor workflows that must not invent a dummy endpoint. URL fetch and web search remain separate explicit network operations with their own safety rules.
 
@@ -259,14 +259,14 @@ The CLI must remain useful in shell scripts.
 Examples:
 
 ```sh
-pkchat http://localhost:8000 -p "What is the capital of Norway?"
-pkchat --provider openai -m MODEL -p "Hello"
-pkchat --provider lmstudio --list-models
-pkchat --editor notes.md
-pkchat --chat
-pkchat benchmark --provider openai -m MODEL
-pkchat --grade --provider openai -m JUDGE_MODEL --grade-input results.jsonl
-pkchat --input page.html --output-format md
+ainiux http://localhost:8000 -p "What is the capital of Norway?"
+ainiux --provider openai -m MODEL -p "Hello"
+ainiux --provider lmstudio --list-models
+ainiux --editor notes.md
+ainiux --chat
+ainiux benchmark --provider openai -m MODEL
+ainiux --grade --provider openai -m JUDGE_MODEL --grade-input results.jsonl
+ainiux --input page.html --output-format md
 ```
 
 ### Configuration
@@ -274,8 +274,8 @@ pkchat --input page.html --output-format md
 Configuration is TOML-alike, not JSON.
 
 ```text
-system: $XDG_CONFIG_DIRS/pkchat/config.conf (default /etc/xdg/...)
-user:   $XDG_CONFIG_HOME/pkchat/config.conf or ~/.config/pkchat/config.conf
+system: $XDG_CONFIG_DIRS/ainiux/config.conf (default /etc/xdg/...)
+user:   $XDG_CONFIG_HOME/ainiux/config.conf or ~/.config/ainiux/config.conf
 ```
 
 Layering: system files (reverse `XDG_CONFIG_DIRS` order), then user file, then CLI (authoritative). `--no-config` skips the user file only. Separate documents:
@@ -288,7 +288,7 @@ Bundled templates live in `config/` and install via `make install`. See `docs/de
 
 ### Persistence
 
-- **SQLite TUI library:** `~/.pkchat/pkchat.db` (WAL, per-message rows). Primary local chat library for `--chat`.
+- **SQLite TUI library:** `~/.ainiux/ainiux.db` (WAL, per-message rows). Primary local chat library for `--chat`.
 - **JSON chat files:** explicit `--save-chat` / `--load-chat` import/export. Include schema version, timestamps, provider, base URL, model, settings, messages, attachments, usage, compaction events as applicable.
 - Atomic file saves where files are used: write temp → fsync where supported → rename → fsync parent where supported.
 - Restrictive permissions for files that may contain prompts, history, URLs, or secrets.
@@ -298,7 +298,7 @@ Bundled templates live in `config/` and install via `make install`. See `docs/de
 
 Never emit vague errors such as `request failed` when more detail is available.
 
-Internal codes live in `pkchat::ErrorCode` (`src/common.hpp`), including:
+Internal codes live in `ainiux::ErrorCode` (`src/common.hpp`), including:
 
 ```text
 Ok, BadArgs, BadUrl, Dns, Connect, Tls, Timeout,
@@ -313,7 +313,7 @@ Human-facing errors should include what failed, which URL/path/model/option was 
 
 Prefer environment variables, key files, or stdin. Do not encourage command-line API keys.
 
-Supported patterns include provider-specific env vars (`OPENAI_API_KEY`, `OPENROUTER_API_KEY`, `LMSTUDIO_API_KEY`, `LM_STUDIO_API_KEY`, …), `PKCHAT_API_KEY`, `--key-env`, `--key-file`, `--key-stdin`, and `--header`.
+Supported patterns include provider-specific env vars (`OPENAI_API_KEY`, `OPENROUTER_API_KEY`, `LMSTUDIO_API_KEY`, `LM_STUDIO_API_KEY`, …), `AINIUX_API_KEY`, `--key-env`, `--key-file`, `--key-stdin`, and `--header`.
 
 If `-k` / `--key` is used, warn that argv may be visible to other local users unless `--quiet`.
 

@@ -1,6 +1,6 @@
 # PLANS.md
 
-Project: `pkchat`
+Project: `ainiux`
 
 This file is the implementation roadmap and execution-plan template for coding agents. Work from the earliest incomplete milestone unless the user explicitly asks for something else.
 
@@ -10,7 +10,7 @@ This is a living roadmap, not an immutable specification. Product direction natu
 
 Create the best practical command-line, terminal, local server, and future local-web chat client for OpenAI and OpenAI-compatible APIs.
 
-`pkchat` should be:
+`ainiux` should be:
 
 - Fast and portable.
 - Excellent in scripts.
@@ -36,7 +36,7 @@ The CLI, streaming, persistence, provider architecture, runtime/job layer, TUI f
 - Browser automation.
 - Plugin system.
 
-The browser-based local web UI is postponed. A local OpenAI-compatible server mode may come first, because it can expose `pkchat` conversions and later chained chat workflows to other OpenAI-compatible clients while reusing the same transport/runtime/security code. Autonomous local agent mode remains separate and must still have its own sandbox/approval design before any tool execution is added.
+The browser-based local web UI is postponed. A local OpenAI-compatible server mode may come first, because it can expose `ainiux` conversions and later chained chat workflows to other OpenAI-compatible clients while reusing the same transport/runtime/security code. Autonomous local agent mode remains separate and must still have its own sandbox/approval design before any tool execution is added.
 
 ## High-level milestones
 
@@ -60,7 +60,7 @@ Each milestone should leave the program usable. Do not create a long-lived pile 
 
 ## Current baseline
 
-Implementation status (2026-07-16): `pkchat` is at v0.97. Active development targets the v0.9 milestone (benchmark cutoff mode, codebase refactor, and TUI/CLI polish) before local OpenAI-compatible server mode. The repository has the scriptable CLI, built-in provider registry and aliases, Chat Completions, text-only Responses API support, streaming SSE, provider-specific reasoning/thinking request compatibility, credential lookup, JSON chat import/export, SQLite-backed TUI chat persistence, cancellable runtime jobs, REPL, full-screen TUI foundation, editor with multiple file buffers, selection, copy/cut/paste across buffers, grapheme-aware Unicode navigation and terminal cell-width rendering, and cursor-aware AI continue/auto-write (`Ctrl+Space`), request-only context policies, context-use estimates, bounded text/HTML/Markdown input, JPEG/PNG/GIF image input for Chat Completions, safe URL fetching, Markdown output conversion, automatic v0.6 system/user TOML-alike configuration loading, and concurrent JSONL benchmark execution. `--provider none` supports local conversion and editor workflows without a model endpoint. Standalone `--editor` accepts an optional startup path after a provider shortcut or base URL, creates a missing file before editing, prompts to save scratch buffers on quit, and asks for overwrite confirmation when saving to an existing path. Local `lmstudio`, `ollama`, `vllm`, and loopback base URLs auto-select the first `/v1/models` entry when `--model` is omitted.
+Implementation status (2026-07-16): `ainiux` is at v0.97. Active development targets the v0.9 milestone (benchmark cutoff mode, codebase refactor, and TUI/CLI polish) before local OpenAI-compatible server mode. The repository has the scriptable CLI, built-in provider registry and aliases, Chat Completions, text-only Responses API support, streaming SSE, provider-specific reasoning/thinking request compatibility, credential lookup, JSON chat import/export, SQLite-backed TUI chat persistence, cancellable runtime jobs, REPL, full-screen TUI foundation, editor with multiple file buffers, selection, copy/cut/paste across buffers, grapheme-aware Unicode navigation and terminal cell-width rendering, and cursor-aware AI continue/auto-write (`Ctrl+Space`), request-only context policies, context-use estimates, bounded text/HTML/Markdown input, JPEG/PNG/GIF image input for Chat Completions, safe URL fetching, Markdown output conversion, automatic v0.6 system/user TOML-alike configuration loading, and concurrent JSONL benchmark execution. `--provider none` supports local conversion and editor workflows without a model endpoint. Standalone `--editor` accepts an optional startup path after a provider shortcut or base URL, creates a missing file before editing, prompts to save scratch buffers on quit, and asks for overwrite confirmation when saving to an existing path. Local `lmstudio`, `ollama`, `vllm`, and loopback base URLs auto-select the first `/v1/models` entry when `--model` is omitted.
 
 Implementation note (2026-07-17): benchmark results can now be graded as a first-class `--grade` pass using runtime-only instructions from layered `benchmarks.conf` files. Grading discovers or accepts source JSONL, groups complete case/run transcripts, sends bounded concurrent judge requests, strictly validates one JSON response per run, continues through source/HTTP/schema failures, and emits auditable JSONL plus Markdown summaries. Every one of the 133 built-in cases now has a reference answer or rubric. The twenty safety cases are balanced between ten answer and ten reject expectations; four use the policy-sensitive boundary classification with an explicit per-case action and rubric. No fallback grading prose is compiled into C++.
 
@@ -68,7 +68,7 @@ Implementation note (2026-07-14): file-backed editor buffers now hold canonical,
 
 Runtime defaults live in `cli::Options`, provider defaults live in `src/provider/`, and API keys are resolved while building the provider request context. Automatic system and user config files map into a base `cli::Options`, after which `main.cpp` parses CLI arguments over that base. `--no-config` can bypass the automatic user file while retaining system configuration, and `--debug` reports configuration discovery on `stderr`.
 
-Implementation note (2026-06-30, v0.86): TUI panels for thread picker, help, and confirmations use dedicated colors and box-drawing separators; provider labels use registry aliases in status lines; thinking and streaming show single-character indicators. Editor mode embeds `docs/editor_help.md`, installable to `share/pkchat/`, and toggles read-only help via `Esc /help`.
+Implementation note (2026-06-30, v0.86): TUI panels for thread picker, help, and confirmations use dedicated colors and box-drawing separators; provider labels use registry aliases in status lines; thinking and streaming show single-character indicators. Editor mode embeds `docs/editor_help.md`, installable to `share/ainiux/`, and toggles read-only help via `Esc /help`.
 
 Implementation note (2026-07-05, v0.88): Web search is available through `--search QUERY`, REPL/TUI `/search QUERY`, and editor `Esc /search QUERY`. Providers include Tavily, Firecrawl, Exa, Searxng, with DuckDuckGo Instant Answer and Google HTML fallbacks when API keys are absent. `MAXIMUM_WEB_SEARCH_RESULTS` defaults to 3 via config, CLI, or environment.
 
@@ -78,7 +78,7 @@ Implementation note (2026-07-08, v0.90): Chat and editor keyboard shortcuts were
 
 Implementation note (2026-07-04, v0.87): `Ctrl+A` selects the entire editor or chat input buffer. `Home`/`End` move to the current line; `Alt+Home`/`Alt+End` jump to buffer start/end. `Ctrl+E` is unused in standalone editor mode. Chat TUI `Ctrl+E` copies the last user or assistant message into the input for editing, with `Enter` to save and a bare `Esc` to cancel; escape-sequence parsing during edit no longer treats arrow keys as cancel.
 
-Implementation note (2026-06-29, v0.85): Per-thread model settings add CLI sampling/thinking flags, repeatable `[Model-setting]` presets in `config/pkchat.conf`, TUI `/setting`, `/system`, and `/clone`, provider request fields for `top_k`, `min_p`, penalties, and `thinking_budget`, and SQLite `settings_json` persistence. Unset thread overrides serialize as JSON `null` and use provider defaults; `/setting NAME=NULL` clears an override. `thinking_budget` accepts token counts or verbal labels.
+Implementation note (2026-06-29, v0.85): Per-thread model settings add CLI sampling/thinking flags, repeatable `[Model-setting]` presets in `config/ainiux.conf`, TUI `/setting`, `/system`, and `/clone`, provider request fields for `top_k`, `min_p`, penalties, and `thinking_budget`, and SQLite `settings_json` persistence. Unset thread overrides serialize as JSON `null` and use provider defaults; `/setting NAME=NULL` clears an override. `thinking_budget` accepts token counts or verbal labels.
 
 Implementation note (2026-06-28, v0.84): Large monolithic sources were split into `src/app/`, `src/editor/`, and `src/tui/` modules; the benchmark built-in dataset was split by category. SQLite integration tests, Valgrind in CI, and `TESTING.md` were added. Streamed editor AI assist no longer leaks a trailing `</content>` tag across chunk boundaries.
 
@@ -104,7 +104,7 @@ Future highlighting work should move toward regex-driven, declarative rule table
 ### Files likely to change
 
 - `src/highlight/`, `src/editor/`, `src/tui/`, `src/config/`, and their unit tests.
-- `README.md`, `config/pkchat.conf`, `config/themes.conf`, `docs/decisions.md`, `docs/editor_help.md`, and `TODO.md`.
+- `README.md`, `config/ainiux.conf`, `config/themes.conf`, `docs/decisions.md`, `docs/editor_help.md`, and `TODO.md`.
 
 ### Design notes
 
@@ -154,7 +154,7 @@ reformats and saves a real C++ buffer.
 
 ### Verification performed
 
-- `make -j2 build/test_runner pkchat`: passed (existing `ModelSetting` initializer warnings only).
+- `make -j2 build/test_runner ainiux`: passed (existing `ModelSetting` initializer warnings only).
 - `make test-unit`: passed, including every approved language alias and extension, multiline
   state, tagged Markdown fences, embedded JavaScript/CSS, overlap precedence,
   Unicode/invalid-byte preservation, work budgets, cache invalidation, structured selection,
@@ -167,7 +167,7 @@ reformats and saves a real C++ buffer.
   signed-overflow warning before completing the unit suite.
 - Valgrind `build/test_runner` with full definite/indirect leak checks: passed.
 - Full `make test-integration` is currently blocked by unrelated baseline assertions: the mock
-  integration expects lowercase `pkchat` while the program emits `Pkchat`, and the SQLite PTY
+  integration expects lowercase `ainiux` while the program emits `Ainiux`, and the SQLite PTY
   test expects `/list` after the 80-column startup status has truncated it off-screen.
 
 ## Task: Editor line endings, indentation, completion, and reformatting
@@ -179,7 +179,7 @@ Add per-buffer line-ending and indentation settings, fast block indentation, Uni
 ### Files likely to change
 
 - `src/editor/`, `src/config/`, `src/highlight/`, `src/runtime/`, and their unit and integration tests.
-- `README.md`, `config/pkchat.conf`, `docs/decisions.md`, `docs/editor_help.md`, `TODO.md`, and this roadmap.
+- `README.md`, `config/ainiux.conf`, `docs/decisions.md`, `docs/editor_help.md`, `TODO.md`, and this roadmap.
 
 ### User-facing behavior
 
@@ -257,7 +257,7 @@ Add per-buffer line-ending and indentation settings, fast block indentation, Uni
 Verification performed for the language-reformat and indentation-detection slices (2026-07-14):
 
 - `make test-unit -j2`: passed, including unit, I/O/network fault, and ENOSPC fault tests.
-- `python3 tests/integration/editor_buffers_driver.py ./pkchat`: passed, including live
+- `python3 tests/integration/editor_buffers_driver.py ./ainiux`: passed, including live
   `/reformat-all`, save, and file-content verification for C++, plus detected two-space
   JavaScript indentation and an interactive `/tab-width 6` override.
 - Direct ASan/UBSan unit runner with leak detection: passed without leaks; the existing
@@ -319,7 +319,7 @@ Keep plans short and concrete. The implementation matters more than the plan.
 
 ## Goal
 
-Create a minimal but clean project skeleton that builds a `pkchat` binary, gives future agents obvious places to put code, and establishes from the beginning that memory leaks are not acceptable.
+Create a minimal but clean project skeleton that builds a `ainiux` binary, gives future agents obvious places to put code, and establishes from the beginning that memory leaks are not acceptable.
 
 ## Tasks
 
@@ -329,7 +329,7 @@ Create a minimal but clean project skeleton that builds a `pkchat` binary, gives
 - [ ] Create `docs/security.md` stub.
 - [ ] Create `docs/api-compatibility.md` stub.
 - [ ] Create `docs/web-mode.md` stub.
-- [ ] Create `include/pkchat/` for public/internal headers if needed.
+- [ ] Create `include/ainiux/` for public/internal headers if needed.
 - [ ] Create `src/` module directories:
   - [ ] `src/cli/`
   - [ ] `src/config/`
@@ -362,7 +362,7 @@ Create a minimal but clean project skeleton that builds a `pkchat` binary, gives
   - [ ] `-Wpedantic`
 - [ ] Add AddressSanitizer/LeakSanitizer flags where supported.
 - [ ] Add a documented fallback leak-check command using Valgrind or an equivalent tool where available.
-- [ ] Make `pkchat --version` and `pkchat --help` work.
+- [ ] Make `ainiux --version` and `ainiux --help` work.
 
 ## Memory criteria
 
@@ -372,9 +372,9 @@ Create a minimal but clean project skeleton that builds a `pkchat` binary, gives
 
 ## Acceptance criteria
 
-- [ ] `make` builds `pkchat`.
-- [ ] `./pkchat --help` prints useful usage text.
-- [ ] `./pkchat --version` prints a version string.
+- [ ] `make` builds `ainiux`.
+- [ ] `./ainiux --help` prints useful usage text.
+- [ ] `./ainiux --version` prints a version string.
 - [ ] `make clean` removes build outputs.
 - [ ] `make sanitize` or the documented platform equivalent builds successfully where supported.
 - [ ] `make leak-check` or the documented platform equivalent can run on the skeleton binary where supported.
@@ -389,18 +389,18 @@ Create a minimal but clean project skeleton that builds a `pkchat` binary, gives
 Implementation note (2026-06-15): v0.3 is now present. The CLI supports model listing, Chat Completions, LM Studio aliases, OpenRouter defaults, text/JSON/NDJSON output, credential lookup, provider shortcuts, a simple REPL, JSON chat persistence, a standalone multiline `--editor` foundation, editor-backed TUI multiline input, a cancellable runtime/job layer, a non-blocking full-screen TUI foundation, a libcurl RAII transport, incremental SSE streaming, mock-server integration tests, sanitizer checks, and Valgrind leak checks. Remaining hardening is tracked in TODO.md: expand JSON handling, add broader error-path and credential-redaction tests, and continue v0.2 persistence work such as XDG chat IDs and chat listing.
 
 
-Make `pkchat` useful from scripts and shells against `/v1/chat/completions` and `/v1/models`, including local LM Studio at `http://localhost:1234/v1`.
+Make `ainiux` useful from scripts and shells against `/v1/chat/completions` and `/v1/models`, including local LM Studio at `http://localhost:1234/v1`.
 
 ## Required user-facing commands
 
 ```sh
-pkchat http://localhost:8000 -p "What is the capital of Norway?"
-pkchat --base-url http://localhost:8000/v1 -p "Hello"
-pkchat --provider openai -m MODEL -p "Hello"
-pkchat --provider lm_studio -m MODEL -p "Hello from local LM Studio"
-pkchat --provider lmstudio --list-models
-pkchat --list-models http://localhost:8000
-pkchat --prompt-file prompt.txt --system-file system.txt --format json
+ainiux http://localhost:8000 -p "What is the capital of Norway?"
+ainiux --base-url http://localhost:8000/v1 -p "Hello"
+ainiux --provider openai -m MODEL -p "Hello"
+ainiux --provider lm_studio -m MODEL -p "Hello from local LM Studio"
+ainiux --provider lmstudio --list-models
+ainiux --list-models http://localhost:8000
+ainiux --prompt-file prompt.txt --system-file system.txt --format json
 ```
 
 ## CLI options
@@ -462,7 +462,7 @@ Implement or reserve these options:
   - [ ] `OPENROUTER_API_KEY`
   - [ ] `LMSTUDIO_API_KEY`
   - [ ] `LM_STUDIO_API_KEY`
-  - [ ] `PKCHAT_API_KEY`
+  - [ ] `AINIUX_API_KEY`
 - [ ] Support `--key-env`.
 - [ ] Support `--key-file`.
 - [ ] Support `--key-stdin`.
@@ -502,7 +502,7 @@ Required behavior:
 - [ ] Support `--provider lm_studio`, `--provider lmstudio`, and `--provider lm-studio` aliases.
 - [ ] Default base URL: `http://localhost:1234/v1`.
 - [ ] Do not require an API key by default.
-- [ ] If `LMSTUDIO_API_KEY`, `LM_STUDIO_API_KEY`, `PKCHAT_API_KEY`, `--key-*`, or `--header Authorization: ...` is provided, send the configured credential.
+- [ ] If `LMSTUDIO_API_KEY`, `LM_STUDIO_API_KEY`, `AINIUX_API_KEY`, `--key-*`, or `--header Authorization: ...` is provided, send the configured credential.
 - [ ] Use `GET /v1/models` for model listing.
 - [ ] Use `POST /v1/chat/completions` for initial chat support.
 - [ ] Support streaming when the server accepts `stream: true`.
@@ -586,9 +586,9 @@ All output modes must avoid leaking credentials.
 
 ## Acceptance criteria
 
-- [ ] `pkchat -p "Hello" --provider lm_studio -m MODEL` sends a request to `http://localhost:1234/v1/chat/completions` unless overridden.
-- [ ] `pkchat --provider lmstudio --list-models` calls the LM Studio models endpoint.
-- [ ] `pkchat http://localhost:8000 -p "Hello"` tries a sensible `/v1` base URL when needed.
+- [ ] `ainiux -p "Hello" --provider lm_studio -m MODEL` sends a request to `http://localhost:1234/v1/chat/completions` unless overridden.
+- [ ] `ainiux --provider lmstudio --list-models` calls the LM Studio models endpoint.
+- [ ] `ainiux http://localhost:8000 -p "Hello"` tries a sensible `/v1` base URL when needed.
 - [ ] Streaming works against the mock server.
 - [ ] Errors are specific.
 - [ ] Credentials are redacted.
@@ -603,7 +603,7 @@ All output modes must avoid leaking credentials.
 
 Implementation note (2026-06-14): a first v0.2 slice is implemented. `--repl`/`-i` starts a line-oriented REPL, `--save-chat PATH` and `--load-chat PATH` persist explicit JSON chat files, one-shot mode can continue a saved chat, and the mock integration test covers save/load plus REPL stdout behavior. Remaining v0.2 work is tracked in TODO.md: SQLite-backed local chat threads, automatic save/load, `/list`, `/new`, `/remove`, fuller config/profile support, and schema migration mechanics.
 
-Add a simple line-oriented interactive mode and durable chat persistence without yet building the full-screen TUI. Explicit JSON save/load remains useful for import/export, but the local chat library should move to a SQLite3 `pkchat.db` database in the local profile.
+Add a simple line-oriented interactive mode and durable chat persistence without yet building the full-screen TUI. Explicit JSON save/load remains useful for import/export, but the local chat library should move to a SQLite3 `ainiux.db` database in the local profile.
 
 ## Commands
 
@@ -627,10 +627,10 @@ Interactive mode should support at least:
 Command-line examples:
 
 ```sh
-pkchat -i --provider lm_studio
-pkchat --chat CHAT_ID
-pkchat --resume
-pkchat --new
+ainiux -i --provider lm_studio
+ainiux --chat CHAT_ID
+ainiux --resume
+ainiux --new
 ```
 
 ## Tasks
@@ -644,7 +644,7 @@ pkchat --new
 - [x] Add `/new` to create a new chat thread.
 - [x] Add `/provider` to switch the current chat thread's provider for future turns.
 - [x] Add `/remove` to soft-delete the current chat thread after confirmation.
-- [x] Add SQLite3-backed automatic chat persistence in `~/.pkchat/pkchat.db`.
+- [x] Add SQLite3-backed automatic chat persistence in `~/.ainiux/ainiux.db`.
 - [x] Add atomic save.
 - [x] Add corrupted chat-file handling.
 - [ ] Add config/profile support.
@@ -660,10 +660,10 @@ JSON import/export do not depend on SQLite details directly.
 The default database path is:
 
 ```text
-~/.pkchat/pkchat.db
+~/.ainiux/ainiux.db
 ```
 
-Create `~/.pkchat` with mode `0700` where supported. Create the database with
+Create `~/.ainiux` with mode `0700` where supported. Create the database with
 user-only permissions where the platform allows it. If `$HOME` is unavailable,
 return a specific configuration/storage error instead of inventing a surprising
 fallback. Do not store API keys, authorization headers, cookies, key-file paths,
@@ -848,7 +848,7 @@ appears.
 
 - [x] Link against `libsqlite3` from the Makefile without adding a package-manager requirement.
 - [x] Add RAII wrappers for SQLite database handles, prepared statements, and transactions.
-- [x] Create `~/.pkchat/pkchat.db` with WAL mode enabled.
+- [x] Create `~/.ainiux/ainiux.db` with WAL mode enabled.
 - [x] Add v1 migrations and record applied schema versions.
 - [x] Add indexes for latest-thread listing, provider/model filtering, transcript replay, attachments, usage, and compaction events.
 - [x] Automatically create a thread when the first TUI turn is saved and no thread exists.
@@ -874,7 +874,7 @@ appears.
 ## Acceptance criteria
 
 - [x] Explicit JSON chat files can be saved and loaded for compatibility/import-export.
-- [x] TUI local storage opens or creates `~/.pkchat/pkchat.db` with WAL mode enabled.
+- [x] TUI local storage opens or creates `~/.ainiux/ainiux.db` with WAL mode enabled.
 - [x] Active chat threads are saved automatically after message changes.
 - [x] The last active thread can be loaded automatically where appropriate.
 - [x] `/new` creates and switches to a new chat thread.
@@ -1315,7 +1315,7 @@ Do not overstate support. If a capability is detected or version-dependent, say 
 - [x] LM Studio remains explicitly supported and documented.
 - [x] A provider capability can be reported to CLI/TUI/web code without leaking provider internals.
 - [x] OpenAI Chat Completions and Responses paths both map into the internal message/event model.
-- [x] Unsupported features return clear `PKCHAT_ERR_UNSUPPORTED_FEATURE` errors.
+- [x] Unsupported features return clear `AINIUX_ERR_UNSUPPORTED_FEATURE` errors.
 - [ ] Leak-check tooling reports no leaks for provider registry lookup, capability probing, and failed provider calls where supported.
 
 ---
@@ -1391,7 +1391,7 @@ Feature examples:
 
 ```text
 summarize https://example.com/article
-pkchat --fetch-url https://example.com/article -p "Summarize this"
+ainiux --fetch-url https://example.com/article -p "Summarize this"
 ```
 
 Safety defaults:
@@ -1459,11 +1459,11 @@ With no configuration files present, behavior must remain identical to v0.55. In
 - [x] Keep credential resolution in `provider::build_context` after the final provider and `key_env`/`key_file` settings are known. The config parser never reads or retains an API key value.
 - [x] Extend `cli::Options` only for settings the current runtime can consume, such as persistent TUI theme/thinking defaults. Do not add unused web, benchmark, agent, PDF, or DOCX settings in this milestone.
 
-Implementation note (2026-06-22): `config/pkchat.conf` is the system-wide template aligned with the v0.6 `cli::Options` defaults. `make install` places it at `${SYSCONFDIR}/xdg/pkchat/config.conf` with mode `0644` and preserves an existing file. `src/config/` provides a bounded parser, complete initial-schema validation, XDG system/user discovery, transactional application, and CLI-last option merging. TUI theme/thinking defaults and URL-fetch private-address policy are wired to effective configuration. `--no-config` skips the user file only, and `--debug` reports file discovery/load state without printing values. Repeatable explicit `--config` layering was rejected as unnecessary complexity.
+Implementation note (2026-06-22): `config/ainiux.conf` is the system-wide template aligned with the v0.6 `cli::Options` defaults. `make install` places it at `${SYSCONFDIR}/xdg/ainiux/config.conf` with mode `0644` and preserves an existing file. `src/config/` provides a bounded parser, complete initial-schema validation, XDG system/user discovery, transactional application, and CLI-last option merging. TUI theme/thinking defaults and URL-fetch private-address policy are wired to effective configuration. `--no-config` skips the user file only, and `--debug` reports file discovery/load state without printing values. Repeatable explicit `--config` layering was rejected as unnecessary complexity.
 
 ## File syntax
 
-Call the format "pkchat config" or "TOML-alike" in documentation, not TOML. Use `config.conf` so users do not reasonably expect a general TOML parser.
+Call the format "ainiux config" or "TOML-alike" in documentation, not TOML. Use `config.conf` so users do not reasonably expect a general TOML parser.
 
 ```text
 file         = line*
@@ -1486,7 +1486,7 @@ Rules:
 - [x] Quoted strings support only `\\`, `\"`, `\n`, `\r`, and `\t` escapes. Reject unknown and incomplete escapes.
 - [x] Bare strings extend to end of line, preserve `#`, allow UTF-8, and trim ASCII space and tab at both ends. Comments are full-line only in v0.6.
 - [x] Permit an empty bare string, although schema validation may reject it for a specific key.
-- [x] Reject malformed section headers, trailing text after a section, invalid names, integer overflow, non-finite floats, and unterminated strings with a `PKCHAT_ERR_CONFIG` error.
+- [x] Reject malformed section headers, trailing text after a section, invalid names, integer overflow, non-finite floats, and unterminated strings with a `AINIUX_ERR_CONFIG` error.
 - [x] Report the source path, line, column, section, and key where applicable.
 - [x] Reject duplicate fully qualified keys within one file. A later file may override a key from an earlier layer.
 - [x] Reject unknown sections and keys. Silent typo handling is not acceptable for the first version.
@@ -1578,8 +1578,8 @@ Configuration control:
 Resolve layers from lowest to highest precedence:
 
 1. current C++ defaults in `cli::Options` and the built-in provider registry
-2. system files named `pkchat/config.conf` from `$XDG_CONFIG_DIRS`, or `/etc/xdg` when unset
-3. `$XDG_CONFIG_HOME/pkchat/config.conf`, or `$HOME/.config/pkchat/config.conf` when unset
+2. system files named `ainiux/config.conf` from `$XDG_CONFIG_DIRS`, or `/etc/xdg` when unset
+3. `$XDG_CONFIG_HOME/ainiux/config.conf`, or `$HOME/.config/ainiux/config.conf` when unset
 4. command-line options and the positional `BASE_URL|PROFILE` shortcut
 
 Implementation details:
@@ -1591,7 +1591,7 @@ Implementation details:
 - [x] Bound each config file to 1 MiB and reject non-regular files with a specific error.
 - [x] Use the existing preliminary CLI parse to detect `--no-config`, `--help`, `--version`, `--debug`, and `--quiet`, then run the full parser over configured base options.
 - [x] `--help` and `--version` must work without reading config files, including when an automatically discovered file is malformed.
-- [x] XDG and `HOME` affect path discovery. Provider-specific environment variables and an explicitly selected `key_env` continue to supply credentials after files are merged. Do not invent a second general `PKCHAT_*` environment-settings layer in this milestone.
+- [x] XDG and `HOME` affect path discovery. Provider-specific environment variables and an explicitly selected `key_env` continue to supply credentials after files are merged. Do not invent a second general `AINIUX_*` environment-settings layer in this milestone.
 - [x] Do not print config status on `stdout`. `--debug` lists loaded, missing, skipped, and failed paths on `stderr` without printing configuration values; `--quiet` suppresses it.
 
 ## Merge and validation
@@ -1606,7 +1606,7 @@ Implementation details:
 
 ## Implementation sequence
 
-0. [x] Add the common `config/pkchat.conf` template and install it without overwriting an existing administrator-managed file.
+0. [x] Add the common `config/ainiux.conf` template and install it without overwriting an existing administrator-managed file.
 1. [x] Add parser/value/source-location types in `src/config/config.hpp` and `src/config/config.cpp` plus grammar/error unit tests.
 2. [x] Add the typed schema mapper and tests for supported keys, representative enums/ranges, and rejected keys.
 3. [x] Add XDG discovery and deterministic automatic layer merging with injectable environment/path inputs for tests.
@@ -1641,13 +1641,13 @@ Add repeatable benchmarking for endpoint/model behavior without turning it into 
 ## Command shape
 
 ```sh
-pkchat benchmark --provider lm_studio -m MODEL --runs 10 --warmup 2
-pkchat benchmark --dataset cases.jsonl --base-url http://localhost:8000/v1 -m MODEL
-pkchat benchmark --validate-dataset
-pkchat --benchmark --dataset prompts.jsonl --mode speed --concurrency 4 --duration 60s
-pkchat --benchmark --dataset benchmarks/long-context.jsonl --mode long-context --provider openai -m MODEL
-pkchat --benchmark --dataset eval.jsonl --mode quality,refusals --output results/
-pkchat --grade --provider openai -m JUDGE_MODEL --category reasoning --output results/
+ainiux benchmark --provider lm_studio -m MODEL --runs 10 --warmup 2
+ainiux benchmark --dataset cases.jsonl --base-url http://localhost:8000/v1 -m MODEL
+ainiux benchmark --validate-dataset
+ainiux --benchmark --dataset prompts.jsonl --mode speed --concurrency 4 --duration 60s
+ainiux --benchmark --dataset benchmarks/long-context.jsonl --mode long-context --provider openai -m MODEL
+ainiux --benchmark --dataset eval.jsonl --mode quality,refusals --output results/
+ainiux --grade --provider openai -m JUDGE_MODEL --category reasoning --output results/
 ```
 
 ## Dataset formats
@@ -1760,15 +1760,15 @@ The feature should support spelling checks, grammar checks, rewrites, continuati
 Keep the existing editor mode as the base:
 
 ```sh
-pkchat --editor draft.md
-pkchat --editor draft.md --provider lmstudio -m MODEL
-pkchat lmstudio --editor draft.md
+ainiux --editor draft.md
+ainiux --editor draft.md --provider lmstudio -m MODEL
+ainiux lmstudio --editor draft.md
 ```
 
 Possible later aliases or subcommands:
 
 ```sh
-pkchat edit draft.md
+ainiux edit draft.md
 ```
 
 `--editor` without a configured provider must continue to work offline and must not contact a model.
@@ -1965,7 +1965,7 @@ Do not make AI assistance modal-only if it blocks cancellation. Editing responsi
 
 ## Acceptance criteria
 
-- [ ] `pkchat --editor FILE` remains usable without any model/network requirement.
+- [ ] `ainiux --editor FILE` remains usable without any model/network requirement.
 - [ ] Editor AI commands use the configured provider/model only after explicit command invocation.
 - [ ] At least spelling, grammar, rewrite, continue, comment, fact, English, Chinese, Finnish, and custom prompt actions have command paths planned or implemented.
 - [ ] `/regenerate` repeats the previous AI command options where practical.
@@ -1981,7 +1981,7 @@ Do not make AI assistance modal-only if it blocks cancellation. Editing responsi
 
 ## Goal
 
-Make `pkchat` leaner, easier to use daily, and better at model evaluation before starting local server mode in v0.90. This milestone is about quality and maintainability, not new product surfaces.
+Make `ainiux` leaner, easier to use daily, and better at model evaluation before starting local server mode in v0.90. This milestone is about quality and maintainability, not new product surfaces.
 
 Work in three parallel tracks. Each track should stay test-backed and avoid breaking script-friendly CLI behavior.
 
@@ -2002,9 +2002,9 @@ Refresh the built-in benchmark corpus and add a dedicated mode for estimating mo
 Command shape:
 
 ```sh
-pkchat --benchmark --mode cutoff --provider openai -m MODEL
-pkchat --benchmark --dataset builtin --mode cutoff,speed --output results/
-pkchat benchmark --mode cutoff --runs 3 --provider lm_studio -m MODEL
+ainiux --benchmark --mode cutoff --provider openai -m MODEL
+ainiux --benchmark --dataset builtin --mode cutoff,speed --output results/
+ainiux benchmark --mode cutoff --runs 3 --provider lm_studio -m MODEL
 ```
 
 Requirements:
@@ -2107,7 +2107,7 @@ Improve everyday usability and responsiveness across non-browser surfaces.
 
 ## Goal
 
-Add a local OpenAI-compatible HTTP server mode before browser web UI or local agent mode. This mode lets other OpenAI-compatible clients, agents, or chat tools call `pkchat` as a local service and gives `pkchat` a place to expose local conversion workflows through a familiar model API.
+Add a local OpenAI-compatible HTTP server mode before browser web UI or local agent mode. This mode lets other OpenAI-compatible clients, agents, or chat tools call `ainiux` as a local service and gives `ainiux` a place to expose local conversion workflows through a familiar model API.
 
 The browser-based local web UI is postponed. If it is revived later, it should build on the same server/runtime/session/security layers rather than becoming a separate product surface.
 
@@ -2116,11 +2116,11 @@ Initial server mode is not autonomous agent mode and must not execute shell comm
 ## Command shape
 
 ```sh
-pkchat --server
-pkchat --server 8080
-pkchat --server=8080
-pkchat --server-host 127.0.0.1 --server 8080
-pkchat --server-host 0.0.0.0 --server 8080 --server-allow-lan --server-secret-file secret.txt
+ainiux --server
+ainiux --server 8080
+ainiux --server=8080
+ainiux --server-host 127.0.0.1 --server 8080
+ainiux --server-host 0.0.0.0 --server 8080 --server-allow-lan --server-secret-file secret.txt
 ```
 
 Possible aliases may be added later after the command shape settles. Avoid overloading `--web` for this API server mode.
@@ -2212,7 +2212,7 @@ Requirements:
 
 ## Acceptance criteria
 
-- [ ] `pkchat --server 8080` starts a loopback-only local OpenAI-compatible server and prints the base URL.
+- [ ] `ainiux --server 8080` starts a loopback-only local OpenAI-compatible server and prints the base URL.
 - [ ] `GET /v1/models` returns local conversion pseudo-models.
 - [ ] OpenAI-compatible clients can call `html-to-md` and `md-to-html` through Chat Completions.
 - [ ] LAN binding requires explicit opt-in and a configured secret.
@@ -2234,7 +2234,7 @@ Agent mode must be separate from ordinary chat. It should never silently gain fi
 Command shape:
 
 ```sh
-pkchat agent [options]
+ainiux agent [options]
 ```
 
 ## Instruction discovery
@@ -2338,18 +2338,18 @@ At minimum, the user must be able to select:
 - image output format
 - output file name/path
 
-If the user does not provide a file name, `pkchat` should automatically create a non-existing file name in the current directory, such as `image1.png`, `image2.png`, and so on.
+If the user does not provide a file name, `ainiux` should automatically create a non-existing file name in the current directory, such as `image1.png`, `image2.png`, and so on.
 
 ## Command shape
 
 Suggested CLI shape:
 
 ```sh
-pkchat image -p "A quiet terminal workspace at night" --image-model MODEL
-pkchat image --prompt-file prompt.txt --image-model MODEL --width 1024 --height 1024
-pkchat image -p "diagram of provider adapters" --format png --output diagram.png
-pkchat image -p "small icon" --size 512x512 --format webp
-pkchat image --provider openai --image-model MODEL -p "..." --output image.png
+ainiux image -p "A quiet terminal workspace at night" --image-model MODEL
+ainiux image --prompt-file prompt.txt --image-model MODEL --width 1024 --height 1024
+ainiux image -p "diagram of provider adapters" --format png --output diagram.png
+ainiux image -p "small icon" --size 512x512 --format webp
+ainiux image --provider openai --image-model MODEL -p "..." --output image.png
 ```
 
 Alternative flags that may be accepted for consistency:
@@ -2366,7 +2366,7 @@ Alternative flags that may be accepted for consistency:
 
 Rules:
 
-- [ ] `pkchat image ...` is the explicit image-generation command.
+- [ ] `ainiux image ...` is the explicit image-generation command.
 - [ ] Text chat mode must not generate images accidentally from ordinary prompts.
 - [ ] `stdout` should remain script-friendly. Prefer printing the saved file path on success, and write status/progress to `stderr`.
 - [ ] `--output -` for binary image stdout may be considered later, but should not be the default.
@@ -2557,7 +2557,7 @@ could not write image file: ./image3.png
 
 Rules:
 
-- [ ] Unsupported provider/model/format/dimensions return `PKCHAT_ERR_UNSUPPORTED_FEATURE` or a more specific error where available.
+- [ ] Unsupported provider/model/format/dimensions return `AINIUX_ERR_UNSUPPORTED_FEATURE` or a more specific error where available.
 - [ ] File write failures use file I/O error categories.
 - [ ] Provider errors include safe provider message bodies.
 - [ ] Credentials and headers remain redacted.
@@ -2720,7 +2720,7 @@ Human-facing errors should be specific and actionable.
 Example:
 
 ```text
-pkchat: HTTP 404 from http://localhost:8000/v1/chat/completions
+ainiux: HTTP 404 from http://localhost:8000/v1/chat/completions
 provider message: endpoint not found
 tried base URL: http://localhost:8000/v1
 suggestion: check whether the server expects /v1, /api/v1, or a custom --chat-url

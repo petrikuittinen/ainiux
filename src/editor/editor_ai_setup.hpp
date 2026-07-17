@@ -7,7 +7,7 @@
 #include "editor/ai_continue.hpp"
 #include "editor/editor_prompts.hpp"
 
-namespace pkchat::editor {
+namespace ainiux::editor {
 
 bool editor_ai_has_provider(const std::optional<AiContinueContext>& context);
 bool editor_ai_ready(const std::optional<AiContinueContext>& context);
@@ -20,4 +20,4 @@ Error apply_editor_provider_target(std::optional<AiContinueContext>& context,
                                   const std::string& target);
 Error apply_editor_model(std::optional<AiContinueContext>& context, const std::string& model);
 
-}  // namespace pkchat::editor
+}  // namespace ainiux::editor

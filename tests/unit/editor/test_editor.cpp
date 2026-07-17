@@ -29,35 +29,35 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
-namespace pkchat::test::editor {
+namespace ainiux::test::editor {
 
 namespace {
 
-using pkchat::test::check;
-using pkchat::test::read_fixture;
+using ainiux::test::check;
+using ainiux::test::read_fixture;
 
 void test_editor_ai_continue_helpers() {
-    pkchat::editor::PieceTable text = pkchat::editor::PieceTable::from_string("abcdefghij");
+    ainiux::editor::PieceTable text = ainiux::editor::PieceTable::from_string("abcdefghij");
     check(text.range_text(2, 4) == "cdef", "range_text returns a bounded substring");
     check(text.range_text(0, 100) == "abcdefghij", "range_text clamps to buffer size");
 
-    check(pkchat::editor::continue_status_message("custom_openai_chat", "gpt-test", "thinking... ESC to abort") ==
+    check(ainiux::editor::continue_status_message("custom_openai_chat", "gpt-test", "thinking... ESC to abort") ==
               "[custom / gpt-test] thinking... ESC to abort",
           "continue status message uses compact provider display names");
 
-    pkchat::provider::ChatResult continue_result;
+    ainiux::provider::ChatResult continue_result;
     continue_result.ttft_ms = 100;
     continue_result.total_ms = 1100;
     continue_result.completion_tokens = 20;
     continue_result.completion_tokens_estimated = true;
-    check(pkchat::editor::continue_completion_status_message("custom_openai_chat",
+    check(ainiux::editor::continue_completion_status_message("custom_openai_chat",
                                                              "gpt-test",
                                                              continue_result,
                                                              true) ==
               "[custom / gpt-test] | TTFT: 100 ms | Token/s: 20.0 (estimated)",
           "continue completion status reuses TUI generation metrics formatting");
 
-    pkchat::editor::EditorState state = pkchat::editor::EditorState::from_text("Once upon a ");
+    ainiux::editor::EditorState state = ainiux::editor::EditorState::from_text("Once upon a ");
     state.cursor = state.text.size();
     check(state.insert_without_undo("time").ok(), "stream insert succeeds");
     check(state.text.str() == "Once upon a time", "stream insert appends at cursor");
@@ -66,10 +66,10 @@ void test_editor_ai_continue_helpers() {
     check(state.undo(), "undo after stream chunk succeeds");
     check(state.text.str() == "Once upon a time", "undo removes only the normal insert");
 
-    pkchat::editor::EditorState gap =
-        pkchat::editor::EditorState::from_text("beforeAFTER");
+    ainiux::editor::EditorState gap =
+        ainiux::editor::EditorState::from_text("beforeAFTER");
     gap.cursor = 6;
-    const pkchat::editor::EditorSnapshot gap_before = gap.capture_state();
+    const ainiux::editor::EditorSnapshot gap_before = gap.capture_state();
     check(gap.insert_without_undo(" inserted ").ok() &&
               gap.text.str() == "before inserted AFTER",
           "stream insertion leaves the original postfix bytes after inserted code");
@@ -78,10 +78,10 @@ void test_editor_ai_continue_helpers() {
     check(gap.undo() && gap.text.str() == "beforeAFTER",
           "all streamed gap-completion chunks are one undoable edit");
 
-    pkchat::editor::EditorState cancelled_gap =
-        pkchat::editor::EditorState::from_text("leftRIGHT");
+    ainiux::editor::EditorState cancelled_gap =
+        ainiux::editor::EditorState::from_text("leftRIGHT");
     cancelled_gap.cursor = 4;
-    const pkchat::editor::EditorSnapshot cancelled_before = cancelled_gap.capture_state();
+    const ainiux::editor::EditorSnapshot cancelled_before = cancelled_gap.capture_state();
     check(cancelled_gap.insert_without_undo("partial  \n").ok(),
           "partial code output can be inserted before cancellation");
     cancelled_gap.finalize_stream_edit(cancelled_before);
@@ -90,77 +90,77 @@ void test_editor_ai_continue_helpers() {
     check(cancelled_gap.undo() && cancelled_gap.text.str() == "leftRIGHT",
           "cancelled partial code remains a single undoable edit");
 
-    const char* none_argv[] = {"pkchat", "--provider", "none", "--editor"};
-    pkchat::cli::ParseResult none_parsed = pkchat::cli::parse_args(4, const_cast<char**>(none_argv));
+    const char* none_argv[] = {"ainiux", "--provider", "none", "--editor"};
+    ainiux::cli::ParseResult none_parsed = ainiux::cli::parse_args(4, const_cast<char**>(none_argv));
     check(none_parsed.error.ok(), "none provider editor args parse");
-    pkchat::provider::ContextResult context = pkchat::provider::build_context(none_parsed.options);
+    ainiux::provider::ContextResult context = ainiux::provider::build_context(none_parsed.options);
     check(context.error.ok(), "none provider context builds");
-    pkchat::editor::AiContinueContext ai_continue;
+    ainiux::editor::AiContinueContext ai_continue;
     ai_continue.request = context.context;
-    ai_continue.settings = pkchat::editor::ai_continue_settings(pkchat::cli::Options{});
-    check(!pkchat::editor::validate_continue_request(ai_continue).ok(),
+    ai_continue.settings = ainiux::editor::ai_continue_settings(ainiux::cli::Options{});
+    check(!ainiux::editor::validate_continue_request(ai_continue).ok(),
           "none provider rejects AI continue");
 
-    const char* lm_argv[] = {"pkchat", "lmstudio", "--editor"};
-    pkchat::cli::ParseResult lm_parsed = pkchat::cli::parse_args(3, const_cast<char**>(lm_argv));
+    const char* lm_argv[] = {"ainiux", "lmstudio", "--editor"};
+    ainiux::cli::ParseResult lm_parsed = ainiux::cli::parse_args(3, const_cast<char**>(lm_argv));
     check(lm_parsed.error.ok(), "lmstudio editor args without model parse");
-    context = pkchat::provider::build_context(lm_parsed.options);
+    context = ainiux::provider::build_context(lm_parsed.options);
     check(context.error.ok(), "lmstudio provider context builds without model");
-    check(pkchat::provider::profile_auto_selects_default_model(context.context.profile,
+    check(ainiux::provider::profile_auto_selects_default_model(context.context.profile,
                                                              context.context.base_url),
           "lmstudio editor auto-selects the first model");
     ai_continue.request = context.context;
-    check(pkchat::editor::validate_continue_request(ai_continue).code == pkchat::ErrorCode::BadArgs,
+    check(ainiux::editor::validate_continue_request(ai_continue).code == ainiux::ErrorCode::BadArgs,
           "continue validation still requires a resolved model");
 
-    const char* localhost_argv[] = {"pkchat", "http://localhost:30000/v1", "--editor"};
-    pkchat::cli::ParseResult localhost_parsed = pkchat::cli::parse_args(3, const_cast<char**>(localhost_argv));
+    const char* localhost_argv[] = {"ainiux", "http://localhost:30000/v1", "--editor"};
+    ainiux::cli::ParseResult localhost_parsed = ainiux::cli::parse_args(3, const_cast<char**>(localhost_argv));
     check(localhost_parsed.error.ok(), "localhost editor args without model parse");
-    pkchat::provider::ContextResult localhost_context =
-        pkchat::provider::build_context(localhost_parsed.options);
+    ainiux::provider::ContextResult localhost_context =
+        ainiux::provider::build_context(localhost_parsed.options);
     check(localhost_context.error.ok(), "localhost custom endpoint context builds without model");
-    check(pkchat::provider::profile_auto_selects_default_model(localhost_context.context.profile,
+    check(ainiux::provider::profile_auto_selects_default_model(localhost_context.context.profile,
                                                                localhost_context.context.base_url),
           "localhost custom endpoint auto-selects the first model");
 
-    pkchat::provider::RequestContext openai_context;
+    ainiux::provider::RequestContext openai_context;
     openai_context.profile.name = "openai";
-    check(!pkchat::provider::profile_auto_selects_default_model(openai_context.profile,
+    check(!ainiux::provider::profile_auto_selects_default_model(openai_context.profile,
                                                                 openai_context.base_url),
           "openai editor does not auto-select a model");
 
-    const char* lm_model_argv[] = {"pkchat", "lmstudio", "-m", "mock-model", "--editor"};
-    pkchat::cli::ParseResult lm_model_parsed = pkchat::cli::parse_args(5, const_cast<char**>(lm_model_argv));
+    const char* lm_model_argv[] = {"ainiux", "lmstudio", "-m", "mock-model", "--editor"};
+    ainiux::cli::ParseResult lm_model_parsed = ainiux::cli::parse_args(5, const_cast<char**>(lm_model_argv));
     check(lm_model_parsed.error.ok(), "lmstudio provider editor args parse");
-    context = pkchat::provider::build_context(lm_model_parsed.options);
+    context = ainiux::provider::build_context(lm_model_parsed.options);
     check(context.error.ok(), "lmstudio provider context builds");
     ai_continue.request = context.context;
     ai_continue.settings.max_output_tokens = 1234;
-    check(pkchat::editor::validate_continue_request(ai_continue).ok(), "configured provider allows continue");
-    const pkchat::provider::RequestContext job_context = pkchat::editor::continue_request_context(ai_continue);
+    check(ainiux::editor::validate_continue_request(ai_continue).ok(), "configured provider allows continue");
+    const ainiux::provider::RequestContext job_context = ainiux::editor::continue_request_context(ai_continue);
     check(job_context.options.stream, "continue forces streaming");
     check(job_context.options.has_max_output_tokens, "continue sets max output tokens");
     check(job_context.options.max_output_tokens == 1234, "continue uses configured token limit");
 
-    pkchat::cli::Options default_options;
-    const pkchat::editor::AiContinueSettings default_settings =
-        pkchat::editor::ai_continue_settings(default_options);
+    ainiux::cli::Options default_options;
+    const ainiux::editor::AiContinueSettings default_settings =
+        ainiux::editor::ai_continue_settings(default_options);
     check(default_settings.max_prefix_chars ==
-                  pkchat::editor::kDefaultAiContinuePrefixMaxChars &&
+                  ainiux::editor::kDefaultAiContinuePrefixMaxChars &&
               default_settings.max_postfix_chars ==
-                  pkchat::editor::kDefaultAiContinuePostfixMaxChars &&
+                  ainiux::editor::kDefaultAiContinuePostfixMaxChars &&
               default_settings.max_prose_prefix_chars ==
-                  pkchat::editor::kDefaultAiContinueProsePrefixMaxChars &&
+                  ainiux::editor::kDefaultAiContinueProsePrefixMaxChars &&
               default_settings.max_prose_postfix_chars ==
-                  pkchat::editor::kDefaultAiContinueProsePostfixMaxChars,
+                  ainiux::editor::kDefaultAiContinueProsePostfixMaxChars,
           "default continue context uses independent 4000/2000 code and 16384/4096 prose limits");
-    pkchat::cli::Options cli_settings_options = default_options;
+    ainiux::cli::Options cli_settings_options = default_options;
     cli_settings_options.editor_ai_continue_prefix_max_chars = 99;
     cli_settings_options.editor_ai_continue_postfix_max_chars = 88;
     cli_settings_options.editor_ai_continue_prose_prefix_max_chars = 77;
     cli_settings_options.editor_ai_continue_prose_postfix_max_chars = 66;
-    const pkchat::editor::AiContinueSettings cli_settings =
-        pkchat::editor::ai_continue_settings(cli_settings_options);
+    const ainiux::editor::AiContinueSettings cli_settings =
+        ainiux::editor::ai_continue_settings(cli_settings_options);
     check(cli_settings.max_prefix_chars == 99 && cli_settings.max_postfix_chars == 88 &&
               cli_settings.max_prose_prefix_chars == 77 &&
               cli_settings.max_prose_postfix_chars == 66,
@@ -201,8 +201,8 @@ void test_editor_ai_continue_helpers() {
     setenv("MAX_CONTINUE_PROSE_POSTFIX", "12", 1);
     setenv("MAX_AI_CONTINUE_TOKENS", "2048", 1);
 #endif
-    const pkchat::editor::AiContinueSettings env_settings =
-        pkchat::editor::ai_continue_settings(cli_settings_options);
+    const ainiux::editor::AiContinueSettings env_settings =
+        ainiux::editor::ai_continue_settings(cli_settings_options);
     check(env_settings.max_prefix_chars == 16, "MAX_CONTINUE_PREFIX overrides default");
     check(env_settings.max_postfix_chars == 8, "MAX_CONTINUE_POSTFIX overrides default");
     check(env_settings.max_prose_prefix_chars == 32,
@@ -217,8 +217,8 @@ void test_editor_ai_continue_helpers() {
     _putenv_s("MAX_CONTINUE_PROSE_PREFIX", "invalid");
     _putenv_s("MAX_CONTINUE_PROSE_POSTFIX", "999999999999999999999999999999");
 #endif
-    const pkchat::editor::AiContinueSettings invalid_env_settings =
-        pkchat::editor::ai_continue_settings(cli_settings_options);
+    const ainiux::editor::AiContinueSettings invalid_env_settings =
+        ainiux::editor::ai_continue_settings(cli_settings_options);
     check(invalid_env_settings.max_prose_prefix_chars == 77 &&
               invalid_env_settings.max_prose_postfix_chars == 66,
           "invalid and overflowing prose environment limits preserve CLI/config values");
@@ -233,8 +233,8 @@ void test_editor_ai_continue_helpers() {
     _putenv_s("MAX_CONTINUE_PROSE_PREFIX", "0");
     _putenv_s("MAX_CONTINUE_PROSE_POSTFIX", "0");
 #endif
-    const pkchat::editor::AiContinueSettings zero_env_settings =
-        pkchat::editor::ai_continue_settings(default_options);
+    const ainiux::editor::AiContinueSettings zero_env_settings =
+        ainiux::editor::ai_continue_settings(default_options);
     check(zero_env_settings.max_prefix_chars == 0 &&
               zero_env_settings.max_postfix_chars == 0 &&
               zero_env_settings.max_prose_prefix_chars == 0 &&
@@ -296,81 +296,81 @@ void test_editor_ai_continue_helpers() {
 }
 
 void test_editor_ai_setup_helpers() {
-    check(pkchat::editor::editor_no_provider_message() ==
+    check(ainiux::editor::editor_no_provider_message() ==
               "No provider chosen. Use /provider to choose one",
           "editor no-provider message mentions /provider");
-    check(pkchat::editor::editor_no_model_message() == "No model chosen. Use /model to choose one",
+    check(ainiux::editor::editor_no_model_message() == "No model chosen. Use /model to choose one",
           "editor no-model message mentions /model");
 
-    std::optional<pkchat::editor::AiContinueContext> no_context;
-    check(!pkchat::editor::editor_ai_has_provider(no_context), "missing context has no provider");
-    check(!pkchat::editor::editor_ai_ready(no_context), "missing context is not AI-ready");
-    check(pkchat::editor::editor_startup_status(no_context).find("/provider") != std::string::npos,
+    std::optional<ainiux::editor::AiContinueContext> no_context;
+    check(!ainiux::editor::editor_ai_has_provider(no_context), "missing context has no provider");
+    check(!ainiux::editor::editor_ai_ready(no_context), "missing context is not AI-ready");
+    check(ainiux::editor::editor_startup_status(no_context).find("/provider") != std::string::npos,
           "startup status without context mentions /provider");
 
-    const char* none_argv[] = {"pkchat", "--provider", "none", "--editor"};
-    pkchat::cli::ParseResult none_parsed = pkchat::cli::parse_args(4, const_cast<char**>(none_argv));
+    const char* none_argv[] = {"ainiux", "--provider", "none", "--editor"};
+    ainiux::cli::ParseResult none_parsed = ainiux::cli::parse_args(4, const_cast<char**>(none_argv));
     check(none_parsed.error.ok(), "none provider editor args parse for ai setup");
-    pkchat::provider::ContextResult none_context = pkchat::provider::build_context(none_parsed.options);
+    ainiux::provider::ContextResult none_context = ainiux::provider::build_context(none_parsed.options);
     check(none_context.error.ok(), "none provider context builds for ai setup");
-    pkchat::editor::AiContinueContext offline_continue;
+    ainiux::editor::AiContinueContext offline_continue;
     offline_continue.request = none_context.context;
-    check(!pkchat::editor::editor_ai_has_provider(offline_continue),
+    check(!ainiux::editor::editor_ai_has_provider(offline_continue),
           "offline provider is not considered chosen");
-    check(pkchat::editor::editor_startup_status(offline_continue).find("Local editor") != std::string::npos,
+    check(ainiux::editor::editor_startup_status(offline_continue).find("Local editor") != std::string::npos,
           "offline startup status mentions local editor");
 
-    const char* lm_model_argv[] = {"pkchat", "lmstudio", "-m", "mock-model", "--editor"};
-    pkchat::cli::ParseResult lm_model_parsed = pkchat::cli::parse_args(5, const_cast<char**>(lm_model_argv));
+    const char* lm_model_argv[] = {"ainiux", "lmstudio", "-m", "mock-model", "--editor"};
+    ainiux::cli::ParseResult lm_model_parsed = ainiux::cli::parse_args(5, const_cast<char**>(lm_model_argv));
     check(lm_model_parsed.error.ok(), "lmstudio editor args parse for ai setup");
-    pkchat::provider::ContextResult ready_context = pkchat::provider::build_context(lm_model_parsed.options);
+    ainiux::provider::ContextResult ready_context = ainiux::provider::build_context(lm_model_parsed.options);
     check(ready_context.error.ok(), "lmstudio provider context builds for ai setup");
-    pkchat::editor::AiContinueContext ready_continue;
+    ainiux::editor::AiContinueContext ready_continue;
     ready_continue.request = ready_context.context;
-    ready_continue.assist_config = pkchat::editor::default_editor_assist_config();
-    check(pkchat::editor::editor_ai_has_provider(ready_continue), "configured provider is chosen");
+    ready_continue.assist_config = ainiux::editor::default_editor_assist_config();
+    check(ainiux::editor::editor_ai_has_provider(ready_continue), "configured provider is chosen");
     ready_continue.request.options.model = "mock-model";
-    check(pkchat::editor::editor_ai_ready(ready_continue), "provider with model is AI-ready");
-    const std::string ready_startup_status = pkchat::editor::editor_startup_status(ready_continue);
+    check(ainiux::editor::editor_ai_ready(ready_continue), "provider with model is AI-ready");
+    const std::string ready_startup_status = ainiux::editor::editor_startup_status(ready_continue);
     check(ready_startup_status.find("[lmstudio / mock-model]") == 0,
           "ready startup status shows provider and model like chat mode");
     check(ready_startup_status.find("ready") != std::string::npos,
           "ready startup status mentions ready");
 
-    std::optional<pkchat::editor::AiContinueContext> created;
-    pkchat::editor::EditorAssistConfig assist_config = pkchat::editor::default_editor_assist_config();
-    check(pkchat::editor::ensure_editor_ai_context(created, assist_config).ok(),
+    std::optional<ainiux::editor::AiContinueContext> created;
+    ainiux::editor::EditorAssistConfig assist_config = ainiux::editor::default_editor_assist_config();
+    check(ainiux::editor::ensure_editor_ai_context(created, assist_config).ok(),
           "ensure_editor_ai_context creates offline context");
     check(created.has_value(), "ensure_editor_ai_context populates optional");
-    check(!pkchat::editor::editor_ai_has_provider(created), "created default context stays offline");
+    check(!ainiux::editor::editor_ai_has_provider(created), "created default context stays offline");
 
-    check(pkchat::editor::apply_editor_model(created, "mock-model").code ==
-              pkchat::ErrorCode::UnsupportedFeature,
+    check(ainiux::editor::apply_editor_model(created, "mock-model").code ==
+              ainiux::ErrorCode::UnsupportedFeature,
           "apply_editor_model requires a provider first");
-    check(pkchat::editor::apply_editor_provider_target(created, assist_config, "openai").ok(),
+    check(ainiux::editor::apply_editor_provider_target(created, assist_config, "openai").ok(),
           "apply_editor_provider_target can switch to openai");
-    check(pkchat::editor::editor_ai_has_provider(created), "openai provider is active after apply");
-    check(pkchat::editor::apply_editor_model(created, "gpt-test").ok(),
+    check(ainiux::editor::editor_ai_has_provider(created), "openai provider is active after apply");
+    check(ainiux::editor::apply_editor_model(created, "gpt-test").ok(),
           "apply_editor_model succeeds after provider is chosen");
     check(created->request.options.model == "gpt-test", "apply_editor_model stores model name");
 
-    const char* openrouter_argv[] = {"pkchat", "openrouter", "--editor"};
-    pkchat::cli::ParseResult openrouter_parsed =
-        pkchat::cli::parse_args(3, const_cast<char**>(openrouter_argv));
+    const char* openrouter_argv[] = {"ainiux", "openrouter", "--editor"};
+    ainiux::cli::ParseResult openrouter_parsed =
+        ainiux::cli::parse_args(3, const_cast<char**>(openrouter_argv));
     check(openrouter_parsed.error.ok(), "openrouter editor args without model parse");
-    pkchat::provider::ContextResult openrouter_context =
-        pkchat::provider::build_context(openrouter_parsed.options);
+    ainiux::provider::ContextResult openrouter_context =
+        ainiux::provider::build_context(openrouter_parsed.options);
     check(openrouter_context.error.ok(), "openrouter provider context builds without model");
     check(openrouter_context.context.options.model.empty(),
           "openrouter editor startup leaves model empty");
-    pkchat::editor::AiContinueContext openrouter_continue;
+    ainiux::editor::AiContinueContext openrouter_continue;
     openrouter_continue.request = openrouter_context.context;
-    check(pkchat::editor::editor_ai_has_provider(openrouter_continue),
+    check(ainiux::editor::editor_ai_has_provider(openrouter_continue),
           "openrouter editor startup has provider");
-    check(!pkchat::editor::editor_ai_ready(openrouter_continue),
+    check(!ainiux::editor::editor_ai_ready(openrouter_continue),
           "openrouter editor startup is not AI-ready without model");
     const std::string openrouter_startup_status =
-        pkchat::editor::editor_startup_status(openrouter_continue);
+        ainiux::editor::editor_startup_status(openrouter_continue);
     check(openrouter_startup_status.find("/model") != std::string::npos,
           "openrouter editor startup status mentions /model");
     check(openrouter_startup_status.find("Choose a model with /model") != std::string::npos,
@@ -378,188 +378,188 @@ void test_editor_ai_setup_helpers() {
     check(openrouter_startup_status.find("/provider") != std::string::npos,
           "openrouter editor startup status mentions /provider like chat mode");
 
-    const char* lm_no_model_argv[] = {"pkchat", "lmstudio", "--editor"};
-    pkchat::cli::ParseResult lm_no_model_parsed =
-        pkchat::cli::parse_args(3, const_cast<char**>(lm_no_model_argv));
+    const char* lm_no_model_argv[] = {"ainiux", "lmstudio", "--editor"};
+    ainiux::cli::ParseResult lm_no_model_parsed =
+        ainiux::cli::parse_args(3, const_cast<char**>(lm_no_model_argv));
     check(lm_no_model_parsed.error.ok(), "lmstudio editor args without model parse for deferral");
-    pkchat::provider::ContextResult lm_no_model_context =
-        pkchat::provider::build_context(lm_no_model_parsed.options);
+    ainiux::provider::ContextResult lm_no_model_context =
+        ainiux::provider::build_context(lm_no_model_parsed.options);
     check(lm_no_model_context.error.ok(), "lmstudio provider context builds without model for deferral");
     check(lm_no_model_context.context.options.model.empty(),
           "lmstudio editor startup leaves model empty");
-    pkchat::editor::AiContinueContext lm_no_model_continue;
+    ainiux::editor::AiContinueContext lm_no_model_continue;
     lm_no_model_continue.request = lm_no_model_context.context;
-    check(pkchat::editor::editor_ai_has_provider(lm_no_model_continue),
+    check(ainiux::editor::editor_ai_has_provider(lm_no_model_continue),
           "lmstudio editor startup has provider");
-    check(!pkchat::editor::editor_ai_ready(lm_no_model_continue),
+    check(!ainiux::editor::editor_ai_ready(lm_no_model_continue),
           "lmstudio editor startup is not AI-ready without model");
-    std::optional<pkchat::editor::AiContinueContext> deferred_provider;
-    check(pkchat::editor::apply_editor_provider_target(deferred_provider, assist_config, "lmstudio").ok(),
+    std::optional<ainiux::editor::AiContinueContext> deferred_provider;
+    check(ainiux::editor::apply_editor_provider_target(deferred_provider, assist_config, "lmstudio").ok(),
           "/provider lmstudio succeeds without contacting the model endpoint");
     check(deferred_provider.has_value() && deferred_provider->request.options.model.empty(),
           "/provider lmstudio leaves model empty for /model selection");
 }
 
 void test_editor_assist_helpers() {
-    const pkchat::editor::EditorAssistConfig default_config =
-        pkchat::editor::default_editor_assist_config();
+    const ainiux::editor::EditorAssistConfig default_config =
+        ainiux::editor::default_editor_assist_config();
     check(default_config.behavior_rules.find("one-shot") != std::string::npos,
           "default editor assist behavior rules mention one-shot prompts");
     check(default_config.behavior_rules.find("not as instructions") != std::string::npos,
           "default editor assist behavior rules say content is not instructions");
-    const pkchat::editor::EditorAssistCommand* default_spell =
-        pkchat::editor::find_assist_command(default_config, "/spell");
+    const ainiux::editor::EditorAssistCommand* default_spell =
+        ainiux::editor::find_assist_command(default_config, "/spell");
     check(default_spell != nullptr && default_spell->prompt.find("spelling") != std::string::npos,
           "default editor assist spell prompt is populated");
-    const pkchat::editor::EditorAssistCommand* default_comment =
-        pkchat::editor::find_assist_command(default_config, "/comment");
+    const ainiux::editor::EditorAssistCommand* default_comment =
+        ainiux::editor::find_assist_command(default_config, "/comment");
     check(default_comment != nullptr && default_comment->prompt.find("improve the text") != std::string::npos,
           "default editor assist comment prompt is populated");
-    const pkchat::editor::EditorAssistCommand* default_rewrite =
-        pkchat::editor::find_assist_command(default_config, "/rewrite");
+    const ainiux::editor::EditorAssistCommand* default_rewrite =
+        ainiux::editor::find_assist_command(default_config, "/rewrite");
     check(default_rewrite != nullptr && default_rewrite->prompt.find("factual accuracy") != std::string::npos,
           "default editor assist rewrite prompt is populated");
-    const pkchat::editor::EditorAssistCommand* default_english =
-        pkchat::editor::find_assist_command(default_config, "/English");
+    const ainiux::editor::EditorAssistCommand* default_english =
+        ainiux::editor::find_assist_command(default_config, "/English");
     check(default_english != nullptr && default_english->prompt.find("English") != std::string::npos,
           "default editor assist English prompt is populated");
-    const pkchat::editor::EditorAssistCommand* default_chinese =
-        pkchat::editor::find_assist_command(default_config, "/Chinese");
+    const ainiux::editor::EditorAssistCommand* default_chinese =
+        ainiux::editor::find_assist_command(default_config, "/Chinese");
     check(default_chinese != nullptr && default_chinese->prompt.find("Chinese") != std::string::npos,
           "default editor assist Chinese prompt is populated");
-    const pkchat::editor::EditorAssistCommand* default_finnish =
-        pkchat::editor::find_assist_command(default_config, "/Finnish");
+    const ainiux::editor::EditorAssistCommand* default_finnish =
+        ainiux::editor::find_assist_command(default_config, "/Finnish");
     check(default_finnish != nullptr && default_finnish->prompt.find("Finnish") != std::string::npos,
           "default editor assist Finnish prompt is populated");
 
-    pkchat::editor::ParsedAssistCommand parsed =
-        pkchat::editor::parse_assist_command("/spell all", default_config);
-    check(parsed.ok && parsed.kind == pkchat::editor::AssistCommandKind::Configured &&
-              parsed.scope == pkchat::editor::AssistScope::All,
+    ainiux::editor::ParsedAssistCommand parsed =
+        ainiux::editor::parse_assist_command("/spell all", default_config);
+    check(parsed.ok && parsed.kind == ainiux::editor::AssistCommandKind::Configured &&
+              parsed.scope == ainiux::editor::AssistScope::All,
           "/spell all parses");
 
-    parsed = pkchat::editor::parse_assist_command("spell all", default_config);
-    check(parsed.ok && parsed.kind == pkchat::editor::AssistCommandKind::Configured &&
-              parsed.scope == pkchat::editor::AssistScope::All,
+    parsed = ainiux::editor::parse_assist_command("spell all", default_config);
+    check(parsed.ok && parsed.kind == ainiux::editor::AssistCommandKind::Configured &&
+              parsed.scope == ainiux::editor::AssistScope::All,
           "slashless editor assist commands parse");
-    parsed = pkchat::editor::parse_assist_command("CHINESE n", default_config);
-    check(parsed.ok && parsed.kind == pkchat::editor::AssistCommandKind::Configured &&
-              parsed.scope == pkchat::editor::AssistScope::NewBuffer,
+    parsed = ainiux::editor::parse_assist_command("CHINESE n", default_config);
+    check(parsed.ok && parsed.kind == ainiux::editor::AssistCommandKind::Configured &&
+              parsed.scope == ainiux::editor::AssistScope::NewBuffer,
           "slashless editor assist commands are case-insensitive");
 
-    parsed = pkchat::editor::parse_assist_command("/grammar selection", default_config);
-    check(parsed.ok && parsed.kind == pkchat::editor::AssistCommandKind::Configured &&
-              parsed.scope == pkchat::editor::AssistScope::Selection,
+    parsed = ainiux::editor::parse_assist_command("/grammar selection", default_config);
+    check(parsed.ok && parsed.kind == ainiux::editor::AssistCommandKind::Configured &&
+              parsed.scope == ainiux::editor::AssistScope::Selection,
           "/grammar selection parses");
 
-    parsed = pkchat::editor::parse_assist_command("/spell", default_config);
-    check(parsed.ok && parsed.kind == pkchat::editor::AssistCommandKind::Configured &&
+    parsed = ainiux::editor::parse_assist_command("/spell", default_config);
+    check(parsed.ok && parsed.kind == ainiux::editor::AssistCommandKind::Configured &&
               !parsed.scope.has_value(),
           "bare /spell requests scope");
 
-    parsed = pkchat::editor::parse_assist_command("/continue", default_config);
-    check(parsed.ok && parsed.kind == pkchat::editor::AssistCommandKind::Configured &&
+    parsed = ainiux::editor::parse_assist_command("/continue", default_config);
+    check(parsed.ok && parsed.kind == ainiux::editor::AssistCommandKind::Configured &&
               !parsed.scope.has_value(),
           "bare /continue runs without scope");
 
-    parsed = pkchat::editor::parse_assist_command("/fact newbuffer", default_config);
-    check(parsed.ok && parsed.kind == pkchat::editor::AssistCommandKind::Configured &&
-              parsed.scope == pkchat::editor::AssistScope::NewBuffer,
+    parsed = ainiux::editor::parse_assist_command("/fact newbuffer", default_config);
+    check(parsed.ok && parsed.kind == ainiux::editor::AssistCommandKind::Configured &&
+              parsed.scope == ainiux::editor::AssistScope::NewBuffer,
           "/fact newbuffer parses");
-    parsed = pkchat::editor::parse_assist_command("/fact v", default_config);
-    check(parsed.ok && parsed.kind == pkchat::editor::AssistCommandKind::Configured &&
-              parsed.scope == pkchat::editor::AssistScope::NewBufferVSplit,
+    parsed = ainiux::editor::parse_assist_command("/fact v", default_config);
+    check(parsed.ok && parsed.kind == ainiux::editor::AssistCommandKind::Configured &&
+              parsed.scope == ainiux::editor::AssistScope::NewBufferVSplit,
           "/fact v parses as vertical new-buffer split");
-    parsed = pkchat::editor::parse_assist_command("/spell hsplit", default_config);
-    check(parsed.ok && parsed.kind == pkchat::editor::AssistCommandKind::Configured &&
-              parsed.scope == pkchat::editor::AssistScope::NewBufferHSplit,
+    parsed = ainiux::editor::parse_assist_command("/spell hsplit", default_config);
+    check(parsed.ok && parsed.kind == ainiux::editor::AssistCommandKind::Configured &&
+              parsed.scope == ainiux::editor::AssistScope::NewBufferHSplit,
           "/spell hsplit parses as horizontal new-buffer split");
 
-    parsed = pkchat::editor::parse_assist_command("/fact n", default_config);
-    check(parsed.ok && parsed.kind == pkchat::editor::AssistCommandKind::Configured &&
-              parsed.scope == pkchat::editor::AssistScope::NewBuffer,
+    parsed = ainiux::editor::parse_assist_command("/fact n", default_config);
+    check(parsed.ok && parsed.kind == ainiux::editor::AssistCommandKind::Configured &&
+              parsed.scope == ainiux::editor::AssistScope::NewBuffer,
           "/fact n parses as new buffer");
 
-    parsed = pkchat::editor::parse_assist_command("/fact insert", default_config);
-    check(parsed.ok && parsed.kind == pkchat::editor::AssistCommandKind::Configured &&
-              parsed.scope == pkchat::editor::AssistScope::Insert,
+    parsed = ainiux::editor::parse_assist_command("/fact insert", default_config);
+    check(parsed.ok && parsed.kind == ainiux::editor::AssistCommandKind::Configured &&
+              parsed.scope == ainiux::editor::AssistScope::Insert,
           "/fact insert parses");
 
-    parsed = pkchat::editor::parse_assist_command("/comment all", default_config);
-    check(parsed.ok && parsed.kind == pkchat::editor::AssistCommandKind::Configured &&
-              parsed.scope == pkchat::editor::AssistScope::All,
+    parsed = ainiux::editor::parse_assist_command("/comment all", default_config);
+    check(parsed.ok && parsed.kind == ainiux::editor::AssistCommandKind::Configured &&
+              parsed.scope == ainiux::editor::AssistScope::All,
           "/comment all parses");
 
-    parsed = pkchat::editor::parse_assist_command("/rewrite selection", default_config);
-    check(parsed.ok && parsed.kind == pkchat::editor::AssistCommandKind::Configured &&
-              parsed.scope == pkchat::editor::AssistScope::Selection,
+    parsed = ainiux::editor::parse_assist_command("/rewrite selection", default_config);
+    check(parsed.ok && parsed.kind == ainiux::editor::AssistCommandKind::Configured &&
+              parsed.scope == ainiux::editor::AssistScope::Selection,
           "/rewrite selection parses");
 
-    parsed = pkchat::editor::parse_assist_command("/english newbuffer", default_config);
-    check(parsed.ok && parsed.kind == pkchat::editor::AssistCommandKind::Configured &&
-              parsed.scope == pkchat::editor::AssistScope::NewBuffer,
+    parsed = ainiux::editor::parse_assist_command("/english newbuffer", default_config);
+    check(parsed.ok && parsed.kind == ainiux::editor::AssistCommandKind::Configured &&
+              parsed.scope == ainiux::editor::AssistScope::NewBuffer,
           "/English parses case-insensitively");
 
-    parsed = pkchat::editor::parse_assist_command("/Chinese n", default_config);
-    check(parsed.ok && parsed.kind == pkchat::editor::AssistCommandKind::Configured &&
-              parsed.scope == pkchat::editor::AssistScope::NewBuffer,
+    parsed = ainiux::editor::parse_assist_command("/Chinese n", default_config);
+    check(parsed.ok && parsed.kind == ainiux::editor::AssistCommandKind::Configured &&
+              parsed.scope == ainiux::editor::AssistScope::NewBuffer,
           "/Chinese n parses as new buffer");
 
-    parsed = pkchat::editor::parse_assist_command("/Finnish all", default_config);
-    check(parsed.ok && parsed.kind == pkchat::editor::AssistCommandKind::Configured &&
-              parsed.scope == pkchat::editor::AssistScope::All,
+    parsed = ainiux::editor::parse_assist_command("/Finnish all", default_config);
+    check(parsed.ok && parsed.kind == ainiux::editor::AssistCommandKind::Configured &&
+              parsed.scope == ainiux::editor::AssistScope::All,
           "/Finnish all parses");
 
-    parsed = pkchat::editor::parse_assist_command("/prompt rewrite formally", default_config);
-    check(parsed.ok && parsed.kind == pkchat::editor::AssistCommandKind::Prompt &&
+    parsed = ainiux::editor::parse_assist_command("/prompt rewrite formally", default_config);
+    check(parsed.ok && parsed.kind == ainiux::editor::AssistCommandKind::Prompt &&
               parsed.custom_prompt == "rewrite formally",
           "/prompt captures custom text");
-    check(pkchat::editor::assist_prompt_mode_message() ==
+    check(ainiux::editor::assist_prompt_mode_message() ==
               "/prompt for selection (s), all (a), insert (i), new buffer (n), vsplit (v), hsplit (h)",
           "/prompt offers the standard scoped AI choices including split new-buffer modes");
-    check(pkchat::editor::assist_prompt_mode_for_key('s') ==
-                  pkchat::editor::AssistPromptMode::Selection &&
-              pkchat::editor::assist_prompt_mode_for_key('A') ==
-                  pkchat::editor::AssistPromptMode::All &&
-              pkchat::editor::assist_prompt_mode_for_key('i') ==
-                  pkchat::editor::AssistPromptMode::Insert &&
-              pkchat::editor::assist_prompt_mode_for_key('N') ==
-                  pkchat::editor::AssistPromptMode::NewBuffer &&
-              pkchat::editor::assist_prompt_mode_for_key('v') ==
-                  pkchat::editor::AssistPromptMode::NewBufferVSplit &&
-              pkchat::editor::assist_prompt_mode_for_key('H') ==
-                  pkchat::editor::AssistPromptMode::NewBufferHSplit,
+    check(ainiux::editor::assist_prompt_mode_for_key('s') ==
+                  ainiux::editor::AssistPromptMode::Selection &&
+              ainiux::editor::assist_prompt_mode_for_key('A') ==
+                  ainiux::editor::AssistPromptMode::All &&
+              ainiux::editor::assist_prompt_mode_for_key('i') ==
+                  ainiux::editor::AssistPromptMode::Insert &&
+              ainiux::editor::assist_prompt_mode_for_key('N') ==
+                  ainiux::editor::AssistPromptMode::NewBuffer &&
+              ainiux::editor::assist_prompt_mode_for_key('v') ==
+                  ainiux::editor::AssistPromptMode::NewBufferVSplit &&
+              ainiux::editor::assist_prompt_mode_for_key('H') ==
+                  ainiux::editor::AssistPromptMode::NewBufferHSplit,
           "/prompt mode keys select advertised choices case-insensitively");
-    check(!pkchat::editor::assist_prompt_mode_for_key('c').has_value(),
+    check(!ainiux::editor::assist_prompt_mode_for_key('c').has_value(),
           "/prompt no longer accepts the continue-only mode key");
 
-    parsed = pkchat::editor::parse_assist_command("/prompt", default_config);
+    parsed = ainiux::editor::parse_assist_command("/prompt", default_config);
     check(!parsed.ok, "bare /prompt is rejected");
 
-    parsed = pkchat::editor::parse_assist_command("/regenerate", default_config);
-    check(parsed.ok && parsed.kind == pkchat::editor::AssistCommandKind::Regenerate,
+    parsed = ainiux::editor::parse_assist_command("/regenerate", default_config);
+    check(parsed.ok && parsed.kind == ainiux::editor::AssistCommandKind::Regenerate,
           "/regenerate parses");
 
-    parsed = pkchat::editor::parse_assist_command("/regenerate now", default_config);
+    parsed = ainiux::editor::parse_assist_command("/regenerate now", default_config);
     check(!parsed.ok, "/regenerate rejects arguments");
 
-    parsed = pkchat::editor::parse_assist_command("/search pkchat cli", default_config);
-    check(parsed.ok && parsed.kind == pkchat::editor::AssistCommandKind::WebSearch,
+    parsed = ainiux::editor::parse_assist_command("/search ainiux cli", default_config);
+    check(parsed.ok && parsed.kind == ainiux::editor::AssistCommandKind::WebSearch,
           "/search parses with query");
-    check(parsed.custom_prompt == "pkchat cli", "/search stores the query text");
+    check(parsed.custom_prompt == "ainiux cli", "/search stores the query text");
 
-    parsed = pkchat::editor::parse_assist_command("/search", default_config);
+    parsed = ainiux::editor::parse_assist_command("/search", default_config);
     check(!parsed.ok, "bare /search is rejected");
 
-    parsed = pkchat::editor::parse_assist_command("/quit", default_config);
-    check(parsed.ok && parsed.kind == pkchat::editor::AssistCommandKind::Quit, "/quit parses");
+    parsed = ainiux::editor::parse_assist_command("/quit", default_config);
+    check(parsed.ok && parsed.kind == ainiux::editor::AssistCommandKind::Quit, "/quit parses");
 
-    parsed = pkchat::editor::parse_assist_command("//quit", default_config);
-    check(parsed.ok && parsed.kind == pkchat::editor::AssistCommandKind::Quit,
+    parsed = ainiux::editor::parse_assist_command("//quit", default_config);
+    check(parsed.ok && parsed.kind == ainiux::editor::AssistCommandKind::Quit,
           "duplicate leading slashes in /quit are accepted");
 
     const std::vector<std::string> completions =
-        pkchat::editor::assist_command_completions(default_config);
+        ainiux::editor::assist_command_completions(default_config);
     check(!completions.empty() && completions.front() == "/spell", "assist completions include /spell");
     check(std::find(completions.begin(), completions.end(), "/regenerate") != completions.end(),
           "assist completions include /regenerate");
@@ -575,12 +575,12 @@ void test_editor_assist_helpers() {
           "builtin assist completions include bare /continue");
     for (const char* builtin : {"/spell", "/grammar", "/fact", "/comment", "/rewrite", "/English",
                                 "/Chinese", "/Finnish"}) {
-        const pkchat::editor::EditorAssistCommand* command =
-            pkchat::editor::find_assist_command(default_config, builtin);
+        const ainiux::editor::EditorAssistCommand* command =
+            ainiux::editor::find_assist_command(default_config, builtin);
         check(command != nullptr && command->modes.size() == 4,
               std::string("default ") + builtin +
                   " exposes selection, all, newbuffer, and insert modes");
-        const std::string scope_prompt = pkchat::editor::assist_scope_prompt(*command);
+        const std::string scope_prompt = ainiux::editor::assist_scope_prompt(*command);
         check(scope_prompt.find("selection (s)") != std::string::npos &&
                   scope_prompt.find("all (a)") != std::string::npos &&
                   scope_prompt.find("new buffer (n)") != std::string::npos &&
@@ -591,80 +591,80 @@ void test_editor_assist_helpers() {
               std::string("default ") + builtin + " scope prompt lists scoped modes without continue");
     }
     {
-        const pkchat::editor::EditorAssistCommand* continue_command =
-            pkchat::editor::find_assist_command(default_config, "/continue");
+        const ainiux::editor::EditorAssistCommand* continue_command =
+            ainiux::editor::find_assist_command(default_config, "/continue");
         check(continue_command != nullptr && continue_command->modes.size() == 1,
               "default /continue exposes only continue mode");
     }
 
     std::string input = "/sp";
-    pkchat::editor::AssistCompleterState completer;
-    pkchat::editor::AssistCompletionResult completion =
-        pkchat::editor::complete_assist_command(input, completer, default_config);
+    ainiux::editor::AssistCompleterState completer;
+    ainiux::editor::AssistCompletionResult completion =
+        ainiux::editor::complete_assist_command(input, completer, default_config);
     check(completion.changed && input.rfind("/spell", 0) == 0, "assist tab completion expands /sp");
 
     input = "/";
-    completer = pkchat::editor::AssistCompleterState{};
-    pkchat::editor::complete_assist_command(input, completer, default_config);
+    completer = ainiux::editor::AssistCompleterState{};
+    ainiux::editor::complete_assist_command(input, completer, default_config);
     check(completer.active && input == "/", "assist tab completion on / enters cycle mode");
     input += "fa";
-    completion = pkchat::editor::complete_assist_command(input, completer, default_config);
+    completion = ainiux::editor::complete_assist_command(input, completer, default_config);
     check(input == "/fact", "assist tab completion rematches after editing / to /fa");
     check(completer.active && completer.candidates.size() == 7,
           "/fa matches /fact and its six scoped variants for cycling");
 
     input = "/";
-    completer = pkchat::editor::AssistCompleterState{};
-    pkchat::editor::complete_assist_command(input, completer, default_config);
+    completer = ainiux::editor::AssistCompleterState{};
+    ainiux::editor::complete_assist_command(input, completer, default_config);
     input = "/q";
-    completion = pkchat::editor::complete_assist_command(input, completer, default_config);
+    completion = ainiux::editor::complete_assist_command(input, completer, default_config);
     check(input == "/quit", "assist tab completion rematches /q after stale / cycle state");
 
     input = "/en";
-    completer = pkchat::editor::AssistCompleterState{};
-    completion = pkchat::editor::complete_assist_command(input, completer, default_config);
+    completer = ainiux::editor::AssistCompleterState{};
+    completion = ainiux::editor::complete_assist_command(input, completer, default_config);
     check(completion.changed && input == "/English",
           "assist tab completion matches capitalized commands case-insensitively");
     input = "/c";
-    completer = pkchat::editor::AssistCompleterState{};
-    completion = pkchat::editor::complete_assist_command(input, completer, default_config);
+    completer = ainiux::editor::AssistCompleterState{};
+    completion = ainiux::editor::complete_assist_command(input, completer, default_config);
     check(!completion.changed && input == "/c" && completer.active,
           "assist tab completion keeps ambiguous mixed-case /c prefix");
 
     input = "rew";
-    completer = pkchat::editor::AssistCompleterState{};
-    completion = pkchat::editor::complete_assist_command(input, completer, default_config);
+    completer = ainiux::editor::AssistCompleterState{};
+    completion = ainiux::editor::complete_assist_command(input, completer, default_config);
     check(completion.changed && input == "rewrite",
           "slashless completion preserves the slashless form");
     input = "ch";
-    completer = pkchat::editor::AssistCompleterState{};
-    completion = pkchat::editor::complete_assist_command(input, completer, default_config);
+    completer = ainiux::editor::AssistCompleterState{};
+    completion = ainiux::editor::complete_assist_command(input, completer, default_config);
     check(completion.changed && input == "Chinese",
           "slashless completion handles case-insensitive configured names");
-    check(pkchat::editor::editor_assist_path_prefix_length("open notes") == 5 &&
-              pkchat::editor::editor_assist_path_prefix_length("/saveas notes") == 8,
+    check(ainiux::editor::editor_assist_path_prefix_length("open notes") == 5 &&
+              ainiux::editor::editor_assist_path_prefix_length("/saveas notes") == 8,
           "slashless and slashed path commands expose path completion");
 
-    pkchat::editor::EditorState state =
-        pkchat::editor::EditorState::from_text("hello wrld");
+    ainiux::editor::EditorState state =
+        ainiux::editor::EditorState::from_text("hello wrld");
     state.selection.anchor = 0;
     state.selection.active = 5;
-    pkchat::editor::AiContinueContext context;
+    ainiux::editor::AiContinueContext context;
     context.request.profile.name = "lm_studio";
     context.request.options.model = "mock-model";
     context.assist_config = default_config;
-    const std::optional<size_t> spell_index = pkchat::editor::assist_command_index(default_config, "/spell");
+    const std::optional<size_t> spell_index = ainiux::editor::assist_command_index(default_config, "/spell");
     check(spell_index.has_value(), "default assist config indexes /spell");
-    pkchat::editor::AssistExecution execution = pkchat::editor::build_assist_execution(
+    ainiux::editor::AssistExecution execution = ainiux::editor::build_assist_execution(
         state,
         context,
-        pkchat::editor::AssistCommandKind::Configured,
+        ainiux::editor::AssistCommandKind::Configured,
         *spell_index,
-        pkchat::editor::AssistScope::Selection,
+        ainiux::editor::AssistScope::Selection,
         "",
         std::nullopt);
     check(execution.ok && !execution.stream &&
-              execution.edit_kind == pkchat::editor::AssistEditKind::ReplaceInPlace &&
+              execution.edit_kind == ainiux::editor::AssistEditKind::ReplaceInPlace &&
               execution.replace_start == 0 && execution.replace_count == 5,
           "spell selection builds in-place execution");
     check(execution.messages.size() == 2 && execution.messages.front().role == "system" &&
@@ -675,99 +675,99 @@ void test_editor_assist_helpers() {
               execution.messages.back().content == "<content>hello</content>",
           "spell selection wraps buffer text in content tags for user message");
 
-    pkchat::editor::EditorState prompt_state =
-        pkchat::editor::EditorState::from_text("selected and remaining");
+    ainiux::editor::EditorState prompt_state =
+        ainiux::editor::EditorState::from_text("selected and remaining");
     prompt_state.selection.anchor = 0;
     prompt_state.selection.active = 8;
-    execution = pkchat::editor::build_assist_execution(
+    execution = ainiux::editor::build_assist_execution(
         prompt_state,
         context,
-        pkchat::editor::AssistCommandKind::Prompt,
+        ainiux::editor::AssistCommandKind::Prompt,
         0,
         std::nullopt,
         "Rewrite clearly",
-        pkchat::editor::AssistPromptMode::Selection);
+        ainiux::editor::AssistPromptMode::Selection);
     check(execution.ok && !execution.stream &&
-              execution.edit_kind == pkchat::editor::AssistEditKind::ReplaceInPlace &&
+              execution.edit_kind == ainiux::editor::AssistEditKind::ReplaceInPlace &&
               execution.replace_start == 0 && execution.replace_count == 8,
           "/prompt selection replaces the selected text");
 
-    execution = pkchat::editor::build_assist_execution(
+    execution = ainiux::editor::build_assist_execution(
         prompt_state,
         context,
-        pkchat::editor::AssistCommandKind::Prompt,
+        ainiux::editor::AssistCommandKind::Prompt,
         0,
         std::nullopt,
         "Rewrite clearly",
-        pkchat::editor::AssistPromptMode::All);
+        ainiux::editor::AssistPromptMode::All);
     check(execution.ok && !execution.stream &&
-              execution.edit_kind == pkchat::editor::AssistEditKind::ReplaceInPlace &&
+              execution.edit_kind == ainiux::editor::AssistEditKind::ReplaceInPlace &&
               execution.replace_start == 0 && execution.replace_count == prompt_state.text.size(),
           "/prompt all replaces the whole buffer");
 
-    execution = pkchat::editor::build_assist_execution(
+    execution = ainiux::editor::build_assist_execution(
         prompt_state,
         context,
-        pkchat::editor::AssistCommandKind::Prompt,
+        ainiux::editor::AssistCommandKind::Prompt,
         0,
         std::nullopt,
         "Rewrite clearly",
-        pkchat::editor::AssistPromptMode::Insert);
+        ainiux::editor::AssistPromptMode::Insert);
     check(execution.ok && execution.stream &&
-              execution.edit_kind == pkchat::editor::AssistEditKind::StreamInsert &&
+              execution.edit_kind == ainiux::editor::AssistEditKind::StreamInsert &&
               execution.messages.back().content == "<content>selected</content>",
           "/prompt insert streams from the selected text at the cursor");
 
-    execution = pkchat::editor::build_assist_execution(
+    execution = ainiux::editor::build_assist_execution(
         prompt_state,
         context,
-        pkchat::editor::AssistCommandKind::Prompt,
+        ainiux::editor::AssistCommandKind::Prompt,
         0,
         std::nullopt,
         "Rewrite clearly",
-        pkchat::editor::AssistPromptMode::NewBuffer);
+        ainiux::editor::AssistPromptMode::NewBuffer);
     check(execution.ok && execution.stream &&
-              execution.edit_kind == pkchat::editor::AssistEditKind::NewBuffer &&
+              execution.edit_kind == ainiux::editor::AssistEditKind::NewBuffer &&
               execution.messages.back().content == "<content>selected</content>",
           "/prompt new buffer streams from the selected text into a new buffer");
 
     prompt_state.clear_selection();
-    execution = pkchat::editor::build_assist_execution(
+    execution = ainiux::editor::build_assist_execution(
         prompt_state,
         context,
-        pkchat::editor::AssistCommandKind::Prompt,
+        ainiux::editor::AssistCommandKind::Prompt,
         0,
         std::nullopt,
         "Rewrite clearly",
-        pkchat::editor::AssistPromptMode::NewBuffer);
+        ainiux::editor::AssistPromptMode::NewBuffer);
     check(!execution.ok &&
               execution.error_message.find("new buffer requires an active selection") !=
                   std::string::npos,
           "/prompt new buffer rejects a missing selection");
 
-    const pkchat::editor::EditorAssistCommand* default_continue =
-        pkchat::editor::find_assist_command(default_config, "/continue");
+    const ainiux::editor::EditorAssistCommand* default_continue =
+        ainiux::editor::find_assist_command(default_config, "/continue");
     check(default_continue != nullptr, "default assist config includes /continue");
     const std::optional<size_t> continue_index =
-        pkchat::editor::assist_command_index(default_config, "/continue");
+        ainiux::editor::assist_command_index(default_config, "/continue");
     check(continue_index.has_value(), "default assist config indexes /continue");
     context.request.options.system = "Custom system";
     state.cursor = state.text.size();
-    execution = pkchat::editor::build_assist_execution(
+    execution = ainiux::editor::build_assist_execution(
         state,
         context,
-        pkchat::editor::AssistCommandKind::Configured,
+        ainiux::editor::AssistCommandKind::Configured,
         *continue_index,
-        pkchat::editor::AssistScope::Continue,
+        ainiux::editor::AssistScope::Continue,
         "",
         std::nullopt);
     check(execution.ok && execution.stream &&
-              execution.edit_kind == pkchat::editor::AssistEditKind::StreamInsert &&
+              execution.edit_kind == ainiux::editor::AssistEditKind::StreamInsert &&
               execution.prose_completion && !execution.code_completion,
           "/continue continue builds streaming execution");
     check(execution.messages.back().content.find(
-              "PKCHAT_PROSE_CONTEXT_V1\nMODE_BYTES 4\ntext\nPREFIX_BYTES 10\nhello wrld\n"
-              "CURSOR_BYTES 9\n<CURSOR/>\nEND_PKCHAT_PROSE_CONTEXT_V1") !=
+              "AINIUX_PROSE_CONTEXT_V1\nMODE_BYTES 4\ntext\nPREFIX_BYTES 10\nhello wrld\n"
+              "CURSOR_BYTES 9\n<CURSOR/>\nEND_AINIUX_PROSE_CONTEXT_V1") !=
               std::string::npos &&
               execution.messages.back().content.find("POSTFIX_BYTES") == std::string::npos,
           "/continue at prose buffer end sends a length-delimited prefix and omits postfix");
@@ -789,15 +789,15 @@ void test_editor_assist_helpers() {
           "/continue continue omits separate usage messages when the full prefix fits the read limit");
 
     context.settings.max_prose_prefix_chars = 4096;
-    pkchat::editor::EditorState long_state =
-        pkchat::editor::EditorState::from_text(std::string(5000, 'a'));
+    ainiux::editor::EditorState long_state =
+        ainiux::editor::EditorState::from_text(std::string(5000, 'a'));
     long_state.cursor = long_state.text.size();
-    execution = pkchat::editor::build_assist_execution(
+    execution = ainiux::editor::build_assist_execution(
         long_state,
         context,
-        pkchat::editor::AssistCommandKind::Configured,
+        ainiux::editor::AssistCommandKind::Configured,
         *continue_index,
-        pkchat::editor::AssistScope::Continue,
+        ainiux::editor::AssistScope::Continue,
         "",
         std::nullopt);
     check(execution.ok, "long /continue continue execution builds");
@@ -808,13 +808,13 @@ void test_editor_assist_helpers() {
               execution.messages.front().content.find(default_continue->prompt) != std::string::npos,
           "user --system is prepended to assist task system prompt");
 
-    pkchat::editor::EditorState markdown_state =
-        pkchat::editor::EditorState::from_text("# prose tail");
+    ainiux::editor::EditorState markdown_state =
+        ainiux::editor::EditorState::from_text("# prose tail");
     markdown_state.cursor = markdown_state.text.size();
-    markdown_state.set_language(pkchat::highlight::Language::Markdown, false);
-    execution = pkchat::editor::build_assist_execution(
-        markdown_state, context, pkchat::editor::AssistCommandKind::Configured,
-        *continue_index, pkchat::editor::AssistScope::Continue, "", std::nullopt);
+    markdown_state.set_language(ainiux::highlight::Language::Markdown, false);
+    execution = ainiux::editor::build_assist_execution(
+        markdown_state, context, ainiux::editor::AssistCommandKind::Configured,
+        *continue_index, ainiux::editor::AssistScope::Continue, "", std::nullopt);
     check(execution.prose_completion && !execution.code_completion &&
               execution.messages.back().content.find("MODE_BYTES 8\nmarkdown\n") !=
                   std::string::npos,
@@ -823,12 +823,12 @@ void test_editor_assist_helpers() {
     context.settings.max_prose_prefix_chars = 3;
     context.settings.max_prose_postfix_chars = 4;
     const std::string prose_beta = "\xCE\xB2";
-    pkchat::editor::EditorState prose_middle = pkchat::editor::EditorState::from_text(
+    ainiux::editor::EditorState prose_middle = ainiux::editor::EditorState::from_text(
         std::string("\xCE\xB1") + prose_beta + "AB  ending\xE5\xB0\xBE");
     prose_middle.cursor = std::string("\xCE\xB1").size() + prose_beta.size() + 2;
-    execution = pkchat::editor::build_assist_execution(
-        prose_middle, context, pkchat::editor::AssistCommandKind::Configured,
-        *continue_index, pkchat::editor::AssistScope::Continue, "", std::nullopt);
+    execution = ainiux::editor::build_assist_execution(
+        prose_middle, context, ainiux::editor::AssistCommandKind::Configured,
+        *continue_index, ainiux::editor::AssistScope::Continue, "", std::nullopt);
     const std::string& prose_request = execution.messages.back().content;
     check(prose_request.find("PREFIX_BYTES 4\n" + prose_beta + "AB\nCURSOR_BYTES 9\n<CURSOR/>\n") !=
                   std::string::npos &&
@@ -841,9 +841,9 @@ void test_editor_assist_helpers() {
           "middle prose continuation requires a developed bridge without the end-only long-form prompt");
 
     context.settings.max_prose_postfix_chars = 2;
-    execution = pkchat::editor::build_assist_execution(
-        prose_middle, context, pkchat::editor::AssistCommandKind::Configured,
-        *continue_index, pkchat::editor::AssistScope::Continue, "", std::nullopt);
+    execution = ainiux::editor::build_assist_execution(
+        prose_middle, context, ainiux::editor::AssistCommandKind::Configured,
+        *continue_index, ainiux::editor::AssistScope::Continue, "", std::nullopt);
     check(execution.messages.back().content.find("POSTFIX_BYTES 2\n  \n") !=
               std::string::npos,
           "bounded prose postfix preserves an immediate whitespace-only slice exactly");
@@ -851,9 +851,9 @@ void test_editor_assist_helpers() {
     prose_middle.cursor = 0;
     context.settings.max_prose_prefix_chars = 0;
     context.settings.max_prose_postfix_chars = 3;
-    execution = pkchat::editor::build_assist_execution(
-        prose_middle, context, pkchat::editor::AssistCommandKind::Configured,
-        *continue_index, pkchat::editor::AssistScope::Continue, "", std::nullopt);
+    execution = ainiux::editor::build_assist_execution(
+        prose_middle, context, ainiux::editor::AssistCommandKind::Configured,
+        *continue_index, ainiux::editor::AssistScope::Continue, "", std::nullopt);
     check(execution.messages.back().content.find("PREFIX_BYTES 0\n\nCURSOR_BYTES 9") !=
                   std::string::npos &&
               execution.messages.back().content.find(
@@ -864,14 +864,14 @@ void test_editor_assist_helpers() {
     std::string invalid_prose_source = "A";
     invalid_prose_source.push_back(static_cast<char>(0xFF));
     invalid_prose_source += "Brest";
-    pkchat::editor::EditorState invalid_prose_state =
-        pkchat::editor::EditorState::from_text(invalid_prose_source);
+    ainiux::editor::EditorState invalid_prose_state =
+        ainiux::editor::EditorState::from_text(invalid_prose_source);
     invalid_prose_state.cursor = 3;
     context.settings.max_prose_prefix_chars = 2;
     context.settings.max_prose_postfix_chars = 2;
-    execution = pkchat::editor::build_assist_execution(
-        invalid_prose_state, context, pkchat::editor::AssistCommandKind::Configured,
-        *continue_index, pkchat::editor::AssistScope::Continue, "", std::nullopt);
+    execution = ainiux::editor::build_assist_execution(
+        invalid_prose_state, context, ainiux::editor::AssistCommandKind::Configured,
+        *continue_index, ainiux::editor::AssistScope::Continue, "", std::nullopt);
     std::string invalid_prose_prefix;
     invalid_prose_prefix.push_back(static_cast<char>(0xFF));
     invalid_prose_prefix += "B";
@@ -880,14 +880,14 @@ void test_editor_assist_helpers() {
               std::string::npos,
           "invalid UTF-8 prose bytes are preserved and count as one context unit");
 
-    pkchat::editor::EditorState prose_whitespace_postfix =
-        pkchat::editor::EditorState::from_text("abc \t\r\n\f\v");
+    ainiux::editor::EditorState prose_whitespace_postfix =
+        ainiux::editor::EditorState::from_text("abc \t\r\n\f\v");
     prose_whitespace_postfix.cursor = 3;
     context.settings.max_prose_prefix_chars = 3;
     context.settings.max_prose_postfix_chars = 20;
-    execution = pkchat::editor::build_assist_execution(
-        prose_whitespace_postfix, context, pkchat::editor::AssistCommandKind::Configured,
-        *continue_index, pkchat::editor::AssistScope::Continue, "", std::nullopt);
+    execution = ainiux::editor::build_assist_execution(
+        prose_whitespace_postfix, context, ainiux::editor::AssistCommandKind::Configured,
+        *continue_index, ainiux::editor::AssistScope::Continue, "", std::nullopt);
     check(execution.messages.back().content.find("POSTFIX_BYTES") == std::string::npos,
           "complete whitespace-only prose remainder is omitted");
     check(execution.messages.front().content.find("Continue at substantial length") !=
@@ -896,9 +896,9 @@ void test_editor_assist_helpers() {
 
     context.settings.max_prose_postfix_chars = 0;
     prose_middle.cursor = 4;
-    execution = pkchat::editor::build_assist_execution(
-        prose_middle, context, pkchat::editor::AssistCommandKind::Configured,
-        *continue_index, pkchat::editor::AssistScope::Continue, "", std::nullopt);
+    execution = ainiux::editor::build_assist_execution(
+        prose_middle, context, ainiux::editor::AssistCommandKind::Configured,
+        *continue_index, ainiux::editor::AssistScope::Continue, "", std::nullopt);
     check(execution.messages.back().content.find("POSTFIX_BYTES") == std::string::npos,
           "zero prose postfix limit omits existing suffix data");
     check(execution.messages.front().content.find("Continue at substantial length") ==
@@ -910,16 +910,16 @@ void test_editor_assist_helpers() {
     context.settings.max_prefix_chars = 3;
     context.settings.max_postfix_chars = 4;
     const std::string beta = "\xCE\xB2";
-    pkchat::editor::EditorState python_state =
-        pkchat::editor::EditorState::from_text(std::string("\xCE\xB1") + beta + "AB  tail\xE5\xB0\xBE");
+    ainiux::editor::EditorState python_state =
+        ainiux::editor::EditorState::from_text(std::string("\xCE\xB1") + beta + "AB  tail\xE5\xB0\xBE");
     python_state.cursor = std::string("\xCE\xB1").size() + beta.size() + 2;
-    python_state.set_language(pkchat::highlight::Language::Python, false);
+    python_state.set_language(ainiux::highlight::Language::Python, false);
     python_state.highlight_enabled = false;
-    execution = pkchat::editor::build_assist_execution(
-        python_state, context, pkchat::editor::AssistCommandKind::Configured,
-        *continue_index, pkchat::editor::AssistScope::Continue, "", std::nullopt);
+    execution = ainiux::editor::build_assist_execution(
+        python_state, context, ainiux::editor::AssistCommandKind::Configured,
+        *continue_index, ainiux::editor::AssistScope::Continue, "", std::nullopt);
     check(execution.ok && execution.code_completion &&
-              execution.completion_language == pkchat::highlight::Language::Python,
+              execution.completion_language == ainiux::highlight::Language::Python,
           "Python /continue uses code completion even with visual highlighting disabled");
     check(execution.messages.front().content.find("exact python code") != std::string::npos &&
               execution.messages.front().content.find(default_continue->prompt) == std::string::npos,
@@ -932,22 +932,22 @@ void test_editor_assist_helpers() {
           "code completion slices multibyte prefix and immediate postfix by UTF-8 characters");
 
     context.settings.max_postfix_chars = 2;
-    execution = pkchat::editor::build_assist_execution(
-        python_state, context, pkchat::editor::AssistCommandKind::Configured,
-        *continue_index, pkchat::editor::AssistScope::Continue, "", std::nullopt);
+    execution = ainiux::editor::build_assist_execution(
+        python_state, context, ainiux::editor::AssistCommandKind::Configured,
+        *continue_index, ainiux::editor::AssistScope::Continue, "", std::nullopt);
     check(execution.messages.back().content.find("POSTFIX_BYTES 2\n  \n") !=
               std::string::npos,
           "bounded postfix is sent exactly even when its immediate slice is whitespace");
 
-    pkchat::editor::EditorState code_start =
-        pkchat::editor::EditorState::from_text("print(value)");
+    ainiux::editor::EditorState code_start =
+        ainiux::editor::EditorState::from_text("print(value)");
     code_start.cursor = 0;
-    code_start.set_language(pkchat::highlight::Language::Python, false);
+    code_start.set_language(ainiux::highlight::Language::Python, false);
     context.settings.max_prefix_chars = 5;
     context.settings.max_postfix_chars = 3;
-    execution = pkchat::editor::build_assist_execution(
-        code_start, context, pkchat::editor::AssistCommandKind::Configured,
-        *continue_index, pkchat::editor::AssistScope::Continue, "", std::nullopt);
+    execution = ainiux::editor::build_assist_execution(
+        code_start, context, ainiux::editor::AssistCommandKind::Configured,
+        *continue_index, ainiux::editor::AssistScope::Continue, "", std::nullopt);
     check(execution.messages.back().content.find("PREFIX_BYTES 0\n\n<CURSOR/>") !=
                   std::string::npos &&
               execution.messages.back().content.find("POSTFIX_BYTES 3\npri\n") !=
@@ -955,9 +955,9 @@ void test_editor_assist_helpers() {
           "code completion at buffer start sends empty prefix and bounded leading postfix");
 
     code_start.cursor = code_start.text.size();
-    execution = pkchat::editor::build_assist_execution(
-        code_start, context, pkchat::editor::AssistCommandKind::Configured,
-        *continue_index, pkchat::editor::AssistScope::Continue, "", std::nullopt);
+    execution = ainiux::editor::build_assist_execution(
+        code_start, context, ainiux::editor::AssistCommandKind::Configured,
+        *continue_index, ainiux::editor::AssistScope::Continue, "", std::nullopt);
     check(execution.messages.back().content.find("PREFIX_BYTES 5\nalue)") !=
                   std::string::npos &&
               execution.messages.back().content.find("POSTFIX_BYTES") == std::string::npos,
@@ -966,15 +966,15 @@ void test_editor_assist_helpers() {
     std::string invalid_source = "A";
     invalid_source.push_back(static_cast<char>(0xFF));
     invalid_source += "Brest";
-    pkchat::editor::EditorState invalid_state =
-        pkchat::editor::EditorState::from_text(invalid_source);
+    ainiux::editor::EditorState invalid_state =
+        ainiux::editor::EditorState::from_text(invalid_source);
     invalid_state.cursor = 3;
-    invalid_state.set_language(pkchat::highlight::Language::Python, false);
+    invalid_state.set_language(ainiux::highlight::Language::Python, false);
     context.settings.max_prefix_chars = 2;
     context.settings.max_postfix_chars = 2;
-    execution = pkchat::editor::build_assist_execution(
-        invalid_state, context, pkchat::editor::AssistCommandKind::Configured,
-        *continue_index, pkchat::editor::AssistScope::Continue, "", std::nullopt);
+    execution = ainiux::editor::build_assist_execution(
+        invalid_state, context, ainiux::editor::AssistCommandKind::Configured,
+        *continue_index, ainiux::editor::AssistScope::Continue, "", std::nullopt);
     std::string invalid_prefix;
     invalid_prefix.push_back(static_cast<char>(0xFF));
     invalid_prefix += "B";
@@ -982,51 +982,51 @@ void test_editor_assist_helpers() {
               std::string::npos,
           "invalid UTF-8 bytes are preserved and count as one continuation context unit");
 
-    pkchat::editor::EditorState whitespace_postfix =
-        pkchat::editor::EditorState::from_text("abc \t\r\n\f\v");
+    ainiux::editor::EditorState whitespace_postfix =
+        ainiux::editor::EditorState::from_text("abc \t\r\n\f\v");
     whitespace_postfix.cursor = 3;
-    whitespace_postfix.set_language(pkchat::highlight::Language::Json, false);
+    whitespace_postfix.set_language(ainiux::highlight::Language::Json, false);
     context.settings.max_prefix_chars = 0;
     context.settings.max_postfix_chars = 20;
-    execution = pkchat::editor::build_assist_execution(
-        whitespace_postfix, context, pkchat::editor::AssistCommandKind::Configured,
-        *continue_index, pkchat::editor::AssistScope::Continue, "", std::nullopt);
+    execution = ainiux::editor::build_assist_execution(
+        whitespace_postfix, context, ainiux::editor::AssistCommandKind::Configured,
+        *continue_index, ainiux::editor::AssistScope::Continue, "", std::nullopt);
     check(execution.messages.back().content.find("LANGUAGE json\nPREFIX_BYTES 0\n\n<CURSOR/>") !=
                   std::string::npos &&
               execution.messages.back().content.find("POSTFIX_BYTES") == std::string::npos,
           "disabled prefix is empty and a complete whitespace-only postfix is omitted");
 
     context.settings.max_postfix_chars = 0;
-    execution = pkchat::editor::build_assist_execution(
-        python_state, context, pkchat::editor::AssistCommandKind::Configured,
-        *continue_index, pkchat::editor::AssistScope::Continue, "", std::nullopt);
+    execution = ainiux::editor::build_assist_execution(
+        python_state, context, ainiux::editor::AssistCommandKind::Configured,
+        *continue_index, ainiux::editor::AssistScope::Continue, "", std::nullopt);
     check(execution.messages.back().content.find("POSTFIX_BYTES") == std::string::npos,
           "zero postfix limit omits postfix data in code completion");
 
-    context.settings.max_prefix_chars = pkchat::editor::kDefaultAiContinuePrefixMaxChars;
-    context.settings.max_postfix_chars = pkchat::editor::kDefaultAiContinuePostfixMaxChars;
+    context.settings.max_prefix_chars = ainiux::editor::kDefaultAiContinuePrefixMaxChars;
+    context.settings.max_postfix_chars = ainiux::editor::kDefaultAiContinuePostfixMaxChars;
     context.settings.max_prose_prefix_chars =
-        pkchat::editor::kDefaultAiContinueProsePrefixMaxChars;
+        ainiux::editor::kDefaultAiContinueProsePrefixMaxChars;
     context.settings.max_prose_postfix_chars =
-        pkchat::editor::kDefaultAiContinueProsePostfixMaxChars;
+        ainiux::editor::kDefaultAiContinueProsePostfixMaxChars;
 
-    pkchat::cli::Options configured_options;
-    configured_options.editor_assist_config = pkchat::editor::default_editor_assist_config();
-    pkchat::config::ParseResult assist_config = pkchat::config::parse(
+    ainiux::cli::Options configured_options;
+    configured_options.editor_assist_config = ainiux::editor::default_editor_assist_config();
+    ainiux::config::ParseResult assist_config = ainiux::config::parse(
         "[editor]\nassist_spell = \"Custom spell prompt\"\n", "assist.conf");
     check(assist_config.error.ok(), "editor assist prompt config parses");
-    check(pkchat::config::apply_document(assist_config.document, configured_options).ok(),
+    check(ainiux::config::apply_document(assist_config.document, configured_options).ok(),
           "editor assist prompt config applies");
     context.assist_config = configured_options.editor_assist_config;
-    const pkchat::editor::EditorAssistCommand* configured_spell =
-        pkchat::editor::find_assist_command(context.assist_config, "/spell");
+    const ainiux::editor::EditorAssistCommand* configured_spell =
+        ainiux::editor::find_assist_command(context.assist_config, "/spell");
     check(configured_spell != nullptr, "configured assist spell command remains available");
-    execution = pkchat::editor::build_assist_execution(
+    execution = ainiux::editor::build_assist_execution(
         state,
         context,
-        pkchat::editor::AssistCommandKind::Configured,
-        *pkchat::editor::assist_command_index(context.assist_config, "/spell"),
-        pkchat::editor::AssistScope::Selection,
+        ainiux::editor::AssistCommandKind::Configured,
+        *ainiux::editor::assist_command_index(context.assist_config, "/spell"),
+        ainiux::editor::AssistScope::Selection,
         "",
         std::nullopt);
     check(execution.messages.front().content.find("Custom spell prompt") != std::string::npos,
@@ -1034,192 +1034,192 @@ void test_editor_assist_helpers() {
     check(execution.messages.back().content.find("<content>") == 0,
           "configured assist wraps editor text in content tags");
 
-    pkchat::config::ParseResult custom_continue_config = pkchat::config::parse(
+    ainiux::config::ParseResult custom_continue_config = ainiux::config::parse(
         "[editor]\nassist_continue = \"Carry the mystery forward.\"\n",
         "assist-continue.conf");
     check(custom_continue_config.error.ok() &&
-              pkchat::config::apply_document(
+              ainiux::config::apply_document(
                   custom_continue_config.document, configured_options).ok(),
           "custom /continue prompt config applies");
     context.assist_config = configured_options.editor_assist_config;
-    pkchat::editor::EditorState custom_continue_state =
-        pkchat::editor::EditorState::from_text("The locked door opened.");
+    ainiux::editor::EditorState custom_continue_state =
+        ainiux::editor::EditorState::from_text("The locked door opened.");
     custom_continue_state.cursor = custom_continue_state.text.size();
-    execution = pkchat::editor::build_assist_execution(
-        custom_continue_state, context, pkchat::editor::AssistCommandKind::Configured,
-        *pkchat::editor::assist_command_index(context.assist_config, "/continue"),
-        pkchat::editor::AssistScope::Continue, "", std::nullopt);
+    execution = ainiux::editor::build_assist_execution(
+        custom_continue_state, context, ainiux::editor::AssistCommandKind::Configured,
+        *ainiux::editor::assist_command_index(context.assist_config, "/continue"),
+        ainiux::editor::AssistScope::Continue, "", std::nullopt);
     check(execution.messages.front().content.find("Carry the mystery forward.") !=
                   std::string::npos &&
               execution.messages.front().content.find("Mandatory continuation rules") !=
                   std::string::npos,
           "custom /continue prompt remains alongside mandatory prose insertion constraints");
 
-    pkchat::config::ParseResult custom_command_config = pkchat::config::parse(
+    ainiux::config::ParseResult custom_command_config = ainiux::config::parse(
         "[command]\n"
         "string = /example\n"
         "modes = all, selection\n"
         "prompt = \"Output 5 examples of the user-given topic.\"\n",
         "command.conf");
     check(custom_command_config.error.ok(), "repeatable [command] config parses");
-    configured_options = pkchat::cli::Options{};
-    check(pkchat::config::apply_document(custom_command_config.document, configured_options).ok(),
+    configured_options = ainiux::cli::Options{};
+    check(ainiux::config::apply_document(custom_command_config.document, configured_options).ok(),
           "repeatable [command] config applies");
-    const pkchat::editor::EditorAssistCommand* example_command =
-        pkchat::editor::find_assist_command(configured_options.editor_assist_config, "/example");
+    const ainiux::editor::EditorAssistCommand* example_command =
+        ainiux::editor::find_assist_command(configured_options.editor_assist_config, "/example");
     check(example_command != nullptr &&
               example_command->modes.size() == 2 &&
               example_command->prompt.find("5 examples") != std::string::npos,
           "configured [command] block adds a custom editor assist command");
-    parsed = pkchat::editor::parse_assist_command("/example all",
+    parsed = ainiux::editor::parse_assist_command("/example all",
                                                   configured_options.editor_assist_config);
-    check(parsed.ok && parsed.kind == pkchat::editor::AssistCommandKind::Configured &&
-              parsed.scope == pkchat::editor::AssistScope::All,
+    check(parsed.ok && parsed.kind == ainiux::editor::AssistCommandKind::Configured &&
+              parsed.scope == ainiux::editor::AssistScope::All,
           "configured custom command parses with scope");
 
-    pkchat::config::ParseResult override_command_config = pkchat::config::parse(
+    ainiux::config::ParseResult override_command_config = ainiux::config::parse(
         "[command]\n"
         "string = /spell\n"
         "modes = selection, all\n"
         "prompt = \"Override spell prompt\"\n",
         "override-command.conf");
     check(override_command_config.error.ok(), "configured command override parses");
-    configured_options = pkchat::cli::Options{};
-    check(pkchat::config::apply_document(override_command_config.document, configured_options).ok(),
+    configured_options = ainiux::cli::Options{};
+    check(ainiux::config::apply_document(override_command_config.document, configured_options).ok(),
           "configured command override applies");
-    const pkchat::editor::EditorAssistCommand* overridden_spell =
-        pkchat::editor::find_assist_command(configured_options.editor_assist_config, "/spell");
+    const ainiux::editor::EditorAssistCommand* overridden_spell =
+        ainiux::editor::find_assist_command(configured_options.editor_assist_config, "/spell");
     check(overridden_spell != nullptr && overridden_spell->prompt == "Override spell prompt",
           "configured command with matching string overrides a built-in command");
 
-    pkchat::config::ParseResult insert_modes_config = pkchat::config::parse(
+    ainiux::config::ParseResult insert_modes_config = ainiux::config::parse(
         "[command]\n"
         "string = /expand\n"
         "modes = continue, insert, local_insert\n"
         "prompt = \"Expand the input.\"\n",
         "insert-modes.conf");
     check(insert_modes_config.error.ok(), "configured continue and insert modes parse");
-    configured_options = pkchat::cli::Options{};
-    check(pkchat::config::apply_document(insert_modes_config.document, configured_options).ok(),
+    configured_options = ainiux::cli::Options{};
+    check(ainiux::config::apply_document(insert_modes_config.document, configured_options).ok(),
           "configured continue and insert modes apply");
-    const pkchat::editor::EditorAssistCommand* expand_command =
-        pkchat::editor::find_assist_command(configured_options.editor_assist_config, "/expand");
+    const ainiux::editor::EditorAssistCommand* expand_command =
+        ainiux::editor::find_assist_command(configured_options.editor_assist_config, "/expand");
     check(expand_command != nullptr && expand_command->modes.size() == 3,
           "configured command stores continue and insert modes");
 
-    parsed = pkchat::editor::parse_assist_command("/expand continue",
+    parsed = ainiux::editor::parse_assist_command("/expand continue",
                                                   configured_options.editor_assist_config);
-    check(parsed.ok && parsed.scope == pkchat::editor::AssistScope::Continue,
+    check(parsed.ok && parsed.scope == ainiux::editor::AssistScope::Continue,
           "/expand continue parses continue mode");
-    parsed = pkchat::editor::parse_assist_command("/expand insert",
+    parsed = ainiux::editor::parse_assist_command("/expand insert",
                                                   configured_options.editor_assist_config);
-    check(parsed.ok && parsed.scope == pkchat::editor::AssistScope::Insert,
+    check(parsed.ok && parsed.scope == ainiux::editor::AssistScope::Insert,
           "/expand insert parses insert mode");
-    parsed = pkchat::editor::parse_assist_command("/expand l",
+    parsed = ainiux::editor::parse_assist_command("/expand l",
                                                   configured_options.editor_assist_config);
-    check(parsed.ok && parsed.scope == pkchat::editor::AssistScope::Insert,
+    check(parsed.ok && parsed.scope == ainiux::editor::AssistScope::Insert,
           "legacy local_insert scope alias l parses as insert");
 
     const std::vector<std::string> expand_completions =
-        pkchat::editor::assist_command_completions(configured_options.editor_assist_config);
+        ainiux::editor::assist_command_completions(configured_options.editor_assist_config);
     check(std::find(expand_completions.begin(), expand_completions.end(), "/expand continue") !=
               expand_completions.end() &&
               std::find(expand_completions.begin(), expand_completions.end(), "/expand insert") !=
                   expand_completions.end(),
           "assist completions include continue and insert variants");
 
-    check(pkchat::editor::assist_scope_prompt(*expand_command).find("continue (c)") != std::string::npos &&
-              pkchat::editor::assist_scope_prompt(*expand_command).find("insert (i)") !=
+    check(ainiux::editor::assist_scope_prompt(*expand_command).find("continue (c)") != std::string::npos &&
+              ainiux::editor::assist_scope_prompt(*expand_command).find("insert (i)") !=
                   std::string::npos,
           "assist scope prompt advertises continue and insert keys");
 
-    pkchat::editor::EditorState insert_state =
-        pkchat::editor::EditorState::from_text("Once upon a time");
+    ainiux::editor::EditorState insert_state =
+        ainiux::editor::EditorState::from_text("Once upon a time");
     insert_state.cursor = insert_state.text.size();
     context.assist_config = configured_options.editor_assist_config;
     const std::optional<size_t> expand_index =
-        pkchat::editor::assist_command_index(context.assist_config, "/expand");
+        ainiux::editor::assist_command_index(context.assist_config, "/expand");
     check(expand_index.has_value(), "configured /expand command is indexed");
-    execution = pkchat::editor::build_assist_execution(
+    execution = ainiux::editor::build_assist_execution(
         insert_state,
         context,
-        pkchat::editor::AssistCommandKind::Configured,
+        ainiux::editor::AssistCommandKind::Configured,
         *expand_index,
-        pkchat::editor::AssistScope::Continue,
+        ainiux::editor::AssistScope::Continue,
         "",
         std::nullopt);
     check(execution.ok && execution.stream &&
-              execution.edit_kind == pkchat::editor::AssistEditKind::StreamInsert,
+              execution.edit_kind == ainiux::editor::AssistEditKind::StreamInsert,
           "continue mode builds streaming execution after the cursor");
     check(execution.messages.back().content == "<content>Once upon a time</content>",
           "continue mode sends tail-before-cursor context as input");
 
     insert_state.selection.anchor = 5;
     insert_state.selection.active = 9;
-    execution = pkchat::editor::build_assist_execution(
+    execution = ainiux::editor::build_assist_execution(
         insert_state,
         context,
-        pkchat::editor::AssistCommandKind::Configured,
+        ainiux::editor::AssistCommandKind::Configured,
         *expand_index,
-        pkchat::editor::AssistScope::Insert,
+        ainiux::editor::AssistScope::Insert,
         "",
         std::nullopt);
     check(execution.ok && execution.stream &&
-              execution.edit_kind == pkchat::editor::AssistEditKind::StreamInsert,
+              execution.edit_kind == ainiux::editor::AssistEditKind::StreamInsert,
           "insert mode builds streaming execution after the cursor");
     check(execution.messages.back().content == "<content>upon</content>",
           "insert mode sends the current selection as input");
 
     insert_state.clear_selection();
-    execution = pkchat::editor::build_assist_execution(
+    execution = ainiux::editor::build_assist_execution(
         insert_state,
         context,
-        pkchat::editor::AssistCommandKind::Configured,
+        ainiux::editor::AssistCommandKind::Configured,
         *expand_index,
-        pkchat::editor::AssistScope::Insert,
+        ainiux::editor::AssistScope::Insert,
         "",
         std::nullopt);
     check(!execution.ok &&
               execution.error_message.find("insert requires an active selection") != std::string::npos,
           "insert mode rejects missing selection");
 
-    pkchat::config::ParseResult newbuffer_modes_config = pkchat::config::parse(
+    ainiux::config::ParseResult newbuffer_modes_config = ainiux::config::parse(
         "[command]\n"
         "string = /summarize\n"
         "modes = selection, all, newbuffer\n"
         "prompt = \"Summarize the input.\"\n",
         "newbuffer-modes.conf");
     check(newbuffer_modes_config.error.ok(), "configured newbuffer mode parses");
-    configured_options = pkchat::cli::Options{};
-    check(pkchat::config::apply_document(newbuffer_modes_config.document, configured_options).ok(),
+    configured_options = ainiux::cli::Options{};
+    check(ainiux::config::apply_document(newbuffer_modes_config.document, configured_options).ok(),
           "configured newbuffer mode applies");
-    parsed = pkchat::editor::parse_assist_command("/summarize n",
+    parsed = ainiux::editor::parse_assist_command("/summarize n",
                                                   configured_options.editor_assist_config);
-    check(parsed.ok && parsed.scope == pkchat::editor::AssistScope::NewBuffer,
+    check(parsed.ok && parsed.scope == ainiux::editor::AssistScope::NewBuffer,
           "/summarize n parses as new buffer");
     insert_state.selection.anchor = 0;
     insert_state.selection.active = 4;
     context.assist_config = configured_options.editor_assist_config;
-    execution = pkchat::editor::build_assist_execution(
+    execution = ainiux::editor::build_assist_execution(
         insert_state,
         context,
-        pkchat::editor::AssistCommandKind::Configured,
-        *pkchat::editor::assist_command_index(context.assist_config, "/summarize"),
-        pkchat::editor::AssistScope::NewBuffer,
+        ainiux::editor::AssistCommandKind::Configured,
+        *ainiux::editor::assist_command_index(context.assist_config, "/summarize"),
+        ainiux::editor::AssistScope::NewBuffer,
         "",
         std::nullopt);
     check(execution.ok && execution.stream &&
-              execution.edit_kind == pkchat::editor::AssistEditKind::NewBuffer,
+              execution.edit_kind == ainiux::editor::AssistEditKind::NewBuffer,
           "new buffer mode builds streaming execution into a new buffer");
     check(execution.messages.back().content == "<content>Once</content>",
           "new buffer mode sends the current selection as input");
     insert_state.clear_selection();
-    execution = pkchat::editor::build_assist_execution(
+    execution = ainiux::editor::build_assist_execution(
         insert_state,
         context,
-        pkchat::editor::AssistCommandKind::Configured,
-        *pkchat::editor::assist_command_index(context.assist_config, "/summarize"),
-        pkchat::editor::AssistScope::NewBuffer,
+        ainiux::editor::AssistCommandKind::Configured,
+        *ainiux::editor::assist_command_index(context.assist_config, "/summarize"),
+        ainiux::editor::AssistScope::NewBuffer,
         "",
         std::nullopt);
     check(!execution.ok &&
@@ -1227,26 +1227,26 @@ void test_editor_assist_helpers() {
                   std::string::npos,
           "new buffer mode rejects missing selection");
 
-    check(pkchat::editor::trim_assist_inplace_response("  fixed text \n") == "fixed text",
+    check(ainiux::editor::trim_assist_inplace_response("  fixed text \n") == "fixed text",
           "in-place assist responses are trimmed");
-    check(pkchat::editor::trim_assist_inplace_response(
+    check(ainiux::editor::trim_assist_inplace_response(
               "<think>hidden trace</think>\n\nVisible rewrite") == "Visible rewrite",
           "in-place assist responses drop thinking traces");
-    check(pkchat::editor::trim_assist_inplace_response("<content>fixed text</content>") == "fixed text",
+    check(ainiux::editor::trim_assist_inplace_response("<content>fixed text</content>") == "fixed text",
           "in-place assist responses strip content tags");
-    check(pkchat::editor::trim_assist_inplace_response("plain text without tags") == "plain text without tags",
+    check(ainiux::editor::trim_assist_inplace_response("plain text without tags") == "plain text without tags",
           "in-place assist responses leave untagged output unchanged");
-    check(pkchat::editor::trim_assist_inplace_response("continued text</content>") == "continued text",
+    check(ainiux::editor::trim_assist_inplace_response("continued text</content>") == "continued text",
           "in-place assist responses strip trailing close tag without open tag");
-    check(pkchat::editor::trim_assist_inplace_response("continued text</content></tool_call>") ==
+    check(ainiux::editor::trim_assist_inplace_response("continued text</content></tool_call>") ==
               "continued text",
           "in-place assist responses strip trailing tool-call wrapper artifacts");
-    check(pkchat::editor::trim_assist_inplace_response("continued text</content></tool_call>  \n") ==
+    check(ainiux::editor::trim_assist_inplace_response("continued text</content></tool_call>  \n") ==
               "continued text",
           "in-place assist responses strip trailing wrapper artifacts with whitespace");
 
     {
-        pkchat::editor::AssistStreamFilter stream_filter;
+        ainiux::editor::AssistStreamFilter stream_filter;
         std::string streamed;
         streamed += stream_filter.feed("<content>hello");
         streamed += stream_filter.feed("</content>");
@@ -1255,14 +1255,14 @@ void test_editor_assist_helpers() {
               "streamed assist output strips content wrapper tags");
     }
     {
-        pkchat::editor::AssistStreamFilter stream_filter;
+        ainiux::editor::AssistStreamFilter stream_filter;
         std::string streamed = stream_filter.feed("continued text</content>");
         streamed += stream_filter.finish();
         check(streamed == "continued text",
               "streamed assist output strips trailing close tag without open tag");
     }
     {
-        pkchat::editor::AssistStreamFilter stream_filter;
+        ainiux::editor::AssistStreamFilter stream_filter;
         std::string streamed = stream_filter.feed("hello</cont");
         streamed += stream_filter.feed("ent>");
         streamed += stream_filter.finish();
@@ -1270,21 +1270,21 @@ void test_editor_assist_helpers() {
               "streamed assist output strips a close tag split across chunks");
     }
     {
-        pkchat::editor::AssistStreamFilter stream_filter;
+        ainiux::editor::AssistStreamFilter stream_filter;
         std::string streamed = stream_filter.feed("plain");
         streamed += stream_filter.finish();
         check(streamed == "plain",
               "streamed assist output leaves untagged text unchanged");
     }
     {
-        pkchat::editor::AssistStreamFilter stream_filter;
+        ainiux::editor::AssistStreamFilter stream_filter;
         std::string streamed = stream_filter.feed("continued text</content></tool_call>");
         streamed += stream_filter.finish();
         check(streamed == "continued text",
               "streamed assist output strips trailing tool-call wrapper artifacts");
     }
     {
-        pkchat::editor::AssistStreamFilter stream_filter;
+        ainiux::editor::AssistStreamFilter stream_filter;
         std::string streamed = stream_filter.feed("continued text</content></tool_cal");
         streamed += stream_filter.feed("l>  ");
         streamed += stream_filter.finish();
@@ -1293,7 +1293,7 @@ void test_editor_assist_helpers() {
     }
 
     {
-        pkchat::editor::ProseAssistStreamFilter stream_filter;
+        ainiux::editor::ProseAssistStreamFilter stream_filter;
         const std::string raw = "  immediate prose\n\t";
         std::string streamed = stream_filter.feed(raw.substr(0, 1));
         streamed += stream_filter.feed(raw.substr(1, 7));
@@ -1303,7 +1303,7 @@ void test_editor_assist_helpers() {
               "raw prose stream preserves leading and trailing whitespace exactly");
     }
     {
-        pkchat::editor::ProseAssistStreamFilter stream_filter;
+        ainiux::editor::ProseAssistStreamFilter stream_filter;
         const std::vector<std::string> chunks = {
             "<co", "ntent> \xE4", "\xBD", "\xA0 bridge\n\t</con", "tent>"};
         std::string streamed;
@@ -1315,7 +1315,7 @@ void test_editor_assist_helpers() {
               "wrapped prose strips only boundary tags across arbitrary chunks and split UTF-8");
     }
     {
-        pkchat::editor::ProseAssistStreamFilter stream_filter;
+        ainiux::editor::ProseAssistStreamFilter stream_filter;
         const std::string wrapped =
             "<content>keep <content> and </content> inside, then continue</content>";
         std::string streamed;
@@ -1327,7 +1327,7 @@ void test_editor_assist_helpers() {
               "wrapped prose preserves tag-like text inside the body");
     }
     {
-        pkchat::editor::ProseAssistStreamFilter stream_filter;
+        ainiux::editor::ProseAssistStreamFilter stream_filter;
         std::string streamed = stream_filter.feed("<content>partial bridge</con");
         streamed += stream_filter.finish();
         check(streamed == "partial bridge</con",
@@ -1335,8 +1335,8 @@ void test_editor_assist_helpers() {
     }
 
     {
-        pkchat::editor::CodeAssistStreamFilter stream_filter(
-            pkchat::highlight::Language::Python);
+        ainiux::editor::CodeAssistStreamFilter stream_filter(
+            ainiux::highlight::Language::Python);
         std::string streamed;
         std::string output;
         check(stream_filter.feed("    ret", output).ok(),
@@ -1351,8 +1351,8 @@ void test_editor_assist_helpers() {
               "raw code stream preserves leading indentation and trailing whitespace exactly");
     }
     {
-        pkchat::editor::CodeAssistStreamFilter stream_filter(
-            pkchat::highlight::Language::Python);
+        ainiux::editor::CodeAssistStreamFilter stream_filter(
+            ainiux::highlight::Language::Python);
         std::string streamed;
         std::string output;
         const std::vector<std::string> chunks = {
@@ -1368,8 +1368,8 @@ void test_editor_assist_helpers() {
               "matching code fence and optional leading blank are stripped without changing body bytes");
     }
     {
-        pkchat::editor::CodeAssistStreamFilter stream_filter(
-            pkchat::highlight::Language::Sql);
+        ainiux::editor::CodeAssistStreamFilter stream_filter(
+            ainiux::highlight::Language::Sql);
         std::string output;
         std::string streamed;
         check(stream_filter.feed("```\nSELECT 1;\n```", output).ok(),
@@ -1380,16 +1380,16 @@ void test_editor_assist_helpers() {
         check(streamed == "SELECT 1;\n", "blank Markdown fence is stripped");
     }
     {
-        pkchat::editor::CodeAssistStreamFilter stream_filter(
-            pkchat::highlight::Language::Python);
+        ainiux::editor::CodeAssistStreamFilter stream_filter(
+            ainiux::highlight::Language::Python);
         std::string output;
-        const pkchat::Error error = stream_filter.feed("```javascript\nalert(1);\n```", output);
-        check(!error.ok() && error.code == pkchat::ErrorCode::ProviderSchema && output.empty(),
+        const ainiux::Error error = stream_filter.feed("```javascript\nalert(1);\n```", output);
+        check(!error.ok() && error.code == ainiux::ErrorCode::ProviderSchema && output.empty(),
               "explicitly mismatched leading code fence is rejected");
     }
     {
-        pkchat::editor::CodeAssistStreamFilter stream_filter(
-            pkchat::highlight::Language::Cpp);
+        ainiux::editor::CodeAssistStreamFilter stream_filter(
+            ainiux::highlight::Language::Cpp);
         const std::string raw = "    const char* fence = \"```\";\n\n";
         std::string output;
         std::string streamed;
@@ -1405,124 +1405,124 @@ void test_editor_assist_helpers() {
     }
 
     {
-        pkchat::editor::EditorState state = pkchat::editor::EditorState::from_text("hello</content>");
+        ainiux::editor::EditorState state = ainiux::editor::EditorState::from_text("hello</content>");
         state.cursor = state.text.size();
-        pkchat::editor::strip_trailing_assist_close_tag_without_undo(state);
+        ainiux::editor::strip_trailing_assist_close_tag_without_undo(state);
         check(state.text.str() == "hello",
               "streamed assist post-clear strips trailing close tag from buffer");
         check(!state.can_undo(), "streamed assist post-clear does not create undo history");
     }
     {
-        pkchat::editor::EditorState state = pkchat::editor::EditorState::from_text("keep</content>tail");
+        ainiux::editor::EditorState state = ainiux::editor::EditorState::from_text("keep</content>tail");
         state.cursor = state.text.size();
-        pkchat::editor::strip_trailing_assist_close_tag_without_undo(state);
+        ainiux::editor::strip_trailing_assist_close_tag_without_undo(state);
         check(state.text.str() == "keep</content>tail",
               "streamed assist post-clear ignores close tag not at insertion tail");
     }
     {
-        pkchat::editor::EditorState state =
-            pkchat::editor::EditorState::from_text("hello</content></tool_call>  ");
+        ainiux::editor::EditorState state =
+            ainiux::editor::EditorState::from_text("hello</content></tool_call>  ");
         state.cursor = state.text.size();
-        pkchat::editor::strip_trailing_assist_close_tag_without_undo(state);
+        ainiux::editor::strip_trailing_assist_close_tag_without_undo(state);
         check(state.text.str() == "hello",
               "streamed assist post-clear strips trailing tool-call wrapper artifacts");
     }
 
-    const pkchat::provider::RequestContext assist_context =
-        pkchat::editor::assist_request_context(context, true);
+    const ainiux::provider::RequestContext assist_context =
+        ainiux::editor::assist_request_context(context, true);
     check(assist_context.suppress_streaming_reasoning,
           "editor assist suppresses streamed reasoning deltas");
 }
 
 void test_editor_contextual_completion_modes() {
-    const std::string directory = "build/pkchat-context-completion";
+    const std::string directory = "build/ainiux-context-completion";
     std::error_code filesystem_error;
     std::filesystem::create_directories(directory, filesystem_error);
     check(!filesystem_error, "contextual completion fixture directory is created");
 
     {
-        std::ofstream fixture(directory + "/pkchat-context-file.txt",
+        std::ofstream fixture(directory + "/ainiux-context-file.txt",
                               std::ios::binary | std::ios::trunc);
         fixture << "context";
         check(static_cast<bool>(fixture), "contextual completion fixture file is written");
     }
 
-    pkchat::editor::ContextualCompleter completer;
+    ainiux::editor::ContextualCompleter completer;
 
-    pkchat::editor::EditorState empty = pkchat::editor::EditorState::from_text("");
-    empty.mode = pkchat::editor::EditorMode::Chat;
-    pkchat::editor::PathCompletionResult result = completer.complete(empty);
+    ainiux::editor::EditorState empty = ainiux::editor::EditorState::from_text("");
+    empty.mode = ainiux::editor::EditorMode::Chat;
+    ainiux::editor::PathCompletionResult result = completer.complete(empty);
     check(!result.handled && empty.text.str().empty(),
           "chat Tab on empty input is ignored");
 
-    pkchat::editor::EditorState editor_path =
-        pkchat::editor::EditorState::from_text(directory + "/pkchat-context-fi");
+    ainiux::editor::EditorState editor_path =
+        ainiux::editor::EditorState::from_text(directory + "/ainiux-context-fi");
     editor_path.cursor = editor_path.text.size();
     result = completer.complete(editor_path);
     check(!result.handled &&
-              editor_path.text.str() == directory + "/pkchat-context-fi",
+              editor_path.text.str() == directory + "/ainiux-context-fi",
           "editor-mode Tab does not run generic path completion");
 
-    pkchat::editor::EditorState command = pkchat::editor::EditorState::from_text("/he");
-    command.mode = pkchat::editor::EditorMode::Chat;
+    ainiux::editor::EditorState command = ainiux::editor::EditorState::from_text("/he");
+    command.mode = ainiux::editor::EditorMode::Chat;
     command.cursor = command.text.size();
     result = completer.complete(command);
-    check(result.handled && result.kind == pkchat::editor::CompletionKind::Command &&
+    check(result.handled && result.kind == ainiux::editor::CompletionKind::Command &&
               result.match_count == 1 && command.text.str() == "/help",
           "chat command completion works at the start of the first line");
 
     completer.reset();
-    pkchat::editor::EditorState path_command = pkchat::editor::EditorState::from_text("/in");
-    path_command.mode = pkchat::editor::EditorMode::Chat;
+    ainiux::editor::EditorState path_command = ainiux::editor::EditorState::from_text("/in");
+    path_command.mode = ainiux::editor::EditorMode::Chat;
     path_command.cursor = path_command.text.size();
     result = completer.complete(path_command);
-    check(result.handled && result.kind == pkchat::editor::CompletionKind::Command &&
+    check(result.handled && result.kind == ainiux::editor::CompletionKind::Command &&
               path_command.text.str() == "/insert ",
           "chat command completion adds the path-command separator");
 
     completer.reset();
-    pkchat::editor::EditorState provider_command =
-        pkchat::editor::EditorState::from_text("/prov");
-    provider_command.mode = pkchat::editor::EditorMode::Chat;
+    ainiux::editor::EditorState provider_command =
+        ainiux::editor::EditorState::from_text("/prov");
+    provider_command.mode = ainiux::editor::EditorMode::Chat;
     provider_command.cursor = provider_command.text.size();
     result = completer.complete(provider_command);
-    check(result.handled && result.kind == pkchat::editor::CompletionKind::Command &&
+    check(result.handled && result.kind == ainiux::editor::CompletionKind::Command &&
               provider_command.text.str() == "/provider ",
           "chat command completion includes /provider");
 
     completer.reset();
-    pkchat::editor::EditorState list_command =
-        pkchat::editor::EditorState::from_text("/li");
-    list_command.mode = pkchat::editor::EditorMode::Chat;
+    ainiux::editor::EditorState list_command =
+        ainiux::editor::EditorState::from_text("/li");
+    list_command.mode = ainiux::editor::EditorMode::Chat;
     list_command.cursor = list_command.text.size();
     result = completer.complete(list_command);
-    check(result.handled && result.kind == pkchat::editor::CompletionKind::Command &&
+    check(result.handled && result.kind == ainiux::editor::CompletionKind::Command &&
               list_command.text.str() == "/list",
           "chat command completion includes /list");
 
     completer.reset();
-    pkchat::editor::EditorState path =
-        pkchat::editor::EditorState::from_text("/insert " + directory + "/pkchat-context-fi");
-    path.mode = pkchat::editor::EditorMode::Chat;
+    ainiux::editor::EditorState path =
+        ainiux::editor::EditorState::from_text("/insert " + directory + "/ainiux-context-fi");
+    path.mode = ainiux::editor::EditorMode::Chat;
     path.cursor = path.text.size();
     result = completer.complete(path);
-    check(result.handled && result.kind == pkchat::editor::CompletionKind::Path &&
+    check(result.handled && result.kind == ainiux::editor::CompletionKind::Path &&
               result.match_count == 1 &&
-              path.text.str() == "/insert " + directory + "/pkchat-context-file.txt",
+              path.text.str() == "/insert " + directory + "/ainiux-context-file.txt",
           "chat path completion runs after /insert");
 
     completer.reset();
-    pkchat::editor::EditorState fetch =
-        pkchat::editor::EditorState::from_text("/fetch " + directory + "/pkchat-context-fi");
-    fetch.mode = pkchat::editor::EditorMode::Chat;
+    ainiux::editor::EditorState fetch =
+        ainiux::editor::EditorState::from_text("/fetch " + directory + "/ainiux-context-fi");
+    fetch.mode = ainiux::editor::EditorMode::Chat;
     fetch.cursor = fetch.text.size();
     result = completer.complete(fetch);
     check(!result.handled &&
-              fetch.text.str() == "/fetch " + directory + "/pkchat-context-fi",
+              fetch.text.str() == "/fetch " + directory + "/ainiux-context-fi",
           "chat path completion ignores non-file commands");
 
-    pkchat::editor::EditorState second_line = pkchat::editor::EditorState::from_text("hello\n/he");
-    second_line.mode = pkchat::editor::EditorMode::Chat;
+    ainiux::editor::EditorState second_line = ainiux::editor::EditorState::from_text("hello\n/he");
+    second_line.mode = ainiux::editor::EditorMode::Chat;
     second_line.cursor = second_line.text.size();
     result = completer.complete(second_line);
     check(!result.handled && second_line.text.str() == "hello\n/he",
@@ -1531,29 +1531,29 @@ void test_editor_contextual_completion_modes() {
 
 void test_editor_file_round_trip() {
     const std::string path = "build/unit-editor.txt";
-    pkchat::editor::PieceTable table = pkchat::editor::PieceTable::from_string("first\nsecond");
-    pkchat::Error err = pkchat::editor::save_file(path, table);
+    ainiux::editor::PieceTable table = ainiux::editor::PieceTable::from_string("first\nsecond");
+    ainiux::Error err = ainiux::editor::save_file(path, table);
     check(err.ok(), "editor file saves");
-    pkchat::editor::PieceTable loaded;
-    err = pkchat::editor::load_file(path, loaded);
+    ainiux::editor::PieceTable loaded;
+    err = ainiux::editor::load_file(path, loaded);
     check(err.ok(), "editor file loads");
     check(loaded.str() == "first\nsecond", "editor file round trip preserves text");
 
-    pkchat::editor::EditorSettings settings;
+    ainiux::editor::EditorSettings settings;
     settings.huge_file_size_warning = 5;
     settings.file_size_limit = -1;
-    pkchat::editor::FileLoadCheck load_check;
-    err = pkchat::editor::check_load_file_size(path, settings, load_check);
+    ainiux::editor::FileLoadCheck load_check;
+    err = ainiux::editor::check_load_file_size(path, settings, load_check);
     check(err.ok() && load_check.size == 12 && load_check.should_warn,
           "editor file size check reports configured huge-file warning");
 
     settings.file_size_limit = 4;
-    err = pkchat::editor::load_file(path, settings, loaded);
+    err = ainiux::editor::load_file(path, settings, loaded);
     check(!err.ok() && err.message.find("FILE_SIZE_LIMIT") != std::string::npos,
           "editor file load rejects files above the configured size limit");
 
     settings.file_size_limit = -1;
-    err = pkchat::editor::load_file(path, settings, loaded);
+    err = ainiux::editor::load_file(path, settings, loaded);
     check(err.ok() && loaded.str() == "first\nsecond",
           "editor file load has no configured upper limit when file_size_limit is -1");
 }
@@ -1562,12 +1562,12 @@ void test_editor_linebreak_modes() {
     struct Case {
         const char* name;
         const char* bytes;
-        pkchat::editor::LineBreak linebreak;
+        ainiux::editor::LineBreak linebreak;
     };
     const Case cases[] = {
-        {"lf", "first\nsecond\n", pkchat::editor::LineBreak::Lf},
-        {"cr", "first\rsecond\r", pkchat::editor::LineBreak::Cr},
-        {"crlf", "first\r\nsecond\r\n", pkchat::editor::LineBreak::Crlf},
+        {"lf", "first\nsecond\n", ainiux::editor::LineBreak::Lf},
+        {"cr", "first\rsecond\r", ainiux::editor::LineBreak::Cr},
+        {"crlf", "first\r\nsecond\r\n", ainiux::editor::LineBreak::Crlf},
     };
     for (const Case& item : cases) {
         const std::string path = std::string("build/unit-editor-linebreak-") + item.name + ".txt";
@@ -1575,15 +1575,15 @@ void test_editor_linebreak_modes() {
             std::ofstream out(path, std::ios::binary | std::ios::trunc);
             out.write(item.bytes, static_cast<std::streamsize>(std::char_traits<char>::length(item.bytes)));
         }
-        pkchat::editor::LoadedFile loaded;
-        pkchat::editor::EditorSettings settings;
-        check(pkchat::editor::load_file(path, settings, loaded).ok(),
+        ainiux::editor::LoadedFile loaded;
+        ainiux::editor::EditorSettings settings;
+        check(ainiux::editor::load_file(path, settings, loaded).ok(),
               std::string("editor loads ") + item.name + " line endings");
         check(loaded.text.str() == "first\nsecond\n" && loaded.linebreak == item.linebreak &&
                   !loaded.mixed_linebreaks,
               std::string("editor detects and normalizes ") + item.name + " line endings");
         const std::string saved = path + ".saved";
-        check(pkchat::editor::save_file(saved, loaded.text, loaded.linebreak).ok(),
+        check(ainiux::editor::save_file(saved, loaded.text, loaded.linebreak).ok(),
               std::string("editor saves ") + item.name + " line endings");
         std::ifstream in(saved, std::ios::binary);
         const std::string bytes((std::istreambuf_iterator<char>(in)),
@@ -1597,12 +1597,12 @@ void test_editor_linebreak_modes() {
         std::ofstream out(mixed_path, std::ios::binary | std::ios::trunc);
         out << "one\r\ntwo\nthree\r";
     }
-    pkchat::editor::EditorSettings settings;
-    settings.linebreak = pkchat::editor::LineBreak::Cr;
-    pkchat::editor::LoadedFile mixed;
-    check(pkchat::editor::load_file(mixed_path, settings, mixed).ok(),
+    ainiux::editor::EditorSettings settings;
+    settings.linebreak = ainiux::editor::LineBreak::Cr;
+    ainiux::editor::LoadedFile mixed;
+    check(ainiux::editor::load_file(mixed_path, settings, mixed).ok(),
           "editor loads mixed line endings");
-    check(mixed.mixed_linebreaks && mixed.linebreak == pkchat::editor::LineBreak::Cr &&
+    check(mixed.mixed_linebreaks && mixed.linebreak == ainiux::editor::LineBreak::Cr &&
               mixed.text.str() == "one\ntwo\nthree\n",
           "mixed line endings normalize and use the configured default");
 
@@ -1611,43 +1611,43 @@ void test_editor_linebreak_modes() {
         std::ofstream out(no_ending_path, std::ios::binary | std::ios::trunc);
         out << "no final ending";
     }
-    settings.linebreak = pkchat::editor::LineBreak::Crlf;
-    pkchat::editor::LoadedFile no_ending;
-    check(pkchat::editor::load_file(no_ending_path, settings, no_ending).ok() &&
-              no_ending.linebreak == pkchat::editor::LineBreak::Crlf &&
+    settings.linebreak = ainiux::editor::LineBreak::Crlf;
+    ainiux::editor::LoadedFile no_ending;
+    check(ainiux::editor::load_file(no_ending_path, settings, no_ending).ok() &&
+              no_ending.linebreak == ainiux::editor::LineBreak::Crlf &&
               no_ending.text.str() == "no final ending",
           "file without a line ending inherits the configured default without adding one");
 }
 
 void test_editor_indentation_detection() {
-    using pkchat::editor::IndentationDetection;
-    using pkchat::editor::TabStyle;
+    using ainiux::editor::IndentationDetection;
+    using ainiux::editor::TabStyle;
 
-    IndentationDetection detected = pkchat::editor::detect_indentation(
+    IndentationDetection detected = ainiux::editor::detect_indentation(
         "function run() {\n  if (ready) {\n    call();\n  }\n}", 4, TabStyle::Spaces);
     check(detected.tab_width_detected && detected.tab_width == 2 &&
               detected.tab_style_detected && detected.tab_style == TabStyle::Spaces,
           "editor detects a consistent two-space indentation step");
 
-    detected = pkchat::editor::detect_indentation(
+    detected = ainiux::editor::detect_indentation(
         "if (ready) {\n    while (open) {\n        call();\n    }\n}", 2, TabStyle::Tab);
     check(detected.tab_width_detected && detected.tab_width == 4 &&
               detected.tab_style_detected && detected.tab_style == TabStyle::Spaces,
           "editor detects a consistent four-space indentation step");
 
-    detected = pkchat::editor::detect_indentation(
+    detected = ainiux::editor::detect_indentation(
         "if ready\n\tcall\nend", 8, TabStyle::Spaces);
     check(!detected.tab_width_detected && detected.tab_width == 8 &&
               detected.tab_style_detected && detected.tab_style == TabStyle::Tab,
           "editor detects tab indentation while retaining the fallback display width");
 
-    detected = pkchat::editor::detect_indentation(
+    detected = ainiux::editor::detect_indentation(
         "top\n  child\n     inconsistent", 6, TabStyle::Tab);
     check(!detected.tab_width_detected && detected.tab_width == 6 &&
               detected.tab_style == TabStyle::Spaces,
           "ambiguous indentation steps retain the configured width");
 
-    detected = pkchat::editor::detect_indentation("const value = 1;", 7, TabStyle::Tab);
+    detected = ainiux::editor::detect_indentation("const value = 1;", 7, TabStyle::Tab);
     check(!detected.tab_width_detected && !detected.tab_style_detected &&
               detected.tab_width == 7 && detected.tab_style == TabStyle::Tab,
           "one-line files retain configured indentation defaults");
@@ -1657,15 +1657,15 @@ void test_editor_indentation_detection() {
         after_limit += "top_level();\n";
     }
     after_limit += "  ignored_after_limit();\n";
-    detected = pkchat::editor::detect_indentation(after_limit, 5, TabStyle::Spaces);
+    detected = ainiux::editor::detect_indentation(after_limit, 5, TabStyle::Spaces);
     check(!detected.tab_width_detected && detected.tab_width == 5,
           "indentation detection inspects only the first twenty physical lines");
 
-    pkchat::editor::EditorSettings settings;
+    ainiux::editor::EditorSettings settings;
     settings.tab_width = 4;
     settings.tab_style = TabStyle::Spaces;
-    pkchat::editor::LoadedFile javascript;
-    check(pkchat::editor::load_file("tests/highlight/javascript_file.js", settings, javascript).ok() &&
+    ainiux::editor::LoadedFile javascript;
+    check(ainiux::editor::load_file("tests/highlight/javascript_file.js", settings, javascript).ok() &&
               javascript.tab_width_detected && javascript.tab_width == 2 &&
               javascript.tab_style_detected && javascript.tab_style == TabStyle::Spaces,
           "loading the JavaScript fixture initializes its detected two-space indentation");
@@ -1677,28 +1677,28 @@ void test_editor_indentation_detection() {
     }
     settings.tab_width = 6;
     settings.tab_style = TabStyle::Tab;
-    pkchat::editor::LoadedFile fallback;
-    check(pkchat::editor::load_file(one_line_path, settings, fallback).ok() &&
+    ainiux::editor::LoadedFile fallback;
+    check(ainiux::editor::load_file(one_line_path, settings, fallback).ok() &&
               !fallback.tab_width_detected && !fallback.tab_style_detected &&
               fallback.tab_width == 6 && fallback.tab_style == TabStyle::Tab,
           "file loading retains configured indentation when detection is inconclusive");
 }
 
 void test_editor_tab_indentation() {
-    pkchat::editor::EditorState state = pkchat::editor::EditorState::from_text("ab");
+    ainiux::editor::EditorState state = ainiux::editor::EditorState::from_text("ab");
     state.tab_width = 4;
     state.cursor = 2;
     check(state.indent().ok() && state.text.str() == "ab  " && state.cursor == 4,
           "space Tab advances to the next configured tab stop");
     check(state.undo() && state.text.str() == "ab", "single-position Tab is one undo step");
 
-    state = pkchat::editor::EditorState::from_text("ab");
-    state.tab_style = pkchat::editor::TabStyle::Tab;
+    state = ainiux::editor::EditorState::from_text("ab");
+    state.tab_style = ainiux::editor::TabStyle::Tab;
     state.cursor = 1;
     check(state.indent().ok() && state.text.str() == "a\tb",
           "tab style inserts one literal tab at the cursor");
 
-    state = pkchat::editor::EditorState::from_text("a\nb\nc");
+    state = ainiux::editor::EditorState::from_text("a\nb\nc");
     state.tab_width = 2;
     state.selection.anchor = 0;
     state.selection.active = state.text.line_start(2);
@@ -1710,7 +1710,7 @@ void test_editor_tab_indentation() {
     check(state.undo() && state.text.str() == "a\nb\nc",
           "arbitrary block indentation is one undo step");
 
-    state = pkchat::editor::EditorState::from_text("a\nb\nc");
+    state = ainiux::editor::EditorState::from_text("a\nb\nc");
     state.tab_width = 2;
     state.selection.anchor = state.text.line_start(2);
     state.selection.active = 0;
@@ -1720,7 +1720,7 @@ void test_editor_tab_indentation() {
               state.selection.active == 0,
           "block Tab preserves reverse selection direction");
 
-    state = pkchat::editor::EditorState::from_text("\t  alpha\n  \tbeta");
+    state = ainiux::editor::EditorState::from_text("\t  alpha\n  \tbeta");
     state.tab_width = 4;
     state.selection.anchor = 0;
     state.selection.active = state.text.size();
@@ -1730,14 +1730,14 @@ void test_editor_tab_indentation() {
     check(state.undo() && state.text.str() == "\t  alpha\n  \tbeta",
           "block outdent is one undo step");
 
-    state = pkchat::editor::EditorState::from_text("    alpha");
+    state = ainiux::editor::EditorState::from_text("    alpha");
     state.tab_width = 4;
     state.cursor = state.text.size();
     check(state.outdent().ok() && state.text.str() == "alpha" && state.cursor == 5,
           "Shift+Tab without a selection outdents the current line and preserves cursor content position");
 
-    const pkchat::editor::PieceTable tabs =
-        pkchat::editor::PieceTable::from_string("\tx");
+    const ainiux::editor::PieceTable tabs =
+        ainiux::editor::PieceTable::from_string("\tx");
     check(tabs.display_column_for_offset(1, 8) == 8 &&
               tabs.offset_for_line_column(0, 8, 8) == 1,
           "editor display columns honor the active tab width");
@@ -1746,7 +1746,7 @@ void test_editor_tab_indentation() {
     for (size_t i = 0; i < 5000; ++i) {
         large_text += "line\n";
     }
-    state = pkchat::editor::EditorState::from_text(large_text);
+    state = ainiux::editor::EditorState::from_text(large_text);
     state.tab_width = 2;
     state.selection.anchor = 0;
     state.selection.active = state.text.size();
@@ -1758,14 +1758,14 @@ void test_editor_tab_indentation() {
 }
 
 void test_editor_word_completion() {
-    std::vector<pkchat::editor::EditorState> buffers;
-    buffers.push_back(pkchat::editor::EditorState::from_text("win"));
+    std::vector<ainiux::editor::EditorState> buffers;
+    buffers.push_back(ainiux::editor::EditorState::from_text("win"));
     buffers.push_back(
-        pkchat::editor::EditorState::from_text("windowHeight windowWidth"));
+        ainiux::editor::EditorState::from_text("windowHeight windowWidth"));
     buffers[0].cursor = buffers[0].text.size();
 
-    pkchat::editor::WordCompleter completer;
-    pkchat::editor::WordCompletionResult result = completer.complete(buffers[0], buffers, 0);
+    ainiux::editor::WordCompleter completer;
+    ainiux::editor::WordCompletionResult result = completer.complete(buffers[0], buffers, 0);
     check(result.error.ok() && result.completed && result.match_count == 2,
           "document Tab finds words across all open buffers");
     check(buffers[0].text.str() == "window",
@@ -1783,26 +1783,26 @@ void test_editor_word_completion() {
     check(buffers[0].undo() && buffers[0].text.str() == "win",
           "one document completion session is one undo operation");
 
-    buffers[0] = pkchat::editor::EditorState::from_text("Win");
+    buffers[0] = ainiux::editor::EditorState::from_text("Win");
     buffers[0].cursor = buffers[0].text.size();
     buffers[1] =
-        pkchat::editor::EditorState::from_text("WindowHeight windowWidth WindowSize");
+        ainiux::editor::EditorState::from_text("WindowHeight windowWidth WindowSize");
     completer.reset();
     result = completer.complete(buffers[0], buffers, 0);
     check(result.completed && result.match_count == 2 && buffers[0].text.str() == "Window",
           "an uppercase prefix enables case-sensitive smart-case matching");
 
-    buffers[0] = pkchat::editor::EditorState::from_text("ä");
+    buffers[0] = ainiux::editor::EditorState::from_text("ä");
     buffers[0].cursor = buffers[0].text.size();
-    buffers[1] = pkchat::editor::EditorState::from_text("Äiti");
+    buffers[1] = ainiux::editor::EditorState::from_text("Äiti");
     completer.reset();
     result = completer.complete(buffers[0], buffers, 0);
     check(result.completed && buffers[0].text.str() == "Äiti",
           "lowercase Unicode prefixes use full case-folded matching");
 
-    buffers[0] = pkchat::editor::EditorState::from_text("stras");
+    buffers[0] = ainiux::editor::EditorState::from_text("stras");
     buffers[0].cursor = buffers[0].text.size();
-    buffers[1] = pkchat::editor::EditorState::from_text("Straße");
+    buffers[1] = ainiux::editor::EditorState::from_text("Straße");
     completer.reset();
     result = completer.complete(buffers[0], buffers, 0);
     check(result.completed && buffers[0].text.str() == "Straße",
@@ -1820,9 +1820,9 @@ void test_editor_word_completion() {
         {"foo_", "foo_bar"},
     };
     for (const MultilingualCase& test : multilingual) {
-        buffers[0] = pkchat::editor::EditorState::from_text(test.prefix);
+        buffers[0] = ainiux::editor::EditorState::from_text(test.prefix);
         buffers[0].cursor = buffers[0].text.size();
-        buffers[1] = pkchat::editor::EditorState::from_text(test.candidate);
+        buffers[1] = ainiux::editor::EditorState::from_text(test.candidate);
         completer.reset();
         result = completer.complete(buffers[0], buffers, 0);
         check(result.completed && buffers[0].text.str() == test.candidate,
@@ -1830,24 +1830,24 @@ void test_editor_word_completion() {
                   test.prefix);
     }
 
-    buffers[0] = pkchat::editor::EditorState::from_text("wo");
+    buffers[0] = ainiux::editor::EditorState::from_text("wo");
     buffers[0].cursor = buffers[0].text.size();
-    buffers[1] = pkchat::editor::EditorState::from_text(
+    buffers[1] = ainiux::editor::EditorState::from_text(
         std::string("bad") + static_cast<char>(0xFF) + "word");
     completer.reset();
     result = completer.complete(buffers[0], buffers, 0);
     check(result.completed && buffers[0].text.str() == "word",
           "invalid UTF-8 bytes are preserved and treated as word boundaries");
 
-    buffers[0] = pkchat::editor::EditorState::from_text("win");
+    buffers[0] = ainiux::editor::EditorState::from_text("win");
     buffers[0].cursor = buffers[0].text.size();
-    buffers[1] = pkchat::editor::EditorState::from_text("windowWidth");
+    buffers[1] = ainiux::editor::EditorState::from_text("windowWidth");
     check(buffers[1].completion_word_index().occurrence_count("windowWidth") == 1,
           "per-buffer word index records occurrence counts");
-    pkchat::editor::EditorState edited_buffer = buffers[1];
+    ainiux::editor::EditorState edited_buffer = buffers[1];
     check(edited_buffer.replace(0, std::string("windowWidth").size(), "paneWidth").ok(),
           "indexed buffer edit succeeds");
-    const pkchat::editor::WordIndex& edited_index =
+    const ainiux::editor::WordIndex& edited_index =
         edited_buffer.completion_word_index();
     check(edited_index.occurrence_count("windowWidth") == 0 &&
               edited_index.occurrence_count("paneWidth") == 1,
@@ -1860,7 +1860,7 @@ void test_editor_word_completion() {
     check(!result.completed,
           "removed cross-buffer words disappear from completion without a stale match");
 
-    buffers[0] = pkchat::editor::EditorState::from_text("windowHeight");
+    buffers[0] = ainiux::editor::EditorState::from_text("windowHeight");
     buffers[0].cursor = 3;
     buffers.resize(1);
     completer.reset();
@@ -1878,9 +1878,9 @@ void test_editor_word_completion() {
     for (size_t index = 0; index < 50000; ++index) {
         large += "symbol_" + std::to_string(index) + ' ';
     }
-    pkchat::editor::EditorState large_buffer =
-        pkchat::editor::EditorState::from_text(std::move(large));
-    const pkchat::editor::WordIndex& large_index =
+    ainiux::editor::EditorState large_buffer =
+        ainiux::editor::EditorState::from_text(std::move(large));
+    const ainiux::editor::WordIndex& large_index =
         large_buffer.completion_word_index();
     check(large_index.unique_word_count() == 50000,
           "large buffers build a deduplicated ordered word index");
@@ -1891,10 +1891,10 @@ void test_editor_word_completion() {
 }
 
 void test_editor_language_reformatting() {
-    using pkchat::editor::EditorState;
-    using pkchat::editor::ReformatRequest;
-    using pkchat::editor::ReformatResult;
-    using pkchat::highlight::Language;
+    using ainiux::editor::EditorState;
+    using ainiux::editor::ReformatRequest;
+    using ainiux::editor::ReformatResult;
+    using ainiux::highlight::Language;
 
     const std::vector<Language> brace_languages = {
         Language::C,          Language::Cpp,        Language::CSharp,
@@ -1910,19 +1910,19 @@ void test_editor_language_reformatting() {
         request.tab_width = 4;
         request.first_line = 0;
         request.last_line = 3;
-        const ReformatResult result = pkchat::editor::reformat_indentation(request);
+        const ReformatResult result = ainiux::editor::reformat_indentation(request);
         check(result.error.ok() && result.replacement ==
                   "if (ready) {\n    value();\n}\n",
               std::string("brace reformat profile works for ") +
-                  pkchat::highlight::language_name(language));
+                  ainiux::highlight::language_name(language));
     }
     ReformatRequest tab_request;
     tab_request.content = "if (ready) {\nvalue();\n}";
     tab_request.language = Language::Cpp;
-    tab_request.tab_style = pkchat::editor::TabStyle::Tab;
+    tab_request.tab_style = ainiux::editor::TabStyle::Tab;
     tab_request.first_line = 0;
     tab_request.last_line = 2;
-    check(pkchat::editor::reformat_indentation(tab_request).replacement ==
+    check(ainiux::editor::reformat_indentation(tab_request).replacement ==
               "if (ready) {\n\tvalue();\n}",
           "language reformat honors literal-tab indentation style");
 
@@ -1971,11 +1971,11 @@ void test_editor_language_reformatting() {
         request.content = test.input;
         request.language = test.language;
         request.first_line = 0;
-        request.last_line = pkchat::highlight::split_lines(test.input).size() - 1;
-        const ReformatResult result = pkchat::editor::reformat_indentation(request);
+        request.last_line = ainiux::highlight::split_lines(test.input).size() - 1;
+        const ReformatResult result = ainiux::editor::reformat_indentation(request);
         check(result.error.ok() && result.replacement == test.expected,
               std::string("language reformat profile works for ") +
-                  pkchat::highlight::language_name(test.language));
+                  ainiux::highlight::language_name(test.language));
     }
 
     ReformatRequest protected_request;
@@ -1985,7 +1985,7 @@ void test_editor_language_reformatting() {
     protected_request.first_line = 0;
     protected_request.last_line = 3;
     ReformatResult protected_result =
-        pkchat::editor::reformat_indentation(protected_request);
+        ainiux::editor::reformat_indentation(protected_request);
     check(protected_result.error.ok() && protected_result.replacement ==
               "if (ready) {\n    const char *text = \"}\"; // {\n    call();\n}",
           "reformat ignores braces inside strings and comments");
@@ -1996,19 +1996,19 @@ void test_editor_language_reformatting() {
     markdown_request.first_line = 0;
     markdown_request.last_line = 4;
     const ReformatResult markdown_result =
-        pkchat::editor::reformat_indentation(markdown_request);
+        ainiux::editor::reformat_indentation(markdown_request);
     check(markdown_result.error.ok() && markdown_result.replacement == markdown_request.content,
           "reformat preserves Markdown fenced-code contents exactly");
 
     ReformatRequest pathological_request;
     pathological_request.content =
-        std::string(pkchat::highlight::kMaximumHighlightedLineBytes + 1, 'x') +
+        std::string(ainiux::highlight::kMaximumHighlightedLineBytes + 1, 'x') +
         "\n  preserve_after_unsafe_line();";
     pathological_request.language = Language::Cpp;
     pathological_request.first_line = 0;
     pathological_request.last_line = 1;
     const ReformatResult pathological_result =
-        pkchat::editor::reformat_indentation(pathological_request);
+        ainiux::editor::reformat_indentation(pathological_request);
     check(pathological_result.error.ok() && !pathological_result.warning.empty() &&
               pathological_result.replacement == pathological_request.content,
           "reformat safely preserves a region after an unclassifiable pathological line");
@@ -2019,12 +2019,12 @@ void test_editor_language_reformatting() {
     state.selection.active = state.text.line_start(3);
     state.cursor = state.selection.active;
     ReformatRequest selected_request;
-    check(pkchat::editor::build_reformat_request(state, false, selected_request).ok() &&
+    check(ainiux::editor::build_reformat_request(state, false, selected_request).ok() &&
               selected_request.first_line == 0 && selected_request.last_line == 2,
           "selected reformat expands touched lines and excludes a following column-zero line");
     ReformatResult selected_result =
-        pkchat::editor::reformat_indentation(selected_request);
-    check(pkchat::editor::apply_reformat_result(state, selected_result, false).ok() &&
+        ainiux::editor::reformat_indentation(selected_request);
+    check(ainiux::editor::apply_reformat_result(state, selected_result, false).ok() &&
               state.text.str() == "if (ready) {\n    call();\n}\nafter();" &&
               state.selection.has_range(),
           "selected reformat applies one leading-whitespace replacement and keeps the block selected");
@@ -2035,37 +2035,37 @@ void test_editor_language_reformatting() {
     state.set_language(Language::Cpp, false);
     state.cursor = state.text.line_start(1) + 2;
     ReformatRequest all_request;
-    check(pkchat::editor::build_reformat_request(state, true, all_request).ok(),
+    check(ainiux::editor::build_reformat_request(state, true, all_request).ok(),
           "reformat-all request accepts an unselected buffer");
-    const ReformatResult all_result = pkchat::editor::reformat_indentation(all_request);
-    check(pkchat::editor::apply_reformat_result(state, all_result, true).ok() &&
+    const ReformatResult all_result = ainiux::editor::reformat_indentation(all_request);
+    check(ainiux::editor::apply_reformat_result(state, all_result, true).ok() &&
               !state.selection.has_range() && state.text.line_for_offset(state.cursor) == 1,
           "reformat-all preserves the logical cursor line and clears selection");
 
     state = EditorState::from_text("plain text");
     ReformatRequest invalid_request;
-    check(!pkchat::editor::build_reformat_request(state, false, invalid_request).ok(),
+    check(!ainiux::editor::build_reformat_request(state, false, invalid_request).ok(),
           "/reformat without a selection reports an actionable error");
-    check(pkchat::editor::build_reformat_request(state, true, invalid_request).ok() &&
-              !pkchat::editor::reformat_indentation(invalid_request).error.ok(),
+    check(ainiux::editor::build_reformat_request(state, true, invalid_request).ok() &&
+              !ainiux::editor::reformat_indentation(invalid_request).error.ok(),
           "text mode reformat reports unsupported mode instead of guessing");
 
-    pkchat::runtime::CancellationSource cancellation;
+    ainiux::runtime::CancellationSource cancellation;
     cancellation.cancel();
     invalid_request.language = Language::Cpp;
-    check(pkchat::editor::reformat_indentation(invalid_request, cancellation.token()).error.code ==
-              pkchat::ErrorCode::Cancelled,
+    check(ainiux::editor::reformat_indentation(invalid_request, cancellation.token()).error.code ==
+              ainiux::ErrorCode::Cancelled,
           "language reformat observes cancellation before processing the buffer");
 
-    pkchat::runtime::EventQueue<pkchat::editor::ReformatEvent> events;
-    pkchat::runtime::JobHandle job;
+    ainiux::runtime::EventQueue<ainiux::editor::ReformatEvent> events;
+    ainiux::runtime::JobHandle job;
     ReformatRequest async_request;
     async_request.content = "if (ready) {\ncall();\n}";
     async_request.language = Language::Cpp;
     async_request.first_line = 0;
     async_request.last_line = 2;
-    pkchat::editor::start_reformat_job(async_request, events, job);
-    pkchat::editor::ReformatEvent event;
+    ainiux::editor::start_reformat_job(async_request, events, job);
+    ainiux::editor::ReformatEvent event;
     check(events.wait_pop_for(event, std::chrono::seconds(2)) && event.result.error.ok() &&
               event.result.replacement == "if (ready) {\n    call();\n}",
           "language reformat runs through the cancellable runtime job queue");
@@ -2081,8 +2081,8 @@ void test_editor_language_reformatting() {
     large_request.language = Language::Cpp;
     large_request.first_line = 0;
     large_request.last_line =
-        pkchat::highlight::split_lines(large_request.content).size() - 1;
-    const ReformatResult large_result = pkchat::editor::reformat_indentation(large_request);
+        ainiux::highlight::split_lines(large_request.content).size() - 1;
+    const ReformatResult large_result = ainiux::editor::reformat_indentation(large_request);
     check(large_result.error.ok() && large_result.replacement.size() >= large_request.content.size(),
           "large language reformat runs as one linear transformation");
 
@@ -2097,8 +2097,8 @@ void test_editor_language_reformatting() {
 }
 
 void test_editor_home_end_navigation() {
-    pkchat::editor::EditorState state =
-        pkchat::editor::EditorState::from_text("alpha\nbeta\ngamma");
+    ainiux::editor::EditorState state =
+        ainiux::editor::EditorState::from_text("alpha\nbeta\ngamma");
     state.cursor = state.text.line_start(2);
     state.scroll_line = 4;
     state.preferred_column = 3;
@@ -2119,9 +2119,9 @@ void test_editor_invalid_utf8_rendering_is_sanitized() {
     invalid.push_back(static_cast<char>(0x82));
     invalid += "B";
 
-    pkchat::editor::EditorState state =
-        pkchat::editor::EditorState::from_text(invalid);
-    pkchat::editor::RenderedPanel rendered = state.render({1, 1, 1, 8});
+    ainiux::editor::EditorState state =
+        ainiux::editor::EditorState::from_text(invalid);
+    ainiux::editor::RenderedPanel rendered = state.render({1, 1, 1, 8});
     check(rendered.lines.size() == 1, "editor invalid UTF-8 render produces a row");
     check(rendered.lines[0].find(static_cast<char>(0xFF)) == std::string::npos,
           "editor render does not emit raw invalid 0xFF bytes to the terminal");
@@ -2133,10 +2133,10 @@ void test_editor_invalid_utf8_rendering_is_sanitized() {
 }
 
 void test_editor_kill_to_line_end() {
-    pkchat::editor::Clipboard clipboard;
-    pkchat::editor::EditorState state = pkchat::editor::EditorState::from_text("alpha beta\ngamma");
+    ainiux::editor::Clipboard clipboard;
+    ainiux::editor::EditorState state = ainiux::editor::EditorState::from_text("alpha beta\ngamma");
     state.cursor = state.text.offset_for_line_column(0, 6);
-    pkchat::Error err = state.kill_to_line_end(clipboard);
+    ainiux::Error err = state.kill_to_line_end(clipboard);
     check(err.ok(), "editor kill to line end succeeds");
     check(state.text.str() == "alpha \ngamma", "editor kill to line end erases text before newline only");
     check(state.cursor == state.text.offset_for_line_column(0, 6), "editor kill to line end keeps cursor in place");
@@ -2153,7 +2153,7 @@ void test_editor_kill_to_line_end() {
     check(state.text.str() == "alpha beta\ngamma", "editor kill at end of non-empty line leaves newline intact");
     check(clipboard.empty(), "editor kill at end of non-empty line does not change clipboard");
 
-    pkchat::editor::EditorState middle = pkchat::editor::EditorState::from_text("alpha\n\ngamma");
+    ainiux::editor::EditorState middle = ainiux::editor::EditorState::from_text("alpha\n\ngamma");
     middle.cursor = middle.text.line_start(1);
     err = middle.kill_to_line_end(clipboard);
     check(err.ok(), "editor kill empty middle line succeeds");
@@ -2161,7 +2161,7 @@ void test_editor_kill_to_line_end() {
     check(middle.cursor == middle.text.line_start(1), "editor kill empty middle line keeps cursor at next line start");
     check(clipboard.text() == "\n", "editor kill empty middle line copies newline to clipboard");
 
-    pkchat::editor::EditorState last = pkchat::editor::EditorState::from_text("alpha\n");
+    ainiux::editor::EditorState last = ainiux::editor::EditorState::from_text("alpha\n");
     last.cursor = last.text.line_start(1);
     err = last.kill_to_line_end(clipboard);
     check(err.ok(), "editor kill empty final line succeeds");
@@ -2169,58 +2169,58 @@ void test_editor_kill_to_line_end() {
     check(last.cursor == last.text.size(), "editor kill empty final line moves cursor to new end");
     check(clipboard.text() == "\n", "editor kill empty final line copies newline to clipboard");
 
-    pkchat::editor::EditorState only = pkchat::editor::EditorState::from_text("");
+    ainiux::editor::EditorState only = ainiux::editor::EditorState::from_text("");
     err = only.kill_to_line_end(clipboard);
     check(err.ok(), "editor kill single empty buffer succeeds");
     check(only.text.str().empty(), "editor kill single empty buffer is a no-op");
 }
 
 void test_editor_movement_sequence_parse() {
-    pkchat::editor::MovementKeyEvent event;
-    check(pkchat::editor::parse_movement_sequence("[D", event) && !event.shift && !event.alt &&
-              event.key == pkchat::editor::MovementKey::Left,
+    ainiux::editor::MovementKeyEvent event;
+    check(ainiux::editor::parse_movement_sequence("[D", event) && !event.shift && !event.alt &&
+              event.key == ainiux::editor::MovementKey::Left,
           "left arrow sequence parses");
-    check(pkchat::editor::parse_movement_sequence("[1;2C", event) && event.shift && !event.alt &&
-              event.key == pkchat::editor::MovementKey::Right,
+    check(ainiux::editor::parse_movement_sequence("[1;2C", event) && event.shift && !event.alt &&
+              event.key == ainiux::editor::MovementKey::Right,
           "shift right arrow sequence parses");
-    check(pkchat::editor::parse_movement_sequence("[5;2~", event) && event.shift && !event.alt &&
-              event.key == pkchat::editor::MovementKey::PageUp,
+    check(ainiux::editor::parse_movement_sequence("[5;2~", event) && event.shift && !event.alt &&
+              event.key == ainiux::editor::MovementKey::PageUp,
           "shift page up sequence parses");
-    check(pkchat::editor::parse_movement_sequence("[1;3H", event) && !event.shift && event.alt &&
-              !event.ctrl && event.key == pkchat::editor::MovementKey::Home,
+    check(ainiux::editor::parse_movement_sequence("[1;3H", event) && !event.shift && event.alt &&
+              !event.ctrl && event.key == ainiux::editor::MovementKey::Home,
           "alt home sequence parses");
-    check(pkchat::editor::parse_movement_sequence("[1;5H", event) && !event.shift && !event.alt &&
-              event.ctrl && event.key == pkchat::editor::MovementKey::Home,
+    check(ainiux::editor::parse_movement_sequence("[1;5H", event) && !event.shift && !event.alt &&
+              event.ctrl && event.key == ainiux::editor::MovementKey::Home,
           "ctrl home sequence parses");
-    check(pkchat::editor::parse_movement_sequence("[1;5F", event) && !event.shift && !event.alt &&
-              event.ctrl && event.key == pkchat::editor::MovementKey::End,
+    check(ainiux::editor::parse_movement_sequence("[1;5F", event) && !event.shift && !event.alt &&
+              event.ctrl && event.key == ainiux::editor::MovementKey::End,
           "ctrl end sequence parses");
-    check(pkchat::editor::parse_movement_sequence("[1;3~", event) && !event.shift && event.alt &&
-              !event.ctrl && event.key == pkchat::editor::MovementKey::Home,
+    check(ainiux::editor::parse_movement_sequence("[1;3~", event) && !event.shift && event.alt &&
+              !event.ctrl && event.key == ainiux::editor::MovementKey::Home,
           "alt home tilde sequence parses");
-    check(pkchat::editor::parse_movement_sequence("[1;5~", event) && !event.shift && !event.alt &&
-              event.ctrl && event.key == pkchat::editor::MovementKey::Home,
+    check(ainiux::editor::parse_movement_sequence("[1;5~", event) && !event.shift && !event.alt &&
+              event.ctrl && event.key == ainiux::editor::MovementKey::Home,
           "ctrl home tilde sequence parses");
-    check(pkchat::editor::parse_movement_sequence("[4;3~", event) && !event.shift && event.alt &&
-              !event.ctrl && event.key == pkchat::editor::MovementKey::End,
+    check(ainiux::editor::parse_movement_sequence("[4;3~", event) && !event.shift && event.alt &&
+              !event.ctrl && event.key == ainiux::editor::MovementKey::End,
           "alt end tilde sequence parses");
-    check(pkchat::editor::parse_movement_sequence("[5;3~", event) && !event.shift && event.alt &&
-              !event.ctrl && event.key == pkchat::editor::MovementKey::PageUp,
+    check(ainiux::editor::parse_movement_sequence("[5;3~", event) && !event.shift && event.alt &&
+              !event.ctrl && event.key == ainiux::editor::MovementKey::PageUp,
           "alt page up sequence parses");
-    check(pkchat::editor::parse_movement_sequence("[6;3~", event) && !event.shift && event.alt &&
-              !event.ctrl && event.key == pkchat::editor::MovementKey::PageDown,
+    check(ainiux::editor::parse_movement_sequence("[6;3~", event) && !event.shift && event.alt &&
+              !event.ctrl && event.key == ainiux::editor::MovementKey::PageDown,
           "alt page down sequence parses");
-    check(pkchat::editor::parse_movement_sequence("[57362;3u", event) && !event.shift && event.alt &&
-              !event.ctrl && event.key == pkchat::editor::MovementKey::PageUp,
+    check(ainiux::editor::parse_movement_sequence("[57362;3u", event) && !event.shift && event.alt &&
+              !event.ctrl && event.key == ainiux::editor::MovementKey::PageUp,
           "kitty Alt+PageUp sequence parses");
-    check(pkchat::editor::parse_movement_sequence("[57360;3u", event) && !event.shift && event.alt &&
-              event.key == pkchat::editor::MovementKey::Home,
+    check(ainiux::editor::parse_movement_sequence("[57360;3u", event) && !event.shift && event.alt &&
+              event.key == ainiux::editor::MovementKey::Home,
           "kitty Alt+Home sequence parses");
 }
 
 void test_editor_select_all() {
-    pkchat::editor::EditorState state =
-        pkchat::editor::EditorState::from_text("alpha\nbeta\ngamma");
+    ainiux::editor::EditorState state =
+        ainiux::editor::EditorState::from_text("alpha\nbeta\ngamma");
     state.cursor = state.text.offset_for_line_column(1, 2);
 
     state.select_all();
@@ -2232,51 +2232,51 @@ void test_editor_select_all() {
 }
 
 void test_editor_line_home_end_navigation() {
-    pkchat::editor::EditorState state =
-        pkchat::editor::EditorState::from_text("alpha\nbeta\ngamma");
+    ainiux::editor::EditorState state =
+        ainiux::editor::EditorState::from_text("alpha\nbeta\ngamma");
     state.cursor = state.text.offset_for_line_column(1, 2);
-    const pkchat::editor::Rect rect{1, 1, 10, 40};
+    const ainiux::editor::Rect rect{1, 1, 10, 40};
 
-    state.apply_movement(pkchat::editor::MovementKey::Home, rect, false, false);
+    state.apply_movement(ainiux::editor::MovementKey::Home, rect, false, false);
     check(state.cursor == state.text.line_start(1), "editor Home moves to the beginning of the current line");
     check(state.preferred_column == 0, "editor Home resets the preferred column to the line start");
 
-    state.apply_movement(pkchat::editor::MovementKey::End, rect, false, false);
+    state.apply_movement(ainiux::editor::MovementKey::End, rect, false, false);
     check(state.cursor == state.text.line_start(1) + state.text.line_length(1),
           "editor End moves to the end of the current line");
 
-    state.apply_movement(pkchat::editor::MovementKey::Home, rect, false, false, true);
+    state.apply_movement(ainiux::editor::MovementKey::Home, rect, false, false, true);
     check(state.cursor == 0, "editor Ctrl+Home moves to the beginning of the buffer");
     check(state.scroll_line == 0, "editor Ctrl+Home scrolls to the top of the buffer");
 
-    state.apply_movement(pkchat::editor::MovementKey::End, rect, false, false, true);
+    state.apply_movement(ainiux::editor::MovementKey::End, rect, false, false, true);
     check(state.cursor == state.text.size(), "editor Ctrl+End moves to the end of the buffer");
 }
 
 void test_editor_wrapped_line_home_end_navigation() {
-    pkchat::editor::EditorState state =
-        pkchat::editor::EditorState::from_text("abcdefghij\nXYZ");
-    const pkchat::editor::Rect rect{1, 1, 10, 4};
+    ainiux::editor::EditorState state =
+        ainiux::editor::EditorState::from_text("abcdefghij\nXYZ");
+    const ainiux::editor::Rect rect{1, 1, 10, 4};
     state.cursor = state.text.line_start(0) + 6;
 
-    state.apply_movement(pkchat::editor::MovementKey::Home, rect, false, false);
+    state.apply_movement(ainiux::editor::MovementKey::Home, rect, false, false);
     check(state.cursor == state.text.line_start(0) + 4,
           "editor Home moves to the beginning of the current wrapped row");
 
-    state.apply_movement(pkchat::editor::MovementKey::End, rect, false, false);
+    state.apply_movement(ainiux::editor::MovementKey::End, rect, false, false);
     check(state.cursor == state.text.line_start(0) + 8,
           "editor End moves to the end of the current wrapped row");
 
     state.cursor = state.text.line_start(0) + 2;
-    state.apply_movement(pkchat::editor::MovementKey::End, rect, false, false);
+    state.apply_movement(ainiux::editor::MovementKey::End, rect, false, false);
     check(state.cursor == state.text.line_start(0) + 4,
           "editor End on the first wrapped row stops at that row boundary");
 }
 
 void test_editor_page_navigation() {
-    pkchat::editor::EditorState state =
-        pkchat::editor::EditorState::from_text("zero\none\ntwo\nthree\nfour\nfive");
-    pkchat::editor::Rect rect{1, 1, 2, 20};
+    ainiux::editor::EditorState state =
+        ainiux::editor::EditorState::from_text("zero\none\ntwo\nthree\nfour\nfive");
+    ainiux::editor::Rect rect{1, 1, 2, 20};
     state.cursor = state.text.line_start(5);
     state.preferred_column = 0;
 
@@ -2294,30 +2294,30 @@ void test_editor_page_navigation() {
 }
 
 void test_editor_paste_prefers_local_clipboard() {
-    pkchat::editor::EditorState state = pkchat::editor::EditorState::from_text("hello");
-    pkchat::editor::Clipboard clipboard;
+    ainiux::editor::EditorState state = ainiux::editor::EditorState::from_text("hello");
+    ainiux::editor::Clipboard clipboard;
     clipboard.set("local");
     state.cursor = state.text.size();
-    pkchat::Error err = pkchat::editor::paste_with_clipboard_preference(state, clipboard, "external");
+    ainiux::Error err = ainiux::editor::paste_with_clipboard_preference(state, clipboard, "external");
     check(err.ok(), "paste prefers local clipboard");
     check(state.text.str() == "hellolocal", "local clipboard overrides terminal paste payload");
 
     clipboard.clear();
-    err = pkchat::editor::paste_with_clipboard_preference(state, clipboard, "external");
+    err = ainiux::editor::paste_with_clipboard_preference(state, clipboard, "external");
     check(err.ok(), "paste falls back to terminal payload when local clipboard is empty");
     check(state.text.str() == "hellolocalexternal", "terminal paste payload is inserted");
 }
 
 void test_editor_path_completion() {
-    const std::string directory = "build/pkchat-tab-completion";
+    const std::string directory = "build/ainiux-tab-completion";
     std::error_code filesystem_error;
-    std::filesystem::create_directories(directory + "/pkchat-folder", filesystem_error);
+    std::filesystem::create_directories(directory + "/ainiux-folder", filesystem_error);
     check(!filesystem_error, "path completion fixture directory is created");
 
     const std::vector<std::string> files = {
-        "pkchat-single-result.txt",
-        "pkchat-cycle-alpha.txt",
-        "pkchat-cycle-alpine.txt",
+        "ainiux-single-result.txt",
+        "ainiux-cycle-alpha.txt",
+        "ainiux-cycle-alpine.txt",
     };
     for (const std::string& name : files) {
         std::ofstream fixture(directory + "/" + name, std::ios::binary | std::ios::trunc);
@@ -2325,21 +2325,21 @@ void test_editor_path_completion() {
         check(static_cast<bool>(fixture), "path completion fixture file is written: " + name);
     }
 
-    pkchat::editor::PathCompleter completer;
-    const std::string unique_prefix = "/insert " + directory + "/pkchat-single-r";
-    pkchat::editor::EditorState unique = pkchat::editor::EditorState::from_text(unique_prefix);
+    ainiux::editor::PathCompleter completer;
+    const std::string unique_prefix = "/insert " + directory + "/ainiux-single-r";
+    ainiux::editor::EditorState unique = ainiux::editor::EditorState::from_text(unique_prefix);
     unique.cursor = unique.text.size();
-    pkchat::editor::PathCompletionResult result = completer.complete(unique);
+    ainiux::editor::PathCompletionResult result = completer.complete(unique);
     check(result.error.ok() && result.match_count == 1, "path completion finds a unique file");
-    check(unique.text.str() == "/insert " + directory + "/pkchat-single-result.txt",
+    check(unique.text.str() == "/insert " + directory + "/ainiux-single-result.txt",
           "one Tab fully completes a unique path");
 
     completer.reset();
-    const std::string cycle_prefix = "/attach " + directory + "/pkchat-cy";
-    pkchat::editor::EditorState cycling = pkchat::editor::EditorState::from_text(cycle_prefix);
+    const std::string cycle_prefix = "/attach " + directory + "/ainiux-cy";
+    ainiux::editor::EditorState cycling = ainiux::editor::EditorState::from_text(cycle_prefix);
     cycling.cursor = cycling.text.size();
     result = completer.complete(cycling);
-    const std::string common = "/attach " + directory + "/pkchat-cycle-alp";
+    const std::string common = "/attach " + directory + "/ainiux-cycle-alp";
     check(result.error.ok() && result.match_count == 2 && !result.cycling,
           "first Tab reports multiple path matches");
     check(cycling.text.str() == common, "first Tab completes the unambiguous common path prefix");
@@ -2347,13 +2347,13 @@ void test_editor_path_completion() {
     result = completer.complete(cycling);
     check(result.cycling && result.choice_index == 0,
           "second Tab selects the first sorted path choice");
-    check(cycling.text.str() == "/attach " + directory + "/pkchat-cycle-alpha.txt",
+    check(cycling.text.str() == "/attach " + directory + "/ainiux-cycle-alpha.txt",
           "second Tab inserts the first path choice");
 
     result = completer.complete(cycling);
     check(result.cycling && result.choice_index == 1,
           "third Tab selects the next path choice");
-    check(cycling.text.str() == "/attach " + directory + "/pkchat-cycle-alpine.txt",
+    check(cycling.text.str() == "/attach " + directory + "/ainiux-cycle-alpine.txt",
           "third Tab inserts the next path choice");
 
     result = completer.complete(cycling);
@@ -2361,32 +2361,32 @@ void test_editor_path_completion() {
           "repeated Tab wraps path choices in sorted order");
 
     completer.reset();
-    pkchat::editor::EditorState directory_state =
-        pkchat::editor::EditorState::from_text(directory + "/pkchat-fol");
+    ainiux::editor::EditorState directory_state =
+        ainiux::editor::EditorState::from_text(directory + "/ainiux-fol");
     directory_state.cursor = directory_state.text.size();
     result = completer.complete(directory_state);
-    check(result.match_count == 1 && directory_state.text.str() == directory + "/pkchat-folder/",
+    check(result.match_count == 1 && directory_state.text.str() == directory + "/ainiux-folder/",
           "directory completion appends a slash");
 
     completer.reset();
-    pkchat::editor::EditorState missing =
-        pkchat::editor::EditorState::from_text(directory + "/pkchat-does-not-exist");
+    ainiux::editor::EditorState missing =
+        ainiux::editor::EditorState::from_text(directory + "/ainiux-does-not-exist");
     missing.cursor = missing.text.size();
     result = completer.complete(missing);
     check(result.error.ok() && result.match_count == 0 &&
-              missing.text.str() == directory + "/pkchat-does-not-exist",
+              missing.text.str() == directory + "/ainiux-does-not-exist",
           "path completion leaves an unmatched path unchanged");
 
-    pkchat::editor::EditorState cancelled =
-        pkchat::editor::EditorState::from_text(directory + "/pkchat-single-r");
+    ainiux::editor::EditorState cancelled =
+        ainiux::editor::EditorState::from_text(directory + "/ainiux-single-r");
     cancelled.cursor = cancelled.text.size();
     result = completer.complete(cancelled, []() { return true; });
-    check(result.error.code == pkchat::ErrorCode::Cancelled &&
-              cancelled.text.str() == directory + "/pkchat-single-r",
+    check(result.error.code == ainiux::ErrorCode::Cancelled &&
+              cancelled.text.str() == directory + "/ainiux-single-r",
           "a cancelled path scan leaves editor input unchanged");
 
     completer.reset();
-    pkchat::editor::EditorState reset_cycle = pkchat::editor::EditorState::from_text(cycle_prefix);
+    ainiux::editor::EditorState reset_cycle = ainiux::editor::EditorState::from_text(cycle_prefix);
     reset_cycle.cursor = reset_cycle.text.size();
     completer.complete(reset_cycle);
     completer.reset();
@@ -2394,34 +2394,34 @@ void test_editor_path_completion() {
     check(!result.cycling && reset_cycle.text.str() == common,
           "resetting completion prevents a later Tab from cycling stale choices");
 
-    std::string minibuffer_input = directory + "/pkchat-sing";
-    pkchat::editor::PathCompleter minibuffer_completer;
-    result = pkchat::editor::complete_path_input(minibuffer_input, minibuffer_completer);
+    std::string minibuffer_input = directory + "/ainiux-sing";
+    ainiux::editor::PathCompleter minibuffer_completer;
+    result = ainiux::editor::complete_path_input(minibuffer_input, minibuffer_completer);
     check(result.error.ok() && result.match_count == 1,
           "minibuffer path completion finds a unique file");
-    check(minibuffer_input == directory + "/pkchat-single-result.txt",
+    check(minibuffer_input == directory + "/ainiux-single-result.txt",
           "minibuffer path completion completes editor save/open paths");
 }
 
 void test_expand_user_path() {
     if (const char* home = std::getenv("HOME")) {
-        check(pkchat::expand_user_path("~") == home, "expand_user_path expands bare tilde");
-        check(pkchat::expand_user_path("~/notes.txt") == std::string(home) + "/notes.txt",
+        check(ainiux::expand_user_path("~") == home, "expand_user_path expands bare tilde");
+        check(ainiux::expand_user_path("~/notes.txt") == std::string(home) + "/notes.txt",
               "expand_user_path expands tilde-prefixed paths");
     }
-    check(pkchat::expand_user_path("-") == "-", "expand_user_path preserves stdin dash");
-    check(pkchat::expand_user_path("stdin") == "stdin", "expand_user_path preserves stdin literal");
-    check(pkchat::expand_user_path("/tmp/file") == "/tmp/file",
+    check(ainiux::expand_user_path("-") == "-", "expand_user_path preserves stdin dash");
+    check(ainiux::expand_user_path("stdin") == "stdin", "expand_user_path preserves stdin literal");
+    check(ainiux::expand_user_path("/tmp/file") == "/tmp/file",
           "expand_user_path leaves absolute paths unchanged");
 }
 
 void test_editor_piece_table_edits() {
-    pkchat::editor::PieceTable table = pkchat::editor::PieceTable::from_string("alpha\nbeta\ngamma");
+    ainiux::editor::PieceTable table = ainiux::editor::PieceTable::from_string("alpha\nbeta\ngamma");
     check(table.size() == 16, "piece table initial size");
     check(table.line_count() == 3, "piece table initial line count");
     check(table.line_text(1) == "beta", "piece table line text");
 
-    pkchat::Error err = table.insert(6, "wide\n");
+    ainiux::Error err = table.insert(6, "wide\n");
     check(err.ok(), "piece table insert succeeds");
     check(table.str() == "alpha\nwide\nbeta\ngamma", "piece table insert preserves text");
     check(table.line_count() == 4, "piece table insert updates line count");
@@ -2436,10 +2436,10 @@ void test_editor_piece_table_edits() {
 }
 
 void test_editor_rectangular_rendering() {
-    pkchat::editor::EditorState state = pkchat::editor::EditorState::from_text("one\ntwo\nthree");
-    pkchat::editor::Rect rect{4, 10, 2, 4};
+    ainiux::editor::EditorState state = ainiux::editor::EditorState::from_text("one\ntwo\nthree");
+    ainiux::editor::Rect rect{4, 10, 2, 4};
     state.cursor = state.text.offset_for_line_column(1, 1);
-    pkchat::editor::RenderedPanel rendered = state.render(rect);
+    ainiux::editor::RenderedPanel rendered = state.render(rect);
     check(rendered.lines.size() == 2, "editor panel respects height");
     check(rendered.lines[0] == "one ", "editor panel pads first visible line");
     check(rendered.lines[1] == "two ", "editor panel pads second visible line");
@@ -2457,8 +2457,8 @@ void test_editor_rectangular_rendering() {
 }
 
 void test_editor_search_navigation() {
-    pkchat::editor::EditorState state =
-        pkchat::editor::EditorState::from_text("alpha beta\nbeta gamma\nalpha");
+    ainiux::editor::EditorState state =
+        ainiux::editor::EditorState::from_text("alpha beta\nbeta gamma\nalpha");
 
     check(state.search("beta"), "editor search finds a substring at or after the cursor");
     check(state.cursor == 6, "editor search moves to the first matching substring");
@@ -2479,11 +2479,11 @@ void test_editor_search_navigation() {
 }
 
 void test_editor_search_replace() {
-    pkchat::editor::EditorState state =
-        pkchat::editor::EditorState::from_text("one two one two one");
+    ainiux::editor::EditorState state =
+        ainiux::editor::EditorState::from_text("one two one two one");
 
     size_t replacements = 0;
-    pkchat::Error err = state.replace_all_from(4, "one", "ONE", replacements);
+    ainiux::Error err = state.replace_all_from(4, "one", "ONE", replacements);
     check(err.ok(), "editor replace-all from cursor succeeds");
     check(replacements == 2, "editor replace-all counts replacements to the end of the buffer");
     check(state.text.str() == "one two ONE two ONE",
@@ -2504,37 +2504,37 @@ void test_editor_search_replace() {
 }
 
 void test_editor_selection_and_clipboard() {
-    pkchat::editor::EditorState state = pkchat::editor::EditorState::from_text("alpha beta gamma");
-    pkchat::editor::Rect rect{1, 1, 1, 20};
-    pkchat::editor::Clipboard clipboard;
+    ainiux::editor::EditorState state = ainiux::editor::EditorState::from_text("alpha beta gamma");
+    ainiux::editor::Rect rect{1, 1, 1, 20};
+    ainiux::editor::Clipboard clipboard;
 
     state.cursor = 5;
-    state.apply_movement(pkchat::editor::MovementKey::Left, rect, true);
-    state.apply_movement(pkchat::editor::MovementKey::Left, rect, true);
-    state.apply_movement(pkchat::editor::MovementKey::Left, rect, true);
-    state.apply_movement(pkchat::editor::MovementKey::Left, rect, true);
-    state.apply_movement(pkchat::editor::MovementKey::Left, rect, true);
+    state.apply_movement(ainiux::editor::MovementKey::Left, rect, true);
+    state.apply_movement(ainiux::editor::MovementKey::Left, rect, true);
+    state.apply_movement(ainiux::editor::MovementKey::Left, rect, true);
+    state.apply_movement(ainiux::editor::MovementKey::Left, rect, true);
+    state.apply_movement(ainiux::editor::MovementKey::Left, rect, true);
     check(state.selection.has_range(), "shift movement creates a selection");
     check(state.selected_text() == "alpha", "selected text matches the highlighted range");
 
-    pkchat::editor::EditorState ascii = pkchat::editor::EditorState::from_text("abcdef");
+    ainiux::editor::EditorState ascii = ainiux::editor::EditorState::from_text("abcdef");
     ascii.cursor = 1;
     for (int i = 0; i < 3; ++i) {
-        ascii.apply_movement(pkchat::editor::MovementKey::Right, rect, true);
+        ascii.apply_movement(ainiux::editor::MovementKey::Right, rect, true);
     }
     check(ascii.selected_text() == "bcde",
           "shift-right selection includes the character at the cursor endpoint");
-    ascii = pkchat::editor::EditorState::from_text("abcdef");
+    ascii = ainiux::editor::EditorState::from_text("abcdef");
     ascii.cursor = 4;
     for (int i = 0; i < 3; ++i) {
-        ascii.apply_movement(pkchat::editor::MovementKey::Left, rect, true);
+        ascii.apply_movement(ainiux::editor::MovementKey::Left, rect, true);
     }
     check(ascii.selected_text() == "bcde",
           "shift-left selection includes the anchor-side endpoint character");
-    ascii = pkchat::editor::EditorState::from_text("abcdef");
+    ascii = ainiux::editor::EditorState::from_text("abcdef");
     ascii.cursor = 0;
     for (int i = 0; i < 2; ++i) {
-        ascii.apply_movement(pkchat::editor::MovementKey::Right, rect, true);
+        ascii.apply_movement(ainiux::editor::MovementKey::Right, rect, true);
     }
     check(ascii.selected_text() == "ab",
           "short forward selections do not over-extend the final character");
@@ -2567,71 +2567,71 @@ void test_editor_selection_and_clipboard() {
 
 void test_editor_autosave() {
     long long parsed = 0;
-    check(pkchat::editor::parse_byte_size("10M", parsed).ok() && parsed == 10LL * 1024LL * 1024LL,
+    check(ainiux::editor::parse_byte_size("10M", parsed).ok() && parsed == 10LL * 1024LL * 1024LL,
           "editor auto-save byte size parses megabytes");
-    check(pkchat::editor::parse_byte_size("512k", parsed).ok() && parsed == 512LL * 1024LL,
+    check(ainiux::editor::parse_byte_size("512k", parsed).ok() && parsed == 512LL * 1024LL,
           "editor auto-save byte size parses kilobytes");
-    check(pkchat::editor::parse_byte_size("2G", parsed).ok() && parsed == 2LL * 1024LL * 1024LL * 1024LL,
+    check(ainiux::editor::parse_byte_size("2G", parsed).ok() && parsed == 2LL * 1024LL * 1024LL * 1024LL,
           "editor auto-save byte size parses gigabytes");
-    check(pkchat::editor::parse_byte_size("1T", parsed).ok() &&
+    check(ainiux::editor::parse_byte_size("1T", parsed).ok() &&
               parsed == 1024LL * 1024LL * 1024LL * 1024LL,
           "editor auto-save byte size parses terabytes");
 
-    check(pkchat::editor::autosave_path_for("notes.txt", "~") == "notes.txt~",
+    check(ainiux::editor::autosave_path_for("notes.txt", "~") == "notes.txt~",
           "editor auto-save path appends postfix to the file name");
 
-    pkchat::editor::EditorSettings settings;
+    ainiux::editor::EditorSettings settings;
     settings.auto_save_mode = true;
     settings.auto_save_threshold = 300;
     settings.auto_save_timeout_seconds = 30;
 
-    pkchat::editor::EditorState state = pkchat::editor::EditorState::from_text("alpha");
+    ainiux::editor::EditorState state = ainiux::editor::EditorState::from_text("alpha");
     state.path = "build/autosave-source.txt";
     state.dirty = true;
     state.record_autosave_change(299);
     const auto idle_short = std::chrono::seconds(5);
-    check(!pkchat::editor::evaluate_autosave(state, settings, idle_short).should_save,
+    check(!ainiux::editor::evaluate_autosave(state, settings, idle_short).should_save,
           "editor auto-save waits until the change threshold is reached");
     state.record_autosave_change(1);
-    check(pkchat::editor::evaluate_autosave(state, settings, idle_short).threshold_met,
+    check(ainiux::editor::evaluate_autosave(state, settings, idle_short).threshold_met,
           "editor auto-save threshold triggers when enough bytes changed");
     state.reset_autosave_pending();
     state.record_autosave_change(10);
     const auto idle_long = std::chrono::seconds(31);
-    check(pkchat::editor::evaluate_autosave(state, settings, idle_long).timeout_met,
+    check(ainiux::editor::evaluate_autosave(state, settings, idle_long).timeout_met,
           "editor auto-save timeout triggers after idle time with pending changes");
 
     settings.auto_save_size_limit = 4;
-    state.text = pkchat::editor::PieceTable::from_string("12345");
+    state.text = ainiux::editor::PieceTable::from_string("12345");
     state.dirty = true;
     state.record_autosave_change(5);
     std::string skip_message;
-    check(!pkchat::editor::perform_autosave(state, settings, skip_message).ok() &&
+    check(!ainiux::editor::perform_autosave(state, settings, skip_message).ok() &&
               skip_message.find("auto_save_size_limit") != std::string::npos,
           "editor auto-save skips buffers above the configured size limit");
 
-    settings.auto_save_size_limit = pkchat::editor::kDefaultAutoSaveSizeLimit;
-    state.text = pkchat::editor::PieceTable::from_string("autosave payload");
+    settings.auto_save_size_limit = ainiux::editor::kDefaultAutoSaveSizeLimit;
+    state.text = ainiux::editor::PieceTable::from_string("autosave payload");
     state.dirty = true;
     state.record_autosave_change(100);
     std::string autosave_message;
-    check(pkchat::editor::perform_autosave(state, settings, autosave_message).ok(),
+    check(ainiux::editor::perform_autosave(state, settings, autosave_message).ok(),
           "editor auto-save writes the backup file");
     check(state.dirty, "editor auto-save does not clear the dirty flag");
     check(state.autosave_pending_bytes() == 0, "editor auto-save clears pending byte counter");
     check(autosave_message.find("build/autosave-source.txt~") != std::string::npos,
           "editor auto-save reports the backup path");
 
-    pkchat::editor::PieceTable backup;
-    check(pkchat::editor::load_file("build/autosave-source.txt~", backup).ok() &&
+    ainiux::editor::PieceTable backup;
+    check(ainiux::editor::load_file("build/autosave-source.txt~", backup).ok() &&
               backup.str() == "autosave payload",
           "editor auto-save backup file contains the current buffer");
 
-    state.text = pkchat::editor::PieceTable::from_string("auto\nsave\n");
-    state.linebreak = pkchat::editor::LineBreak::Crlf;
+    state.text = ainiux::editor::PieceTable::from_string("auto\nsave\n");
+    state.linebreak = ainiux::editor::LineBreak::Crlf;
     state.dirty = true;
     state.record_autosave_change(10);
-    check(pkchat::editor::perform_autosave(state, settings, autosave_message).ok(),
+    check(ainiux::editor::perform_autosave(state, settings, autosave_message).ok(),
           "editor auto-save writes using the buffer linebreak mode");
     {
         std::ifstream raw_backup("build/autosave-source.txt~", std::ios::binary);
@@ -2641,17 +2641,17 @@ void test_editor_autosave() {
               "editor auto-save preserves CRLF and final-line-ending state");
     }
 
-    pkchat::editor::remove_autosave_file(state.path, settings);
+    ainiux::editor::remove_autosave_file(state.path, settings);
     check(!std::filesystem::exists("build/autosave-source.txt~"),
           "editor auto-save backup is removed after an explicit save cleanup");
 
-    pkchat::config::ParseResult parsed_config = pkchat::config::parse(
+    ainiux::config::ParseResult parsed_config = ainiux::config::parse(
         "[editor]\nauto-save-mode = off\nauto-save-postfix = \"#\"\nauto-save-threshold = 128\n"
         "auto-save-timeout = 12\nauto-save-size-limit = 2M\n",
         "autosave.conf");
     check(parsed_config.error.ok(), "editor auto-save config parses");
-    pkchat::cli::Options options;
-    pkchat::Error err = pkchat::config::apply_document(parsed_config.document, options);
+    ainiux::cli::Options options;
+    ainiux::Error err = ainiux::config::apply_document(parsed_config.document, options);
     check(err.ok() && !options.editor_auto_save_mode && options.editor_auto_save_postfix == "#" &&
               options.editor_auto_save_threshold == 128 &&
               options.editor_auto_save_timeout_seconds == 12 &&
@@ -2669,43 +2669,43 @@ void test_editor_autosave() {
     const auto main_time = std::filesystem::last_write_time(main_path);
     std::filesystem::last_write_time(backup_path, main_time + std::chrono::seconds(1));
 
-    pkchat::editor::EditorSettings recovery_settings;
-    const pkchat::editor::AutosaveRecoveryOffer offer =
-        pkchat::editor::check_autosave_recovery_offer(main_path, recovery_settings);
+    ainiux::editor::EditorSettings recovery_settings;
+    const ainiux::editor::AutosaveRecoveryOffer offer =
+        ainiux::editor::check_autosave_recovery_offer(main_path, recovery_settings);
     check(offer.should_offer && offer.autosave_path == backup_path,
           "editor auto-save recovery is offered when backup is newer");
 
     recovery_settings.auto_save_mode = false;
-    check(!pkchat::editor::check_autosave_recovery_offer(main_path, recovery_settings).should_offer,
+    check(!ainiux::editor::check_autosave_recovery_offer(main_path, recovery_settings).should_offer,
           "editor auto-save recovery is disabled when auto-save mode is off");
 
     const std::string prompt =
-        pkchat::editor::autosave_recovery_prompt_message(main_path, backup_path);
+        ainiux::editor::autosave_recovery_prompt_message(main_path, backup_path);
     check(prompt.find(main_path) != std::string::npos && prompt.find(backup_path) != std::string::npos,
           "editor auto-save recovery prompt names both files");
 }
 
 void test_editor_undo_redo_key_bindings() {
-    check(pkchat::editor::is_editor_undo_key(26), "Ctrl+Z is an editor undo key");
-    check(pkchat::editor::is_editor_undo_key(21), "Ctrl+U is an editor undo key");
-    check(!pkchat::editor::is_editor_undo_key(18), "Ctrl+R is not an editor undo key");
+    check(ainiux::editor::is_editor_undo_key(26), "Ctrl+Z is an editor undo key");
+    check(ainiux::editor::is_editor_undo_key(21), "Ctrl+U is an editor undo key");
+    check(!ainiux::editor::is_editor_undo_key(18), "Ctrl+R is not an editor undo key");
 
-    check(!pkchat::editor::is_editor_redo_key(18), "Ctrl+R is not an editor redo key");
-    check(pkchat::editor::is_editor_redo_key(25), "Ctrl+Y is an editor redo key");
-    check(!pkchat::editor::is_editor_redo_key(26), "Ctrl+Z is not an editor redo key");
+    check(!ainiux::editor::is_editor_redo_key(18), "Ctrl+R is not an editor redo key");
+    check(ainiux::editor::is_editor_redo_key(25), "Ctrl+Y is an editor redo key");
+    check(!ainiux::editor::is_editor_redo_key(26), "Ctrl+Z is not an editor redo key");
 
     unsigned char decoded = 0;
-    check(pkchat::editor::decode_control_key_sequence("[26;5u", decoded) && decoded == 26,
+    check(ainiux::editor::decode_control_key_sequence("[26;5u", decoded) && decoded == 26,
           "kitty Ctrl+Z sequence decodes to undo key");
-    check(pkchat::editor::decode_control_key_sequence("[18;5u", decoded) && decoded == 18,
+    check(ainiux::editor::decode_control_key_sequence("[18;5u", decoded) && decoded == 18,
           "kitty Ctrl+R sequence decodes to regenerate key");
 }
 
 void test_editor_split_layout() {
-    using pkchat::editor::Rect;
-    using pkchat::editor::SplitKind;
-    using pkchat::editor::SplitLayout;
-    using pkchat::editor::window_prefix_action;
+    using ainiux::editor::Rect;
+    using ainiux::editor::SplitKind;
+    using ainiux::editor::SplitLayout;
+    using ainiux::editor::window_prefix_action;
 
     check(window_prefix_action('v') == "split-v", "window prefix v is vertical split");
     check(window_prefix_action('3') == "split-v", "window prefix 3 aliases vertical split");
@@ -2793,10 +2793,10 @@ void test_editor_split_layout() {
 }
 
 void test_editor_revert_to_snapshot() {
-    pkchat::editor::EditorState state = pkchat::editor::EditorState::from_text("alpha beta");
+    ainiux::editor::EditorState state = ainiux::editor::EditorState::from_text("alpha beta");
     state.cursor = state.text.offset_for_line_column(0, 6);
-    const pkchat::editor::EditorSnapshot before = state.capture_state();
-    pkchat::Error err = state.insert_without_undo("GAMMA");
+    const ainiux::editor::EditorSnapshot before = state.capture_state();
+    ainiux::Error err = state.insert_without_undo("GAMMA");
     check(err.ok(), "editor insert before revert succeeds");
     check(state.text.str() == "alpha GAMMAbeta", "editor assist-style insert changes text");
     state.revert_to_snapshot(before);
@@ -2806,12 +2806,12 @@ void test_editor_revert_to_snapshot() {
 }
 
 void test_editor_undo_redo() {
-    pkchat::editor::EditorState state = pkchat::editor::EditorState::from_text("alpha");
+    ainiux::editor::EditorState state = ainiux::editor::EditorState::from_text("alpha");
     state.cursor = state.text.size();
-    check(state.undo_limit() == pkchat::editor::kDefaultUndoLimit,
+    check(state.undo_limit() == ainiux::editor::kDefaultUndoLimit,
           "editor undo history defaults to five entries");
 
-    pkchat::Error err = state.insert(" beta");
+    ainiux::Error err = state.insert(" beta");
     check(err.ok(), "editor insert before undo succeeds");
     check(state.text.str() == "alpha beta", "editor insert changes text before undo");
     check(state.can_undo() && !state.can_redo(), "editor records undo and clears redo after an edit");
@@ -2839,7 +2839,7 @@ void test_editor_undo_redo() {
     check(state.undo(), "editor replace is undoable as one edit");
     check(state.text.str() == "alpha beta!", "editor undo restores text before replace");
 
-    pkchat::editor::EditorState limited = pkchat::editor::EditorState::from_text("");
+    ainiux::editor::EditorState limited = ainiux::editor::EditorState::from_text("");
     limited.set_undo_limit(2);
     check(limited.undo_limit() == 2, "editor undo history limit can be changed");
     check(limited.insert("a").ok(), "editor limited undo first edit succeeds");
@@ -2855,9 +2855,9 @@ void test_editor_undo_redo() {
     check(limited.insert("z").ok(), "editor zero undo limit still allows edits");
     check(!limited.can_undo(), "editor zero undo limit stores no undo entries");
 
-    pkchat::editor::EditorState paste_state = pkchat::editor::EditorState::from_text("hello");
+    ainiux::editor::EditorState paste_state = ainiux::editor::EditorState::from_text("hello");
     paste_state.cursor = paste_state.text.size();
-    pkchat::editor::Clipboard clipboard;
+    ainiux::editor::Clipboard clipboard;
     clipboard.set(" world");
     check(paste_state.paste(clipboard).ok(), "editor paste succeeds");
     check(paste_state.text.str() == "hello world", "editor paste appends clipboard text");
@@ -2869,9 +2869,9 @@ void test_editor_unicode_combining_sequence_wraps_on_grapheme_boundary() {
     const std::string combining = "e" "\xCC\x81";
     const std::string text = combining + "yy";
 
-    pkchat::editor::EditorState state =
-        pkchat::editor::EditorState::from_text(text);
-    pkchat::editor::RenderedPanel rendered = state.render({1, 1, 3, 1});
+    ainiux::editor::EditorState state =
+        ainiux::editor::EditorState::from_text(text);
+    ainiux::editor::RenderedPanel rendered = state.render({1, 1, 3, 1});
     check(rendered.lines.size() == 3,
           "editor combining sequence render produces three rows in a one-cell-wide panel");
     check(rendered.lines[0] == combining,
@@ -2887,8 +2887,8 @@ void test_editor_unicode_display_columns_and_offsets() {
     const std::string emoji = "\xF0\x9F\x98\x80";
     const std::string combining = "e" "\xCC\x81";
 
-    pkchat::editor::PieceTable cjk =
-        pkchat::editor::PieceTable::from_string("a" + ni + "b");
+    ainiux::editor::PieceTable cjk =
+        ainiux::editor::PieceTable::from_string("a" + ni + "b");
     check(cjk.display_column_for_offset(1) == 1,
           "editor display column after ASCII is one");
     check(cjk.display_column_for_offset(1 + ni.size()) == 3,
@@ -2898,13 +2898,13 @@ void test_editor_unicode_display_columns_and_offsets() {
     check(cjk.offset_for_line_column(0, 3) == 1 + ni.size(),
           "editor column lookup reaches the byte offset after a wide Chinese character");
 
-    pkchat::editor::PieceTable emoji_table =
-        pkchat::editor::PieceTable::from_string("a" + emoji + "b");
+    ainiux::editor::PieceTable emoji_table =
+        ainiux::editor::PieceTable::from_string("a" + emoji + "b");
     check(emoji_table.display_column_for_offset(1 + emoji.size()) == 3,
           "editor display column counts an emoji as two terminal cells");
 
-    pkchat::editor::PieceTable combining_table =
-        pkchat::editor::PieceTable::from_string(combining + "x");
+    ainiux::editor::PieceTable combining_table =
+        ainiux::editor::PieceTable::from_string(combining + "x");
     check(combining_table.display_column_for_offset(combining.size()) == 1,
           "editor display column gives combining marks zero width");
     check(combining_table.offset_for_line_column(0, 1) == combining.size(),
@@ -2915,9 +2915,9 @@ void test_editor_unicode_emoji_pair_wraps_on_cell_boundaries() {
     const std::string grin = "\xF0\x9F\x98\x80";
     const std::string pair = grin + grin;
 
-    pkchat::editor::EditorState state =
-        pkchat::editor::EditorState::from_text(pair);
-    pkchat::editor::RenderedPanel rendered = state.render({1, 1, 2, 3});
+    ainiux::editor::EditorState state =
+        ainiux::editor::EditorState::from_text(pair);
+    ainiux::editor::RenderedPanel rendered = state.render({1, 1, 2, 3});
     check(rendered.lines.size() == 2,
           "editor emoji pair render produces two rows in a three-cell-wide panel");
     check(rendered.lines[0] == grin + " ",
@@ -2936,9 +2936,9 @@ void test_editor_unicode_emoji_skin_tone_wrap_keeps_modifier() {
     const std::string skin_tone = "\xF0\x9F\x8F\xBD";
     const std::string grapheme = thumbs_up + skin_tone;
 
-    pkchat::editor::EditorState state =
-        pkchat::editor::EditorState::from_text(grapheme + "!");
-    pkchat::editor::RenderedPanel rendered = state.render({1, 1, 1, 2});
+    ainiux::editor::EditorState state =
+        ainiux::editor::EditorState::from_text(grapheme + "!");
+    ainiux::editor::RenderedPanel rendered = state.render({1, 1, 1, 2});
     check(rendered.lines[0] == grapheme,
           "editor wrap keeps an emoji plus skin-tone modifier intact in a two-cell panel");
 
@@ -2956,9 +2956,9 @@ void test_editor_unicode_emoji_zwj_wrap_keeps_sequence_intact() {
         "\xF0\x9F\x91\xA7" "\xE2\x80\x8D"
         "\xF0\x9F\x91\xA6";
 
-    pkchat::editor::EditorState state =
-        pkchat::editor::EditorState::from_text(family_emoji);
-    pkchat::editor::RenderedPanel rendered = state.render({1, 1, 1, 2});
+    ainiux::editor::EditorState state =
+        ainiux::editor::EditorState::from_text(family_emoji);
+    ainiux::editor::RenderedPanel rendered = state.render({1, 1, 1, 2});
     check(rendered.lines.size() == 1,
           "editor ZWJ family emoji render produces one row in a two-cell-wide panel");
     check(rendered.lines[0] == family_emoji,
@@ -2979,8 +2979,8 @@ void test_editor_unicode_grapheme_navigation_and_delete() {
         "\xF0\x9F\x91\xA7" "\xE2\x80\x8D"
         "\xF0\x9F\x91\xA6";
 
-    pkchat::editor::EditorState combining =
-        pkchat::editor::EditorState::from_text(composed_visual_e + "x");
+    ainiux::editor::EditorState combining =
+        ainiux::editor::EditorState::from_text(composed_visual_e + "x");
     combining.move_right();
     check(combining.cursor == composed_visual_e.size(),
           "editor move_right treats base letter plus combining mark as one grapheme");
@@ -2988,13 +2988,13 @@ void test_editor_unicode_grapheme_navigation_and_delete() {
     check(combining.cursor == 0,
           "editor move_left treats base letter plus combining mark as one grapheme");
     combining.cursor = composed_visual_e.size();
-    pkchat::Error err = combining.erase_before_cursor();
+    ainiux::Error err = combining.erase_before_cursor();
     check(err.ok(), "editor backspace before a combining sequence succeeds");
     check(combining.text.str() == "x",
           "editor backspace removes the whole combining grapheme, not only the mark");
 
-    pkchat::editor::EditorState emoji =
-        pkchat::editor::EditorState::from_text(family_emoji + "!");
+    ainiux::editor::EditorState emoji =
+        ainiux::editor::EditorState::from_text(family_emoji + "!");
     emoji.move_right();
     check(emoji.cursor == family_emoji.size(),
           "editor move_right treats a ZWJ emoji sequence as one grapheme");
@@ -3010,9 +3010,9 @@ void test_editor_unicode_rendering_wraps_on_cell_boundaries() {
     const std::string hao = "\xE5\xA5\xBD";
     const std::string combining = "e" "\xCC\x81";
 
-    pkchat::editor::EditorState cjk =
-        pkchat::editor::EditorState::from_text(ni + hao);
-    pkchat::editor::RenderedPanel rendered = cjk.render({1, 1, 2, 2});
+    ainiux::editor::EditorState cjk =
+        ainiux::editor::EditorState::from_text(ni + hao);
+    ainiux::editor::RenderedPanel rendered = cjk.render({1, 1, 2, 2});
     check(rendered.lines.size() == 2, "editor CJK render produces requested rows");
     check(rendered.lines[0] == ni,
           "editor wraps after one two-cell Chinese character in a two-column panel");
@@ -3023,8 +3023,8 @@ void test_editor_unicode_rendering_wraps_on_cell_boundaries() {
     check(rendered.cursor.visible && rendered.cursor.row == 1 && rendered.cursor.col == 0,
           "editor cursor after a wide character at wrap boundary maps to the next visual row");
 
-    pkchat::editor::EditorState marks =
-        pkchat::editor::EditorState::from_text(combining + "x");
+    ainiux::editor::EditorState marks =
+        ainiux::editor::EditorState::from_text(combining + "x");
     rendered = marks.render({1, 1, 1, 2});
     check(rendered.lines[0] == combining + "x",
           "editor render keeps a combining sequence and following ASCII in two cells");
@@ -3041,8 +3041,8 @@ void test_editor_unicode_selection_search_replace_and_file_round_trip() {
     const std::string replacement =
         "\xD8\xB3" "\xD9\x84" "\xD8\xA7" "\xD9\x85";
 
-    pkchat::editor::EditorState state =
-        pkchat::editor::EditorState::from_text(chinese + "\n" + arabic + "\n" +
+    ainiux::editor::EditorState state =
+        ainiux::editor::EditorState::from_text(chinese + "\n" + arabic + "\n" +
                                                cyrillic + "\n" + nordic);
     check(state.text.line_count() == 4, "editor multilingual buffer has four lines");
     check(state.text.line_text(0) == chinese, "editor line_text preserves Chinese UTF-8");
@@ -3050,7 +3050,7 @@ void test_editor_unicode_selection_search_replace_and_file_round_trip() {
     check(state.text.line_text(2) == cyrillic, "editor line_text preserves Cyrillic UTF-8");
     check(state.text.line_text(3) == nordic, "editor line_text preserves Nordic UTF-8");
 
-    pkchat::editor::Clipboard clipboard;
+    ainiux::editor::Clipboard clipboard;
     const size_t arabic_start = state.text.line_start(1);
     state.selection.anchor = arabic_start;
     state.selection.active = arabic_start + arabic.size();
@@ -3065,17 +3065,17 @@ void test_editor_unicode_selection_search_replace_and_file_round_trip() {
     check(state.cursor == state.text.line_start(2), "editor search moves cursor to Cyrillic text start");
 
     size_t replacements = 0;
-    pkchat::Error err = state.replace_all_from(0, arabic, replacement, replacements);
+    ainiux::Error err = state.replace_all_from(0, arabic, replacement, replacements);
     check(err.ok(), "editor replace-all accepts Unicode search and replacement");
     check(replacements == 1, "editor replace-all counts the Arabic occurrence");
     check(state.text.line_text(1) == replacement,
           "editor replace-all substitutes Arabic text with replacement UTF-8");
 
     const std::string path = "build/unit-editor-unicode.txt";
-    err = pkchat::editor::save_file(path, state.text);
+    err = ainiux::editor::save_file(path, state.text);
     check(err.ok(), "editor saves multilingual file");
-    pkchat::editor::PieceTable loaded;
-    err = pkchat::editor::load_file(path, loaded);
+    ainiux::editor::PieceTable loaded;
+    err = ainiux::editor::load_file(path, loaded);
     check(err.ok(), "editor loads multilingual file");
     check(loaded.str() == state.text.str(),
           "editor file round trip preserves multilingual UTF-8 exactly");
@@ -3086,8 +3086,8 @@ void test_editor_utf8_codepoint_navigation_and_editing() {
     const std::string hao = "\xE5\xA5\xBD";
     const std::string chinese = ni + hao;
 
-    pkchat::editor::PieceTable table =
-        pkchat::editor::PieceTable::from_string("A" + chinese + "B");
+    ainiux::editor::PieceTable table =
+        ainiux::editor::PieceTable::from_string("A" + chinese + "B");
     check(table.next_char_offset(1) == 1 + ni.size(),
           "editor next_char_offset skips a complete three-byte UTF-8 code point");
     check(table.next_char_offset(1 + ni.size()) == 1 + chinese.size(),
@@ -3095,8 +3095,8 @@ void test_editor_utf8_codepoint_navigation_and_editing() {
     check(table.previous_char_offset(1 + chinese.size()) == 1 + ni.size(),
           "editor previous_char_offset lands on a UTF-8 leading byte");
 
-    pkchat::editor::EditorState state =
-        pkchat::editor::EditorState::from_text("A" + chinese + "B");
+    ainiux::editor::EditorState state =
+        ainiux::editor::EditorState::from_text("A" + chinese + "B");
     state.move_right();
     check(state.cursor == 1, "editor move_right crosses ASCII one byte at a time");
     state.move_right();
@@ -3106,13 +3106,13 @@ void test_editor_utf8_codepoint_navigation_and_editing() {
     state.move_left();
     check(state.cursor == 1 + ni.size(), "editor move_left skips a complete Chinese character");
 
-    pkchat::Error err = state.erase_before_cursor();
+    ainiux::Error err = state.erase_before_cursor();
     check(err.ok(), "editor backspace before cursor succeeds for UTF-8");
     check(state.text.str() == "A" + hao + "B",
           "editor backspace removes one full UTF-8 code point instead of one byte");
     check(state.cursor == 1, "editor backspace leaves cursor at the removed code point start");
 
-    state = pkchat::editor::EditorState::from_text("A" + chinese + "B");
+    state = ainiux::editor::EditorState::from_text("A" + chinese + "B");
     state.cursor = 1;
     err = state.erase_at_cursor();
     check(err.ok(), "editor delete at cursor succeeds for UTF-8");
@@ -3124,16 +3124,16 @@ void test_editor_utf8_codepoint_navigation_and_editing() {
 }
 
 void test_editor_vertical_navigation_modes() {
-    pkchat::editor::Rect rect{1, 1, 3, 4};
-    pkchat::editor::EditorState logical = pkchat::editor::EditorState::from_text("abcdefghij\nXYZ");
+    ainiux::editor::Rect rect{1, 1, 3, 4};
+    ainiux::editor::EditorState logical = ainiux::editor::EditorState::from_text("abcdefghij\nXYZ");
     logical.cursor = logical.text.offset_for_line_column(0, 2);
     logical.preferred_column = 2;
     logical.move_down(rect);
     check(logical.cursor == logical.text.offset_for_line_column(1, 2),
           "editor default vertical movement uses logical lines");
 
-    pkchat::editor::EditorState visual = pkchat::editor::EditorState::from_text("abcdefghij\nXYZ");
-    visual.vertical_movement = pkchat::editor::VerticalMovementMode::VisualRow;
+    ainiux::editor::EditorState visual = ainiux::editor::EditorState::from_text("abcdefghij\nXYZ");
+    visual.vertical_movement = ainiux::editor::VerticalMovementMode::VisualRow;
     visual.cursor = visual.text.offset_for_line_column(0, 2);
     visual.preferred_column = 2;
     visual.move_down(rect);
@@ -3151,16 +3151,16 @@ void test_editor_vertical_navigation_modes() {
 }
 
 void test_editor_word_wrap_breaks_on_spaces() {
-    pkchat::editor::EditorState state = pkchat::editor::EditorState::from_text("alpha beta");
-    pkchat::editor::RenderedPanel rendered = state.render({1, 1, 2, 8});
+    ainiux::editor::EditorState state = ainiux::editor::EditorState::from_text("alpha beta");
+    ainiux::editor::RenderedPanel rendered = state.render({1, 1, 2, 8});
     check(rendered.lines[0] == "alpha   ", "editor wraps at a word break when available");
     check(rendered.lines[1] == "beta    ", "editor continues after the wrapped word break");
 }
 
 void test_editor_word_wrap_rendering() {
-    pkchat::editor::EditorState state = pkchat::editor::EditorState::from_text("abcdefghij");
-    pkchat::editor::Rect rect{1, 1, 3, 4};
-    pkchat::editor::RenderedPanel rendered = state.render(rect);
+    ainiux::editor::EditorState state = ainiux::editor::EditorState::from_text("abcdefghij");
+    ainiux::editor::Rect rect{1, 1, 3, 4};
+    ainiux::editor::RenderedPanel rendered = state.render(rect);
     check(rendered.lines.size() == 3, "editor wrapped panel respects height");
     check(rendered.lines[0] == "abcd", "editor hard-wraps long words first row");
     check(rendered.lines[1] == "efgh", "editor hard-wraps long words second row");
@@ -3177,14 +3177,14 @@ void test_editor_word_wrap_rendering() {
 }
 
 void test_editor_file_io_failures() {
-    pkchat::editor::PieceTable table;
-    pkchat::Error err = pkchat::editor::load_file("build/editor-missing-file.txt", table);
-    check(!err.ok() && err.code == pkchat::ErrorCode::FileRead,
+    ainiux::editor::PieceTable table;
+    ainiux::Error err = ainiux::editor::load_file("build/editor-missing-file.txt", table);
+    check(!err.ok() && err.code == ainiux::ErrorCode::FileRead,
           "editor load reports a file-read error for a missing path");
 
-    table = pkchat::editor::PieceTable::from_string(u8"مرحبا 你好");
-    err = pkchat::editor::save_file("build/no-such-dir/editor-save.txt", table);
-    check(!err.ok() && err.code == pkchat::ErrorCode::FileWrite,
+    table = ainiux::editor::PieceTable::from_string(u8"مرحبا 你好");
+    err = ainiux::editor::save_file("build/no-such-dir/editor-save.txt", table);
+    check(!err.ok() && err.code == ainiux::ErrorCode::FileWrite,
           "editor save to a missing parent directory reports a file-write error");
 }
 
@@ -3192,50 +3192,50 @@ void test_editor_file_io_failures() {
 
 void test_editor_control_key_sequence_decode() {
     unsigned char decoded = 0;
-    check(pkchat::editor::decode_control_key_sequence("[110;5u", decoded) && decoded == 14,
+    check(ainiux::editor::decode_control_key_sequence("[110;5u", decoded) && decoded == 14,
           "editor decodes kitty-style Ctrl+N as new-buffer");
-    check(pkchat::editor::decode_control_key_sequence("[19;5u", decoded) && decoded == 19,
+    check(ainiux::editor::decode_control_key_sequence("[19;5u", decoded) && decoded == 19,
           "editor decodes kitty-style Ctrl+S");
-    check(pkchat::editor::decode_control_key_sequence("[27;5;19~", decoded) && decoded == 19,
+    check(ainiux::editor::decode_control_key_sequence("[27;5;19~", decoded) && decoded == 19,
           "editor decodes xterm modifyOtherKeys Ctrl+S");
-    check(pkchat::editor::decode_control_key_sequence("[83;5u", decoded) &&
-              decoded == pkchat::editor::editor_key_save_as(),
+    check(ainiux::editor::decode_control_key_sequence("[83;5u", decoded) &&
+              decoded == ainiux::editor::editor_key_save_as(),
           "editor decodes kitty-style Ctrl+Shift+S as save-as");
-    check(pkchat::editor::decode_control_key_sequence("[115;5u", decoded) &&
-              decoded == pkchat::editor::editor_key_save_as(),
+    check(ainiux::editor::decode_control_key_sequence("[115;5u", decoded) &&
+              decoded == ainiux::editor::editor_key_save_as(),
           "editor decodes kitty-style Ctrl+Shift+s as save-as");
-    check(pkchat::editor::decode_control_key_sequence("[23;5u", decoded) && decoded == 23,
+    check(ainiux::editor::decode_control_key_sequence("[23;5u", decoded) && decoded == 23,
           "editor decodes kitty-style Ctrl+W as close-buffer");
-    check(pkchat::editor::decode_control_key_sequence("[Z", decoded) &&
-              decoded == pkchat::editor::editor_key_backtab(),
+    check(ainiux::editor::decode_control_key_sequence("[Z", decoded) &&
+              decoded == ainiux::editor::editor_key_backtab(),
           "editor decodes common xterm Shift+Tab as backtab");
-    check(pkchat::editor::decode_control_key_sequence("[9;2u", decoded) &&
-              decoded == pkchat::editor::editor_key_backtab(),
+    check(ainiux::editor::decode_control_key_sequence("[9;2u", decoded) &&
+              decoded == ainiux::editor::editor_key_backtab(),
           "editor decodes kitty Shift+Tab as backtab");
-    check(pkchat::editor::decode_control_key_sequence("[27;2;9~", decoded) &&
-              decoded == pkchat::editor::editor_key_backtab(),
+    check(ainiux::editor::decode_control_key_sequence("[27;2;9~", decoded) &&
+              decoded == ainiux::editor::editor_key_backtab(),
           "editor decodes xterm modifyOtherKeys Shift+Tab as backtab");
-    check(!pkchat::editor::decode_control_key_sequence("[A", decoded),
+    check(!ainiux::editor::decode_control_key_sequence("[A", decoded),
           "editor ignores arrow-key escape sequences");
 }
 
 void test_editor_save_as_overwrite_helpers() {
-    const std::string existing = "build/pkchat-editor-save-as-existing.txt";
+    const std::string existing = "build/ainiux-editor-save-as-existing.txt";
     std::ofstream out(existing, std::ios::trunc);
     check(static_cast<bool>(out), "editor save-as overwrite fixture is created");
     out << "existing";
     out.close();
 
-    check(!pkchat::editor::needs_overwrite_confirm("build/pkchat-editor-save-as-missing.txt", "scratch.txt"),
+    check(!ainiux::editor::needs_overwrite_confirm("build/ainiux-editor-save-as-missing.txt", "scratch.txt"),
           "editor save-as skips overwrite confirm for a new path");
-    check(pkchat::editor::needs_overwrite_confirm(existing, "scratch.txt"),
+    check(ainiux::editor::needs_overwrite_confirm(existing, "scratch.txt"),
           "editor save-as requires overwrite confirm when the target file exists");
-    check(!pkchat::editor::needs_overwrite_confirm(existing, existing),
+    check(!ainiux::editor::needs_overwrite_confirm(existing, existing),
           "editor save skips overwrite confirm when saving to the current path");
-    check(pkchat::editor::needs_overwrite_confirm(existing, ""),
+    check(ainiux::editor::needs_overwrite_confirm(existing, ""),
           "editor save requires overwrite confirm when saving to an existing path from scratch");
 
-    const std::string prompt = pkchat::editor::overwrite_prompt_message(existing);
+    const std::string prompt = ainiux::editor::overwrite_prompt_message(existing);
     check(prompt.find(existing) != std::string::npos, "editor overwrite prompt names the target path");
     check(prompt.find("Press y to overwrite") != std::string::npos,
           "editor overwrite prompt explains y to overwrite");
@@ -3255,21 +3255,21 @@ void test_editor_file_locking_and_read_only_sessions() {
     }
 
     std::string canonical;
-    check(pkchat::editor::canonicalize_editor_target(target.string(), canonical).ok() &&
+    check(ainiux::editor::canonicalize_editor_target(target.string(), canonical).ok() &&
               fs::path(canonical).is_absolute(),
           "editor lock canonicalizes the target path");
-    pkchat::editor::EditorLockAttempt first =
-        pkchat::editor::acquire_editor_file_lock(target.string());
+    ainiux::editor::EditorLockAttempt first =
+        ainiux::editor::acquire_editor_file_lock(target.string());
     check(first.lock != nullptr && fs::is_directory(canonical + ".LOCK"),
           "editor lock acquisition atomically creates FILE.LOCK");
-    pkchat::editor::EditorLockOwner owner;
-    check(pkchat::editor::read_editor_lock_owner(canonical + ".LOCK", owner).ok() &&
+    ainiux::editor::EditorLockOwner owner;
+    check(ainiux::editor::read_editor_lock_owner(canonical + ".LOCK", owner).ok() &&
               owner.schema_version == 1 && owner.pid == static_cast<long long>(getpid()) &&
               owner.canonical_target == canonical && !owner.token.empty(),
           "editor lock writes complete bounded owner metadata");
-    pkchat::editor::EditorLockAttempt contended =
-        pkchat::editor::acquire_editor_file_lock(target.string());
-    check(!contended.lock && contended.error.code == pkchat::ErrorCode::FileLock &&
+    ainiux::editor::EditorLockAttempt contended =
+        ainiux::editor::acquire_editor_file_lock(target.string());
+    check(!contended.lock && contended.error.code == ainiux::ErrorCode::FileLock &&
               contended.owner_metadata_valid,
           "live editor lock contention is reported without removal");
 
@@ -3285,8 +3285,8 @@ void test_editor_file_locking_and_read_only_sessions() {
         std::ofstream out(owner_path, std::ios::binary | std::ios::trunc);
         out << metadata;
     }
-    pkchat::editor::EditorLockAttempt remote =
-        pkchat::editor::acquire_editor_file_lock(target.string());
+    ainiux::editor::EditorLockAttempt remote =
+        ainiux::editor::acquire_editor_file_lock(target.string());
     check(!remote.lock && remote.owner_metadata_valid &&
               remote.conflicting_owner.hostname == "remote-host" &&
               fs::exists(canonical + ".LOCK"),
@@ -3294,16 +3294,16 @@ void test_editor_file_locking_and_read_only_sessions() {
 
     const fs::path alias = root / "alias.txt";
     fs::create_symlink(target.filename(), alias);
-    pkchat::editor::EditorLockAttempt alias_attempt =
-        pkchat::editor::acquire_editor_file_lock(alias.string());
+    ainiux::editor::EditorLockAttempt alias_attempt =
+        ainiux::editor::acquire_editor_file_lock(alias.string());
     check(!alias_attempt.lock && alias_attempt.conflicting_owner.canonical_target == canonical,
           "symlink aliases contend on the canonical target lock");
 
-    pkchat::editor::EditorState copied;
+    ainiux::editor::EditorState copied;
     copied.set_path(target.string());
     copied.canonical_path = canonical;
     copied.file_lock = first.lock;
-    pkchat::editor::EditorState copied_again = copied;
+    ainiux::editor::EditorState copied_again = copied;
     first.lock.reset();
     copied.file_lock.reset();
     check(fs::exists(canonical + ".LOCK"),
@@ -3311,8 +3311,8 @@ void test_editor_file_locking_and_read_only_sessions() {
     copied_again.file_lock.reset();
     check(!fs::exists(canonical + ".LOCK"), "last EditorState owner releases the lock directory");
 
-    pkchat::editor::EditorLockAttempt token_lock =
-        pkchat::editor::acquire_editor_file_lock(target.string());
+    ainiux::editor::EditorLockAttempt token_lock =
+        ainiux::editor::acquire_editor_file_lock(target.string());
     const std::string token_directory = token_lock.lock->lock_directory();
     {
         std::ifstream in(token_directory + "/owner", std::ios::binary);
@@ -3330,24 +3330,24 @@ void test_editor_file_locking_and_read_only_sessions() {
 
     const pid_t child = fork();
     if (child == 0) {
-        pkchat::editor::EditorLockAttempt child_lock =
-            pkchat::editor::acquire_editor_file_lock(target.string());
+        ainiux::editor::EditorLockAttempt child_lock =
+            ainiux::editor::acquire_editor_file_lock(target.string());
         _exit(child_lock.lock ? 0 : 1);
     }
     int child_status = 0;
     waitpid(child, &child_status, 0);
     check(WIFEXITED(child_status) && WEXITSTATUS(child_status) == 0,
           "child creates a lock for stale recovery testing");
-    pkchat::editor::EditorLockAttempt recovered =
-        pkchat::editor::acquire_editor_file_lock(target.string());
+    ainiux::editor::EditorLockAttempt recovered =
+        ainiux::editor::acquire_editor_file_lock(target.string());
     check(recovered.lock != nullptr && recovered.stale_lock_recovered,
           "dead same-host owner lock is recovered once");
     recovered.lock.reset();
 
     const pid_t nonempty_child = fork();
     if (nonempty_child == 0) {
-        pkchat::editor::EditorLockAttempt child_lock =
-            pkchat::editor::acquire_editor_file_lock(target.string());
+        ainiux::editor::EditorLockAttempt child_lock =
+            ainiux::editor::acquire_editor_file_lock(target.string());
         _exit(child_lock.lock ? 0 : 1);
     }
     int nonempty_status = 0;
@@ -3358,8 +3358,8 @@ void test_editor_file_locking_and_read_only_sessions() {
         std::ofstream unexpected(canonical + ".LOCK/unexpected");
         unexpected << "do not remove";
     }
-    pkchat::editor::EditorLockAttempt nonempty =
-        pkchat::editor::acquire_editor_file_lock(target.string());
+    ainiux::editor::EditorLockAttempt nonempty =
+        ainiux::editor::acquire_editor_file_lock(target.string());
     check(!nonempty.lock && fs::exists(canonical + ".LOCK/owner") &&
               fs::exists(canonical + ".LOCK/unexpected"),
           "dead local lock with unexpected contents is not removed recursively");
@@ -3367,11 +3367,11 @@ void test_editor_file_locking_and_read_only_sessions() {
     fs::remove(canonical + ".LOCK/owner");
     fs::remove(canonical + ".LOCK");
 
-    pkchat::editor::EditorLockAttempt upgrade_blocker =
-        pkchat::editor::acquire_editor_file_lock(target.string());
-    pkchat::editor::EditorState upgrade = pkchat::editor::EditorState::from_text("original");
+    ainiux::editor::EditorLockAttempt upgrade_blocker =
+        ainiux::editor::acquire_editor_file_lock(target.string());
+    ainiux::editor::EditorState upgrade = ainiux::editor::EditorState::from_text("original");
     upgrade.set_path(target.string());
-    check(upgrade.begin_file_session(target.string(), true).code == pkchat::ErrorCode::FileLock &&
+    check(upgrade.begin_file_session(target.string(), true).code == ainiux::ErrorCode::FileLock &&
               upgrade.read_only,
           "contended existing file begins as read-only");
     upgrade_blocker.lock.reset();
@@ -3380,36 +3380,36 @@ void test_editor_file_locking_and_read_only_sessions() {
           "first edit retries the lock and upgrades an unchanged file to writable");
     upgrade.release_file_session();
 
-    pkchat::editor::EditorLockAttempt reload_blocker =
-        pkchat::editor::acquire_editor_file_lock(target.string());
-    pkchat::editor::EditorState reload_declined =
-        pkchat::editor::EditorState::from_text("original");
+    ainiux::editor::EditorLockAttempt reload_blocker =
+        ainiux::editor::acquire_editor_file_lock(target.string());
+    ainiux::editor::EditorState reload_declined =
+        ainiux::editor::EditorState::from_text("original");
     reload_declined.set_path(target.string());
     check(reload_declined.begin_file_session(target.string(), true).code ==
-              pkchat::ErrorCode::FileLock,
+              ainiux::ErrorCode::FileLock,
           "changed-file reload fixture begins read-only");
     {
         std::ofstream out(target, std::ios::trunc);
         out << "external before retry";
     }
     reload_blocker.lock.reset();
-    check(reload_declined.insert("!").code == pkchat::ErrorCode::FileLock &&
+    check(reload_declined.insert("!").code == ainiux::ErrorCode::FileLock &&
               reload_declined.reload_required && reload_declined.file_lock,
           "edit retry holds the newly acquired lock when disk content changed");
-    pkchat::editor::MinibufferState reload_minibuffer;
-    pkchat::editor::start_minibuffer(reload_minibuffer,
-                                     pkchat::editor::MinibufferAction::ConfirmReloadAfterLock,
+    ainiux::editor::MinibufferState reload_minibuffer;
+    ainiux::editor::start_minibuffer(reload_minibuffer,
+                                     ainiux::editor::MinibufferAction::ConfirmReloadAfterLock,
                                      "reload?");
-    pkchat::editor::ReplaceSession reload_replace;
-    pkchat::editor::EditorSettings reload_settings;
+    ainiux::editor::ReplaceSession reload_replace;
+    ainiux::editor::EditorSettings reload_settings;
     std::string reload_search;
     std::string reload_pending_path;
     bool reload_quit = false;
     bool reload_pending_quit = false;
-    pkchat::editor::PendingSaveRequest reload_pending_save;
-    pkchat::editor::PendingAutosaveRecovery reload_recovery;
-    pkchat::editor::PathCompleter reload_completer;
-    check(pkchat::editor::handle_minibuffer_key(reload_declined,
+    ainiux::editor::PendingSaveRequest reload_pending_save;
+    ainiux::editor::PendingAutosaveRecovery reload_recovery;
+    ainiux::editor::PathCompleter reload_completer;
+    check(ainiux::editor::handle_minibuffer_key(reload_declined,
                                                 reload_minibuffer,
                                                 'n',
                                                 reload_quit,
@@ -3426,19 +3426,19 @@ void test_editor_file_locking_and_read_only_sessions() {
           "declining changed-file reload releases the new lock and remains read-only");
 
     const fs::path blocked_destination = root / "blocked-save-as.txt";
-    pkchat::editor::EditorState failed_save_as =
-        pkchat::editor::EditorState::from_text("keep original session");
+    ainiux::editor::EditorState failed_save_as =
+        ainiux::editor::EditorState::from_text("keep original session");
     failed_save_as.set_path(target.string());
     check(failed_save_as.begin_file_session(target.string(), true).ok(),
           "failed Save As fixture owns its original file session");
-    const std::shared_ptr<pkchat::editor::EditorFileLock> original_session =
+    const std::shared_ptr<ainiux::editor::EditorFileLock> original_session =
         failed_save_as.file_lock;
-    pkchat::editor::EditorLockAttempt destination_blocker =
-        pkchat::editor::acquire_editor_file_lock(blocked_destination.string());
-    pkchat::editor::MinibufferState failed_save_minibuffer;
-    pkchat::editor::PendingSaveRequest failed_save_pending;
+    ainiux::editor::EditorLockAttempt destination_blocker =
+        ainiux::editor::acquire_editor_file_lock(blocked_destination.string());
+    ainiux::editor::MinibufferState failed_save_minibuffer;
+    ainiux::editor::PendingSaveRequest failed_save_pending;
     bool failed_save_quit = false;
-    pkchat::editor::request_save_editor_to_path(failed_save_as,
+    ainiux::editor::request_save_editor_to_path(failed_save_as,
                                                 blocked_destination.string(),
                                                 failed_save_minibuffer,
                                                 true,
@@ -3453,18 +3453,18 @@ void test_editor_file_locking_and_read_only_sessions() {
     destination_blocker.lock.reset();
     failed_save_as.release_file_session();
 
-    pkchat::editor::EditorLockAttempt save_as_blocker =
-        pkchat::editor::acquire_editor_file_lock(target.string());
-    pkchat::editor::EditorState save_as =
-        pkchat::editor::EditorState::from_text("read-only save as");
+    ainiux::editor::EditorLockAttempt save_as_blocker =
+        ainiux::editor::acquire_editor_file_lock(target.string());
+    ainiux::editor::EditorState save_as =
+        ainiux::editor::EditorState::from_text("read-only save as");
     save_as.set_path(target.string());
-    check(save_as.begin_file_session(target.string(), true).code == pkchat::ErrorCode::FileLock,
+    check(save_as.begin_file_session(target.string(), true).code == ainiux::ErrorCode::FileLock,
           "read-only Save As fixture is contended");
     const fs::path save_as_target = root / "retargeted.txt";
-    pkchat::editor::MinibufferState save_as_minibuffer;
-    pkchat::editor::PendingSaveRequest save_as_pending;
+    ainiux::editor::MinibufferState save_as_minibuffer;
+    ainiux::editor::PendingSaveRequest save_as_pending;
     bool save_as_quit = false;
-    pkchat::editor::request_save_editor_to_path(save_as,
+    ainiux::editor::request_save_editor_to_path(save_as,
                                                 save_as_target.string(),
                                                 save_as_minibuffer,
                                                 true,
@@ -3472,8 +3472,8 @@ void test_editor_file_locking_and_read_only_sessions() {
                                                 save_as_quit,
                                                 save_as_pending,
                                                 reload_settings);
-    pkchat::editor::PieceTable save_as_saved;
-    check(pkchat::editor::load_file(save_as_target.string(), save_as_saved).ok() &&
+    ainiux::editor::PieceTable save_as_saved;
+    check(ainiux::editor::load_file(save_as_target.string(), save_as_saved).ok() &&
               save_as_saved.str() == "read-only save as" && !save_as.read_only &&
               save_as.file_lock && save_as.canonical_path != canonical &&
               fs::exists(canonical + ".LOCK"),
@@ -3486,34 +3486,34 @@ void test_editor_file_locking_and_read_only_sessions() {
         std::ofstream out(canonical + ".LOCK/owner");
         out << "malformed\n";
     }
-    pkchat::editor::EditorLockAttempt malformed =
-        pkchat::editor::acquire_editor_file_lock(target.string());
+    ainiux::editor::EditorLockAttempt malformed =
+        ainiux::editor::acquire_editor_file_lock(target.string());
     check(!malformed.lock && !malformed.owner_metadata_valid && fs::exists(canonical + ".LOCK"),
           "malformed unverifiable lock is never removed");
     fs::remove(canonical + ".LOCK/owner");
     fs::remove(canonical + ".LOCK");
 
     fs::create_directory(canonical + ".LOCK");
-    pkchat::editor::EditorLockAttempt missing_metadata =
-        pkchat::editor::acquire_editor_file_lock(target.string());
+    ainiux::editor::EditorLockAttempt missing_metadata =
+        ainiux::editor::acquire_editor_file_lock(target.string());
     check(!missing_metadata.lock && !missing_metadata.owner_metadata_valid &&
               fs::exists(canonical + ".LOCK"),
           "missing lock metadata is unverifiable and never removed automatically");
     fs::remove(canonical + ".LOCK");
 
-    pkchat::editor::EditorState read_only = pkchat::editor::EditorState::from_text("abc");
+    ainiux::editor::EditorState read_only = ainiux::editor::EditorState::from_text("abc");
     read_only.read_only = true;
-    check(read_only.insert("x").code == pkchat::ErrorCode::FileLock &&
-              read_only.erase_before_cursor().code == pkchat::ErrorCode::FileLock &&
-              read_only.replace(0, 1, "z").code == pkchat::ErrorCode::FileLock &&
-              read_only.indent().code == pkchat::ErrorCode::FileLock &&
-              read_only.outdent().code == pkchat::ErrorCode::FileLock && !read_only.undo() &&
+    check(read_only.insert("x").code == ainiux::ErrorCode::FileLock &&
+              read_only.erase_before_cursor().code == ainiux::ErrorCode::FileLock &&
+              read_only.replace(0, 1, "z").code == ainiux::ErrorCode::FileLock &&
+              read_only.indent().code == ainiux::ErrorCode::FileLock &&
+              read_only.outdent().code == ainiux::ErrorCode::FileLock && !read_only.undo() &&
               !read_only.redo(),
           "central EditorState mutation guard rejects read-only changes");
-    check(pkchat::editor::editor_status_line(read_only).find("[RO]") != std::string::npos,
+    check(ainiux::editor::editor_status_line(read_only).find("[RO]") != std::string::npos,
           "read-only editor status renders [RO]");
 
-    pkchat::editor::EditorState saving = pkchat::editor::EditorState::from_text("pkchat version");
+    ainiux::editor::EditorState saving = ainiux::editor::EditorState::from_text("ainiux version");
     saving.set_path(target.string());
     check(saving.begin_file_session(target.string(), true).ok(),
           "writable editor state acquires its main-file lock");
@@ -3521,11 +3521,11 @@ void test_editor_file_locking_and_read_only_sessions() {
         std::ofstream out(target, std::ios::trunc);
         out << "external version is longer";
     }
-    pkchat::editor::MinibufferState minibuffer;
-    pkchat::editor::PendingSaveRequest pending;
-    pkchat::editor::EditorSettings settings;
+    ainiux::editor::MinibufferState minibuffer;
+    ainiux::editor::PendingSaveRequest pending;
+    ainiux::editor::EditorSettings settings;
     bool quit = false;
-    pkchat::editor::request_save_editor_to_path(saving,
+    ainiux::editor::request_save_editor_to_path(saving,
                                                 target.string(),
                                                 minibuffer,
                                                 true,
@@ -3534,15 +3534,15 @@ void test_editor_file_locking_and_read_only_sessions() {
                                                 pending,
                                                 settings);
     check(pending.external_change &&
-              minibuffer.action == pkchat::editor::MinibufferAction::ConfirmOverwrite,
+              minibuffer.action == ainiux::editor::MinibufferAction::ConfirmOverwrite,
           "saving detects an external file fingerprint change");
-    pkchat::editor::ReplaceSession replace;
+    ainiux::editor::ReplaceSession replace;
     std::string search;
     std::string pending_load;
     bool pending_quit = false;
-    pkchat::editor::PendingAutosaveRecovery recovery;
-    pkchat::editor::PathCompleter completer;
-    check(pkchat::editor::handle_minibuffer_key(saving,
+    ainiux::editor::PendingAutosaveRecovery recovery;
+    ainiux::editor::PathCompleter completer;
+    check(ainiux::editor::handle_minibuffer_key(saving,
                                                 minibuffer,
                                                 'n',
                                                 quit,
@@ -3556,11 +3556,11 @@ void test_editor_file_locking_and_read_only_sessions() {
                                                 completer) &&
               pending.path.empty(),
           "external-change overwrite can be cancelled");
-    pkchat::editor::PieceTable cancelled;
-    check(pkchat::editor::load_file(target.string(), cancelled).ok() &&
+    ainiux::editor::PieceTable cancelled;
+    check(ainiux::editor::load_file(target.string(), cancelled).ok() &&
               cancelled.str() == "external version is longer",
           "cancelled overwrite preserves the external file");
-    pkchat::editor::request_save_editor_to_path(saving,
+    ainiux::editor::request_save_editor_to_path(saving,
                                                 target.string(),
                                                 minibuffer,
                                                 true,
@@ -3572,7 +3572,7 @@ void test_editor_file_locking_and_read_only_sessions() {
         std::ofstream out(target, std::ios::trunc);
         out << "a second external version changed during confirmation";
     }
-    check(pkchat::editor::handle_minibuffer_key(saving,
+    check(ainiux::editor::handle_minibuffer_key(saving,
                                                 minibuffer,
                                                 'y',
                                                 quit,
@@ -3586,9 +3586,9 @@ void test_editor_file_locking_and_read_only_sessions() {
                                                 completer),
           "first overwrite confirmation rechecks the observed disk version");
     check(!pending.path.empty() &&
-              minibuffer.action == pkchat::editor::MinibufferAction::ConfirmOverwrite,
+              minibuffer.action == ainiux::editor::MinibufferAction::ConfirmOverwrite,
           "a second external change requires a new confirmation");
-    check(pkchat::editor::handle_minibuffer_key(saving,
+    check(ainiux::editor::handle_minibuffer_key(saving,
                                                 minibuffer,
                                                 'y',
                                                 quit,
@@ -3601,9 +3601,9 @@ void test_editor_file_locking_and_read_only_sessions() {
                                                 recovery,
                                                 completer),
           "explicit overwrite confirmation for the rechecked version is handled");
-    pkchat::editor::PieceTable saved;
-    check(pkchat::editor::load_file(target.string(), saved).ok() &&
-              saved.str() == "pkchat version" && saving.has_disk_fingerprint,
+    ainiux::editor::PieceTable saved;
+    check(ainiux::editor::load_file(target.string(), saved).ok() &&
+              saved.str() == "ainiux version" && saving.has_disk_fingerprint,
           "confirmed overwrite saves content and refreshes the fingerprint");
     saving.release_file_session();
     fs::remove_all(root);
@@ -3611,9 +3611,9 @@ void test_editor_file_locking_and_read_only_sessions() {
 
 void test_editor_help_document_and_command() {
     std::string help_text;
-    pkchat::Error err = pkchat::editor::load_editor_help_markdown(help_text);
+    ainiux::Error err = ainiux::editor::load_editor_help_markdown(help_text);
     check(err.ok() && !help_text.empty(), "editor help document loads");
-    check(help_text.find("# pkchat Editor Help") != std::string::npos,
+    check(help_text.find("# ainiux Editor Help") != std::string::npos,
           "editor help document contains the title heading");
     check(help_text.find("Ctrl+Space") != std::string::npos,
           "editor help document documents Ctrl+Space continue");
@@ -3644,12 +3644,12 @@ void test_editor_help_document_and_command() {
     check(help_text.find("/provider") != std::string::npos && help_text.find("/model") != std::string::npos,
           "editor help document documents /provider and /model");
 
-    check(pkchat::editor::is_editor_help_command("/help"), "editor /help command is recognized");
-    check(pkchat::editor::is_editor_help_command("  /HELP  "), "editor /help command is case-insensitive");
-    check(!pkchat::editor::is_editor_help_command("/helpful"), "editor help command rejects prefixes");
+    check(ainiux::editor::is_editor_help_command("/help"), "editor /help command is recognized");
+    check(ainiux::editor::is_editor_help_command("  /HELP  "), "editor /help command is case-insensitive");
+    check(!ainiux::editor::is_editor_help_command("/helpful"), "editor help command rejects prefixes");
 
     const std::vector<std::string> completions =
-        pkchat::editor::assist_command_completions(pkchat::editor::default_editor_assist_config());
+        ainiux::editor::assist_command_completions(ainiux::editor::default_editor_assist_config());
     check(std::find(completions.begin(), completions.end(), "/help") != completions.end(),
           "assist command completions include /help");
     check(std::find(completions.begin(), completions.end(), "/save") != completions.end(),
@@ -3690,88 +3690,88 @@ void test_editor_help_document_and_command() {
               std::find(completions.begin(), completions.end(), "/reformat-all") != completions.end(),
           "editor command completions include language reformat commands");
 
-    pkchat::editor::ParsedEditorSlashCommand slash =
-        pkchat::editor::parse_editor_slash_command("/save");
-    check(slash.command == pkchat::editor::EditorSlashCommand::Save && slash.path.empty(),
+    ainiux::editor::ParsedEditorSlashCommand slash =
+        ainiux::editor::parse_editor_slash_command("/save");
+    check(slash.command == ainiux::editor::EditorSlashCommand::Save && slash.path.empty(),
           "editor /save slash command is recognized");
-    slash = pkchat::editor::parse_editor_slash_command("/SAVEAS");
-    check(slash.command == pkchat::editor::EditorSlashCommand::SaveAs && slash.path.empty(),
+    slash = ainiux::editor::parse_editor_slash_command("/SAVEAS");
+    check(slash.command == ainiux::editor::EditorSlashCommand::SaveAs && slash.path.empty(),
           "editor /saveas slash command is case-insensitive");
-    slash = pkchat::editor::parse_editor_slash_command("/open build/unit-editor.txt");
-    check(slash.command == pkchat::editor::EditorSlashCommand::Open &&
+    slash = ainiux::editor::parse_editor_slash_command("/open build/unit-editor.txt");
+    check(slash.command == ainiux::editor::EditorSlashCommand::Open &&
               slash.path == "build/unit-editor.txt",
           "editor /open PATH preserves the path argument");
-    slash = pkchat::editor::parse_editor_slash_command("/saveas out/new.txt");
-    check(slash.command == pkchat::editor::EditorSlashCommand::SaveAs &&
+    slash = ainiux::editor::parse_editor_slash_command("/saveas out/new.txt");
+    check(slash.command == ainiux::editor::EditorSlashCommand::SaveAs &&
               slash.path == "out/new.txt",
           "editor /saveas PATH preserves the path argument");
-    slash = pkchat::editor::parse_editor_slash_command("/find");
-    check(slash.command == pkchat::editor::EditorSlashCommand::Find,
+    slash = ainiux::editor::parse_editor_slash_command("/find");
+    check(slash.command == ainiux::editor::EditorSlashCommand::Find,
           "editor /find slash command is recognized");
-    slash = pkchat::editor::parse_editor_slash_command("/replace");
-    check(slash.command == pkchat::editor::EditorSlashCommand::Replace,
+    slash = ainiux::editor::parse_editor_slash_command("/replace");
+    check(slash.command == ainiux::editor::EditorSlashCommand::Replace,
           "editor /replace slash command is recognized");
-    slash = pkchat::editor::parse_editor_slash_command("/open");
-    check(slash.command == pkchat::editor::EditorSlashCommand::Open && slash.path.empty(),
+    slash = ainiux::editor::parse_editor_slash_command("/open");
+    check(slash.command == ainiux::editor::EditorSlashCommand::Open && slash.path.empty(),
           "editor bare /open slash command is recognized");
-    slash = pkchat::editor::parse_editor_slash_command("/new");
-    check(slash.command == pkchat::editor::EditorSlashCommand::New && slash.path.empty(),
+    slash = ainiux::editor::parse_editor_slash_command("/new");
+    check(slash.command == ainiux::editor::EditorSlashCommand::New && slash.path.empty(),
           "editor /new slash command is recognized");
-    slash = pkchat::editor::parse_editor_slash_command("/new name");
-    check(slash.command == pkchat::editor::EditorSlashCommand::None,
+    slash = ainiux::editor::parse_editor_slash_command("/new name");
+    check(slash.command == ainiux::editor::EditorSlashCommand::None,
           "editor /new rejects arguments");
-    slash = pkchat::editor::parse_editor_slash_command("/list");
-    check(slash.command == pkchat::editor::EditorSlashCommand::List && slash.path.empty(),
+    slash = ainiux::editor::parse_editor_slash_command("/list");
+    check(slash.command == ainiux::editor::EditorSlashCommand::List && slash.path.empty(),
           "editor /list slash command is recognized");
-    slash = pkchat::editor::parse_editor_slash_command("/close");
-    check(slash.command == pkchat::editor::EditorSlashCommand::Close && slash.path.empty(),
+    slash = ainiux::editor::parse_editor_slash_command("/close");
+    check(slash.command == ainiux::editor::EditorSlashCommand::Close && slash.path.empty(),
           "editor /close slash command is recognized");
-    slash = pkchat::editor::parse_editor_slash_command("/close file.txt");
-    check(slash.command == pkchat::editor::EditorSlashCommand::None,
+    slash = ainiux::editor::parse_editor_slash_command("/close file.txt");
+    check(slash.command == ainiux::editor::EditorSlashCommand::None,
           "editor /close rejects arguments");
-    slash = pkchat::editor::parse_editor_slash_command("/vsplit");
-    check(slash.command == pkchat::editor::EditorSlashCommand::VSplit && slash.path.empty(),
+    slash = ainiux::editor::parse_editor_slash_command("/vsplit");
+    check(slash.command == ainiux::editor::EditorSlashCommand::VSplit && slash.path.empty(),
           "editor /vsplit slash command is recognized");
-    slash = pkchat::editor::parse_editor_slash_command("/hsplit");
-    check(slash.command == pkchat::editor::EditorSlashCommand::HSplit && slash.path.empty(),
+    slash = ainiux::editor::parse_editor_slash_command("/hsplit");
+    check(slash.command == ainiux::editor::EditorSlashCommand::HSplit && slash.path.empty(),
           "editor /hsplit slash command is recognized");
-    slash = pkchat::editor::parse_editor_slash_command("/closesplit");
-    check(slash.command == pkchat::editor::EditorSlashCommand::CloseSplit && slash.path.empty(),
+    slash = ainiux::editor::parse_editor_slash_command("/closesplit");
+    check(slash.command == ainiux::editor::EditorSlashCommand::CloseSplit && slash.path.empty(),
           "editor /closesplit slash command is recognized");
-    slash = pkchat::editor::parse_editor_slash_command("/maximize");
-    check(slash.command == pkchat::editor::EditorSlashCommand::Maximize && slash.path.empty(),
+    slash = ainiux::editor::parse_editor_slash_command("/maximize");
+    check(slash.command == ainiux::editor::EditorSlashCommand::Maximize && slash.path.empty(),
           "editor /maximize slash command is recognized");
-    slash = pkchat::editor::parse_editor_slash_command("/nosplit");
-    check(slash.command == pkchat::editor::EditorSlashCommand::Maximize && slash.path.empty(),
+    slash = ainiux::editor::parse_editor_slash_command("/nosplit");
+    check(slash.command == ainiux::editor::EditorSlashCommand::Maximize && slash.path.empty(),
           "editor /nosplit is an alias for /maximize");
-    slash = pkchat::editor::parse_editor_slash_command("/vsplit extra");
-    check(slash.command == pkchat::editor::EditorSlashCommand::None,
+    slash = ainiux::editor::parse_editor_slash_command("/vsplit extra");
+    check(slash.command == ainiux::editor::EditorSlashCommand::None,
           "editor /vsplit rejects arguments");
-    slash = pkchat::editor::parse_editor_slash_command("/chat");
-    check(slash.command == pkchat::editor::EditorSlashCommand::Chat && slash.path.empty(),
+    slash = ainiux::editor::parse_editor_slash_command("/chat");
+    check(slash.command == ainiux::editor::EditorSlashCommand::Chat && slash.path.empty(),
           "editor /chat slash command is recognized");
     check(std::find(completions.begin(), completions.end(), "/chat") != completions.end(),
           "assist command completions include /chat");
-    slash = pkchat::editor::parse_editor_slash_command("/save extra words");
-    check(slash.command == pkchat::editor::EditorSlashCommand::None,
+    slash = ainiux::editor::parse_editor_slash_command("/save extra words");
+    check(slash.command == ainiux::editor::EditorSlashCommand::None,
           "editor file slash commands reject multi-token path arguments");
 
-    check(pkchat::editor::editor_assist_path_prefix_length("/open build/") == 6,
+    check(ainiux::editor::editor_assist_path_prefix_length("/open build/") == 6,
           "editor assist path mode starts after /open");
-    check(pkchat::editor::editor_assist_path_prefix_length("/saveas foo") == 8,
+    check(ainiux::editor::editor_assist_path_prefix_length("/saveas foo") == 8,
           "editor assist path mode starts after /saveas");
-    check(pkchat::editor::editor_assist_path_prefix_length("/insert build/") == 8,
+    check(ainiux::editor::editor_assist_path_prefix_length("/insert build/") == 8,
           "editor assist path mode starts after /insert");
-    check(pkchat::editor::editor_assist_path_prefix_length("/open") == std::string::npos,
+    check(ainiux::editor::editor_assist_path_prefix_length("/open") == std::string::npos,
           "editor assist path mode requires a separator after /open");
-    check(pkchat::editor::editor_assist_path_prefix_length("/insert") == std::string::npos,
+    check(ainiux::editor::editor_assist_path_prefix_length("/insert") == std::string::npos,
           "editor assist path mode requires a separator after /insert");
-    check(pkchat::editor::editor_assist_path_prefix_length("/search query") == std::string::npos,
+    check(ainiux::editor::editor_assist_path_prefix_length("/search query") == std::string::npos,
           "editor assist path mode ignores non-file commands");
 }
 
 void test_editor_assist_path_completion() {
-    const std::string directory = "build/pkchat-assist-path-completion";
+    const std::string directory = "build/ainiux-assist-path-completion";
     std::error_code filesystem_error;
     std::filesystem::create_directories(directory, filesystem_error);
     check(!filesystem_error, "assist path completion fixture directory is created");
@@ -3781,87 +3781,87 @@ void test_editor_assist_path_completion() {
     fixture << "ok";
     check(static_cast<bool>(fixture), "assist path completion fixture file is written");
 
-    pkchat::editor::AssistCompleterState completer;
+    ainiux::editor::AssistCompleterState completer;
     std::string input = "/open " + directory + "/tar";
-    pkchat::editor::AssistCompletionResult result =
-        pkchat::editor::complete_assist_command(input, completer, pkchat::editor::default_editor_assist_config());
-    check(result.kind == pkchat::editor::CompletionKind::Path && result.error.ok() &&
+    ainiux::editor::AssistCompletionResult result =
+        ainiux::editor::complete_assist_command(input, completer, ainiux::editor::default_editor_assist_config());
+    check(result.kind == ainiux::editor::CompletionKind::Path && result.error.ok() &&
               result.match_count == 1,
           "assist path completion finds a unique file after /open");
     check(input == "/open " + file, "assist path completion completes /open PATH");
 
-    completer = pkchat::editor::AssistCompleterState{};
+    completer = ainiux::editor::AssistCompleterState{};
     input = "/insert " + directory + "/tar";
-    result = pkchat::editor::complete_assist_command(
-        input, completer, pkchat::editor::default_editor_assist_config());
-    check(result.kind == pkchat::editor::CompletionKind::Path && result.error.ok() &&
+    result = ainiux::editor::complete_assist_command(
+        input, completer, ainiux::editor::default_editor_assist_config());
+    check(result.kind == ainiux::editor::CompletionKind::Path && result.error.ok() &&
               result.match_count == 1,
           "assist path completion finds a unique file after /insert");
     check(input == "/insert " + file, "assist path completion completes /insert PATH");
 
-    completer = pkchat::editor::AssistCompleterState{};
+    completer = ainiux::editor::AssistCompleterState{};
     input = "/search " + directory + "/tar";
-    result = pkchat::editor::complete_assist_command(input, completer, pkchat::editor::default_editor_assist_config());
-    check(result.kind == pkchat::editor::CompletionKind::Command,
+    result = ainiux::editor::complete_assist_command(input, completer, ainiux::editor::default_editor_assist_config());
+    check(result.kind == ainiux::editor::CompletionKind::Command,
           "assist tab completion stays in command mode for /search");
     check(input == "/search " + directory + "/tar",
           "assist tab completion does not complete paths for /search");
 }
 
 void test_editor_minibuffer_paste() {
-    pkchat::editor::MinibufferState minibuffer;
-    check(!pkchat::editor::paste_into_minibuffer(minibuffer, "ignored").ok(),
+    ainiux::editor::MinibufferState minibuffer;
+    check(!ainiux::editor::paste_into_minibuffer(minibuffer, "ignored").ok(),
           "minibuffer paste requires an active prompt");
 
-    pkchat::editor::start_minibuffer(minibuffer,
-                                     pkchat::editor::MinibufferAction::AssistCommand,
+    ainiux::editor::start_minibuffer(minibuffer,
+                                     ainiux::editor::MinibufferAction::AssistCommand,
                                      "Command: ",
                                      "/insert ");
-    check(pkchat::editor::paste_into_minibuffer(
+    check(ainiux::editor::paste_into_minibuffer(
               minibuffer, "https://example.com/page?x=1&y=2\r\n").ok(),
           "command minibuffer accepts a pasted URL with a trailing newline");
     check(minibuffer.input == "/insert https://example.com/page?x=1&y=2",
           "command minibuffer strips trailing paste newlines");
 
     const std::string before_multiline = minibuffer.input;
-    check(!pkchat::editor::paste_into_minibuffer(minibuffer, "first\nsecond").ok(),
+    check(!ainiux::editor::paste_into_minibuffer(minibuffer, "first\nsecond").ok(),
           "command minibuffer rejects multiline paste");
     check(minibuffer.input == before_multiline,
           "rejected multiline paste leaves command input unchanged");
 
-    pkchat::editor::start_minibuffer(minibuffer,
-                                     pkchat::editor::MinibufferAction::ConfirmQuit,
+    ainiux::editor::start_minibuffer(minibuffer,
+                                     ainiux::editor::MinibufferAction::ConfirmQuit,
                                      "Quit? ");
-    check(!pkchat::editor::paste_into_minibuffer(minibuffer, "y").ok(),
+    check(!ainiux::editor::paste_into_minibuffer(minibuffer, "y").ok(),
           "confirmation minibuffers reject pasted answers");
 }
 
 void test_editor_missing_file_error_message() {
-    pkchat::editor::FileLoadCheck load_check;
-    pkchat::editor::EditorSettings settings;
-    pkchat::Error err =
-        pkchat::editor::check_load_file_size("this_file_doesnt_exist.txt", settings, load_check);
+    ainiux::editor::FileLoadCheck load_check;
+    ainiux::editor::EditorSettings settings;
+    ainiux::Error err =
+        ainiux::editor::check_load_file_size("this_file_doesnt_exist.txt", settings, load_check);
     check(!err.ok() && err.message == "file not found: this_file_doesnt_exist.txt",
           "editor missing file load reports file not found");
 }
 
 void test_editor_buffer_list_helpers() {
-    std::vector<pkchat::editor::EditorState> buffers;
-    pkchat::editor::EditorState first = pkchat::editor::EditorState::from_text("alpha");
+    std::vector<ainiux::editor::EditorState> buffers;
+    ainiux::editor::EditorState first = ainiux::editor::EditorState::from_text("alpha");
     first.path = "file1.txt";
     first.cursor = first.text.size();
     buffers.push_back(first);
 
-    pkchat::editor::EditorState second = pkchat::editor::EditorState::from_text("beta\nsecond");
+    ainiux::editor::EditorState second = ainiux::editor::EditorState::from_text("beta\nsecond");
     second.path = "file2.txt";
     second.dirty = true;
     second.cursor = second.text.size();
     buffers.push_back(second);
 
-    pkchat::editor::EditorState scratch;
+    ainiux::editor::EditorState scratch;
     buffers.push_back(scratch);
 
-    const std::string rendered = pkchat::editor::editor_buffer_list_text(buffers, 1);
+    const std::string rendered = ainiux::editor::editor_buffer_list_text(buffers, 1);
     check(rendered.find("Buffers - Enter opens - N new - DEL close - Esc cancels") != std::string::npos,
           "editor buffer list includes chooser instructions");
     check(rendered.find("  file1.txt - Ln 1, Col 6") != std::string::npos,
@@ -3871,16 +3871,16 @@ void test_editor_buffer_list_helpers() {
     check(rendered.find("  [scratch 3] - Ln 1, Col 1") != std::string::npos,
           "editor buffer list renders scratch buffers with stable labels");
 
-    check(pkchat::editor::move_editor_buffer_selection(1, buffers.size(), pkchat::editor::MovementKey::Up) == 0,
+    check(ainiux::editor::move_editor_buffer_selection(1, buffers.size(), ainiux::editor::MovementKey::Up) == 0,
           "editor buffer list moves selection up");
-    check(pkchat::editor::move_editor_buffer_selection(0, buffers.size(), pkchat::editor::MovementKey::Down) == 1,
+    check(ainiux::editor::move_editor_buffer_selection(0, buffers.size(), ainiux::editor::MovementKey::Down) == 1,
           "editor buffer list moves selection down");
-    check(pkchat::editor::move_editor_buffer_selection(1, buffers.size(), pkchat::editor::MovementKey::Home) == 0,
+    check(ainiux::editor::move_editor_buffer_selection(1, buffers.size(), ainiux::editor::MovementKey::Home) == 0,
           "editor buffer list home selects first buffer");
-    check(pkchat::editor::move_editor_buffer_selection(0, buffers.size(), pkchat::editor::MovementKey::End) == 2,
+    check(ainiux::editor::move_editor_buffer_selection(0, buffers.size(), ainiux::editor::MovementKey::End) == 2,
           "editor buffer list end selects last buffer");
 
-    pkchat::editor::Clipboard clipboard;
+    ainiux::editor::Clipboard clipboard;
     first.select_all();
     check(first.copy_selection(clipboard).ok(), "editor copies from one buffer");
     second.cursor = second.text.size();
@@ -3890,46 +3890,46 @@ void test_editor_buffer_list_helpers() {
 }
 
 void test_editor_markdown_mode_and_structured_highlighting() {
-    pkchat::editor::EditorState state =
-        pkchat::editor::EditorState::from_text("# Heading and *emphasis*");
+    ainiux::editor::EditorState state =
+        ainiux::editor::EditorState::from_text("# Heading and *emphasis*");
     state.set_path("README.MD");
     state.highlight_enabled = true;
-    check(state.language == pkchat::highlight::Language::Markdown && state.language_automatic,
+    check(state.language == ainiux::highlight::Language::Markdown && state.language_automatic,
           "editor automatically detects Markdown case-insensitively");
 
-    pkchat::editor::EditorState new_file_state;
+    ainiux::editor::EditorState new_file_state;
     new_file_state.set_path("definitely-does-not-exist-yet.md");
-    check(new_file_state.language == pkchat::highlight::Language::Markdown &&
+    check(new_file_state.language == ainiux::highlight::Language::Markdown &&
               new_file_state.language_automatic,
           "editor detects Markdown from a new path before the file exists");
 
-    const std::vector<std::pair<const char*, pkchat::highlight::Language>> detected_modes = {
-        {"new.py", pkchat::highlight::Language::Python},
-        {"new.c", pkchat::highlight::Language::C},
-        {"new.hpp", pkchat::highlight::Language::Cpp},
-        {"new.cs", pkchat::highlight::Language::CSharp},
-        {"new.java", pkchat::highlight::Language::Java},
-        {"new.jsx", pkchat::highlight::Language::JavaScript},
-        {"new.tsx", pkchat::highlight::Language::TypeScript},
-        {"new.html", pkchat::highlight::Language::Html},
-        {"new.css", pkchat::highlight::Language::Css},
-        {"new.xml", pkchat::highlight::Language::Xml},
-        {"new.jsonl", pkchat::highlight::Language::Json},
-        {"new.sh", pkchat::highlight::Language::Bash},
-        {"new.php", pkchat::highlight::Language::Php},
-        {"new.pl", pkchat::highlight::Language::Perl},
-        {"new.rb", pkchat::highlight::Language::Ruby},
-        {"new.rs", pkchat::highlight::Language::Rust},
-        {"new.go", pkchat::highlight::Language::Go},
-        {"new.ps1", pkchat::highlight::Language::PowerShell},
-        {"new.asm", pkchat::highlight::Language::Assembly},
-        {"new.sql", pkchat::highlight::Language::Sql},
-        {"new.toml", pkchat::highlight::Language::Toml},
-        {"new.yaml", pkchat::highlight::Language::Yaml},
-        {"new.ini", pkchat::highlight::Language::Ini},
+    const std::vector<std::pair<const char*, ainiux::highlight::Language>> detected_modes = {
+        {"new.py", ainiux::highlight::Language::Python},
+        {"new.c", ainiux::highlight::Language::C},
+        {"new.hpp", ainiux::highlight::Language::Cpp},
+        {"new.cs", ainiux::highlight::Language::CSharp},
+        {"new.java", ainiux::highlight::Language::Java},
+        {"new.jsx", ainiux::highlight::Language::JavaScript},
+        {"new.tsx", ainiux::highlight::Language::TypeScript},
+        {"new.html", ainiux::highlight::Language::Html},
+        {"new.css", ainiux::highlight::Language::Css},
+        {"new.xml", ainiux::highlight::Language::Xml},
+        {"new.jsonl", ainiux::highlight::Language::Json},
+        {"new.sh", ainiux::highlight::Language::Bash},
+        {"new.php", ainiux::highlight::Language::Php},
+        {"new.pl", ainiux::highlight::Language::Perl},
+        {"new.rb", ainiux::highlight::Language::Ruby},
+        {"new.rs", ainiux::highlight::Language::Rust},
+        {"new.go", ainiux::highlight::Language::Go},
+        {"new.ps1", ainiux::highlight::Language::PowerShell},
+        {"new.asm", ainiux::highlight::Language::Assembly},
+        {"new.sql", ainiux::highlight::Language::Sql},
+        {"new.toml", ainiux::highlight::Language::Toml},
+        {"new.yaml", ainiux::highlight::Language::Yaml},
+        {"new.ini", ainiux::highlight::Language::Ini},
     };
     for (const auto& detected : detected_modes) {
-        pkchat::editor::EditorState detected_state;
+        ainiux::editor::EditorState detected_state;
         detected_state.set_path(detected.first);
         check(detected_state.language == detected.second && detected_state.language_automatic,
               std::string("editor automatically selects mode for new file: ") + detected.first);
@@ -3937,63 +3937,63 @@ void test_editor_markdown_mode_and_structured_highlighting() {
 
     state.selection.anchor = 2;
     state.selection.active = 8;
-    const pkchat::editor::RenderedPanel rendered = state.render({1, 1, 1, 40});
+    const ainiux::editor::RenderedPanel rendered = state.render({1, 1, 1, 40});
     check(rendered.lines.size() == 1 && rendered.lines[0].find("\x1b") == std::string::npos,
           "editor rendered text contains no embedded ANSI selection markup");
     bool saw_heading = false;
     bool saw_selected_heading = false;
-    for (const pkchat::editor::RenderedPanel::Span& span : rendered.line_spans[0]) {
+    for (const ainiux::editor::RenderedPanel::Span& span : rendered.line_spans[0]) {
         saw_heading = saw_heading ||
-                      (span.syntax && span.role == pkchat::highlight::TokenRole::Heading);
+                      (span.syntax && span.role == ainiux::highlight::TokenRole::Heading);
         saw_selected_heading = saw_selected_heading ||
                                (span.syntax && span.selected &&
-                                span.role == pkchat::highlight::TokenRole::Heading);
+                                span.role == ainiux::highlight::TokenRole::Heading);
     }
     check(saw_heading, "editor rendering includes Markdown heading spans");
     check(saw_selected_heading,
           "editor rendering overlays selection independently on Markdown syntax spans");
 
-    pkchat::editor::EditorState python_state =
-        pkchat::editor::EditorState::from_text("def greet(name: str): return 17");
-    python_state.set_language(pkchat::highlight::Language::Python, false);
+    ainiux::editor::EditorState python_state =
+        ainiux::editor::EditorState::from_text("def greet(name: str): return 17");
+    python_state.set_language(ainiux::highlight::Language::Python, false);
     python_state.highlight_enabled = true;
-    const pkchat::editor::RenderedPanel python_rendered = python_state.render({1, 1, 1, 40});
+    const ainiux::editor::RenderedPanel python_rendered = python_state.render({1, 1, 1, 40});
     bool saw_python_keyword = false;
     bool saw_python_type = false;
-    for (const pkchat::editor::RenderedPanel::Span& span : python_rendered.line_spans[0]) {
+    for (const ainiux::editor::RenderedPanel::Span& span : python_rendered.line_spans[0]) {
         saw_python_keyword = saw_python_keyword ||
-                             (span.syntax && span.role == pkchat::highlight::TokenRole::Keyword);
+                             (span.syntax && span.role == ainiux::highlight::TokenRole::Keyword);
         saw_python_type = saw_python_type ||
-                          (span.syntax && span.role == pkchat::highlight::TokenRole::Type);
+                          (span.syntax && span.role == ainiux::highlight::TokenRole::Type);
     }
     check(saw_python_keyword && saw_python_type,
           "editor rendering applies a manually selected programming-language mode");
 
-    state.set_language(pkchat::highlight::Language::Text, false);
+    state.set_language(ainiux::highlight::Language::Text, false);
     state.set_path("renamed.md");
-    check(state.language == pkchat::highlight::Language::Text && !state.language_automatic,
+    check(state.language == ainiux::highlight::Language::Text && !state.language_automatic,
           "editor manual text mode survives save-as path changes");
     state.language_automatic = true;
     state.redetect_language();
-    check(state.language == pkchat::highlight::Language::Markdown,
+    check(state.language == ainiux::highlight::Language::Markdown,
           "editor automatic mode resumes filename detection");
     state.set_path("renamed.txt");
-    check(state.language == pkchat::highlight::Language::Text,
+    check(state.language == ainiux::highlight::Language::Text,
           "editor automatic mode re-detects after save-as");
 
-    state.linebreak = pkchat::editor::LineBreak::Lf;
-    const std::string status = pkchat::editor::editor_status_line(state);
+    state.linebreak = ainiux::editor::LineBreak::Lf;
+    const std::string status = ainiux::editor::editor_status_line(state);
     check(status.find("(text LF)") != std::string::npos &&
               status.find("Mode: Editor") == std::string::npos &&
               status.find("Syntax:") == std::string::npos &&
               status.find("(auto)") == std::string::npos &&
               status.find("(manual)") == std::string::npos,
           "editor status line displays the compact syntax and LF mode");
-    state.linebreak = pkchat::editor::LineBreak::Crlf;
-    check(pkchat::editor::editor_status_line(state).find("(text CRLF)") != std::string::npos,
+    state.linebreak = ainiux::editor::LineBreak::Crlf;
+    check(ainiux::editor::editor_status_line(state).find("(text CRLF)") != std::string::npos,
           "editor status line displays CRLF mode");
-    state.linebreak = pkchat::editor::LineBreak::Cr;
-    check(pkchat::editor::editor_status_line(state).find("(text CR)") != std::string::npos,
+    state.linebreak = ainiux::editor::LineBreak::Cr;
+    check(ainiux::editor::editor_status_line(state).find("(text CR)") != std::string::npos,
           "editor status line displays CR mode");
 }
 
@@ -4053,4 +4053,4 @@ void run_all() {
     test_editor_word_wrap_rendering();
 }
 
-}  // namespace pkchat::test::editor
+}  // namespace ainiux::test::editor

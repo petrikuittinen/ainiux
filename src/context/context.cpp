@@ -5,7 +5,7 @@
 #include <cctype>
 #include <limits>
 
-namespace pkchat::context {
+namespace ainiux::context {
 namespace {
 
 size_t message_bytes(const provider::Message& message) {
@@ -270,4 +270,4 @@ PreparedMessages prepare(const std::vector<provider::Message>& messages,
     return result;
 }
 
-}  // namespace pkchat::context
+}  // namespace ainiux::context
