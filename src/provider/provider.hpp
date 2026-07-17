@@ -65,6 +65,18 @@ struct RequestContext {
 struct ImageInput {
     std::string mime_type;
     std::string base64_data;
+    // Managed chat media is persisted outside SQLite and hydrated into
+    // base64_data only in the request worker. storage_ref is a lowercase
+    // SHA-256 digest, never an arbitrary filesystem path.
+    std::string storage_ref;
+    std::string display_name;
+    std::string source_ref;
+    long long byte_size = 0;
+
+    ImageInput() = default;
+    ImageInput(std::string input_mime_type, std::string input_base64_data)
+        : mime_type(std::move(input_mime_type)),
+          base64_data(std::move(input_base64_data)) {}
 };
 
 struct Message {

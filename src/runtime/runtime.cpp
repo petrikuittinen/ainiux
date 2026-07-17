@@ -54,4 +54,8 @@ bool JobHandle::running() const {
     return running_.load(std::memory_order_acquire);
 }
 
+bool JobHandle::joinable() const {
+    return thread_.joinable();
+}
+
 }  // namespace ainiux::runtime

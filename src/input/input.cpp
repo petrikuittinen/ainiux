@@ -210,14 +210,14 @@ Error classify_file_type(const std::string& path, FileType& type) {
                 "(case-insensitive)"};
 }
 
-Error load_image_file(const std::string& path,
-                      const FileType& type,
-                      size_t max_bytes,
-                      ImageData& image,
-                      runtime::CancellationToken cancellation) {
+Error load_image_file_bytes(const std::string& path,
+                            const FileType& type,
+                            size_t max_bytes,
+                            std::string& bytes,
+                            runtime::CancellationToken cancellation) {
     const std::string resolved = expand_user_path(path);
     if (type.kind != Kind::Image) {
-        return {ErrorCode::Internal, "load_image_file called for non-image input: " + resolved};
+        return {ErrorCode::Internal, "load_image_file_bytes called for non-image input: " + resolved};
     }
     std::ifstream file(resolved, std::ios::binary);
     if (!file) {
@@ -256,12 +256,26 @@ Error load_image_file(const std::string& path,
         return {ErrorCode::Cancelled, "image read cancelled: " + resolved};
     }
 
+    bytes = std::move(data);
+    return ok_error();
+}
+
+Error load_image_file(const std::string& path,
+                      const FileType& type,
+                      size_t max_bytes,
+                      ImageData& image,
+                      runtime::CancellationToken cancellation) {
+    std::string data;
+    Error err = load_image_file_bytes(path, type, max_bytes, data, cancellation);
+    if (!err.ok()) {
+        return err;
+    }
     ImageData loaded;
     loaded.mime_type = type.mime_type;
     loaded.byte_size = data.size();
     loaded.base64_data = base64_encode(data);
     if (cancellation.cancelled()) {
-        return {ErrorCode::Cancelled, "image encoding cancelled: " + resolved};
+        return {ErrorCode::Cancelled, "image encoding cancelled: " + expand_user_path(path)};
     }
     image = std::move(loaded);
     return ok_error();

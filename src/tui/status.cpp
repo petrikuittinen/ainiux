@@ -57,7 +57,7 @@ std::string provider_model_status_message(const provider::RequestContext& contex
 }
 
 std::string ready_status() {
-    return "TAB command/path · Ctrl+Space continue · Alt+Enter newline · Alt+Home/End jump chat";
+    return "Tab complete | Ctrl+Space continue | Alt+Enter newline";
 }
 
 std::string sqlite_unavailable_status(const std::string& reason) {

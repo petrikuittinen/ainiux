@@ -102,6 +102,9 @@ namespace {
 
 std::string thread_summary_label(const chat::ThreadSummary& thread) {
     std::ostringstream out;
+    if (thread.read_only) {
+        out << "[RO] ";
+    }
     out << thread.name;
     if (!thread.last_provider.empty() || !thread.last_model.empty()) {
         out << " [";

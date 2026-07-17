@@ -19,6 +19,7 @@
 #include "app/interactive_mode.hpp"
 #include "app/detail.hpp"
 #include "chat/settings.hpp"
+#include "chat/media_store.hpp"
 #include "ainiux/model_setting.hpp"
 #include "chat/sqlite_store.hpp"
 #include "cli/args.hpp"
@@ -36,6 +37,7 @@
 #include <cerrno>
 #include <cstring>
 #include <iostream>
+#include <optional>
 #include <sys/select.h>
 #include <unistd.h>
 
@@ -68,6 +70,7 @@ app::TuiRunResult run(provider::RequestContext context,
     runtime::JobHandle file_job;
     runtime::JobHandle completion_job;
     ActiveJob active_job = ActiveJob::None;
+    std::optional<chat::Session> deferred_store_save;
     const size_t input_undo_limit = static_cast<size_t>(std::max(0, context.options.editor_undo_limit));
     bool syntax_highlight = interactive != nullptr ? interactive->highlight_enabled
                                                    : context.options.tui_highlight;
@@ -133,6 +136,7 @@ app::TuiRunResult run(provider::RequestContext context,
     std::string pending_full_model_content;
     // For queued regeneration that was triggered while a job was active.
     std::string queued_regen_full_content;
+    std::vector<provider::ImageInput> queued_regen_images;
     ModelsRequestPurpose models_request_purpose = ModelsRequestPurpose::Preview;
     provider::ModelsResult cached_models;
     bool have_cached_models = false;
@@ -155,19 +159,24 @@ app::TuiRunResult run(provider::RequestContext context,
         attachments_committed_for_turn = 0;
         pending_full_model_content.clear();
         queued_regen_full_content.clear();
+        queued_regen_images.clear();
         history_scroll = 0;
+        const std::string status_label =
+            session.read_only
+                ? loaded_label + " [read-only: " + session.read_only_reason + "]"
+                : loaded_label;
         if (loaded_session_differs_from_context(context, session)) {
             mode = TuiMode::ModelConfirm;
-            status = loaded_label;
+            status = status_label;
             return;
         }
         if (active_context_has_provider_selection(context)) {
             app::refresh_session_metadata(session, context);
-            status = loaded_label;
+            status = status_label;
             return;
         }
         Error context_error = apply_loaded_session_context(session);
-        status = context_error.ok() ? loaded_label : detail::error_line(context_error);
+        status = context_error.ok() ? status_label : detail::error_line(context_error);
     };
 
     auto start_new_thread_from_cli = [&]() {
@@ -181,6 +190,7 @@ app::TuiRunResult run(provider::RequestContext context,
         attachments_committed_for_turn = 0;
         pending_full_model_content.clear();
         queued_regen_full_content.clear();
+        queued_regen_images.clear();
         app::apply_system_prompt(session, context.options.system);
         history_scroll = 0;
     };
@@ -363,9 +373,44 @@ app::TuiRunResult run(provider::RequestContext context,
         file_jobs.start_save(path, std::move(snapshot), quiet_success);
     };
 
-    auto start_store_save = [&]() { file_jobs.start_store_save(); };
+    auto start_store_save = [&]() {
+        if (!sqlite_available || session.read_only) {
+            return;
+        }
+        chat::Session snapshot = session;
+        app::refresh_session_metadata(snapshot, context);
+        if (file_job.joinable()) {
+            deferred_store_save = std::move(snapshot);
+            return;
+        }
+        deferred_store_save.reset();
+        file_jobs.start_store_save(std::move(snapshot));
+    };
+
+    auto resume_deferred_store_save = [&]() {
+        if (!deferred_store_save.has_value() || file_job.joinable()) {
+            return;
+        }
+        chat::Session snapshot = std::move(*deferred_store_save);
+        deferred_store_save.reset();
+        file_jobs.start_store_save(std::move(snapshot));
+    };
 
     auto start_store_load = [&](long long thread_id) { file_jobs.start_store_load(thread_id); };
+
+    auto apply_store_save_result = [&](const chat::Session& saved) {
+        if (session.thread_id != 0 && session.thread_id != saved.thread_id) {
+            return;
+        }
+        session.thread_id = saved.thread_id;
+        session.name = saved.name;
+        session.created_at = saved.created_at;
+        session.updated_at = saved.updated_at;
+        if (deferred_store_save.has_value() && deferred_store_save->thread_id == 0) {
+            deferred_store_save->thread_id = saved.thread_id;
+            deferred_store_save->created_at = saved.created_at;
+        }
+    };
 
     auto persist_settings_change = [&](const std::string& message) {
         app::refresh_session_metadata(session, context);
@@ -461,6 +506,10 @@ app::TuiRunResult run(provider::RequestContext context,
     };
 
     auto start_assistant_response = [&]() {
+        if (session.read_only) {
+            status = "Thread is read-only: " + session.read_only_reason;
+            return;
+        }
         active_job = ActiveJob::Chat;
         history_scroll = 0;
         pending_assistant = session.messages.size();
@@ -493,15 +542,20 @@ app::TuiRunResult run(provider::RequestContext context,
             pending_full_model_content.clear();
             return;
         }
-        if (pending_user != static_cast<size_t>(-1) && pending_user < session.messages.size()) {
-            session.messages[pending_user].images.clear();
-        }
         provider::RequestContext job_context = context;
+        const std::string media_database_path = sqlite_available ? sqlite_path : std::string();
+        const size_t max_image_bytes = context.options.max_image_bytes > 0
+                                           ? static_cast<size_t>(context.options.max_image_bytes)
+                                           : 0U;
         model_job.start([job_context, request_messages = std::move(prepared.messages),
+                         media_database_path, max_image_bytes,
                          compaction = std::move(prepared.event), compacted = prepared.compacted,
                          &events](runtime::CancellationToken token) mutable {
-            provider::ChatResult chat;
-            Error send_error = provider::send_chat_messages(
+            provider::ChatResult chat_result;
+            Error send_error = chat::hydrate_message_images(
+                media_database_path, request_messages, max_image_bytes, token);
+            if (send_error.ok()) {
+                send_error = provider::send_chat_messages(
                 job_context,
                 request_messages,
                 [&](const std::string& delta) -> Error {
@@ -514,12 +568,13 @@ app::TuiRunResult run(provider::RequestContext context,
                     }
                     return ok_error();
                 },
-                chat,
+                chat_result,
                 token);
+            }
             TuiEvent event;
             if (send_error.ok()) {
                 event.type = TuiEventType::Done;
-                event.chat = std::move(chat);
+                event.chat = std::move(chat_result);
                 event.compaction = std::move(compaction);
                 event.compacted = compacted;
             } else {
@@ -531,18 +586,30 @@ app::TuiRunResult run(provider::RequestContext context,
         status = "Waiting for response...";
     };
 
-    auto start_turn_with_full = [&](const std::string& history_content,
-                                      const std::string& full_model_content) {
+    auto start_turn_with_payload = [&](const std::string& history_content,
+                                       const std::string& full_model_content,
+                                       const std::vector<provider::ImageInput>& images,
+                                       size_t pending_image_count) {
+        if (session.read_only) {
+            status = "Thread is read-only: " + session.read_only_reason;
+            return;
+        }
         if (active_job != ActiveJob::None) {
             status = "A model job is already running";
             return;
         }
         pending_user = session.messages.size();
         pending_user_added_for_job = true;
-        inflight_image_count = pending_images.size();
-        session.messages.push_back({"user", history_content, pending_images});
+        inflight_image_count = pending_image_count;
+        session.messages.push_back({"user", history_content, images});
         pending_full_model_content = full_model_content;
         start_assistant_response();
+    };
+
+    auto start_turn_with_full = [&](const std::string& history_content,
+                                    const std::string& full_model_content) {
+        start_turn_with_payload(history_content, full_model_content,
+                                pending_images, pending_images.size());
     };
 
     // One-arg version for call sites and callbacks that don't involve attachment bodies.
@@ -572,10 +639,12 @@ app::TuiRunResult run(provider::RequestContext context,
     auto clear_queued_regeneration = [&]() {
         regenerate_after_cancel = false;
         queued_regeneration_prompt.clear();
+        queued_regen_images.clear();
     };
 
     auto start_queued_regeneration = [&](size_t erase_from) {
         const std::string prompt = queued_regeneration_prompt;
+        const std::vector<provider::ImageInput> images = std::move(queued_regen_images);
         clear_queued_regeneration();
         if (app::detail::trim_ascii(prompt).empty()) {
             status = "No previous user prompt to regenerate";
@@ -586,7 +655,7 @@ app::TuiRunResult run(provider::RequestContext context,
         }
         attachments_committed_for_turn = 0;
         // Use stashed full content (if any) for the model; history will get the (short) prompt.
-        start_turn_with_full(prompt, queued_regen_full_content);
+        start_turn_with_payload(prompt, queued_regen_full_content, images, 0);
         queued_regen_full_content.clear();
         status = "Regenerating...";
     };
@@ -601,6 +670,10 @@ app::TuiRunResult run(provider::RequestContext context,
     };
 
     auto start_history_edit = [&]() {
+        if (session.read_only) {
+            status = "Thread is read-only: " + session.read_only_reason;
+            return;
+        }
         if (active_job != ActiveJob::None) {
             status = "Cannot edit history while a job is running";
             return;
@@ -623,6 +696,10 @@ app::TuiRunResult run(provider::RequestContext context,
     };
 
     auto pop_last_message = [&]() {
+        if (session.read_only) {
+            status = "Thread is read-only: " + session.read_only_reason;
+            return;
+        }
         if (active_job != ActiveJob::None) {
             status = "Cannot pop while a model job is running";
             return;
@@ -669,6 +746,10 @@ app::TuiRunResult run(provider::RequestContext context,
             status = "Cannot create a thread while a model job is running";
             return false;
         }
+        if (file_job.joinable()) {
+            status = "Cannot create a thread while a file job is running";
+            return false;
+        }
         start_new_thread_from_cli();
         session.name = app::detail::trim_ascii(name);
         status = session.name.empty() ? "New chat thread" : "New chat thread: " + session.name;
@@ -677,6 +758,10 @@ app::TuiRunResult run(provider::RequestContext context,
     };
 
     auto regenerate_last_turn = [&]() {
+        if (session.read_only) {
+            status = "Thread is read-only: " + session.read_only_reason;
+            return;
+        }
         if (active_job == ActiveJob::Models) {
             status = "Cannot regenerate while listing models";
             return;
@@ -698,6 +783,9 @@ app::TuiRunResult run(provider::RequestContext context,
             }
             regenerate_after_cancel = true;
             queued_regeneration_prompt = prompt;
+            if (pending_user != static_cast<size_t>(-1) && pending_user < session.messages.size()) {
+                queued_regen_images = session.messages[pending_user].images;
+            }
             // Stash the full (bodies) version for the queued regen so the model receives data,
             // while the history will re-use the short "prompt" (names only).
             queued_regen_full_content = pending_full_model_content;
@@ -711,10 +799,14 @@ app::TuiRunResult run(provider::RequestContext context,
             status = "No previous user prompt to regenerate";
             return;
         }
+        const std::vector<provider::ImageInput> images =
+            plan.erase_from < session.messages.size()
+                ? session.messages[plan.erase_from].images
+                : std::vector<provider::ImageInput>();
         session.messages.erase(session.messages.begin() + static_cast<long>(plan.erase_from), session.messages.end());
         // Pass any stashed full content (for the turn being regenerated) so the model gets the bodies.
         // The first arg is the short history content (names only) that will be stored.
-        start_turn_with_full(plan.prompt, pending_full_model_content);
+        start_turn_with_payload(plan.prompt, pending_full_model_content, images, 0);
         status = "Regenerating...";
     };
 
@@ -778,6 +870,10 @@ app::TuiRunResult run(provider::RequestContext context,
     };
     command_handlers.start_fetch = [&](const std::string& url) { file_jobs.start_fetch(url); };
     command_handlers.start_search = [&](const std::string& query) { file_jobs.start_search(query); };
+    command_handlers.start_media_cleanup = [&]() {
+        file_jobs.start_media_cleanup(context.options.media_expiration_days,
+                                      session.thread_id, false);
+    };
     command_handlers.set_thinking_trace_mode = set_thinking_trace_mode;
     command_handlers.switch_to_editor = [&]() {
         if (interactive == nullptr) {
@@ -942,6 +1038,11 @@ app::TuiRunResult run(provider::RequestContext context,
             return;
         }
         if (raw.find('\n') == std::string::npos && !text.empty() && text[0] == '/') {
+            if (session.read_only) {
+                input = new_input_editor();
+                handle_command(text);
+                return;
+            }
             if (try_handle_chat_assist_command(text,
                                                input,
                                                ai_continue.assist_config,
@@ -959,6 +1060,10 @@ app::TuiRunResult run(provider::RequestContext context,
         }
         if (active_job != ActiveJob::None) {
             status = "A model job is already running";
+            return;
+        }
+        if (session.read_only) {
+            status = "Thread is read-only: " + session.read_only_reason;
             return;
         }
 
@@ -1023,6 +1128,9 @@ app::TuiRunResult run(provider::RequestContext context,
 
     refresh_startup_status();
 
+    file_jobs.start_media_cleanup(context.options.media_auto_expiration_days,
+                                  session.thread_id, true);
+
     if (should_open_startup_provider_picker(context)) {
         open_provider_picker(false);
     } else if (!app::detail::trim_ascii(context.options.prompt).empty()) {
@@ -1038,6 +1146,7 @@ app::TuiRunResult run(provider::RequestContext context,
     while (!quit) {
         TuiEvent event;
         while (events.try_pop(event)) {
+            bool completed_file_job = false;
             switch (event.type) {
                 case TuiEventType::Delta:
                     if (pending_assistant != static_cast<size_t>(-1) && pending_assistant < session.messages.size()) {
@@ -1154,6 +1263,7 @@ app::TuiRunResult run(provider::RequestContext context,
                 }
                 case TuiEventType::SaveDone:
                     file_job.join();
+                    completed_file_job = true;
                     if (event.error.ok()) {
                         if (!event.quiet_success) {
                             status = "Saved " + event.text;
@@ -1164,6 +1274,7 @@ app::TuiRunResult run(provider::RequestContext context,
                     break;
                 case TuiEventType::LoadDone:
                     file_job.join();
+                    completed_file_job = true;
                     if (event.error.ok()) {
                         session = std::move(event.session);
                         app::apply_system_prompt(session, context.options.system);
@@ -1174,19 +1285,16 @@ app::TuiRunResult run(provider::RequestContext context,
                     break;
                 case TuiEventType::StoreSaveDone:
                     file_job.join();
+                    completed_file_job = true;
                     if (event.error.ok()) {
-                        if (session.thread_id == 0 || session.thread_id == event.session.thread_id) {
-                            session.thread_id = event.session.thread_id;
-                            session.name = event.session.name;
-                            session.created_at = event.session.created_at;
-                            session.updated_at = event.session.updated_at;
-                        }
+                        apply_store_save_result(event.session);
                     } else if (event.error.code != ErrorCode::Cancelled) {
                         status = detail::error_line(event.error);
                     }
                     break;
                 case TuiEventType::StoreLoadDone:
                     file_job.join();
+                    completed_file_job = true;
                     if (event.error.ok()) {
                         session = std::move(event.session);
                         app::apply_system_prompt(session, context.options.system);
@@ -1196,8 +1304,26 @@ app::TuiRunResult run(provider::RequestContext context,
                         status = detail::error_line(event.error);
                     }
                     break;
+                case TuiEventType::MediaCleanupDone:
+                    file_job.join();
+                    completed_file_job = true;
+                    if (!event.error.ok()) {
+                        if (!event.automatic_cleanup || event.error.code != ErrorCode::Cancelled) {
+                            status = detail::error_line(event.error);
+                        }
+                    } else if (!event.automatic_cleanup || event.media_cleanup.files_removed > 0) {
+                        status = "Media cleanup: " +
+                                 std::to_string(event.media_cleanup.files_removed) +
+                                 " file(s), " +
+                                 std::to_string(event.media_cleanup.bytes_reclaimed) +
+                                 " bytes reclaimed, " +
+                                 std::to_string(event.media_cleanup.threads_locked) +
+                                 " thread(s) locked";
+                    }
+                    break;
                 case TuiEventType::InsertDone:
                     file_job.join();
+                    completed_file_job = true;
                     if (event.error.ok()) {
                         const Error insert_error = input.insert(event.inserted_text);
                         status = insert_error.ok() ? "Inserted " + event.text + " at cursor"
@@ -1208,6 +1334,7 @@ app::TuiRunResult run(provider::RequestContext context,
                     break;
                 case TuiEventType::AttachDone:
                     file_job.join();
+                    completed_file_job = true;
                     if (event.error.ok() && event.image_attachment) {
                         pending_images.push_back(std::move(event.image));
                         status = "Attached image for next prompt: " + event.text + " (" +
@@ -1232,6 +1359,7 @@ app::TuiRunResult run(provider::RequestContext context,
                     break;
                 case TuiEventType::FetchDone:
                     file_job.join();
+                    completed_file_job = true;
                     if (event.error.ok()) {
                         session.messages.push_back(std::move(event.inserted_message));
                         history_scroll = 0;
@@ -1242,6 +1370,7 @@ app::TuiRunResult run(provider::RequestContext context,
                     break;
                 case TuiEventType::SearchDone:
                     file_job.join();
+                    completed_file_job = true;
                     if (event.error.ok()) {
                         session.messages.push_back(std::move(event.inserted_message));
                         history_scroll = 0;
@@ -1291,6 +1420,9 @@ app::TuiRunResult run(provider::RequestContext context,
                         status = editor::path_completion_status(event.completion);
                     }
                     break;
+            }
+            if (completed_file_job) {
+                resume_deferred_store_save();
             }
         }
 
@@ -1593,9 +1725,31 @@ app::TuiRunResult run(provider::RequestContext context,
     completion_job.cancel();
     model_job.join();
     completion_job.join();
-    remove_empty_thread_on_exit();
     file_job.cancel();
     file_job.join();
+    TuiEvent shutdown_event;
+    while (events.try_pop(shutdown_event)) {
+        if (shutdown_event.type == TuiEventType::StoreSaveDone &&
+            shutdown_event.error.ok()) {
+            apply_store_save_result(shutdown_event.session);
+        }
+    }
+    if (deferred_store_save.has_value() && sqlite_available) {
+        chat::Session snapshot = std::move(*deferred_store_save);
+        chat::SqliteStore shutdown_store;
+        Error save_error = shutdown_store.open(sqlite_path);
+        if (save_error.ok()) {
+            save_error = shutdown_store.save_session(snapshot);
+        }
+        if (save_error.ok()) {
+            session.thread_id = snapshot.thread_id;
+            session.name = snapshot.name;
+            session.created_at = snapshot.created_at;
+            session.updated_at = snapshot.updated_at;
+        }
+        deferred_store_save.reset();
+    }
+    remove_empty_thread_on_exit();
     if (switch_to_editor && interactive != nullptr) {
         interactive->context = context;
         interactive->chat_session = session;

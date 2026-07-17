@@ -20,6 +20,8 @@ struct Session {
     std::string model;
     std::string settings_json = "{}";
     std::string usage_json = "{}";
+    bool read_only = false;
+    std::string read_only_reason;
     std::vector<provider::Message> messages;
     std::vector<context::CompactionEvent> compaction_events;
 };

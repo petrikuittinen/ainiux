@@ -116,6 +116,23 @@ class Handler(BaseHTTPRequestHandler):
                     image_count += 1
         return "".join(text), image_count
 
+    def _chat_image_count(self, request):
+        count = 0
+        for message in request.get("messages", []):
+            if not isinstance(message, dict):
+                continue
+            content = message.get("content", [])
+            if not isinstance(content, list):
+                continue
+            for part in content:
+                if not isinstance(part, dict) or part.get("type") != "image_url":
+                    continue
+                image = part.get("image_url", {})
+                url = image.get("url", "") if isinstance(image, dict) else ""
+                if isinstance(url, str) and url.startswith("data:image/"):
+                    count += 1
+        return count
+
     def _fail_validation(self, message):
         self._send(400, json.dumps({"error": {"message": message}}))
         return False
@@ -146,6 +163,8 @@ class Handler(BaseHTTPRequestHandler):
                 ["reasoning", "thinking", "enable_thinking", "thinking_budget"],
                 "openai chat",
             )
+        if last == "expect-restored-image" and self._chat_image_count(request) < 1:
+            return self._fail_validation("restored chat: expected a historical image")
         if last == "expect-anthropic-thinking":
             if request.get("thinking") != {"type": "enabled", "budget_tokens": 2048}:
                 return self._fail_validation("anthropic: expected thinking enabled with budget_tokens=2048")

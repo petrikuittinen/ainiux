@@ -136,6 +136,8 @@ std::string session_to_json(const Session& session) {
     out << "  \"provider\": " << json::quote(session.provider) << ",\n";
     out << "  \"base_url\": " << json::quote(session.base_url) << ",\n";
     out << "  \"model\": " << json::quote(session.model) << ",\n";
+    out << "  \"read_only\": " << (session.read_only ? "true" : "false") << ",\n";
+    out << "  \"read_only_reason\": " << json::quote(session.read_only_reason) << ",\n";
     out << "  \"settings\": " << (session.settings_json.empty() ? "{}" : session.settings_json) << ",\n";
     out << "  \"messages\": [\n";
     for (size_t i = 0; i < session.messages.size(); ++i) {
@@ -217,6 +219,20 @@ Error load_session(const std::string& path, Session& session) {
     if (!err.ok()) return err;
     loaded.model = required_string(parsed.value, "model", err);
     if (!err.ok()) return err;
+    if (const json::Value* read_only = parsed.value.get("read_only")) {
+        if (read_only->type != json::Value::Type::Bool) {
+            return {ErrorCode::ProviderSchema,
+                    "chat file field is not a boolean: read_only"};
+        }
+        loaded.read_only = read_only->boolean;
+    }
+    if (const json::Value* reason = parsed.value.get("read_only_reason")) {
+        if (!reason->is_string()) {
+            return {ErrorCode::ProviderSchema,
+                    "chat file field is not a string: read_only_reason"};
+        }
+        loaded.read_only_reason = reason->string;
+    }
     loaded.settings_json = optional_raw_json(parsed.value, "settings");
     loaded.usage_json = optional_raw_json(parsed.value, "usage");
 

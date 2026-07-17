@@ -184,6 +184,13 @@ Error send_session_turn(provider::RequestContext& context,
                         provider::ChatResult& chat,
                         std::vector<provider::ImageInput> images,
                         bool separate_thinking_traces) {
+    if (session.read_only) {
+        return {ErrorCode::FileLock,
+                "chat thread is read-only" +
+                    (session.read_only_reason.empty()
+                         ? std::string(": managed attachment media is unavailable")
+                         : ": " + session.read_only_reason)};
+    }
     session.messages.push_back({"user", prompt, std::move(images)});
     context::PreparedMessages prepared = context::prepare(
         session.messages, context.options.context_policy,

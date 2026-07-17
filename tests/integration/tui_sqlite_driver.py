@@ -4,6 +4,7 @@
 import os
 import pty
 import select
+import shutil
 import sqlite3
 import subprocess
 import sys
@@ -46,7 +47,8 @@ def start_tui(binary, base, model, home_dir):
     env.setdefault("OPENAI_API_KEY", "integration-test-key")
     master, slave = pty.openpty()
     process = subprocess.Popen(
-        [binary, base, "--quiet", "--chat", "--no-stream", "-m", model],
+        [binary, base, "--quiet", "--chat", "--no-stream", "-m", model,
+         "--image-capability", "allow"],
         stdin=slave,
         stdout=slave,
         stderr=slave,
@@ -339,6 +341,123 @@ def scenario_stale_last_thread(binary, base, model, home_dir):
         conn.close()
 
 
+def scenario_media_restart(binary, base, model, home_dir):
+    image_path = os.environ.get("AINIUX_SQLITE_TEST_IMAGE")
+    if not image_path:
+        raise RuntimeError("AINIUX_SQLITE_TEST_IMAGE is not set")
+    media_home = home_dir + "-media-restart"
+    shutil.rmtree(media_home, ignore_errors=True)
+    os.makedirs(media_home, exist_ok=True)
+    config_dir = os.path.join(media_home, ".config", "ainiux")
+    os.makedirs(config_dir, exist_ok=True)
+    with open(os.path.join(config_dir, "config.conf"), "w", encoding="utf-8") as config:
+        config.write(
+            "config_version = 1\n"
+            "[media]\n"
+            "expiration_days = 7\n"
+            "auto_expiration_days = 0\n"
+        )
+    run_tui(
+        binary,
+        base,
+        model,
+        media_home,
+        [
+            (f"/attach {image_path}\r", 0.8),
+            ("image-seed\r", 1.2),
+            ("image-followup\r", 1.2),
+            ("/quit\r", 0.5),
+        ],
+    )
+    path = db_path(media_home)
+    conn = query_db(path)
+    try:
+        threads = active_threads(conn)
+        if len(threads) != 1:
+            raise RuntimeError(f"expected one media thread, found {len(threads)}")
+        thread_id = threads[0]["id"]
+        attachment = conn.execute(
+            "SELECT storage_ref, object_sha256 FROM attachments WHERE thread_id = ?",
+            (thread_id,),
+        ).fetchone()
+        if attachment is None or attachment["storage_ref"] != "":
+            raise RuntimeError("expected external managed-media attachment metadata")
+        digest = attachment["object_sha256"]
+        media_path = os.path.join(media_home, ".ainiux", "media", "sha256", digest[:2], digest)
+        if not os.path.isfile(media_path):
+            raise RuntimeError("expected managed image file beside the SQLite database")
+    finally:
+        conn.close()
+
+    transcript = run_tui(
+        binary,
+        base,
+        model,
+        media_home,
+        [
+            ("/list\r", 0.6),
+            ("\r", 1.0),
+            ("expect-restored-image\r", 1.5),
+            ("/quit\r", 0.5),
+        ],
+    )
+    if b"AINIUX_ERR_HTTP_STATUS" in transcript:
+        raise RuntimeError("restored media thread produced an HTTP validation error")
+    conn = query_db(path)
+    try:
+        messages = message_texts(conn, thread_id)
+        if ("user", "expect-restored-image") not in messages:
+            raise RuntimeError("expected post-restart user prompt in the saved thread")
+        if not messages or messages[-1] != ("assistant", "Hello"):
+            raise RuntimeError("expected successful post-restart assistant response")
+    finally:
+        conn.close()
+
+    conn = query_db(path)
+    try:
+        conn.execute(
+            "UPDATE media_objects SET last_used_at = '2020-01-01T00:00:00Z'"
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    run_tui(
+        binary,
+        base,
+        model,
+        media_home,
+        [("/cleanup\r", 1.0), ("/quit\r", 0.5)],
+    )
+    conn = query_db(path)
+    try:
+        thread = conn.execute(
+            "SELECT read_only, read_only_reason FROM threads WHERE id = ?",
+            (thread_id,),
+        ).fetchone()
+        if thread is None or thread["read_only"] != 1 or "7 days" not in thread["read_only_reason"]:
+            raise RuntimeError("expected /cleanup to mark the expired media thread read-only")
+        if os.path.exists(media_path):
+            raise RuntimeError("expected /cleanup to remove the expired managed image")
+    finally:
+        conn.close()
+
+    transcript = run_tui(
+        binary,
+        base,
+        model,
+        media_home,
+        [("/list\r", 0.6), ("\r", 1.0), ("must-not-send\r", 0.6), ("\x11", 0.5)],
+    )
+    if b"Thread is read-only" not in transcript:
+        raise RuntimeError("expected a read-only status when continuing an expired-media thread")
+    conn = query_db(path)
+    try:
+        messages = message_texts(conn, thread_id)
+        if any(content == "must-not-send" for _, content in messages):
+            raise RuntimeError("read-only thread accepted a new prompt")
+    finally:
+        conn.close()
+
 def scenario_corrupt_database(binary, base, model, home_dir):
     path = db_path(home_dir)
     os.makedirs(os.path.dirname(path), exist_ok=True)
@@ -382,6 +501,7 @@ def main():
     scenario = sys.argv[5] if len(sys.argv) > 5 else "all"
 
     scenarios = {
+        "media-restart": scenario_media_restart,
         "seed-alpha": scenario_seed_alpha,
         "fresh-start": scenario_fresh_start,
         "beta-list-load": scenario_beta_and_list_load,

@@ -1,7 +1,9 @@
 #include "chat/test_chat.hpp"
 #include "support/test_support.hpp"
+#include "app/app.hpp"
 #include "chat/session.hpp"
 #include "chat/generation_settings.hpp"
+#include "chat/media_store.hpp"
 #include "chat/settings.hpp"
 #include "chat/sqlite_store.hpp"
 #include "ainiux/model_setting.hpp"
@@ -9,6 +11,7 @@
 #include <filesystem>
 #include <fstream>
 #include <sqlite3.h>
+#include <sstream>
 #include <string>
 #include <vector>
 
@@ -37,6 +40,8 @@ void test_chat_session_json_round_trip() {
     session.updated_at = session.created_at;
     session.messages.push_back({"user", "hello"});
     session.messages.push_back({"assistant", "Hello"});
+    session.read_only = true;
+    session.read_only_reason = "managed attachment expired";
     session.compaction_events.push_back({"2026-06-14T00:01:00Z", "truncate-oldest", 2, 1000, 500,
                                          "Context compacted for test"});
 
@@ -56,6 +61,17 @@ void test_chat_session_json_round_trip() {
     check(!loaded.messages.empty() && loaded.messages[0].content == "hello", "loaded user message preserved");
     check(loaded.compaction_events.size() == 1 && loaded.compaction_events[0].messages_compacted == 2,
           "loaded chat preserves compaction events");
+    check(loaded.read_only && loaded.read_only_reason == "managed attachment expired",
+          "JSON export preserves a thread's read-only attachment lock");
+
+    ainiux::provider::ChatResult blocked_result;
+    std::ostringstream blocked_output;
+    const size_t original_message_count = loaded.messages.size();
+    err = ainiux::app::send_session_turn(context, loaded, "continue", blocked_output,
+                                         blocked_result);
+    check(!err.ok() && err.code == ainiux::ErrorCode::FileLock &&
+              loaded.messages.size() == original_message_count && blocked_output.str().empty(),
+          "core chat requests reject read-only exported threads before mutation or transport");
 }
 
 void test_chat_session_rejects_corrupt_json() {
@@ -86,7 +102,7 @@ void test_chat_sqlite_store_round_trip_and_listing() {
     context.options.model = "local-model";
     ainiux::chat::Session session = ainiux::chat::new_session(context);
     session.messages.push_back({"system", "Be concise"});
-    session.messages.push_back({"user", "first prompt", {{"image/png", "base64-image"}}});
+    session.messages.push_back({"user", "first prompt", {{"image/png", "aW1hZ2UtYnl0ZXM="}}});
     session.messages.push_back({"assistant", "first answer"});
     session.usage_json = "{\"prompt_tokens\":2,\"completion_tokens\":3,\"total_tokens\":5}";
     session.compaction_events.push_back({"2026-06-28T00:00:00Z", "truncate-oldest", 2, 1000, 500,
@@ -112,7 +128,8 @@ void test_chat_sqlite_store_round_trip_and_listing() {
           "SQLite load preserves provider, base URL, and model metadata");
     check(loaded.messages.size() == 3 && loaded.messages[1].content == "first prompt" &&
               loaded.messages[1].images.size() == 1 &&
-              loaded.messages[1].images[0].base64_data == "base64-image",
+              loaded.messages[1].images[0].base64_data.empty() &&
+              loaded.messages[1].images[0].storage_ref.size() == 64,
           "SQLite load preserves messages and image attachments");
     check(loaded.usage_json.find("prompt_tokens") != std::string::npos,
           "SQLite load preserves thread usage JSON");
@@ -151,6 +168,132 @@ void test_chat_sqlite_store_round_trip_and_listing() {
     err = store.list_threads(threads, 20);
     check(err.ok() && threads.size() == 1 && threads[0].id == session.thread_id,
           "SQLite thread list hides soft-deleted threads");
+}
+
+void test_chat_managed_media_cleanup_and_read_only_threads() {
+    const std::string directory = "build/unit-managed-media";
+    const std::string path = directory + "/ainiux.db";
+    std::filesystem::remove_all(directory);
+    std::filesystem::create_directories(directory);
+
+    ainiux::chat::SqliteStore store;
+    ainiux::Error err = store.open(path);
+    check(err.ok(), "managed-media SQLite store opens");
+
+    ainiux::provider::ImageInput image;
+    err = store.import_media("abc", "image/png", "photo.png", "/tmp/photo.png", image);
+    check(err.ok(), "managed media imports raw bytes");
+    check(image.storage_ref ==
+              "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad" &&
+              image.base64_data.empty() && image.byte_size == 3,
+          "managed media uses the standard SHA-256 digest without retaining base64");
+    const std::string object_path = ainiux::chat::media_root_for_database(path) +
+                                    "/sha256/ba/" + image.storage_ref;
+    check(std::filesystem::is_regular_file(object_path),
+          "managed media is stored as a private external object");
+
+    ainiux::provider::RequestContext context;
+    context.profile.name = "lm_studio";
+    context.base_url = "http://localhost:1234/v1";
+    context.options.model = "local-model";
+    ainiux::chat::Session session = ainiux::chat::new_session(context);
+    session.messages.push_back({"user", "describe", {image}});
+    session.messages.push_back({"assistant", "description"});
+    err = store.save_session(session);
+    check(err.ok() && session.thread_id > 0, "thread with managed media saves");
+
+    sqlite3* raw_db = nullptr;
+    int rc = sqlite3_open(path.c_str(), &raw_db);
+    check(rc == SQLITE_OK && raw_db != nullptr, "managed-media database opens for assertions");
+    if (raw_db != nullptr) {
+        sqlite3_stmt* statement = nullptr;
+        rc = sqlite3_prepare_v2(
+            raw_db,
+            "SELECT storage_ref, object_sha256 FROM attachments WHERE thread_id = ?1;",
+            -1, &statement, nullptr);
+        if (rc == SQLITE_OK) {
+            sqlite3_bind_int64(statement, 1, session.thread_id);
+            rc = sqlite3_step(statement);
+            check(rc == SQLITE_ROW && sqlite3_column_bytes(statement, 0) == 0 &&
+                      std::string(reinterpret_cast<const char*>(sqlite3_column_text(statement, 1))) ==
+                          image.storage_ref,
+                  "SQLite stores only a media-object reference, not base64 payload data");
+        } else {
+            check(false, "managed-media attachment assertion query prepares");
+        }
+        sqlite3_finalize(statement);
+        sqlite3_close(raw_db);
+    }
+
+    ainiux::chat::Session loaded;
+    err = store.load_session(session.thread_id, loaded);
+    check(err.ok() && !loaded.read_only && loaded.messages.size() == 2 &&
+              loaded.messages[0].images.size() == 1 &&
+              loaded.messages[0].images[0].base64_data.empty() &&
+              loaded.messages[0].images[0].storage_ref == image.storage_ref,
+          "SQLite load restores lightweight managed-media references");
+    err = ainiux::chat::hydrate_message_images(path, loaded.messages, 1024);
+    check(err.ok() && loaded.messages[0].images[0].base64_data == "YWJj",
+          "request hydration reads, verifies, and base64-encodes managed media");
+
+    raw_db = nullptr;
+    rc = sqlite3_open(path.c_str(), &raw_db);
+    check(rc == SQLITE_OK && raw_db != nullptr, "managed-media database reopens for aging");
+    if (raw_db != nullptr) {
+        char* message = nullptr;
+        rc = sqlite3_exec(raw_db,
+                          "UPDATE media_objects SET last_used_at = '2020-01-01T00:00:00Z';",
+                          nullptr, nullptr, &message);
+        check(rc == SQLITE_OK,
+              message == nullptr ? "managed media can be aged for cleanup testing"
+                                 : message);
+        sqlite3_free(message);
+        sqlite3_close(raw_db);
+    }
+
+    ainiux::chat::MediaCleanupResult cleanup;
+    err = store.cleanup_media(7, session.thread_id, "test expiration", cleanup);
+    check(err.ok() && cleanup.objects_expired == 0 && std::filesystem::exists(object_path),
+          "manual cleanup protects the currently open thread");
+
+    err = store.cleanup_media(7, 0, "test expiration", cleanup);
+    check(err.ok() && cleanup.objects_expired == 1 && cleanup.files_removed == 1 &&
+              cleanup.bytes_reclaimed == 3 && cleanup.threads_locked == 1 &&
+              !std::filesystem::exists(object_path),
+          "cleanup expires inactive media, reclaims bytes, and locks affected threads");
+
+    loaded = {};
+    err = store.load_session(session.thread_id, loaded);
+    check(err.ok() && loaded.read_only && loaded.read_only_reason == "test expiration" &&
+              loaded.messages.size() == 2,
+          "expired-media threads remain readable with an explicit read-only reason");
+    err = store.save_session(loaded);
+    check(!err.ok() && err.code == ainiux::ErrorCode::FileWrite &&
+              err.message.find("read-only") != std::string::npos,
+          "SQLite rejects mutations to a read-only thread");
+    std::vector<ainiux::chat::ThreadSummary> summaries;
+    err = store.list_threads(summaries, 20);
+    check(err.ok() && summaries.size() == 1 && summaries[0].read_only,
+          "thread listings expose the read-only marker");
+
+    ainiux::provider::ImageInput missing_image;
+    err = store.import_media("different", "image/png", "missing.png", "/tmp/missing.png",
+                             missing_image);
+    check(err.ok(), "second managed object imports for missing-file test");
+    ainiux::chat::Session missing = ainiux::chat::new_session(context);
+    missing.messages.push_back({"user", "inspect", {missing_image}});
+    missing.messages.push_back({"assistant", "seen"});
+    err = store.save_session(missing);
+    check(err.ok(), "thread for missing-file detection saves");
+    const std::string missing_path = ainiux::chat::media_root_for_database(path) +
+                                     "/sha256/" + missing_image.storage_ref.substr(0, 2) +
+                                     "/" + missing_image.storage_ref;
+    std::filesystem::remove(missing_path);
+    ainiux::chat::Session missing_loaded;
+    err = store.load_session(missing.thread_id, missing_loaded);
+    check(err.ok() && missing_loaded.read_only &&
+              missing_loaded.read_only_reason.find("missing") != std::string::npos,
+          "a manually missing media file locks its thread without hiding the transcript");
 }
 
 void test_chat_sqlite_missing_thread_and_corrupt_database() {
@@ -446,7 +589,7 @@ void test_chat_sqlite_thread_name_from_first_user_prompt() {
                 ", 0, '2026-07-09T00:00:00Z', 'user', 'legacy prompt', '{}');"
                 "UPDATE threads SET name = 'New chat', message_count = 1 WHERE id = " +
                 std::to_string(legacy_thread_id) + ";"
-                "DELETE FROM schema_migrations WHERE version = 2;";
+                "DELETE FROM schema_migrations WHERE version >= 2;";
             const int exec_rc = sqlite3_exec(raw_db, insert_sql.c_str(), nullptr, nullptr, &err_msg);
             check(exec_rc == SQLITE_OK,
                   err_msg == nullptr ? "SQLite legacy seed statements run"
@@ -484,6 +627,7 @@ void run_all() {
     test_chat_session_file_failures_and_unicode();
     test_chat_session_has_chat_messages();
     test_chat_sqlite_store_round_trip_and_listing();
+    test_chat_managed_media_cleanup_and_read_only_threads();
     test_chat_sqlite_thread_name_from_first_user_prompt();
     test_chat_sqlite_remove_empty_threads();
     test_chat_sqlite_missing_thread_and_corrupt_database();

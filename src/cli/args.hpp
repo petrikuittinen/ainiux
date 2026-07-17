@@ -131,6 +131,8 @@ struct Options {
     bool max_web_search_results_explicit = false;
     long max_input_bytes = 1048576;
     long max_image_bytes = 20971520;
+    int media_expiration_days = 7;
+    int media_auto_expiration_days = 30;
     long max_context_bytes = 0;
     int editor_undo_limit = static_cast<int>(ainiux::editor::kDefaultUndoLimit);
     long long editor_huge_file_size_warning = ainiux::editor::kDefaultHugeFileSizeWarningBytes;

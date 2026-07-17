@@ -99,7 +99,9 @@ void render(const chat::Session& session,
                   activity_status_segments(label, activity_kind, activity_frame, suffix),
                   StyleRole::Status, style);
     } else {
-        draw_line(layout.status_row, cols, status, status_role_for_text(status), style);
+        const std::string displayed_status = session.read_only ? "[RO] " + status : status;
+        draw_line(layout.status_row, cols, displayed_status,
+                  status_role_for_text(displayed_status), style);
     }
     draw_line(layout.input_label_row, cols, input_label_segments(), StyleRole::InputLabel, style);
 

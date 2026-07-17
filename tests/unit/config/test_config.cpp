@@ -573,7 +573,7 @@ void test_config_model_setting_thinking_budget() {
 void test_config_reads_common_template() {
     ainiux::config::ParseResult parsed = ainiux::config::read_file("config/ainiux.conf");
     check(parsed.error.ok(), "common config file parses");
-    check(parsed.document.entries.size() == 161, "common config has every expected setting");
+    check(parsed.document.entries.size() == 163, "common config has every expected setting");
     ainiux::cli::Options highlight_options;
     ainiux::Error apply_error = ainiux::config::apply_document(parsed.document, highlight_options);
     check(apply_error.ok() && highlight_options.tui_highlight,
@@ -608,6 +608,7 @@ void test_config_reads_common_template() {
               options.editor_auto_save_postfix == "~" && options.editor_auto_save_threshold == 300 &&
               options.editor_auto_save_timeout_seconds == 30 &&
               options.editor_auto_save_size_limit == 10LL * 1024LL * 1024LL &&
+              options.media_expiration_days == 7 && options.media_auto_expiration_days == 30 &&
               options.editor_ai_continue_prefix_max_chars ==
                   ainiux::editor::kDefaultAiContinuePrefixMaxChars &&
               options.editor_ai_continue_postfix_max_chars ==
@@ -663,6 +664,12 @@ void test_config_schema_rejects_invalid_settings_transactionally() {
               err.message.find("tui.typo") != std::string::npos,
           "config schema rejects unknown keys with the qualified name");
     check(options.tui_theme == "light", "invalid config does not partially change options");
+
+    ainiux::config::ParseResult bad_media_days =
+        ainiux::config::parse("[media]\nexpiration_days = -1\n", "media-days.conf");
+    err = ainiux::config::apply_document(bad_media_days.document, options);
+    check(!err.ok() && err.message.find("non-negative integer") != std::string::npos,
+          "config schema rejects negative managed-media expiration days");
 
     ainiux::config::ParseResult wrong_type =
         ainiux::config::parse("[url_fetch]\nallow_private_addresses = yes\n", "type.conf");

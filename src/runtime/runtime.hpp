@@ -101,6 +101,7 @@ class JobHandle {
     void cancel();
     void join();
     bool running() const;
+    bool joinable() const;
 
    private:
     CancellationSource source_;

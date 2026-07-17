@@ -48,7 +48,7 @@ void append_segment(std::vector<StyledSegment>& segments, std::string text, Styl
 }
 
 constexpr const char kInputLabelStatusMessage[] =
-    " ready. /help. Ctrl+b history back and ctrl+d history down";
+    " | /help | history Ctrl+B ↑ Ctrl+D ↓";
 
 }  // namespace
 

@@ -3098,6 +3098,14 @@ Error send_chat_messages(const RequestContext& context,
             if (!image_error.ok()) {
                 return image_error;
             }
+            for (const ImageInput& image : message.images) {
+                if (image.base64_data.empty()) {
+                    return {ErrorCode::FileRead,
+                            "image attachment data is unavailable" +
+                                (image.display_name.empty() ? std::string()
+                                                            : ": " + image.display_name)};
+                }
+            }
             break;
         }
     }

@@ -1428,6 +1428,8 @@ Implementation note (2026-06-20): Non-interactive `--input stdin` and `--attach 
 
 Implementation note (2026-07-14): `/insert` is now a text-editing operation rather than an alias for `/attach`. In editor and full-screen chat modes it inserts at the active cursor through a cancellable worker/event path. Local files accept any ending when their bounded contents are valid UTF-8 and contain no NUL; CR and CRLF normalize to internal LF. HTTP(S) sources reuse URL-fetch security controls and convert UTF-8 HTML to Markdown by default. `[input] auto-convert-html-to-md = no`, chat `/setting auto-convert-html-to-md=no`, or editor `/auto-convert-html-to-md no` retains raw HTML. `/attach` keeps its existing provider context and image-queue behavior.
 
+Implementation note (2026-07-17): Full-screen chat image attachments now persist as raw content-addressed objects under `~/.ainiux/media/sha256/`, while SQLite schema v3 stores only metadata and per-message SHA-256 references. Restored and regenerated stateless requests hydrate historical images inside the request worker. `/cleanup` uses `[media] expiration_days` (default 7), startup cleanup uses `media.auto_expiration_days` (default 30), and zero disables either path. Expired or manually missing media leaves a tombstone and permanently marks affected live threads read-only while preserving their readable transcript.
+
 ## Acceptance criteria
 
 - [x] Context compaction never modifies the full saved transcript destructively.
@@ -2071,6 +2073,20 @@ Improve everyday usability and responsiveness across non-browser surfaces.
 - [ ] Improve chat history scrolling, jump-to-top/bottom behavior, and status-line hints for active provider/model/thinking state.
 - [ ] Reduce friction in thread picker, `/list`, `/clone`, `/setting`, `/system`, and message-edit flows.
 - [ ] Keep the UI responsive during streaming, save/load, search, and slow provider calls.
+
+### Attachment persistence and lifecycle
+
+- [x] Persist full-screen chat images as content-addressed files outside SQLite, with per-message metadata and SHA-256 references in SQLite; hydrate request bytes only inside the cancellable model worker.
+- [x] Add `/cleanup`, configurable manual and automatic media expiration, tombstones, and readable-but-locked threads when request-critical managed media is missing.
+- [ ] Persist the exact bounded UTF-8 context used for TUI text and Markdown attachments. Persist converted Markdown for HTML attachments so follow-up requests and restored threads do not depend on the original path or the one-turn `pending_full_model_content` buffer.
+- [ ] Generalize the image-only attachment API into logical attachments plus durable replay representations. Keep small replay text in SQLite and large binary objects in the content-addressed media store; do not store raw base64 in SQLite or chat JSON.
+- [ ] Add attachment derivatives for future conversions: extracted PDF/DOCX text, audio transcripts, and video transcripts/keyframes. Record source kind/MIME type, converter and version, size/truncation warnings, and whether each object is required for replay.
+- [ ] Make cleanup lock a thread only when the removed object is required to reproduce historical model input. Deleting an archival HTML/PDF/DOCX/audio/video original must not lock a thread when its durable converted text, transcript, or other replay representation remains available.
+- [ ] Add provider-adapter capability checks and request shaping for future native PDF, file, audio, and video inputs. Unsupported combinations must return `UnsupportedFeature`; portable local extraction/transcription remains the fallback where implemented.
+- [ ] Add dedicated `src/pdf/` and `src/word/` conversion modules when PDF and DOCX support is implemented. Start with PDF and DOCX, keep legacy `.doc` and scanned-PDF OCR explicitly unsupported until their own reviewed implementations exist, and justify any parser dependency.
+- [ ] Stream future large audio/video imports through bounded hashing and storage jobs rather than loading whole files or base64 payloads into memory.
+- [ ] Make JSON chat import/export preserve portable attachment metadata and durable replay content, or report clearly when external managed media is required alongside the JSON file.
+- [ ] Test same-process follow-ups, restart/replay, regeneration, context compaction, shared-object cleanup, missing originals with surviving derivatives, cancellation, corrupt media, size limits, and leak-free failure paths for every supported attachment kind.
 
 ### Editor TUI
 

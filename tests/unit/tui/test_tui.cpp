@@ -168,8 +168,10 @@ void test_configured_assist_slash_command_detection() {
 
 void test_tui_ready_and_generation_status() {
     check(ainiux::tui::ready_status() ==
-              "TAB command/path · Ctrl+Space continue · Alt+Enter newline · Alt+Home/End jump chat",
-          "TUI ready status displays complementary input and navigation hints");
+              "Tab complete | Ctrl+Space continue | Alt+Enter newline",
+          "TUI ready status displays compact input hints");
+    check(ainiux::tui::ready_status().size() <= 80,
+          "TUI ready status fits an 80-column terminal");
 
     ainiux::provider::ChatResult result;
     result.ttft_ms = 100;
@@ -549,9 +551,9 @@ void test_tui_input_label_and_activity_indicators() {
           "TUI input label concatenates app version branding with helper text");
     check(label.find(ainiux::versionNumber) != std::string::npos, "TUI input label includes the current version");
     check(label.find("/help") != std::string::npos &&
-              label.find("Ctrl+b history back") != std::string::npos &&
-              label.find("ctrl+d history down") != std::string::npos,
-          "TUI input label shows help and history navigation hints");
+              label.find(u8"history Ctrl+B ↑ Ctrl+D ↓") != std::string::npos,
+          "TUI input label shows compact help and history navigation hints");
+    check(label.size() <= 80, "TUI input label fits an 80-column terminal");
 
     const std::string thinking_a =
         ainiux::tui::activity_indicator_text(ainiux::tui::ActivityKind::Thinking, 0);

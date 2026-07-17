@@ -11,6 +11,7 @@ rm -rf "$HOME_DIR"
 mkdir -p "$HOME_DIR"
 export HOME="$HOME_DIR"
 export OPENAI_API_KEY="${OPENAI_API_KEY:-integration-test-key}"
+export AINIUX_SQLITE_TEST_IMAGE="$ROOT/tests/image_files/temperature_meter.jpg"
 
 python3 "$ROOT/tests/mock_server/openai_mock.py" --port "$PORT" --model "$MODEL" >"$SERVER_LOG" 2>&1 &
 SERVER_PID=$!

@@ -26,7 +26,10 @@ struct TuiFileJobs {
     void start_save(const std::string& path, chat::Session snapshot, bool quiet_success = false);
     void start_load(const std::string& path);
     void start_store_load(long long thread_id);
-    void start_store_save();
+    void start_store_save(chat::Session snapshot);
+    void start_media_cleanup(int expiration_days,
+                             long long protected_thread_id,
+                             bool automatic);
     void start_insert(const std::string& source);
     void start_attach(const std::string& path);
     void start_fetch(const std::string& url);

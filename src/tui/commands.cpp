@@ -10,6 +10,21 @@
 
 namespace ainiux::tui {
 
+namespace {
+
+bool allowed_for_read_only_thread(const std::string& text) {
+    return text == "/help" || text == "/quit" || text == "/exit" ||
+           text == "/list" || text == "/models" || text == "/remove" ||
+           text == "/remove-empty" || text == "/cleanup" ||
+           text == "/new" || text.rfind("/new ", 0) == 0 ||
+           text == "/save" || text.rfind("/save ", 0) == 0 ||
+           text.rfind("/load ", 0) == 0 || text == "/theme" ||
+           text.rfind("/theme ", 0) == 0 || text == "/highlight" ||
+           text.rfind("/highlight ", 0) == 0;
+}
+
+}  // namespace
+
 void handle_tui_command(const std::string& text, TuiCommandContext& ctx, TuiCommandHandlers& handlers) {
     if (text == "/quit" || text == "/exit") {
         handlers.quit();
@@ -37,6 +52,7 @@ void handle_tui_command(const std::string& text, TuiCommandContext& ctx, TuiComm
                 "/load PATH\n"
                 "/remove\n"
                 "/remove-empty\n"
+                "/cleanup (expire inactive managed media)\n"
                 "/pop\n"
                 "/response\n"
                 "/insert FILE_OR_URL (UTF-8 text at cursor)\n"
@@ -55,6 +71,13 @@ void handle_tui_command(const std::string& text, TuiCommandContext& ctx, TuiComm
             ctx.status = "Help hidden";
         }
         ctx.history_scroll = 0;
+        return;
+    }
+    if (ctx.session.read_only && !allowed_for_read_only_thread(text)) {
+        ctx.status = "Thread is read-only: " +
+                     (ctx.session.read_only_reason.empty()
+                          ? std::string("managed attachment media is unavailable")
+                          : ctx.session.read_only_reason);
         return;
     }
     if (text.rfind("/thinking", 0) == 0) {
@@ -347,6 +370,10 @@ void handle_tui_command(const std::string& text, TuiCommandContext& ctx, TuiComm
     }
     if (text == "/response") {
         handlers.start_response_to_unanswered_user();
+        return;
+    }
+    if (text == "/cleanup") {
+        handlers.start_media_cleanup();
         return;
     }
     if (text == "/insert" || text.rfind("/insert ", 0) == 0) {

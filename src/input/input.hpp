@@ -53,6 +53,11 @@ Error load_image_file(const std::string& path,
                       size_t max_bytes,
                       ImageData& image,
                       runtime::CancellationToken cancellation = runtime::CancellationToken());
+Error load_image_file_bytes(const std::string& path,
+                            const FileType& type,
+                            size_t max_bytes,
+                            std::string& bytes,
+                            runtime::CancellationToken cancellation = runtime::CancellationToken());
 Error load_text_context_file(const std::string& path,
                              size_t max_bytes,
                              TextContext& context,

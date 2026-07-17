@@ -166,6 +166,7 @@ std::vector<std::string> chat_assist_command_completions(const EditorAssistConfi
         "/attach ",
         "/clear",
         "/clone",
+        "/cleanup",
         "/edit",
         "/editor",
         "/exit",

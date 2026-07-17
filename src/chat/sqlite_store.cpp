@@ -1,5 +1,7 @@
 #include "chat/sqlite_store.hpp"
 
+#include "chat/media_store.hpp"
+
 #include <sqlite3.h>
 
 #include <cerrno>
@@ -15,7 +17,7 @@
 namespace ainiux::chat {
 namespace {
 
-constexpr int kSchemaVersion = 2;
+constexpr int kSchemaVersion = 3;
 constexpr const char kDefaultThreadName[] = "New chat";
 constexpr size_t kMaxThreadNameLength = 40;
 
@@ -368,6 +370,31 @@ Error migrate_thread_names_v2(sqlite3* db, const std::string& path) {
     return ok_error();
 }
 
+bool table_has_column(sqlite3* db,
+                      const std::string& path,
+                      const std::string& table,
+                      const std::string& column,
+                      Error& error) {
+    Statement stmt(db, path);
+    error = stmt.prepare(("PRAGMA table_info(" + table + ");").c_str());
+    if (!error.ok()) {
+        return false;
+    }
+    while (true) {
+        const int rc = stmt.step();
+        if (rc == SQLITE_DONE) {
+            return false;
+        }
+        if (rc != SQLITE_ROW) {
+            error = sqlite_error(db, path, "could not inspect SQLite table columns", rc);
+            return false;
+        }
+        if (stmt.column_text(1) == column) {
+            return true;
+        }
+    }
+}
+
 bool valid_role(const std::string& role) {
     return role == "system" || role == "user" || role == "assistant";
 }
@@ -493,7 +520,93 @@ INSERT OR IGNORE INTO schema_migrations(version, applied_at)
         }
         version = 2;
     }
+    if (version < 3) {
+        Transaction migration(db, path);
+        err = migration.begin();
+        if (!err.ok()) {
+            return err;
+        }
+        err = exec_sql(db, path, R"SQL(
+CREATE TABLE IF NOT EXISTS media_objects (
+    sha256 TEXT PRIMARY KEY,
+    kind TEXT NOT NULL,
+    mime_type TEXT NOT NULL,
+    byte_size INTEGER NOT NULL,
+    storage_ref TEXT NOT NULL UNIQUE,
+    created_at TEXT NOT NULL,
+    last_used_at TEXT NOT NULL,
+    deleted_at TEXT,
+    delete_reason TEXT NOT NULL DEFAULT ''
+);
+)SQL",
+                       "could not migrate SQLite media schema to version 3");
+        if (!err.ok()) {
+            return err;
+        }
+        for (const auto& column : {
+                 std::pair<const char*, const char*>{"threads", "read_only INTEGER NOT NULL DEFAULT 0"},
+                 {"threads", "read_only_reason TEXT NOT NULL DEFAULT ''"},
+                 {"attachments", "object_sha256 TEXT REFERENCES media_objects(sha256)"},
+                 {"attachments", "source_ref TEXT NOT NULL DEFAULT ''"},
+                 {"attachments", "byte_size INTEGER NOT NULL DEFAULT 0"}}) {
+            const std::string definition = column.second;
+            const std::string column_name = definition.substr(0, definition.find(' '));
+            Error inspect_error;
+            if (!table_has_column(db, path, column.first, column_name, inspect_error)) {
+                if (!inspect_error.ok()) {
+                    return inspect_error;
+                }
+                const std::string sql = "ALTER TABLE " + std::string(column.first) +
+                                        " ADD COLUMN " + definition + ";";
+                err = exec_sql(db, path, sql.c_str(),
+                               "could not add SQLite media schema column");
+                if (!err.ok()) {
+                    return err;
+                }
+            }
+        }
+        err = exec_sql(db, path, R"SQL(
+CREATE INDEX IF NOT EXISTS idx_attachments_object ON attachments(object_sha256);
+CREATE INDEX IF NOT EXISTS idx_media_last_used ON media_objects(deleted_at, last_used_at);
+INSERT OR IGNORE INTO schema_migrations(version, applied_at)
+    VALUES(3, strftime('%Y-%m-%dT%H:%M:%SZ','now'));
+)SQL",
+                       "could not finish SQLite media schema migration 3");
+        if (!err.ok()) {
+            return err;
+        }
+        err = migration.commit();
+        if (!err.ok()) {
+            return err;
+        }
+        version = 3;
+    }
     return ok_error();
+}
+
+Error upsert_media_object(sqlite3* db,
+                          const std::string& path,
+                          const StoredMedia& stored,
+                          const std::string& kind,
+                          const std::string& timestamp) {
+    Statement stmt(db, path);
+    Error err = stmt.prepare(
+        "INSERT INTO media_objects(sha256, kind, mime_type, byte_size, storage_ref, created_at, "
+        "last_used_at, deleted_at, delete_reason) VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?6, NULL, '') "
+        "ON CONFLICT(sha256) DO UPDATE SET mime_type = excluded.mime_type, "
+        "byte_size = excluded.byte_size, storage_ref = excluded.storage_ref, "
+        "last_used_at = excluded.last_used_at, deleted_at = NULL, delete_reason = ''; ");
+    if (!err.ok()) {
+        return err;
+    }
+    return BindChain(stmt)
+        .text(1, stored.sha256)
+        .text(2, kind)
+        .text(3, stored.mime_type)
+        .int64(4, stored.byte_size)
+        .text(5, stored.storage_ref)
+        .text(6, timestamp)
+        .step_done("could not register managed media object");
 }
 
 Error insert_attachment(sqlite3* db,
@@ -501,12 +614,43 @@ Error insert_attachment(sqlite3* db,
                         long long thread_id,
                         long long message_id,
                         long long ordinal,
-                        const provider::ImageInput& image,
+                        const provider::ImageInput& original_image,
                         const std::string& created_at) {
+    provider::ImageInput image = original_image;
+    StoredMedia stored;
+    if (image.storage_ref.empty()) {
+        Error store_error = store_media_base64(path, image.base64_data, image.mime_type, stored);
+        if (!store_error.ok()) {
+            return store_error;
+        }
+        image.storage_ref = stored.sha256;
+        image.byte_size = stored.byte_size;
+    } else {
+        bool available = false;
+        Error media_error = media_file_available(path, image.storage_ref,
+                                                 image.byte_size, available);
+        if (!media_error.ok()) {
+            return media_error;
+        }
+        if (!available) {
+            return {ErrorCode::FileRead,
+                    "cannot save message because managed attachment media is unavailable: " +
+                        image.storage_ref};
+        }
+        stored.sha256 = image.storage_ref;
+        stored.storage_ref = "sha256/" + image.storage_ref.substr(0, 2) + "/" + image.storage_ref;
+        stored.mime_type = image.mime_type;
+        stored.byte_size = image.byte_size;
+    }
+    Error err = upsert_media_object(db, path, stored, "image", created_at);
+    if (!err.ok()) {
+        return err;
+    }
     Statement stmt(db, path);
-    Error err = stmt.prepare(
-        "INSERT INTO attachments(thread_id, message_id, ordinal, kind, mime_type, metadata_json, storage_ref, created_at) "
-        "VALUES(?1, ?2, ?3, 'image', ?4, '{}', ?5, ?6);");
+    err = stmt.prepare(
+        "INSERT INTO attachments(thread_id, message_id, ordinal, kind, mime_type, display_name, "
+        "metadata_json, storage_ref, created_at, object_sha256, source_ref, byte_size) "
+        "VALUES(?1, ?2, ?3, 'image', ?4, ?5, '{}', '', ?6, ?7, ?8, ?9);");
     if (!err.ok()) {
         return err;
     }
@@ -515,8 +659,11 @@ Error insert_attachment(sqlite3* db,
         .int64(2, message_id)
         .int64(3, ordinal)
         .text(4, image.mime_type)
-        .text(5, image.base64_data)
+        .text(5, image.display_name)
         .text(6, created_at)
+        .text(7, image.storage_ref)
+        .text(8, image.source_ref)
+        .int64(9, image.byte_size)
         .step_done("could not insert SQLite attachment");
 }
 
@@ -526,8 +673,9 @@ Error load_images_for_message(sqlite3* db,
                               std::vector<provider::ImageInput>& images) {
     Statement stmt(db, path);
     Error err = stmt.prepare(
-        "SELECT mime_type, storage_ref FROM attachments "
-        "WHERE message_id = ?1 AND kind = 'image' ORDER BY ordinal, id;");
+        "SELECT a.mime_type, a.storage_ref, COALESCE(a.object_sha256, ''), a.display_name, "
+        "a.source_ref, a.byte_size FROM attachments a "
+        "WHERE a.message_id = ?1 AND a.kind = 'image' ORDER BY a.ordinal, a.id;");
     if (!err.ok()) {
         return err;
     }
@@ -543,7 +691,17 @@ Error load_images_for_message(sqlite3* db,
         if (rc != SQLITE_ROW) {
             return sqlite_error(db, path, "could not load SQLite attachments", rc);
         }
-        images.push_back({stmt.column_text(0), stmt.column_text(1)});
+        provider::ImageInput image;
+        image.mime_type = stmt.column_text(0);
+        image.storage_ref = stmt.column_text(2);
+        image.display_name = stmt.column_text(3);
+        image.source_ref = stmt.column_text(4);
+        image.byte_size = stmt.column_int64(5);
+        if (image.storage_ref.empty()) {
+            // Version 1/2 compatibility: storage_ref contained inline base64.
+            image.base64_data = stmt.column_text(1);
+        }
+        images.push_back(std::move(image));
     }
 }
 
@@ -688,6 +846,28 @@ Error SqliteStore::save_session(Session& session) {
     for (const provider::Message& message : session.messages) {
         if (!valid_role(message.role)) {
             return {ErrorCode::ProviderSchema, "cannot save message with unsupported role: " + message.role};
+        }
+    }
+    if (session.thread_id > 0) {
+        Statement locked(db_, path_);
+        Error lock_error = locked.prepare(
+            "SELECT read_only, read_only_reason FROM threads WHERE id = ?1;");
+        if (!lock_error.ok()) {
+            return lock_error;
+        }
+        lock_error = BindChain(locked).int64(1, session.thread_id).error();
+        if (!lock_error.ok()) {
+            return lock_error;
+        }
+        const int lock_rc = locked.step();
+        if (lock_rc == SQLITE_ROW && locked.column_int64(0) != 0) {
+            const std::string reason = locked.column_text(1);
+            return {ErrorCode::FileWrite,
+                    "chat thread is read-only" +
+                        (reason.empty() ? std::string() : ": " + reason)};
+        }
+        if (lock_rc != SQLITE_ROW && lock_rc != SQLITE_DONE) {
+            return sqlite_error(db_, path_, "could not inspect SQLite thread lock", lock_rc);
         }
     }
 
@@ -868,7 +1048,8 @@ Error SqliteStore::load_session(long long thread_id, Session& session) {
     Statement thread(db_, path_);
     Error err = thread.prepare(
         "SELECT id, name, created_at, modified_at, last_provider, last_base_url, last_model, "
-        "settings_json, usage_json, message_count FROM threads WHERE id = ?1 AND deleted_at IS NULL;");
+        "settings_json, usage_json, message_count, read_only, read_only_reason "
+        "FROM threads WHERE id = ?1 AND deleted_at IS NULL;");
     if (!err.ok()) {
         return err;
     }
@@ -894,6 +1075,8 @@ Error SqliteStore::load_session(long long thread_id, Session& session) {
     loaded.model = thread.column_text(6);
     loaded.settings_json = thread.column_text(7);
     loaded.usage_json = thread.column_text(8);
+    loaded.read_only = thread.column_int64(10) != 0;
+    loaded.read_only_reason = thread.column_text(11);
 
     Statement messages(db_, path_);
     err = messages.prepare(
@@ -917,6 +1100,58 @@ Error SqliteStore::load_session(long long thread_id, Session& session) {
         err = load_images_for_message(db_, path_, messages.column_int64(0), images);
         if (!err.ok()) return err;
         loaded.messages.push_back({messages.column_text(1), messages.column_text(2), std::move(images)});
+    }
+
+    if (!loaded.read_only) {
+        for (const provider::Message& message : loaded.messages) {
+            for (const provider::ImageInput& image : message.images) {
+                if (image.storage_ref.empty()) {
+                    continue;
+                }
+                Statement object(db_, path_);
+                err = object.prepare(
+                    "SELECT byte_size, deleted_at, delete_reason FROM media_objects WHERE sha256 = ?1;");
+                if (!err.ok()) return err;
+                err = BindChain(object).text(1, image.storage_ref).error();
+                if (!err.ok()) return err;
+                const int object_rc = object.step();
+                bool available = false;
+                std::string media_reason;
+                if (object_rc == SQLITE_DONE) {
+                    media_reason = "managed attachment metadata is missing";
+                } else if (object_rc != SQLITE_ROW) {
+                    return sqlite_error(db_, path_, "could not inspect managed media", object_rc);
+                } else if (!object.column_text(1).empty()) {
+                    media_reason = object.column_text(2).empty()
+                                       ? "a managed attachment has expired"
+                                       : object.column_text(2);
+                } else {
+                    Error media_error = media_file_available(path_, image.storage_ref,
+                                                             object.column_int64(0), available);
+                    if (!media_error.ok()) {
+                        media_reason = media_error.message;
+                    } else if (!available) {
+                        media_reason = "a managed attachment file is missing";
+                    }
+                }
+                if (media_reason.empty()) {
+                    continue;
+                }
+                loaded.read_only = true;
+                loaded.read_only_reason = media_reason;
+                Statement mark(db_, path_);
+                err = mark.prepare(
+                    "UPDATE threads SET read_only = 1, read_only_reason = ?1 WHERE id = ?2;");
+                if (!err.ok()) return err;
+                err = BindChain(mark).text(1, media_reason).int64(2, thread_id)
+                          .step_done("could not mark thread read-only");
+                if (!err.ok()) return err;
+                break;
+            }
+            if (loaded.read_only) {
+                break;
+            }
+        }
     }
 
     Statement compactions(db_, path_);
@@ -965,7 +1200,8 @@ Error SqliteStore::list_threads(std::vector<ThreadSummary>& threads, int limit) 
     }
     Statement stmt(db_, path_);
     Error err = stmt.prepare(
-        "SELECT id, name, created_at, modified_at, last_provider, last_base_url, last_model, message_count "
+        "SELECT id, name, created_at, modified_at, last_provider, last_base_url, last_model, message_count, "
+        "read_only, read_only_reason "
         "FROM threads WHERE deleted_at IS NULL ORDER BY modified_at DESC, id DESC LIMIT ?1;");
     if (!err.ok()) {
         return err;
@@ -991,8 +1227,139 @@ Error SqliteStore::list_threads(std::vector<ThreadSummary>& threads, int limit) 
         summary.last_base_url = stmt.column_text(5);
         summary.last_model = stmt.column_text(6);
         summary.message_count = stmt.column_int64(7);
+        summary.read_only = stmt.column_int64(8) != 0;
+        summary.read_only_reason = stmt.column_text(9);
         threads.push_back(std::move(summary));
     }
+}
+
+Error SqliteStore::import_media(const std::string& bytes,
+                                const std::string& mime_type,
+                                const std::string& display_name,
+                                const std::string& source_ref,
+                                provider::ImageInput& image) {
+    if (db_ == nullptr) {
+        return {ErrorCode::Internal, "SQLite database is not open"};
+    }
+    StoredMedia stored;
+    Error err = store_media_bytes(path_, bytes, mime_type, stored);
+    if (!err.ok()) {
+        return err;
+    }
+    err = upsert_media_object(db_, path_, stored, "image", current_timestamp_utc());
+    if (!err.ok()) {
+        return err;
+    }
+    image.mime_type = mime_type;
+    image.base64_data.clear();
+    image.storage_ref = stored.sha256;
+    image.display_name = display_name;
+    image.source_ref = source_ref;
+    image.byte_size = stored.byte_size;
+    return ok_error();
+}
+
+Error SqliteStore::cleanup_media(int expiration_days,
+                                 long long protected_thread_id,
+                                 const std::string& reason,
+                                 MediaCleanupResult& result,
+                                 runtime::CancellationToken cancellation) {
+    result = {};
+    if (db_ == nullptr) {
+        return {ErrorCode::Internal, "SQLite database is not open"};
+    }
+    if (expiration_days <= 0) {
+        return ok_error();
+    }
+
+    struct Candidate {
+        std::string sha256;
+    };
+    std::vector<Candidate> candidates;
+    Statement list(db_, path_);
+    Error err = list.prepare(
+        "SELECT mo.sha256 FROM media_objects mo "
+        "WHERE mo.deleted_at IS NULL "
+        "AND datetime(mo.last_used_at) < datetime('now', ?1) "
+        "AND NOT EXISTS (SELECT 1 FROM attachments protected "
+        "                WHERE protected.object_sha256 = mo.sha256 "
+        "                AND protected.thread_id = ?2) "
+        "ORDER BY mo.sha256;");
+    if (!err.ok()) return err;
+    const std::string modifier = "-" + std::to_string(expiration_days) + " days";
+    err = BindChain(list).text(1, modifier).int64(2, protected_thread_id).error();
+    if (!err.ok()) return err;
+    while (true) {
+        if (cancellation.cancelled()) {
+            return {ErrorCode::Cancelled, "media cleanup cancelled while scanning objects"};
+        }
+        const int rc = list.step();
+        if (rc == SQLITE_DONE) break;
+        if (rc != SQLITE_ROW) {
+            return sqlite_error(db_, path_, "could not list expired managed media", rc);
+        }
+        candidates.push_back({list.column_text(0)});
+    }
+
+    if (!candidates.empty()) {
+        Transaction tx(db_, path_);
+        err = tx.begin();
+        if (!err.ok()) return err;
+        const std::string timestamp = current_timestamp_utc();
+        for (const Candidate& candidate : candidates) {
+            if (cancellation.cancelled()) {
+                return {ErrorCode::Cancelled, "media cleanup cancelled before expiration commit"};
+            }
+            Statement lock(db_, path_);
+            err = lock.prepare(
+                "UPDATE threads SET read_only = 1, read_only_reason = ?1 "
+                "WHERE read_only = 0 AND deleted_at IS NULL AND id IN "
+                "(SELECT thread_id FROM attachments WHERE object_sha256 = ?2);");
+            if (!err.ok()) return err;
+            err = BindChain(lock).text(1, reason).text(2, candidate.sha256)
+                      .step_done("could not lock threads with expired media");
+            if (!err.ok()) return err;
+            result.threads_locked += sqlite3_changes(db_);
+
+            Statement expire(db_, path_);
+            err = expire.prepare(
+                "UPDATE media_objects SET deleted_at = ?1, delete_reason = ?2 "
+                "WHERE sha256 = ?3 AND deleted_at IS NULL;");
+            if (!err.ok()) return err;
+            err = BindChain(expire).text(1, timestamp).text(2, reason).text(3, candidate.sha256)
+                      .step_done("could not expire managed media");
+            if (!err.ok()) return err;
+            result.objects_expired += sqlite3_changes(db_);
+        }
+        err = tx.commit();
+        if (!err.ok()) return err;
+    }
+
+    Statement tombstones(db_, path_);
+    err = tombstones.prepare(
+        "SELECT sha256, byte_size FROM media_objects WHERE deleted_at IS NOT NULL;");
+    if (!err.ok()) return err;
+    while (true) {
+        if (cancellation.cancelled()) {
+            return {ErrorCode::Cancelled,
+                    "media cleanup cancelled; expired files will be retried later"};
+        }
+        const int rc = tombstones.step();
+        if (rc == SQLITE_DONE) break;
+        if (rc != SQLITE_ROW) {
+            return sqlite_error(db_, path_, "could not list expired media files", rc);
+        }
+        bool removed = false;
+        err = remove_media_file(path_, tombstones.column_text(0), removed);
+        if (!err.ok()) {
+            return err;
+        }
+        if (removed) {
+            ++result.files_removed;
+            result.bytes_reclaimed += tombstones.column_int64(1);
+        }
+    }
+    return ok_error();
 }
 
 Error SqliteStore::soft_delete_thread(long long thread_id) {

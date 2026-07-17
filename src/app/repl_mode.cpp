@@ -20,6 +20,11 @@ void print_repl_help() {
                  "/fetch URL, /search QUERY, /clear, /system TEXT, /model MODEL\n";
 }
 
+bool allowed_for_read_only_session(const std::string& text) {
+    return text == "/help" || text == "/quit" || text == "/exit" ||
+           text.rfind("/save", 0) == 0 || text.rfind("/load", 0) == 0;
+}
+
 }  // namespace
 
 int run_repl(provider::RequestContext context, chat::Session session, std::ostream& out) {
@@ -68,6 +73,14 @@ int run_repl(provider::RequestContext context, chat::Session session, std::ostre
             continue;
         }
         if (text[0] == '/') {
+            if (session.read_only && !allowed_for_read_only_session(text)) {
+                const std::string reason = session.read_only_reason.empty()
+                                               ? "managed attachment media is unavailable"
+                                               : session.read_only_reason;
+                print_error({ErrorCode::FileLock,
+                             "chat thread is read-only: " + reason});
+                continue;
+            }
             if (text == "/quit" || text == "/exit") {
                 break;
             }

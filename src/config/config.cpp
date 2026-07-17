@@ -1874,6 +1874,10 @@ Error apply_document(const Document& document, cli::Options& options) {
                               cli::option_values::image_capability_description());
         } else if (name == "input.auto-convert-html-to-md") {
             err = auto_save_mode(entry, candidate.auto_convert_html_to_markdown);
+        } else if (name == "media.expiration_days") {
+            err = nonnegative_int(entry, candidate.media_expiration_days);
+        } else if (name == "media.auto_expiration_days") {
+            err = nonnegative_int(entry, candidate.media_auto_expiration_days);
         } else if (name == "editor.undo_limit") {
             err = nonnegative_int(entry, candidate.editor_undo_limit);
         } else if (name == "editor.huge_file_size_warning") {

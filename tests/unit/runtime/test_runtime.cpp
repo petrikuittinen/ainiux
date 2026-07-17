@@ -32,11 +32,19 @@ void test_runtime_event_queue_and_job_cancel() {
     for (int i = 0; i < 100 && !entered.load(std::memory_order_acquire); ++i) {
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
-    check(job.running(), "runtime job reports running");
+    check(job.running() && job.joinable(), "runtime job reports running and joinable");
     job.cancel();
     check(queue.wait_pop_for(value, std::chrono::milliseconds(1000)) && value == 42, "runtime job observes cancellation");
     job.join();
-    check(!job.running(), "runtime job reports stopped after join");
+    check(!job.running() && !job.joinable(), "runtime job reports stopped after join");
+
+    job.start([](ainiux::runtime::CancellationToken) {});
+    for (int i = 0; i < 100 && job.running(); ++i) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    check(!job.running() && job.joinable(),
+          "completed runtime job stays joinable until its event owner joins it");
+    job.join();
 }
 
 void test_runtime_queue_timeout() {

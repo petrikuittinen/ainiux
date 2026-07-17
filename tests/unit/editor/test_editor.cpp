@@ -615,7 +615,11 @@ void test_editor_assist_helpers() {
     ainiux::editor::AssistCompleterState completer;
     ainiux::editor::AssistCompletionResult completion =
         ainiux::editor::complete_assist_command(input, completer, default_config);
-    check(completion.changed && input.rfind("/spell", 0) == 0, "assist tab completion expands /sp");
+    check(!completion.changed && input == "/sp" && completer.active,
+          "assist tab completion enters cycle mode for /spell, /speech, and /Spanish");
+    completion = ainiux::editor::complete_assist_command(input, completer, default_config);
+    check(completion.cycling && input.rfind("/spell", 0) == 0,
+          "assist tab completion cycles from /sp to /spell");
 
     input = "/";
     completer = ainiux::editor::AssistCompleterState{};

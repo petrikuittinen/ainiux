@@ -1,6 +1,5 @@
 #include "tui/file_jobs.hpp"
 
-#include "app/app.hpp"
 #include "fetch/fetch.hpp"
 #include "html/html.hpp"
 #include "input/input.hpp"
@@ -9,10 +8,12 @@
 #include "tui/detail/render.hpp"
 #include "tui/tui.hpp"
 
+#include <stdexcept>
+
 namespace ainiux::tui {
 
 bool TuiFileJobs::busy(bool quiet) const {
-    if (!file_job.running()) {
+    if (!file_job.joinable()) {
         return false;
     }
     if (!quiet) {
@@ -91,12 +92,10 @@ void TuiFileJobs::start_store_load(long long thread_id) {
     status = "Loading thread " + std::to_string(thread_id);
 }
 
-void TuiFileJobs::start_store_save() {
+void TuiFileJobs::start_store_save(chat::Session snapshot) {
     if (!sqlite_available || busy(true)) {
         return;
     }
-    chat::Session snapshot = session;
-    app::refresh_session_metadata(snapshot, context);
     const std::string db_path = sqlite_path;
     runtime::EventQueue<TuiEvent>& event_queue = events;
     file_job.start([db_path, snapshot = std::move(snapshot), &event_queue](
@@ -115,6 +114,52 @@ void TuiFileJobs::start_store_save() {
         }
         event_queue.push(std::move(event));
     });
+}
+
+void TuiFileJobs::start_media_cleanup(int expiration_days,
+                                      long long protected_thread_id,
+                                      bool automatic) {
+    if (!sqlite_available) {
+        if (!automatic) {
+            status = sqlite_unavailable_message ? sqlite_unavailable_message()
+                                                : sqlite_unavailable_status("");
+        }
+        return;
+    }
+    if (expiration_days <= 0) {
+        if (!automatic) {
+            status = "Media cleanup is disabled by its zero-day setting";
+        }
+        return;
+    }
+    if (busy(automatic)) {
+        return;
+    }
+    const std::string db_path = sqlite_path;
+    runtime::EventQueue<TuiEvent>& event_queue = events;
+    file_job.start([db_path, expiration_days, protected_thread_id, automatic, &event_queue](
+                       runtime::CancellationToken token) mutable {
+        TuiEvent event;
+        event.type = TuiEventType::MediaCleanupDone;
+        event.automatic_cleanup = automatic;
+        if (token.cancelled()) {
+            event.error = {ErrorCode::Cancelled, "media cleanup cancelled"};
+        } else {
+            chat::SqliteStore store;
+            event.error = store.open(db_path);
+            if (event.error.ok()) {
+                const std::string reason =
+                    "managed attachment media expired after " +
+                    std::to_string(expiration_days) + " days of inactivity";
+                event.error = store.cleanup_media(expiration_days, protected_thread_id,
+                                                  reason, event.media_cleanup, token);
+            }
+        }
+        event_queue.push(std::move(event));
+    });
+    if (!automatic) {
+        status = "Cleaning managed media...";
+    }
 }
 
 void TuiFileJobs::start_insert(const std::string& source) {
@@ -235,8 +280,11 @@ void TuiFileJobs::start_attach(const std::string& path) {
     const long text_limit = context.options.max_input_bytes;
     const long image_limit = context.options.max_image_bytes;
     const bool auto_convert = context.options.auto_convert_html_to_markdown;
+    const bool persist_image = sqlite_available;
+    const std::string media_database_path = sqlite_path;
     runtime::EventQueue<TuiEvent>& event_queue = events;
-    file_job.start([path, type, text_limit, image_limit, auto_convert, &event_queue](
+    file_job.start([path, type, text_limit, image_limit, auto_convert, persist_image,
+                    media_database_path, &event_queue](
                        runtime::CancellationToken token) mutable {
         TuiEvent event;
         event.type = TuiEventType::AttachDone;
@@ -245,6 +293,18 @@ void TuiFileJobs::start_attach(const std::string& path) {
             event.image_attachment = true;
             if (image_limit <= 0) {
                 event.error = {ErrorCode::BadArgs, "--max-image-bytes must be greater than zero"};
+            } else if (persist_image) {
+                std::string bytes;
+                event.error = input::load_image_file_bytes(
+                    path, type, static_cast<size_t>(image_limit), bytes, token);
+                if (event.error.ok()) {
+                    chat::SqliteStore store;
+                    event.error = store.open(media_database_path);
+                    if (event.error.ok()) {
+                        event.error = store.import_media(bytes, type.mime_type, path,
+                                                         expand_user_path(path), event.image);
+                    }
+                }
             } else {
                 input::ImageData loaded;
                 event.error = input::load_image_file(

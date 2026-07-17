@@ -5,6 +5,7 @@
 #include <vector>
 
 #include "chat/session.hpp"
+#include "chat/sqlite_store.hpp"
 #include "common.hpp"
 #include "context/context.hpp"
 #include "editor/editor.hpp"
@@ -21,6 +22,7 @@ enum class TuiEventType {
     LoadDone,
     StoreSaveDone,
     StoreLoadDone,
+    MediaCleanupDone,
     InsertDone,
     AttachDone,
     FetchDone,
@@ -65,6 +67,8 @@ struct TuiEvent {
     editor::PathCompletionResult completion;
     size_t completion_generation = 0;
     bool quiet_success = false;
+    chat::MediaCleanupResult media_cleanup;
+    bool automatic_cleanup = false;
     // For chat /attach list of text attachments
     std::string attached_source;
     std::string attached_content;

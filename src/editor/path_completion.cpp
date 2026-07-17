@@ -29,6 +29,7 @@ const std::vector<std::string>& chat_command_completions() {
     static const std::vector<std::string> commands = {
         "/attach ",
         "/clear",
+        "/cleanup",
         "/exit",
         "/fetch ",
         "/search ",
