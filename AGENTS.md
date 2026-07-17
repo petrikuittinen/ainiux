@@ -2,69 +2,105 @@
 
 Project: `pkchat`
 
-This file contains repository-level instructions for AI coding agents. Treat it as project guidance. The user's latest explicit instruction always wins, but otherwise follow this file and `PLANS.md`.
+Repository-level instructions for AI coding agents. Treat this as current project guidance. The user's latest explicit instruction always wins. For milestones and history use `PLANS.md`; for user-facing usage use `README.md`; for design rationale use `docs/decisions.md`; for open work use `TODO.md`.
 
 ## Mission
 
-Build `pkchat`: a fast, portable command-line, terminal, and local-web chat client for OpenAI and OpenAI-compatible APIs.
+Build and maintain `pkchat`: a fast, portable command-line and terminal chat client for OpenAI and OpenAI-compatible APIs, with a first-class standalone editor, document conversion, benchmarks, and judge grading.
 
-The program must be excellent as a scriptable CLI before it becomes a full-screen terminal UI or browser UI. Keep the core engine independent from the UI so the same request, provider, streaming, persistence, runtime/job, cancellation, memory-management, and error-handling code can be reused by command-line mode, REPL mode, TUI mode, local web mode, benchmark mode, and future agent mode.
+The program must stay excellent as a scriptable CLI. Keep the core engine independent from UI surfaces so the same request, provider, streaming, persistence, runtime/job, cancellation, memory-management, and error-handling code is reused by:
 
-## Current implementation stance
+- non-interactive CLI chat
+- document extraction / conversion
+- REPL
+- full-screen chat TUI
+- standalone editor (with optional AI assist)
+- benchmark runner
+- grade (judge) pass
+- future local OpenAI-compatible server mode
+- postponed browser web UI
+- future local agent mode (last)
 
-- Default implementation language: **C++17**.
+## Current product snapshot
+
+Status: **v0.97** (see `README.md` and `PLANS.md` implementation notes). Active development targets **v0.9** polish (benchmark cutoff work, refactor, TUI/CLI polish), then **v0.90** local OpenAI-compatible server mode. Browser web UI is postponed. Local agent mode is deliberately late.
+
+### Implemented modes
+
+| Mode | Entry | Notes |
+| --- | --- | --- |
+| One-shot CLI chat | default + `-p` / `--prompt-file` | stdout = model output; stderr = status/errors |
+| Document extract | `--input` / `--fetch-url` without chat prompt | text/Markdown/HTML conversion; image input for chat path |
+| List models | `--list-models` | provider `/models` |
+| REPL | `--repl` / `-i` | line-oriented interactive |
+| Chat TUI | `--chat` (`--tui` alias) | non-blocking alternate-screen UI; SQLite threads |
+| Standalone editor | `--editor [path]` | multi-buffer piece-table editor; optional AI assist |
+| Benchmark | `benchmark` / `--benchmark` | concurrent JSONL dataset runner |
+| Grade | `--grade` | second-pass judge scoring of benchmark results (not combined with `--benchmark`) |
+
+### Implemented capabilities agents must respect
+
+- Built-in provider registry and aliases; Chat Completions; text-only OpenAI Responses API (`--api responses`, `--responses`, `openai_responses`)
+- Provider-specific reasoning/thinking request mapping (`--thinking`, `--thinking-budget`)
+- `--provider none` offline profile for conversion/editor without a model endpoint
+- Credential lookup from env / key file / stdin; redaction in logs and artifacts
+- JSON chat import/export (`--save-chat` / `--load-chat`); SQLite-backed TUI chat library at `~/.pkchat/pkchat.db`
+- Cancellable runtime jobs; libcurl HTTP + incremental SSE streaming
+- Request-only context policies; full transcript preserved on disk
+- Bounded text/HTML/Markdown attachments; JPEG/PNG/GIF image input (Chat Completions)
+- Safe URL fetching; web search (`--search`, `/search`) with API providers and keyless fallbacks
+- Automatic system/user TOML-alike configuration (`config.conf`), plus `themes.conf`, `editor-commands.conf`, `benchmarks.conf`
+- Shared syntax highlighting for editor and chat; grapheme-aware editor navigation
+- Editor AI assist (`Ctrl+Space`, slash commands); window splits; file locking sessions
+- Concurrent JSONL benchmarks and configurable judge grading with runtime prompts from `benchmarks.conf`
+
+### Not implemented yet (do not pretend they exist)
+
+- Local OpenAI-compatible **server** mode (`--server` in `PLANS.md` v0.90)
+- Browser local web UI (`src/web/` reserved; `docs/web-mode.md` is still a stub plan)
+- Autonomous **agent** mode (`pkchat agent`, v1.0) with sandbox/approval
+- PDF / DOCX conversion modules
+- Native Anthropic Messages adapter; full live capability probing for all models
+- ncurses-based TUI (current UI uses POSIX `termios` + ANSI)
+
+## Implementation stance
+
+- Default language: **C++17**.
 - Do not use Rust or Go.
 - Keep the code portable across Linux, BSD, macOS, and other POSIX-like systems where practical.
 - Use a `Makefile` as the primary build entry point.
 - Do not require C++20, C++23, C23, non-portable compiler extensions, or a package manager unless the user explicitly approves it.
-- If the user later explicitly changes the project to C, prefer **C17** for practical compiler portability. Do not make C23 mandatory unless a specific feature justifies it.
+- Prefer stack objects, RAII, `std::string`, `std::vector`, and standard containers.
 
-Performance matters, but correctness, clear errors, safe credential handling, robust streaming, responsive UI behavior, zero memory leaks, and a clean architecture matter more. The main bottlenecks are endpoint latency, model inference, file I/O, and terminal/browser rendering, not C versus C++ overhead.
+Performance matters, but correctness, clear errors, safe credential handling, robust streaming, responsive UI behavior, zero memory leaks, and clean architecture matter more.
 
-## Non-negotiable implementation criteria
+## Non-negotiable: no memory leaks
 
-### No memory leaks
-
-The program must not have memory leaks. Every allocation and acquired resource must be released as soon as it is no longer needed, including on error paths, cancellation paths, timeout paths, interrupted streams, failed JSON parsing, failed file processing, and early returns.
+Every allocation and acquired resource must be released as soon as it is no longer needed, including on error, cancellation, timeout, interrupted stream, failed JSON parse, failed file processing, and early return paths.
 
 Rules:
 
-- Prefer stack objects, RAII, `std::string`, `std::vector`, and standard containers.
-- Use `std::unique_ptr` for owned heap objects. Use `std::shared_ptr` only when shared ownership is truly required and documented.
-- Do not use raw owning pointers in new C++ code.
-- Wrap C resources in RAII types: `CURL*`, `curl_slist*`, JSON handles, `FILE*`, file descriptors, sockets, `DIR*`, terminal state, allocated buffers, and temporary files.
-- When interoperating with C APIs, define ownership at the boundary: who allocates, who frees, and which function frees it.
-- Allocation failures must be handled explicitly where applicable.
-- Add leak checks to tests with AddressSanitizer/LeakSanitizer where available, and Valgrind or an equivalent leak checker where practical.
-- A feature is not done until normal success paths and important failure paths have been checked for leaks.
+- Prefer stack objects and RAII. Use `std::unique_ptr` for owned heap objects. Use `std::shared_ptr` only when shared ownership is truly required and documented.
+- Do not introduce raw owning pointers in new C++ code.
+- Wrap C resources in RAII: `CURL*`, `curl_slist*`, `sqlite3*`, `FILE*`, file descriptors, sockets, `DIR*`, terminal state, temporary files, and allocated buffers.
+- At C API boundaries, define who allocates, who frees, and which free function is used.
+- A feature is not done until normal success paths and important failure paths have been checked for leaks where tooling is available (`make test-sanitize`, `make test-leak`).
 
-If the project is converted to C, use explicit ownership comments, `goto cleanup` style cleanup blocks where helpful, and one obvious release path per function. Never duplicate complex cleanup logic across branches.
-
-## Core priorities
+## Active priorities
 
 Work in this order unless the user explicitly changes priorities:
 
-1. Script-friendly non-interactive CLI.
-2. Reliable HTTP transport and streaming parser.
-3. Provider adapter/profile architecture.
-4. LM Studio as a first-class local provider profile.
-5. Clear, structured error handling.
-6. Safe credential/config handling.
-7. Memory ownership discipline and leak-check infrastructure.
-8. JSON chat persistence and simple REPL.
-9. Runtime/job layer for cancellable long-running work.
-10. Full-screen TUI that never blocks on network, endpoint waits, or file processing.
-11. Provider-specific capability detection and additional adapters.
-12. Attachments and URL fetching.
-13. Benchmark mode.
-14. Local web server mode.
-15. Local agent mode, only after the above is solid.
+1. Keep script-friendly CLI, provider, HTTP/SSE, and error behavior solid.
+2. Finish remaining v0.9 polish: benchmark cutoff/grade calibration, TUI/CLI polish, refactor hygiene, leak and cancellation hardening (see `TODO.md` / `PLANS.md`).
+3. Local OpenAI-compatible **server** mode (v0.90), reusing provider/runtime/security layers.
+4. Only then consider revived browser web UI on the same server/runtime foundation.
+5. Local agent mode last, only with explicit sandbox/approval design.
 
-Do not start with the autonomous agent feature. It is intentionally late because it has security and sandboxing consequences. Web server mode must be implemented before agent mode.
+Do not start autonomous agent features early. Do not treat postponed browser web UI as the next major surface; prefer server mode first.
 
 ## Repository layout
 
-Use this layout unless the existing repository already has a better equivalent:
+This is the **authoritative** layout. Put new code in the matching module. Do not invent a parallel tree.
 
 ```text
 .
@@ -72,542 +108,344 @@ Use this layout unless the existing repository already has a better equivalent:
 ├── PLANS.md
 ├── TODO.md
 ├── README.md
+├── TESTING.md
 ├── Makefile
-├── include/
-│   └── pkchat/
+├── LICENSE
+├── config/                      # bundled install templates
+│   ├── pkchat.conf
+│   ├── themes.conf
+│   ├── editor-commands.conf
+│   └── benchmarks.conf
+├── benchmarks/                  # JSONL datasets (builtin parts + long-context)
+├── include/pkchat/
+│   ├── version.hpp
+│   └── model_setting.hpp
 ├── src/
-│   ├── main.cpp
-│   ├── cli/
-│   ├── config/
-│   ├── provider/
-│   ├── http/
-│   ├── runtime/
-│   ├── chat/
-│   ├── tui/
-│   ├── web/
-│   ├── unicode/
-│   ├── tools/
-│   ├── benchmark/
-│   └── security/
+│   ├── main.cpp                 # mode dispatch
+│   ├── common.{hpp,cpp}
+│   ├── app/                     # mode runners and session orchestration
+│   ├── cli/                     # argument parsing and option values
+│   ├── config/                  # TOML-alike config loading/schema
+│   ├── provider/                # registry, adapters, model list jobs
+│   ├── http/                    # libcurl transport + SSE
+│   ├── runtime/                 # jobs, cancellation, event queues
+│   ├── chat/                    # session, settings, SQLite, JSON chat I/O
+│   ├── context/                 # request context policies / estimates
+│   ├── editor/                  # piece table, buffers, AI assist, locks, splits
+│   ├── tui/                     # full-screen chat UI
+│   ├── ui/                      # shared confirmation / text selector
+│   ├── benchmark/               # dataset, run, scoring, grading, report
+│   ├── fetch/                   # safe URL fetch
+│   ├── search/                  # web search providers and fallbacks
+│   ├── input/                   # local text/image classification and read
+│   ├── html/                    # HTML → text/Markdown
+│   ├── markdown/                # Markdown → HTML/plaintext
+│   ├── highlight/               # shared syntax highlighter
+│   ├── json/                    # internal JSON facade
+│   ├── output/                  # thinking/trace helpers
+│   ├── security/                # credential redaction
+│   ├── version/
+│   ├── web/                     # reserved (browser UI postponed; empty)
+│   ├── tools/                   # reserved / thin
+│   └── unicode/                 # reserved (Unicode data lives under editor/detail)
 ├── tests/
-│   ├── unit/
+│   ├── unit/<module>/           # mirrors src modules; test_runner driver
 │   ├── integration/
+│   ├── mock_server/
+│   ├── mock/                    # LD_PRELOAD helpers (e.g. ENOSPC)
 │   ├── fixtures/
-│   └── mock_server/
+│   ├── highlight/
+│   ├── image_files/
+│   └── text_files/
+├── tools/                       # generate_editor_unicode_data.py, run_enospc_test.sh
 └── docs/
     ├── decisions.md
     ├── api-compatibility.md
+    ├── security.md
+    ├── editor_help.md
     ├── web-mode.md
-    └── security.md
+    └── unicode-license.txt
 ```
 
-Keep dependencies isolated behind small wrapper modules so they can be replaced later.
+Headers for a module usually live next to their `.cpp` files under `src/<module>/` (not only under `include/`). Keep dependencies isolated behind small wrapper modules so they can be replaced later.
 
 ## Dependencies
 
-Use as few external libraries as practical, but do not reimplement complex infrastructure badly.
+Use as few external libraries as practical. Every new dependency must be justified in `docs/decisions.md` or next to the build configuration.
 
-Acceptable baseline dependencies:
+Current baseline:
 
-- `libcurl` for HTTP, HTTPS, proxy support, timeouts, and streaming callbacks.
-- One JSON library behind a small internal facade. Do not hand-write a JSON parser.
-- `ncursesw` for the later full-screen terminal UI.
-- A Unicode helper library such as `utf8proc` or `libgrapheme` is acceptable when implementing serious Unicode text editing.
-- A small, portable HTTP server library may be considered for local web mode, but only behind `src/web/` and only after documenting the dependency decision. A minimal in-tree local-only server is acceptable if it remains simple, tested, and safe.
+- **libcurl** — HTTP/HTTPS, proxies, timeouts, streaming callbacks (`src/http/`).
+- **libsqlite3** — TUI chat library (`src/chat/sqlite_store.*`, `~/.pkchat/pkchat.db`).
+- **In-tree JSON facade** (`src/json/`) — request escaping and response parsing; expand or vendor a reviewed library only with an explicit decision.
+- **POSIX termios + ANSI** — TUI and editor terminal I/O. **No ncurses dependency** today. The editor renderer is independent of the terminal harness.
+- **Generated Unicode tables** — editor word completion / properties under `src/editor/detail/` (see `tools/generate_editor_unicode_data.py`). Full `utf8proc` / `libgrapheme` integration is future work, not required for ordinary changes.
 
-Do not add a dependency just because it is convenient. Every dependency must be justified in `docs/decisions.md` or a short comment near the build configuration.
+Do not add a dependency only because it is convenient.
 
 ## Architecture rules
 
+### Mode dispatch
+
+`src/main.cpp` validates option combinations and dispatches to `src/app/`:
+
+- `run_benchmark_mode`, `run_grade_mode`
+- document extract via document helpers
+- interactive session for `--editor`, `--chat` / `--tui`, and REPL
+
+UI code must not reimplement provider HTTP, SSE parsing, or credential resolution. Long-running work goes through `src/runtime/` and delivers events to the owning loop.
+
 ### Provider adapters/profiles are mandatory
 
-Do not scatter provider-specific assumptions through the codebase. Route all model/API differences through `src/provider/`.
+Route model/API differences through `src/provider/`. Do not scatter provider-specific JSON shape or auth assumptions through TUI, editor, or CLI formatters.
 
-The internal provider interface should support, at minimum:
+The registry is data-driven. Profiles include aliases, default base URLs, endpoint paths, key environment variables, local/remote flags, optional dummy keys, compatibility warnings, and capability flags. OpenAI-compatible providers share Chat Completions request code; Responses is a sibling adapter.
 
-```text
-list_models()
-send_chat_request()
-stream_chat_request()
-cancel_request()
-get_capabilities()
-```
-
-Capabilities should include:
+Built-in profiles include at least:
 
 ```text
-chat_completions
-responses_api
-streaming
-usage_reporting
-requires_bearer_key
-optional_bearer_key
-images
-pdfs
-file_uploads
-file_urls
-tool_calls
-server_side_context_management
-custom_headers
-local_endpoint
-```
-
-Initial adapters/profiles:
-
-```text
-openai_chat          /v1/chat/completions
-openai_responses     /v1/responses
-custom_openai_chat   configurable OpenAI-compatible chat endpoint
-lm_studio            local OpenAI-compatible profile, default http://localhost:1234/v1
-```
-
-Later adapters/profiles:
-
-```text
+none / offline
+openai (aliases: openai_chat, openai_responses)
 openrouter
-ollama
-vllm
-llama_cpp
+deepseek, gemini, anthropic, xai (grok), moonshot (kimi)
+llamacpp, lm_studio (lmstudio), ollama, vllm, sglang
+groq, mistral, together, perplexity, cerebras, fireworks,
+deepinfra, nvidia_nim, zai, qwen, dashscope
+custom_openai_chat (custom)
 ```
 
-Treat LM Studio as a first-class local compatibility profile, not merely as an undocumented custom URL. It is operationally close to a llama.cpp-style local OpenAI-compatible server, but it has its own defaults, aliases, documentation, and optional authentication behavior.
+Treat LM Studio as a first-class local profile (default `http://localhost:1234/v1`, optional key via `LMSTUDIO_API_KEY` / `LM_STUDIO_API_KEY` / `PKCHAT_API_KEY`). Keep `lm_studio` separate from `llamacpp` in profile names even if adapters share code.
 
-The UI must not know the difference between OpenAI Chat Completions, OpenAI Responses, OpenRouter, Ollama, vLLM, LM Studio, llama.cpp, or a custom endpoint.
+`--provider none` has no base URL or model transport. Use it for local conversion and editor workflows that must not invent a dummy endpoint. URL fetch and web search remain separate explicit network operations with their own safety rules.
 
-### LM Studio profile rules
+The UI must not hard-code the difference between OpenAI Chat Completions, Responses, OpenRouter, Ollama, vLLM, LM Studio, or a custom URL beyond selecting a profile and showing status.
 
-Support LM Studio explicitly because it is a popular local OpenAI-compatible endpoint.
+### HTTP and streaming
 
-Provider/profile names and aliases:
-
-```text
-lm_studio
-lmstudio
-lm-studio
-```
-
-Default profile settings:
-
-```text
-default_base_url: http://localhost:1234/v1
-default_key_env: LMSTUDIO_API_KEY, then LM_STUDIO_API_KEY, then PKCHAT_API_KEY
-requires_bearer_key: false by default
-local_endpoint: true
-```
-
-Required compatibility support:
-
-```text
-GET  /v1/models
-POST /v1/chat/completions
-POST /v1/responses, when capability detection says it works
-stream: true for streaming chat/responses, when supported
-```
-
-LM Studio authentication is optional. Do not require a key for `--provider lm_studio` unless the user provides one or the server returns an authentication error. If a key is configured, send it as a Bearer token just like other OpenAI-compatible APIs.
-
-Provider quirks to document and test:
-
-- The model identifier should come from `GET /v1/models`; do not assume OpenAI model names.
-- The server is usually local and often has no authentication by default. Warn in docs that binding it to a LAN address has security implications.
-- Treat capabilities as detected, not assumed. Some LM Studio versions/models may support Responses, tools, images, or structured output differently.
-- Keep `lm_studio` separate from `llama_cpp` in profile names, even if much of the adapter code is shared.
-- If connection to `localhost:1234` is refused, show a local-server-specific hint to start LM Studio's server and verify the port.
-
-### HTTP and streaming rules
-
-The HTTP layer belongs in `src/http/` and must be usable without the TUI or web UI.
+`src/http/` owns transport and must remain usable without TUI or editor.
 
 Requirements:
 
-- Use explicit connect timeout and total timeout settings.
-- Support cancellation while a stream is active.
-- Support proxy configuration where libcurl supports it.
-- Redact credentials in debug logs.
-- Never assume one network chunk equals one JSON object.
-- Implement a real server-sent events parser for streaming.
-- Correctly handle `data: [DONE]`, comments, blank event separators, partial chunks, malformed events, and UTF-8 split across chunks.
-- Ensure all libcurl handles, header lists, buffers, and callback state are released on success, failure, and cancellation.
+- Explicit connect and total timeouts.
+- Cancellation while a stream is active.
+- Proxy support where libcurl supports it.
+- Credential redaction in debug logs.
+- Real SSE parsing: never assume one network chunk equals one JSON object.
+- Handle `data: [DONE]`, comments, blank separators, partial chunks, malformed events, and UTF-8 split across chunks.
+- Release all libcurl handles, header lists, buffers, and callback state on success, failure, and cancellation.
 
-### Runtime/job layer rules
+### Runtime/job layer
 
-Put cancellable long-running work behind `src/runtime/` or an equivalent abstraction before implementing the full-screen TUI or local web UI.
+Cancellable long-running work belongs in `src/runtime/` (cancellation token, thread-safe event queue, RAII job handle). Current model: one worker thread per active job; the owning UI loop alone mutates terminal/session state (see `docs/decisions.md`).
 
-Long-running jobs include:
+Jobs include HTTP connect/request/stream, model list, URL fetch, attachment/document processing, chat save/load on slow filesystems, editor AI assist, reformat jobs, benchmark/grade work, and future server request handling.
 
-```text
-HTTP connect/request/streaming
-model-list request
-URL fetch
-attachment read/process
-text/PDF extraction
-chat save/load on slow filesystems
-context compaction/summarization
-benchmark runs
-future web requests that proxy to model calls
-future agent tool execution
-```
+Rules:
 
-Requirements:
-
-- The UI thread/event loop must never block on network I/O, DNS/TLS waits, endpoint response waits, streaming callbacks, file reads, file writes, URL fetching, attachment processing, PDF/text extraction, compaction, or benchmark jobs.
-- Use worker threads, a job queue, non-blocking event loops, or another explicit runtime design. Pick one and document it in `docs/decisions.md`.
-- All long-running jobs must support cancellation.
-- Use thread-safe event delivery from workers to UI code.
-- Workers must not mutate TUI state, web session state, or shared chat state directly. Send events to the owning loop instead.
-- The TUI must remain usable while a model request is pending or streaming.
-- Local web mode must continue accepting browser/UI requests while a model request, file processing job, or streaming response is in progress.
-- Shutdown must cancel or join workers cleanly.
-- No worker, queue, cancellation token, mutex, condition variable, or per-job allocation may leak.
+- UI threads must never block on network, DNS/TLS, endpoint waits, streaming callbacks, large file I/O, fetch, or compaction.
+- Workers must not mutate TUI, editor, or chat state directly; they send events.
+- All jobs must support cancellation; shutdown cancels or joins cleanly.
+- No leaks of workers, queues, tokens, mutexes, or per-job buffers.
 
 ### CLI rules
 
-The CLI must be useful in shell scripts.
+The CLI must remain useful in shell scripts.
 
-Default behavior:
-
-- `stdout` is reserved for model output.
+- `stdout` is reserved for model output (and intentional convert/list output).
 - `stderr` is for status, warnings, progress, and errors.
-- Exit codes must distinguish success, bad arguments, network failure, API failure, config failure, and internal failure.
-- Add `--format text|json|ndjson` before adding fancy output.
-- Add `--no-stream` even if streaming is the default.
+- Exit codes distinguish success, bad arguments, network failure, API failure, config failure, cancellation, and internal failure via `ErrorCode` and `src/app/exit_codes.cpp`.
+- Support `--format text|json|ndjson` and `--no-stream` for scripted chat paths.
 
-Required early examples:
+Examples:
 
 ```sh
 pkchat http://localhost:8000 -p "What is the capital of Norway?"
 pkchat --provider openai -m MODEL -p "Hello"
-pkchat --provider lm_studio -m MODEL -p "Hello from LM Studio"
 pkchat --provider lmstudio --list-models
-pkchat --list-models http://localhost:8000
-pkchat --prompt-file prompt.txt --system-file system.txt --format json
+pkchat --editor notes.md
+pkchat --chat
+pkchat benchmark --provider openai -m MODEL
+pkchat --grade --provider openai -m JUDGE_MODEL --grade-input results.jsonl
+pkchat --input page.html --output-format md
 ```
 
-### Local web server mode rules
+### Configuration
 
-Local web mode is a normal product mode, but it must be implemented after the CLI, provider architecture, persistence, runtime/job layer, and benchmark mode are solid. It must be implemented before local agent mode.
+Configuration is TOML-alike, not JSON.
 
-Command shape:
-
-```sh
-pkchat -w
-pkchat --web
-pkchat --web 8080
-pkchat --web=8080
-pkchat --web-host 127.0.0.1 --web 8080
+```text
+system: $XDG_CONFIG_DIRS/pkchat/config.conf (default /etc/xdg/...)
+user:   $XDG_CONFIG_HOME/pkchat/config.conf or ~/.config/pkchat/config.conf
 ```
 
-Rules:
+Layering: system files (reverse `XDG_CONFIG_DIRS` order), then user file, then CLI (authoritative). `--no-config` skips the user file only. Separate documents:
 
-- `-w` and `--web` start a local web server.
-- If no port is provided, default to port `80`.
-- Because binding to port 80 often requires elevated privileges on Unix-like systems, show a clear permission error and suggest `--web 8080` when binding fails for that reason.
-- Bind to `127.0.0.1` by default, not all interfaces.
-- Require an explicit option such as `--web-host 0.0.0.0` or `--web-allow-lan` before listening on LAN-visible addresses.
-- Do not expose API keys, config secrets, chat files, or arbitrary local files through the web server.
-- Disable permissive CORS by default. Do not allow arbitrary websites to control the local server.
-- Use standard HTML widgets: `textarea` for input, `button` elements for actions, `select` for model/provider selection, and ordinary form controls for settings.
-- Use a monospace font by default.
-- Provide a light/dark mode toggle.
-- Keep the browser UI visually similar to the text CLI/TUI chat: chat history, input area, status area, settings/model controls, and basic stats.
-- Serve local assets only. Do not depend on external CDNs for core functionality.
-- Use the same provider, chat, persistence, runtime/job, cancellation, and error-handling layers as CLI/TUI mode.
-- Streaming to the browser should use a simple, documented mechanism such as Server-Sent Events or WebSocket. Do not block the HTTP accept loop or browser UI while waiting for model output.
-- All per-session allocations, sockets, response buffers, and streaming state must be cleaned up when the session ends, the browser disconnects, or the user cancels generation.
+- `themes.conf` — TUI/editor themes
+- `editor-commands.conf` — editor AI slash commands
+- `benchmarks.conf` — judge grading prompts (no compiled fallback grading prose)
 
-### URL/base URL handling
+Bundled templates live in `config/` and install via `make install`. See `docs/decisions.md`.
 
-Be helpful but deterministic.
+### Persistence
 
-Rules:
+- **SQLite TUI library:** `~/.pkchat/pkchat.db` (WAL, per-message rows). Primary local chat library for `--chat`.
+- **JSON chat files:** explicit `--save-chat` / `--load-chat` import/export. Include schema version, timestamps, provider, base URL, model, settings, messages, attachments, usage, compaction events as applicable.
+- Atomic file saves where files are used: write temp → fsync where supported → rename → fsync parent where supported.
+- Restrictive permissions for files that may contain prompts, history, URLs, or secrets.
+- Release every allocation, open DB handle, temporary file, and JSON object on success and failure.
 
-1. If the provided URL path already ends in `/v1`, use it as the base URL.
-2. If the path is empty or `/`, try appending `/v1`.
-3. Probe `GET /models` and `GET /v1/models` only when needed.
-4. Cache or display the selected base URL only after it succeeds.
-5. Allow explicit overrides with `--base-url`, `--chat-url`, `--models-url`, and later `--responses-url`.
-6. Do not hide surprising URL rewrites. Show them on `stderr` unless `--quiet` is set.
-
-### Error handling rules
+### Error handling
 
 Never emit vague errors such as `request failed` when more detail is available.
 
-Use structured internal error categories such as:
+Internal codes live in `pkchat::ErrorCode` (`src/common.hpp`), including:
 
 ```text
-PKCHAT_ERR_BAD_ARGS
-PKCHAT_ERR_BAD_URL
-PKCHAT_ERR_DNS
-PKCHAT_ERR_CONNECT
-PKCHAT_ERR_TLS
-PKCHAT_ERR_TIMEOUT
-PKCHAT_ERR_HTTP_STATUS
-PKCHAT_ERR_AUTH
-PKCHAT_ERR_RATE_LIMIT
-PKCHAT_ERR_JSON_PARSE
-PKCHAT_ERR_SSE_PARSE
-PKCHAT_ERR_PROVIDER_SCHEMA
-PKCHAT_ERR_UNSUPPORTED_FEATURE
-PKCHAT_ERR_FILE_READ
-PKCHAT_ERR_FILE_WRITE
-PKCHAT_ERR_CONFIG_CORRUPT
-PKCHAT_ERR_WEB_BIND
-PKCHAT_ERR_WEB_REQUEST
-PKCHAT_ERR_MEMORY
-PKCHAT_ERR_INTERNAL
+Ok, BadArgs, BadUrl, Dns, Connect, Tls, Timeout,
+HttpStatus, Auth, RateLimit, JsonParse, SseParse,
+ProviderSchema, UnsupportedFeature, FileRead, FileWrite,
+FileLock, Config, Cancelled, StreamComplete, Internal
 ```
 
-Human-facing errors should include:
+Human-facing errors should include what failed, which URL/path/model/option was involved, HTTP status and safe provider body when available, what was tried, and a concrete next step when possible.
 
-- What failed.
-- Which URL, path, file, model, option, socket, or port was involved.
-- HTTP status and provider error body when safe to show.
-- What was tried.
-- A concrete next step when possible.
+### Credential handling
 
-Example:
+Prefer environment variables, key files, or stdin. Do not encourage command-line API keys.
+
+Supported patterns include provider-specific env vars (`OPENAI_API_KEY`, `OPENROUTER_API_KEY`, `LMSTUDIO_API_KEY`, `LM_STUDIO_API_KEY`, …), `PKCHAT_API_KEY`, `--key-env`, `--key-file`, `--key-stdin`, and `--header`.
+
+If `-k` / `--key` is used, warn that argv may be visible to other local users unless `--quiet`.
+
+Always redact from logs, errors, traces, saved chats, and debug output:
 
 ```text
-HTTP 404 from http://localhost:8000/v1/chat/completions: endpoint not found.
-Tried base URL: http://localhost:8000/v1
-Suggestion: check whether the server expects /v1, /api/v1, or a custom --chat-url.
+Authorization, api-key, x-api-key, cookie, set-cookie
 ```
 
-### Credential handling rules
+### URL / base URL handling
 
-Prefer credentials from environment variables, key files, or stdin. Do not encourage command-line API keys.
+Be helpful but deterministic:
 
-Supported methods should include:
+1. If the path already ends in `/v1`, use it as the base URL.
+2. If the path is empty or `/`, try appending `/v1`.
+3. Probe models endpoints only when needed.
+4. Allow overrides such as `--base-url`, `--chat-url`, `--models-url`, `--responses-url`.
+5. Do not hide surprising rewrites; show them on stderr unless `--quiet`.
 
-```text
-OPENAI_API_KEY
-OPENROUTER_API_KEY
-LMSTUDIO_API_KEY
-LM_STUDIO_API_KEY
-PKCHAT_API_KEY
---key-env NAME
---key-file PATH
---key-stdin
---header "Name: Value"
-```
+### URL fetch and web search safety
 
-If `-k` or `--key` is implemented, warn that command-line arguments may be visible to other local users unless `--quiet` is set.
+- URL fetch is explicit (`--fetch-url`, `/fetch`); never triggered merely by URLs inside prompt text.
+- Limit response size, set timeouts, control redirects, check content type.
+- Block private, loopback, multicast, link-local, and metadata addresses unless explicitly allowed (`--allow-private-url-fetch` / config).
+- Web search is a separate module (`src/search/`) with its own providers and result caps.
+- Clean up all transfer handles, buffers, and temporary state after success, failure, or cancellation.
 
-Always redact these from logs, errors, traces, saved chats, web responses, and debug output:
+### Attachments and document conversion
 
-```text
-Authorization
-api-key
-x-api-key
-cookie
-set-cookie
-```
+Attachments are capability-dependent. Do not fake support.
 
-### Persistence rules
+- Text: bounded read, binary/UTF-8 checks, convert then send converted context.
+- Images: JPEG/PNG/GIF for Chat Completions; temporary base64; never persist raw base64 into chat JSON.
+- PDF/DOCX: unsupported; do not insert binary as prompt text. Future modules should be `src/pdf/`, `src/word/` (or similar), not grown into `src/html/`.
 
-Use XDG-style locations on Unix-like systems:
+### Context and compaction
 
-```text
-config: $XDG_CONFIG_HOME/pkchat/config.json or ~/.config/pkchat/config.json
-state:  $XDG_STATE_HOME/pkchat/chats/ or ~/.local/state/pkchat/chats/
-data:   $XDG_DATA_HOME/pkchat/ or ~/.local/share/pkchat/
-```
+Never silently destroy the user's actual transcript. Store the full transcript; only compact the version sent to the model.
 
-Chat files must include at least:
+Policies include `error`, `truncate-oldest`, `truncate-middle`, `summarize-oldest`, `summarize-middle`, and related options documented in CLI help. When compaction happens, surface a clear notice.
 
-```text
-schema_version
-created_at
-updated_at
-provider
-base_url
-model
-settings
-messages
-attachments
-usage
-compaction_events
-```
+### Unicode and terminal
 
-Save chat/config files atomically:
+UTF-8 byte preservation is not enough.
 
-```text
-write temp file
-fsync temp file where supported
-rename temp file over destination
-fsync parent directory where supported
-```
+- Editor and TUI: grapheme-aware navigation, terminal cell width, no mid-sequence UTF-8 splits on stream.
+- Invalid UTF-8: visible replacement on render where applicable; do not crash.
+- Tests should cover multilingual text, combining marks, emoji sequences, and invalid bytes.
+- Keep cancel/interrupt behavior sensible (`Ctrl+C` / Esc for cancel where implemented); do not invent non-portable send chords without fallbacks such as slash commands.
 
-Use restrictive permissions for files that may contain prompts, chat history, URLs, or secrets.
+### Chat TUI rules
 
-Every allocation, open file, temporary file, JSON object, and directory handle used during load/save must be released on success and failure.
+The TUI is a shipped foundation, not a future milestone. Continue improving it without breaking responsiveness.
 
-### Unicode and terminal rules
+- Layout: chat history, status line, bounded bottom input panel embedding `EditorState`.
+- Restore terminal state after crash/interrupt where possible; handle resize.
+- Streaming must not corrupt the input editor.
+- Long-running work runs as runtime jobs; user can scroll, edit, open help/pickers, and cancel in-flight generation.
+- Themes: semantic colors via `themes.conf`; `--nocolors` disables styling without removing control sequences.
 
-UTF-8 byte preservation is not enough. Treat Unicode handling as a real feature.
+### Standalone editor rules
 
-Tests must include:
+`--editor` is a permanent product mode and the multiline editing core shared with TUI input.
 
-```text
-Chinese: 你好
-Arabic: مرحبا
-Cyrillic: Привет
-Finnish/Swedish characters: Ä Ö Å ä ö å
-Combining marks: é
-Emoji sequence: 👨‍👩‍👧‍👦
-Invalid UTF-8 byte sequences
-```
+- Piece-table buffer model; multi-buffer open/list/close; optional splits.
+- Advisory `FILE.LOCK` sessions, read-only contention handling, external-change detection (see `docs/decisions.md` / editor file session code).
+- AI assist uses the configured provider/model only: no shell, no arbitrary workspace agent tools, no network beyond the model endpoint and explicit fetch/search commands.
+- `/insert` is text insertion; `/attach` is provider context / images; do not conflate them.
+- Auto-save, huge-file warnings, tab/line-ending settings, syntax `/mode`, `/reformat` are editor concerns under `src/editor/`.
 
-For the TUI/editor:
+### Benchmark and grade rules
 
-- Track grapheme clusters, not just bytes.
-- Track terminal cell width.
-- Do not split a UTF-8 sequence during streaming output.
-- Do not assume Ctrl+Enter or Shift+Enter are portable.
-- Prefer configurable key bindings.
-- Default send key should be something realistically detectable, such as `Alt+Enter` or `Esc` followed by `Enter`, with fallback commands like `/send`.
-- Keep `Ctrl+C` as cancel/interrupt by default, not copy.
+- Datasets and results are UTF-8 JSONL. Built-in corpus lives under `benchmarks/` (category parts assembled into `benchmarks/builtin.jsonl`).
+- Every case needs a reference answer or assessment criteria; safety cases use classification + expected action (including policy-sensitive boundary cases).
+- Grading instructions come only from layered `benchmarks.conf` at runtime — do not compile fallback grading prose into C++.
+- `--benchmark` and `--grade` cannot be combined.
+- Keep runs cancellable; release per-run allocations; continue through individual case failures where the design already does so.
 
-### TUI rules
+### Future local server mode (v0.90)
 
-The TUI is not v1. Build it after CLI, simple REPL, runtime/job infrastructure, and persistence are reliable.
+When implemented, prefer a dedicated flag such as `--server` (see `PLANS.md`). Do not overload postponed browser `--web` for the API server without an explicit product decision.
 
-Target layout:
+Expected constraints:
 
-```text
-chat history: remaining screen height
-input area: floor(height / 5), minimum 3 lines when possible
-status line: one line
-```
+- Bind loopback by default; require an explicit option for LAN bind.
+- Do not expose API keys, config secrets, chat DBs, or arbitrary local files.
+- Reuse provider, runtime, cancellation, and redaction layers.
+- Initial server mode is not agent mode: no shell execution, no unrestricted workspace reads.
 
-Required behavior before visual polish:
+### Future agent mode (v1.0)
 
-- Terminal state is restored after crash or interrupt where possible.
-- Window resize is handled.
-- Streaming output does not corrupt the input editor.
-- Raw mode/cbreak mode cleanup is robust.
-- `/help`, `/quit`, `/model`, `/system`, `/temperature`, `/save`, `/load`, and `/models` work.
-- The UI remains responsive while connecting, waiting for the endpoint, streaming output, loading/saving chats, processing attachments, fetching URLs, compacting context, or cancelling a job.
-- The user can scroll, edit the current input, open help/options, and cancel an in-flight generation while a request is pending.
+Agent mode is last and separate from ordinary chat/editor assist.
 
-### Context and compaction rules
+- Default: read-only workspace intent, no shell, no network except configured model endpoint.
+- Ask before writes, commands, and URL fetches; log tool actions.
+- Support workspace path and sandbox levels when designed.
+- Never implement auto-executing local shell without an approval/sandbox design.
 
-Never silently destroy the user's actual transcript.
+### Postponed browser web UI
 
-Store the full transcript on disk. Only compact the version sent to the model.
-
-Supported policies should eventually include:
-
-```text
---context-policy error
---context-policy truncate-oldest
---context-policy summarize-oldest
---context-policy summarize-middle
---context-policy provider-auto
-```
-
-When compaction happens, show a clear notice such as:
-
-```text
-Context compacted: 42 earlier messages summarized into 1 message. Full transcript preserved on disk.
-```
-
-### Attachments and URL fetching rules
-
-Attachments are provider-capability dependent. Do not fake support.
-
-Text files may be inlined after size and encoding checks. Images, PDFs, and provider-native files require capability checks.
-
-URL fetching must be explicit or clearly visible. Protect users from accidental local-network probing.
-
-Default URL-fetching safety rules:
-
-- Limit response size.
-- Set a timeout.
-- Limit redirects.
-- Check content type.
-- Block private, loopback, multicast, link-local, and metadata-service addresses unless explicitly allowed.
-- Show which URL was fetched.
-- Clean up all transfer handles, buffers, temporary files, parser objects, and attachment state after success, failure, or cancellation.
-
-### Local agent mode rules
-
-Agent mode is late-stage and must be separate from ordinary chat. Implement web server mode before implementing agent mode.
-
-Command shape should be similar to:
-
-```sh
-pkchat agent [options]
-```
-
-Default safety model:
-
-- Read-only current workspace.
-- No shell execution by default.
-- No network except the configured model endpoint by default.
-- Ask before writing files.
-- Ask before running commands.
-- Ask before fetching URLs.
-- Show exact commands before running them.
-- Log all tool actions.
-- Support `--workspace PATH` and `--sandbox none|basic|strict`.
-
-Do not implement auto-executing local shell commands without an approval/sandbox design.
+Do not implement browser web UI while v0.9 / server mode work remains the roadmap focus unless the user explicitly requests it. If revived, reuse server/runtime/session/security layers; keep CORS locked down; serve only local assets; never leak secrets. Detailed historical checklist lives in older notes and `docs/web-mode.md`.
 
 ## Testing requirements
 
-Add tests with every behavior change. Do not rely only on manual testing.
+Add tests with every behavior change. Do not rely only on manual testing. See `TESTING.md`.
 
-Minimum test categories:
+Minimum areas (many already have coverage — extend rather than replace):
 
 ```text
-unit tests for CLI parsing
-unit tests for URL normalization
-unit tests for JSON request generation
-unit tests for provider response parsing
-unit tests for LM Studio profile defaults and aliases
-unit tests for SSE parsing
-unit tests for runtime cancellation and event delivery
-unit tests for error formatting
-unit tests for UTF-8 validation and boundary handling
-unit tests for web-mode port parsing and route handling
-integration tests with a mock OpenAI-compatible server
-integration tests with a mock LM Studio-compatible server
-streaming tests with arbitrary chunk boundaries
-TUI responsiveness tests with slow mock endpoints
-web UI responsiveness tests with slow mock endpoints and slow file jobs
-HTTP 401, 403, 404, 429, 500 tests
-connection drop mid-stream
-malformed JSON
-malformed SSE
-empty input
-overly long input
-corrupted config and chat files
-permission-denied file writes
-permission-denied web bind to port 80
-API key redaction tests
-memory leak tests for success, error, cancellation, and interrupted-stream paths
+CLI parsing, URL normalization, config loading
+JSON request generation and provider response parsing
+Provider registry / aliases / LM Studio defaults
+SSE parsing with arbitrary chunk boundaries
+Runtime cancellation and event delivery
+Error formatting and credential redaction
+UTF-8 validation and editor grapheme/cell-width behavior
+Benchmark dataset schema, run, and grade validation
+Editor file lock / autosave / AI assist cancellation where practical
+HTTP 401/403/404/429/500, connection drop mid-stream
+Malformed JSON/SSE, corrupt config/chat/DB, permission failures
+Memory leak checks for success, error, cancellation, interrupted stream
 ```
 
-When practical, add sanitizer and leak-check targets:
-
-```sh
-make sanitize
-make test-sanitize
-make leak-check
-make test-leak
-```
-
-Do not claim tests passed unless you actually ran them.
-
-## Build expectations
-
-The Makefile should eventually support:
+Useful targets:
 
 ```sh
 make
 make test
+make test-unit
+make test-unit-faults
 make test-integration
+make test-integration-sqlite
 make sanitize
 make test-sanitize
 make leak-check
@@ -616,38 +454,35 @@ make clean
 make install PREFIX=/usr/local
 ```
 
-Compiler warnings should be strict. Use at least:
-
-```text
--Wall -Wextra -Wpedantic
-```
-
-Treat warnings as errors in CI or sanitizer builds when practical, but avoid making uncommon platform warnings block all users unnecessarily.
+Compiler warnings should stay strict (`-Wall -Wextra -Wpedantic` as configured). Do not claim tests passed unless you actually ran them.
 
 ## Documentation expectations
 
-Keep these files current:
+Keep these current when behavior changes:
 
-- `README.md`: user-facing usage, examples, supported providers, build/install.
-- `TODO.md`: short active task list.
-- `PLANS.md`: roadmap, milestone acceptance criteria, implementation plan.
-- `docs/api-compatibility.md`: provider quirks and supported endpoints.
-- `docs/security.md`: credential, URL-fetching, web-mode, and agent-mode safety model.
-- `docs/web-mode.md`: local web server usage, security model, endpoints, and UI behavior.
-- `docs/decisions.md`: notable design decisions and dependency choices.
+- `README.md` — user-facing usage, examples, providers, build/install
+- `TODO.md` — short active task list
+- `PLANS.md` — roadmap and milestone acceptance criteria (history + next work)
+- `TESTING.md` — how to run and what is covered
+- `docs/api-compatibility.md` — provider quirks
+- `docs/security.md` — credential, URL-fetch, future server/agent safety
+- `docs/decisions.md` — design and dependency decisions
+- `docs/editor_help.md` — editor help content embedded/installed for users
+- `docs/web-mode.md` — postponed browser UI notes
+
+This file (`AGENTS.md`) describes **current agent constraints and layout**. Milestone narrative and historical checklists belong in `PLANS.md`.
 
 ## Coding style
 
 - Prefer small modules and explicit ownership.
 - Avoid hidden global mutable state.
-- Use RAII for resources such as CURL handles, files, sockets, JSON objects, terminal mode, web sessions, worker threads, and temporary files.
+- Use RAII for CURL, sqlite, files, sockets, JSON objects, terminal mode, worker threads, and temporary files.
 - Check every meaningful return value.
-- Do not ignore errors from file I/O, socket I/O, terminal operations, JSON parsing, memory allocation, thread creation, locks, condition variables, or libcurl callbacks.
 - Keep functions short enough to review.
-- Keep provider-specific JSON shape code inside provider adapters.
-- Do not mix terminal drawing code, web-server code, and HTTP/model-provider code.
-- Avoid cleverness. The project is a reliability tool, not a demo.
-- No memory leaks are acceptable. New code must have a clear ownership model.
+- Keep provider-specific JSON shape inside provider adapters.
+- Do not mix terminal drawing, HTTP/provider transport, and benchmark grading in one file.
+- Avoid cleverness. This is a reliability tool, not a demo.
+- No memory leaks are acceptable.
 
 ## Definition of done
 
@@ -657,12 +492,12 @@ A change is not done until:
 2. Relevant tests exist or there is a clear explanation why not.
 3. Existing tests pass, if runnable.
 4. Errors are specific and actionable.
-5. Credentials are not leaked in logs, saved files, traces, terminal output, or web responses.
+5. Credentials are not leaked in logs, saved files, traces, terminal output, or future web/server responses.
 6. Documentation is updated when behavior changes.
-7. The change does not break script-friendly stdout/stderr behavior.
-8. The implementation fits the architecture in this file.
-9. Long-running work is cancellable and does not block TUI/web UI loops where those modes are involved.
-10. Leak checks pass for the touched code path where leak-check tooling is available.
+7. Script-friendly stdout/stderr behavior remains intact for CLI paths.
+8. The implementation fits this architecture.
+9. Long-running work is cancellable and does not block TUI/editor loops where those modes are involved.
+10. Leak checks pass for the touched path where tooling is available.
 
 ## Git and worktree safety for agents
 
@@ -672,3 +507,4 @@ A change is not done until:
 - Do not amend commits unless explicitly asked.
 - Keep unrelated refactors out of feature patches.
 - Prefer focused, reviewable changes.
+- Do not commit local scratch files (ad-hoc notes, personal test inputs, editor backups) unless the user asks.
