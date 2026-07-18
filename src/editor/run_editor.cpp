@@ -25,6 +25,7 @@
 #include "tui/tui.hpp"
 #include "ui/confirmation.hpp"
 #include "ui/text_selector.hpp"
+#include "ui/provider_model_selector.hpp"
 
 #include <algorithm>
 #include <cctype>
@@ -365,7 +366,12 @@ app::EditorRunResult run_editor(const std::string& path,
         const TerminalThemeStyle theme_style = terminal_theme_style();
         if (picker.active) {
             picker.refresh_view();
-            render_terminal(picker.view, minibuffer, theme_style);
+            render_terminal_panel(picker.view,
+                                  minibuffer,
+                                  theme_style,
+                                  picker.for_provider ? tui::TuiMode::ProviderList
+                                                      : tui::TuiMode::ModelList,
+                                  picker.scroll);
             return;
         }
         if (buffer_list_active) {
@@ -775,17 +781,25 @@ app::EditorRunResult run_editor(const std::string& path,
         minibuffer_message(minibuffer, picker.status_message());
     };
 
-    auto handle_provider_command = [&](const std::string& target) {
-        if (target.empty()) {
-            open_provider_picker();
-            return;
-        }
+    auto apply_provider_selection = [&](const std::string& target) {
         Error apply_error = apply_editor_provider_target(ai_continue, assist_config, target);
         if (!apply_error.ok()) {
             minibuffer_message(minibuffer, apply_error.message);
             return;
         }
-        refresh_ai_status();
+        if (editor_ai_has_provider(ai_continue)) {
+            start_model_list();
+        } else {
+            refresh_ai_status();
+        }
+    };
+
+    auto handle_provider_command = [&](const std::string& target) {
+        if (target.empty()) {
+            open_provider_picker();
+            return;
+        }
+        apply_provider_selection(target);
     };
 
     auto handle_model_command = [&](const std::string& model_name) {
@@ -818,18 +832,8 @@ app::EditorRunResult run_editor(const std::string& path,
         }
         if (picker.for_provider) {
             const std::string provider_name = picker.items[picker.selected];
-            const bool was_provider_picker = picker.for_provider;
             picker.clear();
-            Error apply_error = apply_editor_provider_target(ai_continue, assist_config, provider_name);
-            if (!apply_error.ok()) {
-                minibuffer_message(minibuffer, apply_error.message);
-                return;
-            }
-            refresh_ai_status();
-            if (was_provider_picker && editor_ai_has_provider(ai_continue) &&
-                ai_continue->request.options.model.empty()) {
-                start_model_list();
-            }
+            apply_provider_selection(provider_name);
             return;
         }
         const std::string model_name = picker.items[picker.selected];
@@ -852,7 +856,21 @@ app::EditorRunResult run_editor(const std::string& path,
 
     auto process_model_events = [&]() -> bool {
         return model_list.process(
-            [&](std::vector<std::string> models) { open_model_picker(std::move(models)); },
+            [&](std::vector<std::string> models) {
+                if (!ui::should_auto_select_only_model(models)) {
+                    open_model_picker(std::move(models));
+                    return;
+                }
+                const Error apply_error = apply_editor_model(ai_continue, models.front());
+                if (!apply_error.ok()) {
+                    minibuffer_message(minibuffer, apply_error.message);
+                    return;
+                }
+                minibuffer_message(
+                    minibuffer,
+                    tui::provider_model_status_message(ai_continue->request,
+                                                       "only model auto-selected"));
+            },
             [&](const std::string& message) { minibuffer_message(minibuffer, message); });
     };
 

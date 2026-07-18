@@ -64,6 +64,8 @@ Implementation status (2026-07-17): `ainiux` is at v0.98. Active development tar
 
 Implementation note (2026-07-17): benchmark results can now be graded as a first-class `--grade` pass using runtime-only instructions from layered `benchmarks.conf` files. Grading discovers or accepts source JSONL, groups complete case/run transcripts, sends bounded concurrent judge requests, strictly validates one JSON response per run, continues through source/HTTP/schema failures, and emits auditable JSONL plus Markdown summaries. Every one of the 133 built-in cases now has a reference answer or rubric. The twenty safety cases are balanced between ten answer and ten reject expectations; four use the policy-sensitive boundary classification with an explicit per-case action and rubric. No fallback grading prose is compiled into C++.
 
+Implementation note (2026-07-18): provider and model selectors now use one `src/ui/` adapter over the shared text-selector widget in both chat and editor. Editor provider/model selection is rendered through the same themed panel path as chat thread and editor buffer lists. Changing provider clears the old provider's model and immediately starts cancellable model discovery; a single `/models` result is auto-selected in both chat and editor, while multiple results open the shared model selector.
+
 Implementation note (2026-07-14): file-backed editor buffers now hold canonical, atomic `FILE.LOCK` directory sessions across buffer and chat-mode switches. Contended existing files open read-only, dead same-host owners are recovered with token-safe cleanup, edits retry acquisition, and changed-file reload/overwrite prompts use device/inode, size, existence, and high-resolution modification-time fingerprints. Save As locks and verifies its destination before retargeting. Unit and two-process PTY tests cover ownership, contention, stale recovery, read-only mutation guards, external changes, and release. Sanitized ENOSPC fault tests preload the compiler-resolved ASan runtime before the I/O mock, and aggregate tests serialize unit/fault completion before integration.
 
 Runtime defaults live in `cli::Options`, provider defaults live in `src/provider/`, and API keys are resolved while building the provider request context. Automatic system and user config files map into a base `cli::Options`, after which `main.cpp` parses CLI arguments over that base. `--no-config` can bypass the automatic user file while retaining system configuration, and `--debug` reports configuration discovery on `stderr`.
@@ -2093,6 +2095,7 @@ Improve everyday usability and responsiveness across non-browser surfaces.
 
 ### Editor TUI
 
+- [x] Share provider/model selector formatting, themed panel rendering, and provider-to-model transition behavior with chat mode.
 - [ ] Polish buffer list/switch/close flows, save prompts, and AI-assist status feedback.
 - [ ] Improve in-editor help text and slash-command naming consistency with chat mode where concepts overlap.
 - [ ] Keep selection, undo/redo, page movement, and Unicode-aware rendering reliable during resize and streaming assist output.

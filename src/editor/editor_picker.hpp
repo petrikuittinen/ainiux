@@ -13,6 +13,7 @@ struct EditorProviderModelPicker {
     bool for_provider = false;
     std::vector<std::string> items;
     size_t selected = 0;
+    int scroll = 0;
     EditorState view;
 
     std::string selection_label() const;

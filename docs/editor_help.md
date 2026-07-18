@@ -110,7 +110,7 @@ ainiux lmstudio --editor draft.md
 
 When a provider is set but no model is chosen yet, the minibuffer shows **Choose a model with /model**. File editing still works; AI commands stay disabled until a model is selected.
 
-Use `Esc` then `/provider` or `/model` to change provider or model. `/provider` with no argument opens a provider picker; `/model` with no argument loads `/v1/models` and opens a model picker.
+Use `Esc` then `/provider` or `/model` to change provider or model. `/provider` with no argument opens the same colored selector widget used by chat and the editor buffer list. Choosing a provider clears the previous provider's model and immediately loads `/v1/models`; multiple results open the model selector, while one result is selected automatically. `/model` with no argument loads the same endpoint and selector directly.
 
 `ainiux --provider none --editor` (or plain `ainiux --editor`) runs as a local editor with no network access. Use `/provider` and `/model` later to enable AI assist.
 

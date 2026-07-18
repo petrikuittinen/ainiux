@@ -270,7 +270,7 @@ LF, CR, and CRLF files are normalized internally and saved back with their detec
 
 ### Editor AI Assist
 
-A provider shortcut or profile may precede `--editor` without a model, matching `--chat` startup: the editor opens immediately and the minibuffer shows **Choose a model with /model**. Use `Esc` then `/model` (or the model picker) to select a model; AI assist stays disabled until then. `ainiux --provider none --editor` and plain `ainiux --editor` run offline as local editors.
+A provider shortcut or profile may precede `--editor` without a model, matching `--chat` startup: the editor opens immediately and the minibuffer shows **Choose a model with /model**. Use `Esc` then `/model` (or the model picker) to select a model; AI assist stays disabled until then. Choosing a provider later with `/provider` immediately loads that provider's models, clears any model inherited from the previous provider, and opens the shared colored model selector. If `/models` returns exactly one model, chat and editor select it automatically. `ainiux --provider none --editor` and plain `ainiux --editor` run offline as local editors.
 
 With a configured provider and model, the editor can run one-shot AI tasks from the minibuffer or continue writing at the cursor.
 

@@ -3,6 +3,7 @@
 
 import os
 import pty
+import re
 import select
 import subprocess
 import sys
@@ -39,9 +40,25 @@ def text(raw):
     return raw.decode("utf-8", errors="replace")
 
 
+def plain_text(raw):
+    return re.sub(r"\x1b\[[0-?]*[ -/]*[@-~]", "", text(raw))
+
+
 def require_seen(raw, needle, context):
     if needle not in text(raw):
         raise RuntimeError(f"expected {needle!r} while {context}; saw {text(raw)[-500:]!r}")
+
+
+def require_seen_plain(raw, needle, context):
+    rendered = plain_text(raw)
+    if needle not in rendered:
+        raise RuntimeError(f"expected {needle!r} while {context}; saw {rendered[-500:]!r}")
+
+
+def require_match(raw, pattern, context):
+    rendered = text(raw)
+    if re.search(pattern, rendered) is None:
+        raise RuntimeError(f"expected /{pattern}/ while {context}; saw {rendered[-500:]!r}")
 
 
 def check_new_file_mode(binary, tmpdir, filename, expected_mode):
@@ -154,13 +171,64 @@ def check_detected_indentation(binary, tmpdir):
         raise RuntimeError(f"indent-detection editor exited with status {process.returncode}")
 
 
+def check_provider_model_picker(binary, base_url, model):
+    master, slave = pty.openpty()
+    process = subprocess.Popen(
+        [binary, "--provider", "none", "--editor"],
+        stdin=slave,
+        stdout=slave,
+        stderr=slave,
+        close_fds=True,
+    )
+    os.close(slave)
+    output = bytearray()
+    try:
+        time.sleep(0.4)
+        output.extend(drain(master, 1.0))
+
+        picker_output = bytearray()
+        picker_output.extend(send(master, "\x1b"))
+        picker_output.extend(send(master, "/provider\r"))
+        require_seen(picker_output, "Enter select", "opening the editor provider selector")
+        require_seen_plain(picker_output, "── Provider", "rendering the shared provider selector panel")
+        require_match(
+            picker_output,
+            r"\x1b\[38;2;\d+;\d+;\d+m\x1b\[48;2;\d+;\d+;\d+mProvider",
+            "coloring the editor provider selector title",
+        )
+        output.extend(picker_output)
+        output.extend(send(master, "\x1b"))
+        require_seen(output, "Provider selection cancelled", "cancelling the provider selector")
+
+        output.extend(send(master, "\x1b"))
+        provider_change = send(master, f"/provider {base_url}\r", delay=0.5)
+        output.extend(provider_change)
+        time.sleep(0.4)
+        output.extend(drain(master, 1.0))
+        require_seen(output, "only model auto-selected", "chaining provider selection into model discovery")
+        require_seen(output, model, "automatically choosing the only returned model")
+
+        output.extend(send(master, "\x11"))
+        process.wait(timeout=10)
+    finally:
+        if process.poll() is None:
+            process.terminate()
+            process.wait(timeout=2)
+        os.close(master)
+    if process.returncode != 0:
+        raise RuntimeError(f"provider/model picker editor exited with status {process.returncode}")
+
+
 def main():
-    if len(sys.argv) != 2:
-        print("usage: editor_buffers_driver.py BINARY", file=sys.stderr)
+    if len(sys.argv) != 4:
+        print("usage: editor_buffers_driver.py BINARY BASE_URL MODEL", file=sys.stderr)
         return 2
 
     binary = sys.argv[1]
+    base_url = sys.argv[2]
+    model = sys.argv[3]
     tmpdir = tempfile.mkdtemp(prefix="ainiux-editor-buffers-")
+    check_provider_model_picker(binary, base_url, model)
     check_new_file_mode(binary, tmpdir, "new-document.md", "markdown")
     check_new_file_mode(binary, tmpdir, "new-document.html", "html")
     check_new_file_mode(binary, tmpdir, "new-document.xhtml", "htmlonly")

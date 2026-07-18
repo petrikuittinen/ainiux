@@ -33,6 +33,7 @@
 #include "runtime/runtime.hpp"
 #include "ui/confirmation.hpp"
 #include "ui/text_selector.hpp"
+#include "ui/provider_model_selector.hpp"
 
 #include <cerrno>
 #include <cstring>
@@ -193,10 +194,10 @@ app::TuiRunResult run(provider::RequestContext context,
             return thread_picker_text(thread_picker_threads, thread_picker_selected);
         }
         if (mode == TuiMode::ProviderList) {
-            return provider_picker_text(picker_items, picker_selected);
+            return ui::provider_selector_text(picker_items, picker_selected);
         }
         if (mode == TuiMode::ModelList) {
-            return model_picker_text(picker_items, picker_selected);
+            return ui::model_selector_text(picker_items, picker_selected);
         }
         if (mode == TuiMode::AttachmentList) {
             return attachment_picker_text(chat_attachments, attachment_picker_selected);
@@ -449,7 +450,7 @@ app::TuiRunResult run(provider::RequestContext context,
             status = "Cannot change provider while a model job is running";
             return;
         }
-        picker_items = selectable_provider_ids();
+        picker_items = ui::selectable_provider_ids();
         picker_selected = 0;
         picker_cancel_quits = cancel_quits;
         mode = TuiMode::ProviderList;
@@ -1352,6 +1353,10 @@ app::TuiRunResult run(provider::RequestContext context,
                             status = detail::error_line(event.error);
                         } else if (event.models.empty()) {
                             status = "No models returned";
+                        } else if (ui::should_auto_select_only_model(event.models)) {
+                            const std::string only_model = event.models.front();
+                            picker_callbacks.on_model_selected(only_model);
+                            status = provider_model_status_message(context, "only model auto-selected");
                         } else {
                             picker_items = std::move(event.models);
                             picker_selected = 0;

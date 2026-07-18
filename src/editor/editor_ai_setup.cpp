@@ -61,6 +61,9 @@ Error apply_editor_provider_target(std::optional<AiContinueContext>& context,
 
     cli::Options next = context->request.options;
     provider::apply_provider_target(next, target);
+    // A model id belongs to the provider that supplied it. Never carry it across
+    // a provider change; the shared provider/model flow will discover a new one.
+    next.model.clear();
     provider::ContextResult rebuilt = provider::build_context(next);
     if (!rebuilt.error.ok()) {
         return rebuilt.error;

@@ -417,6 +417,26 @@ void test_tui_buffer_list_uses_colored_panel_widget() {
     check(saw_title, "buffer list panel uses the shared title styling");
     check(saw_hint, "buffer list panel uses the shared hint styling");
     check(saw_selected, "buffer list panel uses the shared selected-row styling");
+
+    for (ainiux::tui::TuiMode mode : {ainiux::tui::TuiMode::ProviderList,
+                                      ainiux::tui::TuiMode::ModelList}) {
+        const std::vector<ainiux::tui::StyledLine> selector_lines =
+            ainiux::tui::detail::panel_lines_for_text(
+                u8"↑↓ move · Enter select · Esc cancel\n› selected\n  other", mode, 80);
+        bool selector_title = false;
+        bool selector_hint = false;
+        bool selector_highlight = false;
+        for (const ainiux::tui::StyledLine& line : selector_lines) {
+            for (const ainiux::tui::StyledSegment& segment : line.segments) {
+                selector_title = selector_title || segment.role == ainiux::tui::StyleRole::PanelTitle;
+                selector_hint = selector_hint || segment.role == ainiux::tui::StyleRole::PanelHint;
+                selector_highlight =
+                    selector_highlight || segment.role == ainiux::tui::StyleRole::PanelHighlight;
+            }
+        }
+        check(selector_title && selector_hint && selector_highlight,
+              "provider/model selectors use the shared colored panel roles");
+    }
 }
 
 void test_tui_thinking_trace_display() {
@@ -610,17 +630,6 @@ void test_tui_provider_display_and_activity_status() {
           "TUI provider display name shortens custom_openai_chat to custom");
 }
 
-void test_tui_selectable_provider_ids() {
-    const std::vector<std::string> providers = ainiux::tui::selectable_provider_ids();
-    check(!providers.empty(), "TUI provider picker includes at least one provider");
-    check(std::find(providers.begin(), providers.end(), "none") == providers.end(),
-          "TUI provider picker excludes the offline none profile");
-    check(std::find(providers.begin(), providers.end(), "custom_openai_chat") == providers.end(),
-          "TUI provider picker excludes custom_openai_chat without a base URL");
-    check(std::find(providers.begin(), providers.end(), "lm_studio") != providers.end(),
-          "TUI provider picker includes lm_studio");
-}
-
 void test_tui_startup_provider_picker() {
     ainiux::provider::RequestContext offline;
     offline.profile.offline = true;
@@ -654,20 +663,6 @@ void test_tui_chat_startup_status() {
     check(ready_status.find("/provider") != std::string::npos &&
               ready_status.find("/list") != std::string::npos,
           "TUI startup status reminds about provider changes and thread list when ready");
-}
-
-void test_tui_provider_and_model_picker_text() {
-    const std::vector<std::string> providers = {"lm_studio", "openai"};
-    const std::string provider_text = ainiux::tui::provider_picker_text(providers, 1);
-    check(provider_text.find("Enter select") != std::string::npos,
-          "TUI provider picker text documents Enter selection");
-    check(provider_text.find(u8"› openai") != std::string::npos,
-          "TUI provider picker highlights the selected provider");
-
-    const std::vector<std::string> models = {"alpha", "beta"};
-    const std::string model_text = ainiux::tui::model_picker_text(models, 0);
-    check(model_text.find(u8"› alpha") != std::string::npos,
-          "TUI model picker highlights the selected model");
 }
 
 void test_tui_session_load_model_mismatch_detection() {
@@ -872,10 +867,8 @@ void run_all() {
     test_tui_restore_cli_context();
     test_tui_input_label_and_activity_indicators();
     test_tui_provider_display_and_activity_status();
-    test_tui_selectable_provider_ids();
     test_tui_startup_provider_picker();
     test_tui_chat_startup_status();
-    test_tui_provider_and_model_picker_text();
     test_tui_unicode_and_empty_status();
     test_tui_layout_reserves_editor_input_panel();
     test_tui_sqlite_unavailable_status();

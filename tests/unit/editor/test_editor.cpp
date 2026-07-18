@@ -353,6 +353,10 @@ void test_editor_ai_setup_helpers() {
     check(ainiux::editor::apply_editor_model(created, "gpt-test").ok(),
           "apply_editor_model succeeds after provider is chosen");
     check(created->request.options.model == "gpt-test", "apply_editor_model stores model name");
+    check(ainiux::editor::apply_editor_provider_target(created, assist_config, "openrouter").ok(),
+          "switching an editor provider succeeds after a model was selected");
+    check(created->request.options.model.empty(),
+          "switching an editor provider clears the previous provider's model");
 
     const char* openrouter_argv[] = {"ainiux", "openrouter", "--editor"};
     ainiux::cli::ParseResult openrouter_parsed =

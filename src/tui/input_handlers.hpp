@@ -12,9 +12,6 @@
 
 namespace ainiux::tui {
 
-std::vector<std::string> selectable_provider_ids();
-std::string provider_picker_text(const std::vector<std::string>& provider_ids, size_t selected);
-std::string model_picker_text(const std::vector<std::string>& models, size_t selected);
 std::string thread_picker_text(const std::vector<chat::ThreadSummary>& threads, size_t selected);
 std::string attachment_picker_text(const std::vector<ChatAttachment>& attachments, size_t selected);
 std::string remove_confirm_text(const chat::Session& session);

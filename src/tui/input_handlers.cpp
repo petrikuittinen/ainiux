@@ -87,17 +87,6 @@ bool apply_chat_history_scroll(const editor::MovementKeyEvent& movement,
     }
 }
 
-std::vector<std::string> selectable_provider_ids() {
-    std::vector<std::string> providers;
-    for (const provider::Profile& profile : provider::built_in_profiles()) {
-        if (!provider::is_selectable_provider(profile)) {
-            continue;
-        }
-        providers.push_back(profile.name);
-    }
-    return providers;
-}
-
 namespace {
 
 std::string thread_summary_label(const chat::ThreadSummary& thread) {
@@ -124,7 +113,7 @@ std::string thread_summary_label(const chat::ThreadSummary& thread) {
     return out.str();
 }
 
-ui::TextSelectorConfig standard_picker_config(const char* header) {
+ui::TextSelectorConfig picker_config(const char* header) {
     ui::TextSelectorConfig config;
     config.header = header;
     return config;
@@ -132,21 +121,8 @@ ui::TextSelectorConfig standard_picker_config(const char* header) {
 
 }  // namespace
 
-std::string provider_picker_text(const std::vector<std::string>& provider_ids, size_t selected) {
-    std::vector<std::string> labels;
-    labels.reserve(provider_ids.size());
-    for (const std::string& provider_id : provider_ids) {
-        labels.push_back(provider::display_name_for_profile(provider_id));
-    }
-    return ui::render_text_selector(standard_picker_config(ui::kTextSelectorStandardHint), selected, labels);
-}
-
-std::string model_picker_text(const std::vector<std::string>& models, size_t selected) {
-    return ui::render_text_selector(standard_picker_config(ui::kTextSelectorStandardHint), selected, models);
-}
-
 std::string thread_picker_text(const std::vector<chat::ThreadSummary>& threads, size_t selected) {
-    return ui::render_text_selector(standard_picker_config(ui::kTextSelectorThreadHint), selected, threads.size(),
+    return ui::render_text_selector(picker_config(ui::kTextSelectorThreadHint), selected, threads.size(),
                                     [&](size_t index) { return thread_summary_label(threads[index]); });
 }
 

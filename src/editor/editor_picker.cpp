@@ -1,6 +1,6 @@
 #include "editor/editor_picker.hpp"
 
-#include "tui/input_handlers.hpp"
+#include "ui/provider_model_selector.hpp"
 #include "ui/text_selector.hpp"
 
 namespace ainiux::editor {
@@ -23,10 +23,11 @@ std::string EditorProviderModelPicker::status_message() const {
 }
 
 void EditorProviderModelPicker::refresh_view() {
-    const std::string text = for_provider ? tui::provider_picker_text(items, selected)
-                                          : tui::model_picker_text(items, selected);
+    const std::string text = for_provider ? ui::provider_selector_text(items, selected)
+                                          : ui::model_selector_text(items, selected);
     view = EditorState::from_text(text);
     view.path = for_provider ? "[providers]" : "[models]";
+    view.highlight_enabled = false;
     const size_t selected_line = std::min(selected + 1, view.text.line_count() - 1);
     view.cursor = view.text.line_start(selected_line);
     view.dirty = false;
@@ -34,8 +35,9 @@ void EditorProviderModelPicker::refresh_view() {
 }
 
 void EditorProviderModelPicker::open_providers() {
-    items = tui::selectable_provider_ids();
+    items = ui::selectable_provider_ids();
     selected = 0;
+    scroll = 0;
     for_provider = true;
     active = true;
 }
@@ -43,6 +45,7 @@ void EditorProviderModelPicker::open_providers() {
 void EditorProviderModelPicker::open_models(std::vector<std::string> models) {
     items = std::move(models);
     selected = 0;
+    scroll = 0;
     for_provider = false;
     active = true;
 }
@@ -51,6 +54,7 @@ void EditorProviderModelPicker::clear() {
     active = false;
     items.clear();
     selected = 0;
+    scroll = 0;
 }
 
 bool EditorProviderModelPicker::handle_escape(const std::string& sequence, std::string& status_out) {

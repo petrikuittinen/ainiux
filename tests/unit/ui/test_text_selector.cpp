@@ -3,7 +3,10 @@
 #include "editor/selection.hpp"
 #include "support/test_support.hpp"
 #include "ui/confirmation.hpp"
+#include "ui/provider_model_selector.hpp"
 #include "ui/text_selector.hpp"
+
+#include <algorithm>
 
 namespace ainiux::test::ui {
 namespace {
@@ -80,6 +83,33 @@ void test_text_selector_status() {
           "text selector status omits position for empty lists");
 }
 
+void test_provider_model_selectors() {
+    const std::vector<std::string> providers = ainiux::ui::selectable_provider_ids();
+    check(!providers.empty(), "provider selector includes at least one provider");
+    check(std::find(providers.begin(), providers.end(), "none") == providers.end(),
+          "provider selector excludes the offline none profile");
+    check(std::find(providers.begin(), providers.end(), "custom_openai_chat") == providers.end(),
+          "provider selector excludes custom_openai_chat without a base URL");
+    check(std::find(providers.begin(), providers.end(), "lm_studio") != providers.end(),
+          "provider selector includes lm_studio");
+
+    const std::string provider_text =
+        ainiux::ui::provider_selector_text({"lm_studio", "openai"}, 1);
+    check(provider_text.find("Enter select") != std::string::npos,
+          "provider selector documents Enter selection");
+    check(provider_text.find(u8"› openai") != std::string::npos,
+          "provider selector highlights the selected provider");
+
+    const std::vector<std::string> models = {"alpha", "beta"};
+    const std::string model_text = ainiux::ui::model_selector_text(models, 0);
+    check(model_text.find(u8"› alpha") != std::string::npos,
+          "model selector highlights the selected model");
+    check(ainiux::ui::should_auto_select_only_model({"only"}),
+          "one returned model is eligible for automatic selection");
+    check(!ainiux::ui::should_auto_select_only_model(models),
+          "multiple returned models require the selector");
+}
+
 }  // namespace
 
 void run_all() {
@@ -88,6 +118,7 @@ void run_all() {
     test_text_selector_movement();
     test_text_selector_escape_sequence();
     test_text_selector_status();
+    test_provider_model_selectors();
 }
 
 }  // namespace ainiux::test::ui
