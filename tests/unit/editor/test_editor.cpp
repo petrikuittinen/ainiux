@@ -44,6 +44,10 @@ void test_editor_ai_continue_helpers() {
     check(ainiux::editor::continue_status_message("custom_openai_chat", "gpt-test", "thinking... ESC to abort") ==
               "[custom / gpt-test] thinking... ESC to abort",
           "continue status message uses compact provider display names");
+    check(ainiux::editor::continue_status_message(
+              "gemini", "models/gemini-3.1-flash-lite-preview", "thinking...") ==
+              u8"[gemini / gemini-3.1-flash-lite-pre…] thinking...",
+          "editor status strips and truncates provider-prefixed model names");
 
     ainiux::provider::ChatResult continue_result;
     continue_result.ttft_ms = 100;
@@ -54,7 +58,7 @@ void test_editor_ai_continue_helpers() {
                                                              "gpt-test",
                                                              continue_result,
                                                              true) ==
-              "[custom / gpt-test] | TTFT: 100 ms | Token/s: 20.0 (estimated)",
+              "[custom / gpt-test] | TTFT: 100 ms | ~20.0 token/s",
           "continue completion status reuses TUI generation metrics formatting");
 
     ainiux::editor::EditorState state = ainiux::editor::EditorState::from_text("Once upon a ");

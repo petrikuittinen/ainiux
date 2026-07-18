@@ -4,6 +4,7 @@
 #include "editor/editor_ai_setup.hpp"
 #include "editor/editor_assist.hpp"
 #include "tui/tui.hpp"
+#include "ui/provider_model_display.hpp"
 
 namespace ainiux::editor {
 
@@ -30,18 +31,11 @@ AiContinueSettings ai_continue_settings(const cli::Options& options) {
 std::string continue_status_message(const std::string& provider_name,
                                     const std::string& model_name,
                                     const std::string& suffix) {
-    const std::string display_provider =
-        provider_name.empty() ? "" : provider::display_name_for_profile(provider_name);
-    if (display_provider.empty() && model_name.empty()) {
+    const std::string label = ui::provider_model_display_label(provider_name, model_name);
+    if (label.empty()) {
         return suffix;
     }
-    if (display_provider.empty()) {
-        return "[" + model_name + "] " + suffix;
-    }
-    if (model_name.empty()) {
-        return "[" + display_provider + " / model unknown] " + suffix;
-    }
-    return "[" + display_provider + " / " + model_name + "] " + suffix;
+    return label + " " + suffix;
 }
 
 std::string continue_status_label(const std::string& provider_name, const std::string& model_name) {

@@ -3,6 +3,7 @@
 #include "editor/selection.hpp"
 #include "support/test_support.hpp"
 #include "ui/confirmation.hpp"
+#include "ui/provider_model_display.hpp"
 #include "ui/provider_model_selector.hpp"
 #include "ui/text_selector.hpp"
 
@@ -110,6 +111,31 @@ void test_provider_model_selectors() {
           "multiple returned models require the selector");
 }
 
+void test_provider_model_display() {
+    check(ainiux::ui::compact_model_name_for_display(
+              "models/gemini-3.1-flash-lite-preview") ==
+              u8"gemini-3.1-flash-lite-pre…",
+          "model display strips a provider path prefix and truncates to 26 characters");
+    check(ainiux::ui::compact_model_name_for_display(
+              "accounts/example/models/gemini-flash") == "gemini-flash",
+          "model display strips through the final slash");
+    check(ainiux::ui::compact_model_name_for_display("short-model") == "short-model",
+          "model display preserves a short unprefixed model name");
+
+    const std::string family = u8"👨‍👩‍👧‍👦";
+    const std::string limit_graphemes =
+        std::string(ainiux::ui::kModelDisplayCharacterLimit - 1, 'a') + family;
+    check(ainiux::ui::compact_model_name_for_display(limit_graphemes) == limit_graphemes,
+          "model display counts a joined Unicode sequence as one character");
+    check(ainiux::ui::compact_model_name_for_display(limit_graphemes + "x") ==
+              std::string(ainiux::ui::kModelDisplayCharacterLimit - 1, 'a') + u8"…",
+          "model display truncation does not split a Unicode grapheme");
+    check(ainiux::ui::provider_model_display_label(
+              "gemini", "models/gemini-3.1-flash-lite-preview") ==
+              u8"[gemini / gemini-3.1-flash-lite-pre…]",
+          "shared provider/model label uses the compact model display name");
+}
+
 }  // namespace
 
 void run_all() {
@@ -119,6 +145,7 @@ void run_all() {
     test_text_selector_escape_sequence();
     test_text_selector_status();
     test_provider_model_selectors();
+    test_provider_model_display();
 }
 
 }  // namespace ainiux::test::ui

@@ -2,6 +2,7 @@
 
 #include "context/context.hpp"
 #include "provider/provider.hpp"
+#include "ui/provider_model_display.hpp"
 
 #include <iomanip>
 #include <sstream>
@@ -10,18 +11,7 @@ namespace ainiux::tui {
 namespace {
 
 std::string provider_model_status_label(const std::string& provider_name, const std::string& model_name) {
-    const std::string display_provider =
-        provider_name.empty() ? "" : provider::display_name_for_profile(provider_name);
-    if (display_provider.empty() && model_name.empty()) {
-        return "";
-    }
-    if (display_provider.empty()) {
-        return "[" + model_name + "]";
-    }
-    if (model_name.empty()) {
-        return "[" + display_provider + " / model unknown]";
-    }
-    return "[" + display_provider + " / " + model_name + "]";
+    return ui::provider_model_display_label(provider_name, model_name);
 }
 
 std::string provider_model_status_label(const provider::RequestContext& context) {
@@ -121,19 +111,12 @@ std::string generation_ready_status(const std::string& provider_name,
             out << " | Response: " << result.total_ms << " ms";
         }
     }
-    if (context_tokens > 0) {
-        out << " | ";
-        if (result.completion_tokens_estimated) {
-            out << "~";
-        }
-        out << std::fixed << std::setprecision(1) << provider::tokens_per_second(result, stream) << " tok/s";
-    } else {
-        out << " | Token/s: " << std::fixed << std::setprecision(1)
-            << provider::tokens_per_second(result, stream);
-        if (result.completion_tokens_estimated) {
-            out << " (estimated)";
-        }
+    out << " | ";
+    if (result.completion_tokens_estimated) {
+        out << "~";
     }
+    out << std::fixed << std::setprecision(1) << provider::tokens_per_second(result, stream)
+        << " token/s";
     const std::string context_usage =
         context::format_context_usage(context::estimated_usage_tokens(messages, result), context_tokens);
     if (!context_usage.empty()) {

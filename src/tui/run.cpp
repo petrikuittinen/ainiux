@@ -34,6 +34,7 @@
 #include "ui/confirmation.hpp"
 #include "ui/text_selector.hpp"
 #include "ui/provider_model_selector.hpp"
+#include "ui/provider_model_display.hpp"
 
 #include <cerrno>
 #include <cstring>
@@ -230,7 +231,7 @@ app::TuiRunResult run(provider::RequestContext context,
                 const auto& th = thread_picker_threads[pending_thread_delete];
                 std::string label = th.name.empty() ? ("thread " + std::to_string(th.id)) : th.name;
                 if (!th.last_model.empty()) {
-                    label += " [" + th.last_model + "]";
+                    label += " [" + ui::compact_model_name_for_display(th.last_model) + "]";
                 }
                 return "Delete thread:\n  " + label + "\nPress y to delete · n or Esc to cancel";
             }
@@ -1053,14 +1054,16 @@ app::TuiRunResult run(provider::RequestContext context,
         mode = TuiMode::Chat;
         status = context.options.model.empty()
                      ? "Using current provider: " + provider::display_name_for_profile(context.profile.name)
-                     : "Using current model: " + context.options.model;
+                     : "Using current model: " +
+                           ui::compact_model_name_for_display(context.options.model);
         start_store_save();
     };
     picker_callbacks.on_model_confirm_rejected = [&]() {
         Error context_error = apply_loaded_session_context(session);
         mode = TuiMode::Chat;
         if (context_error.ok()) {
-            status = "Using thread model: " + context.options.model;
+            status = "Using thread model: " +
+                     ui::compact_model_name_for_display(context.options.model);
             start_store_save();
         } else {
             status = detail::error_line(context_error);

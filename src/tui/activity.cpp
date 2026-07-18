@@ -1,7 +1,7 @@
 #include "tui/activity.hpp"
 
 #include "ainiux/version.hpp"
-#include "provider/provider.hpp"
+#include "ui/provider_model_display.hpp"
 
 #include <algorithm>
 
@@ -136,18 +136,7 @@ std::vector<StyledSegment> activity_placeholder_segments(const std::string& labe
 }
 
 std::string session_status_label(const chat::Session& session) {
-    const std::string display_provider =
-        session.provider.empty() ? "" : provider::display_name_for_profile(session.provider);
-    if (display_provider.empty() && session.model.empty()) {
-        return "";
-    }
-    if (display_provider.empty()) {
-        return "[" + session.model + "]";
-    }
-    if (session.model.empty()) {
-        return "[" + display_provider + " / model unknown]";
-    }
-    return "[" + display_provider + " / " + session.model + "]";
+    return ui::provider_model_display_label(session.provider, session.model);
 }
 
 ActivityKind activity_kind_for_pending_assistant(const chat::Session& session,

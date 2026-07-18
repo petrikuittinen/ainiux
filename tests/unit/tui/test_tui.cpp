@@ -185,22 +185,30 @@ void test_tui_ready_and_generation_status() {
           "TUI streaming completion status starts with compact provider and model names");
     check(streaming.find("TTFT: 100 ms") != std::string::npos,
           "TUI streaming completion status displays time to first token");
-    check(streaming.find("Token/s: 20.0 (estimated)") != std::string::npos,
+    check(streaming.find("| ~20.0 token/s") != std::string::npos,
           "TUI streaming completion status estimates throughput after the first token");
 
     const std::string non_streaming =
         ainiux::tui::generation_ready_status("lm_studio", "gpt-test", result, false, {}, 0);
     check(non_streaming.find("Response: 1100 ms") != std::string::npos,
           "TUI non-streaming completion status reports response latency instead of TTFT");
-    check(non_streaming.find("Token/s: 18.2 (estimated)") != std::string::npos,
+    check(non_streaming.find("| ~18.2 token/s") != std::string::npos,
           "TUI non-streaming completion status estimates whole-response throughput");
 
+    result.completion_tokens_estimated = false;
+    const std::string exact =
+        ainiux::tui::generation_ready_status("lm_studio", "gpt-test", result, true, {}, 0);
+    check(exact.find("| 20.0 token/s") != std::string::npos &&
+              exact.find("| ~20.0 token/s") == std::string::npos,
+          "TUI completion status omits the estimate marker for provider-reported usage");
+
+    result.completion_tokens_estimated = true;
     result.usage_json = "{\"prompt_tokens\":20,\"completion_tokens\":5,\"total_tokens\":25}";
     const std::vector<ainiux::provider::Message> messages = {
         {"user", "hi"}, {"assistant", "<think>x</think>ok"}};
     const std::string context_status =
         ainiux::tui::generation_ready_status("lm_studio", "gpt-test", result, true, messages, 100);
-    check(context_status.find("TTFT 100ms | ~20.0 tok/s") != std::string::npos,
+    check(context_status.find("TTFT 100ms | ~20.0 token/s") != std::string::npos,
           "TUI context status uses compact timing and estimated-throughput notation");
     check(context_status.find("context: 25 (25%)") != std::string::npos,
           "TUI completion status displays estimated context usage");
@@ -628,6 +636,13 @@ void test_tui_input_label_and_activity_indicators() {
 void test_tui_provider_display_and_activity_status() {
     check(ainiux::provider::display_name_for_profile("custom_openai_chat") == "custom",
           "TUI provider display name shortens custom_openai_chat to custom");
+
+    ainiux::chat::Session session;
+    session.provider = "gemini";
+    session.model = "models/gemini-3.1-flash-lite-preview";
+    check(ainiux::tui::session_status_label(session) ==
+              u8"[gemini / gemini-3.1-flash-lite-pre…]",
+          "TUI activity status strips and truncates provider-prefixed model names");
 }
 
 void test_tui_chat_startup_status() {

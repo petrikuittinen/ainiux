@@ -6,6 +6,7 @@
 #include "editor/selection.hpp"
 #include "editor/terminal_input.hpp"
 #include "provider/provider.hpp"
+#include "ui/provider_model_display.hpp"
 #include "ui/text_selector.hpp"
 
 #include <sstream>
@@ -110,7 +111,7 @@ std::string thread_summary_label(const chat::ThreadSummary& thread) {
             if (!thread.last_provider.empty()) {
                 out << " / ";
             }
-            out << thread.last_model;
+            out << ui::compact_model_name_for_display(thread.last_model);
         }
         out << "]";
     }

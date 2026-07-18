@@ -2,6 +2,7 @@
 
 #include "chat/settings.hpp"
 #include "provider/provider.hpp"
+#include "ui/provider_model_display.hpp"
 
 #include <cctype>
 #include <sstream>
@@ -18,7 +19,7 @@ std::string format_provider_model_line(const std::string& provider_name, const s
         out << "unknown provider";
     }
     if (!model_name.empty()) {
-        out << " / " << model_name;
+        out << " / " << ui::compact_model_name_for_display(model_name);
     } else {
         out << " / unknown model";
     }
