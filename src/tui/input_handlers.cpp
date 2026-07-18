@@ -1,6 +1,7 @@
 #include "tui/input_handlers.hpp"
 
 #include "tui/detail/render.hpp"
+#include "tui/session_load.hpp"
 
 #include "editor/selection.hpp"
 #include "editor/terminal_input.hpp"
@@ -93,6 +94,11 @@ std::string thread_summary_label(const chat::ThreadSummary& thread) {
     std::ostringstream out;
     if (thread.read_only) {
         out << "[RO] ";
+    }
+    const std::string missing =
+        saved_provider_model_missing(thread.last_provider, thread.last_model);
+    if (!missing.empty()) {
+        out << "[SETUP: " << missing << "] ";
     }
     out << thread.name;
     if (!thread.last_provider.empty() || !thread.last_model.empty()) {

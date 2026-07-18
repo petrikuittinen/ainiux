@@ -67,13 +67,25 @@ std::string sqlite_unavailable_status(const std::string& reason) {
     return "Saved chat database unavailable: " + reason;
 }
 
-bool should_open_startup_provider_picker(const provider::RequestContext& context) {
-    return context.profile.offline;
+bool chat_provider_model_ready(const provider::RequestContext& context) {
+    return !context.profile.offline && !context.profile.name.empty() &&
+           !context.options.model.empty();
+}
+
+std::string chat_provider_model_required_status(const provider::RequestContext& context,
+                                                bool require_provider_selection) {
+    if (require_provider_selection || context.profile.offline || context.profile.name.empty()) {
+        return "Setup required: /provider, then /model · sending disabled";
+    }
+    if (context.options.model.empty()) {
+        return "Setup required: /model · sending disabled";
+    }
+    return "";
 }
 
 std::string chat_startup_status(const provider::RequestContext& context) {
     if (context.profile.offline) {
-        return "Select a provider with /provider, then choose a model with /model";
+        return "Offline · /list browse · /provider then /model to enable sending";
     }
     if (context.options.model.empty()) {
         return "Choose a model with /model · Change provider with /provider";

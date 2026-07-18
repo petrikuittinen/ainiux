@@ -2548,6 +2548,12 @@ app::EditorRunResult run_editor(const std::string& path,
         }
     };
 
+    if (ai_continue.has_value() &&
+        provider::needs_interactive_model_selection(ai_continue->request)) {
+        start_model_list();
+        render_editor();
+    }
+
     if (interactive != nullptr && interactive->pending_editor_assist.active) {
         const app::PendingEditorAssistFromChat pending = interactive->pending_editor_assist;
         interactive->pending_editor_assist = {};

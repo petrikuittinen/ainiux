@@ -219,6 +219,100 @@ def check_provider_model_picker(binary, base_url, model):
         raise RuntimeError(f"provider/model picker editor exited with status {process.returncode}")
 
 
+def check_bare_editor_startup(binary):
+    master, slave = pty.openpty()
+    process = subprocess.Popen(
+        [binary, "--editor"],
+        stdin=slave,
+        stdout=slave,
+        stderr=slave,
+        close_fds=True,
+    )
+    os.close(slave)
+    output = bytearray()
+    try:
+        time.sleep(0.5)
+        output.extend(drain(master, 1.0))
+        require_seen(output, "Local editor", "starting the editor without an AI provider")
+        rendered = plain_text(output)
+        if "── Provider" in rendered or "── Model" in rendered or "Loading models" in rendered:
+            raise RuntimeError("bare editor startup unexpectedly opened provider/model selection")
+        output.extend(send(master, "\x11"))
+        process.wait(timeout=10)
+    finally:
+        if process.poll() is None:
+            process.terminate()
+            process.wait(timeout=2)
+        os.close(master)
+    if process.returncode != 0:
+        raise RuntimeError(f"bare editor startup exited with status {process.returncode}")
+
+
+def check_single_model_editor_startup(binary, base_url, model):
+    master, slave = pty.openpty()
+    process = subprocess.Popen(
+        [binary, base_url, "--editor"],
+        stdin=slave,
+        stdout=slave,
+        stderr=slave,
+        close_fds=True,
+    )
+    os.close(slave)
+    output = bytearray()
+    try:
+        time.sleep(0.5)
+        output.extend(drain(master, 1.2))
+        require_seen(output, "only model auto-selected", "discovering one startup editor model")
+        require_seen(output, model, "auto-selecting the sole startup editor model")
+        if "── Model" in plain_text(output):
+            raise RuntimeError("single-model editor startup unnecessarily opened a picker")
+        output.extend(send(master, "\x11"))
+        process.wait(timeout=10)
+    finally:
+        if process.poll() is None:
+            process.terminate()
+            process.wait(timeout=2)
+        os.close(master)
+    if process.returncode != 0:
+        raise RuntimeError(f"single-model editor startup exited with status {process.returncode}")
+
+
+def check_multiple_model_editor_startup(binary, base_url, model):
+    master, slave = pty.openpty()
+    process = subprocess.Popen(
+        [
+            binary,
+            base_url,
+            "--models-url",
+            base_url + "/v1/models-multiple",
+            "--editor",
+        ],
+        stdin=slave,
+        stdout=slave,
+        stderr=slave,
+        close_fds=True,
+    )
+    os.close(slave)
+    output = bytearray()
+    try:
+        time.sleep(0.5)
+        output.extend(drain(master, 1.2))
+        require_seen_plain(output, "── Model", "opening startup editor model selection")
+        require_seen(output, model, "showing the first startup editor model")
+        require_seen(output, model + "-second", "showing the second startup editor model")
+        output.extend(send(master, "\r", delay=0.6))
+        require_seen(output, "ready", "accepting a startup editor model")
+        output.extend(send(master, "\x11"))
+        process.wait(timeout=10)
+    finally:
+        if process.poll() is None:
+            process.terminate()
+            process.wait(timeout=2)
+        os.close(master)
+    if process.returncode != 0:
+        raise RuntimeError(f"multiple-model editor startup exited with status {process.returncode}")
+
+
 def main():
     if len(sys.argv) != 4:
         print("usage: editor_buffers_driver.py BINARY BASE_URL MODEL", file=sys.stderr)
@@ -228,6 +322,9 @@ def main():
     base_url = sys.argv[2]
     model = sys.argv[3]
     tmpdir = tempfile.mkdtemp(prefix="ainiux-editor-buffers-")
+    check_bare_editor_startup(binary)
+    check_single_model_editor_startup(binary, base_url, model)
+    check_multiple_model_editor_startup(binary, base_url, model)
     check_provider_model_picker(binary, base_url, model)
     check_new_file_mode(binary, tmpdir, "new-document.md", "markdown")
     check_new_file_mode(binary, tmpdir, "new-document.html", "html")

@@ -630,24 +630,14 @@ void test_tui_provider_display_and_activity_status() {
           "TUI provider display name shortens custom_openai_chat to custom");
 }
 
-void test_tui_startup_provider_picker() {
-    ainiux::provider::RequestContext offline;
-    offline.profile.offline = true;
-    check(ainiux::tui::should_open_startup_provider_picker(offline),
-          "TUI opens startup provider picker when chat starts offline");
-
-    ainiux::provider::RequestContext ready;
-    ready.profile.name = "lm_studio";
-    ready.options.model = "qwen-local";
-    check(!ainiux::tui::should_open_startup_provider_picker(ready),
-          "TUI skips startup provider picker when a provider is already configured");
-}
-
 void test_tui_chat_startup_status() {
     ainiux::provider::RequestContext offline;
     offline.profile.offline = true;
     check(ainiux::tui::chat_startup_status(offline).find("/provider") != std::string::npos,
           "TUI startup status prompts for provider when offline");
+    check(ainiux::tui::chat_startup_status(offline).find("/list") != std::string::npos &&
+              ainiux::tui::chat_startup_status(offline).find("enable sending") != std::string::npos,
+          "offline TUI status explains browsing and disabled sending without opening a picker");
 
     ainiux::provider::RequestContext missing_model;
     missing_model.profile.name = "lm_studio";
@@ -663,6 +653,79 @@ void test_tui_chat_startup_status() {
     check(ready_status.find("/provider") != std::string::npos &&
               ready_status.find("/list") != std::string::npos,
           "TUI startup status reminds about provider changes and thread list when ready");
+
+    check(!ainiux::tui::chat_provider_model_ready(offline),
+          "TUI send readiness rejects a missing provider");
+    check(!ainiux::tui::chat_provider_model_ready(missing_model),
+          "TUI send readiness rejects a missing model");
+    check(ainiux::tui::chat_provider_model_ready(ready),
+          "TUI send readiness accepts a configured provider and model");
+    check(ainiux::tui::chat_provider_model_required_status(missing_model)
+                  .find("sending disabled") != std::string::npos,
+          "TUI explains that sending is disabled until model setup is complete");
+    check(ainiux::tui::chat_provider_model_required_status(ready, true)
+                  .find("/provider, then /model") != std::string::npos,
+          "TUI can require provider reselection before model selection");
+}
+
+void test_tui_incomplete_thread_labels() {
+    check(ainiux::tui::saved_provider_model_complete("openrouter", "model-id"),
+          "TUI recognizes complete saved provider/model metadata");
+    check(!ainiux::tui::saved_provider_model_complete("openrouter", ""),
+          "TUI recognizes a missing saved model");
+    check(!ainiux::tui::saved_provider_model_complete("none", "model-id"),
+          "TUI treats the offline profile as a missing saved provider");
+
+    ainiux::chat::ThreadSummary missing_model;
+    missing_model.id = 1;
+    missing_model.name = "What kills trolls";
+    missing_model.modified_at = "2026-07-18T00:00:00Z";
+    missing_model.last_provider = "openrouter";
+    missing_model.message_count = 4;
+    const std::string model_text = ainiux::tui::thread_picker_text({missing_model}, 0);
+    check(model_text.find("[SETUP: model missing] What kills trolls") != std::string::npos,
+          "TUI thread picker puts a missing-model warning before the thread title");
+
+    ainiux::chat::ThreadSummary missing_both = missing_model;
+    missing_both.last_provider.clear();
+    const std::string both_text = ainiux::tui::thread_picker_text({missing_both}, 0);
+    check(both_text.find("[SETUP: provider+model missing]") != std::string::npos,
+          "TUI thread picker clearly labels missing provider and model metadata");
+}
+
+void test_tui_loaded_context_does_not_inherit_model_or_endpoints() {
+    ainiux::cli::Options active_options;
+    active_options.tui = true;
+    active_options.key = "test-key";
+    ainiux::provider::apply_provider_target(active_options, "http://localhost:30000/v1");
+    active_options.model = "local-model";
+    active_options.chat_url = "http://localhost:30000/v1/chat/completions";
+    active_options.models_url = "http://localhost:30000/v1/models";
+    ainiux::provider::ContextResult built = ainiux::provider::build_context(active_options);
+    check(built.error.ok(), "TUI regression test builds the prior local request context");
+    if (!built.error.ok()) {
+        return;
+    }
+
+    ainiux::chat::Session loaded;
+    loaded.provider = "openrouter";
+    loaded.base_url = "https://openrouter.ai/api/v1";
+    loaded.model.clear();
+    const ainiux::Error applied =
+        ainiux::tui::apply_loaded_session_to_context(built.context, loaded);
+    check(applied.ok(), "TUI applies an incomplete saved OpenRouter context");
+    if (!applied.ok()) {
+        return;
+    }
+    check(built.context.profile.name == "openrouter",
+          "TUI restores the saved provider for an incomplete thread");
+    check(built.context.options.model.empty(),
+          "TUI preserves an empty saved model instead of inheriting the local model");
+    check(built.context.chat_url.find("localhost:30000") == std::string::npos &&
+              built.context.models_url.find("localhost:30000") == std::string::npos,
+          "TUI clears endpoint overrides inherited from the previous thread");
+    check(built.context.chat_url.find("openrouter.ai") != std::string::npos,
+          "TUI rebuilds the request URL from the saved provider context");
 }
 
 void test_tui_session_load_model_mismatch_detection() {
@@ -864,10 +927,11 @@ void run_all() {
     test_tui_history_jump_helpers();
     test_tui_session_load_model_mismatch_detection();
     test_tui_session_load_model_confirm_text();
+    test_tui_incomplete_thread_labels();
+    test_tui_loaded_context_does_not_inherit_model_or_endpoints();
     test_tui_restore_cli_context();
     test_tui_input_label_and_activity_indicators();
     test_tui_provider_display_and_activity_status();
-    test_tui_startup_provider_picker();
     test_tui_chat_startup_status();
     test_tui_unicode_and_empty_status();
     test_tui_layout_reserves_editor_input_panel();

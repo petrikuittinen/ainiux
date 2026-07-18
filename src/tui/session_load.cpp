@@ -31,6 +31,34 @@ bool active_context_has_provider_selection(const provider::RequestContext& activ
     return !active.profile.offline;
 }
 
+bool saved_provider_model_complete(const std::string& provider_name,
+                                   const std::string& model_name) {
+    const bool has_provider = !provider_name.empty() &&
+                              provider::canonical_profile_name(provider_name) != "none";
+    return has_provider && !model_name.empty();
+}
+
+std::string saved_provider_model_missing(const std::string& provider_name,
+                                         const std::string& model_name) {
+    const bool provider_missing = provider_name.empty() ||
+                                  provider::canonical_profile_name(provider_name) == "none";
+    const bool model_missing = model_name.empty();
+    if (provider_missing && model_missing) {
+        return "provider+model missing";
+    }
+    if (provider_missing) {
+        return "provider missing";
+    }
+    if (model_missing) {
+        return "model missing";
+    }
+    return "";
+}
+
+bool session_has_complete_provider_model(const chat::Session& session) {
+    return saved_provider_model_complete(session.provider, session.model);
+}
+
 bool loaded_session_differs_from_context(const provider::RequestContext& active,
                                          const chat::Session& loaded) {
     if (!active_context_has_provider_selection(active)) {
@@ -61,16 +89,17 @@ std::string model_confirm_text(const provider::RequestContext& active,
 
 Error apply_loaded_session_to_context(provider::RequestContext& context, const chat::Session& loaded) {
     cli::Options next = context.options;
-    if (!loaded.provider.empty()) {
-        next.provider = loaded.provider;
-    }
-    if (!loaded.base_url.empty()) {
+    const bool has_loaded_provider = !loaded.provider.empty() &&
+                                     provider::canonical_profile_name(loaded.provider) != "none";
+    const std::string loaded_provider = has_loaded_provider ? loaded.provider : "none";
+    provider::apply_provider_target(next, loaded_provider);
+    if (has_loaded_provider && !loaded.base_url.empty()) {
         next.base_url = loaded.base_url;
         next.positional_url.clear();
     }
-    if (!loaded.model.empty()) {
-        next.model = loaded.model;
-    }
+    // An empty persisted model is meaningful. Never inherit a model (or an
+    // endpoint override cleared above) from the previously active thread.
+    next.model = loaded.model;
     Error settings_error = chat::apply_settings_json(next, loaded.settings_json);
     if (!settings_error.ok()) {
         return settings_error;

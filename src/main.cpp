@@ -245,13 +245,6 @@ int main(int argc, char** argv) {
         ainiux::provider::RequestContext editor_context = std::move(context_result.context);
         std::optional<ainiux::editor::AiContinueContext> ai_continue;
         if (!editor_context.profile.offline) {
-            if (!ainiux::provider::defers_model_selection(editor_context)) {
-                ainiux::Error model_err = ainiux::app::choose_default_model(editor_context);
-                if (!model_err.ok()) {
-                    ainiux::app::print_error(model_err);
-                    return ainiux::app::exit_code_for(model_err.code);
-                }
-            }
             ainiux::editor::AiContinueContext configured;
             configured.request = std::move(editor_context);
             configured.settings = ainiux::editor::ai_continue_settings(options);
@@ -423,8 +416,7 @@ int main(int argc, char** argv) {
     if (!loaded_session) {
         session = ainiux::chat::new_session(context);
     }
-    const bool defer_tui_model_selection = ainiux::provider::tui_defers_model_selection(context);
-    if (!model_chosen && !defer_tui_model_selection) {
+    if (!model_chosen && !context.options.tui) {
         ainiux::Error model_err = ainiux::app::choose_default_model(context);
         if (!model_err.ok()) {
             ainiux::app::print_error(model_err);

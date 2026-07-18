@@ -106,9 +106,8 @@ void test_editor_ai_continue_helpers() {
     check(lm_parsed.error.ok(), "lmstudio editor args without model parse");
     context = ainiux::provider::build_context(lm_parsed.options);
     check(context.error.ok(), "lmstudio provider context builds without model");
-    check(ainiux::provider::profile_auto_selects_default_model(context.context.profile,
-                                                             context.context.base_url),
-          "lmstudio editor auto-selects the first model");
+    check(ainiux::provider::needs_interactive_model_selection(context.context),
+          "lmstudio editor discovers models when no model was supplied");
     ai_continue.request = context.context;
     check(ainiux::editor::validate_continue_request(ai_continue).code == ainiux::ErrorCode::BadArgs,
           "continue validation still requires a resolved model");
@@ -119,15 +118,13 @@ void test_editor_ai_continue_helpers() {
     ainiux::provider::ContextResult localhost_context =
         ainiux::provider::build_context(localhost_parsed.options);
     check(localhost_context.error.ok(), "localhost custom endpoint context builds without model");
-    check(ainiux::provider::profile_auto_selects_default_model(localhost_context.context.profile,
-                                                               localhost_context.context.base_url),
-          "localhost custom endpoint auto-selects the first model");
+    check(ainiux::provider::needs_interactive_model_selection(localhost_context.context),
+          "localhost custom endpoint discovers models when no model was supplied");
 
     ainiux::provider::RequestContext openai_context;
     openai_context.profile.name = "openai";
-    check(!ainiux::provider::profile_auto_selects_default_model(openai_context.profile,
-                                                                openai_context.base_url),
-          "openai editor does not auto-select a model");
+    check(ainiux::provider::needs_interactive_model_selection(openai_context),
+          "remote provider without a model requires interactive model discovery");
 
     const char* lm_model_argv[] = {"ainiux", "lmstudio", "-m", "mock-model", "--editor"};
     ainiux::cli::ParseResult lm_model_parsed = ainiux::cli::parse_args(5, const_cast<char**>(lm_model_argv));
@@ -3661,8 +3658,12 @@ void test_editor_help_document_and_command() {
               help_text.find("/maximize") != std::string::npos &&
               help_text.find("/nosplit") != std::string::npos,
           "editor help document documents split slash commands");
-    check(help_text.find("Choose a model with /model") != std::string::npos,
-          "editor help document documents deferred model selection");
+    check(help_text.find("loads `/v1/models`") != std::string::npos &&
+              help_text.find("selected automatically") != std::string::npos &&
+              help_text.find("multiple results open") != std::string::npos,
+          "editor help document documents startup model discovery");
+    check(help_text.find("no startup picker or model request") != std::string::npos,
+          "editor help document documents bare offline startup");
     check(help_text.find("/provider") != std::string::npos && help_text.find("/model") != std::string::npos,
           "editor help document documents /provider and /model");
 

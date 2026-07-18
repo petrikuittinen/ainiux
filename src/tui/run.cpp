@@ -50,15 +50,6 @@ app::TuiRunResult run(provider::RequestContext context,
                       chat::Session session,
                       app::InteractiveSession* interactive) {
     const provider::RequestContext cli_context = context;
-    if (context.options.model.empty() &&
-        provider::profile_auto_selects_default_model(context.profile, context.base_url)) {
-        Error model_err = app::choose_default_model(context);
-        if (!model_err.ok()) {
-            std::cerr << error_code_name(model_err.code) << ": " << model_err.message << "\n";
-            return {app::exit_code_for(model_err.code), app::InteractiveUiTarget::Quit};
-        }
-        app::refresh_session_metadata(session, context);
-    }
     TerminalSession terminal;
     Error err = terminal.enter();
     if (!err.ok()) {
@@ -126,6 +117,7 @@ app::TuiRunResult run(provider::RequestContext context,
     std::vector<std::string> picker_items;
     size_t picker_selected = 0;
     bool picker_cancel_quits = false;
+    bool loaded_thread_requires_provider_selection = false;
     std::vector<ChatAttachment> chat_attachments;
     size_t attachment_picker_selected = 0;
     size_t pending_attachment_delete = static_cast<size_t>(-1);
@@ -160,6 +152,29 @@ app::TuiRunResult run(provider::RequestContext context,
             session.read_only
                 ? loaded_label + " [read-only: " + session.read_only_reason + "]"
                 : loaded_label;
+        if (!session_has_complete_provider_model(session)) {
+            loaded_thread_requires_provider_selection = true;
+            const Error context_error = apply_loaded_session_context(session);
+            picker_items = ui::selectable_provider_ids();
+            picker_selected = 0;
+            picker_cancel_quits = false;
+            mode = TuiMode::ProviderList;
+            help_text.clear();
+            settings_text.clear();
+            const std::string missing =
+                saved_provider_model_missing(session.provider, session.model);
+            status = "Thread setup: " + missing + " · select provider; model follows";
+            if (!context_error.ok()) {
+                status += " · saved context error: " + context_error.message;
+            }
+            return;
+        }
+        loaded_thread_requires_provider_selection = false;
+        if (!chat_provider_model_ready(context)) {
+            const Error context_error = apply_loaded_session_context(session);
+            status = context_error.ok() ? status_label : detail::error_line(context_error);
+            return;
+        }
         if (loaded_session_differs_from_context(context, session)) {
             mode = TuiMode::ModelConfirm;
             status = status_label;
@@ -175,6 +190,7 @@ app::TuiRunResult run(provider::RequestContext context,
     };
 
     auto start_new_thread_from_cli = [&]() {
+        loaded_thread_requires_provider_selection = false;
         restore_cli_context(context, cli_context);
         show_thinking_traces = context.options.show_thinking_traces;
         session = chat::new_session(context);
@@ -499,9 +515,21 @@ app::TuiRunResult run(provider::RequestContext context,
         }
     };
 
+    auto require_provider_model_for_send = [&]() {
+        if (!loaded_thread_requires_provider_selection && chat_provider_model_ready(context)) {
+            return true;
+        }
+        status = chat_provider_model_required_status(
+            context, loaded_thread_requires_provider_selection);
+        return false;
+    };
+
     auto start_assistant_response = [&]() {
         if (session.read_only) {
             status = "Thread is read-only: " + session.read_only_reason;
+            return;
+        }
+        if (!require_provider_model_for_send()) {
             return;
         }
         active_job = ActiveJob::Chat;
@@ -578,6 +606,9 @@ app::TuiRunResult run(provider::RequestContext context,
                                        size_t pending_image_count) {
         if (session.read_only) {
             status = "Thread is read-only: " + session.read_only_reason;
+            return;
+        }
+        if (!require_provider_model_for_send()) {
             return;
         }
         if (active_job != ActiveJob::None) {
@@ -751,6 +782,9 @@ app::TuiRunResult run(provider::RequestContext context,
             status = "Thread is read-only: " + session.read_only_reason;
             return;
         }
+        if (!require_provider_model_for_send()) {
+            return;
+        }
         if (active_job == ActiveJob::Models) {
             status = "Cannot regenerate while listing models";
             return;
@@ -828,7 +862,12 @@ app::TuiRunResult run(provider::RequestContext context,
     command_handlers.start_new_chat_thread = [&](const std::string& name) { start_new_chat_thread(name); };
     command_handlers.open_provider_picker = open_provider_picker;
     command_handlers.apply_selected_provider = [&](const std::string& provider_target) {
-        return apply_selected_provider(context, session, show_thinking_traces, provider_target, status);
+        const bool applied =
+            apply_selected_provider(context, session, show_thinking_traces, provider_target, status);
+        if (applied) {
+            loaded_thread_requires_provider_selection = false;
+        }
+        return applied;
     };
     command_handlers.start_store_save = start_store_save;
     command_handlers.start_models = start_models;
@@ -902,12 +941,18 @@ app::TuiRunResult run(provider::RequestContext context,
                                       attachments_committed_for_turn};
 
     auto handle_command = [&](const std::string& text) {
+        if (loaded_thread_requires_provider_selection &&
+            (text == "/model" || text.rfind("/model ", 0) == 0)) {
+            status = "Thread setup requires /provider first; model selection follows";
+            return;
+        }
         handle_tui_command(text, command_context, command_handlers);
     };
 
     TuiPickerCallbacks picker_callbacks;
     picker_callbacks.on_provider_selected = [&](const std::string& provider_name) {
         if (apply_selected_provider(context, session, show_thinking_traces, provider_name, status)) {
+            loaded_thread_requires_provider_selection = false;
             picker_items.clear();
             picker_selected = 0;
             mode = TuiMode::Chat;
@@ -919,6 +964,7 @@ app::TuiRunResult run(provider::RequestContext context,
     picker_callbacks.on_model_selected = [&](const std::string& model_name) {
         context.options.model = model_name;
         session.model = model_name;
+        loaded_thread_requires_provider_selection = false;
         if (have_cached_models) {
             provider::apply_context_window_from_models(context, cached_models);
         }
@@ -1013,9 +1059,12 @@ app::TuiRunResult run(provider::RequestContext context,
     picker_callbacks.on_model_confirm_rejected = [&]() {
         Error context_error = apply_loaded_session_context(session);
         mode = TuiMode::Chat;
-        status = context_error.ok() ? "Using thread model: " + context.options.model
-                                    : detail::error_line(context_error);
-        start_store_save();
+        if (context_error.ok()) {
+            status = "Using thread model: " + context.options.model;
+            start_store_save();
+        } else {
+            status = detail::error_line(context_error);
+        }
     };
     picker_callbacks.on_model_confirm_retry = [&](const std::string& message) { status = message; };
 
@@ -1055,6 +1104,9 @@ app::TuiRunResult run(provider::RequestContext context,
             status = "Thread is read-only: " + session.read_only_reason;
             return;
         }
+        if (!require_provider_model_for_send()) {
+            return;
+        }
 
         const std::string typed_prompt = raw;
 
@@ -1092,8 +1144,8 @@ app::TuiRunResult run(provider::RequestContext context,
     file_jobs.start_media_cleanup(context.options.media_auto_expiration_days,
                                   session.thread_id, true);
 
-    if (should_open_startup_provider_picker(context)) {
-        open_provider_picker(false);
+    if (provider::needs_interactive_model_selection(context)) {
+        start_models(ModelsRequestPurpose::Picker);
     } else if (!app::detail::trim_ascii(context.options.prompt).empty()) {
         start_turn(context.options.prompt);
     }
@@ -1428,6 +1480,9 @@ app::TuiRunResult run(provider::RequestContext context,
                                                  input.text.empty(),
                                                  pending_thread_delete};
                 if (handle_tui_picker_input(ch, picker_state, picker_callbacks)) {
+                    if (loaded_thread_requires_provider_selection && mode == TuiMode::Chat) {
+                        status = chat_provider_model_required_status(context, true);
+                    }
                     continue;
                 }
                 if (mode == TuiMode::AttachmentList) {

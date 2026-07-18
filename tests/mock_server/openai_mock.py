@@ -50,10 +50,13 @@ class Handler(BaseHTTPRequestHandler):
                 "text/html; charset=utf-8",
             )
             return
-        if self.path == "/v1/models":
+        if self.path in ("/v1/models", "/v1/models-multiple"):
             if self.empty_models:
                 self._send(200, json.dumps({"object": "list", "data": []}))
                 return
+            model_ids = [self.model]
+            if self.path == "/v1/models-multiple":
+                model_ids.append(self.model + "-second")
             self._send(
                 200,
                 json.dumps(
@@ -61,10 +64,11 @@ class Handler(BaseHTTPRequestHandler):
                         "object": "list",
                         "data": [
                             {
-                                "id": self.model,
+                                "id": model_id,
                                 "object": "model",
                                 "context_length": 10000,
                             }
+                            for model_id in model_ids
                         ],
                     }
                 ),

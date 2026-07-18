@@ -553,12 +553,6 @@ void test_provider_lookup_metadata() {
           "custom OpenAI-compatible profile is not selectable in provider pickers");
     check(lm_studio_profile != nullptr && ainiux::provider::is_selectable_provider(*lm_studio_profile),
           "lm_studio profile is selectable in provider pickers");
-    check(ainiux::provider::profile_auto_selects_default_model(*lm_studio_profile, lm_studio_profile->base_url),
-          "local lm_studio profile auto-selects a default model");
-    check(!ainiux::provider::profile_auto_selects_default_model(*custom_profile, "https://api.example.com/v1"),
-          "custom remote endpoint does not auto-select a default model");
-    check(ainiux::provider::profile_auto_selects_default_model(*custom_profile, "http://localhost:8000/v1"),
-          "custom loopback endpoint auto-selects a default model");
 }
 
 void test_lmstudio_context() {
@@ -809,10 +803,8 @@ void test_tui_local_endpoint_auto_selects_model() {
     check(parsed.error.ok(), "local URL chat UI args parse");
     ainiux::provider::ContextResult context = ainiux::provider::build_context(parsed.options);
     check(context.error.ok(), "local URL chat UI context builds");
-    check(!ainiux::provider::defers_model_selection(context.context),
-          "local custom URL defers model selection only for non-auto-select providers");
-    check(!ainiux::provider::tui_defers_model_selection(context.context),
-          "local custom URL chat UI auto-selects the default model");
+    check(ainiux::provider::needs_interactive_model_selection(context.context),
+          "local custom URL chat UI discovers models before choosing among them");
     check(context.context.base_url.find("localhost:30000") != std::string::npos,
           "local URL chat UI keeps the requested endpoint");
 
@@ -821,16 +813,20 @@ void test_tui_local_endpoint_auto_selects_model() {
     ainiux::provider::apply_tui_startup_default(bare_chat);
     ainiux::provider::ContextResult offline = ainiux::provider::build_context(bare_chat);
     check(offline.error.ok(), "bare chat UI offline context builds");
-    check(!ainiux::provider::tui_defers_model_selection(offline.context),
-          "bare offline chat UI does not defer because provider selection comes first");
+    check(!ainiux::provider::needs_interactive_model_selection(offline.context),
+          "bare offline chat UI does not start provider or model selection");
 
     const char* editor_argv[] = {"ainiux", "http://localhost:30000", "--editor"};
     ainiux::cli::ParseResult editor_parsed = ainiux::cli::parse_args(3, const_cast<char**>(editor_argv));
     check(editor_parsed.error.ok(), "local URL editor args parse");
     ainiux::provider::ContextResult editor_context = ainiux::provider::build_context(editor_parsed.options);
     check(editor_context.error.ok(), "local URL editor context builds");
-    check(!ainiux::provider::defers_model_selection(editor_context.context),
-          "local custom URL editor auto-selects the default model");
+    check(ainiux::provider::needs_interactive_model_selection(editor_context.context),
+          "local custom URL editor discovers models before choosing among them");
+
+    editor_context.context.options.model = "configured-model";
+    check(!ainiux::provider::needs_interactive_model_selection(editor_context.context),
+          "interactive startup skips model discovery when a model was supplied");
 }
 
 void test_tui_startup_provider_selection_helpers() {
@@ -1032,9 +1028,8 @@ void test_provider_registry_resolves_added_profiles() {
     check(sglang_ctx.context.profile.name == "sglang", "sglang profile selected");
     check(sglang_ctx.context.base_url == "http://localhost:30000/v1", "sglang defaults to localhost:30000");
     check(sglang_ctx.context.profile.local_endpoint, "sglang is marked local");
-    check(ainiux::provider::profile_auto_selects_default_model(sglang_ctx.context.profile,
-                                                               sglang_ctx.context.base_url),
-          "sglang auto-selects a default model");
+    check(ainiux::provider::needs_interactive_model_selection(sglang_ctx.context),
+          "sglang without a model requires interactive model discovery");
 
     const char* deepinfra_argv[] = {"ainiux", "--provider", "deepinfra", "--list-models", "--header", "Authorization: Bearer test"};
     ainiux::cli::ParseResult deepinfra = ainiux::cli::parse_args(6, const_cast<char**>(deepinfra_argv));

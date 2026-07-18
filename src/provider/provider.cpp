@@ -23,13 +23,6 @@ namespace ainiux::provider {
 
 namespace {
 
-bool is_loopback_base_url(const std::string& base_url) {
-    const std::string lower = ascii_lower(base_url);
-    return lower.find("://localhost") != std::string::npos ||
-           lower.find("://127.0.0.1") != std::string::npos ||
-           lower.find("://[::1]") != std::string::npos;
-}
-
 Capabilities profile_capabilities(bool requires_key,
                                   bool local,
                                   bool chat_completions,
@@ -2752,31 +2745,8 @@ bool is_selectable_provider(const Profile& profile) {
     return !profile.offline && profile.name != names::kCustomOpenAiChat;
 }
 
-bool profile_auto_selects_default_model(const Profile& profile, const std::string& base_url) {
-    if (profile.offline) {
-        return false;
-    }
-    if (profile.local_endpoint) {
-        return true;
-    }
-    if (profile.name == names::kCustomOpenAiChat && is_loopback_base_url(base_url)) {
-        return true;
-    }
-    return false;
-}
-
-bool defers_model_selection(const RequestContext& context) {
-    if (!context.options.model.empty() || context.profile.offline) {
-        return false;
-    }
-    return !profile_auto_selects_default_model(context.profile, context.base_url);
-}
-
-bool tui_defers_model_selection(const RequestContext& context) {
-    if (!context.options.tui) {
-        return false;
-    }
-    return defers_model_selection(context);
+bool needs_interactive_model_selection(const RequestContext& context) {
+    return !context.profile.offline && context.options.model.empty();
 }
 
 std::vector<Profile> built_in_profiles() {

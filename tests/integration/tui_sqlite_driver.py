@@ -550,6 +550,96 @@ def scenario_markdown_restart(binary, base, model, home_dir):
         raise RuntimeError("restored Markdown thread failed durable replay validation")
 
 
+def scenario_incomplete_thread_setup(binary, base, model, home_dir):
+    setup_home = home_dir + "-incomplete-thread"
+    shutil.rmtree(setup_home, ignore_errors=True)
+    os.makedirs(setup_home, exist_ok=True)
+    run_tui(
+        binary,
+        base,
+        model,
+        setup_home,
+        [
+            ("/new IncompleteModel\r", 0.5),
+            ("setup-seed\r", 1.2),
+            ("/quit\r", 0.5),
+        ],
+    )
+
+    path = db_path(setup_home)
+    conn = query_db(path)
+    try:
+        row = conn.execute(
+            "SELECT id FROM threads WHERE name = 'IncompleteModel' AND deleted_at IS NULL"
+        ).fetchone()
+        if row is None:
+            raise RuntimeError("expected seeded IncompleteModel thread")
+        thread_id = row["id"]
+        conn.execute(
+            "UPDATE threads SET last_provider = 'openrouter', "
+            "last_base_url = 'https://openrouter.ai/api/v1', last_model = '' "
+            "WHERE id = ?",
+            (thread_id,),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    transcript = run_tui(
+        binary,
+        base,
+        model,
+        setup_home,
+        [
+            ("/list\r", 0.6),
+            ("\r", 0.8),
+            ("\x1b", 0.4),
+            ("must-not-send\r", 0.6),
+            ("\x11", 0.5),
+        ],
+    )
+    if b"[SETUP: model missing]" not in transcript:
+        raise RuntimeError("expected the thread picker to label the missing model")
+    if b"/provider, then /model" not in transcript or b"sending disabled" not in transcript:
+        raise RuntimeError("expected incomplete-thread sending to remain visibly disabled")
+    conn = query_db(path)
+    try:
+        messages = message_texts(conn, thread_id)
+        if any(content == "must-not-send" for _, content in messages):
+            raise RuntimeError("incomplete thread accepted a prompt before provider/model setup")
+    finally:
+        conn.close()
+
+    transcript = run_tui(
+        binary,
+        base,
+        model,
+        setup_home,
+        [
+            ("/list\r", 0.6),
+            ("\r", 0.8),
+            ("\x1b", 0.4),
+            (f"/provider {base}\r", 1.2),
+            ("after-required-setup\r", 1.4),
+            ("/quit\r", 0.5),
+        ],
+    )
+    if b"AINIUX_ERR_HTTP_STATUS" in transcript:
+        raise RuntimeError("configured incomplete thread produced an HTTP error")
+    conn = query_db(path)
+    try:
+        row = conn.execute(
+            "SELECT last_provider, last_model FROM threads WHERE id = ?", (thread_id,)
+        ).fetchone()
+        if row is None or row["last_model"] != model:
+            raise RuntimeError("provider/model setup was not persisted on the repaired thread")
+        messages = message_texts(conn, thread_id)
+        if ("user", "after-required-setup") not in messages or messages[-1] != ("assistant", "Hello"):
+            raise RuntimeError("repaired thread did not accept a successful follow-up prompt")
+    finally:
+        conn.close()
+
+
 def scenario_corrupt_database(binary, base, model, home_dir):
     path = db_path(home_dir)
     os.makedirs(os.path.dirname(path), exist_ok=True)
@@ -595,6 +685,7 @@ def main():
     scenarios = {
         "media-restart": scenario_media_restart,
         "markdown-restart": scenario_markdown_restart,
+        "incomplete-thread": scenario_incomplete_thread_setup,
         "seed-alpha": scenario_seed_alpha,
         "fresh-start": scenario_fresh_start,
         "beta-list-load": scenario_beta_and_list_load,

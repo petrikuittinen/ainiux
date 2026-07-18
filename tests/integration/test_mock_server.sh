@@ -591,6 +591,8 @@ python3 "$ROOT/tests/integration/editor_prose_continue_driver.py" "$ROOT/ainiux"
 python3 "$ROOT/tests/integration/editor_buffers_driver.py" "$ROOT/ainiux" "$BASE" "$MODEL"
 python3 "$ROOT/tests/integration/editor_locking_driver.py" "$ROOT/ainiux"
 python3 "$ROOT/tests/integration/editor_text_modes_driver.py" "$ROOT/ainiux"
+python3 "$ROOT/tests/integration/tui_startup_selection_driver.py" \
+    "$ROOT/ainiux" "$BASE" "$MODEL"
 
 image_extract_err="$ROOT/build/image-extract.err"
 if "$ROOT/ainiux" --input "$local_png" --quiet >"$ROOT/build/image-extract.out" 2>"$image_extract_err"; then

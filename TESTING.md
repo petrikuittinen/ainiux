@@ -29,6 +29,7 @@ CI (`.github/workflows/ci.yml`) runs `make test` and `make test-leak` on Ubuntu 
 - `build/test_io_faults` — separate binary for slower or environment-dependent checks.
 - `tests/integration/test_mock_server.sh` — CLI, REPL, benchmark/grade, fetch, config, attachments, and TUI insert coverage against a local mock API.
 - `tests/integration/test_sqlite_persistence.sh` — SQLite-backed TUI persistence via `tui_sqlite_driver.py`.
+- `tests/integration/tui_startup_selection_driver.py` — isolated PTY coverage for bare-offline chat and one-/multiple-model startup discovery.
 - `tests/mock_server/` — Python HTTP mocks for OpenAI-compatible APIs and slow responses.
 - `tests/mock/` — POSIX `LD_PRELOAD` shim for disk-full simulation.
 
@@ -54,7 +55,7 @@ Approximate size today: **900+** unit assertions, **170+** integration checks in
 - Chat Completions and Responses API against `openai_mock.py`
 - Streaming, JSON/NDJSON output, thinking-trace redaction
 - REPL, benchmark modes, action-balanced safety ratings, configurable judge grading, URL fetch safety, attachments, images
-- Editor/chat shared provider/model selectors, editor colored selector panels, provider-to-model discovery, and one-model auto-selection
+- Editor/chat shared provider/model selectors, colored selector panels, explicit-provider startup discovery, one-model auto-selection, multiple-model selection, and non-modal bare-offline startup
 - TUI insert/attach/fetch driver
 - SQLite TUI workflows: `/new`, autosave/reload, `/list`, `/provider`, `/remove`, stale `last_thread_id`, corrupt database, image persistence across restart, `/cleanup`, and read-only expired-media threads
 
@@ -69,7 +70,7 @@ Approximate size today: **900+** unit assertions, **170+** integration checks in
 
 ### `tests/mock_server/openai_mock.py`
 
-Local OpenAI-compatible server used by `test_mock_server.sh`. Supports model listing, chat completions, responses API, streaming, reasoning fields, attachments, images, HTML fetch fixtures, and strict configurable benchmark-grading requests.
+Local OpenAI-compatible server used by `test_mock_server.sh`. Supports one- and multiple-result model-list endpoints, chat completions, responses API, streaming, reasoning fields, attachments, images, HTML fetch fixtures, and strict configurable benchmark-grading requests.
 
 ### `tests/mock_server/slow_http_mock.py`
 
@@ -92,7 +93,11 @@ Write attempts to paths containing `mock-enospc` fail with `ENOSPC`. Optional `A
 ### `tests/integration/tui_sqlite_driver.py`
 
 PTY driver for TUI commands. Uses an isolated `HOME` so the database is created at `$HOME/.ainiux/ainiux.db` and verified with Python `sqlite3`.
-It covers managed-image restart/expiration and canonical Markdown attachment replay: small inline Markdown, one-time HTML conversion to file-backed `.md`, same-process follow-ups, source changes after import, and restored-thread requests.
+It covers managed-image restart/expiration and canonical Markdown attachment replay: small inline Markdown, one-time HTML conversion to file-backed `.md`, same-process follow-ups, source changes after import, and restored-thread requests. It also corrupts a saved thread's model metadata while a different local endpoint is active, then verifies the visible setup warning, blocked send, forced provider/model repair flow, persisted repair, and successful follow-up request.
+
+### `tests/integration/tui_startup_selection_driver.py`
+
+PTY driver for startup selection policy. It verifies that bare chat opens without a provider/model modal, explains `/list` and setup, blocks sending, and still opens the thread library. With an explicit provider it verifies sole-model auto-selection and the shared selector for multiple results. `editor_buffers_driver.py` covers the equivalent bare, single-result, and multiple-result editor cases.
 
 ## Known gaps
 

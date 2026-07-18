@@ -101,18 +101,18 @@ Hold `Shift` while using arrow keys, `Page Up`/`Page Down`, `Home`/`End`, or `Ct
 
 ## Provider and model
 
-Start the editor with a provider shortcut or profile, then choose a model inside the editor — the same flow as `--chat`:
+Start the editor with a provider shortcut or profile to discover its models immediately — the same flow as `--chat`:
 
 ```text
 ainiux openrouter --editor notes.txt
 ainiux lmstudio --editor draft.md
 ```
 
-When a provider is set but no model is chosen yet, the minibuffer shows **Choose a model with /model**. File editing still works; AI commands stay disabled until a model is selected.
+When a provider is set but no model is chosen yet, ainiux loads `/v1/models`. A sole result is selected automatically; multiple results open the colored model selector. File editing still works while discovery runs, and AI commands stay disabled until a model is selected.
 
 Use `Esc` then `/provider` or `/model` to change provider or model. `/provider` with no argument opens the same colored selector widget used by chat and the editor buffer list. Choosing a provider clears the previous provider's model and immediately loads `/v1/models`; multiple results open the model selector, while one result is selected automatically. `/model` with no argument loads the same endpoint and selector directly.
 
-`ainiux --provider none --editor` (or plain `ainiux --editor`) runs as a local editor with no network access. Use `/provider` and `/model` later to enable AI assist.
+`ainiux --provider none --editor` (or plain `ainiux --editor`) runs as a local editor with no startup picker or model request. Use `/provider` later to discover and select a model for AI assist.
 
 ## AI continue (`Ctrl+Space`)
 
