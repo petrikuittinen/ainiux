@@ -41,7 +41,7 @@ Approximate size today: **900+** unit assertions, **170+** integration checks in
 **Strong unit coverage**
 
 - CLI parsing and options
-- Python/C/C++ symbol scanning, incremental project indexing, stale detection, and Markdown reports
+- Python/C/C++/JavaScript/TypeScript/HTML/CSS symbol scanning, embedded HTML script/style scanning, incremental project indexing, line totals, stale detection, and Markdown reports
 - Provider registry, every registered reasoning request protocol, and response parsing
 - Main configuration plus `models.conf` parsing, layering, disabling, regex validation, final-component/case-insensitive family matching, and precedence
 - HTML/Markdown/input/output conversion

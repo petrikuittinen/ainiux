@@ -273,7 +273,7 @@ The HTTP transport uses libcurl through RAII wrappers in `src/http/`. Build flag
 
 ## Project Code Index
 
-The first local-agent building block is a standalone, best-effort Python/C/C++ symbol index. Run it from a project root:
+The first local-agent building block is a standalone, best-effort Python, C, C++, JavaScript, TypeScript, HTML, and CSS symbol index. Run it from a project root:
 
 ```sh
 ./ainiux --index-code
@@ -281,11 +281,11 @@ The first local-agent building block is a standalone, best-effort Python/C/C++ s
 ./ainiux --print-index --output code-index.md
 ```
 
-`--index-code` recursively discovers eligible source files and creates or incrementally refreshes `.ainiux/index.sqlite`. Parsing uses fast regex-assisted lexical scanners and a bounded worker pool; it intentionally favors speed over compiler-grade accuracy. It records ordinary classes, namespaces, functions, methods, types, aliases, fields, globals, and constants. Dynamic definitions, macros, references, call graphs, and unusual declarations are deferred.
+`--index-code` recursively discovers eligible source files and creates or incrementally refreshes `.ainiux/index.sqlite`. Parsing uses fast regex-assisted lexical scanners and a bounded worker pool; it intentionally favors speed over compiler-grade accuracy. It records ordinary classes, namespaces, functions, methods, types, aliases, fields, globals, and constants. The web scanners also record TypeScript interfaces and type aliases, CSS selectors, at-rules, keyframes and custom properties, HTML elements with IDs and custom elements, and symbols inside HTML `<script>` and `<style>` blocks. Data-only JSON/import-map script blocks are skipped. Dynamic definitions, macros, references, call graphs, and unusual declarations are deferred.
 
 The indexer never enters `.ainiux`, version-control metadata, or common build/dependency directories. It honors ordered workspace-root `.gitignore` and `.ignore` rules using `*`, `?`, `**`, leading/trailing slash, comments, and `!` re-inclusion; nested ignore files are deferred. It does not follow directory symlinks, skips binary and non-UTF-8 inputs, and reports per-file skips on `stderr` without failing the completed refresh. Source files default to a 10 MiB limit, configurable with `[index] max_source_code_file_size = 10M` or `--max-source-code-file-size SIZE`.
 
-`--print-index` emits deterministic Markdown to `stdout` unless `--output PATH` is used. It checks file paths, sizes, modification times, scanner version, size configuration, and root ignore rules first. A stale snapshot produces a warning on `stderr` but remains read-only and printable. `--index-code --print-index` refreshes and prints in one invocation. Pressing `Ctrl+C` cancels a refresh before its transaction commits, preserving the previous completed snapshot.
+`--print-index` emits deterministic Markdown to `stdout` unless `--output PATH` is used. Its totals table includes files, physical source lines, indexed/skipped counts, and symbols per language plus an all-language total; skipped binary, invalid UTF-8, oversized, and unreadable files contribute zero lines. It checks file paths, sizes, modification times, scanner version, size configuration, and root ignore rules first. A stale snapshot produces a warning on `stderr` but remains read-only and printable. `--index-code --print-index` refreshes and prints in one invocation. Pressing `Ctrl+C` cancels a refresh before its transaction commits, preserving the previous completed snapshot.
 
 ## Editor Mode
 

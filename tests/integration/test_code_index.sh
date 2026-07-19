@@ -9,6 +9,11 @@ trap 'rm -rf "$WORK"' EXIT HUP INT TERM
 mkdir -p "$WORK/src" "$WORK/build"
 printf '%s\n' 'def greet(name):' '    """Return a greeting."""' '    return "Hello " + name' > "$WORK/tool.py"
 printf '%s\n' 'struct Point { int x; };' 'int add(int a, int b);' > "$WORK/src/math.h"
+printf '%s\n' 'export function start() { return true; }' 'const render = () => { return "ok"; };' > "$WORK/app.js"
+printf '%s\n' 'export interface User {' '    id: number;' '}' > "$WORK/models.ts"
+printf '%s\n' ':root { --brand: #369; }' '.card { color: var(--brand); }' > "$WORK/theme.css"
+printf '%s\n' '<main id="app">' '<style>' '.embedded { color: green; }' '</style>' '<script>' \
+    'function embeddedBoot() {}' '</script>' '</main>' > "$WORK/index.html"
 printf '%s\n' 'def ignored():' '    pass' > "$WORK/ignored.py"
 printf '%s\n' 'ignored.py' > "$WORK/.gitignore"
 printf '%s\n' 'int generated(void);' > "$WORK/build/generated.c"
@@ -26,6 +31,15 @@ test -f "$WORK/.ainiux/index.sqlite"
 grep -q '# ainiux Code Index' "$WORK/report.md"
 grep -q 'greet' "$WORK/report.md"
 grep -q 'Point' "$WORK/report.md"
+grep -q 'start' "$WORK/report.md"
+grep -q 'User' "$WORK/report.md"
+grep -q '\.card' "$WORK/report.md"
+grep -q 'embeddedBoot' "$WORK/report.md"
+grep -q '| JavaScript | 1 | 2 |' "$WORK/report.md"
+grep -q '| TypeScript | 1 | 3 |' "$WORK/report.md"
+grep -q '| CSS | 1 | 2 |' "$WORK/report.md"
+grep -q '| HTML | 1 | 8 |' "$WORK/report.md"
+grep -q '| \*\*All languages\*\* | \*\*7\*\* | \*\*20\*\* | \*\*6\*\* | \*\*1\*\* |' "$WORK/report.md"
 if grep -q 'ignored.py' "$WORK/report.md"; then
     echo 'ignored source appeared in code index report' >&2
     exit 1

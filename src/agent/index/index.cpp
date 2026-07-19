@@ -54,6 +54,7 @@ struct ScannedFile {
     Candidate candidate;
     Language language = Language::Python;
     std::string content_hash;
+    std::size_t line_count = 0;
     std::string status = "indexed";
     std::string error;
     std::vector<Symbol> symbols;
@@ -194,6 +195,10 @@ class Transaction {
 Language parse_language(const std::string& value) {
     if (value == "C++") return Language::Cpp;
     if (value == "C") return Language::C;
+    if (value == "JavaScript") return Language::JavaScript;
+    if (value == "TypeScript") return Language::TypeScript;
+    if (value == "HTML") return Language::Html;
+    if (value == "CSS") return Language::Css;
     return Language::Python;
 }
 
@@ -209,6 +214,7 @@ Error ensure_schema(Database& db) {
         "CREATE TABLE IF NOT EXISTS files("
         " id INTEGER PRIMARY KEY, path TEXT NOT NULL UNIQUE, language TEXT NOT NULL,"
         " size INTEGER NOT NULL, mtime_ns INTEGER NOT NULL, content_hash TEXT NOT NULL,"
+        " line_count INTEGER NOT NULL,"
         " scan_status TEXT NOT NULL, scan_error TEXT NOT NULL, indexed_at INTEGER NOT NULL);"
         "CREATE TABLE IF NOT EXISTS symbols("
         " id INTEGER PRIMARY KEY, file_id INTEGER NOT NULL REFERENCES files(id) ON DELETE CASCADE,"
@@ -220,6 +226,22 @@ Error ensure_schema(Database& db) {
         "CREATE INDEX IF NOT EXISTS symbols_name ON symbols(name);"
         "CREATE INDEX IF NOT EXISTS symbols_qualified_name ON symbols(qualified_name);"
         "CREATE INDEX IF NOT EXISTS symbols_kind ON symbols(kind);");
+}
+
+Error ensure_line_count_column(Database& db) {
+    bool found = false;
+    {
+        Statement columns;
+        Error error = columns.prepare(db, "PRAGMA table_info(files)");
+        if (!error.ok()) return error;
+        for (int rc = columns.step(); rc != SQLITE_DONE; rc = columns.step()) {
+            if (rc != SQLITE_ROW)
+                return sqlite_error(db.get(), "could not inspect indexed files schema", db.path());
+            if (columns.column_text(1) == "line_count") found = true;
+        }
+    }
+    return found ? ok_error()
+                 : db.exec("ALTER TABLE files ADD COLUMN line_count INTEGER NOT NULL DEFAULT 0");
 }
 
 Error validate_read_schema(Database& db) {
@@ -583,6 +605,10 @@ ScannedFile scan_candidate(const Candidate& candidate, const Options& options) {
         output.error = "source is not valid UTF-8 (invalid byte at offset " + std::to_string(invalid) + ")";
         return output;
     }
+    if (!source.empty()) {
+        output.line_count = static_cast<std::size_t>(std::count(source.begin(), source.end(), '\n'));
+        if (source.back() != '\n') ++output.line_count;
+    }
     ScanResult scan = scan_source(candidate.path, source, candidate.language);
     output.language = scan.language;
     output.symbols = std::move(scan.symbols);
@@ -592,9 +618,10 @@ ScannedFile scan_candidate(const Candidate& candidate, const Options& options) {
 Error replace_file(Database& db, const ScannedFile& file, long long indexed_at) {
     Statement upsert;
     Error error = upsert.prepare(
-        db, "INSERT INTO files(path,language,size,mtime_ns,content_hash,scan_status,scan_error,indexed_at)"
-            " VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(path) DO UPDATE SET language=excluded.language,"
+        db, "INSERT INTO files(path,language,size,mtime_ns,content_hash,line_count,scan_status,scan_error,indexed_at)"
+            " VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(path) DO UPDATE SET language=excluded.language,"
             " size=excluded.size,mtime_ns=excluded.mtime_ns,content_hash=excluded.content_hash,"
+            " line_count=excluded.line_count,"
             " scan_status=excluded.scan_status,scan_error=excluded.scan_error,indexed_at=excluded.indexed_at");
     if (!error.ok()) return error;
     int parameter = 1;
@@ -603,6 +630,7 @@ Error replace_file(Database& db, const ScannedFile& file, long long indexed_at) 
         !(error = upsert.bind_int64(db, parameter++, static_cast<sqlite3_int64>(file.candidate.size))).ok() ||
         !(error = upsert.bind_int64(db, parameter++, file.candidate.mtime_ns)).ok() ||
         !(error = upsert.bind_text(db, parameter++, file.content_hash)).ok() ||
+        !(error = upsert.bind_int64(db, parameter++, static_cast<sqlite3_int64>(file.line_count))).ok() ||
         !(error = upsert.bind_text(db, parameter++, file.status)).ok() ||
         !(error = upsert.bind_text(db, parameter++, file.error)).ok() ||
         !(error = upsert.bind_int64(db, parameter, indexed_at)).ok()) return error;
@@ -809,6 +837,7 @@ Error refresh(const Options& options, RefreshStats& stats) {
 
     Transaction transaction(db);
     if (!(error = transaction.begin()).ok()) return error;
+    if (!(error = ensure_line_count_column(db)).ok()) return error;
     for (const std::string& path : removed) {
         if (cancelled(options)) return {ErrorCode::Cancelled, "code indexing cancelled; previous snapshot preserved"};
         if (!(error = remove_file(db, path)).ok()) return error;
@@ -905,19 +934,34 @@ Error print_markdown(const Options& options, const Freshness& freshness, std::os
 
     Statement totals;
     if (!(error = totals.prepare(
-              db, "SELECT language,COUNT(*),SUM(CASE WHEN scan_status='indexed' THEN 1 ELSE 0 END),"
+              db, "SELECT language,COUNT(*),"
+                  "COALESCE(SUM(CASE WHEN scan_status='indexed' THEN line_count ELSE 0 END),0),"
+                  "SUM(CASE WHEN scan_status='indexed' THEN 1 ELSE 0 END),"
                   "SUM(CASE WHEN scan_status!='indexed' THEN 1 ELSE 0 END),"
                   "(SELECT COUNT(*) FROM symbols s JOIN files sf ON sf.id=s.file_id WHERE sf.language=f.language) "
                   "FROM files f GROUP BY language ORDER BY language")).ok()) return error;
-    output << "## Totals\n\n| Language | Files | Indexed | Skipped/errors | Symbols |\n"
-              "| --- | ---: | ---: | ---: | ---: |\n";
+    output << "## Totals\n\n| Language | Files | Lines of code | Indexed | Skipped/errors | Symbols |\n"
+              "| --- | ---: | ---: | ---: | ---: | ---: |\n";
+    sqlite3_int64 total_files = 0;
+    sqlite3_int64 total_lines = 0;
+    sqlite3_int64 total_indexed = 0;
+    sqlite3_int64 total_skipped = 0;
+    sqlite3_int64 total_symbols = 0;
     for (int rc = totals.step(); rc != SQLITE_DONE; rc = totals.step()) {
         if (cancelled(options)) return {ErrorCode::Cancelled, "printing code index cancelled"};
         if (rc != SQLITE_ROW) return sqlite_error(db.get(), "could not read index totals", db.path());
+        total_files += totals.column_int64(1);
+        total_lines += totals.column_int64(2);
+        total_indexed += totals.column_int64(3);
+        total_skipped += totals.column_int64(4);
+        total_symbols += totals.column_int64(5);
         output << "| " << markdown_text(totals.column_text(0)) << " | " << totals.column_int64(1)
                << " | " << totals.column_int64(2) << " | " << totals.column_int64(3)
-               << " | " << totals.column_int64(4) << " |\n";
+               << " | " << totals.column_int64(4) << " | " << totals.column_int64(5) << " |\n";
     }
+    output << "| **All languages** | **" << total_files << "** | **" << total_lines
+           << "** | **" << total_indexed << "** | **" << total_skipped << "** | **"
+           << total_symbols << "** |\n";
     output << "\n";
     if (!freshness.fresh) {
         output << "## Stale Snapshot\n\n";
@@ -943,7 +987,7 @@ Error print_markdown(const Options& options, const Freshness& freshness, std::os
     if (wrote_skipped) output << "\n";
 
     Statement files;
-    if (!(error = files.prepare(db, "SELECT id,path,language,scan_status,scan_error FROM files ORDER BY path")).ok())
+    if (!(error = files.prepare(db, "SELECT id,path,language,line_count,scan_status,scan_error FROM files ORDER BY path")).ok())
         return error;
     output << "## Files\n\n";
     while (true) {
@@ -954,7 +998,8 @@ Error print_markdown(const Options& options, const Freshness& freshness, std::os
         const sqlite3_int64 file_id = files.column_int64(0);
         output << "### " << markdown_code(files.column_text(1)) << "\n\n"
                << "Language: " << markdown_text(files.column_text(2))
-               << "; status: " << markdown_text(files.column_text(3)) << ".\n\n";
+               << "; lines: " << files.column_int64(3)
+               << "; status: " << markdown_text(files.column_text(4)) << ".\n\n";
         Statement symbols;
         if (!(error = symbols.prepare(
                   db, "SELECT kind,qualified_name,signature,line_start,line_end,documentation FROM symbols "

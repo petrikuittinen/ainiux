@@ -748,7 +748,7 @@ Options:
       --index-code              Create or incrementally refresh .ainiux/index.sqlite.
       --print-index             Print the stored project code index as Markdown.
       --max-source-code-file-size SIZE
-                                Maximum Python/C/C++ source file size; default 10M.
+                                Maximum supported source file size; default 10M.
 
   Prompt and generation:
   -p, --prompt TEXT
