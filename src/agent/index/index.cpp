@@ -730,6 +730,54 @@ std::string database_path(const std::string& workspace) {
     return (fs::path(workspace) / ".ainiux" / "index.sqlite").string();
 }
 
+Error clear_database(const Options& options, ClearStats& stats) {
+    fs::path root;
+    Error error = workspace_root(options.workspace, root);
+    if (!error.ok()) return error;
+
+    const fs::path state_directory = root / ".ainiux";
+    std::error_code filesystem_error;
+    const fs::file_status directory_status = fs::symlink_status(state_directory, filesystem_error);
+    if (filesystem_error == std::errc::no_such_file_or_directory) return ok_error();
+    if (filesystem_error) {
+        return {ErrorCode::FileWrite,
+                "could not inspect project index directory " + state_directory.string() + ": " +
+                    filesystem_error.message()};
+    }
+    if (!fs::exists(directory_status)) return ok_error();
+    if (fs::is_symlink(directory_status) || !fs::is_directory(directory_status)) {
+        return {ErrorCode::FileWrite,
+                "refusing to clear code index because " + state_directory.string() +
+                    " is not a project-local directory"};
+    }
+
+    const fs::path db_path = state_directory / "index.sqlite";
+    const fs::path targets[] = {db_path, fs::path(db_path.string() + "-wal"),
+                                fs::path(db_path.string() + "-shm")};
+    for (const fs::path& target : targets) {
+        filesystem_error.clear();
+        const fs::file_status status = fs::symlink_status(target, filesystem_error);
+        if (filesystem_error == std::errc::no_such_file_or_directory) continue;
+        if (filesystem_error) {
+            return {ErrorCode::FileWrite,
+                    "could not inspect code index file " + target.string() + ": " +
+                        filesystem_error.message()};
+        }
+        if (!fs::exists(status)) continue;
+        if (!fs::is_regular_file(status) && !fs::is_symlink(status)) {
+            return {ErrorCode::FileWrite,
+                    "refusing to remove non-file code index path " + target.string()};
+        }
+        if (!fs::remove(target, filesystem_error) || filesystem_error) {
+            return {ErrorCode::FileWrite,
+                    "could not remove code index file " + target.string() + ": " +
+                        (filesystem_error ? filesystem_error.message() : "path was not removed")};
+        }
+        ++stats.removed_files;
+    }
+    return ok_error();
+}
+
 Error refresh(const Options& options, RefreshStats& stats) {
     const auto started = std::chrono::steady_clock::now();
     fs::path root;

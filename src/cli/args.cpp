@@ -276,6 +276,8 @@ ParseResult parse_args(int argc, char** argv, const Options& base_options) {
             opts.index_code = true;
         } else if (arg == "--print-index") {
             opts.print_index = true;
+        } else if (arg == "--clear-index") {
+            opts.clear_index = true;
         } else if (arg == "--stream") {
             opts.stream = true;
             opts.stream_explicit = true;
@@ -659,22 +661,28 @@ ParseResult parse_args(int argc, char** argv) {
 }
 
 Error validate_index_mode_arguments(int argc, char** argv, const Options& options) {
-    if (!options.index_code && !options.print_index) return ok_error();
+    if (!options.index_code && !options.print_index && !options.clear_index) return ok_error();
+    if (options.clear_index && (options.index_code || options.print_index)) {
+        return {ErrorCode::BadArgs,
+                "--clear-index cannot be combined with --index-code or --print-index"};
+    }
     for (int i = 1; i < argc; ++i) {
         const std::string argument = argv[i];
         const std::size_t equals = argument.find('=');
         const std::string option = equals == std::string::npos ? argument : argument.substr(0, equals);
-        if (option == "--index-code" || option == "--print-index" || option == "--no-config" ||
-            option == "--debug") {
+        if (option == "--index-code" || option == "--print-index" || option == "--clear-index" ||
+            option == "--no-config" || option == "--debug") {
             continue;
         }
-        if (option == "--output" || option == "--max-source-code-file-size") {
+        if (!options.clear_index &&
+            (option == "--output" || option == "--max-source-code-file-size")) {
             if (equals == std::string::npos) ++i;
             continue;
         }
         return {ErrorCode::BadArgs,
-                option + " cannot be combined with --index-code or --print-index"};
+                option + " cannot be combined with code index mode"};
     }
+    if (options.clear_index) return ok_error();
     if (!options.print_index && !options.output_path.empty()) {
         return {ErrorCode::BadArgs, "--output requires --print-index in code index mode"};
     }
@@ -698,6 +706,7 @@ Usage:
   ainiux --grade [--grade-input FILE] [--provider NAME] [-m JUDGE_MODEL]
   ainiux --index-code [--max-source-code-file-size SIZE]
   ainiux --print-index [--output PATH]
+  ainiux --clear-index
 
 Examples:
   ainiux http://localhost:8000 -p "What is the capital of Norway?"
@@ -747,6 +756,7 @@ Options:
       --grade                   Grade benchmark results with a judge model (also: ainiux grade ...).
       --index-code              Create or incrementally refresh .ainiux/index.sqlite.
       --print-index             Print the stored project code index as Markdown.
+      --clear-index             Remove the project code index database.
       --max-source-code-file-size SIZE
                                 Maximum supported source file size; default 10M.
 

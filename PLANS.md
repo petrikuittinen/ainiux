@@ -2258,7 +2258,7 @@ This is the v1.0 plan for ainiux local agent mode (merged from the former standa
 **Also includes:** project-local SQLite code index, scanners, PageRank, fuzzy edits, preferred tool strategies.  
 **Product name:** ainiux throughout.
 
-**Implemented first slice (2026-07-19):** standalone `--index-code` and `--print-index` modes now provide the project-local `.ainiux/index.sqlite` foundation for Python, C, C++, JavaScript, TypeScript, HTML, and CSS, including embedded HTML script/style scanning and physical line totals. This baby-step schema stores files, line counts, and symbols only and uses parallel discovery/scanning, lightweight lexical extraction, root ignore files, incremental size/mtime checks, transactional refresh, and read-only Markdown reporting. Agent mode, references/FTS, ranking, tools, and interactive integration remain milestones below.
+**Implemented first slice (2026-07-19):** standalone `--index-code`, `--print-index`, and `--clear-index` modes now provide the project-local `.ainiux/index.sqlite` foundation for Python, C, C++, JavaScript, TypeScript, HTML, and CSS, including `.jsx`/`.tsx`/`.mts`/`.cts`, embedded HTML script/style scanning, and physical line totals. This baby-step schema stores files, line counts, and symbols only and uses parallel discovery/scanning, lightweight lexical extraction, root ignore files, incremental size/mtime checks, transactional refresh, read-only Markdown reporting, and isolated database removal. Agent mode, references/FTS, ranking, tools, and interactive integration remain milestones below.
 
 ---
 

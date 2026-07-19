@@ -87,7 +87,8 @@ int main(int argc, char** argv) {
         ainiux::app::print_error(configured.error);
         return ainiux::app::exit_code_for(configured.error.code);
     }
-    if (parsed.options.editor && !parsed.options.index_code && !parsed.options.print_index) {
+    if (parsed.options.editor && !parsed.options.index_code && !parsed.options.print_index &&
+        !parsed.options.clear_index) {
         ainiux::chat::SqliteStore state_store;
         const ainiux::Error open_error = state_store.open_default();
         if (open_error.ok()) {
@@ -122,7 +123,7 @@ int main(int argc, char** argv) {
         return ainiux::app::exit_code_for(parsed.error.code);
     }
     ainiux::cli::Options options = parsed.options;
-    if (options.index_code || options.print_index) {
+    if (options.index_code || options.print_index || options.clear_index) {
         const ainiux::Error index_arguments =
             ainiux::cli::validate_index_mode_arguments(argc, argv, options);
         if (!index_arguments.ok()) {

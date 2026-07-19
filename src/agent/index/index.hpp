@@ -55,6 +55,10 @@ struct RefreshStats {
     std::vector<std::string> diagnostics;
 };
 
+struct ClearStats {
+    std::size_t removed_files = 0;
+};
+
 struct Freshness {
     bool fresh = false;
     std::vector<std::string> added;
@@ -68,6 +72,7 @@ bool language_for_path(const std::string& path, Language& language);
 ScanResult scan_source(const std::string& path, const std::string& source, Language language);
 
 std::string database_path(const std::string& workspace);
+Error clear_database(const Options& options, ClearStats& stats);
 Error refresh(const Options& options, RefreshStats& stats);
 Error check_freshness(const Options& options, Freshness& freshness);
 Error print_markdown(const Options& options, const Freshness& freshness, std::ostream& output);

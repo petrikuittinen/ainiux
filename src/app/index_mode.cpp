@@ -41,6 +41,24 @@ int run_index_mode(const cli::Options& options) {
     index_options.max_source_code_file_size = options.max_source_code_file_size;
     index_options.interrupted = [] { return g_index_interrupt != 0; };
 
+    if (options.clear_index) {
+        agent::index::ClearStats stats;
+        const Error error = agent::index::clear_database(index_options, stats);
+        if (!error.ok()) {
+            print_error(error);
+            return exit_code_for(error.code);
+        }
+        if (stats.removed_files == 0) {
+            std::cerr << "Code index is already clear; no database exists at "
+                      << agent::index::database_path(index_options.workspace) << ".\n";
+        } else {
+            std::cerr << "Code index cleared: removed " << stats.removed_files
+                      << " database file(s) from "
+                      << agent::index::database_path(index_options.workspace) << ".\n";
+        }
+        return 0;
+    }
+
     if (options.index_code) {
         agent::index::RefreshStats stats;
         const Error error = agent::index::refresh(index_options, stats);

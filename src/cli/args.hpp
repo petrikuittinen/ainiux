@@ -55,6 +55,7 @@ struct Options {
     bool grade_input_explicit = false;
     bool index_code = false;
     bool print_index = false;
+    bool clear_index = false;
 
     std::string positional_url;
     std::string prompt;

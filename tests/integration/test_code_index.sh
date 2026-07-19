@@ -11,6 +11,10 @@ printf '%s\n' 'def greet(name):' '    """Return a greeting."""' '    return "Hel
 printf '%s\n' 'struct Point { int x; };' 'int add(int a, int b);' > "$WORK/src/math.h"
 printf '%s\n' 'export function start() { return true; }' 'const render = () => { return "ok"; };' > "$WORK/app.js"
 printf '%s\n' 'export interface User {' '    id: number;' '}' > "$WORK/models.ts"
+printf '%s\n' 'export function App() {' '    return <main>Hello</main>;' '}' > "$WORK/component.jsx"
+printf '%s\n' 'export const View = (props: Props) => {' '    return <section>{props.title}</section>;' '};' > "$WORK/view.tsx"
+printf '%s\n' 'export function bootModule() { return true; }' > "$WORK/runtime.mts"
+printf '%s\n' 'export const loadLegacy = () => true;' > "$WORK/legacy.cts"
 printf '%s\n' ':root { --brand: #369; }' '.card { color: var(--brand); }' > "$WORK/theme.css"
 printf '%s\n' '<main id="app">' '<style>' '.embedded { color: green; }' '</style>' '<script>' \
     'function embeddedBoot() {}' '</script>' '</main>' > "$WORK/index.html"
@@ -33,13 +37,17 @@ grep -q 'greet' "$WORK/report.md"
 grep -q 'Point' "$WORK/report.md"
 grep -q 'start' "$WORK/report.md"
 grep -q 'User' "$WORK/report.md"
+grep -q 'App' "$WORK/report.md"
+grep -q 'View' "$WORK/report.md"
+grep -q 'bootModule' "$WORK/report.md"
+grep -q 'loadLegacy' "$WORK/report.md"
 grep -q '\.card' "$WORK/report.md"
 grep -q 'embeddedBoot' "$WORK/report.md"
-grep -q '| JavaScript | 1 | 2 |' "$WORK/report.md"
-grep -q '| TypeScript | 1 | 3 |' "$WORK/report.md"
+grep -q '| JavaScript | 2 | 5 |' "$WORK/report.md"
+grep -q '| TypeScript | 4 | 8 |' "$WORK/report.md"
 grep -q '| CSS | 1 | 2 |' "$WORK/report.md"
 grep -q '| HTML | 1 | 8 |' "$WORK/report.md"
-grep -q '| \*\*All languages\*\* | \*\*7\*\* | \*\*20\*\* | \*\*6\*\* | \*\*1\*\* |' "$WORK/report.md"
+grep -q '| \*\*All languages\*\* | \*\*11\*\* | \*\*28\*\* | \*\*10\*\* | \*\*1\*\* |' "$WORK/report.md"
 if grep -q 'ignored.py' "$WORK/report.md"; then
     echo 'ignored source appeared in code index report' >&2
     exit 1
@@ -63,5 +71,18 @@ if (cd "$WORK" && "$BIN" --index-code --provider none >/dev/null 2>"$WORK/bad.st
     exit 1
 fi
 grep -q 'cannot be combined' "$WORK/bad.stderr"
+
+(cd "$WORK" && "$BIN" --clear-index >"$WORK/clear.stdout" 2>"$WORK/clear.stderr")
+test ! -s "$WORK/clear.stdout"
+grep -q 'Code index cleared' "$WORK/clear.stderr"
+test ! -e "$WORK/.ainiux/index.sqlite"
+if (cd "$WORK" && "$BIN" --print-index >/dev/null 2>"$WORK/missing.stderr"); then
+    echo 'print-index succeeded after the index was cleared' >&2
+    exit 1
+fi
+grep -q 'no completed code index exists' "$WORK/missing.stderr"
+(cd "$WORK" && "$BIN" --clear-index >"$WORK/clear-again.stdout" 2>"$WORK/clear-again.stderr")
+test ! -s "$WORK/clear-again.stdout"
+grep -q 'already clear' "$WORK/clear-again.stderr"
 
 echo 'code index integration tests passed'

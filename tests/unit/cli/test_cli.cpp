@@ -449,6 +449,26 @@ void test_cli_code_index_parse() {
     const char* bad_size[] = {"ainiux", "--index-code", "--max-source-code-file-size", "huge"};
     parsed = ainiux::cli::parse_args(4, const_cast<char**>(bad_size));
     check(!parsed.error.ok(), "code index CLI rejects invalid byte size");
+
+    const char* clear[] = {"ainiux", "--clear-index"};
+    parsed = ainiux::cli::parse_args(2, const_cast<char**>(clear));
+    check(parsed.error.ok() && parsed.options.clear_index &&
+              ainiux::cli::validate_index_mode_arguments(2, const_cast<char**>(clear), parsed.options).ok(),
+          "clear-index parses as a standalone code index mode");
+
+    const char* conflicting[] = {"ainiux", "--clear-index", "--index-code"};
+    parsed = ainiux::cli::parse_args(3, const_cast<char**>(conflicting));
+    check(parsed.error.ok() &&
+              !ainiux::cli::validate_index_mode_arguments(
+                   3, const_cast<char**>(conflicting), parsed.options).ok(),
+          "clear-index rejects refresh combinations");
+
+    const char* clear_output[] = {"ainiux", "--clear-index", "--output", "index.md"};
+    parsed = ainiux::cli::parse_args(4, const_cast<char**>(clear_output));
+    check(parsed.error.ok() &&
+              !ainiux::cli::validate_index_mode_arguments(
+                   4, const_cast<char**>(clear_output), parsed.options).ok(),
+          "clear-index rejects output options");
 }
 
 }  // namespace

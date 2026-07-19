@@ -285,12 +285,24 @@ void test_html_embedded_scanner() {
 
 void test_web_language_detection() {
     Language language = Language::Python;
-    check(ainiux::agent::index::language_for_path("module.MJS", language) &&
+    check(ainiux::agent::index::language_for_path("module.JS", language) &&
               language == Language::JavaScript,
-          "code index detects JavaScript extensions through editor detection");
+          "code index detects .js through editor detection");
+    check(ainiux::agent::index::language_for_path("module.JSX", language) &&
+              language == Language::JavaScript,
+          "code index detects .jsx case-insensitively");
+    check(ainiux::agent::index::language_for_path("view.TS", language) &&
+              language == Language::TypeScript,
+          "code index detects .ts through editor detection");
     check(ainiux::agent::index::language_for_path("view.TSX", language) &&
               language == Language::TypeScript,
-          "code index detects TypeScript extensions through editor detection");
+          "code index detects .tsx case-insensitively");
+    check(ainiux::agent::index::language_for_path("module.MTS", language) &&
+              language == Language::TypeScript,
+          "code index detects .mts case-insensitively");
+    check(ainiux::agent::index::language_for_path("module.CTS", language) &&
+              language == Language::TypeScript,
+          "code index detects .cts case-insensitively");
     check(ainiux::agent::index::language_for_path("index.HTML", language) &&
               language == Language::Html,
           "code index detects HTML extensions through editor detection");
@@ -447,6 +459,51 @@ void test_schema_upgrade_adds_line_counts() {
     check(!cleanup_error, "schema upgrade test workspace is removed");
 }
 
+void test_clear_database() {
+    const fs::path root = temporary_workspace("clear");
+    write_file(root / "component.jsx", "export function App() { return <main>Hello</main>; }\n");
+    ainiux::agent::index::Options options;
+    options.workspace = root.string();
+    ainiux::agent::index::RefreshStats refresh_stats;
+    ainiux::Error error = ainiux::agent::index::refresh(options, refresh_stats);
+    check(error.ok() && refresh_stats.indexed == 1,
+          "clear test creates an index containing JSX source");
+
+    const fs::path database = root / ".ainiux" / "index.sqlite";
+    write_file(fs::path(database.string() + "-wal"), "stale wal");
+    write_file(fs::path(database.string() + "-shm"), "stale shm");
+    ainiux::agent::index::ClearStats clear_stats;
+    error = ainiux::agent::index::clear_database(options, clear_stats);
+    check(error.ok() && clear_stats.removed_files == 3 && !fs::exists(database) &&
+              !fs::exists(fs::path(database.string() + "-wal")) &&
+              !fs::exists(fs::path(database.string() + "-shm")),
+          "clear-index removes the database and SQLite sidecars");
+
+    clear_stats = {};
+    error = ainiux::agent::index::clear_database(options, clear_stats);
+    check(error.ok() && clear_stats.removed_files == 0,
+          "clearing an absent code index is idempotent");
+
+    std::error_code cleanup_error;
+    fs::remove_all(root / ".ainiux", cleanup_error);
+    check(!cleanup_error, "empty index state directory is removed for symlink safety test");
+    const fs::path outside = temporary_workspace("clear-outside");
+    write_file(outside / "index.sqlite", "outside database");
+    fs::create_directory_symlink(outside, root / ".ainiux", cleanup_error);
+    check(!cleanup_error, "symlinked index state directory fixture is created");
+    clear_stats = {};
+    error = ainiux::agent::index::clear_database(options, clear_stats);
+    check(!error.ok() && fs::exists(outside / "index.sqlite"),
+          "clear-index refuses a symlinked .ainiux directory and preserves its target");
+
+    cleanup_error.clear();
+    fs::remove_all(root, cleanup_error);
+    check(!cleanup_error, "clear index test workspace is removed");
+    cleanup_error.clear();
+    fs::remove_all(outside, cleanup_error);
+    check(!cleanup_error, "clear index symlink target workspace is removed");
+}
+
 }  // namespace
 
 void run_all() {
@@ -461,6 +518,7 @@ void run_all() {
     test_refresh_incremental_report_and_skips();
     test_corrupt_index_errors();
     test_schema_upgrade_adds_line_counts();
+    test_clear_database();
 }
 
 }  // namespace ainiux::test::agent_index
