@@ -34,6 +34,8 @@ void print_config_diagnostics(const config::LoadResult& configured) {
             kind = "themes";
         } else if (diagnostic.kind == config::ConfigFileKind::Benchmarks) {
             kind = "benchmark prompts";
+        } else if (diagnostic.kind == config::ConfigFileKind::Models) {
+            kind = "models";
         }
         std::cerr << "Config debug: " << state << " " << scope << " " << kind;
         if (!diagnostic.path.empty()) {

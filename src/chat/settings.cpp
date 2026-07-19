@@ -1,5 +1,6 @@
 #include "chat/settings.hpp"
 #include "chat/generation_settings.hpp"
+#include "config/model_catalog.hpp"
 
 #include <cctype>
 #include <cmath>
@@ -121,86 +122,36 @@ bool is_null_setting_value(const std::string& value) {
     return true;
 }
 
-}  // namespace
-
-bool thinking_budget_is_token_count(const std::string& value) {
-    if (value.empty()) {
-        return false;
+void reconcile_preset_temperature(cli::Options& options) {
+    if (!options.temperature_preset_applied) return;
+    const ModelCapability* capability = config::resolve_model_capability(
+        options.model_catalog, options.provider, options.api, options.model);
+    if (capability == nullptr || !options.has_chat_purpose) return;
+    const ModelSetting* preset = config::find_model_preset(
+        options.model_catalog, *capability, options.chat_purpose);
+    if (preset == nullptr || !preset->temperature.has_value()) return;
+    if (config::temperature_supported_for(*capability, options.reasoning)) {
+        options.temperature = *preset->temperature;
+        options.has_temperature = true;
+    } else {
+        options.has_temperature = false;
     }
-    for (unsigned char ch : value) {
-        if (ch < '0' || ch > '9') {
-            return false;
-        }
-    }
-    return true;
-}
-
-namespace {
-
-Error validate_thinking_budget_value(const std::string& value) {
-    if (value.empty()) {
-        return {ErrorCode::BadArgs, "thinking_budget must not be empty"};
-    }
-    if (!thinking_budget_is_token_count(value)) {
-        return ok_error();
-    }
-    try {
-        const long long tokens = std::stoll(value);
-        if (tokens < 0) {
-            return {ErrorCode::BadArgs, "thinking_budget token count must be non-negative"};
-        }
-    } catch (const std::exception&) {
-        return {ErrorCode::BadArgs, "thinking_budget token count is too large"};
-    }
-    return ok_error();
 }
 
 }  // namespace
-
-bool model_pattern_matches(const std::string& pattern, const std::string& model) {
-    if (pattern.empty() || model.empty()) {
-        return false;
-    }
-    if (pattern.back() == '*') {
-        const std::string prefix = pattern.substr(0, pattern.size() - 1);
-        return model.size() >= prefix.size() && model.compare(0, prefix.size(), prefix) == 0;
-    }
-    return pattern == model;
-}
-
-const ModelSetting* find_model_setting(const std::string& model,
-                                       const std::string& purpose,
-                                       const std::vector<ModelSetting>& presets) {
-    const ModelSetting* best = nullptr;
-    size_t best_prefix = 0;
-    for (const ModelSetting& preset : presets) {
-        if (preset.purpose != purpose || !model_pattern_matches(preset.model, model)) {
-            continue;
-        }
-        size_t prefix_len = preset.model.size();
-        if (preset.model.back() == '*') {
-            --prefix_len;
-        }
-        if (best == nullptr || prefix_len > best_prefix) {
-            best = &preset;
-            best_prefix = prefix_len;
-        }
-    }
-    return best;
-}
 
 void reset_thread_setting_overrides(cli::Options& options) {
     options.stream_explicit = false;
     options.has_temperature = false;
+    options.temperature_preset_applied = false;
     options.has_top_p = false;
     options.has_top_k = false;
     options.has_min_p = false;
     options.has_repeat_penalty = false;
     options.has_presence_penalty = false;
     options.has_max_output_tokens = false;
-    options.has_enable_thinking = false;
-    options.has_thinking_budget = false;
-    options.thinking_budget.clear();
+    options.reasoning = ReasoningSelection::automatic();
+    options.reasoning_explicit = false;
     options.has_chat_purpose = false;
     options.chat_purpose.clear();
     options.has_context_tokens = false;
@@ -208,38 +159,43 @@ void reset_thread_setting_overrides(cli::Options& options) {
     options.has_show_thinking_traces = false;
 }
 
-Error apply_model_setting_preset(cli::Options& options, const ModelSetting& preset) {
+Error apply_model_setting_preset(cli::Options& options,
+                                 const ModelSetting& preset,
+                                 const ModelCapability* capability) {
     options.chat_purpose = preset.purpose;
     options.has_chat_purpose = true;
-    options.temperature = preset.temperature;
-    options.has_temperature = true;
-    options.top_k = preset.top_k;
-    options.has_top_k = true;
-    options.top_p = preset.top_p;
-    options.has_top_p = true;
-    options.min_p = preset.min_p;
-    options.has_min_p = true;
-    options.repeat_penalty = preset.repeat_penalty;
-    options.has_repeat_penalty = true;
-    options.presence_penalty = preset.presence_penalty;
-    options.has_presence_penalty = true;
-    if (!preset.default_system_prompt.empty()) {
-        options.system = preset.default_system_prompt;
+    if (preset.reasoning.has_value() && !options.reasoning_explicit) {
+        options.reasoning = *preset.reasoning;
     }
-    if (!preset.thinking_budget.empty()) {
-        options.thinking_budget = preset.thinking_budget;
-        options.has_thinking_budget = true;
+    const bool temperature_allowed = capability == nullptr ||
+        config::temperature_supported_for(*capability, options.reasoning);
+    if (!options.has_temperature || options.temperature_preset_applied) {
+        if (preset.temperature.has_value() && temperature_allowed) {
+            options.temperature = *preset.temperature;
+            options.has_temperature = true;
+            options.temperature_preset_applied = true;
+        } else {
+            options.has_temperature = false;
+            // Keep ownership while a catalog preset is temporarily suppressed
+            // so a later reasoning=none can restore its exact temperature.
+            options.temperature_preset_applied = preset.temperature.has_value();
+        }
+    }
+    if (preset.top_k.has_value()) { options.top_k = *preset.top_k; options.has_top_k = true; }
+    if (preset.top_p.has_value()) { options.top_p = *preset.top_p; options.has_top_p = true; }
+    if (preset.min_p.has_value()) { options.min_p = *preset.min_p; options.has_min_p = true; }
+    if (preset.repeat_penalty.has_value()) {
+        options.repeat_penalty = *preset.repeat_penalty;
+        options.has_repeat_penalty = true;
+    }
+    if (preset.presence_penalty.has_value()) {
+        options.presence_penalty = *preset.presence_penalty;
+        options.has_presence_penalty = true;
+    }
+    if (preset.default_system_prompt.has_value() && !preset.default_system_prompt->empty()) {
+        options.system = *preset.default_system_prompt;
     }
     return ok_error();
-}
-
-void append_thinking_budget_json(std::ostringstream& out, const std::string& value) {
-    out << ",\"thinking_budget\":";
-    if (thinking_budget_is_token_count(value)) {
-        out << value;
-    } else {
-        out << json::quote(value);
-    }
 }
 
 std::string trim_setting_ascii(std::string text) {
@@ -272,17 +228,14 @@ Error apply_chat_setting(cli::Options& options, const std::string& raw_name, con
             options.has_max_output_tokens = false;
             return ok_error();
         }
-        if (name == generation::kThinking) {
-            options.has_enable_thinking = false;
-            return ok_error();
-        }
-        if (name == generation::kThinkingBudget) {
-            options.has_thinking_budget = false;
-            options.thinking_budget.clear();
+        if (name == generation::kReasoning) {
+            options.reasoning = ReasoningSelection::automatic();
+            options.reasoning_explicit = true;
             return ok_error();
         }
         if (name == generation::kTemperature) {
             options.has_temperature = false;
+            options.temperature_preset_applied = false;
             return ok_error();
         }
         if (name == generation::kTopK) {
@@ -323,22 +276,15 @@ Error apply_chat_setting(cli::Options& options, const std::string& raw_name, con
         options.has_max_output_tokens = true;
         return ok_error();
     }
-    if (name == generation::kThinking) {
-        bool enabled = false;
-        if (!parse_bool_setting(value, enabled)) {
-            return invalid_setting_value(name, "expected on or off");
-        }
-        options.enable_thinking = enabled;
-        options.has_enable_thinking = true;
-        return ok_error();
-    }
-    if (name == generation::kThinkingBudget) {
-        Error err = validate_thinking_budget_value(value);
+    if (name == generation::kReasoning) {
+        ReasoningSelection selection;
+        Error err = config::parse_reasoning_selection(value, selection);
         if (!err.ok()) {
             return err;
         }
-        options.thinking_budget = value;
-        options.has_thinking_budget = true;
+        options.reasoning = std::move(selection);
+        options.reasoning_explicit = true;
+        reconcile_preset_temperature(options);
         return ok_error();
     }
     if (name == generation::kTemperature) {
@@ -351,6 +297,7 @@ Error apply_chat_setting(cli::Options& options, const std::string& raw_name, con
             return invalid_setting_value(name, "expected a finite number");
         }
         options.has_temperature = true;
+        options.temperature_preset_applied = false;
         return ok_error();
     }
     if (name == generation::kTopK) {
@@ -409,15 +356,12 @@ std::string settings_json_from_options(const cli::Options& options) {
     append_optional_number(out, first, "repeat_penalty", options.has_repeat_penalty, options.repeat_penalty);
     append_optional_number(out, first, "presence_penalty", options.has_presence_penalty, options.presence_penalty);
     append_optional_int(out, first, "max_output_tokens", options.has_max_output_tokens, options.max_output_tokens);
-    append_optional_bool(out, first, "enable_thinking", options.has_enable_thinking, options.enable_thinking);
-    if (options.has_thinking_budget) {
-        if (thinking_budget_is_token_count(options.thinking_budget)) {
-            append_json_int(out, first, "thinking_budget", std::stoll(options.thinking_budget));
-        } else {
-            append_json_string(out, first, "thinking_budget", options.thinking_budget);
-        }
+    if (options.reasoning.kind == ReasoningSelectionKind::Named) {
+        append_json_string(out, first, "reasoning", options.reasoning.value);
+    } else if (options.reasoning.kind == ReasoningSelectionKind::TokenBudget) {
+        append_json_int(out, first, "reasoning", options.reasoning.tokens);
     } else {
-        append_json_null(out, first, "thinking_budget");
+        append_json_null(out, first, "reasoning");
     }
     append_optional_bool(out, first, "show_thinking_traces", options.has_show_thinking_traces,
                          options.show_thinking_traces);
@@ -459,6 +403,7 @@ Error apply_settings_json(cli::Options& options, const std::string& settings_jso
         } else {
             options.temperature = temperature->number;
             options.has_temperature = true;
+            options.temperature_preset_applied = false;
         }
     }
     if (const json::Value* top_p = root.get("top_p")) {
@@ -529,36 +474,45 @@ Error apply_settings_json(cli::Options& options, const std::string& settings_jso
             options.has_max_output_tokens = true;
         }
     }
-    if (const json::Value* enable_thinking = root.get("enable_thinking")) {
-        if (enable_thinking->is_null()) {
-            // cleared override
-        } else if (enable_thinking->type != json::Value::Type::Bool) {
-            return {ErrorCode::ProviderSchema, "chat settings enable_thinking must be a boolean or null"};
-        } else {
-            options.enable_thinking = enable_thinking->boolean;
-            options.has_enable_thinking = true;
-        }
-    }
-    if (const json::Value* thinking_budget = root.get("thinking_budget")) {
-        if (thinking_budget->is_null()) {
-            // cleared override
-        } else if (thinking_budget->type == json::Value::Type::Number) {
-            if (thinking_budget->number < 0.0) {
+    if (const json::Value* reasoning = root.get("reasoning")) {
+        if (reasoning->is_null()) {
+            options.reasoning = ReasoningSelection::automatic();
+        } else if (reasoning->type == json::Value::Type::Number) {
+            if (!std::isfinite(reasoning->number) || reasoning->number < 0.0 ||
+                std::floor(reasoning->number) != reasoning->number ||
+                reasoning->number > static_cast<double>(std::numeric_limits<long long>::max())) {
                 return {ErrorCode::ProviderSchema,
-                        "chat settings thinking_budget must be a non-negative token count"};
+                        "chat settings reasoning must be a non-negative integer token budget"};
             }
-            options.thinking_budget = std::to_string(static_cast<long long>(thinking_budget->number));
-            options.has_thinking_budget = true;
-        } else if (thinking_budget->type == json::Value::Type::String) {
-            Error err = validate_thinking_budget_value(thinking_budget->string);
+            options.reasoning = ReasoningSelection::token_budget(
+                static_cast<long long>(reasoning->number));
+        } else if (reasoning->type == json::Value::Type::String) {
+            Error err = config::parse_reasoning_selection(reasoning->string, options.reasoning, false);
             if (!err.ok()) {
-                return {ErrorCode::ProviderSchema, err.message};
+                return {ErrorCode::ProviderSchema, "chat settings " + err.message};
             }
-            options.thinking_budget = thinking_budget->string;
-            options.has_thinking_budget = true;
         } else {
             return {ErrorCode::ProviderSchema,
-                    "chat settings thinking_budget must be a token count, verbal label string, or null"};
+                    "chat settings reasoning must be a string, integer, or null"};
+        }
+        options.reasoning_explicit = true;
+    } else if (const json::Value* legacy_budget = root.get("thinking_budget")) {
+        // Read old thread files without retaining the retired runtime fields.
+        if (legacy_budget->type == json::Value::Type::Number && legacy_budget->number >= 0.0 &&
+            std::floor(legacy_budget->number) == legacy_budget->number) {
+            options.reasoning = ReasoningSelection::token_budget(
+                static_cast<long long>(legacy_budget->number));
+            options.reasoning_explicit = true;
+        } else if (legacy_budget->type == json::Value::Type::String) {
+            Error err = config::parse_reasoning_selection(legacy_budget->string, options.reasoning, false);
+            if (!err.ok()) return {ErrorCode::ProviderSchema, "chat settings " + err.message};
+            options.reasoning_explicit = true;
+        }
+    } else if (const json::Value* legacy_toggle = root.get("enable_thinking")) {
+        if (legacy_toggle->type == json::Value::Type::Bool) {
+            options.reasoning = ReasoningSelection::named(
+                legacy_toggle->boolean ? "enabled" : "none");
+            options.reasoning_explicit = true;
         }
     }
     if (const json::Value* show_thinking_traces = root.get("show_thinking_traces")) {
@@ -617,13 +571,12 @@ std::string format_settings_summary(const cli::Options& options) {
         << (options.has_presence_penalty ? std::to_string(options.presence_penalty) : "default");
     out << " max_tokens="
         << (options.has_max_output_tokens ? std::to_string(options.max_output_tokens) : "default");
-    out << " thinking="
-        << (options.has_enable_thinking ? (options.enable_thinking ? "on" : "off") : "default");
-    out << " thinking_budget=" << (options.has_thinking_budget ? options.thinking_budget : "default");
+    out << " reasoning=" << config::reasoning_selection_value(options.reasoning);
     return out.str();
 }
 
-std::string format_settings_panel(const cli::Options& options) {
+std::string format_settings_panel(const cli::Options& options,
+                                  const std::string& advisory) {
     std::ostringstream out;
     out << "/setting (hide/show this panel)\n";
     auto append = [&](const char* name, const std::string& value) { out << name << '=' << value << '\n'; };
@@ -636,13 +589,13 @@ std::string format_settings_panel(const cli::Options& options) {
     append("presence_penalty",
            options.has_presence_penalty ? std::to_string(options.presence_penalty) : "");
     append("max_tokens", options.has_max_output_tokens ? std::to_string(options.max_output_tokens) : "");
-    append("thinking", options.has_enable_thinking ? (options.enable_thinking ? "on" : "off") : "");
-    append("thinking_budget", options.has_thinking_budget ? options.thinking_budget : "");
+    append("reasoning", config::reasoning_selection_value(options.reasoning));
     append("show_thinking_traces",
            options.has_show_thinking_traces ? (options.show_thinking_traces ? "trace" : "notrace") : "");
     append("purpose", options.has_chat_purpose ? options.chat_purpose : "");
     append("context_tokens", options.has_context_tokens ? std::to_string(options.context_tokens) : "");
     append("auto-convert-html-to-md", options.auto_convert_html_to_markdown ? "yes" : "no");
+    if (!advisory.empty()) append("warning", advisory);
     std::string text = out.str();
     if (!text.empty() && text.back() == '\n') {
         text.pop_back();

@@ -37,6 +37,8 @@ enum class TuiMode {
     ThreadList,
     ProviderList,
     ModelList,
+    ReasoningList,
+    ReasoningConfirm,
     RemoveConfirm,
     ModelConfirm,
     SystemEdit,

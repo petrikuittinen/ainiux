@@ -8,6 +8,7 @@
 #include "chat/sqlite_store.hpp"
 #include "ainiux/model_setting.hpp"
 #include "json/json.hpp"
+#include "provider/model_selection.hpp"
 #include <filesystem>
 #include <fstream>
 #include <sqlite3.h>
@@ -33,6 +34,8 @@ void test_chat_session_json_round_trip() {
     check(session.settings_json.find("\"context_tokens\":null") != std::string::npos,
           "configured context window is not stored as a thread override");
     context.options.has_context_tokens = true;
+    context.options.reasoning = ainiux::ReasoningSelection::named("high");
+    context.options.reasoning_explicit = true;
     session = ainiux::chat::new_session(context);
     check(session.settings_json.find("\"context_tokens\":65536") != std::string::npos,
           "explicit context window override is persisted in settings_json");
@@ -63,6 +66,11 @@ void test_chat_session_json_round_trip() {
           "loaded chat preserves compaction events");
     check(loaded.read_only && loaded.read_only_reason == "managed attachment expired",
           "JSON export preserves a thread's read-only attachment lock");
+    ainiux::cli::Options loaded_settings;
+    err = ainiux::chat::apply_settings_json(loaded_settings, loaded.settings_json);
+    check(err.ok() &&
+              loaded_settings.reasoning == ainiux::ReasoningSelection::named("high"),
+          "JSON export restores the thread's complete reasoning selection");
 
     ainiux::provider::ChatResult blocked_result;
     std::ostringstream blocked_output;
@@ -100,6 +108,8 @@ void test_chat_sqlite_store_round_trip_and_listing() {
     context.profile.name = "lm_studio";
     context.base_url = "http://localhost:1234/v1";
     context.options.model = "local-model";
+    context.options.reasoning = ainiux::ReasoningSelection::named("high");
+    context.options.reasoning_explicit = true;
     ainiux::chat::Session session = ainiux::chat::new_session(context);
     session.messages.push_back({"system", "Be concise"});
     session.messages.push_back({"user", "first prompt", {{"image/png", "aW1hZ2UtYnl0ZXM="}}});
@@ -136,6 +146,11 @@ void test_chat_sqlite_store_round_trip_and_listing() {
     check(loaded.compaction_events.size() == 1 &&
               loaded.compaction_events[0].messages_compacted == 2,
           "SQLite load preserves compaction events");
+    ainiux::cli::Options loaded_settings;
+    err = ainiux::chat::apply_settings_json(loaded_settings, loaded.settings_json);
+    check(err.ok() &&
+              loaded_settings.reasoning == ainiux::ReasoningSelection::named("high"),
+          "SQLite load restores a named per-thread reasoning selection");
 
     session.messages.pop_back();
     session.usage_json = "{\"prompt_tokens\":2,\"completion_tokens\":3,\"total_tokens\":5}";
@@ -146,11 +161,23 @@ void test_chat_sqlite_store_round_trip_and_listing() {
     check(err.ok() && loaded.messages.size() == 2 && loaded.messages.back().role == "user",
           "SQLite save after assistant pop preserves remaining messages");
 
+    context.options.reasoning = ainiux::ReasoningSelection::token_budget(3072);
     ainiux::chat::Session second = ainiux::chat::new_session(context);
     second.messages.push_back({"user", "newest prompt"});
     second.messages.push_back({"assistant", "newest answer"});
     err = store.save_session(second);
     check(err.ok(), "SQLite second chat session saves");
+    ainiux::chat::Session loaded_second;
+    err = store.load_session(second.thread_id, loaded_second);
+    loaded_settings = {};
+    if (err.ok()) {
+        err = ainiux::chat::apply_settings_json(
+            loaded_settings, loaded_second.settings_json);
+    }
+    check(err.ok() &&
+              loaded_settings.reasoning ==
+                  ainiux::ReasoningSelection::token_budget(3072),
+          "SQLite keeps reasoning selections independent across threads");
 
     std::vector<ainiux::chat::ThreadSummary> threads;
     err = store.list_threads(threads, 20);
@@ -511,35 +538,24 @@ void test_chat_session_file_failures_and_unicode() {
 }
 
 void test_chat_settings_helpers() {
-    check(ainiux::chat::model_pattern_matches("Qwen3.6-*", "Qwen3.6-35B-A3B"),
-          "model pattern wildcard matches a concrete model");
-    check(!ainiux::chat::model_pattern_matches("Qwen3.6-*", "Qwen3.5-4B"),
-          "model pattern wildcard rejects a different family");
-
-    const std::vector<ainiux::ModelSetting> presets = {
-        {"Qwen3.6-*", "coding", "", 0.6, 20, 0.95, 0.0, 1.0, 0.0},
-        {"Qwen3.6-35B-A3B", "coding", "", 0.4, 10, 0.8, 0.0, 1.0, 0.0},
-    };
-    const ainiux::ModelSetting* preset =
-        ainiux::chat::find_model_setting("Qwen3.6-35B-A3B", "coding", presets);
-    check(preset != nullptr && preset->temperature == 0.4,
-          "model preset lookup prefers the longest matching pattern");
-
     ainiux::cli::Options options;
     ainiux::Error err = ainiux::chat::apply_chat_setting(options, "temperature", "0.9");
     check(err.ok() && options.has_temperature && options.temperature == 0.9,
           "chat setting parser applies temperature");
-    err = ainiux::chat::apply_chat_setting(options, "thinking", "on");
-    check(err.ok() && options.has_enable_thinking && options.enable_thinking,
-          "chat setting parser applies thinking");
-    err = ainiux::chat::apply_chat_setting(options, "thinking_budget", "8192");
-    check(err.ok() && options.has_thinking_budget && options.thinking_budget == "8192" &&
-              ainiux::chat::thinking_budget_is_token_count(options.thinking_budget),
-          "chat setting parser applies numeric thinking_budget");
-    err = ainiux::chat::apply_chat_setting(options, "thinking_budget", "high");
-    check(err.ok() && options.thinking_budget == "high" &&
-              !ainiux::chat::thinking_budget_is_token_count(options.thinking_budget),
-          "chat setting parser applies verbal thinking_budget");
+    err = ainiux::chat::apply_chat_setting(options, "reasoning", "8192");
+    check(err.ok() &&
+              options.reasoning == ainiux::ReasoningSelection::token_budget(8192),
+          "chat setting parser applies an exact reasoning token budget");
+    err = ainiux::chat::apply_chat_setting(options, "reasoning", "ultra");
+    check(err.ok() &&
+              options.reasoning == ainiux::ReasoningSelection::named("ultra"),
+          "chat setting parser accepts an uncatalogued ASCII reasoning value");
+    err = ainiux::chat::apply_chat_setting(options, "reasoning", "auto");
+    check(err.ok() && options.reasoning.is_auto(),
+          "chat setting reasoning=auto clears the override");
+    err = ainiux::chat::apply_chat_setting(options, "reasoning", "not valid");
+    check(!err.ok() && err.code == ainiux::ErrorCode::BadArgs,
+          "chat setting rejects an invalid reasoning token");
     err = ainiux::chat::apply_chat_setting(options, "auto-convert-html-to-md", "no");
     check(err.ok() && !options.auto_convert_html_to_markdown,
           "chat setting parser can disable HTML-to-Markdown insertion conversion");
@@ -549,52 +565,120 @@ void test_chat_settings_helpers() {
     source.top_k = 40;
     source.has_chat_purpose = true;
     source.chat_purpose = "general";
-    source.has_thinking_budget = true;
-    source.thinking_budget = "medium";
+    source.reasoning = ainiux::ReasoningSelection::named("high");
+    source.reasoning_explicit = true;
     source.auto_convert_html_to_markdown = false;
     const std::string encoded = ainiux::chat::settings_json_from_options(source);
     ainiux::cli::Options loaded;
     err = ainiux::chat::apply_settings_json(loaded, encoded);
     check(err.ok() && loaded.has_top_k && loaded.top_k == 40 && loaded.has_chat_purpose &&
-              loaded.chat_purpose == "general" && loaded.has_thinking_budget &&
-              loaded.thinking_budget == "medium" && !loaded.auto_convert_html_to_markdown,
-          "chat settings JSON round-trips verbal thinking_budget");
+              loaded.chat_purpose == "general" &&
+              loaded.reasoning == ainiux::ReasoningSelection::named("high") &&
+              !loaded.auto_convert_html_to_markdown,
+          "chat settings JSON round-trips a named reasoning selection");
 
     source = ainiux::cli::Options{};
-    source.has_thinking_budget = true;
-    source.thinking_budget = "4096";
-    err = ainiux::chat::apply_settings_json(loaded, ainiux::chat::settings_json_from_options(source));
-    check(err.ok() && loaded.thinking_budget == "4096" &&
-              ainiux::chat::thinking_budget_is_token_count(loaded.thinking_budget),
-          "chat settings JSON round-trips numeric thinking_budget");
+    source.reasoning = ainiux::ReasoningSelection::token_budget(4096);
+    source.reasoning_explicit = true;
+    err = ainiux::chat::apply_settings_json(
+        loaded, ainiux::chat::settings_json_from_options(source));
+    check(err.ok() &&
+              loaded.reasoning == ainiux::ReasoningSelection::token_budget(4096),
+          "chat settings JSON round-trips an exact reasoning token budget");
+
+    source = ainiux::cli::Options{};
+    err = ainiux::chat::apply_settings_json(
+        loaded, ainiux::chat::settings_json_from_options(source));
+    check(err.ok() && loaded.reasoning.is_auto(),
+          "chat settings JSON round-trips Auto as null");
+
+    err = ainiux::chat::apply_settings_json(
+        loaded, "{\"thinking_budget\":\"legacy-high\"}");
+    check(err.ok() &&
+              loaded.reasoning == ainiux::ReasoningSelection::named("legacy-high"),
+          "legacy chat settings migrate into the canonical reasoning selection");
 
     err = ainiux::chat::apply_chat_setting(options, "temperature", "NULL");
     check(err.ok() && !options.has_temperature, "chat setting NULL clears temperature override");
     options.has_temperature = true;
     options.temperature = 0.9;
+    options.reasoning = ainiux::ReasoningSelection::named("ultra");
     const std::string with_nulls = ainiux::chat::settings_json_from_options(options);
     check(with_nulls.find("\"top_k\":null") != std::string::npos,
           "chat settings JSON emits null for unset overrides");
     ainiux::cli::Options cleared;
     err = ainiux::chat::apply_settings_json(cleared, with_nulls);
-    check(err.ok() && cleared.has_temperature && cleared.temperature == 0.9 && !cleared.has_top_k,
-          "chat settings JSON null values clear overrides on load");
+    check(err.ok() && cleared.has_temperature && cleared.temperature == 0.9 &&
+              !cleared.has_top_k &&
+              cleared.reasoning == ainiux::ReasoningSelection::named("ultra"),
+          "chat settings JSON restores explicit values and clears null overrides");
 
     const std::string panel = ainiux::chat::format_settings_panel(options);
     check(panel.find("temperature=0.9") != std::string::npos &&
-              panel.find("thinking=on") != std::string::npos &&
-              panel.find("thinking_budget=high") != std::string::npos &&
+              panel.find("reasoning=ultra") != std::string::npos &&
               panel.find("auto-convert-html-to-md=no") != std::string::npos &&
               panel.find("top_k=") != std::string::npos &&
               panel.find("top_k=40") == std::string::npos,
-          "chat settings panel shows set values and empty unset fields");
+          "chat settings panel shows canonical reasoning and set values");
+    const std::string warning_panel = ainiux::chat::format_settings_panel(
+        options, "temperature may be rejected for this model");
+    check(warning_panel.find("warning=temperature may be rejected") !=
+              std::string::npos,
+          "chat settings panel surfaces explicit temperature advisories");
 
     ainiux::cli::Options empty_panel_options;
     const std::string empty_panel = ainiux::chat::format_settings_panel(empty_panel_options);
     check(empty_panel.find("temperature=\n") != std::string::npos &&
+              empty_panel.find("reasoning=auto") != std::string::npos &&
               empty_panel.find("purpose=\n") != std::string::npos &&
               empty_panel.find("default") == std::string::npos,
-          "chat settings panel leaves unset fields empty");
+          "chat settings panel shows Auto while leaving other unset fields empty");
+
+    ainiux::ModelCapability gpt54;
+    gpt54.temperature = ainiux::TemperatureSupport::ReasoningNoneOnly;
+    gpt54.reasoning_default = ainiux::ReasoningSelection::named("none");
+    ainiux::ModelSetting preset;
+    preset.purpose = "coding";
+    preset.temperature = 0.6;
+    preset.reasoning = ainiux::ReasoningSelection::named("high");
+    options = ainiux::cli::Options{};
+    err = ainiux::chat::apply_model_setting_preset(options, preset, &gpt54);
+    check(err.ok() && !options.has_temperature &&
+              options.reasoning == ainiux::ReasoningSelection::named("high"),
+          "automatic presets omit temperature when the reasoning combination is unsupported");
+
+    preset.reasoning = ainiux::ReasoningSelection::named("none");
+    err = ainiux::chat::apply_model_setting_preset(options, preset, &gpt54);
+    check(err.ok() && options.has_temperature && options.temperature == 0.6,
+          "conditional GPT-5 temperature metadata permits presets at reasoning=none");
+
+    gpt54.id = "dynamic-gpt";
+    gpt54.provider = "openai";
+    gpt54.api = "chat";
+    gpt54.model_regex = "^dynamic-gpt$";
+    preset.model_id = gpt54.id;
+    options.provider = "openai";
+    options.api = "chat";
+    options.model = "dynamic-gpt";
+    options.model_catalog.models.push_back(gpt54);
+    options.model_catalog.presets.push_back(preset);
+    err = ainiux::chat::apply_chat_setting(options, "reasoning", "high");
+    check(err.ok() && !options.has_temperature &&
+              options.temperature_preset_applied,
+          "changing reasoning suppresses an automatic conditionally unsupported temperature");
+    err = ainiux::chat::apply_chat_setting(options, "reasoning", "none");
+    check(err.ok() && options.has_temperature && options.temperature == 0.6,
+          "reasoning=none restores the catalog preset temperature exactly");
+
+    options = ainiux::cli::Options{};
+    options.has_temperature = true;
+    options.temperature = 0.8;
+    options.reasoning = ainiux::ReasoningSelection::named("high");
+    options.reasoning_explicit = true;
+    err = ainiux::chat::apply_model_setting_preset(options, preset, &gpt54);
+    check(err.ok() && options.has_temperature && options.temperature == 0.8 &&
+              options.reasoning == ainiux::ReasoningSelection::named("high"),
+          "explicit temperature and reasoning overrides survive advisory presets");
 }
 
 void test_chat_session_has_chat_messages() {
@@ -766,6 +850,47 @@ void test_generation_settings_metadata() {
           "generation metadata recognizes coding purpose");
 }
 
+void test_editor_model_selection_app_state() {
+    const std::string path = "build/unit-editor-selection-ainiux.db";
+    std::filesystem::remove(path);
+    std::filesystem::remove(path + "-wal");
+    std::filesystem::remove(path + "-shm");
+
+    ainiux::chat::SqliteStore store;
+    ainiux::Error err = store.open(path);
+    check(err.ok(), "editor selection app-state database opens");
+
+    ainiux::provider::ModelSelection selection{
+        "openai",
+        "gpt-5.4",
+        "responses",
+        ainiux::ReasoningSelection::token_budget(4096),
+    };
+    err = store.set_app_state(
+        "editor_model_selection",
+        ainiux::provider::serialize_model_selection(selection));
+    check(err.ok(), "editor model selection is stored in generic app_state");
+
+    std::string encoded;
+    bool found = false;
+    err = store.app_state("editor_model_selection", encoded, found);
+    ainiux::provider::ModelSelection loaded;
+    if (err.ok() && found) {
+        err = ainiux::provider::parse_model_selection(encoded, loaded);
+    }
+    check(err.ok() && found && loaded.provider == "openai" &&
+              loaded.model == "gpt-5.4" && loaded.api == "responses" &&
+              loaded.reasoning == ainiux::ReasoningSelection::token_budget(4096),
+          "editor provider, model, API, and reasoning round-trip through app_state");
+
+    selection.reasoning = ainiux::ReasoningSelection::named("ultra");
+    err = ainiux::provider::parse_model_selection(
+        ainiux::provider::serialize_model_selection(selection), loaded);
+    check(err.ok() &&
+              loaded.reasoning == ainiux::ReasoningSelection::named("ultra"),
+          "shared model-selection serialization preserves forward-compatible values");
+}
+
 }  // namespace
 
 void run_all() {
@@ -781,6 +906,7 @@ void run_all() {
     test_chat_sqlite_remove_empty_threads();
     test_chat_sqlite_missing_thread_and_corrupt_database();
     test_chat_settings_helpers();
+    test_editor_model_selection_app_state();
     test_generation_settings_metadata();
 }
 

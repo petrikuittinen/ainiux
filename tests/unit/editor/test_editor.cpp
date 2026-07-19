@@ -1,6 +1,7 @@
 #include "editor/test_editor.hpp"
 #include "support/test_support.hpp"
 #include "common.hpp"
+#include "app/interactive_mode.hpp"
 #include "cli/args.hpp"
 #include "config/config.hpp"
 #include "editor/ai_continue.hpp"
@@ -10,6 +11,7 @@
 #include "editor/editor.hpp"
 #include "editor/editor_assist.hpp"
 #include "editor/editor_help.hpp"
+#include "editor/editor_picker.hpp"
 #include "editor/file_session.hpp"
 #include "editor/path_completion.hpp"
 #include "editor/reformat.hpp"
@@ -354,6 +356,20 @@ void test_editor_ai_setup_helpers() {
     check(ainiux::editor::apply_editor_model(created, "gpt-test").ok(),
           "apply_editor_model succeeds after provider is chosen");
     check(created->request.options.model == "gpt-test", "apply_editor_model stores model name");
+    created->request.options.reasoning = ainiux::ReasoningSelection::named("high");
+    check(ainiux::editor::apply_editor_model(created, "gpt-test").ok() &&
+              created->request.options.reasoning ==
+                  ainiux::ReasoningSelection::named("high"),
+          "reselecting the actual editor model preserves reasoning");
+    check(ainiux::editor::apply_editor_model(created, "gpt-other").ok() &&
+              created->request.options.reasoning.is_auto(),
+          "changing the editor model resets reasoning to Auto");
+    created->request.options.reasoning = ainiux::ReasoningSelection::named("high");
+    check(ainiux::editor::apply_editor_provider_target(created, assist_config, "openai").ok() &&
+              created->request.options.model == "gpt-other" &&
+              created->request.options.reasoning ==
+                  ainiux::ReasoningSelection::named("high"),
+          "reselecting the actual editor provider preserves model and reasoning");
     check(ainiux::editor::apply_editor_provider_target(created, assist_config, "openrouter").ok(),
           "switching an editor provider succeeds after a model was selected");
     check(created->request.options.model.empty(),
@@ -403,6 +419,50 @@ void test_editor_ai_setup_helpers() {
           "/provider lmstudio succeeds without contacting the model endpoint");
     check(deferred_provider.has_value() && deferred_provider->request.options.model.empty(),
           "/provider lmstudio leaves model empty for /model selection");
+}
+
+void test_editor_reasoning_picker() {
+    ainiux::editor::EditorProviderModelPicker picker;
+    picker.open_reasoning(
+        {"auto", "low", "high"},
+        {"Auto (provider default: medium)", "Low", "High"},
+        1);
+    picker.refresh_view();
+    check(picker.active && picker.for_reasoning && picker.selected == 1 &&
+              picker.view.text.range_text(0, picker.view.text.size()).find("> Low") !=
+                  std::string::npos,
+          "editor reasoning picker highlights the current value");
+
+    std::string status;
+    check(picker.handle_escape("[B", status) && picker.selected == 2 &&
+              status == "Selected reasoning 3/3",
+          "editor reasoning picker navigates with the shared selector keys");
+    picker.refresh_view();
+    check(picker.view.text.range_text(0, picker.view.text.size()).find("> High") !=
+              std::string::npos,
+          "editor reasoning picker refresh highlights the navigated value");
+    check(picker.handle_escape("", status) && !picker.active &&
+              status == "Reasoning selection cancelled",
+          "editor reasoning picker cancellation returns to editing");
+}
+
+void test_chat_editor_reasoning_context_sync() {
+    ainiux::app::InteractiveSession session;
+    session.context.options.reasoning =
+        ainiux::ReasoningSelection::named("high");
+    session.context.options.reasoning_explicit = true;
+    ainiux::app::sync_shared_provider_to_editor(session);
+    check(session.ai_continue.has_value() &&
+              session.ai_continue->request.options.reasoning ==
+                  ainiux::ReasoningSelection::named("high"),
+          "chat-to-editor context synchronization carries reasoning");
+
+    session.ai_continue->request.options.reasoning =
+        ainiux::ReasoningSelection::token_budget(2048);
+    ainiux::app::sync_editor_provider_to_shared(session, session.ai_continue);
+    check(session.context.options.reasoning ==
+              ainiux::ReasoningSelection::token_budget(2048),
+          "editor-to-chat context synchronization carries reasoning");
 }
 
 void test_editor_assist_helpers() {
@@ -3861,6 +3921,12 @@ void test_editor_minibuffer_paste() {
                                      "Quit? ");
     check(!ainiux::editor::paste_into_minibuffer(minibuffer, "y").ok(),
           "confirmation minibuffers reject pasted answers");
+
+    ainiux::editor::start_minibuffer(minibuffer,
+                                     ainiux::editor::MinibufferAction::ConfirmReasoning,
+                                     "Use unlisted reasoning? ");
+    check(!ainiux::editor::paste_into_minibuffer(minibuffer, "y").ok(),
+          "reasoning confirmation rejects pasted answers");
 }
 
 void test_editor_missing_file_error_message() {
@@ -4036,6 +4102,8 @@ void run_all() {
     test_editor_markdown_mode_and_structured_highlighting();
     test_editor_ai_continue_helpers();
     test_editor_ai_setup_helpers();
+    test_editor_reasoning_picker();
+    test_chat_editor_reasoning_context_sync();
     test_editor_file_io_failures();
     test_editor_assist_helpers();
     test_editor_contextual_completion_modes();

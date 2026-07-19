@@ -144,11 +144,14 @@ Error choose_default_model(provider::RequestContext& context) {
         }
     }
     if (!context.options.chat_purpose.empty() && !context.options.model.empty()) {
-        const ModelSetting* preset = chat::find_model_setting(context.options.model,
-                                                              context.options.chat_purpose,
-                                                              context.options.model_settings);
-        if (preset != nullptr) {
-            return chat::apply_model_setting_preset(context.options, *preset);
+        const ModelCapability* capability = provider::matched_model_capability(context);
+        if (capability != nullptr) {
+            const ModelSetting* preset = config::find_model_preset(context.options.model_catalog,
+                                                                   *capability,
+                                                                   context.options.chat_purpose);
+            if (preset != nullptr) {
+                return chat::apply_model_setting_preset(context.options, *preset, capability);
+            }
         }
     }
     return ok_error();
@@ -157,6 +160,21 @@ Error choose_default_model(provider::RequestContext& context) {
 void print_chat_start(const provider::RequestContext& context) {
     if (context.options.quiet) {
         return;
+    }
+    if (!context.profile.offline) {
+        const std::string catalog_warning = config::reasoning_catalog_warning(
+            context.options.model_catalog,
+            context.profile.name,
+            context.api_kind == provider::ApiKind::Responses ? "responses" : "chat",
+            context.options.model,
+            context.options.reasoning);
+        if (!catalog_warning.empty()) {
+            std::cerr << "Warning: " << catalog_warning << ".\n";
+        }
+        const std::string advisory = provider::reasoning_temperature_advisory(context);
+        if (!advisory.empty()) {
+            std::cerr << "Warning: " << advisory << ".\n";
+        }
     }
     if (context.options.repl) {
         std::cerr << app_version_label() << " REPL | ";

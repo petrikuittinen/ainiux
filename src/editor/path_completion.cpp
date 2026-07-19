@@ -55,6 +55,7 @@ const std::vector<std::string>& chat_command_completions() {
         "/clone",
         "/theme ",
         "/thinking ",
+        "/reasoning ",
     };
     return commands;
 }

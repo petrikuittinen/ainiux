@@ -40,19 +40,19 @@ Approximate size today: **900+** unit assertions, **170+** integration checks in
 **Strong unit coverage**
 
 - CLI parsing and options
-- Provider registry, request shaping, and response parsing
-- Config loading and validation
+- Provider registry, every registered reasoning request protocol, and response parsing
+- Main configuration plus `models.conf` parsing, layering, disabling, regex validation, final-component/case-insensitive family matching, and precedence
 - HTML/Markdown/input/output conversion
 - Editor piece table, panels, selection, and file I/O
-- Chat JSON save/load
-- SQLite store round-trip, listing, soft delete, corrupt DB, and missing-thread handling
+- Chat JSON save/load, including named/numeric/Auto per-thread reasoning
+- SQLite store round-trip, editor model-selection app state, listing, soft delete, corrupt DB, and missing-thread handling
 - Runtime cancellation and event delivery
 - Security redaction helpers
 - Unicode, numeric, and malformed-input edge cases
 
 **Integration coverage**
 
-- Chat Completions and Responses API against `openai_mock.py`
+- Chat Completions and Responses API against `openai_mock.py`, including strict exact reasoning shapes and unlisted-value CLI/REPL warnings
 - Streaming, JSON/NDJSON output, thinking-trace redaction
 - REPL, benchmark modes, action-balanced safety ratings, configurable judge grading, URL fetch safety, attachments, images
 - Editor/chat shared provider/model selectors, colored selector panels, explicit-provider startup discovery, one-model auto-selection, multiple-model selection, and non-modal bare-offline startup
@@ -70,7 +70,7 @@ Approximate size today: **900+** unit assertions, **170+** integration checks in
 
 ### `tests/mock_server/openai_mock.py`
 
-Local OpenAI-compatible server used by `test_mock_server.sh`. Supports one- and multiple-result model-list endpoints, chat completions, responses API, streaming, reasoning fields, attachments, images, HTML fetch fixtures, and strict configurable benchmark-grading requests.
+Local OpenAI-compatible server used by `test_mock_server.sh`. Supports one- and multiple-result model-list endpoints, chat completions, responses API, streaming, exact named/numeric reasoning fields without approximate conversion, attachments, images, HTML fetch fixtures, and strict configurable benchmark-grading requests.
 
 ### `tests/mock_server/slow_http_mock.py`
 

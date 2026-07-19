@@ -1,4 +1,6 @@
 #include "app/interactive_mode.hpp"
+#include "chat/settings.hpp"
+#include "chat/sqlite_store.hpp"
 #include "common.hpp"
 #include "editor/autosave.hpp"
 #include "editor/editor.hpp"
@@ -18,6 +20,7 @@
 #include "editor/terminal_ui.hpp"
 #include "input/input.hpp"
 #include "runtime/runtime.hpp"
+#include "provider/model_selection.hpp"
 #include "search/search.hpp"
 #include "tui/activity.hpp"
 #include "tui/events.hpp"
@@ -64,6 +67,10 @@ struct InsertSession {
     runtime::EventQueue<InsertEvent> events;
     // Join the worker before destroying the event queue it references.
     runtime::JobHandle job;
+};
+
+struct EditorSelectionSaveEvent {
+    Error error;
 };
 
 std::string canonical_editor_command_line(const std::string& line) {
@@ -220,6 +227,7 @@ app::EditorRunResult run_editor(const std::string& path,
     std::string last_search;
     ReplaceSession replace;
     std::string pending_load_path;
+    std::string pending_reasoning;
     PendingAutosaveRecovery pending_autosave_recovery;
     AssistSession assist_session;
     ReformatSession reformat_session;
@@ -236,6 +244,9 @@ app::EditorRunResult run_editor(const std::string& path,
     EditorState buffer_list_view;
     EditorProviderModelPicker picker;
     EditorModelListRuntime model_list;
+    runtime::EventQueue<EditorSelectionSaveEvent> selection_save_events;
+    runtime::JobHandle selection_save_job;
+    std::string pending_selection_save;
     bool pending_close_confirm = false;
     size_t pending_close_index = static_cast<size_t>(-1);
     TerminalSize last_size = terminal_size();
@@ -370,7 +381,8 @@ app::EditorRunResult run_editor(const std::string& path,
                                   minibuffer,
                                   theme_style,
                                   picker.for_provider ? tui::TuiMode::ProviderList
-                                                      : tui::TuiMode::ModelList,
+                                      : picker.for_reasoning ? tui::TuiMode::ReasoningList
+                                                             : tui::TuiMode::ModelList,
                                   picker.scroll);
             return;
         }
@@ -734,6 +746,46 @@ app::EditorRunResult run_editor(const std::string& path,
         }
     };
 
+    auto active_model_options = [&]() -> const cli::Options* {
+        if (ai_continue.has_value()) return &ai_continue->request.options;
+        if (interactive != nullptr) return &interactive->context.options;
+        return nullptr;
+    };
+
+    auto start_pending_selection_save = [&]() {
+        if (selection_save_job.running() || pending_selection_save.empty()) return;
+        std::string value = std::move(pending_selection_save);
+        pending_selection_save.clear();
+        selection_save_job.start([value = std::move(value), &selection_save_events](runtime::CancellationToken) {
+            EditorSelectionSaveEvent event;
+            chat::SqliteStore store;
+            event.error = store.open_default();
+            if (event.error.ok()) {
+                event.error = store.set_app_state("editor_model_selection", value);
+            }
+            selection_save_events.push(std::move(event));
+        });
+    };
+
+    auto schedule_selection_save = [&]() {
+        const cli::Options* options = active_model_options();
+        if (options == nullptr) return;
+        pending_selection_save = provider::serialize_model_selection(
+            provider::model_selection_from_options(*options));
+        start_pending_selection_save();
+    };
+
+    auto process_selection_save_events = [&]() {
+        EditorSelectionSaveEvent event;
+        if (!selection_save_events.try_pop(event)) return false;
+        selection_save_job.join();
+        if (!event.error.ok()) {
+            minibuffer_message(minibuffer, "Could not remember editor model selection: " + event.error.message);
+        }
+        start_pending_selection_save();
+        return true;
+    };
+
     auto refresh_ai_status = [&]() {
         minibuffer_message(minibuffer, editor_startup_status(ai_continue));
     };
@@ -781,12 +833,99 @@ app::EditorRunResult run_editor(const std::string& path,
         minibuffer_message(minibuffer, picker.status_message());
     };
 
+    auto open_reasoning_picker = [&]() {
+        if (!editor_ai_ready(ai_continue)) {
+            minibuffer_message(minibuffer,
+                               editor_ai_has_provider(ai_continue)
+                                   ? editor_no_model_message()
+                                   : editor_no_provider_message());
+            return;
+        }
+        const provider::RequestContext& request = ai_continue->request;
+        config::ReasoningSelectorData data = config::reasoning_selector_data(
+            request.options.model_catalog,
+            request.profile.name,
+            request.api_kind == provider::ApiKind::Responses ? "responses" : "chat",
+            request.options.model);
+        if (!data.guidance.empty()) {
+            minibuffer_message(minibuffer, data.guidance);
+            return;
+        }
+        std::vector<std::string> values;
+        size_t current = 0;
+        for (size_t i = 0; i < data.values.size(); ++i) {
+            values.push_back(config::reasoning_selection_value(data.values[i]));
+            if (data.values[i] == request.options.reasoning) current = i;
+        }
+        if (help_view.active) exit_help_view();
+        picker.open_reasoning(std::move(values), std::move(data.labels), current);
+        buffer_list_active = false;
+        pending_close_confirm = false;
+        pending_close_index = static_cast<size_t>(-1);
+        minibuffer_message(minibuffer, picker.status_message());
+    };
+
+    auto commit_reasoning_selection = [&](const std::string& value) {
+        if (!editor_ai_ready(ai_continue)) {
+            minibuffer_message(minibuffer,
+                               editor_ai_has_provider(ai_continue)
+                                   ? editor_no_model_message()
+                                   : editor_no_provider_message());
+            return;
+        }
+        Error err = chat::apply_chat_setting(ai_continue->request.options, "reasoning", value);
+        if (!err.ok()) {
+            minibuffer_message(minibuffer, err.message);
+            return;
+        }
+        std::string message = "Reasoning set to " +
+            config::reasoning_selection_value(ai_continue->request.options.reasoning);
+        const std::string advisory =
+            provider::reasoning_temperature_advisory(ai_continue->request);
+        if (!advisory.empty()) message += ". Warning: " + advisory;
+        minibuffer_message(minibuffer, message);
+        schedule_selection_save();
+    };
+
+    auto apply_reasoning_selection = [&](const std::string& value) {
+        if (!editor_ai_ready(ai_continue)) {
+            minibuffer_message(minibuffer,
+                               editor_ai_has_provider(ai_continue)
+                                   ? editor_no_model_message()
+                                   : editor_no_provider_message());
+            return;
+        }
+        ReasoningSelection selection;
+        Error parse_error = config::parse_reasoning_selection(value, selection);
+        if (!parse_error.ok()) {
+            minibuffer_message(minibuffer, parse_error.message);
+            return;
+        }
+        const provider::RequestContext& request = ai_continue->request;
+        const std::string warning = config::reasoning_catalog_warning(
+            request.options.model_catalog,
+            request.profile.name,
+            request.api_kind == provider::ApiKind::Responses ? "responses" : "chat",
+            request.options.model,
+            selection);
+        if (warning.empty()) {
+            commit_reasoning_selection(value);
+            return;
+        }
+        pending_reasoning = value;
+        start_minibuffer(minibuffer,
+                         MinibufferAction::ConfirmReasoning,
+                         "Warning: '" + value +
+                             "' is not listed in models.conf. Proceed? y/n: ");
+    };
+
     auto apply_provider_selection = [&](const std::string& target) {
         Error apply_error = apply_editor_provider_target(ai_continue, assist_config, target);
         if (!apply_error.ok()) {
             minibuffer_message(minibuffer, apply_error.message);
             return;
         }
+        schedule_selection_save();
         if (editor_ai_has_provider(ai_continue)) {
             start_model_list();
         } else {
@@ -817,6 +956,7 @@ app::EditorRunResult run_editor(const std::string& path,
             return;
         }
         refresh_ai_status();
+        schedule_selection_save();
     };
 
     auto handle_picker_list_escape = [&]() {
@@ -836,6 +976,12 @@ app::EditorRunResult run_editor(const std::string& path,
             apply_provider_selection(provider_name);
             return;
         }
+        if (picker.for_reasoning) {
+            const std::string value = picker.items[picker.selected];
+            picker.clear();
+            apply_reasoning_selection(value);
+            return;
+        }
         const std::string model_name = picker.items[picker.selected];
         picker.clear();
         Error apply_error = apply_editor_model(ai_continue, model_name);
@@ -843,6 +989,7 @@ app::EditorRunResult run_editor(const std::string& path,
             minibuffer_message(minibuffer, apply_error.message);
             return;
         }
+        schedule_selection_save();
         refresh_ai_status();
     };
 
@@ -866,6 +1013,7 @@ app::EditorRunResult run_editor(const std::string& path,
                     minibuffer_message(minibuffer, apply_error.message);
                     return;
                 }
+                schedule_selection_save();
                 minibuffer_message(
                     minibuffer,
                     tui::provider_model_status_message(ai_continue->request,
@@ -878,8 +1026,23 @@ app::EditorRunResult run_editor(const std::string& path,
         if (!minibuffer.active ||
             (minibuffer.action != MinibufferAction::LoadFile &&
              minibuffer.action != MinibufferAction::ConfirmLoad &&
-             minibuffer.action != MinibufferAction::ConfirmAutosaveRecovery)) {
+             minibuffer.action != MinibufferAction::ConfirmAutosaveRecovery &&
+             minibuffer.action != MinibufferAction::ConfirmReasoning)) {
             return false;
+        }
+        if (minibuffer.action == MinibufferAction::ConfirmReasoning) {
+            if (ch == 'y' || ch == 'Y') {
+                const std::string reasoning = pending_reasoning;
+                pending_reasoning.clear();
+                commit_reasoning_selection(reasoning);
+            } else if (ch == 'n' || ch == 'N' || ch == 27) {
+                pending_reasoning.clear();
+                minibuffer_message(minibuffer, "Reasoning change cancelled");
+            } else {
+                minibuffer.prompt = ui::kConfirmationRetryPrompt;
+                minibuffer.input.clear();
+            }
+            return true;
         }
         if (ch == 27) {
             pending_load_path.clear();
@@ -1829,6 +1992,16 @@ app::EditorRunResult run_editor(const std::string& path,
             handle_provider_command(command_line.size() <= 9 ? "" : trim_ascii_copy(command_line.substr(9)));
             return;
         }
+        if (command_line == "/reasoning" || command_line.rfind("/reasoning ", 0) == 0) {
+            pending_assist = PendingAssist{};
+            exit_assist_command_mode(minibuffer, assist_completer);
+            const std::string requested = command_line.size() <= 10
+                                              ? ""
+                                              : trim_ascii_copy(command_line.substr(10));
+            if (requested.empty()) open_reasoning_picker();
+            else apply_reasoning_selection(requested);
+            return;
+        }
         if (command_line == "/model" || command_line.rfind("/model ", 0) == 0) {
             pending_assist = PendingAssist{};
             exit_assist_command_mode(minibuffer, assist_completer);
@@ -2553,6 +2726,7 @@ app::EditorRunResult run_editor(const std::string& path,
         start_model_list();
         render_editor();
     }
+    schedule_selection_save();
 
     if (interactive != nullptr && interactive->pending_editor_assist.active) {
         const app::PendingEditorAssistFromChat pending = interactive->pending_editor_assist;
@@ -2592,6 +2766,7 @@ app::EditorRunResult run_editor(const std::string& path,
             }
         }
         const bool model_updated = process_model_events();
+        const bool selection_updated = process_selection_save_events();
         const bool assist_animating =
             assist_session.active && assist_session.activity_kind != tui::ActivityKind::None;
         if (assist_animating) {
@@ -2609,7 +2784,7 @@ app::EditorRunResult run_editor(const std::string& path,
             if (current_size.rows != last_size.rows || current_size.cols != last_size.cols ||
                 assist_session.job.running() || model_list.job.running() || assist_updated ||
                 reformat_session.job.running() || reformat_updated || insert_session.job.running() ||
-                insert_updated || model_updated ||
+                insert_updated || model_updated || selection_updated ||
                 assist_animating) {
                 last_size = current_size;
                 render_editor();
@@ -2644,6 +2819,22 @@ app::EditorRunResult run_editor(const std::string& path,
 
         last_size = terminal_size();
         render_editor();
+    }
+    selection_save_job.join();
+    EditorSelectionSaveEvent selection_event;
+    while (selection_save_events.try_pop(selection_event)) {
+        if (!selection_event.error.ok()) {
+            std::cerr << "Warning: could not remember editor model selection: "
+                      << selection_event.error.message << "\n";
+        }
+    }
+    start_pending_selection_save();
+    selection_save_job.join();
+    while (selection_save_events.try_pop(selection_event)) {
+        if (!selection_event.error.ok()) {
+            std::cerr << "Warning: could not remember editor model selection: "
+                      << selection_event.error.message << "\n";
+        }
     }
     sync_active_buffer();
     if (switch_to_chat) {

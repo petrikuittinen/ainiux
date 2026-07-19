@@ -194,6 +194,7 @@ std::vector<std::string> chat_assist_command_completions(const EditorAssistConfi
         "/system",
         "/theme ",
         "/thinking ",
+        "/reasoning ",
     };
     for (const char* command : kChatOnly) {
         commands.push_back(command);

@@ -5,6 +5,7 @@
 #include <sstream>
 
 #include "chat/settings.hpp"
+#include "config/model_catalog.hpp"
 #include "cli/option_values.hpp"
 #include "context/policy.hpp"
 #include "chat/generation_settings.hpp"
@@ -18,7 +19,7 @@ bool needs_value(const std::string& opt) {
     static const char* with_values[] = {
         "-p", "--prompt", "--prompt-file", "-s", "--system", "--system-file", "-m", "--model", "-model",
         "-t", "--temperature", "--top-p", "--top-k", "--min-p", "--repeat-penalty", "--presence-penalty",
-        "--thinking", "--thinking-budget", "--purpose", "--max-output-tokens", "--format", "--output-format",
+        "--reasoning", "--purpose", "--max-output-tokens", "--format", "--output-format",
         "--output",
         "--provider", "--profile", "--api", "--base-url", "--chat-url", "--models-url", "--responses-url",
         "--key-env", "--key-file", "-k", "--key", "--header", "--connect-timeout", "--timeout",
@@ -323,12 +324,14 @@ ParseResult parse_args(int argc, char** argv, const Options& base_options) {
                 opts.system_file = value;
             } else if (opt == "-m" || opt == "--model" || opt == "-model") {
                 opts.model = value;
+                opts.model_explicit = true;
             } else if (opt == "-t" || opt == "--temperature") {
                 Error err = parse_double(opt, value, opts.temperature);
                 if (!err.ok()) {
                     return {opts, err};
                 }
                 opts.has_temperature = true;
+                opts.temperature_preset_applied = false;
             } else if (opt == "--top-p") {
                 Error err = parse_double(opt, value, opts.top_p);
                 if (!err.ok()) {
@@ -362,20 +365,13 @@ ParseResult parse_args(int argc, char** argv, const Options& base_options) {
                     return {opts, err};
                 }
                 opts.has_presence_penalty = true;
-            } else if (opt == "--thinking") {
-                if (value == "on" || value == "true" || value == "1") {
-                    opts.enable_thinking = true;
-                } else if (value == "off" || value == "false" || value == "0") {
-                    opts.enable_thinking = false;
-                } else {
-                    return {opts, {ErrorCode::BadArgs, "--thinking must be on or off"}};
-                }
-                opts.has_enable_thinking = true;
-            } else if (opt == "--thinking-budget") {
-                Error err = ainiux::chat::apply_chat_setting(opts, "thinking_budget", value);
+            } else if (opt == "--reasoning") {
+                Error err = config::parse_reasoning_selection(value, opts.reasoning);
                 if (!err.ok()) {
                     return {opts, err};
                 }
+                opts.reasoning_explicit = true;
+                opts.reasoning_cli_explicit = true;
             } else if (opt == "--purpose") {
                 if (!chat::generation::is_chat_purpose(value)) {
                     return {opts,
@@ -455,6 +451,7 @@ ParseResult parse_args(int argc, char** argv, const Options& base_options) {
                 opts.provider = value;
                 opts.provider_explicit = true;
             } else if (opt == "--api") {
+                opts.api_explicit = true;
                 if (value == "chat" || value == "chat_completions" || value == "chat-completions") {
                     opts.api = "chat";
                 } else if (value == "responses" || value == "responses_api" || value == "responses-api") {
@@ -631,6 +628,13 @@ ParseResult parse_args(int argc, char** argv, const Options& base_options) {
             opts.positional_url = arg;
         }
     }
+    if (!opts.provider_explicit &&
+        (opts.positional_url.rfind("http://", 0) == 0 ||
+         opts.positional_url.rfind("https://", 0) == 0)) {
+        // A direct OpenAI-compatible endpoint must override an inherited
+        // remembered/configured provider selection. Explicit --provider still wins.
+        opts.provider = "openai";
+    }
     return {opts, ok_error()};
 }
 
@@ -713,10 +717,9 @@ Options:
       --min-p FLOAT
       --repeat-penalty FLOAT
       --presence-penalty FLOAT
-      --thinking on|off
-      --thinking-budget TOKENS|LABEL
-                                Token count (for example 8192) or a verbal label
-                                (for example high).
+      --reasoning auto|VALUE|TOKENS
+                                Provider default, a named value (for example high),
+                                or an exact non-negative token budget.
       --purpose general|coding|instruct|creative
       --max-output-tokens N
       --stream | --no-stream

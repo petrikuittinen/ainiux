@@ -932,45 +932,60 @@ Error SqliteStore::open(const std::string& path) {
 }
 
 Error SqliteStore::set_last_thread_id(long long thread_id) {
+    return set_app_state("last_thread_id", std::to_string(thread_id));
+}
+
+Error SqliteStore::set_app_state(const std::string& key, const std::string& value) {
     if (db_ == nullptr) {
         return {ErrorCode::Internal, "SQLite database is not open"};
     }
+    if (key.empty() || key.size() > 128) {
+        return {ErrorCode::BadArgs, "SQLite app-state key must contain 1 through 128 characters"};
+    }
     Statement stmt(db_, path_);
     Error err = stmt.prepare(
-        "INSERT INTO app_state(key, value, updated_at) VALUES('last_thread_id', ?1, ?2) "
+        "INSERT INTO app_state(key, value, updated_at) VALUES(?1, ?2, ?3) "
         "ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at;");
     if (!err.ok()) {
         return err;
     }
     return BindChain(stmt)
-        .text(1, std::to_string(thread_id))
-        .text(2, current_timestamp_utc())
-        .step_done("could not update SQLite last thread");
+        .text(1, key)
+        .text(2, value)
+        .text(3, current_timestamp_utc())
+        .step_done("could not update SQLite app state");
 }
 
 Error SqliteStore::last_thread_id(long long& thread_id, bool& found) {
     found = false;
     thread_id = 0;
-    if (db_ == nullptr) {
-        return {ErrorCode::Internal, "SQLite database is not open"};
-    }
-    Statement stmt(db_, path_);
-    Error err = stmt.prepare("SELECT value FROM app_state WHERE key = 'last_thread_id';");
-    if (!err.ok()) return err;
-    const int rc = stmt.step();
-    if (rc == SQLITE_DONE) {
-        return ok_error();
-    }
-    if (rc != SQLITE_ROW) {
-        return sqlite_error(db_, path_, "could not read SQLite last thread", rc);
-    }
+    std::string value;
+    Error err = app_state("last_thread_id", value, found);
+    if (!err.ok() || !found) return err;
     try {
-        thread_id = std::stoll(stmt.column_text(0));
+        thread_id = std::stoll(value);
         found = thread_id > 0;
     } catch (...) {
         found = false;
         thread_id = 0;
     }
+    return ok_error();
+}
+
+Error SqliteStore::app_state(const std::string& key, std::string& value, bool& found) {
+    found = false;
+    value.clear();
+    if (db_ == nullptr) return {ErrorCode::Internal, "SQLite database is not open"};
+    Statement stmt(db_, path_);
+    Error err = stmt.prepare("SELECT value FROM app_state WHERE key = ?1;");
+    if (!err.ok()) return err;
+    err = BindChain(stmt).text(1, key).error();
+    if (!err.ok()) return err;
+    const int rc = stmt.step();
+    if (rc == SQLITE_DONE) return ok_error();
+    if (rc != SQLITE_ROW) return sqlite_error(db_, path_, "could not read SQLite app state", rc);
+    value = stmt.column_text(0);
+    found = true;
     return ok_error();
 }
 

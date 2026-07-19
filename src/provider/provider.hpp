@@ -162,6 +162,8 @@ bool needs_interactive_model_selection(const RequestContext& context);
 std::string display_name_for_profile(const std::string& profile_name);
 Error validate_profile_name(const std::string& name);
 const Capabilities& capabilities_for(const RequestContext& context);
+const ModelCapability* matched_model_capability(const RequestContext& context);
+std::string reasoning_temperature_advisory(const RequestContext& context);
 Capabilities detected_capabilities_for(const RequestContext& context);
 Error validate_image_input(const RequestContext& context);
 std::string active_request_url(const RequestContext& context);

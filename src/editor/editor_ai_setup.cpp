@@ -61,12 +61,18 @@ Error apply_editor_provider_target(std::optional<AiContinueContext>& context,
 
     cli::Options next = context->request.options;
     provider::apply_provider_target(next, target);
-    // A model id belongs to the provider that supplied it. Never carry it across
-    // a provider change; the shared provider/model flow will discover a new one.
-    next.model.clear();
     provider::ContextResult rebuilt = provider::build_context(next);
     if (!rebuilt.error.ok()) {
         return rebuilt.error;
+    }
+    const bool changed = rebuilt.context.profile.name != context->request.profile.name ||
+                         rebuilt.context.base_url != context->request.base_url;
+    if (changed) {
+        // A model id belongs to the provider that supplied it. Never carry it
+        // across an actual provider change; the shared flow discovers a new one.
+        rebuilt.context.options.model.clear();
+        rebuilt.context.options.reasoning = ReasoningSelection::automatic();
+        rebuilt.context.options.reasoning_explicit = true;
     }
     context->request = std::move(rebuilt.context);
     return ok_error();
@@ -76,7 +82,12 @@ Error apply_editor_model(std::optional<AiContinueContext>& context, const std::s
     if (!editor_ai_has_provider(context)) {
         return {ErrorCode::UnsupportedFeature, editor_no_provider_message()};
     }
+    const bool changed = context->request.options.model != model;
     context->request.options.model = model;
+    if (changed) {
+        context->request.options.reasoning = ReasoningSelection::automatic();
+        context->request.options.reasoning_explicit = true;
+    }
     const Error context_err = provider::resolve_context_window(context->request, model);
     if (!context_err.ok()) {
         return context_err;

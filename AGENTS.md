@@ -41,7 +41,7 @@ Status: **v0.98** (see `README.md` and `PLANS.md` implementation notes). Active 
 ### Implemented capabilities agents must respect
 
 - Built-in provider registry and aliases; Chat Completions; text-only OpenAI Responses API (`--api responses`, `--responses`, `openai_responses`)
-- Provider-specific reasoning/thinking request mapping (`--thinking`, `--thinking-budget`)
+- Catalog-selected provider reasoning mapping (`--reasoning auto|VALUE|TOKENS`)
 - `--provider none` offline profile for conversion/editor without a model endpoint
 - Credential lookup from env / key file / stdin; redaction in logs and artifacts
 - JSON chat import/export (`--save-chat` / `--load-chat`); SQLite-backed TUI chat library at `~/.ainiux/ainiux.db`
@@ -49,7 +49,7 @@ Status: **v0.98** (see `README.md` and `PLANS.md` implementation notes). Active 
 - Request-only context policies; full transcript preserved on disk
 - Bounded text/HTML/Markdown attachments; JPEG/PNG/GIF image input (Chat Completions)
 - Safe URL fetching; web search (`--search`, `/search`) with API providers and keyless fallbacks
-- Automatic system/user TOML-alike configuration (`config.conf`), plus `themes.conf`, `editor-commands.conf`, `benchmarks.conf`
+- Automatic system/user TOML-alike configuration (`config.conf`), plus `themes.conf`, `editor-commands.conf`, `benchmarks.conf`, and `models.conf`
 - Shared syntax highlighting for editor and chat; grapheme-aware editor navigation
 - Editor AI assist (`Ctrl+Space`, slash commands); window splits; file locking sessions
 - Concurrent JSONL benchmarks and configurable judge grading with runtime prompts from `benchmarks.conf`
@@ -115,7 +115,8 @@ This is the **authoritative** layout. Put new code in the matching module. Do no
 │   ├── ainiux.conf
 │   ├── themes.conf
 │   ├── editor-commands.conf
-│   └── benchmarks.conf
+│   ├── benchmarks.conf
+│   └── models.conf
 ├── benchmarks/                  # JSONL datasets (builtin parts + long-context)
 ├── include/ainiux/
 │   ├── version.hpp
@@ -283,6 +284,7 @@ Layering: system files (reverse `XDG_CONFIG_DIRS` order), then user file, then C
 - `themes.conf` — TUI/editor themes
 - `editor-commands.conf` — editor AI slash commands
 - `benchmarks.conf` — judge grading prompts (no compiled fallback grading prose)
+- `models.conf` — model capabilities, reasoning selector options, and optional purpose presets
 
 Bundled templates live in `config/` and install via `make install`. See `docs/decisions.md`.
 

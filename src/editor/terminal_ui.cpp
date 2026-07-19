@@ -297,6 +297,7 @@ Error paste_into_minibuffer(MinibufferState& minibuffer, const std::string& text
         case MinibufferAction::ConfirmSaveOnQuit:
         case MinibufferAction::ConfirmOverwrite:
         case MinibufferAction::ConfirmReloadAfterLock:
+        case MinibufferAction::ConfirmReasoning:
         case MinibufferAction::AssistScopeChoice:
         case MinibufferAction::AssistPromptMode:
             return {ErrorCode::BadArgs, "paste is not accepted by the active prompt"};

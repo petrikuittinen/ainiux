@@ -111,7 +111,17 @@ set +e
     --mode quality --runs 10 --limit 1 -m "$MODEL" \
     >"$benchmark_cancel_out" 2>"$benchmark_cancel_err" &
 BENCHMARK_PID=$!
-sleep 0.2
+# Background jobs inherit SIGINT as ignored from a non-interactive shell until
+# the benchmark installs its cancellation handler. Sanitizer startup can make
+# a fixed delay race that initialization, so wait for the started event.
+i=0
+while ! grep '^Benchmark started:' "$benchmark_cancel_err" >/dev/null 2>&1; do
+    i=$((i + 1))
+    if [ "$i" -ge 50 ]; then
+        break
+    fi
+    sleep 0.1
+done
 kill -INT "$BENCHMARK_PID"
 wait "$BENCHMARK_PID"
 benchmark_cancel_status=$?
@@ -251,10 +261,17 @@ grade_cancel_out="$ROOT/build/grade-cancel.out"
 grade_cancel_err="$ROOT/build/grade-cancel.err"
 set +e
 "$ROOT/ainiux" --grade "http://127.0.0.1:$SLOW_PORT" --stream \
-    --grade-input "$grade_cancel_source" --quiet -m "$MODEL" \
+    --grade-input "$grade_cancel_source" -m "$MODEL" \
     >"$grade_cancel_out" 2>"$grade_cancel_err" &
 GRADE_PID=$!
-sleep 0.2
+i=0
+while ! grep '^Grading started:' "$grade_cancel_err" >/dev/null 2>&1; do
+    i=$((i + 1))
+    if [ "$i" -ge 50 ]; then
+        break
+    fi
+    sleep 0.1
+done
 kill -INT "$GRADE_PID"
 wait "$GRADE_PID"
 grade_cancel_status=$?
@@ -625,6 +642,25 @@ printf '%s' "$models" | grep -F "**Provider:**" >/dev/null
 
 reply=$("$ROOT/ainiux" "$BASE" --quiet --no-stream -m "$MODEL" -p "hello")
 test "$reply" = "Hello"
+reasoning_warning_err="$ROOT/build/reasoning-value-warning.err"
+reasoning_warning_reply=$("$ROOT/ainiux" "$BASE" --no-stream \
+    -m "gateway/deepseek-v4-flash" --reasoning maxx -p "hello" \
+    2>"$reasoning_warning_err")
+test "$reasoning_warning_reply" = "Hello"
+grep "Warning: reasoning value 'maxx' is not listed for model 'gateway/deepseek-v4-flash'" \
+    "$reasoning_warning_err" >/dev/null
+grep 'models.conf values: none|high|max' "$reasoning_warning_err" >/dev/null
+
+repl_reasoning_warning_err="$ROOT/build/repl-reasoning-value-warning.err"
+printf '/reasoning maxx\nn\n/quit\n' | \
+    "$ROOT/ainiux" "$BASE" --quiet --repl --no-stream \
+        -m "gateway/deepseek-v4-flash" \
+        >"$ROOT/build/repl-reasoning-value-warning.out" \
+        2>"$repl_reasoning_warning_err"
+grep "Warning: reasoning value 'maxx' is not listed" \
+    "$repl_reasoning_warning_err" >/dev/null
+grep 'Proceed? \[y/N\]' "$repl_reasoning_warning_err" >/dev/null
+grep 'Reasoning change cancelled' "$repl_reasoning_warning_err" >/dev/null
 auto_model=$("$ROOT/ainiux" "$BASE" --quiet --no-stream -p "model?")
 
 test "$auto_model" = "$MODEL"
@@ -663,35 +699,35 @@ responses_json=$("$ROOT/ainiux" "$BASE" --quiet --api responses --no-stream -m "
 printf '%s' "$responses_json" | grep '"content":"Hello"' >/dev/null
 
 shape_openai=$("$ROOT/ainiux" --provider openai --base-url "$BASE" --quiet --no-stream \
-    -m "$MODEL" --thinking-budget high -p "expect-openai-chat-reasoning" \
+    -m "$MODEL" --reasoning high -p "expect-openai-chat-reasoning" \
     --header "Authorization: Bearer test")
 test "$shape_openai" = "request-ok"
 shape_openai_responses=$("$ROOT/ainiux" --provider openai --base-url "$BASE" --quiet \
-    --api responses --no-stream -m "$MODEL" --thinking-budget 4096 \
+    --api responses --no-stream -m "$MODEL" --reasoning 4096 \
     -p "expect-openai-responses-reasoning" --header "Authorization: Bearer test")
 test "$shape_openai_responses" = "request-ok"
 shape_anthropic=$("$ROOT/ainiux" --provider anthropic --base-url "$BASE" --quiet \
-    --no-stream -m "claude-sonnet-4-6" --thinking-budget 2048 \
+    --no-stream -m "claude-sonnet-4-6" --reasoning 2048 \
     -p "expect-anthropic-thinking" --header "Authorization: Bearer test")
 test "$shape_anthropic" = "request-ok"
 shape_gemini=$("$ROOT/ainiux" --provider gemini --base-url "$BASE" --quiet --no-stream \
-    -m "gemini-3.5-flash" --thinking-budget 4096 -p "expect-gemini-reasoning" \
+    -m "gemini-3.5-flash" --reasoning 4096 -p "expect-gemini-reasoning" \
     --header "Authorization: Bearer test")
 test "$shape_gemini" = "request-ok"
 shape_kimi=$("$ROOT/ainiux" --provider moonshot --base-url "$BASE" --quiet --no-stream \
-    -m "kimi-k2.6" --thinking off -p "expect-kimi-thinking" \
+    -m "kimi-k2.6" --reasoning off -p "expect-kimi-thinking" \
     --header "Authorization: Bearer test")
 test "$shape_kimi" = "request-ok"
 shape_deepseek=$("$ROOT/ainiux" --provider deepseek --base-url "$BASE" --quiet \
-    --no-stream -m "deepseek-v4-pro" --thinking-budget xhigh \
+    --no-stream -m "deepseek-v4-pro" --reasoning xhigh \
     -p "expect-deepseek-v4-thinking" --header "Authorization: Bearer test")
 test "$shape_deepseek" = "request-ok"
 shape_qwen=$("$ROOT/ainiux" --provider qwen --base-url "$BASE" --quiet --no-stream \
-    -m "qwen3.7-plus" --thinking-budget high -p "expect-qwen-thinking" \
+    -m "qwen3.6-plus" --reasoning high -p "expect-qwen-thinking" \
     --header "Authorization: Bearer test")
 test "$shape_qwen" = "request-ok"
 shape_glm=$("$ROOT/ainiux" --provider zai --base-url "$BASE" --quiet --no-stream \
-    -m "glm-5.2" --thinking-budget xhigh -p "expect-glm-thinking" \
+    -m "glm-5.2" --reasoning xhigh -p "expect-glm-thinking" \
     --header "Authorization: Bearer test")
 test "$shape_glm" = "request-ok"
 

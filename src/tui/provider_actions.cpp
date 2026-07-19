@@ -14,11 +14,17 @@ bool apply_selected_provider(provider::RequestContext& context,
                              std::string& status) {
     cli::Options next = context.options;
     provider::apply_provider_target(next, provider_target);
-    next.model.clear();
     provider::ContextResult rebuilt = provider::build_context(next);
     if (!rebuilt.error.ok()) {
         status = detail::error_line(rebuilt.error);
         return false;
+    }
+    const bool changed = rebuilt.context.profile.name != context.profile.name ||
+                         rebuilt.context.base_url != context.base_url;
+    if (changed) {
+        rebuilt.context.options.model.clear();
+        rebuilt.context.options.reasoning = ReasoningSelection::automatic();
+        rebuilt.context.options.reasoning_explicit = true;
     }
     context = std::move(rebuilt.context);
     show_thinking_traces = context.options.show_thinking_traces;

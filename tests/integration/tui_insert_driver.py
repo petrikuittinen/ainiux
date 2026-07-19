@@ -26,6 +26,25 @@ def send(master, text, delay=0.35):
     return drain(master)
 
 
+def wait_for_terminal(master, timeout=5.0):
+    deadline = time.monotonic() + timeout
+    output = bytearray()
+    while time.monotonic() < deadline:
+        ready, _, _ = select.select([master], [], [], 0.05)
+        if not ready:
+            continue
+        try:
+            chunk = os.read(master, 65536)
+        except OSError as error:
+            raise RuntimeError("terminal exited before initialization") from error
+        if not chunk:
+            raise RuntimeError("terminal exited before initialization")
+        output.extend(chunk)
+        if b"\x1b[2J" in output:
+            return
+    raise RuntimeError("terminal did not initialize before the test timeout")
+
+
 def require_running(process, description):
     if process.poll() is not None:
         raise RuntimeError(f"{description} exited after Ctrl+C")
@@ -44,8 +63,7 @@ def verify_editor_minibuffer(binary, target_path, save_path):
     )
     os.close(slave)
     try:
-        time.sleep(0.25)
-        drain(master)
+        wait_for_terminal(master)
         send(master, "\x03", 0.2)
         require_running(process, "editor")
         typed_text = target_path[:-4]
@@ -95,8 +113,7 @@ def verify_editor_insert(binary, target_path, fetch_url, save_path):
     )
     os.close(slave)
     try:
-        time.sleep(0.25)
-        drain(master)
+        wait_for_terminal(master)
         send(master, "before\n")
         send(master, "\x1b", 0.15)
         send(master, f"/insert {odd_path[:-6]}\t", 0.2)
@@ -154,8 +171,7 @@ def main():
     )
     os.close(slave)
     try:
-        time.sleep(0.25)
-        drain(master)
+        wait_for_terminal(master)
         send(master, "\x03", 0.2)
         require_running(process, "TUI")
         help_output = send(master, "/help\r")

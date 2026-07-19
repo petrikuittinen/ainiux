@@ -6,6 +6,8 @@
 #include "tui/activity.hpp"
 #include "editor/terminal_input.hpp"
 #include "tui/input_handlers.hpp"
+#include "tui/picker_input.hpp"
+#include "tui/provider_actions.hpp"
 #include "tui/session_load.hpp"
 #include "config/config.hpp"
 #include "tui/theme_registry.hpp"
@@ -31,6 +33,98 @@ void test_tui_history_jump_helpers() {
           "TUI Home jump requests a clamped scrollback maximum");
     check(ainiux::tui::history_scroll_for_thread_end() == 0,
           "TUI End jump returns to the live chat bottom");
+}
+
+void test_tui_provider_change_resets_only_on_actual_change() {
+    ainiux::cli::Options options;
+    options.tui = true;
+    options.provider = "lmstudio";
+    options.model = "remembered-model";
+    options.reasoning = ainiux::ReasoningSelection::named("high");
+    ainiux::provider::ContextResult built = ainiux::provider::build_context(options);
+    check(built.error.ok(), "TUI provider reset test builds a local context");
+
+    ainiux::chat::Session session;
+    bool show_thinking_traces = false;
+    std::string status;
+    check(ainiux::tui::apply_selected_provider(built.context,
+                                               session,
+                                               show_thinking_traces,
+                                               "lmstudio",
+                                               status) &&
+              built.context.options.model == "remembered-model" &&
+              built.context.options.reasoning ==
+                  ainiux::ReasoningSelection::named("high"),
+          "TUI reselecting the actual provider preserves model and reasoning");
+    check(ainiux::tui::apply_selected_provider(built.context,
+                                               session,
+                                               show_thinking_traces,
+                                               "ollama",
+                                               status) &&
+              built.context.options.model.empty() &&
+              built.context.options.reasoning.is_auto(),
+          "TUI actual provider change clears model and resets reasoning to Auto");
+}
+
+void test_tui_reasoning_picker_input() {
+    ainiux::tui::TuiMode mode = ainiux::tui::TuiMode::ReasoningList;
+    bool quit = false;
+    std::string status;
+    std::vector<std::string> items = {"auto", "low", "high"};
+    size_t selected = 0;
+    bool picker_cancel_quits = false;
+    std::vector<ainiux::chat::ThreadSummary> threads;
+    size_t thread_selected = 0;
+    size_t pending_thread_delete = 0;
+    ainiux::tui::TuiPickerInputState state{
+        mode,
+        quit,
+        status,
+        items,
+        selected,
+        picker_cancel_quits,
+        threads,
+        thread_selected,
+        true,
+        pending_thread_delete,
+    };
+    std::string accepted;
+    ainiux::tui::TuiPickerCallbacks callbacks;
+    callbacks.on_reasoning_selected =
+        [&](const std::string& value) { accepted = value; };
+
+    ainiux::editor::clear_terminal_input_queue();
+    ainiux::editor::push_terminal_input_bytes("[B");
+    check(ainiux::tui::handle_tui_picker_input(27, state, callbacks) &&
+              selected == 1 && status == "Selected reasoning 2/3",
+          "TUI reasoning selector navigates through configured options");
+    check(ainiux::tui::handle_tui_picker_input('\n', state, callbacks) &&
+              accepted == "low",
+          "TUI reasoning selector accepts the highlighted canonical value");
+
+    mode = ainiux::tui::TuiMode::ReasoningList;
+    items = {"auto", "low"};
+    selected = 1;
+    ainiux::editor::clear_terminal_input_queue();
+    check(ainiux::tui::handle_tui_picker_input(27, state, callbacks) &&
+              mode == ainiux::tui::TuiMode::Chat && items.empty() &&
+              status == "Reasoning selection cancelled",
+          "TUI reasoning selector cancellation returns to chat");
+
+    bool confirmed = false;
+    bool rejected = false;
+    callbacks.on_reasoning_confirm_accepted = [&]() { confirmed = true; };
+    callbacks.on_reasoning_confirm_rejected = [&]() { rejected = true; };
+    callbacks.on_reasoning_confirm_retry = [&](const std::string& message) { status = message; };
+    mode = ainiux::tui::TuiMode::ReasoningConfirm;
+    check(ainiux::tui::handle_tui_picker_input('x', state, callbacks) &&
+              status.find("Press y") == 0 && !confirmed && !rejected,
+          "TUI unlisted reasoning confirmation rejects ambiguous input");
+    check(ainiux::tui::handle_tui_picker_input('y', state, callbacks) && confirmed,
+          "TUI unlisted reasoning confirmation accepts y");
+    confirmed = false;
+    check(ainiux::tui::handle_tui_picker_input(27, state, callbacks) && rejected && !confirmed,
+          "TUI unlisted reasoning confirmation treats Esc as cancellation");
 }
 
 void test_tui_layout_reserves_editor_input_panel() {
@@ -726,6 +820,7 @@ void test_tui_loaded_context_does_not_inherit_model_or_endpoints() {
     loaded.provider = "openrouter";
     loaded.base_url = "https://openrouter.ai/api/v1";
     loaded.model.clear();
+    loaded.settings_json = "{\"reasoning\":3072}";
     const ainiux::Error applied =
         ainiux::tui::apply_loaded_session_to_context(built.context, loaded);
     check(applied.ok(), "TUI applies an incomplete saved OpenRouter context");
@@ -741,6 +836,9 @@ void test_tui_loaded_context_does_not_inherit_model_or_endpoints() {
           "TUI clears endpoint overrides inherited from the previous thread");
     check(built.context.chat_url.find("openrouter.ai") != std::string::npos,
           "TUI rebuilds the request URL from the saved provider context");
+    check(built.context.options.reasoning ==
+              ainiux::ReasoningSelection::token_budget(3072),
+          "TUI thread loading restores the complete saved reasoning selection");
 }
 
 void test_tui_session_load_model_mismatch_detection() {
@@ -940,6 +1038,8 @@ void test_tui_unicode_and_empty_status() {
 
 void run_all() {
     test_tui_history_jump_helpers();
+    test_tui_provider_change_resets_only_on_actual_change();
+    test_tui_reasoning_picker_input();
     test_tui_session_load_model_mismatch_detection();
     test_tui_session_load_model_confirm_text();
     test_tui_incomplete_thread_labels();

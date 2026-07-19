@@ -57,6 +57,8 @@ class SqliteStore {
     Error list_threads(std::vector<ThreadSummary>& threads, int limit = 200);
     Error last_thread_id(long long& thread_id, bool& found);
     Error set_last_thread_id(long long thread_id);
+    Error app_state(const std::string& key, std::string& value, bool& found);
+    Error set_app_state(const std::string& key, const std::string& value);
     Error import_media(const std::string& bytes,
                        const std::string& mime_type,
                        const std::string& display_name,

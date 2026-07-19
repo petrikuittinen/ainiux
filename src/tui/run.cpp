@@ -111,6 +111,8 @@ app::TuiRunResult run(provider::RequestContext context,
     size_t inflight_image_count = 0;
     std::string help_text;
     std::string settings_text;
+    std::string pending_reasoning;
+    std::string pending_reasoning_warning;
     TuiMode mode = TuiMode::Chat;
     size_t history_edit_index = static_cast<size_t>(-1);
     std::vector<chat::ThreadSummary> thread_picker_threads;
@@ -216,6 +218,19 @@ app::TuiRunResult run(provider::RequestContext context,
         if (mode == TuiMode::ModelList) {
             return ui::model_selector_text(picker_items, picker_selected);
         }
+        if (mode == TuiMode::ReasoningList) {
+            return config::reasoning_selector_text(context.options.model_catalog,
+                                                   context.profile.name,
+                                                   context.api_kind == provider::ApiKind::Responses
+                                                       ? "responses"
+                                                       : "chat",
+                                                   context.options.model,
+                                                   picker_selected);
+        }
+        if (mode == TuiMode::ReasoningConfirm) {
+            return pending_reasoning_warning + "\n\nUse '" + pending_reasoning +
+                   "' anyway? Press y to proceed · n or Esc to cancel";
+        }
         if (mode == TuiMode::AttachmentList) {
             return attachment_picker_text(chat_attachments, attachment_picker_selected);
         }
@@ -270,7 +285,9 @@ app::TuiRunResult run(provider::RequestContext context,
 
     auto refresh_settings_panel_if_visible = [&]() {
         if (!settings_text.empty()) {
-            settings_text = chat::format_settings_panel(context.options);
+            settings_text = chat::format_settings_panel(
+                context.options,
+                provider::reasoning_temperature_advisory(context));
         }
     };
 
@@ -477,6 +494,40 @@ app::TuiRunResult run(provider::RequestContext context,
         status = picker_items.empty()
                      ? "No providers available"
                      : ui::text_selector_status("Selected provider", picker_selected, picker_items.size());
+    };
+
+    auto open_reasoning_picker = [&]() {
+        if (active_job != ActiveJob::None) {
+            status = "Cannot change reasoning while a model job is running";
+            return;
+        }
+        const ModelCapability* capability = provider::matched_model_capability(context);
+        if (capability == nullptr) {
+            status = "No reasoning catalog entry matches " + context.options.model +
+                     ". Use /reasoning VALUE directly or add an entry to models.conf";
+            return;
+        }
+        std::vector<ReasoningSelection> selections;
+        (void)config::reasoning_selector_text(context.options.model_catalog,
+                                              context.profile.name,
+                                              context.api_kind == provider::ApiKind::Responses
+                                                  ? "responses"
+                                                  : "chat",
+                                              context.options.model,
+                                              0,
+                                              &selections);
+        picker_items.clear();
+        picker_selected = 0;
+        for (size_t i = 0; i < selections.size(); ++i) {
+            picker_items.push_back(config::reasoning_selection_value(selections[i]));
+            if (selections[i] == context.options.reasoning) picker_selected = i;
+        }
+        picker_cancel_quits = false;
+        mode = TuiMode::ReasoningList;
+        history_scroll = 0;
+        help_text.clear();
+        settings_text.clear();
+        status = ui::text_selector_status("Selected reasoning", picker_selected, picker_items.size());
     };
 
     auto refresh_startup_status = [&]() {
@@ -856,6 +907,24 @@ app::TuiRunResult run(provider::RequestContext context,
             return true;
         };
 
+    auto commit_reasoning_selection = [&](const std::string& reasoning) {
+        Error err = chat::apply_chat_setting(context.options, "reasoning", reasoning);
+        if (!err.ok()) {
+            mode = TuiMode::Chat;
+            status = err.message;
+            return;
+        }
+        picker_items.clear();
+        picker_selected = 0;
+        mode = TuiMode::Chat;
+        std::string message = "Reasoning set to " +
+            config::reasoning_selection_value(context.options.reasoning);
+        const std::string advisory = provider::reasoning_temperature_advisory(context);
+        if (!advisory.empty()) message += ". Warning: " + advisory;
+        persist_settings_change(message);
+        refresh_settings_panel_if_visible();
+    };
+
     TuiCommandHandlers command_handlers;
     command_handlers.quit = [&]() { quit = true; };
     command_handlers.start_history_edit = start_history_edit;
@@ -872,6 +941,17 @@ app::TuiRunResult run(provider::RequestContext context,
     };
     command_handlers.start_store_save = start_store_save;
     command_handlers.start_models = start_models;
+    command_handlers.open_reasoning_picker = open_reasoning_picker;
+    command_handlers.request_reasoning_confirmation =
+        [&](const std::string& reasoning, const std::string& warning) {
+            pending_reasoning = reasoning;
+            pending_reasoning_warning = warning;
+            help_text.clear();
+            settings_text.clear();
+            history_scroll = 0;
+            mode = TuiMode::ReasoningConfirm;
+            status = "Warning: " + warning + ". Proceed? y/n";
+        };
     command_handlers.persist_settings_change = persist_settings_change;
     command_handlers.refresh_settings_panel_if_visible = refresh_settings_panel_if_visible;
     command_handlers.start_save = [&](const std::string& path) { start_save(path, session); };
@@ -963,8 +1043,13 @@ app::TuiRunResult run(provider::RequestContext context,
         }
     };
     picker_callbacks.on_model_selected = [&](const std::string& model_name) {
+        const bool changed = context.options.model != model_name;
         context.options.model = model_name;
         session.model = model_name;
+        if (changed) {
+            context.options.reasoning = ReasoningSelection::automatic();
+            context.options.reasoning_explicit = true;
+        }
         loaded_thread_requires_provider_selection = false;
         if (have_cached_models) {
             provider::apply_context_window_from_models(context, cached_models);
@@ -975,6 +1060,23 @@ app::TuiRunResult run(provider::RequestContext context,
         status = provider_model_status_message(context, "ready");
         start_store_save();
     };
+    picker_callbacks.on_reasoning_selected = [&](const std::string& reasoning) {
+        commit_reasoning_selection(reasoning);
+    };
+    picker_callbacks.on_reasoning_confirm_accepted = [&]() {
+        const std::string reasoning = pending_reasoning;
+        pending_reasoning.clear();
+        pending_reasoning_warning.clear();
+        commit_reasoning_selection(reasoning);
+    };
+    picker_callbacks.on_reasoning_confirm_rejected = [&]() {
+        pending_reasoning.clear();
+        pending_reasoning_warning.clear();
+        mode = TuiMode::Chat;
+        status = "Reasoning change cancelled";
+    };
+    picker_callbacks.on_reasoning_confirm_retry =
+        [&](const std::string& message) { status = message; };
     picker_callbacks.on_thread_selected = [&](long long thread_id) {
         mode = TuiMode::Chat;
         thread_picker_threads.clear();
@@ -1458,6 +1560,10 @@ app::TuiRunResult run(provider::RequestContext context,
             editor::TerminalInputEvent event;
             while (editor::read_terminal_input(event, 0)) {
                 if (event.type == editor::TerminalInputType::BracketedPaste) {
+                    if (mode == TuiMode::ReasoningConfirm) {
+                        status = "Paste is not accepted by the reasoning confirmation; press y or n";
+                        continue;
+                    }
                     path_completer.reset();
                     ++completion_generation;
                     completion_job.cancel();

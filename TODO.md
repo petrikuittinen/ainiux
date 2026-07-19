@@ -28,7 +28,8 @@
 ## Provider And API Hardening
 
 - Continue v0.4 provider work: provider capability probing, provider-specific error normalization, broader Responses API schema coverage, and adapter docs/tests for real providers.
-- Add live reasoning/thinking capability probing or model metadata so unsupported effort labels and token budgets can be rejected before a provider request.
+- Add optional live reasoning capability probing where providers expose reliable metadata; keep `models.conf` as the portable offline catalog and direct values forward-compatible.
+- Periodically verify shipped `models.conf` entries against primary vendor documentation as model IDs, defaults, and accepted values evolve.
 - Add a native Anthropic Messages adapter for full Claude extended/adaptive thinking behavior, signatures, output configuration validation, and preserved reasoning state; the OpenAI-compatible Anthropic profile only maps request-side thinking controls.
 - Preserve provider reasoning state needed by future agentic tool loops, including OpenAI Responses reasoning items, OpenRouter signed reasoning details, DeepSeek reasoning content around tool calls, and Anthropic thinking signatures.
 - Add provider-reported context limits and improve token estimation.

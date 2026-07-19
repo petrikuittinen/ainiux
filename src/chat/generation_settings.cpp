@@ -11,15 +11,13 @@ const std::vector<const char*>& chat_setting_names() {
         kRepeatPenalty,
         kPresencePenalty,
         kMaxTokens,
-        kThinking,
-        kThinkingBudget,
+        kReasoning,
     };
     return kNames;
 }
 
 std::string chat_setting_names_description() {
-    return "temperature, top_k, top_p, min_p, repeat_penalty, presence_penalty, max_tokens, thinking, "
-           "or thinking_budget";
+    return "temperature, top_k, top_p, min_p, repeat_penalty, presence_penalty, max_tokens, or reasoning";
 }
 
 bool is_chat_setting_name(const std::string& name) {
@@ -33,7 +31,7 @@ bool is_chat_setting_name(const std::string& name) {
 
 const std::vector<const char*>& model_setting_keys() {
     static const std::vector<const char*> kKeys = {
-        "model",
+        "model_id",
         "purpose",
         "default_system_prompt",
         kTemperature,
@@ -42,14 +40,14 @@ const std::vector<const char*>& model_setting_keys() {
         kMinP,
         kRepeatPenalty,
         kPresencePenalty,
-        kThinkingBudget,
+        kReasoning,
     };
     return kKeys;
 }
 
 std::string model_setting_keys_description() {
-    return "model, purpose, default_system_prompt, temperature, top_k, top_p, min_p, repeat_penalty, "
-           "presence_penalty, or thinking_budget";
+    return "model_id, purpose, default_system_prompt, temperature, top_k, top_p, min_p, repeat_penalty, "
+           "presence_penalty, or reasoning";
 }
 
 const std::vector<const char*>& chat_purposes() {

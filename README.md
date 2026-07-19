@@ -102,7 +102,7 @@ export OPENROUTER_API_KEY=...
 
 **v0.98** — active development. Core surfaces are usable daily: scriptable CLI, REPL, full-screen chat TUI, AI editor, multi-provider chat, durable image and canonical-Markdown attachments, safe URL fetch, web search hooks, document conversion, concurrent benchmarks, and judge grading.
 
-Under the hood: libcurl HTTP/SSE, cancellable runtime jobs, Chat Completions plus text-only Responses API support, provider-specific reasoning/thinking request mapping, SQLite-backed TUI threads, JSON chat import/export, multi-language syntax highlighting, grapheme-aware editing, and layered TOML-alike configuration.
+Under the hood: libcurl HTTP/SSE, cancellable runtime jobs, Chat Completions plus text-only Responses API support, a layered model capability catalog with unified reasoning controls, SQLite-backed TUI threads, JSON chat import/export, multi-language syntax highlighting, grapheme-aware editing, and layered TOML-alike configuration.
 
 ## Build reference
 
@@ -117,9 +117,31 @@ make clean
 make install PREFIX=/usr/local
 ```
 
-The template source is `config/ainiux.conf`. It is installed as `/etc/xdg/ainiux/config.conf` by default; set `SYSCONFDIR` when packaging for a different system configuration root.
+The main template source is `config/ainiux.conf`. Model capabilities and purpose presets live separately in `config/models.conf`. Both are installed below `/etc/xdg/ainiux/` by default; set `SYSCONFDIR` when packaging for a different system configuration root.
 
 At startup, ainiux loads system `ainiux/config.conf` files from `$XDG_CONFIG_DIRS` (default `/etc/xdg`) and then the user file at `$XDG_CONFIG_HOME/ainiux/config.conf` (normally `~/.config/ainiux/config.conf`). User keys partially override system keys, and command-line arguments override both. `--no-config` skips the user file while retaining administrator-provided system configuration. Missing automatic files are ignored; malformed, unknown, or incorrectly typed settings produce a configuration error with the file and source location. `--help` and `--version` do not load configuration.
+
+`models.conf` is layered independently: bundled runtime catalog, system `$XDG_CONFIG_DIRS/ainiux/models.conf`, then user `$XDG_CONFIG_HOME/ainiux/models.conf`. Repeatable `[model]` and `[preset]` blocks merge by stable identity; `enabled = false` removes an earlier record. Matching uses validated, case-insensitive regular expressions against only the final slash-separated model component, so prefixes from OpenRouter, Groq, Together, custom gateways, or any other transport are ignored. Bundled family records are provider-neutral; an optional `provider` field remains available for genuinely transport-specific user overrides. `--no-config` skips the user catalog layer, and `--debug` reports catalog discovery. `make install` preserves the system template and installs a runtime fallback under `share/ainiux/models.conf`.
+
+```conf
+[model]
+id = local-example
+provider = custom_openai_chat
+api = chat
+model = "^example(?:[-.].*)?$"
+value = none|low|medium|high
+priority = 100
+reasoning_protocol = openai_effort
+reasoning_default = medium
+temperature = unsupported
+
+[preset]
+model_id = local-example
+purpose = coding
+top_p = 0.95
+```
+
+The `model` field is a family regular expression, while `value` is an ordered, pipe-separated list used directly for selector values and labels. Preset generation fields are optional, including temperature and reasoning. Protocol names are closed and validated because request JSON remains provider-adapter code, not configuration data. Ordinary `config.conf` may set `[generation].reasoning` to `auto`, a named ASCII value, or an exact non-negative token budget.
 
 Chat images and large canonical Markdown attachments are kept as content-addressed files under `~/.ainiux/media/sha256/`; SQLite stores their SHA-256 references and metadata. Text, Markdown, and HTML attachments are normalized once to Markdown when attached. Canonical Markdown at or below `[media] max_size_to_store_to_db = 65536` UTF-8 bytes stays directly in SQLite and never expires with managed-media cleanup; larger content is stored as a `.md` media object. `[media] expiration_days = 7` controls explicit TUI `/cleanup`, while `[media] auto_expiration_days = 30` controls the automatic cleanup run when chat mode starts. Set either expiration value to `0` to disable that cleanup path. Explicit cleanup protects the currently open thread. When request-critical file-backed media expires—or a managed file is found missing—the affected saved thread remains readable but is marked `[RO]` and cannot be continued or edited.
 
@@ -561,20 +583,20 @@ Complete built-in provider list:
 
 The model-backed profiles share the same OpenAI-compatible chat adapter where possible, with endpoint paths and key defaults coming from the registry. Provider names and aliases are case-insensitive; hyphens and underscores are interchangeable.
 
-Reasoning and thinking controls:
+Reasoning controls:
 
 ```sh
-./ainiux --provider openai --thinking-budget high -m MODEL -p "Solve carefully"
-./ainiux --provider openrouter --thinking-budget 4096 -m MODEL -p "Solve carefully"
-./ainiux --provider gemini --thinking-budget high -m MODEL -p "Solve carefully"
-./ainiux --provider anthropic --thinking-budget 2048 -m claude-sonnet-4-6 -p "Solve carefully"
-./ainiux --provider moonshot --thinking off -m kimi-k2.6 -p "Answer directly"
-./ainiux --provider qwen --thinking-budget 8192 -m qwen-plus -p "Solve carefully"
-./ainiux --provider deepseek --thinking-budget xhigh -m deepseek-v4-pro -p "Solve carefully"
-./ainiux --provider zai --thinking-budget xhigh -m glm-5.2 -p "Solve carefully"
+./ainiux --provider openai --reasoning high -m gpt-5.4 -p "Solve carefully"
+./ainiux --provider openrouter --reasoning 4096 -m MODEL -p "Solve carefully"
+./ainiux --provider anthropic --reasoning 2048 -m claude-sonnet-5 -p "Solve carefully"
+./ainiux --provider qwen --reasoning 8192 -m qwen3.6-plus -p "Solve carefully"
+./ainiux --provider deepseek --reasoning max -m deepseek-v4-pro -p "Solve carefully"
+./ainiux --provider zai --reasoning xhigh -m glm-5.2 -p "Solve carefully"
 ```
 
-`--thinking on|off` and `--thinking-budget TOKENS|LABEL` are translated by the provider layer into each profile's documented request shape. OpenAI Chat uses `reasoning_effort`, OpenAI Responses uses `reasoning.effort`, OpenRouter uses `reasoning.effort` or `reasoning.max_tokens`, Gemini uses `reasoning_effort`, Anthropic Claude uses `thinking` with `output_config` for adaptive efforts, Kimi K2.x uses `thinking.type` where the model allows it, Qwen/DashScope use `enable_thinking` and `thinking_budget`, DeepSeek V4 and GLM-5.2 use `thinking.type` plus their supported `reasoning_effort` labels, and xAI uses `reasoning_effort`. Custom and local OpenAI-compatible endpoints retain generic `enable_thinking` / `thinking_budget` fields unless model or URL detection selects a known family. See [docs/api-compatibility.md](docs/api-compatibility.md) for the mapping and current limitations.
+`--reasoning auto|VALUE|TOKENS`, `/reasoning [VALUE]`, and `/setting reasoning=VALUE` all use one canonical selection. `auto` omits an override; a non-negative integer is an exact token budget; and a bounded ASCII value such as `low`, `max`, or a future `ultra` value is passed through the matched provider protocol without an approximate label↔token conversion. Bare `/reasoning` opens a model-aware selector whose choices come from `models.conf`. When a family matches but a direct value is absent from its `value` list, one-shot CLI mode warns on stderr and continues; REPL, chat TUI, and editor commands warn and ask for y/n confirmation. Accepting the prompt keeps unlisted future provider values possible.
+
+Chat stores the selection per thread as JSON `null`, a string, or an integer. Changing the actual provider or model resets it to Auto, while loading or cloning a thread restores its saved value. The standalone editor remembers its last provider/model/API/reasoning selection globally in SQLite; explicit CLI arguments still win. Endpoint URLs and credentials are never stored in this app state, so a remembered custom provider is restored only while a usable endpoint remains configured. Catalog temperature metadata is advisory for explicit values: presets omit known-incompatible temperature settings, while an explicit temperature is serialized with a warning. The separate `/thinking trace|notrace` command controls trace display only. See [docs/api-compatibility.md](docs/api-compatibility.md) for wire mappings and catalog limits.
 
 Offline mode uses the `none` provider (alias `offline`) and requires no model endpoint or API key:
 
@@ -686,6 +708,8 @@ The TUI also runs `/insert`, `/attach`, `/fetch`, `/search`, and managed-media c
 
 Starting chat with a named online provider but no model, such as `ainiux openrouter -c`, immediately discovers models. One result is selected automatically; multiple results open the shared model selector. Plain `ainiux -c` stays offline without opening either selector: its status points to `/list` for browsing saved threads and to `/provider` then `/model` for setup, and sending remains disabled until both are selected. A complete saved thread supplies its own provider and model when loaded.
 
+In chat, bare `/reasoning` opens the catalog-backed selector and `/reasoning VALUE` applies a direct value. If the model family matches but the value is not listed, chat asks whether to proceed; rejecting the prompt leaves the current value unchanged. Reasoning is stored per thread and resets to Auto only when the actual provider or model changes. `/setting reasoning=VALUE` is equivalent for settings-panel workflows.
+
 In non-interactive `-p`/`--prompt` mode, model thinking traces are written only to standard error. Standard output contains only the visible answer, including with streaming, JSON, NDJSON, rendered output, and `--output stdout`, so it is safe to pipe into another command. Saved chat files retain the full assistant response, including thinking traces.
 
 The TUI keeps model requests, `/models`, `/save`, and `/load` behind runtime jobs so the terminal loop stays responsive. Its always-visible input label is `Ainiux vVERSION | /help | history Ctrl+B ↑ Ctrl+D ↓`, and its initial status is `Tab complete | Ctrl+Space continue | Alt+Enter newline`; after a completed streaming response, the status shows time to first token and token/s, using compact notation such as `~20.0 token/s` when provider token usage is unavailable and locally estimated. With `--context`, that same line also shows estimated context usage. Non-streaming responses show total response latency because true first-token timing is not observable. The bottom input area embeds the editor component in a fixed-height panel with soft wrap and visual-row cursor movement. In chat TUI mode, `Tab` is context sensitive: at the beginning of the first input line it completes slash commands, and after `/insert`, `/attach`, `/save`, or `/load` it completes file paths with repeated-choice cycling. Empty input and non-file commands do not start path completion. Colors are enabled by default with the `dark` theme; use `--nocolors` to disable color styling, `/theme` or `/theme NAME` to inspect or switch themes, and `/highlight on|off` to toggle raw Markdown highlighting. Thinking traces are hidden by default; use `/thinking trace`, `/thinking notrace`, or `Ctrl+T` to toggle display of `<think>...</think>` blocks; visible thinking traces retain their dedicated style while surrounding Markdown is highlighted. Provider reasoning fields such as `reasoning_content`, `reasoning`, and text `reasoning_details` are displayed as `<think>` blocks. TUI chat threads are stored in `~/.ainiux/ainiux.db` using SQLite WAL mode; `/list` opens a newest-first thread picker, up/down changes selection, Enter loads a thread, and Esc cancels. A thread missing its saved provider or model is prefixed with `[SETUP: … missing]`; loading it immediately opens provider selection and then model selection. Sending and regeneration remain disabled until both choices are complete, and an empty saved model never inherits a model or endpoint from the previously active thread. Threads whose attachment media expired or disappeared are labeled `[RO]`; their transcript can be read, listed, saved, or removed, but no new model turn or transcript edit is allowed. `/new [NAME]` starts a fresh thread, `/provider PROVIDER` changes the provider for future turns, `/model MODEL` changes the model, `/pop` removes the last user or assistant message, `/response` replies to a final unanswered user message, and `/remove` asks before soft-deleting the current thread. `Enter` sends, `Alt+Enter` or `Esc` then `Enter` inserts a newline, `Shift` plus arrows, `PageUp`/`PageDown`, `Home`/`End`, or `Ctrl+Home`/`Ctrl+End` extend a highlighted selection in the input, `Ctrl+A` selects the entire input buffer, `Ctrl+E` copies the last user or assistant message into the input for editing (`Enter` saves, a bare `Esc` cancels), `Ctrl+C` copies the selection, `Ctrl+X` cuts it, `Ctrl+V` pastes, `Ctrl+K` kills from the cursor to the end of the input line and removes the line when it is already empty, `Ctrl+Z` or `Ctrl+U` undoes, `Ctrl+Y` redoes, and `Ctrl+S` sends the current multiline draft. A bare `Esc` cancels the active model request while keeping the current turn visible. `Ctrl+R`, `Alt+R`, or `Esc` then `R` regenerates the last answer by resending the last user prompt and its managed images. `/pop` removes the last user or assistant message. `Home`/`End` move to the current input line, `Ctrl+Home`/`Ctrl+End` jump to buffer bounds, `PageUp`/`PageDown` page through the input like the editor, `Ctrl+B` and `Ctrl+D` scroll chat history back and forward, and `Alt+Home`/`Alt+End` jump to the oldest history or live bottom. `Ctrl+Q` exits chat mode.
@@ -755,9 +779,13 @@ v0.91 refreshes two late-2026 cutoff benchmark cases (March and April 2026), add
 
 v0.90 unifies chat and editor keyboard shortcuts: `Ctrl+Z`/`Ctrl+U` undo, `Ctrl+Y` redo, `Ctrl+Home`/`Ctrl+End` buffer bounds, and `PageUp`/`PageDown` for in-input paging. Chat mode adds `Ctrl+R` regenerate, `Ctrl+B`/`Ctrl+D` chat-history scroll (for terminals that block `Alt+PageUp`/`Alt+PageDown`), and `Alt+Home`/`Alt+End` jump to thread top/bottom. `PLANS.md` now targets v0.9 work (benchmark cutoff mode, codebase refactor, TUI/CLI polish) before local OpenAI-compatible server mode.
 
+### v0.98 unified reasoning and model catalog
+
+v0.98 replaces the split public thinking controls with `--reasoning` and shared chat/editor `/reasoning` behavior. Layered `models.conf` records model matching, closed provider protocols, selector choices, defaults, temperature capability metadata, and optional purpose presets. Direct named values and exact budgets remain forward-compatible. Chat persists reasoning per thread, the editor remembers its last complete model selection globally, and shared serialization is ready for later surfaces without adding agent functionality.
+
 ### v0.89 reasoning compatibility and editor buffers
 
-v0.89 expands `--thinking` and `--thinking-budget` through a provider compatibility layer instead of using one generic wire shape for every endpoint. This covers OpenAI Chat/Responses, OpenRouter, Gemini, Anthropic Claude through its OpenAI-compatible endpoint, Kimi K2.x, Qwen/DashScope, DeepSeek V4, GLM-5.2/Z.AI, xAI, and the custom/local fallback path. It also adds multiple standalone editor buffers: `Ctrl+O` opens files into buffers, `Ctrl+N` or `/new` opens a new empty buffer, `Ctrl+L` or `/list` switches buffers, and `Ctrl+W` or `/close` closes the active buffer with discard prompts. Native Anthropic Messages support and preservation of provider reasoning state for future agentic tool loops remain follow-up work.
+v0.89 introduced provider-specific reasoning request translation instead of using one generic wire shape for every endpoint. v0.98 supersedes its split public controls with the canonical `--reasoning` selection and catalog-driven protocols. The editor-buffer work from v0.89 remains: `Ctrl+O` opens files into buffers, `Ctrl+N` or `/new` opens a new empty buffer, `Ctrl+L` or `/list` switches buffers, and `Ctrl+W` or `/close` closes the active buffer with discard prompts.
 
 ### v0.88 web search
 
@@ -773,7 +801,7 @@ v0.86 improves TUI readability with compact provider display names (`custom` ins
 
 ### v0.85 model settings notes
 
-v0.85 adds per-thread model settings with CLI flags (`--top-k`, `--min-p`, `--repeat-penalty`, `--presence-penalty`, `--thinking`, `--thinking-budget`, `--purpose`), repeatable `[Model-setting]` presets in `config/ainiux.conf`, TUI `/setting`, `/system`, and `/clone`, and SQLite persistence via `settings_json`. Unset overrides are stored as JSON `null` and use provider defaults; `/setting NAME=NULL` clears a thread override. `thinking_budget` accepts token counts (`8192`) or verbal labels (`high`) and is translated to the active provider's request format when a model call is serialized.
+v0.85 introduced per-thread sampling settings, TUI `/setting`, `/system`, and `/clone`, and SQLite `settings_json` persistence. v0.98 moves its model presets from `config.conf` into optional-field `[preset]` blocks in `models.conf` and stores canonical reasoning as `null`, a string, or an integer.
 
 ### v0.84 refactor notes
 

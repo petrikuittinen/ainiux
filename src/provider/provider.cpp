@@ -1,4 +1,5 @@
 #include "chat/settings.hpp"
+#include "config/model_catalog.hpp"
 #include "provider/names.hpp"
 #include "provider/provider.hpp"
 
@@ -246,414 +247,158 @@ Error validate_header(const std::string& header) {
 
 std::string strip_thinking_blocks_for_request(const std::string& content);
 
-enum class ReasoningWireFormat {
-    None,
-    GenericThinking,
-    AnthropicThinking,
-    OpenAiChatEffort,
-    OpenAiResponsesReasoning,
-    OpenRouterReasoning,
-    GeminiOpenAi,
-    KimiThinking,
-    QwenThinking,
-    DeepSeekThinking,
-    ZaiThinking,
-    XaiReasoningEffort,
-};
-
-long long parse_reasoning_token_budget(const std::string& value) {
-    if (!chat::thinking_budget_is_token_count(value)) {
-        return -1;
-    }
-    try {
-        return std::stoll(value);
-    } catch (const std::exception&) {
-        return -1;
-    }
-}
-
-std::string normalize_reasoning_effort(std::string value) {
-    value = ascii_lower(ascii_trim(std::move(value)));
-    if (value == "off" || value == "false" || value == "disabled" || value == "disable" ||
-        value == "no") {
-        return "none";
-    }
-    if (value == "on" || value == "true" || value == "enabled" || value == "enable" ||
-        value == "yes") {
-        return "medium";
-    }
-    return value;
-}
-
-std::string effort_from_token_budget(long long tokens) {
-    if (tokens <= 0) {
-        return "none";
-    }
-    if (tokens <= 1024) {
-        return "low";
-    }
-    if (tokens <= 8192) {
-        return "medium";
-    }
-    if (tokens <= 24576) {
-        return "high";
-    }
-    return "xhigh";
-}
-
-long long token_budget_from_effort(const std::string& effort) {
-    if (effort == "none") {
-        return 0;
-    }
-    if (effort == "minimal" || effort == "low") {
-        return 1024;
-    }
-    if (effort == "medium") {
-        return 8192;
-    }
-    if (effort == "high") {
-        return 24576;
-    }
-    if (effort == "xhigh" || effort == "max") {
-        return 32768;
-    }
-    return -1;
-}
-
-std::string reasoning_effort_from_options(const cli::Options& o) {
-    if (o.has_thinking_budget) {
-        const long long tokens = parse_reasoning_token_budget(o.thinking_budget);
-        if (tokens >= 0) {
-            return effort_from_token_budget(tokens);
-        }
-        return normalize_reasoning_effort(o.thinking_budget);
-    }
-    if (o.has_enable_thinking) {
-        return o.enable_thinking ? "medium" : "none";
-    }
-    return "";
-}
-
-bool text_contains_any(const std::string& text, const std::vector<std::string>& needles);
-std::string context_model_and_urls(const RequestContext& context);
-
-ReasoningWireFormat reasoning_wire_format_for(const RequestContext& context) {
-    const std::string profile = normalize_provider_key(context.profile.name);
-    const std::string model_and_urls = context_model_and_urls(context);
-    if (profile == names::kNone || context.profile.offline) {
-        return ReasoningWireFormat::None;
-    }
-    if (profile == "openai") {
-        return context.api_kind == ApiKind::Responses ? ReasoningWireFormat::OpenAiResponsesReasoning
-                                                      : ReasoningWireFormat::OpenAiChatEffort;
-    }
-    if (profile == "openrouter") {
-        return ReasoningWireFormat::OpenRouterReasoning;
-    }
-    if (profile == "anthropic") {
-        return ReasoningWireFormat::AnthropicThinking;
-    }
-    if (profile == "gemini") {
-        return ReasoningWireFormat::GeminiOpenAi;
-    }
-    if (profile == "moonshot") {
-        return ReasoningWireFormat::KimiThinking;
-    }
-    if (profile == "qwen" || profile == "dashscope") {
-        return ReasoningWireFormat::QwenThinking;
-    }
-    if (profile == "deepseek") {
-        return ReasoningWireFormat::DeepSeekThinking;
-    }
-    if (profile == "zai") {
-        return ReasoningWireFormat::ZaiThinking;
-    }
-    if (profile == "xai") {
-        return ReasoningWireFormat::XaiReasoningEffort;
-    }
-    if (text_contains_any(model_and_urls, {"api.anthropic.com", "claude-"})) {
-        return ReasoningWireFormat::AnthropicThinking;
-    }
-    if (text_contains_any(model_and_urls, {"generativelanguage.googleapis.com", "gemini-"})) {
-        return ReasoningWireFormat::GeminiOpenAi;
-    }
-    if (text_contains_any(model_and_urls, {"api.moonshot.ai", "platform.kimi.ai", "kimi-k2", "kimi_k2"})) {
-        return ReasoningWireFormat::KimiThinking;
-    }
-    if (text_contains_any(model_and_urls, {"dashscope", "maas.aliyuncs.com", "qwen3.7", "qwen3.6"})) {
-        return ReasoningWireFormat::QwenThinking;
-    }
-    if (text_contains_any(model_and_urls, {"api.deepseek.com", "deepseek-v4", "deepseek_v4"})) {
-        return ReasoningWireFormat::DeepSeekThinking;
-    }
-    if (text_contains_any(model_and_urls, {"api.z.ai", "glm-5.2", "glm_5.2", "zai-org/glm-5.2"})) {
-        return ReasoningWireFormat::ZaiThinking;
-    }
-    if (profile.empty() || profile == names::kCustomOpenAiChat || context.profile.local_endpoint) {
-        return ReasoningWireFormat::GenericThinking;
-    }
-    return ReasoningWireFormat::None;
-}
-
-std::string openai_effort_value(std::string effort) {
-    if (effort == "max") {
-        return "xhigh";
-    }
-    return effort;
-}
-
-std::string gemini_effort_value(std::string effort) {
-    if (effort == "xhigh" || effort == "max") {
-        return "high";
-    }
-    return effort;
-}
-
-std::string xai_effort_value(std::string effort) {
-    if (effort == "minimal") {
-        return "low";
-    }
-    if (effort == "xhigh" || effort == "max") {
-        return "high";
-    }
-    return effort;
-}
-
-std::string deepseek_effort_value(std::string effort) {
-    if (effort == "xhigh" || effort == "max") {
-        return "max";
-    }
-    if (effort == "none") {
-        return "none";
-    }
-    return "high";
-}
-
-std::string anthropic_effort_value(std::string effort) {
-    if (effort == "minimal") {
-        return "low";
-    }
-    if (effort == "none") {
-        return "";
-    }
-    return effort;
-}
-
-std::string zai_effort_value(std::string effort) {
-    if (effort == "xhigh" || effort == "max") {
-        return "max";
-    }
-    if (effort == "low" || effort == "medium") {
-        return "high";
-    }
-    if (effort == "minimal" || effort == "none") {
-        return "none";
-    }
-    return effort;
-}
 
 std::string append_pair(std::string fields, const std::string& key, const std::string& value_json) {
-    if (!fields.empty()) {
-        fields += ",";
-    }
-    fields += json::quote(key);
-    fields += ":";
-    fields += value_json;
+    if (!fields.empty()) fields += ",";
+    fields += json::quote(key) + ":" + value_json;
     return fields;
 }
 
-bool text_contains_any(const std::string& text, const std::vector<std::string>& needles) {
-    for (const std::string& needle : needles) {
-        if (text.find(needle) != std::string::npos) {
-            return true;
-        }
+std::string reasoning_scalar_json(const ReasoningSelection& selection) {
+    if (selection.kind == ReasoningSelectionKind::TokenBudget) {
+        return std::to_string(selection.tokens);
     }
-    return false;
+    return json::quote(selection.value);
 }
 
-bool kimi_model_has_forced_thinking(const std::string& model) {
-    const std::string text = ascii_lower(model);
-    return text.find("kimi-k2.7") != std::string::npos ||
-           text.find("kimi_k2.7") != std::string::npos;
+ReasoningProtocol fallback_reasoning_protocol(const RequestContext& context) {
+    const std::string profile = normalize_provider_key(context.profile.name);
+    if (profile == names::kNone || context.profile.offline) return ReasoningProtocol::None;
+    if (profile == names::kOpenAi) return ReasoningProtocol::OpenAiEffort;
+    if (profile == "openrouter") return ReasoningProtocol::OpenRouter;
+    if (profile == "anthropic") return ReasoningProtocol::AnthropicBudget;
+    if (profile == "gemini") return ReasoningProtocol::GeminiEffort;
+    if (profile == "moonshot") return ReasoningProtocol::KimiEffort;
+    if (profile == "qwen" || profile == "dashscope") {
+        return context.api_kind == ApiKind::Responses ? ReasoningProtocol::QwenResponses
+                                                      : ReasoningProtocol::QwenChat;
+    }
+    if (profile == "deepseek") return ReasoningProtocol::DeepSeek;
+    if (profile == "zai") return ReasoningProtocol::Zai;
+    if (profile == "xai") return ReasoningProtocol::XaiEffort;
+    if (profile.empty() || profile == names::kCustomOpenAiChat || context.profile.local_endpoint) {
+        return ReasoningProtocol::GenericThinking;
+    }
+    return ReasoningProtocol::None;
 }
 
-std::string context_model_and_urls(const RequestContext& context) {
-    return ascii_lower(context.options.model + " " + context.base_url + " " +
-                       context.chat_url + " " + context.responses_url);
+const ModelCapability* matched_model_capability_impl(const RequestContext& context) {
+    const std::string api = context.api_kind == ApiKind::Responses ? "responses" : "chat";
+    return config::resolve_model_capability(context.options.model_catalog,
+                                            context.profile.name,
+                                            api,
+                                            context.options.model);
 }
 
-std::string qwen_reasoning_fields_json(const cli::Options& o) {
-    std::string fields;
-    const std::string effort = reasoning_effort_from_options(o);
-    const long long explicit_tokens =
-        o.has_thinking_budget ? parse_reasoning_token_budget(o.thinking_budget) : -1;
-
-    if (o.has_enable_thinking || o.has_thinking_budget) {
-        bool enabled = true;
-        if (o.has_enable_thinking) {
-            enabled = o.enable_thinking;
-        }
-        if (effort == "none" || explicit_tokens == 0) {
-            enabled = false;
-        }
-        fields = append_pair(fields, "enable_thinking", enabled ? "true" : "false");
+ReasoningProtocol reasoning_protocol_for(const RequestContext& context) {
+    // A router's wire format is determined by the transport even when the
+    // matched catalog entry describes the model's native provider.
+    if (normalize_provider_key(context.profile.name) == "openrouter") {
+        return ReasoningProtocol::OpenRouter;
     }
-
-    if (explicit_tokens > 0) {
-        fields = append_pair(fields, "thinking_budget", std::to_string(explicit_tokens));
-    } else if (explicit_tokens < 0 && !effort.empty()) {
-        const long long mapped_tokens = token_budget_from_effort(effort);
-        if (mapped_tokens > 0) {
-            fields = append_pair(fields, "thinking_budget", std::to_string(mapped_tokens));
-        }
-    }
-    return fields;
+    const ModelCapability* capability = matched_model_capability_impl(context);
+    return capability == nullptr ? fallback_reasoning_protocol(context)
+                                 : capability->reasoning_protocol;
 }
 
-std::string anthropic_reasoning_fields_json(const cli::Options& o) {
-    const std::string effort = reasoning_effort_from_options(o);
-    const long long explicit_tokens =
-        o.has_thinking_budget ? parse_reasoning_token_budget(o.thinking_budget) : -1;
-    std::string fields;
-
-    if (explicit_tokens == 0 || effort == "none" || (o.has_enable_thinking && !o.enable_thinking)) {
-        return append_pair(fields, "thinking", "{\"type\":\"disabled\"}");
-    }
-    if (explicit_tokens > 0) {
-        return append_pair(fields,
-                           "thinking",
-                           "{\"type\":\"enabled\",\"budget_tokens\":" +
-                               std::to_string(explicit_tokens) + "}");
-    }
-
-    fields = append_pair(fields, "thinking", "{\"type\":\"adaptive\"}");
-    const std::string claude_effort = anthropic_effort_value(effort.empty() ? "medium" : effort);
-    if (!claude_effort.empty()) {
-        fields = append_pair(fields, "output_config", "{\"effort\":" + json::quote(claude_effort) + "}");
-    }
-    return fields;
+std::string reasoning_effort_object(const ReasoningSelection& selection) {
+    return "{\"effort\":" + reasoning_scalar_json(selection) + "}";
 }
 
-std::string kimi_reasoning_fields_json(const RequestContext& context) {
-    const cli::Options& o = context.options;
-    if (kimi_model_has_forced_thinking(o.model)) {
-        return "";
-    }
-
-    const std::string effort = reasoning_effort_from_options(o);
-    const long long explicit_tokens =
-        o.has_thinking_budget ? parse_reasoning_token_budget(o.thinking_budget) : -1;
-    if (explicit_tokens == 0 || effort == "none" || (o.has_enable_thinking && !o.enable_thinking)) {
-        return "\"thinking\":{\"type\":\"disabled\"}";
-    }
-    return "\"thinking\":{\"type\":\"enabled\"}";
-}
-
-std::string zai_reasoning_fields_json(const cli::Options& o) {
-    const std::string effort = reasoning_effort_from_options(o);
-    const long long explicit_tokens =
-        o.has_thinking_budget ? parse_reasoning_token_budget(o.thinking_budget) : -1;
-    std::string fields;
-
-    if (explicit_tokens == 0 || effort == "none" || (o.has_enable_thinking && !o.enable_thinking)) {
-        return append_pair(fields, "thinking", "{\"type\":\"disabled\"}");
-    }
-    fields = append_pair(fields, "thinking", "{\"type\":\"enabled\"}");
-    if (!effort.empty()) {
-        fields = append_pair(fields, "reasoning_effort", json::quote(zai_effort_value(effort)));
-    }
-    return fields;
-}
-
-std::string generic_reasoning_fields_json(const cli::Options& o) {
-    std::string fields;
-    if (o.has_enable_thinking) {
-        fields = append_pair(fields, "enable_thinking", o.enable_thinking ? "true" : "false");
-    }
-    if (o.has_thinking_budget) {
-        if (chat::thinking_budget_is_token_count(o.thinking_budget)) {
-            fields = append_pair(fields, "thinking_budget", o.thinking_budget);
-        } else {
-            fields = append_pair(fields, "thinking_budget", json::quote(o.thinking_budget));
-        }
-    }
-    return fields;
+bool reasoning_selection_is_plain_enable(const ReasoningSelection& selection) {
+    if (selection.kind != ReasoningSelectionKind::Named) return false;
+    const std::string value = ascii_lower(selection.value);
+    return value == "enabled" || value == "enable" || value == "on" ||
+           value == "true" || value == "yes";
 }
 
 std::string reasoning_fields_json(const RequestContext& context) {
-    const cli::Options& o = context.options;
-    if (!o.has_enable_thinking && !o.has_thinking_budget) {
-        return "";
-    }
-
-    const ReasoningWireFormat format = reasoning_wire_format_for(context);
-    const std::string effort = reasoning_effort_from_options(o);
-    const long long tokens =
-        o.has_thinking_budget ? parse_reasoning_token_budget(o.thinking_budget) : -1;
+    const ReasoningSelection& selection = context.options.reasoning;
+    if (selection.is_auto()) return {};
+    const bool disabled = config::reasoning_selection_disables(selection);
+    const std::string scalar = reasoning_scalar_json(selection);
     std::string fields;
-
-    switch (format) {
-        case ReasoningWireFormat::None:
-            return "";
-        case ReasoningWireFormat::GenericThinking:
-            return generic_reasoning_fields_json(o);
-        case ReasoningWireFormat::AnthropicThinking:
-            return anthropic_reasoning_fields_json(o);
-        case ReasoningWireFormat::OpenAiChatEffort:
-            if (!effort.empty()) {
-                fields = append_pair(fields, "reasoning_effort", json::quote(openai_effort_value(effort)));
+    switch (reasoning_protocol_for(context)) {
+        case ReasoningProtocol::None:
+            return {};
+        case ReasoningProtocol::GenericThinking:
+            fields = append_pair(fields, "enable_thinking", disabled ? "false" : "true");
+            return append_pair(fields, "thinking_budget", scalar);
+        case ReasoningProtocol::OpenAiEffort:
+            if (context.api_kind == ApiKind::Responses) {
+                return append_pair(fields, "reasoning", reasoning_effort_object(selection));
+            }
+            return append_pair(fields, "reasoning_effort", scalar);
+        case ReasoningProtocol::OpenRouter:
+            if (selection.kind == ReasoningSelectionKind::TokenBudget) {
+                return append_pair(fields, "reasoning", "{\"max_tokens\":" + scalar + "}");
+            }
+            return append_pair(fields, "reasoning", reasoning_effort_object(selection));
+        case ReasoningProtocol::GeminiEffort:
+        case ReasoningProtocol::KimiEffort:
+            return append_pair(fields, "reasoning_effort", scalar);
+        case ReasoningProtocol::XaiEffort:
+            return append_pair(fields, "reasoning", reasoning_effort_object(selection));
+        case ReasoningProtocol::GeminiThinkingLevel:
+            return append_pair(fields,
+                               "generation_config",
+                               "{\"thinking_level\":" + scalar + "}");
+        case ReasoningProtocol::GemmaThinkingLevel:
+            return append_pair(fields,
+                               "generationConfig",
+                               "{\"thinkingConfig\":{\"thinkingLevel\":" + scalar + "}}");
+        case ReasoningProtocol::AnthropicBudget:
+            if (disabled) return append_pair(fields, "thinking", "{\"type\":\"disabled\"}");
+            return append_pair(fields,
+                               "thinking",
+                               "{\"type\":\"enabled\",\"budget_tokens\":" + scalar + "}");
+        case ReasoningProtocol::ThinkingToggle:
+            return append_pair(
+                fields,
+                "thinking",
+                "{\"type\":" +
+                    json::quote(disabled ? "disabled"
+                                         : selection.kind == ReasoningSelectionKind::Named &&
+                                                   selection.value != "enabled" &&
+                                                   selection.value != "on"
+                                               ? selection.value
+                                               : "enabled") +
+                    "}");
+        case ReasoningProtocol::QwenChat:
+            fields = append_pair(fields, "enable_thinking", disabled ? "false" : "true");
+            if (!disabled && !reasoning_selection_is_plain_enable(selection) &&
+                (selection.kind == ReasoningSelectionKind::TokenBudget ||
+                 selection.kind == ReasoningSelectionKind::Named)) {
+                fields = append_pair(fields, "thinking_budget", scalar);
             }
             return fields;
-        case ReasoningWireFormat::OpenAiResponsesReasoning:
-            if (!effort.empty()) {
-                fields = append_pair(fields,
-                                     "reasoning",
-                                     "{\"effort\":" + json::quote(openai_effort_value(effort)) + "}");
-            }
+        case ReasoningProtocol::QwenResponses:
+        case ReasoningProtocol::MiniMaxResponses:
+            return append_pair(fields, "reasoning", reasoning_effort_object(selection));
+        case ReasoningProtocol::DeepSeek:
+        case ReasoningProtocol::Zai:
+            fields = append_pair(fields,
+                                 "thinking",
+                                 std::string("{\"type\":\"") +
+                                     (disabled ? "disabled" : "enabled") + "\"}");
+            if (!disabled) fields = append_pair(fields, "reasoning_effort", scalar);
             return fields;
-        case ReasoningWireFormat::OpenRouterReasoning:
-            if (tokens == 0 || effort == "none") {
-                fields = append_pair(fields, "reasoning", "{\"effort\":\"none\"}");
-            } else if (tokens > 0) {
-                fields = append_pair(fields, "reasoning", "{\"max_tokens\":" + std::to_string(tokens) + "}");
-            } else if (!effort.empty()) {
-                fields = append_pair(fields, "reasoning", "{\"effort\":" + json::quote(effort) + "}");
-            } else if (o.has_enable_thinking && o.enable_thinking) {
-                fields = append_pair(fields, "reasoning", "{\"enabled\":true}");
+        case ReasoningProtocol::NemotronTemplate:
+            fields = "\"chat_template_kwargs\":{\"enable_thinking\":";
+            fields += disabled ? "false" : "true";
+            if (!disabled && !reasoning_selection_is_plain_enable(selection) &&
+                (selection.kind == ReasoningSelectionKind::TokenBudget ||
+                 selection.kind == ReasoningSelectionKind::Named)) {
+                fields += ",\"reasoning_budget\":" + scalar;
             }
+            fields += "}";
             return fields;
-        case ReasoningWireFormat::GeminiOpenAi:
-            if (!effort.empty()) {
-                fields =
-                    append_pair(fields, "reasoning_effort", json::quote(gemini_effort_value(effort)));
-            }
-            return fields;
-        case ReasoningWireFormat::KimiThinking:
-            return kimi_reasoning_fields_json(context);
-        case ReasoningWireFormat::QwenThinking:
-            return qwen_reasoning_fields_json(o);
-        case ReasoningWireFormat::DeepSeekThinking: {
-            if (effort == "none" || tokens == 0 || (o.has_enable_thinking && !o.enable_thinking)) {
-                fields = append_pair(fields, "thinking", "{\"type\":\"disabled\"}");
-                return fields;
-            }
-            fields = append_pair(fields, "thinking", "{\"type\":\"enabled\"}");
-            if (!effort.empty()) {
-                fields = append_pair(fields,
-                                     "reasoning_effort",
-                                     json::quote(deepseek_effort_value(effort)));
-            }
-            return fields;
-        }
-        case ReasoningWireFormat::ZaiThinking:
-            return zai_reasoning_fields_json(o);
-        case ReasoningWireFormat::XaiReasoningEffort:
-            if (!effort.empty()) {
-                fields = append_pair(fields, "reasoning_effort", json::quote(xai_effort_value(effort)));
-            }
-            return fields;
+        case ReasoningProtocol::Hy3Template:
+            return append_pair(fields,
+                               "extra_body",
+                               "{\"chat_template_kwargs\":{\"reasoning_effort\":" + scalar + "}}");
     }
-    return "";
+    return {};
 }
 
 void append_sampling_fields(std::ostringstream& json, const cli::Options& o) {
@@ -2390,6 +2135,16 @@ http::Request base_http_request(const RequestContext& context,
 }
 
 }  // namespace
+
+const ModelCapability* matched_model_capability(const RequestContext& context) {
+    return matched_model_capability_impl(context);
+}
+
+std::string reasoning_temperature_advisory(const RequestContext& context) {
+    return config::temperature_advisory(matched_model_capability_impl(context),
+                                        context.options.reasoning,
+                                        context.options.has_temperature);
+}
 
 std::string normalize_base_url(const std::string& url, bool* changed, Error& error) {
     error = ok_error();

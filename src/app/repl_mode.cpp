@@ -5,6 +5,7 @@
 #include <utility>
 #include <vector>
 
+#include "chat/settings.hpp"
 #include "fetch/fetch.hpp"
 #include "input/input.hpp"
 #include "search/search.hpp"
@@ -17,7 +18,8 @@ using InputKind = input::Kind;
 
 void print_repl_help() {
     std::cerr << "Commands: /help, /quit, /exit, /save [PATH], /load PATH, /insert FILE_OR_URL, /attach PATH, "
-                 "/fetch URL, /search QUERY, /clear, /system TEXT, /model MODEL\n";
+                 "/fetch URL, /search QUERY, /clear, /system TEXT, /model MODEL, "
+                 "/reasoning auto|VALUE|TOKENS\n";
 }
 
 bool allowed_for_read_only_session(const std::string& text) {
@@ -114,6 +116,47 @@ int run_repl(provider::RequestContext context, chat::Session session, std::ostre
                 session.model = model;
                 if (!context.options.quiet) {
                     std::cerr << "Model set to " << model << "\n";
+                }
+                continue;
+            }
+            if (text == "/reasoning" || text.rfind("/reasoning ", 0) == 0) {
+                const std::string requested = detail::trim_ascii(text.substr(10));
+                if (requested.empty()) {
+                    std::cerr << "Usage: /reasoning auto|VALUE|TOKENS\n";
+                    continue;
+                }
+                ReasoningSelection selection;
+                Error err = config::parse_reasoning_selection(requested, selection);
+                if (!err.ok()) {
+                    print_error(err);
+                    continue;
+                }
+                const std::string warning = config::reasoning_catalog_warning(
+                    context.options.model_catalog,
+                    context.profile.name,
+                    context.api_kind == provider::ApiKind::Responses ? "responses" : "chat",
+                    context.options.model,
+                    selection);
+                if (!warning.empty()) {
+                    std::cerr << "Warning: " << warning << ". Proceed? [y/N] ";
+                    std::string answer;
+                    if (!std::getline(std::cin, answer) ||
+                        (ascii_lower(detail::trim_ascii(answer)) != "y" &&
+                         ascii_lower(detail::trim_ascii(answer)) != "yes")) {
+                        std::cerr << "Reasoning change cancelled.\n";
+                        continue;
+                    }
+                }
+                err = chat::apply_chat_setting(context.options, "reasoning", requested);
+                if (!err.ok()) {
+                    print_error(err);
+                    continue;
+                }
+                refresh_session_metadata(session, context);
+                if (!context.options.quiet) {
+                    std::cerr << "Reasoning set to "
+                              << config::reasoning_selection_value(context.options.reasoning)
+                              << "\n";
                 }
                 continue;
             }

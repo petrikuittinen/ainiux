@@ -52,7 +52,7 @@ void render(const chat::Session& session,
                      : history_lines_for_session(session, cols, show_thinking_traces, activity_kind,
                                                  activity_frame, syntax_highlight);
     const bool picker_top_aligned = mode == TuiMode::ThreadList || mode == TuiMode::ProviderList ||
-                                    mode == TuiMode::ModelList;
+                                    mode == TuiMode::ModelList || mode == TuiMode::ReasoningList;
     const int max_history_scroll = std::max(0, static_cast<int>(history.size()) - layout.history_rows);
     history_scroll = std::min(std::max(0, history_scroll), max_history_scroll);
 

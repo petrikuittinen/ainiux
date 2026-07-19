@@ -7,6 +7,7 @@
 #include "app/app.hpp"
 #include "app/interactive_mode.hpp"
 #include "chat/session.hpp"
+#include "chat/sqlite_store.hpp"
 #include "cli/args.hpp"
 #include "config/config.hpp"
 #include "editor/ai_continue.hpp"
@@ -15,6 +16,7 @@
 #include "json/json.hpp"
 #include "ainiux/version.hpp"
 #include "provider/provider.hpp"
+#include "provider/model_selection.hpp"
 #include "search/search.hpp"
 #include "tui/tui.hpp"
 
@@ -85,12 +87,74 @@ int main(int argc, char** argv) {
         ainiux::app::print_error(configured.error);
         return ainiux::app::exit_code_for(configured.error.code);
     }
+    if (parsed.options.editor) {
+        ainiux::chat::SqliteStore state_store;
+        const ainiux::Error open_error = state_store.open_default();
+        if (open_error.ok()) {
+            std::string saved;
+            bool found = false;
+            const ainiux::Error state_error =
+                state_store.app_state("editor_model_selection", saved, found);
+            if (state_error.ok() && found) {
+                ainiux::provider::ModelSelection selection;
+                const ainiux::Error parse_error =
+                    ainiux::provider::parse_model_selection(saved, selection);
+                if (parse_error.ok() &&
+                    ainiux::provider::can_restore_model_selection(configured.options,
+                                                                  selection)) {
+                    ainiux::provider::apply_model_selection(configured.options, selection);
+                } else if (parse_error.ok() && parsed.options.debug && !parsed.options.quiet) {
+                    std::cerr << "Config debug: ignored editor model selection because its "
+                                 "provider/API endpoint is no longer configured\n";
+                } else if (parsed.options.debug && !parsed.options.quiet) {
+                    std::cerr << "Config debug: ignored invalid editor model selection: "
+                              << parse_error.message << "\n";
+                }
+            }
+        } else if (parsed.options.debug && !parsed.options.quiet) {
+            std::cerr << "Config debug: editor model selection unavailable: "
+                      << open_error.message << "\n";
+        }
+    }
     parsed = ainiux::cli::parse_args(argc, argv, configured.options);
     if (!parsed.error.ok()) {
         ainiux::app::print_error(parsed.error);
         return ainiux::app::exit_code_for(parsed.error.code);
     }
     ainiux::cli::Options options = parsed.options;
+    bool positional_target_changed = false;
+    if (!options.positional_url.empty()) {
+        if (ainiux::provider::looks_like_api_url(options.positional_url)) {
+            ainiux::Error target_error;
+            ainiux::Error configured_error;
+            const std::string target = ainiux::provider::normalize_base_url(
+                options.positional_url, nullptr, target_error);
+            const std::string configured_target = configured.options.base_url.empty()
+                                                      ? std::string{}
+                                                      : ainiux::provider::normalize_base_url(
+                                                            configured.options.base_url,
+                                                            nullptr,
+                                                            configured_error);
+            positional_target_changed =
+                !target_error.ok() || !configured_error.ok() ||
+                configured_target.empty() || target != configured_target;
+        } else {
+            positional_target_changed =
+                ainiux::provider::canonical_profile_name(options.positional_url) !=
+                ainiux::provider::canonical_profile_name(configured.options.provider);
+        }
+    }
+    const bool explicit_target_changed =
+        positional_target_changed ||
+        (options.provider_explicit &&
+         ainiux::provider::canonical_profile_name(options.provider) !=
+             ainiux::provider::canonical_profile_name(configured.options.provider)) ||
+        (options.model_explicit && options.model != configured.options.model) ||
+        (options.api_explicit && options.api != configured.options.api);
+    if (explicit_target_changed && !options.reasoning_cli_explicit) {
+        options.reasoning = ainiux::ReasoningSelection::automatic();
+        options.reasoning_explicit = true;
+    }
     if (options.benchmark && options.grade) {
         ainiux::app::print_error({ainiux::ErrorCode::BadArgs,
                                   "--benchmark and --grade cannot be combined"});
@@ -243,6 +307,11 @@ int main(int argc, char** argv) {
             return ainiux::app::exit_code_for(context_result.error.code);
         }
         ainiux::provider::RequestContext editor_context = std::move(context_result.context);
+        const std::string temperature_advisory =
+            ainiux::provider::reasoning_temperature_advisory(editor_context);
+        if (!temperature_advisory.empty() && !options.quiet) {
+            std::cerr << "Warning: " << temperature_advisory << ".\n";
+        }
         std::optional<ainiux::editor::AiContinueContext> ai_continue;
         if (!editor_context.profile.offline) {
             ainiux::editor::AiContinueContext configured;

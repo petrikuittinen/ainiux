@@ -169,8 +169,8 @@ class Handler(BaseHTTPRequestHandler):
         if responses:
             if last != "expect-openai-responses-reasoning":
                 return True
-            if request.get("reasoning") != {"effort": "medium"}:
-                return self._fail_validation("openai responses: expected reasoning.effort=medium")
+            if request.get("reasoning") != {"effort": 4096}:
+                return self._fail_validation("openai responses: expected exact reasoning.effort=4096")
             return self._forbid_fields(
                 request,
                 ["reasoning_effort", "thinking", "enable_thinking", "thinking_budget"],
@@ -206,26 +206,26 @@ class Handler(BaseHTTPRequestHandler):
                 "anthropic",
             )
         if last == "expect-gemini-reasoning":
-            if request.get("reasoning_effort") != "medium":
-                return self._fail_validation("gemini: expected reasoning_effort=medium")
+            if request.get("reasoning_effort") != 4096:
+                return self._fail_validation("gemini: expected exact reasoning_effort=4096")
             return self._forbid_fields(
                 request,
                 ["reasoning", "extra_body", "thinking", "enable_thinking", "thinking_budget"],
                 "gemini",
             )
         if last == "expect-kimi-thinking":
-            if request.get("thinking") != {"type": "disabled"}:
-                return self._fail_validation("kimi: expected thinking disabled")
+            if request.get("reasoning_effort") != "off":
+                return self._fail_validation("kimi: expected reasoning_effort=off")
             return self._forbid_fields(
                 request,
-                ["reasoning", "reasoning_effort", "enable_thinking", "thinking_budget"],
+                ["reasoning", "thinking", "enable_thinking", "thinking_budget"],
                 "kimi",
             )
         if last == "expect-deepseek-v4-thinking":
             if request.get("thinking") != {"type": "enabled"}:
                 return self._fail_validation("deepseek: expected thinking enabled")
-            if request.get("reasoning_effort") != "max":
-                return self._fail_validation("deepseek: expected reasoning_effort=max")
+            if request.get("reasoning_effort") != "xhigh":
+                return self._fail_validation("deepseek: expected reasoning_effort=xhigh")
             return self._forbid_fields(
                 request,
                 ["reasoning", "enable_thinking", "thinking_budget"],
@@ -234,8 +234,8 @@ class Handler(BaseHTTPRequestHandler):
         if last == "expect-qwen-thinking":
             if request.get("enable_thinking") is not True:
                 return self._fail_validation("qwen: expected enable_thinking=true")
-            if request.get("thinking_budget") != 24576:
-                return self._fail_validation("qwen: expected thinking_budget=24576")
+            if request.get("thinking_budget") != "high":
+                return self._fail_validation("qwen: expected unmodified thinking_budget=high")
             return self._forbid_fields(
                 request,
                 ["reasoning", "reasoning_effort", "thinking"],
@@ -244,8 +244,8 @@ class Handler(BaseHTTPRequestHandler):
         if last == "expect-glm-thinking":
             if request.get("thinking") != {"type": "enabled"}:
                 return self._fail_validation("glm: expected thinking enabled")
-            if request.get("reasoning_effort") != "max":
-                return self._fail_validation("glm: expected reasoning_effort=max")
+            if request.get("reasoning_effort") != "xhigh":
+                return self._fail_validation("glm: expected reasoning_effort=xhigh")
             return self._forbid_fields(
                 request,
                 ["reasoning", "enable_thinking", "thinking_budget"],

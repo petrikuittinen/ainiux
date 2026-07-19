@@ -3,6 +3,7 @@
 #include "chat/generation_settings.hpp"
 #include "cli/option_values.hpp"
 #include "context/policy.hpp"
+#include "config/model_catalog.hpp"
 #include "editor/autosave.hpp"
 #include "editor/editor_prompts.hpp"
 #include "ainiux/model_setting.hpp"
@@ -17,6 +18,7 @@
 #include <fstream>
 #include <limits>
 #include <locale>
+#include <regex>
 #include <sstream>
 #include <utility>
 
@@ -423,7 +425,8 @@ class Parser {
     std::map<std::string, size_t> repeatable_section_current_instance_;
 
     static bool is_repeatable_section(const std::string& name) {
-        return name == "command" || name == "Model-setting" || name == "theme";
+        return name == "command" || name == "theme" || name == "model" ||
+               name == "preset";
     }
 
     Error parse_multiline_quoted(size_t opening_offset,
@@ -1307,188 +1310,253 @@ std::vector<std::string> config_paths_from_dirs(const std::string& dirs, const c
     return std::vector<std::string>(priority_order.rbegin(), priority_order.rend());
 }
 
-void merge_model_setting(std::vector<ModelSetting>& settings, ModelSetting setting) {
-    for (ModelSetting& existing : settings) {
-        if (existing.model == setting.model && existing.purpose == setting.purpose) {
-            existing = std::move(setting);
-            return;
-        }
+bool repeatable_entry_parts(const std::string& name,
+                            const std::string& section,
+                            size_t& index,
+                            std::string& key) {
+    const std::string prefix = section + ".";
+    if (name.rfind(prefix, 0) != 0) return false;
+    const std::string tail = name.substr(prefix.size());
+    const size_t dot = tail.find('.');
+    if (dot == std::string::npos) return false;
+    try {
+        index = static_cast<size_t>(std::stoull(tail.substr(0, dot)));
+    } catch (const std::exception&) {
+        return false;
     }
-    settings.push_back(std::move(setting));
+    key = tail.substr(dot + 1);
+    return true;
 }
 
-Error apply_configured_model_settings(const Document& document, cli::Options& candidate) {
-    struct PartialModelSetting {
-        std::optional<std::string> model;
-        std::optional<std::string> purpose;
-        std::optional<std::string> default_system_prompt;
-        std::optional<double> temperature;
-        std::optional<int> top_k;
-        std::optional<double> top_p;
-        std::optional<double> min_p;
-        std::optional<double> repeat_penalty;
-        std::optional<double> presence_penalty;
-        std::optional<std::string> thinking_budget;
+Error catalog_required(const SourceLocation& source,
+                       const std::string& section,
+                       const char* field) {
+    return {ErrorCode::Config,
+            source.path + ":" + std::to_string(source.line) + ":" +
+                std::to_string(source.column) + ": invalid config setting [" + section +
+                "]: " + field + " is required"};
+}
+
+Error reasoning_selection_entry(const Entry& entry,
+                                ReasoningSelection& selection,
+                                bool allow_auto = false) {
+    std::string text;
+    if (entry.value.is_integer()) {
+        if (entry.value.integer < 0) {
+            return schema_error(entry, "reasoning token budget must be non-negative");
+        }
+        text = std::to_string(entry.value.integer);
+    } else if (entry.value.is_string()) {
+        text = entry.value.string;
+    } else {
+        return schema_error(entry, "reasoning must be an ASCII value or integer token budget");
+    }
+    Error err = parse_reasoning_selection(text, selection, allow_auto);
+    return err.ok() ? err : schema_error(entry, err.message);
+}
+
+Error reasoning_options_entry(const Entry& entry,
+                              std::vector<ReasoningSelection>& options) {
+    Error err = require_type(entry, Value::Type::String);
+    if (!err.ok()) return err;
+
+    options.clear();
+    size_t begin = 0;
+    while (begin <= entry.value.string.size()) {
+        const size_t separator = entry.value.string.find('|', begin);
+        const size_t end = separator == std::string::npos
+                               ? entry.value.string.size()
+                               : separator;
+        const std::string token =
+            trim_config_ascii(entry.value.string.substr(begin, end - begin));
+        if (token.empty()) {
+            return schema_error(entry,
+                                "reasoning values must be separated by | and must not be empty");
+        }
+        ReasoningSelection selection;
+        err = parse_reasoning_selection(token, selection, false);
+        if (!err.ok()) return schema_error(entry, err.message);
+        if (std::find(options.begin(), options.end(), selection) != options.end()) {
+            return schema_error(entry, "duplicate reasoning value " + token);
+        }
+        options.push_back(std::move(selection));
+        if (separator == std::string::npos) break;
+        begin = separator + 1;
+    }
+    return ok_error();
+}
+
+template <typename T, typename Predicate>
+void erase_matching(std::vector<T>& values, Predicate predicate) {
+    values.erase(std::remove_if(values.begin(), values.end(), predicate), values.end());
+}
+
+Error apply_configured_model_catalog(const Document& document, cli::Options& candidate) {
+    struct PartialModel {
+        std::optional<std::string> id;
+        std::string provider = "any";
+        std::string api = "any";
+        std::optional<std::string> regex;
+        int priority = 0;
+        std::optional<ReasoningProtocol> protocol;
+        std::optional<ReasoningSelection> reasoning_default;
+        std::vector<ReasoningSelection> reasoning_options;
+        TemperatureSupport temperature = TemperatureSupport::Unknown;
+        bool enabled = true;
+        SourceLocation source;
+    };
+    struct PartialPreset {
+        ModelSetting preset;
+        bool have_model_id = false;
+        bool have_purpose = false;
         SourceLocation source;
     };
 
-    std::map<size_t, PartialModelSetting> partial_settings;
+    std::map<size_t, PartialModel> models;
+    std::map<size_t, PartialPreset> presets;
     for (const auto& item : document.entries) {
-        const std::string& name = item.first;
-        if (name.rfind("Model-setting.", 0) != 0) {
-            continue;
-        }
-        const std::string tail = name.substr(std::string("Model-setting.").size());
-        const size_t dot = tail.find('.');
-        if (dot == std::string::npos) {
-            continue;
-        }
-        size_t index = 0;
-        try {
-            index = static_cast<size_t>(std::stoul(tail.substr(0, dot)));
-        } catch (const std::exception&) {
-            continue;
-        }
-        const std::string key = tail.substr(dot + 1);
-        PartialModelSetting& partial = partial_settings[index];
-        if (partial.source.path.empty()) {
-            partial.source = item.second.source;
-        }
         const Entry& entry = item.second;
-        if (key == "model") {
-            Error err = require_type(entry, Value::Type::String);
-            if (!err.ok()) {
-                return err;
-            }
-            if (entry.value.string.empty()) {
-                return schema_error(entry, "model must not be empty");
-            }
-            partial.model = entry.value.string;
-        } else if (key == "purpose") {
-            std::string purpose;
-            Error err = enum_string(entry,
-                                    chat::generation::chat_purpose_strings(),
-                                    purpose,
-                                    chat::generation::chat_purpose_description());
-            if (!err.ok()) {
-                return err;
-            }
-            partial.purpose = std::move(purpose);
-        } else if (key == "default_system_prompt") {
-            Error err = require_type(entry, Value::Type::String);
-            if (!err.ok()) {
-                return err;
-            }
-            partial.default_system_prompt = entry.value.string;
-        } else if (key == chat::generation::kTemperature) {
-            double value = 0.0;
-            Error err = numeric_double(entry, value);
-            if (!err.ok()) {
-                return err;
-            }
-            partial.temperature = value;
-        } else if (key == chat::generation::kTopK) {
-            int value = 0;
-            Error err = nonnegative_int(entry, value);
-            if (!err.ok()) {
-                return err;
-            }
-            partial.top_k = value;
-        } else if (key == chat::generation::kTopP) {
-            double value = 0.0;
-            Error err = numeric_double(entry, value);
-            if (!err.ok()) {
-                return err;
-            }
-            partial.top_p = value;
-        } else if (key == chat::generation::kMinP) {
-            double value = 0.0;
-            Error err = numeric_double(entry, value);
-            if (!err.ok()) {
-                return err;
-            }
-            partial.min_p = value;
-        } else if (key == chat::generation::kRepeatPenalty) {
-            double value = 0.0;
-            Error err = numeric_double(entry, value);
-            if (!err.ok()) {
-                return err;
-            }
-            partial.repeat_penalty = value;
-        } else if (key == chat::generation::kPresencePenalty) {
-            double value = 0.0;
-            Error err = numeric_double(entry, value);
-            if (!err.ok()) {
-                return err;
-            }
-            partial.presence_penalty = value;
-        } else if (key == chat::generation::kThinkingBudget) {
-            if (entry.value.is_string()) {
-                if (entry.value.string.empty()) {
-                    return schema_error(entry, "thinking_budget must not be empty");
+        size_t index = 0;
+        std::string key;
+        if (repeatable_entry_parts(item.first, "model", index, key)) {
+            PartialModel& partial = models[index];
+            if (partial.source.path.empty()) partial.source = entry.source;
+            if (key == "id" || key == "provider" || key == "api" || key == "model") {
+                Error err = require_type(entry, Value::Type::String);
+                if (!err.ok()) return err;
+                if (entry.value.string.empty()) return schema_error(entry, key + " must not be empty");
+                if (key == "id") partial.id = entry.value.string;
+                else if (key == "provider") partial.provider = entry.value.string;
+                else if (key == "api") {
+                    const std::string api = lower_config_ascii(entry.value.string);
+                    if (api != "any" && api != "chat" && api != "responses") {
+                        return schema_error(entry, "api must be any, chat, or responses");
+                    }
+                    partial.api = api;
+                } else partial.regex = entry.value.string;
+            } else if (key == "value") {
+                Error err = reasoning_options_entry(entry, partial.reasoning_options);
+                if (!err.ok()) return err;
+            } else if (key == "priority") {
+                Error err = require_type(entry, Value::Type::Integer);
+                if (!err.ok()) return err;
+                if (entry.value.integer < std::numeric_limits<int>::min() ||
+                    entry.value.integer > std::numeric_limits<int>::max()) {
+                    return schema_error(entry, "priority is outside the supported integer range");
                 }
-                partial.thinking_budget = entry.value.string;
-            } else if (entry.value.is_integer()) {
-                if (entry.value.integer < 0) {
-                    return schema_error(entry, "thinking_budget token count must be non-negative");
+                partial.priority = static_cast<int>(entry.value.integer);
+            } else if (key == "reasoning_protocol") {
+                Error err = require_type(entry, Value::Type::String);
+                if (!err.ok()) return err;
+                ReasoningProtocol protocol;
+                if (!parse_reasoning_protocol(entry.value.string, protocol)) {
+                    return schema_error(entry, "unknown reasoning protocol; expected " + reasoning_protocol_names());
                 }
-                partial.thinking_budget = std::to_string(entry.value.integer);
+                partial.protocol = protocol;
+            } else if (key == "reasoning_default") {
+                ReasoningSelection value;
+                Error err = reasoning_selection_entry(entry, value, false);
+                if (!err.ok()) return err;
+                partial.reasoning_default = value;
+            } else if (key == "temperature") {
+                Error err = require_type(entry, Value::Type::String);
+                if (!err.ok()) return err;
+                if (!parse_temperature_support(entry.value.string, partial.temperature)) {
+                    return schema_error(entry,
+                                        "temperature must be unknown, supported, unsupported, or reasoning_none_only");
+                }
+            } else if (key == "enabled") {
+                Error err = require_type(entry, Value::Type::Boolean);
+                if (!err.ok()) return err;
+                partial.enabled = entry.value.boolean;
             } else {
-                return schema_error(entry, "thinking_budget must be a token count or verbal label string");
+                return schema_error(entry, "unknown [model] key");
             }
-        } else {
-            return schema_error(entry,
-                                "unknown [Model-setting] key; expected " +
-                                    chat::generation::model_setting_keys_description());
+            continue;
+        }
+        if (repeatable_entry_parts(item.first, "preset", index, key)) {
+            PartialPreset& partial = presets[index];
+            if (partial.source.path.empty()) partial.source = entry.source;
+            if (key == "model_id" || key == "purpose" || key == "default_system_prompt") {
+                Error err = require_type(entry, Value::Type::String);
+                if (!err.ok()) return err;
+                if (key == "model_id") {
+                    partial.preset.model_id = entry.value.string;
+                    partial.have_model_id = true;
+                } else if (key == "purpose") {
+                    if (!chat::generation::is_chat_purpose(entry.value.string)) {
+                        return schema_error(entry, "purpose must be " + chat::generation::chat_purpose_description());
+                    }
+                    partial.preset.purpose = entry.value.string;
+                    partial.have_purpose = true;
+                } else partial.preset.default_system_prompt = entry.value.string;
+            } else if (key == "temperature" || key == "top_p" || key == "min_p" ||
+                       key == "repeat_penalty" || key == "presence_penalty") {
+                double value = 0.0;
+                Error err = numeric_double(entry, value);
+                if (!err.ok()) return err;
+                if (key == "temperature") partial.preset.temperature = value;
+                else if (key == "top_p") partial.preset.top_p = value;
+                else if (key == "min_p") partial.preset.min_p = value;
+                else if (key == "repeat_penalty") partial.preset.repeat_penalty = value;
+                else partial.preset.presence_penalty = value;
+            } else if (key == "top_k") {
+                int value = 0;
+                Error err = nonnegative_int(entry, value);
+                if (!err.ok()) return err;
+                partial.preset.top_k = value;
+            } else if (key == "reasoning") {
+                ReasoningSelection value;
+                Error err = reasoning_selection_entry(entry, value, true);
+                if (!err.ok()) return err;
+                partial.preset.reasoning = value;
+            } else if (key == "enabled") {
+                Error err = require_type(entry, Value::Type::Boolean);
+                if (!err.ok()) return err;
+                partial.preset.enabled = entry.value.boolean;
+            } else {
+                return schema_error(entry, "unknown [preset] key");
+            }
         }
     }
 
-    for (const auto& item : partial_settings) {
-        const PartialModelSetting& partial = item.second;
-        const auto required_error = [&](const char* field) {
-            return Error{ErrorCode::Config,
-                         partial.source.path + ":" + std::to_string(partial.source.line) + ":" +
-                             std::to_string(partial.source.column) +
-                             ": invalid config setting [Model-setting]: " + field + " is required"};
-        };
-        if (!partial.model.has_value()) {
-            return required_error("model");
+    for (const auto& item : models) {
+        const PartialModel& partial = item.second;
+        if (!partial.id.has_value()) return catalog_required(partial.source, "model", "id");
+        erase_matching(candidate.model_catalog.models,
+                       [&](const ModelCapability& value) { return value.id == *partial.id; });
+        if (!partial.enabled) continue;
+        if (!partial.regex.has_value()) return catalog_required(partial.source, "model", "model");
+        if (!partial.protocol.has_value()) return catalog_required(partial.source, "model", "reasoning_protocol");
+        try {
+            (void)std::regex(*partial.regex, std::regex::ECMAScript | std::regex::icase);
+        } catch (const std::regex_error& err) {
+            return {ErrorCode::Config,
+                    partial.source.path + ":" + std::to_string(partial.source.line) + ":" +
+                        std::to_string(partial.source.column) +
+                        ": invalid model regex for [model] " + *partial.id + ": " + err.what()};
         }
-        if (!partial.purpose.has_value()) {
-            return required_error("purpose");
-        }
-        if (!partial.default_system_prompt.has_value()) {
-            return required_error("default_system_prompt");
-        }
-        if (!partial.temperature.has_value()) {
-            return required_error("temperature");
-        }
-        if (!partial.top_k.has_value()) {
-            return required_error("top_k");
-        }
-        if (!partial.top_p.has_value()) {
-            return required_error("top_p");
-        }
-        if (!partial.min_p.has_value()) {
-            return required_error("min_p");
-        }
-        if (!partial.repeat_penalty.has_value()) {
-            return required_error("repeat_penalty");
-        }
-        if (!partial.presence_penalty.has_value()) {
-            return required_error("presence_penalty");
-        }
-        ModelSetting setting{*partial.model,
-                             *partial.purpose,
-                             *partial.default_system_prompt,
-                             *partial.temperature,
-                             *partial.top_k,
-                             *partial.top_p,
-                             *partial.min_p,
-                             *partial.repeat_penalty,
-                             *partial.presence_penalty,
-                             partial.thinking_budget.value_or("")};
-        merge_model_setting(candidate.model_settings, std::move(setting));
+        ModelCapability capability;
+        capability.id = *partial.id;
+        capability.provider = partial.provider;
+        capability.api = partial.api;
+        capability.model_regex = *partial.regex;
+        capability.priority = partial.priority;
+        capability.reasoning_protocol = *partial.protocol;
+        capability.reasoning_default = partial.reasoning_default;
+        capability.reasoning_options = partial.reasoning_options;
+        capability.temperature = partial.temperature;
+        capability.load_order = candidate.model_catalog.next_load_order++;
+        candidate.model_catalog.models.push_back(std::move(capability));
+    }
+    for (const auto& item : presets) {
+        const PartialPreset& partial = item.second;
+        if (!partial.have_model_id) return catalog_required(partial.source, "preset", "model_id");
+        if (!partial.have_purpose) return catalog_required(partial.source, "preset", "purpose");
+        erase_matching(candidate.model_catalog.presets, [&](const ModelSetting& value) {
+            return value.model_id == partial.preset.model_id && value.purpose == partial.preset.purpose;
+        });
+        if (partial.preset.enabled) candidate.model_catalog.presets.push_back(partial.preset);
     }
     return ok_error();
 }
@@ -1669,6 +1737,33 @@ Error apply_benchmarks_document_impl(const Document& document, cli::Options& opt
     return ok_error();
 }
 
+Error apply_models_document_impl(const Document& document, cli::Options& options) {
+    cli::Options candidate = options;
+    for (const auto& item : document.entries) {
+        const std::string& name = item.first;
+        const Entry& entry = item.second;
+        if (name == "config_version") {
+            Error err = require_type(entry, Value::Type::Integer);
+            if (!err.ok()) return err;
+            if (entry.value.integer != 1) {
+                return schema_error(entry,
+                                    "unsupported models config version " +
+                                        std::to_string(entry.value.integer) +
+                                        "; supported version is 1");
+            }
+            continue;
+        }
+        if (name.rfind("model.", 0) != 0 && name.rfind("preset.", 0) != 0) {
+            return schema_error(entry,
+                                "unknown models setting; expected [model] or [preset]");
+        }
+    }
+    Error err = apply_configured_model_catalog(document, candidate);
+    if (!err.ok()) return err;
+    options = std::move(candidate);
+    return ok_error();
+}
+
 }  // namespace
 
 Error apply_editor_commands_document(const Document& document, cli::Options& options) {
@@ -1681,6 +1776,10 @@ Error apply_themes_document(const Document& document, cli::Options& options) {
 
 Error apply_benchmarks_document(const Document& document, cli::Options& options) {
     return apply_benchmarks_document_impl(document, options);
+}
+
+Error apply_models_document(const Document& document, cli::Options& options) {
+    return apply_models_document_impl(document, options);
 }
 
 Error validate_benchmark_grading_prompts(const cli::BenchmarkGradingPrompts& prompts) {
@@ -1810,13 +1909,19 @@ Error apply_document(const Document& document, cli::Options& options) {
             }
         } else if (name == "generation.temperature") {
             err = numeric_double(entry, candidate.temperature);
-            if (err.ok()) candidate.has_temperature = true;
+            if (err.ok()) {
+                candidate.has_temperature = true;
+                candidate.temperature_preset_applied = false;
+            }
         } else if (name == "generation.top_p") {
             err = numeric_double(entry, candidate.top_p);
             if (err.ok()) candidate.has_top_p = true;
         } else if (name == "generation.max_output_tokens") {
             err = nonnegative_int(entry, candidate.max_output_tokens);
             if (err.ok()) candidate.has_max_output_tokens = true;
+        } else if (name == "generation.reasoning") {
+            err = reasoning_selection_entry(entry, candidate.reasoning, true);
+            if (err.ok()) candidate.reasoning_explicit = true;
         } else if (name == "context.window_tokens") {
             err = context_window_tokens(entry, candidate.context_tokens);
             if (err.ok()) {
@@ -1996,8 +2101,6 @@ Error apply_document(const Document& document, cli::Options& options) {
             continue;
         } else if (name.rfind("theme.", 0) == 0) {
             continue;
-        } else if (name.rfind("Model-setting.", 0) == 0) {
-            continue;
         } else if (name == "url_fetch.max_bytes") {
             err = nonnegative_long(entry, candidate.max_fetch_bytes);
         } else if (name == "url_fetch.allow_private_addresses") {
@@ -2051,10 +2154,6 @@ Error apply_document(const Document& document, cli::Options& options) {
         if (!err.ok()) {
             return err;
         }
-    }
-    Error model_setting_err = apply_configured_model_settings(document, candidate);
-    if (!model_setting_err.ok()) {
-        return model_setting_err;
     }
     Error command_err = apply_configured_assist_commands(document, candidate);
     if (!command_err.ok()) {
@@ -2175,12 +2274,91 @@ std::vector<std::string> bundled_benchmarks_paths() {
     return paths;
 }
 
+std::string user_models_path(const Environment& environment) {
+    if (absolute_path(environment.xdg_config_home)) {
+        return (std::filesystem::path(environment.xdg_config_home) / "ainiux" / "models.conf").string();
+    }
+    if (!absolute_path(environment.home)) return {};
+    return (std::filesystem::path(environment.home) / ".config" / "ainiux" / "models.conf").string();
+}
+
+std::vector<std::string> system_models_paths(const Environment& environment) {
+    const std::string dirs = environment.xdg_config_dirs.empty() ? "/etc/xdg" : environment.xdg_config_dirs;
+    return config_paths_from_dirs(dirs, "models.conf");
+}
+
+std::vector<std::string> bundled_models_paths() {
+    std::vector<std::string> paths;
+    if (const char* override_path = std::getenv("AINIUX_MODELS")) {
+        if (override_path[0] != '\0') paths.emplace_back(override_path);
+    }
+    paths.emplace_back("config/models.conf");
+    paths.emplace_back("/usr/local/share/ainiux/models.conf");
+    paths.emplace_back("/usr/share/ainiux/models.conf");
+    return paths;
+}
+
 LoadResult load_automatic(const cli::Options& base_options,
                           const Environment& environment,
                           bool load_user_config) {
     LoadResult result{base_options, {}, {}, ok_error()};
     result.options.editor_assist_config = ainiux::editor::empty_editor_assist_config();
     result.options.tui_themes = tui::default_theme_registry();
+
+    auto load_models_path = [&](const std::string& path, ConfigScope scope) -> Error {
+        std::error_code filesystem_error;
+        const bool exists = std::filesystem::exists(path, filesystem_error);
+        if (filesystem_error) {
+            result.diagnostics.push_back({scope, ConfigFileKind::Models, ConfigFileState::Error, path});
+            return {ErrorCode::Config, "could not inspect models file: " + path};
+        }
+        if (!exists) {
+            result.diagnostics.push_back({scope, ConfigFileKind::Models, ConfigFileState::Missing, path});
+            return ok_error();
+        }
+        ParseResult parsed = read_file(path);
+        if (!parsed.error.ok()) {
+            result.diagnostics.push_back({scope, ConfigFileKind::Models, ConfigFileState::Error, path});
+            return parsed.error;
+        }
+        Error err = apply_models_document(parsed.document, result.options);
+        if (!err.ok()) {
+            result.diagnostics.push_back({scope, ConfigFileKind::Models, ConfigFileState::Error, path});
+            return err;
+        }
+        result.loaded_paths.push_back(path);
+        result.diagnostics.push_back({scope, ConfigFileKind::Models, ConfigFileState::Loaded, path});
+        return ok_error();
+    };
+
+    bool bundled_models_loaded = false;
+    for (const std::string& path : bundled_models_paths()) {
+        std::error_code filesystem_error;
+        if (!std::filesystem::exists(path, filesystem_error) || filesystem_error) continue;
+        Error err = load_models_path(path, ConfigScope::Bundled);
+        if (!err.ok()) { result.error = std::move(err); return result; }
+        bundled_models_loaded = true;
+        break;
+    }
+    if (!bundled_models_loaded) {
+        result.diagnostics.push_back(
+            {ConfigScope::Bundled, ConfigFileKind::Models, ConfigFileState::Missing, "config/models.conf"});
+    }
+    for (const std::string& path : system_models_paths(environment)) {
+        Error err = load_models_path(path, ConfigScope::System);
+        if (!err.ok()) { result.error = std::move(err); return result; }
+    }
+    const std::string user_models = user_models_path(environment);
+    if (user_models.empty()) {
+        result.diagnostics.push_back(
+            {ConfigScope::User, ConfigFileKind::Models, ConfigFileState::Unavailable, {}});
+    } else if (!load_user_config) {
+        result.diagnostics.push_back(
+            {ConfigScope::User, ConfigFileKind::Models, ConfigFileState::Skipped, user_models});
+    } else {
+        Error err = load_models_path(user_models, ConfigScope::User);
+        if (!err.ok()) { result.error = std::move(err); return result; }
+    }
 
     auto load_benchmarks_path = [&](const std::string& path,
                                     ConfigScope scope,

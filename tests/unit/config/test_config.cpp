@@ -2,6 +2,7 @@
 #include "support/test_support.hpp"
 #include "cli/args.hpp"
 #include "config/config.hpp"
+#include "config/model_catalog.hpp"
 #include "editor/editor.hpp"
 #include "editor/editor_prompts.hpp"
 #include "tui/theme_registry.hpp"
@@ -152,13 +153,14 @@ void test_config_applies_user_settings() {
     ainiux::config::Environment environment{config_home, system_home, "/nonexistent"};
     ainiux::config::LoadResult loaded = ainiux::config::load_automatic(ainiux::cli::Options{}, environment);
     check(loaded.error.ok(), "automatic user config loading succeeds");
-    check(loaded.loaded_paths.size() == 5 &&
-              loaded.loaded_paths[0].find("benchmarks.conf") != std::string::npos &&
-              loaded.loaded_paths[1].find("themes.conf") != std::string::npos &&
-              loaded.loaded_paths[2].find("editor-commands.conf") != std::string::npos &&
-              loaded.loaded_paths[3] == system_home + "/ainiux/config.conf" &&
-              loaded.loaded_paths[4] == config_home + "/ainiux/config.conf",
-          "automatic loading applies bundled prompt/UI files before system and user config");
+    check(loaded.loaded_paths.size() == 6 &&
+              loaded.loaded_paths[0].find("models.conf") != std::string::npos &&
+              loaded.loaded_paths[1].find("benchmarks.conf") != std::string::npos &&
+              loaded.loaded_paths[2].find("themes.conf") != std::string::npos &&
+              loaded.loaded_paths[3].find("editor-commands.conf") != std::string::npos &&
+              loaded.loaded_paths[4] == system_home + "/ainiux/config.conf" &&
+              loaded.loaded_paths[5] == config_home + "/ainiux/config.conf",
+          "automatic loading applies the bundled catalog and prompt/UI files before system and user config");
     check(loaded.options.tui_themes.has("dark") && loaded.options.tui_themes.has("light") &&
               loaded.options.tui_themes.has("sepia"),
           "automatic loading includes built-in themes");
@@ -204,12 +206,13 @@ void test_config_applies_user_settings() {
     check(system_only.error.ok() && !system_only.options.allow_private_url_fetch &&
               !system_only.options.show_thinking_traces && system_only.options.tui_theme == "light",
           "disabling user config retains the automatic system config");
-    check(system_only.loaded_paths.size() == 4 &&
-              system_only.loaded_paths[0].find("benchmarks.conf") != std::string::npos &&
-              system_only.loaded_paths[1].find("themes.conf") != std::string::npos &&
-              system_only.loaded_paths[2].find("editor-commands.conf") != std::string::npos &&
-              system_only.loaded_paths[3] == system_home + "/ainiux/config.conf",
-          "disabling user config still loads bundled prompts/UI files and system config");
+    check(system_only.loaded_paths.size() == 5 &&
+              system_only.loaded_paths[0].find("models.conf") != std::string::npos &&
+              system_only.loaded_paths[1].find("benchmarks.conf") != std::string::npos &&
+              system_only.loaded_paths[2].find("themes.conf") != std::string::npos &&
+              system_only.loaded_paths[3].find("editor-commands.conf") != std::string::npos &&
+              system_only.loaded_paths[4] == system_home + "/ainiux/config.conf",
+          "disabling user config still loads the bundled catalog, prompt/UI files, and system config");
     bool skipped_user_config = false;
     for (const ainiux::config::ConfigDiagnostic& diagnostic : system_only.diagnostics) {
         if (diagnostic.scope == ainiux::config::ConfigScope::User &&
@@ -486,94 +489,255 @@ void test_benchmark_prompt_configuration() {
           "AINIUX_BENCHMARKS overrides the bundled benchmark prompt path");
 }
 
-void test_config_applies_model_settings() {
+void test_config_applies_model_catalog() {
     ainiux::config::ParseResult parsed = ainiux::config::parse(
-        "[Model-setting]\n"
-        "model = Qwen3.6-*\n"
+        "[model]\n"
+        "id = qwen-coder\n"
+        "provider = qwen\n"
+        "api = chat\n"
+        "model = \"^qwen3[.]6(?:[-.].*)?$\"\n"
+        "value = low|1024\n"
+        "priority = 100\n"
+        "reasoning_protocol = qwen_chat\n"
+        "reasoning_default = medium\n"
+        "temperature = supported\n"
+        "[preset]\n"
+        "model_id = qwen-coder\n"
         "purpose = coding\n"
-        "default_system_prompt = \"\"\n"
-        "temperature = 0.6\n"
         "top_k = 20\n"
         "top_p = 0.95\n"
-        "min_p = 0.0\n"
-        "repeat_penalty = 1.0\n"
-        "presence_penalty = 0.0\n",
-        "model-setting.conf");
-    check(parsed.error.ok(), "model-setting config parses");
+        "reasoning = high\n",
+        "models.conf");
+    check(parsed.error.ok(), "models catalog parses");
 
     ainiux::cli::Options options;
-    ainiux::Error err = ainiux::config::apply_document(parsed.document, options);
-    check(err.ok() && options.model_settings.size() == 1, "model-setting config applies");
-    const ainiux::ModelSetting& setting = options.model_settings.front();
-    check(setting.model == "Qwen3.6-*" && setting.purpose == "coding" &&
-              setting.default_system_prompt.empty() && setting.temperature == 0.6 && setting.top_k == 20 &&
-              setting.top_p == 0.95 && setting.min_p == 0.0 && setting.repeat_penalty == 1.0 &&
-              setting.presence_penalty == 0.0,
-          "model-setting values are stored");
+    ainiux::Error err = ainiux::config::apply_models_document(parsed.document, options);
+    check(err.ok() && options.model_catalog.models.size() == 1 &&
+              options.model_catalog.presets.size() == 1,
+          "model and preset blocks apply");
+    const ainiux::ModelCapability& capability = options.model_catalog.models.front();
+    check(capability.id == "qwen-coder" && capability.provider == "qwen" &&
+              capability.api == "chat" && capability.priority == 100 &&
+              capability.reasoning_protocol == ainiux::ReasoningProtocol::QwenChat &&
+              capability.reasoning_default == ainiux::ReasoningSelection::named("medium") &&
+              capability.reasoning_options.size() == 2 &&
+              capability.reasoning_options[0] == ainiux::ReasoningSelection::named("low") &&
+              capability.reasoning_options[1] == ainiux::ReasoningSelection::token_budget(1024) &&
+              capability.temperature == ainiux::TemperatureSupport::Supported,
+          "model capability and compact reasoning values are stored");
+    const ainiux::ModelSetting& preset = options.model_catalog.presets.front();
+    check(!preset.temperature.has_value() && preset.top_k == 20 && preset.top_p == 0.95 &&
+              preset.reasoning == ainiux::ReasoningSelection::named("high"),
+          "preset generation fields are optional");
 
-    ainiux::config::ParseResult override_config = ainiux::config::parse(
-        "[Model-setting]\n"
-        "model = Qwen3.6-*\n"
-        "purpose = coding\n"
-        "default_system_prompt = \"\"\n"
-        "temperature = 0.4\n"
-        "top_k = 10\n"
-        "top_p = 0.8\n"
-        "min_p = 0.0\n"
-        "repeat_penalty = 1.0\n"
-        "presence_penalty = 0.0\n",
-        "model-setting-override.conf");
-    options.model_settings.push_back({"Gemma-4-31B", "general", "", 1.0, 64, 0.95, 0.0, 1.0, 0.0});
-    err = ainiux::config::apply_document(override_config.document, options);
-    check(err.ok() && options.model_settings.size() == 2, "model-setting merge keeps other entries");
-    check(options.model_settings[0].model == "Qwen3.6-*" && options.model_settings[0].temperature == 0.4 &&
-              options.model_settings[0].top_k == 10 && options.model_settings[1].model == "Gemma-4-31B",
-          "model-setting merge replaces matching model and purpose in place");
+    const ainiux::ModelCapability* match = ainiux::config::resolve_model_capability(
+        options.model_catalog, "qwen", "chat", "models/qwen3.6-coder");
+    check(match != nullptr && match->id == "qwen-coder",
+          "model regex matches the final component of a prefixed model id");
+    check(!ainiux::config::model_regex_matches("^models/.*$", "models/qwen3.6-coder"),
+          "model regex never matches a provider prefix");
+
+    const ainiux::config::ReasoningSelectorData selector =
+        ainiux::config::reasoning_selector_data(
+            options.model_catalog, "qwen", "chat", "models/qwen3.6-coder");
+    check(selector.values.size() == 3 &&
+              selector.values.front().is_auto() &&
+              selector.labels.front().find("provider default: medium") != std::string::npos &&
+              selector.labels[1] == "low" && selector.labels[2] == "1024",
+          "reasoning selector derives labels directly from compact values");
+    const ainiux::config::ReasoningSelectorData unknown =
+        ainiux::config::reasoning_selector_data(
+            options.model_catalog, "qwen", "chat", "unknown-model");
+    check(unknown.values.empty() && unknown.guidance.find("/reasoning VALUE") != std::string::npos &&
+              unknown.guidance.find("models.conf") != std::string::npos,
+          "unknown models receive direct-value and catalog guidance");
 }
 
-void test_config_model_setting_thinking_budget() {
-    ainiux::config::ParseResult verbal = ainiux::config::parse(
-        "[Model-setting]\n"
-        "model = Qwen3.6-*\n"
-        "purpose = general\n"
-        "default_system_prompt = \"\"\n"
-        "temperature = 0.8\n"
-        "top_k = 20\n"
-        "top_p = 0.95\n"
-        "min_p = 0.0\n"
-        "repeat_penalty = 1.0\n"
-        "presence_penalty = 1.5\n"
-        "thinking_budget = high\n",
-        "model-setting-verbal-budget.conf");
+void test_model_catalog_layering_and_validation() {
     ainiux::cli::Options options;
-    ainiux::Error err = ainiux::config::apply_document(verbal.document, options);
-    check(err.ok() && options.model_settings.size() == 1 &&
-              options.model_settings.front().thinking_budget == "high",
-          "model-setting config accepts verbal thinking_budget");
+    const auto apply = [&](const std::string& text, const std::string& path) {
+        const ainiux::config::ParseResult parsed = ainiux::config::parse(text, path);
+        check(parsed.error.ok(), path + " parses");
+        return parsed.error.ok()
+                   ? ainiux::config::apply_models_document(parsed.document, options)
+                   : parsed.error;
+    };
 
-    ainiux::config::ParseResult numeric = ainiux::config::parse(
-        "[Model-setting]\n"
-        "model = Qwen3.6-*\n"
-        "purpose = instruct\n"
-        "default_system_prompt = \"\"\n"
-        "temperature = 0.7\n"
-        "top_k = 20\n"
-        "top_p = 0.80\n"
-        "min_p = 0.0\n"
-        "repeat_penalty = 1.0\n"
-        "presence_penalty = 1.5\n"
-        "thinking_budget = 8192\n",
-        "model-setting-token-budget.conf");
-    err = ainiux::config::apply_document(numeric.document, options);
-    check(err.ok() && options.model_settings.size() == 2 &&
-              options.model_settings.back().thinking_budget == "8192",
-          "model-setting config accepts token thinking_budget");
+    ainiux::Error err = apply(
+        "[model]\n"
+        "id = generic\nprovider = any\napi = any\nmodel = \"^same$\"\nvalue = low\n"
+        "priority = 10\nreasoning_protocol = generic_thinking\n"
+        "[model]\n"
+        "id = specific\nprovider = openai\napi = chat\nmodel = \"^same$\"\nvalue = low\n"
+        "priority = 10\nreasoning_protocol = openai_effort\n"
+        "[model]\n"
+        "id = merged\nprovider = openai\napi = any\nmodel = \"^merged$\"\n"
+        "value = low|medium\nreasoning_protocol = openai_effort\n"
+        "[preset]\nmodel_id = merged\npurpose = coding\ntemperature = 0.6\n",
+        "bundled-models.conf");
+    check(err.ok(), "bundled model layer applies");
+    const ainiux::ModelCapability* match =
+        ainiux::config::resolve_model_capability(options.model_catalog, "openai", "chat", "same");
+    check(match != nullptr && match->id == "specific",
+          "provider and API specificity resolves equal-priority overlaps");
+
+    err = apply(
+        "[model]\n"
+        "id = later\nprovider = openai\napi = chat\nmodel = \"^same$\"\nvalue = low\n"
+        "priority = 10\nreasoning_protocol = xai_effort\n"
+        "[model]\n"
+        "id = merged\nprovider = openai\napi = responses\nmodel = \"^merged-v2$\"\n"
+        "value = low|high\npriority = 40\nreasoning_protocol = openai_effort\n"
+        "temperature = unsupported\n"
+        "[preset]\nmodel_id = merged\npurpose = coding\ntop_k = 7\n",
+        "user-models.conf");
+    check(err.ok(), "later model layer applies");
+    match = ainiux::config::resolve_model_capability(
+        options.model_catalog, "openai", "chat", "same");
+    check(match != nullptr && match->id == "later",
+          "later config layer resolves otherwise equal model definitions");
+    check(options.model_catalog.models.size() == 4,
+          "model blocks merge by id instead of accumulating duplicate ids");
+    const ainiux::ModelCapability* merged = nullptr;
+    for (const ainiux::ModelCapability& capability : options.model_catalog.models) {
+        if (capability.id == "merged") merged = &capability;
+    }
+    check(merged != nullptr && merged->reasoning_options.size() == 2 &&
+              merged->reasoning_options[1] == ainiux::ReasoningSelection::named("high"),
+          "later model layers replace their compact reasoning values by model id");
+    check(options.model_catalog.presets.size() == 1 &&
+              !options.model_catalog.presets.front().temperature.has_value() &&
+              options.model_catalog.presets.front().top_k == 7,
+          "presets merge by model id and purpose");
+
+    err = apply(
+        "[preset]\nmodel_id = merged\npurpose = coding\nenabled = false\n"
+        "[model]\nid = merged\nenabled = false\n",
+        "remove-models.conf");
+    check(err.ok() && options.model_catalog.models.size() == 3 &&
+              options.model_catalog.presets.empty(),
+          "enabled=false removes layered model catalog records");
+
+    ainiux::config::ParseResult invalid = ainiux::config::parse(
+        "[model]\nid = broken\nmodel = \"([\"\nvalue = low\nreasoning_protocol = openai_effort\n",
+        "invalid-regex.conf");
+    err = ainiux::config::apply_models_document(invalid.document, options);
+    check(!err.ok() && err.code == ainiux::ErrorCode::Config &&
+              err.message.find("invalid model regex") != std::string::npos,
+          "invalid model regex is rejected during config loading");
+
+    invalid = ainiux::config::parse(
+        "[model]\nid = broken\nmodel = \".*\"\nvalue = low\nreasoning_protocol = arbitrary_json_path\n",
+        "invalid-protocol.conf");
+    err = ainiux::config::apply_models_document(invalid.document, options);
+    check(!err.ok() && err.code == ainiux::ErrorCode::Config &&
+              err.message.find("unknown reasoning protocol") != std::string::npos,
+          "unregistered reasoning protocols are rejected during config loading");
+}
+
+void test_config_reads_models_template() {
+    const ainiux::config::ParseResult parsed =
+        ainiux::config::read_file("config/models.conf");
+    check(parsed.error.ok(), "bundled models.conf parses");
+    ainiux::cli::Options options;
+    const ainiux::Error err =
+        ainiux::config::apply_models_document(parsed.document, options);
+    check(err.ok() && options.model_catalog.models.size() >= 20 &&
+              !options.model_catalog.presets.empty(),
+          "bundled models.conf passes schema validation and contains capabilities");
+    bool muse = false;
+    bool mimo_ladder = false;
+    for (const ainiux::ModelCapability& capability : options.model_catalog.models) {
+        muse = muse || capability.id.find("muse") != std::string::npos;
+        if (capability.id.find("mimo") != std::string::npos) {
+            for (const ainiux::ReasoningSelection& option : capability.reasoning_options) {
+                mimo_ladder = mimo_ladder ||
+                              (option.kind == ainiux::ReasoningSelectionKind::Named &&
+                               option.value != "none" && option.value != "disabled" &&
+                               option.value != "off" && option.value != "enabled");
+            }
+        }
+    }
+    check(!muse && !mimo_ladder,
+          "bundled catalog omits Muse and an unverified MiMo effort ladder");
+
+    const std::vector<std::pair<std::string, std::string>> routed_models = {
+        {"groq", "another-router/google/GEMINI-3.1-FLASH-LITE-IMAGE"},
+        {"together", "gateway/openai/GPT-5.6-LUNA"},
+        {"custom_openai_chat", "x-ai/GROK-4.5"},
+        {"deepinfra", "vendor/qwen/QWEN3.6-27B"},
+        {"openrouter", "anthropic/CLAUDE-OPUS-4.8"},
+    };
+    for (const auto& routed : routed_models) {
+        const ainiux::config::ReasoningSelectorData selector =
+            ainiux::config::reasoning_selector_data(
+                options.model_catalog, routed.first, "chat", routed.second);
+        check(selector.guidance.empty() && selector.values.size() > 1,
+              "provider-neutral family regex matches " + routed.second);
+    }
+
+    const ainiux::ModelCapability* llama = ainiux::config::resolve_model_capability(
+        options.model_catalog, "groq", "chat", "meta/Meta-Llama-3.3-70B-Instruct");
+    check(llama != nullptr && llama->id == "preset-llama-3",
+          "case-insensitive Llama 3.x family rule covers routed sizes and variants");
+    const ainiux::ModelCapability* gpt_oss_20b = ainiux::config::resolve_model_capability(
+        options.model_catalog, "together", "chat", "openai/GPT-OSS-20B");
+    const ainiux::ModelCapability* gpt_oss_120b = ainiux::config::resolve_model_capability(
+        options.model_catalog, "deepinfra", "chat", "vendor/openai/gpt-oss-120b");
+    check(gpt_oss_20b != nullptr && gpt_oss_20b->id == "openai-gpt-oss" &&
+              gpt_oss_120b != nullptr && gpt_oss_120b->id == "openai-gpt-oss",
+          "GPT OSS family rule covers both 20B and 120B through arbitrary prefixes");
+
+    const std::string valid_warning = ainiux::config::reasoning_catalog_warning(
+        options.model_catalog,
+        "groq",
+        "chat",
+        "vendor/DEEPSEEK-V4-FLASH",
+        ainiux::ReasoningSelection::named("max"));
+    const std::string typo_warning = ainiux::config::reasoning_catalog_warning(
+        options.model_catalog,
+        "groq",
+        "chat",
+        "vendor/DEEPSEEK-V4-FLASH",
+        ainiux::ReasoningSelection::named("maxx"));
+    check(valid_warning.empty() && typo_warning.find("maxx") != std::string::npos &&
+              typo_warning.find("none|high|max") != std::string::npos &&
+              typo_warning.find("provider may reject") != std::string::npos,
+          "catalog warning distinguishes configured reasoning values from forward-compatible overrides");
+    check(ainiux::config::reasoning_catalog_warning(
+              options.model_catalog,
+              "groq",
+              "chat",
+              "unknown-model",
+              ainiux::ReasoningSelection::named("ultra")).empty() &&
+              ainiux::config::reasoning_catalog_warning(
+                  options.model_catalog,
+                  "groq",
+                  "chat",
+                  "llama-3.2-3b",
+                  ainiux::ReasoningSelection::named("ultra")).empty(),
+          "catalog warning stays silent without a matched list of allowed values");
+
+    const std::vector<std::string> near_misses = {
+        "google/gemini-2.5-flash",
+        "openai/gpt-4.1",
+        "x-ai/grok-3",
+        "qwen/qwen2.5-27b",
+        "anthropic/claude-haiku-3.5",
+        "meta/llama-4.0-70b",
+        "openai/gpt-oss-200b",
+    };
+    for (const std::string& model : near_misses) {
+        check(ainiux::config::resolve_model_capability(
+                  options.model_catalog, "openrouter", "chat", model) == nullptr,
+              "family regex rejects near miss " + model);
+    }
 }
 
 void test_config_reads_common_template() {
     ainiux::config::ParseResult parsed = ainiux::config::read_file("config/ainiux.conf");
     check(parsed.error.ok(), "common config file parses");
-    check(parsed.document.entries.size() == 164, "common config has every expected setting");
+    check(parsed.document.entries.size() == 56, "common config has every expected setting");
     ainiux::cli::Options highlight_options;
     ainiux::Error apply_error = ainiux::config::apply_document(parsed.document, highlight_options);
     check(apply_error.ok() && highlight_options.tui_highlight,
@@ -620,11 +784,8 @@ void test_config_reads_common_template() {
                   ainiux::editor::kDefaultAiContinueProsePostfixMaxChars &&
               options.editor_ai_continue_max_tokens == ainiux::editor::kDefaultAiContinueMaxTokens,
           "common config maps to the built-in runtime defaults");
-    check(options.model_settings.size() == 12, "common config includes model-setting presets");
-    check(options.model_settings.front().model == "Qwen3.6-*" &&
-              options.model_settings.front().purpose == "creative" &&
-              options.model_settings.front().temperature == 1.0,
-          "common config model-setting presets preserve order and values");
+    check(options.model_catalog.models.empty(),
+          "common config leaves model capabilities to models.conf");
 }
 
 void test_config_rejects_invalid_input() {
@@ -922,8 +1083,9 @@ void test_config_empty_and_numeric_edge_cases() {
 
 void run_all() {
     test_config_applies_user_settings();
-    test_config_applies_model_settings();
-    test_config_model_setting_thinking_budget();
+    test_config_applies_model_catalog();
+    test_model_catalog_layering_and_validation();
+    test_config_reads_models_template();
     test_config_empty_and_numeric_edge_cases();
     test_config_file_read_errors();
     test_config_parses_supported_values();

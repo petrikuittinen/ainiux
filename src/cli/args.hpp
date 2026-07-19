@@ -62,6 +62,8 @@ struct Options {
     std::string model;
     std::string provider = "openai";
     bool provider_explicit = false;
+    bool model_explicit = false;
+    bool api_explicit = false;
     std::string profile;
     std::string api = "chat";
     std::string base_url;
@@ -104,6 +106,8 @@ struct Options {
 
     double temperature = 0.0;
     bool has_temperature = false;
+    // Distinguishes advisory catalog presets from an explicit CLI/config/UI value.
+    bool temperature_preset_applied = false;
     double top_p = 0.0;
     bool has_top_p = false;
     int top_k = 0;
@@ -114,10 +118,11 @@ struct Options {
     bool has_repeat_penalty = false;
     double presence_penalty = 0.0;
     bool has_presence_penalty = false;
-    bool enable_thinking = false;
-    bool has_enable_thinking = false;
-    std::string thinking_budget;
-    bool has_thinking_budget = false;
+    ReasoningSelection reasoning;
+    // True when a configuration or CLI source explicitly selected reasoning.
+    // The Auto value itself remains the canonical cleared override.
+    bool reasoning_explicit = false;
+    bool reasoning_cli_explicit = false;
     std::string chat_purpose;
     bool has_chat_purpose = false;
     bool has_context_tokens = false;
@@ -165,7 +170,7 @@ struct Options {
 
     std::vector<std::string> headers;
     std::vector<std::string> attachment_paths;
-    std::vector<ModelSetting> model_settings;
+    ModelCatalog model_catalog;
 };
 
 struct ParseResult {

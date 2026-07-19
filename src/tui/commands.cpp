@@ -23,6 +23,28 @@ bool allowed_for_read_only_thread(const std::string& text) {
            text.rfind("/highlight ", 0) == 0;
 }
 
+bool reasoning_change_needs_confirmation(const std::string& requested,
+                                         TuiCommandContext& ctx,
+                                         TuiCommandHandlers& handlers) {
+    ReasoningSelection selection;
+    Error err = config::parse_reasoning_selection(requested, selection);
+    if (!err.ok()) {
+        ctx.status = err.message;
+        return true;
+    }
+    const std::string warning = config::reasoning_catalog_warning(
+        ctx.context.options.model_catalog,
+        ctx.context.profile.name,
+        ctx.context.api_kind == provider::ApiKind::Responses ? "responses" : "chat",
+        ctx.context.options.model,
+        selection);
+    if (warning.empty()) {
+        return false;
+    }
+    handlers.request_reasoning_confirmation(requested, warning);
+    return true;
+}
+
 }  // namespace
 
 void handle_tui_command(const std::string& text, TuiCommandContext& ctx, TuiCommandHandlers& handlers) {
@@ -43,6 +65,7 @@ void handle_tui_command(const std::string& text, TuiCommandContext& ctx, TuiComm
                 "/provider [PROVIDER]\n"
                 "/models\n"
                 "/model [MODEL]\n"
+                "/reasoning [auto|VALUE|TOKENS]\n"
                 "/system [TEXT]\n"
                 "/setting (hide/show current settings)\n"
                 "/setting NAME=VALUE\n"
@@ -78,6 +101,28 @@ void handle_tui_command(const std::string& text, TuiCommandContext& ctx, TuiComm
                      (ctx.session.read_only_reason.empty()
                           ? std::string("managed attachment media is unavailable")
                           : ctx.session.read_only_reason);
+        return;
+    }
+    if (text == "/reasoning" || text.rfind("/reasoning ", 0) == 0) {
+        const std::string requested = app::detail::trim_ascii(text.substr(10));
+        if (requested.empty()) {
+            handlers.open_reasoning_picker();
+            return;
+        }
+        if (reasoning_change_needs_confirmation(requested, ctx, handlers)) {
+            return;
+        }
+        Error err = chat::apply_chat_setting(ctx.context.options, "reasoning", requested);
+        if (!err.ok()) {
+            ctx.status = err.message;
+            return;
+        }
+        std::string message = "Reasoning set to " +
+            config::reasoning_selection_value(ctx.context.options.reasoning);
+        const std::string advisory = provider::reasoning_temperature_advisory(ctx.context);
+        if (!advisory.empty()) message += ". Warning: " + advisory;
+        handlers.persist_settings_change(message);
+        handlers.refresh_settings_panel_if_visible();
         return;
     }
     if (text.rfind("/thinking", 0) == 0) {
@@ -186,8 +231,13 @@ void handle_tui_command(const std::string& text, TuiCommandContext& ctx, TuiComm
             handlers.start_models(ModelsRequestPurpose::Picker);
             return;
         }
+        const bool changed = ctx.context.options.model != model;
         ctx.context.options.model = model;
         ctx.session.model = model;
+        if (changed) {
+            ctx.context.options.reasoning = ReasoningSelection::automatic();
+            ctx.context.options.reasoning_explicit = true;
+        }
         ctx.status = provider_model_status_message(ctx.context, "ready");
         handlers.start_store_save();
         return;
@@ -234,7 +284,9 @@ void handle_tui_command(const std::string& text, TuiCommandContext& ctx, TuiComm
         if (requested.empty()) {
             if (ctx.settings_text.empty()) {
                 ctx.help_text.clear();
-                ctx.settings_text = chat::format_settings_panel(ctx.context.options);
+                ctx.settings_text = chat::format_settings_panel(
+                    ctx.context.options,
+                    provider::reasoning_temperature_advisory(ctx.context));
                 ctx.status = "Settings shown; /setting hides them";
             } else {
                 ctx.settings_text.clear();
@@ -248,25 +300,32 @@ void handle_tui_command(const std::string& text, TuiCommandContext& ctx, TuiComm
                 ctx.status = "Set a model with /model before applying a purpose preset";
                 return;
             }
-            const ModelSetting* preset =
-                chat::find_model_setting(ctx.context.options.model,
-                                         requested,
-                                         ctx.context.options.model_settings);
+            const ModelCapability* capability = provider::matched_model_capability(ctx.context);
+            const ModelSetting* preset = capability == nullptr
+                ? nullptr
+                : config::find_model_preset(ctx.context.options.model_catalog,
+                                            *capability,
+                                            requested);
             if (preset == nullptr) {
-                ctx.status = "No [Model-setting] preset for model " + ctx.context.options.model +
+                ctx.status = "No [preset] in models.conf for model " + ctx.context.options.model +
                              " purpose " + requested;
                 return;
             }
-            Error preset_error = chat::apply_model_setting_preset(ctx.context.options, *preset);
+            Error preset_error = chat::apply_model_setting_preset(ctx.context.options, *preset, capability);
             if (!preset_error.ok()) {
                 ctx.status = detail::error_line(preset_error);
                 return;
             }
-            if (!preset->default_system_prompt.empty()) {
-                app::replace_system_prompt(ctx.session, preset->default_system_prompt);
-                ctx.context.options.system = preset->default_system_prompt;
+            if (preset->default_system_prompt.has_value() && !preset->default_system_prompt->empty()) {
+                app::replace_system_prompt(ctx.session, *preset->default_system_prompt);
+                ctx.context.options.system = *preset->default_system_prompt;
             }
-            handlers.persist_settings_change("Applied " + requested + " settings for " + ctx.context.options.model);
+            std::string message = "Applied " + requested + " settings for " +
+                                  ctx.context.options.model;
+            const std::string advisory =
+                provider::reasoning_temperature_advisory(ctx.context);
+            if (!advisory.empty()) message += ". Warning: " + advisory;
+            handlers.persist_settings_change(message);
             handlers.refresh_settings_panel_if_visible();
             return;
         }
@@ -281,12 +340,20 @@ void handle_tui_command(const std::string& text, TuiCommandContext& ctx, TuiComm
             ctx.status = "Usage: /setting NAME=VALUE";
             return;
         }
+        if (ascii_lower(name) == "reasoning" &&
+            reasoning_change_needs_confirmation(value, ctx, handlers)) {
+            return;
+        }
         Error setting_error = chat::apply_chat_setting(ctx.context.options, name, value);
         if (!setting_error.ok()) {
             ctx.status = setting_error.message;
             return;
         }
-        handlers.persist_settings_change("Updated " + name);
+        std::string message = "Updated " + name;
+        const std::string advisory =
+            provider::reasoning_temperature_advisory(ctx.context);
+        if (!advisory.empty()) message += ". Warning: " + advisory;
+        handlers.persist_settings_change(message);
         handlers.refresh_settings_panel_if_visible();
         return;
     }

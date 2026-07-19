@@ -8,18 +8,23 @@ namespace ainiux::tui {
 bool handle_tui_picker_input(unsigned char ch,
                              TuiPickerInputState& state,
                              const TuiPickerCallbacks& callbacks) {
-    if (state.mode == TuiMode::ProviderList || state.mode == TuiMode::ModelList) {
+    if (state.mode == TuiMode::ProviderList || state.mode == TuiMode::ModelList ||
+        state.mode == TuiMode::ReasoningList) {
         if (ch == 17) {
             state.quit = true;
             return true;
         }
         if (ch == 27) {
-            const std::string selection_label =
-                state.mode == TuiMode::ProviderList ? "Selected provider" : "Selected model";
+            const std::string selection_label = state.mode == TuiMode::ProviderList
+                                                    ? "Selected provider"
+                                                    : state.mode == TuiMode::ModelList
+                                                          ? "Selected model"
+                                                          : "Selected reasoning";
             const PickerEscapeResult result = handle_list_picker_escape(
                 state.picker_items.size(), state.picker_selected, state.status, selection_label);
             if (result == PickerEscapeResult::Cancelled) {
                 const bool provider_picker = state.mode == TuiMode::ProviderList;
+                const bool reasoning_picker = state.mode == TuiMode::ReasoningList;
                 state.picker_items.clear();
                 state.picker_selected = 0;
                 if (state.picker_cancel_quits) {
@@ -27,7 +32,10 @@ bool handle_tui_picker_input(unsigned char ch,
                 } else {
                     state.mode = TuiMode::Chat;
                 }
-                state.status = provider_picker ? "Provider selection cancelled" : "Model selection cancelled";
+                state.status = provider_picker
+                                   ? "Provider selection cancelled"
+                                   : reasoning_picker ? "Reasoning selection cancelled"
+                                                      : "Model selection cancelled";
             }
             return true;
         }
@@ -35,8 +43,10 @@ bool handle_tui_picker_input(unsigned char ch,
             if (state.picker_selected < state.picker_items.size()) {
                 if (state.mode == TuiMode::ProviderList) {
                     callbacks.on_provider_selected(state.picker_items[state.picker_selected]);
-                } else {
+                } else if (state.mode == TuiMode::ModelList) {
                     callbacks.on_model_selected(state.picker_items[state.picker_selected]);
+                } else {
+                    callbacks.on_reasoning_selected(state.picker_items[state.picker_selected]);
                 }
             }
             return true;
@@ -95,6 +105,24 @@ bool handle_tui_picker_input(unsigned char ch,
                 return true;
             case ui::ConfirmationKeyResult::Pending:
                 callbacks.on_thread_delete_retry("Press y to delete, n or Esc to cancel");
+                return true;
+        }
+    }
+    if (state.mode == TuiMode::ReasoningConfirm) {
+        if (ch == 17) {
+            state.quit = true;
+            return true;
+        }
+        switch (ui::parse_confirmation_key(ch)) {
+            case ui::ConfirmationKeyResult::Accepted:
+                callbacks.on_reasoning_confirm_accepted();
+                return true;
+            case ui::ConfirmationKeyResult::Rejected:
+                callbacks.on_reasoning_confirm_rejected();
+                return true;
+            case ui::ConfirmationKeyResult::Pending:
+                callbacks.on_reasoning_confirm_retry(
+                    "Press y to use the unlisted reasoning value, n or Esc to cancel");
                 return true;
         }
     }

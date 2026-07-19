@@ -20,30 +20,38 @@ Implemented text-only support is available with `--api responses`, `--responses`
 
 Current Responses support maps `output_text` and streaming `response.output_text.delta` into the same internal assistant message/delta model used by Chat Completions. Reasoning summary deltas are rendered as `<think>...</think>` blocks when providers emit them. Images, files, tools, provider-side context management, and capability probing are not implemented yet.
 
-## Reasoning And Thinking Controls
+## Unified Reasoning Control
 
-`--thinking on|off` and `--thinking-budget TOKENS|LABEL` are translated in `src/provider/` before a request is sent. The mapping is provider-profile based, so strict APIs do not receive the old generic `enable_thinking` and `thinking_budget` fields unless that is their documented shape or the endpoint is explicitly local/custom.
+`--reasoning auto|VALUE|TOKENS` is the public CLI control. Chat and editor expose `/reasoning`, `/reasoning VALUE`, and `/setting reasoning=VALUE`. Auto omits the override. A non-negative integer is retained exactly, and a bounded ASCII token is retained verbatim; no approximate effort-label/token-budget conversion occurs.
+
+The layered `models.conf` catalog selects one registered protocol after matching the API and a case-insensitive model-family regular expression against only the final slash-separated component of the model ID. Transport or vendor prefixes are ignored. Bundled family records are provider-neutral, although user records may opt into provider scoping for a transport-specific override. The catalog also supplies model-aware selector choices from one pipe-separated `value` list and the documented default. Direct values remain accepted when absent from the selector so a newer provider value can work without waiting for a catalog update, but the one-shot CLI warns and interactive chat/editor commands require confirmation before applying one. The endpoint remains authoritative and may reject an unsupported value.
 
 ```text
-profile/API                 outgoing request fields
-openai chat                 reasoning_effort: LABEL
-openai responses            reasoning: { effort: LABEL }
-openrouter                  reasoning: { effort: LABEL } or { max_tokens: TOKENS }
-gemini                      reasoning_effort: LABEL
-anthropic                   thinking: { type: enabled|disabled|adaptive } plus output_config.effort
-moonshot/kimi               thinking: { type: enabled|disabled }, omitted for always-thinking K2.7 models
-qwen, dashscope             enable_thinking plus numeric thinking_budget
-deepseek                    thinking: { type: enabled|disabled } plus reasoning_effort: high|max
-zai/glm                     thinking: { type: enabled|disabled } plus reasoning_effort: high|max
-xai                         reasoning_effort: LABEL
-custom/local fallback       enable_thinking and thinking_budget unless a known model family is detected
+catalog protocol            outgoing request fields
+openai_effort, chat         reasoning_effort: VALUE
+openai_effort, responses    reasoning: { effort: VALUE }
+openrouter                  reasoning: { effort: VALUE } or { max_tokens: TOKENS }
+gemini_effort               reasoning_effort: VALUE
+gemini_thinking_level       generation_config: { thinking_level: VALUE }
+gemma_thinking_level        generationConfig: { thinkingConfig: { thinkingLevel: VALUE } }
+anthropic_budget            thinking: { type: enabled, budget_tokens: TOKENS|VALUE }
+thinking_toggle             thinking: { type: enabled|disabled|VALUE }
+qwen_chat                   enable_thinking plus exact thinking_budget
+qwen_responses              reasoning: { effort: VALUE }
+deepseek, zai               thinking.type plus unmodified reasoning_effort
+kimi_effort                 reasoning_effort: VALUE
+xai_effort                  reasoning: { effort: VALUE }
+minimax_responses           reasoning: { effort: VALUE }
+nemotron_template           chat_template_kwargs enable_thinking/reasoning_budget
+hy3_template                extra_body.chat_template_kwargs.reasoning_effort
+generic_thinking            enable_thinking plus exact thinking_budget
 ```
 
-Numeric budgets are preserved where the provider documents token-budget control: OpenRouter `reasoning.max_tokens`, Anthropic `thinking.budget_tokens`, and Qwen/DashScope `thinking_budget`. For effort-only APIs, numeric budgets are mapped onto a deterministic scale: `0 -> none`, `<=1024 -> low`, `<=8192 -> medium`, `<=24576 -> high`, and larger values to `xhigh` where supported. Qwen/DashScope verbal labels are converted back to approximate token budgets on the same scale.
+Disable spellings such as `none`, `off`, and numeric `0` are recognized where a protocol has an enable/disable shape. Other names—including `minimal`—are not globally rewritten because their meaning is model-specific. Auto is always omitted rather than converted to a guessed default.
 
-Provider-specific limits still apply. For example, Gemini can disable thinking only on some models, Kimi K2.7 models always think and reject a `thinking` override, DeepSeek V4 and GLM-5.2 map lower efforts to `high`, and some OpenAI models only support a subset of effort values. `ainiux` does not yet perform live model capability probing for reasoning controls.
+Catalog entries currently cover model-specific GPT-5 generations, Gemini/Gemma, Claude token budgets, Grok, DeepSeek, Kimi, GLM, Qwen Chat/Responses, MiniMax Chat/Responses, MiMo Chat/Responses, Stepfun, Nemotron, Hy3, Llama 3.x presets, and both 20B/120B gpt-oss variants. Model matching checks only the final component, so arbitrarily nested prefixes such as `gateway/vendor/GEMINI-...` work without becoming part of the family expression. Native Anthropic Messages is still not implemented; the catalog cannot add an API adapter by itself.
 
-Anthropic's built-in profile uses Anthropic's OpenAI SDK compatibility endpoint, which Anthropic documents as mainly for testing/comparison. It maps request-side `thinking` controls, but native Claude Messages support is still needed for full extended/adaptive thinking behavior, signatures, and preserved reasoning state.
+Temperature metadata is advisory for explicit overrides. Purpose presets omit temperature when the matched model/reasoning combination marks it unsupported. Explicit CLI, configuration, chat, or editor temperature values remain serialized and produce a warning because the provider may reject them. In particular, the bundled catalog distinguishes older GPT-5 models that reject temperature from GPT-5.4/GPT-5.2 models that permit it only with `reasoning=none`; see [OpenAI's current GPT-5 parameter compatibility](https://developers.openai.com/api/docs/guides/latest-model?model=gpt-5.4).
 
 ## Built-In Profiles
 

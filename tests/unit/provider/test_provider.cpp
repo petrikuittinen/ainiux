@@ -3,6 +3,7 @@
 #include "cli/args.hpp"
 #include "json/json.hpp"
 #include "provider/names.hpp"
+#include "provider/model_selection.hpp"
 #include "provider/provider.hpp"
 
 #include <arpa/inet.h>
@@ -80,6 +81,16 @@ void check_number_field(const ainiux::json::Value* value,
 }
 
 void check_bool_field(const ainiux::json::Value& value,
+                      const std::string& name,
+                      bool expected,
+                      const std::string& message) {
+    const ainiux::json::Value* actual = field(value, name);
+    check(actual != nullptr && actual->type == ainiux::json::Value::Type::Bool &&
+              actual->boolean == expected,
+          message);
+}
+
+void check_bool_field(const ainiux::json::Value* value,
                       const std::string& name,
                       bool expected,
                       const std::string& message) {
@@ -917,6 +928,32 @@ void test_editor_defaults_offline_without_credentials() {
           "configured openrouter editor keeps provider without credentials");
 }
 
+void test_editor_model_selection_restore_requires_available_endpoint() {
+    ainiux::cli::Options configured;
+    ainiux::provider::ModelSelection custom{
+        "custom_openai_chat",
+        "remembered-model",
+        "chat",
+        ainiux::ReasoningSelection::named("high"),
+    };
+    check(!ainiux::provider::can_restore_model_selection(configured, custom),
+          "editor does not restore a custom provider after its endpoint disappears");
+
+    configured.base_url = "http://127.0.0.1:1234/v1";
+    check(ainiux::provider::can_restore_model_selection(configured, custom),
+          "editor restores a custom provider when its endpoint remains configured");
+
+    configured = {};
+    custom.provider = "lmstudio";
+    check(ainiux::provider::can_restore_model_selection(configured, custom),
+          "editor restores a provider with a built-in endpoint");
+
+    custom.provider = "none";
+    custom.model.clear();
+    check(ainiux::provider::can_restore_model_selection(configured, custom),
+          "editor restores the explicit offline selection without an endpoint");
+}
+
 void test_openai_context_allows_missing_model() {
     const char* argv[] = {"ainiux", "--provider", "openai", "-p", "hello", "--header", "Authorization: Bearer test"};
     ainiux::cli::ParseResult parsed = ainiux::cli::parse_args(7, const_cast<char**>(argv));
@@ -1086,232 +1123,242 @@ void test_provider_responses_unsupported_and_override() {
 }
 
 void test_provider_reasoning_request_compatibility() {
-    ainiux::provider::RequestContext context;
-    context.options.has_thinking_budget = true;
-    context.options.thinking_budget = "high";
+    const auto context_for = [](ainiux::ReasoningProtocol protocol,
+                                const ainiux::ReasoningSelection& selection,
+                                ainiux::provider::ApiKind api) {
+        ainiux::provider::RequestContext context;
+        context.profile.name = "custom_openai_chat";
+        context.api_kind = api;
+        context.options.model = "mock-model";
+        context.options.reasoning = selection;
+        context.options.reasoning_explicit = !selection.is_auto();
+        ainiux::ModelCapability capability;
+        capability.id = "test-capability";
+        capability.provider = "any";
+        capability.api = "any";
+        capability.model_regex = "^mock-model$";
+        capability.priority = 100;
+        capability.reasoning_protocol = protocol;
+        capability.load_order = 1;
+        context.options.model_catalog.models.push_back(capability);
+        return context;
+    };
+    const auto chat_context = [&](ainiux::ReasoningProtocol protocol,
+                                  const ainiux::ReasoningSelection& selection) {
+        return context_for(protocol,
+                           selection,
+                           ainiux::provider::ApiKind::ChatCompletions);
+    };
 
-    context.profile.name = "openai";
-    context.api_kind = ainiux::provider::ApiKind::ChatCompletions;
+    ainiux::provider::RequestContext context =
+        chat_context(ainiux::ReasoningProtocol::OpenAiEffort,
+                     ainiux::ReasoningSelection::automatic());
     ainiux::json::Value request = serialized_request_json(context);
-    check_string_field(request,
-                       "reasoning_effort",
-                       "high",
-                       "OpenAI Chat uses reasoning_effort for verbal thinking budgets");
-    check(field(request, "enable_thinking") == nullptr && field(request, "thinking_budget") == nullptr,
-          "OpenAI Chat does not receive generic thinking fields");
+    check(field(request, "reasoning_effort") == nullptr &&
+              field(request, "reasoning") == nullptr,
+          "Auto omits reasoning fields");
 
-    context.api_kind = ainiux::provider::ApiKind::Responses;
-    context.options.thinking_budget = "4096";
+    context = chat_context(ainiux::ReasoningProtocol::DeepSeek,
+                           ainiux::ReasoningSelection::named("high"));
+    context.profile.name = "openrouter";
+    check(ainiux::provider::matched_model_capability(context) != nullptr,
+          "OpenRouter transport matches a provider-neutral model family");
+    request = serialized_request_json(context);
+    const ainiux::json::Value* routed_reasoning = field(request, "reasoning");
+    check_string_field(routed_reasoning, "effort", "high",
+                       "OpenRouter transport keeps the OpenRouter reasoning wire format");
+    check(field(request, "thinking") == nullptr &&
+              field(request, "reasoning_effort") == nullptr,
+          "OpenRouter does not use the matched model's native reasoning fields");
+
+    context = chat_context(ainiux::ReasoningProtocol::OpenAiEffort,
+                           ainiux::ReasoningSelection::named("ultra"));
+    request = serialized_request_json(context);
+    check_string_field(request, "reasoning_effort", "ultra",
+                       "OpenAI Chat passes an unknown named effort through unchanged");
+
+    context = context_for(ainiux::ReasoningProtocol::OpenAiEffort,
+                          ainiux::ReasoningSelection::token_budget(4096),
+                          ainiux::provider::ApiKind::Responses);
     request = serialized_request_json(context);
     const ainiux::json::Value* reasoning = field(request, "reasoning");
-    check(reasoning != nullptr && reasoning->is_object(), "OpenAI Responses emits a reasoning object");
-    check_string_field(reasoning,
-                       "effort",
-                       "medium",
-                       "OpenAI Responses maps numeric budgets to reasoning effort");
-    check(field(request, "thinking_budget") == nullptr,
-          "OpenAI Responses does not receive generic thinking_budget");
+    check_number_field(reasoning, "effort", 4096.0,
+                       "OpenAI Responses preserves an exact numeric selection without approximation");
 
-    context = ainiux::provider::RequestContext{};
-    context.profile.name = "openrouter";
-    context.options.has_thinking_budget = true;
-    context.options.thinking_budget = "2048";
+    context = chat_context(ainiux::ReasoningProtocol::OpenRouter,
+                           ainiux::ReasoningSelection::token_budget(2048));
     request = serialized_request_json(context);
     reasoning = field(request, "reasoning");
-    check(reasoning != nullptr && reasoning->is_object(), "OpenRouter emits unified reasoning object");
-    check_number_field(reasoning,
-                       "max_tokens",
-                       2048.0,
-                       "OpenRouter preserves numeric thinking budgets as reasoning.max_tokens");
-    check(field(request, "reasoning_effort") == nullptr,
-          "OpenRouter does not receive top-level reasoning_effort");
-
-    context.options.thinking_budget = "xhigh";
+    check_number_field(reasoning, "max_tokens", 2048.0,
+                       "OpenRouter uses exact reasoning.max_tokens budgets");
+    context.options.reasoning = ainiux::ReasoningSelection::named("xhigh");
     request = serialized_request_json(context);
-    reasoning = field(request, "reasoning");
-    check_string_field(reasoning,
-                       "effort",
-                       "xhigh",
-                       "OpenRouter preserves effort labels in reasoning.effort");
+    check_string_field(field(request, "reasoning"), "effort", "xhigh",
+                       "OpenRouter preserves named efforts");
 
-    context = ainiux::provider::RequestContext{};
-    context.profile.name = "gemini";
-    context.options.has_thinking_budget = true;
-    context.options.thinking_budget = "8192";
+    context = chat_context(ainiux::ReasoningProtocol::GenericThinking,
+                           ainiux::ReasoningSelection::named("ultra"));
     request = serialized_request_json(context);
-    check_string_field(request,
-                       "reasoning_effort",
-                       "medium",
-                       "Gemini maps numeric thinking budgets to documented OpenAI-compatible reasoning_effort");
-    check(field(request, "extra_body") == nullptr,
-          "Gemini default compatibility path does not mix reasoning_effort with native thinking_config");
+    check_bool_field(request, "enable_thinking", true,
+                     "generic reasoning enables thinking for a named value");
+    check_string_field(request, "thinking_budget", "ultra",
+                       "generic reasoning passes an unknown value through");
 
-    context.options.thinking_budget = "xhigh";
+    context = chat_context(ainiux::ReasoningProtocol::GeminiEffort,
+                           ainiux::ReasoningSelection::token_budget(8192));
     request = serialized_request_json(context);
-    check_string_field(request,
-                       "reasoning_effort",
-                       "high",
-                       "Gemini maps over-high effort labels to its highest OpenAI-compatible effort");
+    check_number_field(request, "reasoning_effort", 8192.0,
+                       "Gemini effort protocol preserves an exact manual value");
 
-    context = ainiux::provider::RequestContext{};
-    context.profile.name = "anthropic";
-    context.options.has_thinking_budget = true;
-    context.options.thinking_budget = "2048";
+    context = chat_context(ainiux::ReasoningProtocol::GeminiThinkingLevel,
+                           ainiux::ReasoningSelection::named("high"));
+    request = serialized_request_json(context);
+    const ainiux::json::Value* generation_config =
+        field(request, "generation_config");
+    const ainiux::json::Value* thinking_config = generation_config;
+    check_string_field(thinking_config, "thinking_level", "high",
+                       "Gemini native protocol uses generation_config.thinking_level");
+
+    context = chat_context(ainiux::ReasoningProtocol::GemmaThinkingLevel,
+                           ainiux::ReasoningSelection::named("minimal"));
+    request = serialized_request_json(context);
+    generation_config = field(request, "generationConfig");
+    thinking_config = field(generation_config, "thinkingConfig");
+    check_string_field(thinking_config, "thinkingLevel", "minimal",
+                       "Gemma preserves minimal as a level instead of treating it as disabled");
+
+    context = chat_context(ainiux::ReasoningProtocol::AnthropicBudget,
+                           ainiux::ReasoningSelection::token_budget(2048));
     request = serialized_request_json(context);
     const ainiux::json::Value* thinking = field(request, "thinking");
-    check_string_field(thinking,
-                       "type",
-                       "enabled",
-                       "Anthropic Claude OpenAI compatibility uses thinking.type enabled");
-    check_number_field(thinking,
-                       "budget_tokens",
-                       2048.0,
-                       "Anthropic Claude preserves numeric thinking budgets as budget_tokens");
-    check(field(request, "reasoning_effort") == nullptr && field(request, "enable_thinking") == nullptr,
-          "Anthropic Claude does not receive OpenAI or generic thinking controls");
-
-    context.options.thinking_budget = "high";
+    check_string_field(thinking, "type", "enabled",
+                       "Anthropic exact budgets enable thinking");
+    check_number_field(thinking, "budget_tokens", 2048.0,
+                       "Anthropic exact budgets are not converted");
+    context.options.reasoning = ainiux::ReasoningSelection::named("ultra");
     request = serialized_request_json(context);
-    thinking = field(request, "thinking");
-    const ainiux::json::Value* output_config = field(request, "output_config");
-    check_string_field(thinking,
-                       "type",
-                       "adaptive",
-                       "Anthropic Claude maps verbal budgets to adaptive thinking");
-    check_string_field(output_config,
-                       "effort",
-                       "high",
-                       "Anthropic Claude carries verbal effort in output_config");
-
-    context = ainiux::provider::RequestContext{};
-    context.profile.name = "qwen";
-    context.options.has_thinking_budget = true;
-    context.options.thinking_budget = "high";
+    check_string_field(field(request, "thinking"), "budget_tokens", "ultra",
+                       "Anthropic passes an unknown manual budget to the server");
+    context.options.reasoning = ainiux::ReasoningSelection::named("none");
     request = serialized_request_json(context);
-    check_bool_field(request, "enable_thinking", true, "Qwen thinking budget enables thinking");
-    check_number_field(request,
-                       "thinking_budget",
-                       24576.0,
-                       "Qwen maps verbal thinking budgets to documented token-budget scale");
+    check_string_field(field(request, "thinking"), "type", "disabled",
+                       "Anthropic maps a documented disable value to disabled thinking");
 
-    context.profile.name = "dashscope";
-    context.options.thinking_budget = "1024";
+    context = chat_context(ainiux::ReasoningProtocol::ThinkingToggle,
+                           ainiux::ReasoningSelection::named("ultra"));
     request = serialized_request_json(context);
-    check_bool_field(request, "enable_thinking", true, "DashScope numeric budget enables thinking");
-    check_number_field(request, "thinking_budget", 1024.0, "DashScope preserves numeric thinking_budget");
+    check_string_field(field(request, "thinking"), "type", "ultra",
+                       "toggle protocol forwards an unknown named value");
+    context.options.reasoning = ainiux::ReasoningSelection::named("off");
+    request = serialized_request_json(context);
+    check_string_field(field(request, "thinking"), "type", "disabled",
+                       "toggle protocol recognizes disable values");
 
-    context = ainiux::provider::RequestContext{};
-    context.profile.name = "deepseek";
-    context.options.has_enable_thinking = true;
-    context.options.enable_thinking = false;
+    context = chat_context(ainiux::ReasoningProtocol::QwenChat,
+                           ainiux::ReasoningSelection::named("high"));
     request = serialized_request_json(context);
-    thinking = field(request, "thinking");
-    check_string_field(thinking,
-                       "type",
-                       "disabled",
-                       "DeepSeek maps thinking off to thinking.type disabled");
+    check_bool_field(request, "enable_thinking", true,
+                     "Qwen Chat enables thinking");
+    check_string_field(request, "thinking_budget", "high",
+                       "Qwen Chat does not approximate a named value into tokens");
+    context.options.reasoning = ainiux::ReasoningSelection::named("enabled");
+    request = serialized_request_json(context);
+    check_bool_field(request, "enable_thinking", true,
+                     "Qwen Chat selector enable value uses the toggle");
+    check(field(request, "thinking_budget") == nullptr,
+          "Qwen Chat selector enable value does not invent a budget");
+    context.options.reasoning = ainiux::ReasoningSelection::token_budget(1024);
+    request = serialized_request_json(context);
+    check_number_field(request, "thinking_budget", 1024.0,
+                       "Qwen Chat preserves exact token budgets");
+
+    context = context_for(ainiux::ReasoningProtocol::QwenResponses,
+                          ainiux::ReasoningSelection::named("max"),
+                          ainiux::provider::ApiKind::Responses);
+    request = serialized_request_json(context);
+    check_string_field(field(request, "reasoning"), "effort", "max",
+                       "Qwen Responses uses reasoning.effort");
+
+    context = chat_context(ainiux::ReasoningProtocol::DeepSeek,
+                           ainiux::ReasoningSelection::named("medium"));
+    request = serialized_request_json(context);
+    check_string_field(field(request, "thinking"), "type", "enabled",
+                       "DeepSeek enables thinking for a named value");
+    check_string_field(request, "reasoning_effort", "medium",
+                       "DeepSeek preserves named efforts without remapping");
+    context.options.reasoning = ainiux::ReasoningSelection::named("none");
+    request = serialized_request_json(context);
+    check_string_field(field(request, "thinking"), "type", "disabled",
+                       "DeepSeek recognizes none");
     check(field(request, "reasoning_effort") == nullptr,
-          "DeepSeek disabled thinking omits reasoning_effort");
+          "DeepSeek omits effort when disabled");
 
-    context.options.enable_thinking = true;
-    context.options.has_thinking_budget = true;
-    context.options.thinking_budget = "medium";
+    context = chat_context(ainiux::ReasoningProtocol::KimiEffort,
+                           ainiux::ReasoningSelection::named("max"));
     request = serialized_request_json(context);
-    thinking = field(request, "thinking");
-    check_string_field(thinking,
-                       "type",
-                       "enabled",
-                       "DeepSeek maps enabled thinking to thinking.type enabled");
-    check_string_field(request,
-                       "reasoning_effort",
-                       "high",
-                       "DeepSeek maps low/medium-compatible efforts to high");
+    check_string_field(request, "reasoning_effort", "max",
+                       "Kimi effort protocol preserves max");
 
-    context = ainiux::provider::RequestContext{};
-    context.profile.name = "moonshot";
-    context.options.model = "kimi-k2.6";
-    context.options.has_enable_thinking = true;
-    context.options.enable_thinking = false;
+    context = chat_context(ainiux::ReasoningProtocol::Zai,
+                           ainiux::ReasoningSelection::named("xhigh"));
     request = serialized_request_json(context);
-    thinking = field(request, "thinking");
-    check_string_field(thinking,
-                       "type",
-                       "disabled",
-                       "Kimi K2.6 maps thinking off to thinking.type disabled");
-    check(field(request, "reasoning_effort") == nullptr && field(request, "thinking_budget") == nullptr,
-          "Kimi K2.6 does not receive unsupported effort or token-budget fields");
+    check_string_field(request, "reasoning_effort", "xhigh",
+                       "Z.AI preserves an unknown effort without conversion");
+    check_string_field(field(request, "thinking"), "type", "enabled",
+                       "Z.AI enables thinking for explicit effort");
 
-    context.options.model = "kimi-k2.7-code";
-    context.options.enable_thinking = true;
+    context = chat_context(ainiux::ReasoningProtocol::XaiEffort,
+                           ainiux::ReasoningSelection::named("xhigh"));
     request = serialized_request_json(context);
-    check(field(request, "thinking") == nullptr,
-          "Kimi K2.7 code omits thinking parameter because the model is always thinking");
+    check_string_field(field(request, "reasoning"), "effort", "xhigh",
+                       "xAI preserves named effort values in reasoning.effort");
 
-    context = ainiux::provider::RequestContext{};
-    context.profile.name = "zai";
-    context.options.model = "glm-5.2";
-    context.options.has_thinking_budget = true;
-    context.options.thinking_budget = "xhigh";
+    context = context_for(ainiux::ReasoningProtocol::MiniMaxResponses,
+                          ainiux::ReasoningSelection::named("high"),
+                          ainiux::provider::ApiKind::Responses);
     request = serialized_request_json(context);
-    thinking = field(request, "thinking");
-    check_string_field(thinking,
-                       "type",
-                       "enabled",
-                       "GLM-5.2 enables thinking when reasoning effort is requested");
-    check_string_field(request,
-                       "reasoning_effort",
-                       "max",
-                       "GLM-5.2 maps xhigh to max reasoning effort");
+    check_string_field(field(request, "reasoning"), "effort", "high",
+                       "MiniMax Responses uses reasoning.effort");
 
-    context.options.thinking_budget = "none";
+    context = chat_context(ainiux::ReasoningProtocol::NemotronTemplate,
+                           ainiux::ReasoningSelection::token_budget(3072));
     request = serialized_request_json(context);
-    thinking = field(request, "thinking");
-    check_string_field(thinking,
-                       "type",
-                       "disabled",
-                       "GLM-5.2 maps none to disabled thinking");
-    check(field(request, "reasoning_effort") == nullptr,
-          "GLM-5.2 does not send reasoning_effort when thinking is disabled");
+    const ainiux::json::Value* template_kwargs = field(request, "chat_template_kwargs");
+    check_bool_field(template_kwargs, "enable_thinking", true,
+                     "Nemotron enables thinking in chat template kwargs");
+    check_number_field(template_kwargs, "reasoning_budget", 3072.0,
+                       "Nemotron preserves exact reasoning budgets");
 
-    context = ainiux::provider::RequestContext{};
-    context.profile.name = "xai";
-    context.options.has_thinking_budget = true;
-    context.options.thinking_budget = "xhigh";
+    context = chat_context(ainiux::ReasoningProtocol::Hy3Template,
+                           ainiux::ReasoningSelection::named("ultra"));
     request = serialized_request_json(context);
-    check_string_field(request,
-                       "reasoning_effort",
-                       "high",
-                       "xAI maps xhigh to the highest documented Grok effort");
+    const ainiux::json::Value* extra_body = field(request, "extra_body");
+    template_kwargs = field(extra_body, "chat_template_kwargs");
+    check_string_field(template_kwargs, "reasoning_effort", "ultra",
+                       "Hy3 forwards named reasoning in chat template kwargs");
 
-    context = ainiux::provider::RequestContext{};
-    context.profile.name = "custom_openai_chat";
-    context.options.has_enable_thinking = true;
-    context.options.enable_thinking = true;
-    context.options.has_thinking_budget = true;
-    context.options.thinking_budget = "high";
+    context = chat_context(ainiux::ReasoningProtocol::None,
+                           ainiux::ReasoningSelection::named("high"));
     request = serialized_request_json(context);
-    check_bool_field(request,
-                     "enable_thinking",
-                     true,
-                     "custom OpenAI-compatible endpoints keep generic enable_thinking");
-    check_string_field(request,
-                       "thinking_budget",
-                       "high",
-                       "custom OpenAI-compatible endpoints preserve verbal thinking_budget");
+    check(field(request, "reasoning") == nullptr &&
+              field(request, "reasoning_effort") == nullptr &&
+              field(request, "thinking") == nullptr,
+          "none protocol omits reasoning controls");
 
-    context.options.model = "deepseek-v4-pro";
+    context = chat_context(ainiux::ReasoningProtocol::OpenAiEffort,
+                           ainiux::ReasoningSelection::named("high"));
+    context.options.model_catalog.models.front().temperature =
+        ainiux::TemperatureSupport::ReasoningNoneOnly;
+    context.options.has_temperature = true;
+    context.options.temperature = 0.7;
     request = serialized_request_json(context);
-    thinking = field(request, "thinking");
-    check_string_field(thinking,
-                       "type",
-                       "enabled",
-                       "custom endpoints with a DeepSeek V4 model use DeepSeek thinking fields");
-    check_string_field(request,
-                       "reasoning_effort",
-                       "high",
-                       "custom endpoints with a DeepSeek V4 model map verbal budgets to DeepSeek reasoning_effort");
-    check(field(request, "enable_thinking") == nullptr && field(request, "thinking_budget") == nullptr,
-          "custom DeepSeek V4 model detection suppresses generic thinking fields");
+    check_number_field(request, "temperature", 0.7,
+                       "explicit temperature remains serialized when catalog metadata warns");
+    check(!ainiux::provider::reasoning_temperature_advisory(context).empty(),
+          "explicit unsupported temperature produces an advisory");
+    context.options.reasoning = ainiux::ReasoningSelection::named("none");
+    check(ainiux::provider::reasoning_temperature_advisory(context).empty(),
+          "reasoning=none satisfies conditional GPT-5 temperature support");
 }
 
 void test_provider_unicode_request_serialization() {
@@ -1362,6 +1409,7 @@ void run_all() {
     test_tui_startup_provider_selection_helpers();
     test_editor_startup_local_only_default();
     test_editor_defaults_offline_without_credentials();
+    test_editor_model_selection_restore_requires_available_endpoint();
     test_none_provider_allows_an_empty_endpoint();
     test_openai_context_allows_missing_model();
     test_openrouter_shortcut_context();

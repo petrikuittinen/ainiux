@@ -13,9 +13,7 @@ inline constexpr const char kRepeatPenalty[] = "repeat_penalty";
 inline constexpr const char kPresencePenalty[] = "presence_penalty";
 inline constexpr const char kMaxTokens[] = "max_tokens";
 inline constexpr const char kMaxOutputTokens[] = "max_output_tokens";
-inline constexpr const char kThinking[] = "thinking";
-inline constexpr const char kEnableThinking[] = "enable_thinking";
-inline constexpr const char kThinkingBudget[] = "thinking_budget";
+inline constexpr const char kReasoning[] = "reasoning";
 
 inline constexpr const char kPurposeGeneral[] = "general";
 inline constexpr const char kPurposeCoding[] = "coding";

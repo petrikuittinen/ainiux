@@ -322,6 +322,69 @@ void test_cli_responses_parse() {
     check(parsed.options.api == "responses", "--responses selects Responses API");
 }
 
+void test_cli_reasoning_parse() {
+    const char* named_argv[] = {"ainiux", "--reasoning", "ultra", "-m", "model"};
+    ainiux::cli::ParseResult parsed =
+        ainiux::cli::parse_args(5, const_cast<char**>(named_argv));
+    check(parsed.error.ok() &&
+              parsed.options.reasoning == ainiux::ReasoningSelection::named("ultra") &&
+              parsed.options.reasoning_explicit && parsed.options.reasoning_cli_explicit &&
+              parsed.options.model_explicit,
+          "--reasoning accepts an uncatalogued named value");
+
+    const char* budget_argv[] = {"ainiux", "--reasoning", "8192"};
+    parsed = ainiux::cli::parse_args(3, const_cast<char**>(budget_argv));
+    check(parsed.error.ok() &&
+              parsed.options.reasoning == ainiux::ReasoningSelection::token_budget(8192),
+          "--reasoning accepts an exact non-negative token budget");
+
+    const char* auto_argv[] = {"ainiux", "--reasoning", "auto"};
+    parsed = ainiux::cli::parse_args(3, const_cast<char**>(auto_argv));
+    check(parsed.error.ok() && parsed.options.reasoning.is_auto() &&
+              parsed.options.reasoning_cli_explicit,
+          "--reasoning auto explicitly clears an override");
+
+    const char* invalid_argv[] = {"ainiux", "--reasoning", "not valid"};
+    parsed = ainiux::cli::parse_args(3, const_cast<char**>(invalid_argv));
+    check(!parsed.error.ok() && parsed.error.code == ainiux::ErrorCode::BadArgs,
+          "--reasoning rejects values outside the bounded ASCII token syntax");
+
+    const char* old_thinking_argv[] = {"ainiux", "--thinking", "on"};
+    parsed = ainiux::cli::parse_args(3, const_cast<char**>(old_thinking_argv));
+    check(!parsed.error.ok(), "retired --thinking is no longer a public option");
+    const char* old_budget_argv[] = {"ainiux", "--thinking-budget", "4096"};
+    parsed = ainiux::cli::parse_args(3, const_cast<char**>(old_budget_argv));
+    check(!parsed.error.ok(), "retired --thinking-budget is no longer a public option");
+
+    ainiux::cli::Options remembered;
+    remembered.provider = "openai";
+    remembered.model = "remembered-model";
+    remembered.api = "chat";
+    remembered.reasoning = ainiux::ReasoningSelection::named("high");
+    const char* override_argv[] = {
+        "ainiux", "--editor", "--provider", "qwen", "-m", "qwen3.6-plus",
+        "--responses", "--reasoning", "low",
+    };
+    parsed = ainiux::cli::parse_args(
+        9, const_cast<char**>(override_argv), remembered);
+    check(parsed.error.ok() && parsed.options.provider == "qwen" &&
+              parsed.options.model == "qwen3.6-plus" &&
+              parsed.options.api == "responses" &&
+              parsed.options.reasoning ==
+                  ainiux::ReasoningSelection::named("low"),
+          "explicit editor CLI selection overrides remembered model state");
+
+    remembered.provider = "none";
+    const char* direct_url_argv[] = {
+        "ainiux", "http://127.0.0.1:18080", "--editor",
+    };
+    parsed = ainiux::cli::parse_args(
+        3, const_cast<char**>(direct_url_argv), remembered);
+    check(parsed.error.ok() && parsed.options.provider == "openai" &&
+              parsed.options.positional_url == "http://127.0.0.1:18080",
+          "direct endpoint overrides a remembered offline editor provider");
+}
+
 void test_cli_empty_and_unicode_edge_cases() {
     const char* argv[] = {"ainiux"};
     ainiux::cli::ParseResult parsed = ainiux::cli::parse_args(1, const_cast<char**>(argv));
@@ -377,6 +440,7 @@ void run_all() {
     test_cli_rejects_unknown();
     test_cli_repl_parse();
     test_cli_responses_parse();
+    test_cli_reasoning_parse();
     test_url_normalization();
 }
 

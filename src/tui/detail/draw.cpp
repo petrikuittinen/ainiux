@@ -454,6 +454,10 @@ const char* panel_title_for_mode(TuiMode mode) {
             return "Provider";
         case TuiMode::ModelList:
             return "Model";
+        case TuiMode::ReasoningList:
+            return "Reasoning";
+        case TuiMode::ReasoningConfirm:
+            return "Reasoning warning";
         case TuiMode::AttachmentList:
             return "Attachments";
         case TuiMode::AttachmentDeleteConfirm:
@@ -498,6 +502,7 @@ void append_panel_fill_line(std::vector<StyledLine>& lines, int cols) {
 
 StyleRole panel_body_role_for_line(TuiMode mode, const std::string& line) {
     if ((mode == TuiMode::ThreadList || mode == TuiMode::ProviderList || mode == TuiMode::ModelList ||
+         mode == TuiMode::ReasoningList ||
          mode == TuiMode::AttachmentList) &&
         (line.rfind(u8"› ", 0) == 0 || line.rfind("> ", 0) == 0)) {
         return StyleRole::PanelHighlight;

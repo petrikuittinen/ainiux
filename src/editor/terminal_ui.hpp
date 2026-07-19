@@ -38,6 +38,7 @@ enum class MinibufferAction {
     ConfirmSaveOnQuit,
     ConfirmOverwrite,
     ConfirmReloadAfterLock,
+    ConfirmReasoning,
     AssistCommand,
     AssistScopeChoice,
     AssistPromptMode,
