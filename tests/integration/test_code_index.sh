@@ -85,4 +85,39 @@ grep -q 'no completed code index exists' "$WORK/missing.stderr"
 test ! -s "$WORK/clear-again.stdout"
 grep -q 'already clear' "$WORK/clear-again.stderr"
 
+LANG_WORK="$WORK/languages"
+mkdir -p "$LANG_WORK"
+printf '%s\n' '# Indexed Markdown' > "$LANG_WORK/README.md"
+printf '%s\n' 'class IndexedCpp {};' > "$LANG_WORK/model.cpp"
+printf '%s\n' 'class IndexedCSharp {}' > "$LANG_WORK/model.cs"
+printf '%s\n' 'class IndexedJava {}' > "$LANG_WORK/Model.java"
+printf '%s\n' '<main id="indexed-xhtml"><script>function notIndexedHere() {}</script></main>' > "$LANG_WORK/page.xhtml"
+printf '%s\n' '<schema><element name="IndexedXml"/></schema>' > "$LANG_WORK/schema.xml"
+printf '%s\n' '{"indexedJson": true}' > "$LANG_WORK/data.json"
+printf '%s\n' 'indexed_bash() { :; }' > "$LANG_WORK/script.sh"
+printf '%s\n' '<?php' 'function indexed_php() {}' > "$LANG_WORK/plugin.php"
+printf '%s\n' 'sub indexed_perl {}' > "$LANG_WORK/module.pm"
+printf '%s\n' 'def indexed_ruby' 'end' > "$LANG_WORK/worker.rb"
+printf '%s\n' 'pub fn indexed_rust() {}' > "$LANG_WORK/lib.rs"
+printf '%s\n' 'package demo' 'func indexedGo() {}' > "$LANG_WORK/main.go"
+printf '%s\n' 'function Indexed-PowerShell {}' > "$LANG_WORK/script.ps1"
+printf '%s\n' '.type indexed_assembly, @function' 'indexed_assembly:' > "$LANG_WORK/start.s"
+printf '%s\n' 'CREATE TABLE indexed_sql (id INTEGER);' > "$LANG_WORK/schema.sql"
+printf '%s\n' '[indexedToml]' 'enabled = true' > "$LANG_WORK/config.toml"
+printf '%s\n' 'indexedYaml:' '  enabled: true' > "$LANG_WORK/config.yaml"
+printf '%s\n' '[indexedIni]' 'enabled = true' > "$LANG_WORK/config.ini"
+(cd "$LANG_WORK" && "$BIN" --index-code --print-index >"$LANG_WORK/report.md" 2>"$LANG_WORK/index.stderr")
+for language in Markdown 'C++' 'C#' Java HTML-only XML JSON Bash PHP Perl Ruby Rust Go PowerShell Assembly SQL TOML YAML INI; do
+    grep -Fq "| $language |" "$LANG_WORK/report.md"
+done
+for symbol in 'Indexed Markdown' IndexedCpp IndexedCSharp IndexedJava indexed-xhtml IndexedXml \
+    indexedJson indexed_bash indexed_php indexed_perl indexed_ruby indexed_rust indexedGo \
+    Indexed-PowerShell indexed_assembly indexed_sql indexedToml indexedYaml indexedIni; do
+    grep -Fq "$symbol" "$LANG_WORK/report.md"
+done
+if grep -Fq 'notIndexedHere' "$LANG_WORK/report.md"; then
+    echo 'HTML-only indexing unexpectedly scanned embedded JavaScript' >&2
+    exit 1
+fi
+
 echo 'code index integration tests passed'

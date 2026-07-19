@@ -9,6 +9,7 @@
 
 #include "common.hpp"
 #include "highlight/highlight.hpp"
+#include "agent/index/scanner_extra.hpp"
 
 namespace ainiux::agent::index {
 namespace {
@@ -1164,9 +1165,9 @@ void append_embedded_symbols(ScanResult& destination, ScanResult embedded, int l
     }
 }
 
-ScanResult scan_html(const std::string& source) {
+ScanResult scan_html(const std::string& source, bool embedded_languages = true) {
     ScanResult result;
-    result.language = Language::Html;
+    result.language = embedded_languages ? Language::Html : Language::HtmlOnly;
     const std::string lower = ascii_lower(source);
     const SourceLineMap line_map(source);
     static const std::regex opening_tag(
@@ -1206,8 +1207,18 @@ ScanResult scan_html(const std::string& source) {
             result.symbols.push_back(std::move(symbol));
         }
 
-        const bool script = tag_name == "script";
-        const bool style = tag_name == "style";
+        const bool raw_script = tag_name == "script";
+        const bool raw_style = tag_name == "style";
+        if (!embedded_languages && (raw_script || raw_style)) {
+            const std::string closing_tag = "</" + tag_name;
+            const std::size_t close = lower.find(closing_tag, end + 1);
+            if (close == std::string::npos) break;
+            const std::size_t closing_end = html_tag_end(source, close + 2);
+            pos = closing_end == std::string::npos ? source.size() : closing_end + 1;
+            continue;
+        }
+        const bool script = embedded_languages && raw_script;
+        const bool style = embedded_languages && raw_style;
         if (!script && !style) {
             pos = end + 1;
             continue;
@@ -1247,38 +1258,92 @@ ScanResult scan_html(const std::string& source) {
 
 const char* language_name(Language language) {
     switch (language) {
+        case Language::Markdown: return "Markdown";
         case Language::Python: return "Python";
         case Language::C: return "C";
         case Language::Cpp: return "C++";
+        case Language::CSharp: return "C#";
+        case Language::Java: return "Java";
         case Language::JavaScript: return "JavaScript";
         case Language::TypeScript: return "TypeScript";
         case Language::Html: return "HTML";
+        case Language::HtmlOnly: return "HTML-only";
         case Language::Css: return "CSS";
+        case Language::Xml: return "XML";
+        case Language::Json: return "JSON";
+        case Language::Bash: return "Bash";
+        case Language::Php: return "PHP";
+        case Language::Perl: return "Perl";
+        case Language::Ruby: return "Ruby";
+        case Language::Rust: return "Rust";
+        case Language::Go: return "Go";
+        case Language::PowerShell: return "PowerShell";
+        case Language::Assembly: return "Assembly";
+        case Language::Sql: return "SQL";
+        case Language::Toml: return "TOML";
+        case Language::Yaml: return "YAML";
+        case Language::Ini: return "INI";
     }
     return "Unknown";
 }
 
 bool language_for_path(const std::string& path, Language& language) {
     switch (highlight::detect_language(path)) {
+        case highlight::Language::Markdown: language = Language::Markdown; return true;
         case highlight::Language::Python: language = Language::Python; return true;
         case highlight::Language::C: language = Language::C; return true;
         case highlight::Language::Cpp: language = Language::Cpp; return true;
+        case highlight::Language::CSharp: language = Language::CSharp; return true;
+        case highlight::Language::Java: language = Language::Java; return true;
         case highlight::Language::JavaScript: language = Language::JavaScript; return true;
         case highlight::Language::TypeScript: language = Language::TypeScript; return true;
         case highlight::Language::Html: language = Language::Html; return true;
+        case highlight::Language::HtmlOnly: language = Language::HtmlOnly; return true;
         case highlight::Language::Css: language = Language::Css; return true;
+        case highlight::Language::Xml: language = Language::Xml; return true;
+        case highlight::Language::Json: language = Language::Json; return true;
+        case highlight::Language::Bash: language = Language::Bash; return true;
+        case highlight::Language::Php: language = Language::Php; return true;
+        case highlight::Language::Perl: language = Language::Perl; return true;
+        case highlight::Language::Ruby: language = Language::Ruby; return true;
+        case highlight::Language::Rust: language = Language::Rust; return true;
+        case highlight::Language::Go: language = Language::Go; return true;
+        case highlight::Language::PowerShell: language = Language::PowerShell; return true;
+        case highlight::Language::Assembly: language = Language::Assembly; return true;
+        case highlight::Language::Sql: language = Language::Sql; return true;
+        case highlight::Language::Toml: language = Language::Toml; return true;
+        case highlight::Language::Yaml: language = Language::Yaml; return true;
+        case highlight::Language::Ini: language = Language::Ini; return true;
         default: return false;
     }
 }
 
 ScanResult scan_source(const std::string& path, const std::string& source, Language language) {
     switch (language) {
+        case Language::Markdown:
+        case Language::CSharp:
+        case Language::Java:
+        case Language::Xml:
+        case Language::Json:
+        case Language::Bash:
+        case Language::Php:
+        case Language::Perl:
+        case Language::Ruby:
+        case Language::Rust:
+        case Language::Go:
+        case Language::PowerShell:
+        case Language::Assembly:
+        case Language::Sql:
+        case Language::Toml:
+        case Language::Yaml:
+        case Language::Ini: return scan_additional_source(source, language);
         case Language::Python: return scan_python(source);
         case Language::C:
         case Language::Cpp: return scan_c_family(path, source, language);
         case Language::JavaScript:
         case Language::TypeScript: return scan_ecmascript(source, language);
         case Language::Html: return scan_html(source);
+        case Language::HtmlOnly: return scan_html(source, false);
         case Language::Css: return scan_css(source);
     }
     return {};

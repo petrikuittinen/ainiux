@@ -7,6 +7,8 @@
 #include <fstream>
 #include <sstream>
 #include <string>
+#include <utility>
+#include <vector>
 
 #include "agent/index/index.hpp"
 #include "support/test_support.hpp"
@@ -35,6 +37,15 @@ const ainiux::agent::index::Symbol* find_symbol(const ScanResult& scan,
         if (symbol.kind == kind && symbol.qualified_name == qualified_name) return &symbol;
     }
     return nullptr;
+}
+
+std::string symbol_summary(const ScanResult& scan) {
+    std::string output;
+    for (const auto& symbol : scan.symbols) {
+        if (!output.empty()) output += ", ";
+        output += symbol.kind + ":" + symbol.qualified_name;
+    }
+    return output;
 }
 
 fs::path temporary_workspace(const std::string& label) {
@@ -310,6 +321,306 @@ void test_web_language_detection() {
           "code index detects CSS extensions through editor detection");
 }
 
+void test_all_editor_language_detection() {
+    const std::vector<std::pair<std::string, Language>> cases = {
+        {"README.MD", Language::Markdown},       {"module.PY", Language::Python},
+        {"module.C", Language::C},               {"module.CPP", Language::Cpp},
+        {"module.CS", Language::CSharp},         {"module.JAVA", Language::Java},
+        {"module.JSX", Language::JavaScript},    {"module.TSX", Language::TypeScript},
+        {"index.HTML", Language::Html},           {"index.XHTML", Language::HtmlOnly},
+        {"theme.CSS", Language::Css},             {"schema.XML", Language::Xml},
+        {"data.JSONL", Language::Json},           {"script.BASH", Language::Bash},
+        {"module.PHP", Language::Php},            {"module.PM", Language::Perl},
+        {"Gemfile", Language::Ruby},              {"module.RS", Language::Rust},
+        {"module.GO", Language::Go},              {"module.PS1", Language::PowerShell},
+        {"module.S", Language::Assembly},         {"schema.SQL", Language::Sql},
+        {"config.TOML", Language::Toml},          {"config.YML", Language::Yaml},
+        {"config.INI", Language::Ini},
+    };
+    for (const auto& item : cases) {
+        Language detected = Language::Python;
+        check(ainiux::agent::index::language_for_path(item.first, detected) && detected == item.second,
+              "code index matches editor language detection for " + item.first);
+    }
+    Language detected = Language::Python;
+    check(!ainiux::agent::index::language_for_path("notes.txt", detected),
+          "code index continues to exclude editor plain-text files");
+}
+
+void test_markdown_markup_and_data_scanners() {
+    const std::string markdown =
+        "# Guide\n"
+        "## Setup\n"
+        "[manual]: https://example.test/manual\n"
+        "```md\n"
+        "# Hidden\n"
+        "```\n";
+    ScanResult scan = ainiux::agent::index::scan_source("README.md", markdown, Language::Markdown);
+    check(has_symbol(scan, "heading", "Guide") && has_symbol(scan, "heading", "Guide::Setup"),
+          "Markdown scanner finds and qualifies headings");
+    check(has_symbol(scan, "link-reference", "manual") && !has_symbol(scan, "heading", "Hidden"),
+          "Markdown scanner finds references and ignores fenced headings");
+
+    const std::string html_only =
+        "<main id=\"app\"><script>function hidden() {}</script><user-card/></main>\n";
+    scan = ainiux::agent::index::scan_source("index.xhtml", html_only, Language::HtmlOnly);
+    check(scan.language == Language::HtmlOnly && has_symbol(scan, "element", "#app") &&
+              !has_symbol(scan, "function", "hidden"),
+          "HTML-only scanner indexes markup without embedded JavaScript");
+
+    const std::string xml =
+        "<!-- <fake id=\"hidden\"/> -->\n"
+        "<xs:schema xmlns:xs=\"urn:test\">\n"
+        "  <xs:element name=\"User\"/>\n"
+        "</xs:schema>\n";
+    scan = ainiux::agent::index::scan_source("schema.xml", xml, Language::Xml);
+    check(has_symbol(scan, "element", "xs:schema") &&
+              has_symbol(scan, "declaration", "xs:element::User") &&
+              !has_symbol(scan, "element", "#hidden"),
+          "XML scanner finds roots and named declarations while masking comments");
+
+    const std::string json =
+        "{\n"
+        "  \"config\": {\"port\": 8080},\n"
+        "  \"message\": \"{\\\"hidden\\\": 1}\"\n"
+        "}\n"
+        "{\"jsonl_key\": true}\n";
+    scan = ainiux::agent::index::scan_source("data.jsonl", json, Language::Json);
+    check(has_symbol(scan, "key", "config") && has_symbol(scan, "key", "config::port") &&
+              has_symbol(scan, "key", "jsonl_key") && !has_symbol(scan, "key", "hidden"),
+          "JSON scanner finds nested and JSONL keys without matching strings");
+}
+
+void test_managed_language_scanners() {
+    const std::string csharp =
+        "namespace Demo.App {\n"
+        "  // Widget documentation\n"
+        "  public class Widget {\n"
+        "    public const int Limit = 4;\n"
+        "    public string Name { get; set; }\n"
+        "    public int Add(int left, int right) { return left + right; }\n"
+        "    string fake = \"class Ghost { void Hidden() {} }\";\n"
+        "  }\n"
+        "}\n";
+    ScanResult scan = ainiux::agent::index::scan_source("Widget.cs", csharp, Language::CSharp);
+    check(has_symbol(scan, "namespace", "Demo.App") &&
+              has_symbol(scan, "class", "Demo.App::Widget") &&
+              has_symbol(scan, "constant", "Demo.App::Widget::Limit") &&
+              has_symbol(scan, "property", "Demo.App::Widget::Name") &&
+              has_symbol(scan, "method", "Demo.App::Widget::Add"),
+          "C# scanner finds namespaces, types, fields, properties, and methods: " +
+              symbol_summary(scan));
+    check(!has_symbol(scan, "class", "Demo.App::Widget::Ghost"),
+          "C# scanner masks declarations inside strings");
+    const auto* widget = find_symbol(scan, "class", "Demo.App::Widget");
+    check(widget != nullptr && widget->line_start == 3 && widget->line_end == 8 &&
+              widget->documentation == "Widget documentation",
+          "C# scanner records ranges and documentation");
+
+    const std::string java =
+        "package com.example;\n"
+        "public final class Service {\n"
+        "  private final int size = 1;\n"
+        "  public String greet(String name) { return name; }\n"
+        "  // interface Hidden {}\n"
+        "}\n";
+    scan = ainiux::agent::index::scan_source("Service.java", java, Language::Java);
+    check(has_symbol(scan, "package", "com.example") &&
+              has_symbol(scan, "class", "com.example::Service") &&
+              has_symbol(scan, "field", "com.example::Service::size") &&
+              has_symbol(scan, "method", "com.example::Service::greet") &&
+              !has_symbol(scan, "interface", "com.example::Service::Hidden"),
+          "Java scanner finds packages, classes, fields, and methods without comment false positives: " +
+              symbol_summary(scan));
+}
+
+void test_scripting_language_scanners() {
+    const std::string bash =
+        "# Main entry.\n"
+        "main() {\n"
+        "  local inside=1\n"
+        "}\n"
+        "readonly LIMIT=4\n"
+        "text='fake() { :; }'\n";
+    ScanResult scan = ainiux::agent::index::scan_source("tool.sh", bash, Language::Bash);
+    check(has_symbol(scan, "function", "main") && has_symbol(scan, "constant", "LIMIT") &&
+              has_symbol(scan, "global", "text") && !has_symbol(scan, "function", "fake"),
+          "Bash scanner finds functions and module variables without string false positives");
+
+    const std::string php =
+        "<?php\n"
+        "namespace Demo\\Core;\n"
+        "class Worker {\n"
+        "  private string $name;\n"
+        "  public function run(string $value): string { return $value; }\n"
+        "}\n"
+        "const VERSION = 1;\n"
+        "function helper(): void {}\n";
+    scan = ainiux::agent::index::scan_source("Worker.php", php, Language::Php);
+    check(has_symbol(scan, "namespace", "Demo\\Core") &&
+              has_symbol(scan, "class", "Demo\\Core::Worker") &&
+              has_symbol(scan, "field", "Demo\\Core::Worker::name") &&
+              has_symbol(scan, "method", "Demo\\Core::Worker::run") &&
+              has_symbol(scan, "constant", "Demo\\Core::VERSION") &&
+              has_symbol(scan, "function", "Demo\\Core::helper"),
+          "PHP scanner finds namespaces, classes, properties, methods, constants, and functions: " +
+              symbol_summary(scan));
+
+    const std::string perl =
+        "package Demo;\n"
+        "use constant LIMIT => 4;\n"
+        "our $VALUE = 1;\n"
+        "sub run { return $VALUE; }\n"
+        "my $text = 'sub hidden {}';\n";
+    scan = ainiux::agent::index::scan_source("Demo.pm", perl, Language::Perl);
+    check(has_symbol(scan, "package", "Demo") && has_symbol(scan, "constant", "Demo::LIMIT") &&
+              has_symbol(scan, "global", "Demo::VALUE") &&
+              has_symbol(scan, "function", "Demo::run") &&
+              !has_symbol(scan, "function", "Demo::hidden"),
+          "Perl scanner finds packages, subs, constants, and globals");
+
+    const std::string ruby =
+        "module Demo\n"
+        "  VERSION = 1\n"
+        "  class Worker\n"
+        "    def run(value)\n"
+        "      value\n"
+        "    end\n"
+        "  end\n"
+        "end\n"
+        "text = 'class Hidden; end'\n";
+    scan = ainiux::agent::index::scan_source("worker.rb", ruby, Language::Ruby);
+    check(has_symbol(scan, "module", "Demo") && has_symbol(scan, "constant", "Demo::VERSION") &&
+              has_symbol(scan, "class", "Demo::Worker") &&
+              has_symbol(scan, "method", "Demo::Worker::run") &&
+              !has_symbol(scan, "class", "Hidden"),
+          "Ruby scanner finds modules, classes, methods, and constants");
+
+    const std::string powershell =
+        "class Worker {\n"
+        "  [string] $Name\n"
+        "  [string] Render([string] $value) { return $value }\n"
+        "}\n"
+        "function Start-Worker { return [Worker]::new() }\n"
+        "$script:Cache = @{}\n"
+        "# function Hidden {}\n";
+    scan = ainiux::agent::index::scan_source("Worker.ps1", powershell, Language::PowerShell);
+    check(has_symbol(scan, "class", "Worker") && has_symbol(scan, "property", "Worker::Name") &&
+              has_symbol(scan, "method", "Worker::Render") &&
+              has_symbol(scan, "function", "Start-Worker") && has_symbol(scan, "global", "Cache") &&
+              !has_symbol(scan, "function", "Hidden"),
+          "PowerShell scanner finds classes, properties, methods, functions, and globals");
+}
+
+void test_systems_language_scanners() {
+    const std::string rust =
+        "pub mod demo {\n"
+        "  pub struct Worker { value: i32 }\n"
+        "  impl Worker {\n"
+        "    pub fn run(&self, value: i32) -> i32 { value }\n"
+        "  }\n"
+        "  pub const LIMIT: i32 = 4;\n"
+        "  pub fn start() {}\n"
+        "  const TEXT: &str = \"fn hidden() {}\";\n"
+        "}\n";
+    ScanResult scan = ainiux::agent::index::scan_source("lib.rs", rust, Language::Rust);
+    check(has_symbol(scan, "mod", "demo") && has_symbol(scan, "struct", "demo::Worker") &&
+              has_symbol(scan, "impl", "demo::Worker") &&
+              has_symbol(scan, "method", "demo::Worker::run") &&
+              has_symbol(scan, "constant", "demo::LIMIT") &&
+              has_symbol(scan, "function", "demo::start") &&
+              !has_symbol(scan, "function", "demo::hidden"),
+          "Rust scanner finds modules, types, impls, methods, functions, and constants: " +
+              symbol_summary(scan));
+
+    const std::string go =
+        "package demo\n"
+        "type Worker struct { Value int }\n"
+        "func (w *Worker) Run(value int) int { return value }\n"
+        "func Start() {}\n"
+        "const Limit = 4\n"
+        "var Global = 1\n"
+        "var text = \"func Hidden() {}\"\n";
+    scan = ainiux::agent::index::scan_source("worker.go", go, Language::Go);
+    check(has_symbol(scan, "package", "demo") && has_symbol(scan, "type", "demo::Worker") &&
+              has_symbol(scan, "method", "demo::Worker::Run") &&
+              has_symbol(scan, "function", "demo::Start") &&
+              has_symbol(scan, "constant", "demo::Limit") &&
+              has_symbol(scan, "global", "demo::Global") &&
+              !has_symbol(scan, "function", "demo::Hidden"),
+          "Go scanner finds packages, types, methods, functions, constants, and globals: " +
+              symbol_summary(scan));
+
+    const std::string assembly =
+        ".type start, @function\n"
+        ".globl start\n"
+        "start:\n"
+        "  ret\n"
+        ".equ LIMIT, 4\n"
+        "; fake:\n";
+    scan = ainiux::agent::index::scan_source("start.s", assembly, Language::Assembly);
+    check(has_symbol(scan, "function", "start") && has_symbol(scan, "constant", "LIMIT") &&
+              !has_symbol(scan, "label", "fake"),
+          "Assembly scanner recognizes typed function labels and constants");
+}
+
+void test_sql_and_configuration_scanners() {
+    const std::string sql =
+        "-- User records.\n"
+        "CREATE TABLE app.users (id INTEGER);\n"
+        "CREATE VIEW app.active_users AS SELECT * FROM app.users;\n"
+        "CREATE FUNCTION app.load_user(id INTEGER) RETURNS INTEGER AS 'body';\n"
+        "SELECT 'CREATE TABLE hidden(id int)';\n";
+    ScanResult scan = ainiux::agent::index::scan_source("schema.sql", sql, Language::Sql);
+    check(has_symbol(scan, "table", "app.users") &&
+              has_symbol(scan, "view", "app.active_users") &&
+              has_symbol(scan, "function", "app.load_user") &&
+              !has_symbol(scan, "table", "hidden"),
+          "SQL scanner finds common CREATE declarations without matching strings");
+    const auto* users = find_symbol(scan, "table", "app.users");
+    check(users != nullptr && users->documentation == "User records.",
+          "SQL scanner records preceding documentation");
+
+    const std::string toml =
+        "# Server settings.\n"
+        "[server]\n"
+        "port = 8080\n"
+        "[[server.routes]]\n"
+        "path = \"/\"\n"
+        "# hidden = 1\n";
+    scan = ainiux::agent::index::scan_source("config.toml", toml, Language::Toml);
+    check(has_symbol(scan, "table", "server") && has_symbol(scan, "key", "server::port") &&
+              has_symbol(scan, "array-table", "server.routes") &&
+              has_symbol(scan, "key", "server.routes::path") && !has_symbol(scan, "key", "hidden"),
+          "TOML scanner finds tables, array tables, and qualified keys");
+
+    const std::string yaml =
+        "app:\n"
+        "  port: 8080\n"
+        "  database:\n"
+        "    host: localhost\n"
+        "description: |\n"
+        "  fake: value\n"
+        "# hidden: true\n";
+    scan = ainiux::agent::index::scan_source("config.yaml", yaml, Language::Yaml);
+    check(has_symbol(scan, "mapping", "app") && has_symbol(scan, "key", "app::port") &&
+              has_symbol(scan, "mapping", "app::database") &&
+              has_symbol(scan, "key", "app::database::host") &&
+              !has_symbol(scan, "key", "fake") && !has_symbol(scan, "key", "hidden"),
+          "YAML scanner qualifies mappings and ignores block-scalar/comment content");
+
+    const std::string ini =
+        "; Database settings.\n"
+        "[database]\n"
+        "host = localhost\n"
+        "port: 5432\n"
+        "# hidden = yes\n";
+    scan = ainiux::agent::index::scan_source("config.ini", ini, Language::Ini);
+    check(has_symbol(scan, "section", "database") && has_symbol(scan, "key", "database::host") &&
+              has_symbol(scan, "key", "database::port") && !has_symbol(scan, "key", "hidden"),
+          "INI scanner finds sections and qualified keys");
+}
+
 void test_refresh_incremental_report_and_skips() {
     const fs::path root = temporary_workspace("refresh");
     write_file(root / ".gitignore", "*.py\n!keep.py\n");
@@ -515,6 +826,12 @@ void run_all() {
     test_css_scanner();
     test_html_embedded_scanner();
     test_web_language_detection();
+    test_all_editor_language_detection();
+    test_markdown_markup_and_data_scanners();
+    test_managed_language_scanners();
+    test_scripting_language_scanners();
+    test_systems_language_scanners();
+    test_sql_and_configuration_scanners();
     test_refresh_incremental_report_and_skips();
     test_corrupt_index_errors();
     test_schema_upgrade_adds_line_counts();

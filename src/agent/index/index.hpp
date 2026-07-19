@@ -13,9 +13,35 @@
 namespace ainiux::agent::index {
 
 inline constexpr int kSchemaVersion = 2;
-inline constexpr int kScannerVersion = 2;
+inline constexpr int kScannerVersion = 3;
 
-enum class Language { Python, C, Cpp, JavaScript, TypeScript, Html, Css };
+enum class Language {
+    Markdown,
+    Python,
+    C,
+    Cpp,
+    CSharp,
+    Java,
+    JavaScript,
+    TypeScript,
+    Html,
+    HtmlOnly,
+    Css,
+    Xml,
+    Json,
+    Bash,
+    Php,
+    Perl,
+    Ruby,
+    Rust,
+    Go,
+    PowerShell,
+    Assembly,
+    Sql,
+    Toml,
+    Yaml,
+    Ini,
+};
 
 struct Symbol {
     std::string kind;

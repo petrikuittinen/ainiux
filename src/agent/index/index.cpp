@@ -193,12 +193,30 @@ class Transaction {
 };
 
 Language parse_language(const std::string& value) {
+    if (value == "Markdown") return Language::Markdown;
     if (value == "C++") return Language::Cpp;
     if (value == "C") return Language::C;
+    if (value == "C#") return Language::CSharp;
+    if (value == "Java") return Language::Java;
     if (value == "JavaScript") return Language::JavaScript;
     if (value == "TypeScript") return Language::TypeScript;
     if (value == "HTML") return Language::Html;
+    if (value == "HTML-only") return Language::HtmlOnly;
     if (value == "CSS") return Language::Css;
+    if (value == "XML") return Language::Xml;
+    if (value == "JSON") return Language::Json;
+    if (value == "Bash") return Language::Bash;
+    if (value == "PHP") return Language::Php;
+    if (value == "Perl") return Language::Perl;
+    if (value == "Ruby") return Language::Ruby;
+    if (value == "Rust") return Language::Rust;
+    if (value == "Go") return Language::Go;
+    if (value == "PowerShell") return Language::PowerShell;
+    if (value == "Assembly") return Language::Assembly;
+    if (value == "SQL") return Language::Sql;
+    if (value == "TOML") return Language::Toml;
+    if (value == "YAML") return Language::Yaml;
+    if (value == "INI") return Language::Ini;
     return Language::Python;
 }
 

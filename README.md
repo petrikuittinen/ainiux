@@ -273,7 +273,7 @@ The HTTP transport uses libcurl through RAII wrappers in `src/http/`. Build flag
 
 ## Project Code Index
 
-The first local-agent building block is a standalone, best-effort Python, C, C++, JavaScript, TypeScript, HTML, and CSS symbol index. Run it from a project root:
+The first local-agent building block is a standalone, best-effort symbol index covering the same language set as the editor: Markdown, Python, C, C++, C#, Java, JavaScript/JSX, TypeScript/TSX, HTML, HTML-only, CSS3, XML, JSON/JSONL, Bash, PHP, Perl, Ruby, Rust, Go, PowerShell, Assembly, SQL, TOML, YAML, and INI. Run it from a project root:
 
 ```sh
 ./ainiux --index-code
@@ -282,7 +282,7 @@ The first local-agent building block is a standalone, best-effort Python, C, C++
 ./ainiux --clear-index
 ```
 
-`--index-code` recursively discovers eligible source files and creates or incrementally refreshes `.ainiux/index.sqlite`. JavaScript indexing recognizes `.js`, `.mjs`, `.cjs`, and `.jsx`; TypeScript indexing recognizes `.ts`, `.mts`, `.cts`, and `.tsx`, all case-insensitively. Parsing uses fast regex-assisted lexical scanners and a bounded worker pool; it intentionally favors speed over compiler-grade accuracy. It records ordinary classes, namespaces, functions, methods, types, aliases, fields, globals, and constants. The web scanners also record TypeScript interfaces and type aliases, CSS selectors, at-rules, keyframes and custom properties, HTML elements with IDs and custom elements, and symbols inside HTML `<script>` and `<style>` blocks. Data-only JSON/import-map script blocks are skipped. Dynamic definitions, macros, references, call graphs, and unusual declarations are deferred.
+`--index-code` recursively discovers eligible source files and creates or incrementally refreshes `.ainiux/index.sqlite`. It reuses the editor's case-insensitive filename detection, including JavaScript `.js`/`.mjs`/`.cjs`/`.jsx` and TypeScript `.ts`/`.mts`/`.cts`/`.tsx`. Parsing uses fast regex-assisted lexical scanners and a bounded worker pool; it intentionally favors speed over compiler-grade accuracy. It records ordinary classes, namespaces/packages/modules, functions, methods, types, aliases, fields/properties, globals, and constants. Document and configuration scanners record useful structural symbols such as Markdown headings, markup declarations, JSON keys, SQL objects, and TOML/YAML/INI sections and keys. The web scanners also record TypeScript interfaces and type aliases, CSS selectors, at-rules, keyframes and custom properties, HTML elements with IDs and custom elements, and symbols inside HTML `<script>` and `<style>` blocks. HTML-only does not scan embedded JavaScript or CSS, and data-only JSON/import-map script blocks are skipped. Dynamic definitions, macros, references, call graphs, and unusual declarations are deferred.
 
 The indexer never enters `.ainiux`, version-control metadata, or common build/dependency directories. It honors ordered workspace-root `.gitignore` and `.ignore` rules using `*`, `?`, `**`, leading/trailing slash, comments, and `!` re-inclusion; nested ignore files are deferred. It does not follow directory symlinks, skips binary and non-UTF-8 inputs, and reports per-file skips on `stderr` without failing the completed refresh. Source files default to a 10 MiB limit, configurable with `[index] max_source_code_file_size = 10M` or `--max-source-code-file-size SIZE`.
 

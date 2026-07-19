@@ -41,7 +41,7 @@ Approximate size today: **900+** unit assertions, **170+** integration checks in
 **Strong unit coverage**
 
 - CLI parsing and options
-- Python/C/C++/JavaScript/TypeScript/HTML/CSS symbol scanning, JSX/TSX/MTS/CTS discovery, embedded HTML script/style scanning, incremental project indexing, line totals, stale detection, clearing, and Markdown reports
+- Full editor-language code-index parity: Markdown, Python, C/C++, C#, Java, JavaScript/TypeScript and React/module endings, HTML/HTML-only, CSS, XML, JSON, Bash, PHP, Perl, Ruby, Rust, Go, PowerShell, Assembly, SQL, TOML, YAML, and INI; plus embedded HTML scanning, qualification, ranges, documentation, false-positive masking, incremental refresh, line totals, stale detection, clearing, and Markdown reports
 - Provider registry, every registered reasoning request protocol, and response parsing
 - Main configuration plus `models.conf` parsing, layering, disabling, regex validation, final-component/case-insensitive family matching, and precedence
 - HTML/Markdown/input/output conversion
@@ -54,7 +54,7 @@ Approximate size today: **900+** unit assertions, **170+** integration checks in
 
 **Integration coverage**
 
-- Project-local code-index creation/printing/clearing, JavaScript and TypeScript module/JSX endings, binary skips, ignore rules, stale reporting, output files, and option rejection
+- Project-local code-index creation/printing/clearing, full editor-language discovery and reporting, JavaScript and TypeScript module/JSX endings, binary skips, ignore rules, stale reporting, output files, and option rejection
 - Chat Completions and Responses API against `openai_mock.py`, including strict exact reasoning shapes and unlisted-value CLI/REPL warnings
 - Streaming, JSON/NDJSON output, thinking-trace redaction
 - REPL, benchmark modes, action-balanced safety ratings, configurable judge grading, URL fetch safety, attachments, images
