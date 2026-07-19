@@ -1,4 +1,4 @@
-# ainiux Editor Help v0.98
+# ainiux Editor Help v0.99
 
 Standalone editor mode (`ainiux --editor [PATH]`) is a multiline text editor with Unicode-aware navigation, search/replace, and optional AI assist when a provider and model are configured.
 

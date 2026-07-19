@@ -100,7 +100,7 @@ export OPENROUTER_API_KEY=...
 
 ## Current status
 
-**v0.98** — active development. Core surfaces are usable daily: scriptable CLI, REPL, full-screen chat TUI, AI editor, multi-provider chat, durable image and canonical-Markdown attachments, safe URL fetch, web search hooks, document conversion, concurrent benchmarks, and judge grading.
+**v0.99** — active development. Core surfaces are usable daily: scriptable CLI, REPL, full-screen chat TUI, AI editor, multi-provider chat, durable image and canonical-Markdown attachments, safe URL fetch, web search hooks, document conversion, concurrent benchmarks, and judge grading. The v1.0 local agent mode plan in `PLANS.md` is now the detailed project-local agent roadmap (tools, index, chat-reuse UI, mode cycling).
 
 Under the hood: libcurl HTTP/SSE, cancellable runtime jobs, Chat Completions plus text-only Responses API support, a layered model capability catalog with unified reasoning controls, SQLite-backed TUI threads, JSON chat import/export, multi-language syntax highlighting, grapheme-aware editing, and layered TOML-alike configuration.
 
@@ -778,6 +778,10 @@ v0.91 refreshes two late-2026 cutoff benchmark cases (March and April 2026), add
 ### v0.90 keyboard shortcuts and roadmap
 
 v0.90 unifies chat and editor keyboard shortcuts: `Ctrl+Z`/`Ctrl+U` undo, `Ctrl+Y` redo, `Ctrl+Home`/`Ctrl+End` buffer bounds, and `PageUp`/`PageDown` for in-input paging. Chat mode adds `Ctrl+R` regenerate, `Ctrl+B`/`Ctrl+D` chat-history scroll (for terminals that block `Alt+PageUp`/`Alt+PageDown`), and `Alt+Home`/`Alt+End` jump to thread top/bottom. `PLANS.md` now targets v0.9 work (benchmark cutoff mode, codebase refactor, TUI/CLI polish) before local OpenAI-compatible server mode.
+
+### v0.99 agent mode plan
+
+v0.99 records the merged v1.0 local agent mode plan in `PLANS.md`: project-local `.ainiux/index.sqlite` and `agent.sqlite`, chat-TUI reuse for the agent surface, and mode cycling among chat, editor, and agent. No agent runtime is shipped yet.
 
 ### v0.98 unified reasoning and model catalog
 

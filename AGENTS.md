@@ -23,7 +23,7 @@ The program must stay excellent as a scriptable CLI. Keep the core engine indepe
 
 ## Current product snapshot
 
-Status: **v0.98** (see `README.md` and `PLANS.md` implementation notes). Active development targets **v0.9** polish (benchmark cutoff work, refactor, TUI/CLI polish), then **v0.90** local OpenAI-compatible server mode. Browser web UI is postponed. Local agent mode is deliberately late.
+Status: **v0.99** (see `README.md` and `PLANS.md` implementation notes). Active development targets **v0.9** polish (benchmark cutoff work, refactor, TUI/CLI polish), then **v0.90** local OpenAI-compatible server mode. Browser web UI is postponed. Local agent mode is deliberately late.
 
 ### Implemented modes
 
