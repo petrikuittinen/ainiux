@@ -174,6 +174,14 @@ v0.83 also expands automated coverage and adds small mocks for faults that are a
 
 Environment-dependent fault tests run in a separate `build/test_io_faults` binary so the main `test_runner` stays fast and deterministic on every platform.
 
+## Project-Local Code Index First Slice
+
+The v1.0 agent groundwork begins with an isolated, non-agent index mode under `src/agent/index/`. Its SQLite database is always `<workspace>/.ainiux/index.sqlite`; it is deliberately separate from the user chat library. SQLite WAL, foreign-key cascades, a single transactional writer, and bounded parallel readers/scanners provide inexpensive incremental refreshes without adding a dependency.
+
+The first scanner set is Python, C, and C++. It combines comment/string masking, precompiled regular expressions, and indentation/brace scope tracking rather than compiler front ends or language servers. This trades edge-case accuracy for startup speed and portability and makes the index a hint, never source-of-truth. The schema stores files and symbols only; references, FTS, PageRank, call graphs, macros, and agent tools are deferred. Unchanged size/mtime pairs are not opened or hashed. Changed files are read once and scanned in a bounded worker pool, while all database replacement happens in one final transaction so cancellation preserves the previous snapshot.
+
+Workspace discovery has fixed safety exclusions for project state, VCS, generated output, dependencies, caches, and virtual environments. It reads only root `.gitignore` and `.ignore` files using a documented practical wildcard/negation subset and never follows directory symlinks. Binary, invalid UTF-8, oversized, and individually unreadable source files are recorded as skips; structural traversal and database failures remain fatal. Markdown reporting opens the index read-only, streams rows in deterministic source order, and warns rather than refreshing when lightweight freshness metadata differs.
+
 ## Advisory Editor File Sessions
 
 File-backed editor buffers use `src/editor/file_session.*` to canonicalize identity, fingerprint disk state, and own an atomic `FILE.LOCK` directory. `EditorState` copies share the RAII lock through `std::shared_ptr` because active buffers are copied while switching buffers and temporarily moving between editor and chat modes; the underlying lock object remains uniquely responsible for token-checked cleanup. Scratch buffers have no lock. The lock is held for the entire buffer lifetime and Save As is a destination-locked transaction that retargets only after a successful write.

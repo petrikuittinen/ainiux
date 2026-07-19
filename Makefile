@@ -130,6 +130,7 @@ test-unit-faults: $(IO_FAULT_BIN) $(POSIX_IO_MOCK)
 	tools/run_enospc_test.sh "$(CXX)" "$(abspath $(POSIX_IO_MOCK))" "$(abspath $(IO_FAULT_BIN))"
 
 test-integration: $(BIN)
+	tests/integration/test_code_index.sh
 	tests/integration/test_mock_server.sh
 	tests/integration/test_sqlite_persistence.sh
 	sh tests/integration/test_llama_server.sh

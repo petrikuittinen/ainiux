@@ -1,6 +1,7 @@
 #include <iostream>
 
 #include "benchmark/test_benchmark.hpp"
+#include "agent/test_index.hpp"
 #include "chat/test_chat.hpp"
 #include "cli/test_cli.hpp"
 #include "config/test_config.hpp"
@@ -23,6 +24,7 @@
 #include "ui/test_text_selector.hpp"
 
 int main() {
+    ainiux::test::agent_index::run_all();
     ainiux::test::output::run_all();
     ainiux::test::config::run_all();
     ainiux::test::cli::run_all();

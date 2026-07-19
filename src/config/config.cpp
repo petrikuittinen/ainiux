@@ -1972,6 +1972,14 @@ Error apply_document(const Document& document, cli::Options& options) {
             err = nonnegative_long(entry, candidate.max_input_bytes);
         } else if (name == "input.max_image_bytes") {
             err = nonnegative_long(entry, candidate.max_image_bytes);
+        } else if (name == "index.max_source_code_file_size") {
+            long long value = 0;
+            err = auto_save_byte_size(entry, value);
+            if (err.ok() && static_cast<unsigned long long>(value) >
+                                static_cast<unsigned long long>(std::numeric_limits<size_t>::max())) {
+                err = schema_error(entry, "byte size is too large for this platform");
+            }
+            if (err.ok()) candidate.max_source_code_file_size = static_cast<size_t>(value);
         } else if (name == "input.image_capability") {
             err = enum_string(entry,
                               cli::option_values::image_capability_strings(),

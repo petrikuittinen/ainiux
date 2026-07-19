@@ -87,7 +87,7 @@ int main(int argc, char** argv) {
         ainiux::app::print_error(configured.error);
         return ainiux::app::exit_code_for(configured.error.code);
     }
-    if (parsed.options.editor) {
+    if (parsed.options.editor && !parsed.options.index_code && !parsed.options.print_index) {
         ainiux::chat::SqliteStore state_store;
         const ainiux::Error open_error = state_store.open_default();
         if (open_error.ok()) {
@@ -122,6 +122,15 @@ int main(int argc, char** argv) {
         return ainiux::app::exit_code_for(parsed.error.code);
     }
     ainiux::cli::Options options = parsed.options;
+    if (options.index_code || options.print_index) {
+        const ainiux::Error index_arguments =
+            ainiux::cli::validate_index_mode_arguments(argc, argv, options);
+        if (!index_arguments.ok()) {
+            ainiux::app::print_error(index_arguments);
+            return ainiux::app::exit_code_for(index_arguments.code);
+        }
+        return ainiux::app::run_index_mode(options);
+    }
     bool positional_target_changed = false;
     if (!options.positional_url.empty()) {
         if (ainiux::provider::looks_like_api_url(options.positional_url)) {

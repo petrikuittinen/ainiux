@@ -16,7 +16,7 @@ Useful targets:
 |--------|----------------|
 | `make test-unit` | `test_runner` plus `test_io_faults` (network/read-only/ENOSPC) |
 | `make test-unit-faults` | Fault tests only |
-| `make test-integration` | Mock-server end-to-end script plus SQLite TUI persistence script |
+| `make test-integration` | Code-index, mock-server, and SQLite TUI end-to-end scripts |
 | `make test-integration-sqlite` | SQLite TUI persistence only |
 | `make test-sanitize` | AddressSanitizer/UBSan build of the full `make test` path |
 | `make test-leak` | Valgrind on `test_runner`, `test_io_faults`, and `ainiux --version` |
@@ -28,6 +28,7 @@ CI (`.github/workflows/ci.yml`) runs `make test` and `make test-leak` on Ubuntu 
 - `tests/unit/` — module-oriented C++ unit tests. `test_runner` dispatches `run_all()` from each module directory.
 - `build/test_io_faults` — separate binary for slower or environment-dependent checks.
 - `tests/integration/test_mock_server.sh` — CLI, REPL, benchmark/grade, fetch, config, attachments, and TUI insert coverage against a local mock API.
+- `tests/integration/test_code_index.sh` — project-local refresh, ignore/skip behavior, Markdown output, stale snapshots, and CLI isolation.
 - `tests/integration/test_sqlite_persistence.sh` — SQLite-backed TUI persistence via `tui_sqlite_driver.py`.
 - `tests/integration/tui_startup_selection_driver.py` — isolated PTY coverage for bare-offline chat and one-/multiple-model startup discovery.
 - `tests/mock_server/` — Python HTTP mocks for OpenAI-compatible APIs and slow responses.
@@ -40,6 +41,7 @@ Approximate size today: **900+** unit assertions, **170+** integration checks in
 **Strong unit coverage**
 
 - CLI parsing and options
+- Python/C/C++ symbol scanning, incremental project indexing, stale detection, and Markdown reports
 - Provider registry, every registered reasoning request protocol, and response parsing
 - Main configuration plus `models.conf` parsing, layering, disabling, regex validation, final-component/case-insensitive family matching, and precedence
 - HTML/Markdown/input/output conversion
@@ -52,6 +54,7 @@ Approximate size today: **900+** unit assertions, **170+** integration checks in
 
 **Integration coverage**
 
+- Project-local code-index creation/printing, binary skips, ignore rules, stale reporting, output files, and option rejection
 - Chat Completions and Responses API against `openai_mock.py`, including strict exact reasoning shapes and unlisted-value CLI/REPL warnings
 - Streaming, JSON/NDJSON output, thinking-trace redaction
 - REPL, benchmark modes, action-balanced safety ratings, configurable judge grading, URL fetch safety, attachments, images

@@ -2258,6 +2258,8 @@ This is the v1.0 plan for ainiux local agent mode (merged from the former standa
 **Also includes:** project-local SQLite code index, scanners, PageRank, fuzzy edits, preferred tool strategies.  
 **Product name:** ainiux throughout.
 
+**Implemented first slice (2026-07-19):** standalone `--index-code` and `--print-index` modes now provide the project-local `.ainiux/index.sqlite` foundation for Python, C, and C++. This baby-step schema stores files and symbols only and uses parallel discovery/scanning, lightweight lexical extraction, root ignore files, incremental size/mtime checks, transactional refresh, and read-only Markdown reporting. Agent mode, references/FTS, ranking, tools, and interactive integration remain milestones below.
+
 ---
 
 ## 1. Scope

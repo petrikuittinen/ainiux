@@ -423,6 +423,34 @@ void test_url_normalization() {
     check(!err.ok() && err.code == ainiux::ErrorCode::BadUrl, "bad URL rejected");
 }
 
+void test_cli_code_index_parse() {
+    const char* defaults[] = {"ainiux", "--index-code"};
+    ainiux::cli::ParseResult parsed = ainiux::cli::parse_args(2, const_cast<char**>(defaults));
+    check(parsed.error.ok() &&
+              parsed.options.max_source_code_file_size == 10U * 1024U * 1024U,
+          "code index CLI defaults to a 10 MiB source file limit");
+
+    const char* argv[] = {"ainiux", "--index-code", "--print-index",
+                          "--max-source-code-file-size", "2M", "--output", "index.md"};
+    parsed = ainiux::cli::parse_args(7, const_cast<char**>(argv));
+    check(parsed.error.ok() && parsed.options.index_code && parsed.options.print_index &&
+              parsed.options.max_source_code_file_size == 2U * 1024U * 1024U &&
+              parsed.options.output_path == "index.md",
+          "code index CLI flags and byte-size override parse");
+    check(ainiux::cli::validate_index_mode_arguments(7, const_cast<char**>(argv), parsed.options).ok(),
+          "code index CLI accepts refresh-and-print options");
+
+    const char* unrelated[] = {"ainiux", "--index-code", "--provider", "openai"};
+    parsed = ainiux::cli::parse_args(4, const_cast<char**>(unrelated));
+    check(parsed.error.ok() &&
+              !ainiux::cli::validate_index_mode_arguments(4, const_cast<char**>(unrelated), parsed.options).ok(),
+          "code index CLI rejects provider options");
+
+    const char* bad_size[] = {"ainiux", "--index-code", "--max-source-code-file-size", "huge"};
+    parsed = ainiux::cli::parse_args(4, const_cast<char**>(bad_size));
+    check(!parsed.error.ok(), "code index CLI rejects invalid byte size");
+}
+
 }  // namespace
 
 void run_all() {
@@ -430,6 +458,7 @@ void run_all() {
     test_cli_chat_nocolors_parse();
     test_cli_chat_parse();
     test_cli_context_token_parse();
+    test_cli_code_index_parse();
     test_cli_editor_parse();
     test_cli_help_displays_version();
     test_cli_web_search_parse();

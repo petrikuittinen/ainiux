@@ -53,6 +53,8 @@ struct Options {
     bool benchmark_warmup_explicit = false;
     bool benchmark_duration_explicit = false;
     bool grade_input_explicit = false;
+    bool index_code = false;
+    bool print_index = false;
 
     std::string positional_url;
     std::string prompt;
@@ -135,6 +137,7 @@ struct Options {
     int max_web_search_results = 3;
     bool max_web_search_results_explicit = false;
     long max_input_bytes = 1048576;
+    size_t max_source_code_file_size = 10U * 1024U * 1024U;
     long max_image_bytes = 20971520;
     long media_max_size_to_store_to_db = 65536;
     int media_expiration_days = 7;
@@ -180,6 +183,7 @@ struct ParseResult {
 
 ParseResult parse_args(int argc, char** argv);
 ParseResult parse_args(int argc, char** argv, const Options& base_options);
+Error validate_index_mode_arguments(int argc, char** argv, const Options& options);
 std::string help_text();
 const char* format_name(OutputFormat format);
 

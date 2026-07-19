@@ -9,6 +9,7 @@
 #include "cli/option_values.hpp"
 #include "context/policy.hpp"
 #include "chat/generation_settings.hpp"
+#include "editor/autosave.hpp"
 #include "ainiux/version.hpp"
 
 namespace ainiux::cli {
@@ -26,6 +27,7 @@ bool needs_value(const std::string& opt) {
         "--proxy", "--fetch-url", "--search", "--web-search-provider", "--input", "--attach",
         "--html-file", "--html-format", "--max-fetch-bytes", "--max-web-search-results",
         "--max-input-bytes", "--max-image-bytes", "--max-context-bytes",
+        "--max-source-code-file-size",
         "--context", "--context-policy", "--image-capability",
         "--save-chat", "--load-chat", "--dataset", "--grade-input", "--category", "--case",
         "--runs", "--warmup", "--limit", "--mode", "--concurrency", "--duration",
@@ -270,6 +272,10 @@ ParseResult parse_args(int argc, char** argv, const Options& base_options) {
             opts.version = true;
         } else if (arg == "--list-models") {
             opts.list_models = true;
+        } else if (arg == "--index-code") {
+            opts.index_code = true;
+        } else if (arg == "--print-index") {
+            opts.print_index = true;
         } else if (arg == "--stream") {
             opts.stream = true;
             opts.stream_explicit = true;
@@ -522,6 +528,16 @@ ParseResult parse_args(int argc, char** argv, const Options& base_options) {
                 if (!err.ok()) {
                     return {opts, err};
                 }
+            } else if (opt == "--max-source-code-file-size") {
+                long long parsed_size = 0;
+                Error err = editor::parse_byte_size(value, parsed_size);
+                if (!err.ok() || parsed_size < 0 ||
+                    static_cast<unsigned long long>(parsed_size) >
+                        static_cast<unsigned long long>(std::numeric_limits<size_t>::max())) {
+                    return {opts, {ErrorCode::BadArgs,
+                                   "--max-source-code-file-size expects a byte size such as 1M"}};
+                }
+                opts.max_source_code_file_size = static_cast<size_t>(parsed_size);
             } else if (opt == "--max-image-bytes") {
                 Error err = parse_long(opt, value, opts.max_image_bytes);
                 if (!err.ok()) {
@@ -642,6 +658,29 @@ ParseResult parse_args(int argc, char** argv) {
     return parse_args(argc, argv, Options{});
 }
 
+Error validate_index_mode_arguments(int argc, char** argv, const Options& options) {
+    if (!options.index_code && !options.print_index) return ok_error();
+    for (int i = 1; i < argc; ++i) {
+        const std::string argument = argv[i];
+        const std::size_t equals = argument.find('=');
+        const std::string option = equals == std::string::npos ? argument : argument.substr(0, equals);
+        if (option == "--index-code" || option == "--print-index" || option == "--no-config" ||
+            option == "--debug") {
+            continue;
+        }
+        if (option == "--output" || option == "--max-source-code-file-size") {
+            if (equals == std::string::npos) ++i;
+            continue;
+        }
+        return {ErrorCode::BadArgs,
+                option + " cannot be combined with --index-code or --print-index"};
+    }
+    if (!options.print_index && !options.output_path.empty()) {
+        return {ErrorCode::BadArgs, "--output requires --print-index in code index mode"};
+    }
+    return ok_error();
+}
+
 std::string help_text() {
     return app_version_label() + R"( - script-friendly OpenAI-compatible chat CLI
 
@@ -657,6 +696,8 @@ Usage:
   ainiux --benchmark [--dataset FILE] [--mode MODE] [--provider NAME] [-m MODEL]
   ainiux benchmark [--dataset FILE] [--mode MODE] [--provider NAME] [-m MODEL]
   ainiux --grade [--grade-input FILE] [--provider NAME] [-m JUDGE_MODEL]
+  ainiux --index-code [--max-source-code-file-size SIZE]
+  ainiux --print-index [--output PATH]
 
 Examples:
   ainiux http://localhost:8000 -p "What is the capital of Norway?"
@@ -704,6 +745,10 @@ Options:
                                 (like -c/--chat). Use --provider none for offline local editing.
       --benchmark               Run benchmark mode (also: ainiux benchmark ...).
       --grade                   Grade benchmark results with a judge model (also: ainiux grade ...).
+      --index-code              Create or incrementally refresh .ainiux/index.sqlite.
+      --print-index             Print the stored project code index as Markdown.
+      --max-source-code-file-size SIZE
+                                Maximum Python/C/C++ source file size; default 10M.
 
   Prompt and generation:
   -p, --prompt TEXT
