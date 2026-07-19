@@ -737,7 +737,7 @@ void test_config_reads_models_template() {
 void test_config_reads_common_template() {
     ainiux::config::ParseResult parsed = ainiux::config::read_file("config/ainiux.conf");
     check(parsed.error.ok(), "common config file parses");
-    check(parsed.document.entries.size() == 57, "common config has every expected setting");
+    check(parsed.document.entries.size() == 59, "common config has every expected setting");
     ainiux::cli::Options highlight_options;
     ainiux::Error apply_error = ainiux::config::apply_document(parsed.document, highlight_options);
     check(apply_error.ok() && highlight_options.tui_highlight,
@@ -782,7 +782,9 @@ void test_config_reads_common_template() {
                   ainiux::editor::kDefaultAiContinueProsePrefixMaxChars &&
               options.editor_ai_continue_prose_postfix_max_chars ==
                   ainiux::editor::kDefaultAiContinueProsePostfixMaxChars &&
-              options.editor_ai_continue_max_tokens == ainiux::editor::kDefaultAiContinueMaxTokens,
+              options.editor_ai_continue_max_tokens == ainiux::editor::kDefaultAiContinueMaxTokens &&
+              options.max_parallel_agents == 2 &&
+              options.security_review_batch_size == 200U * 1024U,
           "common config maps to the built-in runtime defaults");
     check(options.model_catalog.models.empty(),
           "common config leaves model capabilities to models.conf");
@@ -1089,6 +1091,27 @@ void test_config_code_index_size() {
           "index maximum source size accepts layered byte-size setting");
 }
 
+void test_config_security_review_settings() {
+    ainiux::config::ParseResult parsed = ainiux::config::parse(
+        "[agent]\nmax_parallel_agents = 4\nsecurity_review_batch_size = 200K\n",
+        "agent.conf");
+    ainiux::cli::Options options;
+    ainiux::Error error = ainiux::config::apply_document(parsed.document, options);
+    check(parsed.error.ok() && error.ok() && options.max_parallel_agents == 4 &&
+              options.security_review_batch_size == 204800,
+          "agent config parses bounded concurrency and binary-K review size");
+
+    parsed = ainiux::config::parse("[agent]\nmax_parallel_agents = 33\n", "agent-bad.conf");
+    options = ainiux::cli::Options{};
+    error = ainiux::config::apply_document(parsed.document, options);
+    check(!error.ok(), "agent config rejects more than 32 parallel workers");
+
+    parsed = ainiux::config::parse("[agent]\nsecurity_review_batch_size = 0\n", "agent-zero.conf");
+    options = ainiux::cli::Options{};
+    error = ainiux::config::apply_document(parsed.document, options);
+    check(!error.ok(), "agent config rejects a zero review batch size");
+}
+
 }  // namespace
 
 void run_all() {
@@ -1098,6 +1121,7 @@ void run_all() {
     test_config_reads_models_template();
     test_config_empty_and_numeric_edge_cases();
     test_config_code_index_size();
+    test_config_security_review_settings();
     test_config_file_read_errors();
     test_config_parses_supported_values();
     test_config_parses_multiline_strings();

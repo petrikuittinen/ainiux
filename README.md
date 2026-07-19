@@ -100,7 +100,7 @@ export OPENROUTER_API_KEY=...
 
 ## Current status
 
-**v0.99** — active development. Core surfaces are usable daily: scriptable CLI, REPL, full-screen chat TUI, AI editor, multi-provider chat, durable image and canonical-Markdown attachments, safe URL fetch, web search hooks, document conversion, concurrent benchmarks, and judge grading. The v1.0 local agent mode plan in `PLANS.md` is now the detailed project-local agent roadmap (tools, index, chat-reuse UI, mode cycling).
+**v1.00** — active development. Core surfaces are usable daily: scriptable CLI, REPL, full-screen chat TUI, AI editor, multi-provider chat, durable image and canonical-Markdown attachments, safe URL fetch, web search hooks, document conversion, concurrent benchmarks, judge grading, and a headless whole-project security review. Interactive/autonomous local agent mode remains later roadmap work.
 
 Under the hood: libcurl HTTP/SSE, cancellable runtime jobs, Chat Completions plus text-only Responses API support, a layered model capability catalog with unified reasoning controls, SQLite-backed TUI threads, JSON chat import/export, multi-language syntax highlighting, grapheme-aware editing, and layered TOML-alike configuration.
 
@@ -289,6 +289,25 @@ The indexer never enters `.ainiux`, version-control metadata, or common build/de
 `--print-index` emits deterministic Markdown to `stdout` unless `--output PATH` is used. Its totals table includes files, physical source lines, indexed/skipped counts, and symbols per language plus an all-language total; skipped binary, invalid UTF-8, oversized, and unreadable files contribute zero lines. It checks file paths, sizes, modification times, scanner version, size configuration, and root ignore rules first. A stale snapshot produces a warning on `stderr` but remains read-only and printable. `--index-code --print-index` refreshes and prints in one invocation. Pressing `Ctrl+C` cancels a refresh before its transaction commits, preserving the previous completed snapshot.
 
 `--clear-index` is a standalone, idempotent operation that removes `.ainiux/index.sqlite` and any SQLite `-wal`/`-shm` sidecars. It writes status to `stderr`, produces no normal `stdout` output, and leaves other files in `.ainiux` untouched.
+
+## Whole-project Security Review
+
+Run the first headless, read-only agent workflow from the project root:
+
+```sh
+./ainiux openrouter -m MODEL --security-review >security-review.md
+./ainiux --provider openai --api responses -m MODEL --security-review >security-review.md
+```
+
+`--security-review` first incrementally refreshes `.ainiux/index.sqlite`, then sends every eligible indexed file to the selected provider in deterministic path order. Small files are packed up to `[agent] security_review_batch_size` (default `200K`, or 204,800 bytes); larger indexed files use dedicated sequential UTF-8-safe chunks. At most `[agent] max_parallel_agents` model workers run at once (default 2, valid range 1–32). A final serialized coordinator validates cross-file authentication, authorization, data-flow, and database findings. The selected model/provider must support native function calling; no textual tool-call parser is used.
+
+The generated Markdown report is the only normal `stdout` content. Index diagnostics, scope, progress, and errors use `stderr`, so ordinary shell redirection is the report interface; `--output` and alternate output formats are rejected. Findings do not make the command fail. Incomplete coverage, skipped/stale files, cancellation, index/provider failures, invalid worker output, or coordinator failure still produce the available best-effort report and return nonzero.
+
+Review workers can only use bounded read tools over the completed index snapshot plus a shell-free inspection runner for `pwd`, bounded `ls`, `rg`, non-recursive `grep`, non-mutating `find`, and snapshot-safe Git status/file/workspace metadata. Paths are workspace-relative and fingerprint checked; symlinks, traversal, `.ainiux`, VCS metadata, ignored paths, command separators, interpreters, builds, tests, writes, Git history/object/diff reads, environment overrides, external helpers, and mutating commands are denied. Every worker must claim every supplied batch path exactly once before that batch counts as reviewed. Exact configured credential values are redacted from batches, tool results, diagnostics, and reports, and model-controlled report fields are escaped before Markdown rendering.
+
+Trusted prompts are installed under `share/ainiux/prompts/` and have embedded build fallbacks. Project `AGENTS.md`, `SKILL.md`, documentation, comments, fixtures, transcripts, and other source are review data only and never become instructions. `--trusted-prompt-dir DIR` is an explicit testing/packaging override and is accepted only with `--security-review`.
+
+This workflow does not create `agent.sqlite`, transcripts, or tool logs and cannot edit the project. Its only durable project mutation is the refreshed code index. It is not interactive agent mode, `--plan`, or `--code`.
 
 ## Editor Mode
 
@@ -798,9 +817,9 @@ v0.91 refreshes two late-2026 cutoff benchmark cases (March and April 2026), add
 
 v0.90 unifies chat and editor keyboard shortcuts: `Ctrl+Z`/`Ctrl+U` undo, `Ctrl+Y` redo, `Ctrl+Home`/`Ctrl+End` buffer bounds, and `PageUp`/`PageDown` for in-input paging. Chat mode adds `Ctrl+R` regenerate, `Ctrl+B`/`Ctrl+D` chat-history scroll (for terminals that block `Alt+PageUp`/`Alt+PageDown`), and `Alt+Home`/`Alt+End` jump to thread top/bottom. `PLANS.md` now targets v0.9 work (benchmark cutoff mode, codebase refactor, TUI/CLI polish) before local OpenAI-compatible server mode.
 
-### v0.99 agent mode plan
+### v0.99 read-only security-review slice
 
-v0.99 records the merged v1.0 local agent mode plan in `PLANS.md`: project-local `.ainiux/index.sqlite` and `agent.sqlite`, chat-TUI reuse for the agent surface, and mode cycling among chat, editor, and agent. No agent runtime is shipped yet.
+v0.99 now includes `--security-review`, a headless read-only whole-project workflow built on the project index and native provider function calls. The broader v1.0 plan still covers future interactive/autonomous agent mode, `agent.sqlite`, writes, approvals, chat-TUI reuse, and mode cycling; those capabilities are not enabled by security review.
 
 ### v0.98 unified reasoning and model catalog
 
@@ -868,7 +887,7 @@ If Valgrind is not installed, `make leak-check` falls back to the sanitizer test
 ## Current Limitations
 
 - Streaming chat and Responses API events are parsed incrementally as SSE through libcurl write callbacks.
-- Responses API support is currently text-only. Local image input currently uses the Chat Completions `image_url` content-part schema only.
+- Responses API support is text-only for ordinary chat, with native function-call/output items available to the headless security-review loop. Local image input currently uses the Chat Completions `image_url` content-part schema only.
 - Capabilities start from the provider registry. Chat Completions image input additionally recognizes common vision model names; use `--image-capability allow` only after verifying an unknown/custom model.
 - The JSON facade is intentionally small and scoped to the current CLI/provider needs.
 - HTML extraction is intentionally simple: no JavaScript execution, no full DOM implementation, and no charset conversion yet. Non-UTF-8 input is rejected instead of transcoded.

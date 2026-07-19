@@ -27,7 +27,7 @@ bool needs_value(const std::string& opt) {
         "--proxy", "--fetch-url", "--search", "--web-search-provider", "--input", "--attach",
         "--html-file", "--html-format", "--max-fetch-bytes", "--max-web-search-results",
         "--max-input-bytes", "--max-image-bytes", "--max-context-bytes",
-        "--max-source-code-file-size",
+        "--max-source-code-file-size", "--trusted-prompt-dir",
         "--context", "--context-policy", "--image-capability",
         "--save-chat", "--load-chat", "--dataset", "--grade-input", "--category", "--case",
         "--runs", "--warmup", "--limit", "--mode", "--concurrency", "--duration",
@@ -278,6 +278,8 @@ ParseResult parse_args(int argc, char** argv, const Options& base_options) {
             opts.print_index = true;
         } else if (arg == "--clear-index") {
             opts.clear_index = true;
+        } else if (arg == "--security-review") {
+            opts.security_review = true;
         } else if (arg == "--stream") {
             opts.stream = true;
             opts.stream_explicit = true;
@@ -540,6 +542,8 @@ ParseResult parse_args(int argc, char** argv, const Options& base_options) {
                                    "--max-source-code-file-size expects a byte size such as 1M"}};
                 }
                 opts.max_source_code_file_size = static_cast<size_t>(parsed_size);
+            } else if (opt == "--trusted-prompt-dir") {
+                opts.trusted_prompt_dir = value;
             } else if (opt == "--max-image-bytes") {
                 Error err = parse_long(opt, value, opts.max_image_bytes);
                 if (!err.ok()) {
@@ -689,6 +693,56 @@ Error validate_index_mode_arguments(int argc, char** argv, const Options& option
     return ok_error();
 }
 
+Error validate_security_review_arguments(int argc, char** argv, const Options& options) {
+    if (!options.security_review) return ok_error();
+    if (options.index_code || options.print_index || options.clear_index) {
+        return {ErrorCode::BadArgs,
+                "--security-review cannot be combined with code index mode flags; it refreshes the index itself"};
+    }
+    bool positional_seen = false;
+    for (int i = 1; i < argc; ++i) {
+        const std::string argument = argv[i];
+        const std::size_t equals = argument.find('=');
+        const std::string option = equals == std::string::npos ? argument : argument.substr(0, equals);
+        if (!option.empty() && option.front() != '-') {
+            if (positional_seen) {
+                return {ErrorCode::BadArgs,
+                        "unexpected extra positional argument in security review mode: " + option};
+            }
+            positional_seen = true;
+            continue;
+        }
+        if (option == "--security-review" || option == "--responses" ||
+            option == "--key-stdin" || option == "--quiet" || option == "--debug" ||
+            option == "--no-config" || option == "--trace-http" ||
+            option == "--insecure-tls" || option == "--stream" || option == "--no-stream") {
+            continue;
+        }
+        const bool takes_value =
+            option == "-m" || option == "--model" || option == "-model" ||
+            option == "--provider" || option == "--profile" || option == "--api" ||
+            option == "--base-url" || option == "--chat-url" || option == "--models-url" ||
+            option == "--responses-url" || option == "--key-env" || option == "--key-file" ||
+            option == "-k" || option == "--key" || option == "--header" ||
+            option == "--reasoning" || option == "--connect-timeout" || option == "--timeout" ||
+            option == "--proxy" || option == "--trusted-prompt-dir";
+        if (takes_value) {
+            if (equals == std::string::npos) ++i;
+            continue;
+        }
+        return {ErrorCode::BadArgs, option + " cannot be combined with --security-review"};
+    }
+    if (options.format != OutputFormat::Text || options.rendered_output_format_explicit) {
+        return {ErrorCode::BadArgs,
+                "--security-review emits Markdown only and cannot use alternate output formats"};
+    }
+    if (!options.output_path.empty()) {
+        return {ErrorCode::BadArgs,
+                "--security-review writes Markdown to stdout; redirect stdout instead of using --output"};
+    }
+    return ok_error();
+}
+
 std::string help_text() {
     return app_version_label() + R"( - script-friendly OpenAI-compatible chat CLI
 
@@ -707,6 +761,7 @@ Usage:
   ainiux --index-code [--max-source-code-file-size SIZE]
   ainiux --print-index [--output PATH]
   ainiux --clear-index
+  ainiux [BASE_URL|PROFILE] -m MODEL --security-review
 
 Examples:
   ainiux http://localhost:8000 -p "What is the capital of Norway?"
@@ -757,6 +812,8 @@ Options:
       --index-code              Create or incrementally refresh .ainiux/index.sqlite.
       --print-index             Print the stored project code index as Markdown.
       --clear-index             Remove the project code index database.
+      --security-review         Review every eligible indexed workspace file and print Markdown.
+      --trusted-prompt-dir DIR  Trusted prompt resource override for testing/installations.
       --max-source-code-file-size SIZE
                                 Maximum supported source file size; default 10M.
 

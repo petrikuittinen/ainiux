@@ -4,7 +4,19 @@
 - `-k`/`--key` is supported for testing but warns because command-line arguments may be visible to other local users.
 - Authorization-like headers and configured key values are redacted from transport errors.
 - LM Studio authentication is optional by default.
-- Local web mode and agent mode are not implemented yet.
+- Local web mode and interactive/autonomous agent mode are not implemented. The explicit headless `--security-review` workflow is read-only and separately constrained below.
+
+## Headless Security Review
+
+`--security-review` explicitly authorizes sending every eligible file in the current workspace's refreshed index snapshot to the configured model provider. The command prints the file/byte scope and destination provider/model on `stderr` before model work. Its deterministic Markdown report is written to `stdout`; findings do not alter the exit status, while incomplete coverage and operational failures return nonzero after rendering the available report.
+
+Only trusted installed prompts (`share/ainiux/prompts/master_prompt.md` and `security_prompt.md`) or their embedded build copies define instructions. The explicit `--trusted-prompt-dir` override is for controlled tests/installations. Prompts are never discovered from the reviewed workspace. All workspace bytes—including `AGENTS.md`, `SKILL.md`, comments, web/MCP fixtures, transcripts, images represented in source, and tool output—are untrusted review data.
+
+Native function calls are supported through Chat Completions/OpenRouter and Responses. Calls are bounded to 16 rounds and 64 calls per review step. Unknown tools, invalid arguments, truncation, and policy denials produce structured results. Transient failures receive two cancellation-aware retries; invalid final JSON receives one repair turn. A worker result is valid only when its coverage array names every supplied source path exactly once. Opaque reasoning details and Responses output items are replayed through the provider protocol rather than converted into instructions or display text. Model-controlled finding fields are escaped before local Markdown rendering; freshly verified source evidence remains inside a dynamically sized fenced block.
+
+The read registry exposes only the completed index snapshot. Actual reads verify the indexed content hash and reject traversal, symlinks, ignored/unindexed paths, `.ainiux`, and VCS metadata. Outputs are bounded UTF-8 JSON envelopes. The command runner uses `fork`, pre-resolved `execve`, pipes, polling, process groups, cancellation/timeouts, and guaranteed reaping; it never invokes a shell, and its child performs no allocations between `fork` and `execve`. Its allowlist is limited to inspection commands and snapshot-safe Git status/file/workspace metadata; Git object/history/diff reads, pagers, external helpers and text conversions, config overrides, recursive ignore bypasses, writes, builds, tests, and interpreters are denied.
+
+Exact configured credentials are redacted from source batches, tool/command streams, diagnostics, and reports. No agent session database, transcript, or tool log is created. The only durable workspace change is `.ainiux/index.sqlite` and its SQLite sidecars.
 
 ## Editor Advisory Locks
 

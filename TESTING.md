@@ -27,7 +27,7 @@ CI (`.github/workflows/ci.yml`) runs `make test` and `make test-leak` on Ubuntu 
 
 - `tests/unit/` — module-oriented C++ unit tests. `test_runner` dispatches `run_all()` from each module directory.
 - `build/test_io_faults` — separate binary for slower or environment-dependent checks.
-- `tests/integration/test_mock_server.sh` — CLI, REPL, benchmark/grade, fetch, config, attachments, and TUI insert coverage against a local mock API.
+- `tests/integration/test_mock_server.sh` — CLI, REPL, benchmark/grade, fetch, config, attachments, TUI insert, and native-tool security-review coverage against a local mock API.
 - `tests/integration/test_code_index.sh` — project-local refresh, ignore/skip behavior, Markdown output, stale snapshots, and CLI isolation.
 - `tests/integration/test_sqlite_persistence.sh` — SQLite-backed TUI persistence via `tui_sqlite_driver.py`.
 - `tests/integration/tui_startup_selection_driver.py` — isolated PTY coverage for bare-offline chat and one-/multiple-model startup discovery.
@@ -50,12 +50,15 @@ Approximate size today: **900+** unit assertions, **170+** integration checks in
 - SQLite store round-trip, editor model-selection app state, listing, soft delete, corrupt DB, and missing-thread handling
 - Runtime cancellation and event delivery
 - Security redaction helpers
+- Native Chat/Responses tool definition, call, streamed-fragment/index validation, multi-item text, continuation, and result serialization
+- Security-review read tools, exact batch coverage, index fingerprint checks, ignored/traversal/symlink rejection, secret redaction, command/helper allowlisting, Markdown-field escaping, and deterministic report rendering
 - Unicode, numeric, and malformed-input edge cases
 
 **Integration coverage**
 
 - Project-local code-index creation/printing/clearing, full editor-language discovery and reporting, JavaScript and TypeScript module/JSX endings, binary skips, ignore rules, stale reporting, output files, and option rejection
 - Chat Completions and Responses API against `openai_mock.py`, including strict exact reasoning shapes and unlisted-value CLI/REPL warnings
+- Headless security review with an incremental project index, native multi-round `read_file`, opaque reasoning continuation, untrusted `AGENTS.md` data, coordinator output, and clean stdout/stderr separation
 - Streaming, JSON/NDJSON output, thinking-trace redaction
 - REPL, benchmark modes, action-balanced safety ratings, configurable judge grading, URL fetch safety, attachments, images
 - Editor/chat shared provider/model selectors, colored selector panels, explicit-provider startup discovery, one-model auto-selection, multiple-model selection, and non-modal bare-offline startup
@@ -73,7 +76,7 @@ Approximate size today: **900+** unit assertions, **170+** integration checks in
 
 ### `tests/mock_server/openai_mock.py`
 
-Local OpenAI-compatible server used by `test_mock_server.sh`. Supports one- and multiple-result model-list endpoints, chat completions, responses API, streaming, exact named/numeric reasoning fields without approximate conversion, attachments, images, HTML fetch fixtures, and strict configurable benchmark-grading requests.
+Local OpenAI-compatible server used by `test_mock_server.sh`. Supports one- and multiple-result model-list endpoints, chat completions, responses API, streaming, exact named/numeric reasoning fields without approximate conversion, attachments, images, HTML fetch fixtures, strict configurable benchmark grading, and the security-review native tool/coordinator loop.
 
 ### `tests/mock_server/slow_http_mock.py`
 

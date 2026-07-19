@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import argparse
 import json
+import re
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -331,6 +332,86 @@ class Handler(BaseHTTPRequestHandler):
         messages = request.get("messages", [])
         last, image_count = self._chat_last_input(request)
         if not self._validate_request_shape(request, last):
+            return
+        system_text = "\n".join(
+            message.get("content", "")
+            for message in messages
+            if isinstance(message, dict)
+            and message.get("role") == "system"
+            and isinstance(message.get("content"), str)
+        )
+        if request.get("tools") and "security-review worker" in system_text:
+            if "serialized cross-project coordinator" in system_text:
+                reply = json.dumps(
+                    {"keep": [], "reject": [], "merge": [], "findings": [], "notes": []}
+                )
+                self._send(
+                    200,
+                    json.dumps(
+                        {
+                            "model": self.model,
+                            "choices": [{"index": 0, "finish_reason": "stop", "message": {"role": "assistant", "content": reply}}],
+                        }
+                    ),
+                )
+                return
+            tool_result_seen = any(
+                isinstance(message, dict) and message.get("role") == "tool"
+                for message in messages
+            )
+            user_text = "\n".join(
+                message.get("content", "")
+                for message in messages
+                if isinstance(message, dict)
+                and message.get("role") == "user"
+                and isinstance(message.get("content"), str)
+            )
+            path_matches = re.findall(r"## File path \(JSON\): (\"(?:\\.|[^\"])*\")", user_text)
+            review_paths = [json.loads(path) for path in path_matches] or ["review.cpp"]
+            review_path = review_paths[0]
+            if not tool_result_seen:
+                self._send(
+                    200,
+                    json.dumps(
+                        {
+                            "model": self.model,
+                            "choices": [
+                                {
+                                    "index": 0,
+                                    "finish_reason": "tool_calls",
+                                    "message": {
+                                        "role": "assistant",
+                                        "content": None,
+                                        "reasoning_details": [{"type": "reasoning.encrypted", "data": "opaque-review-state"}],
+                                        "tool_calls": [
+                                            {
+                                                "id": "review_call_1",
+                                                "type": "function",
+                                                "function": {
+                                                    "name": "read_file",
+                                                    "arguments": json.dumps({"path": review_path, "start_line": 1, "end_line": 1}),
+                                                },
+                                            }
+                                        ],
+                                    },
+                                }
+                            ],
+                        }
+                    ),
+                )
+                return
+            reply = json.dumps(
+                {"findings": [], "coverage": review_paths, "notes": []}
+            )
+            self._send(
+                200,
+                json.dumps(
+                    {
+                        "model": self.model,
+                        "choices": [{"index": 0, "finish_reason": "stop", "message": {"role": "assistant", "content": reply}}],
+                    }
+                ),
+            )
             return
         url_context_seen = any(
             isinstance(message, dict)

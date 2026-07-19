@@ -35,6 +35,7 @@ Capabilities profile_capabilities(bool requires_key,
     caps.streaming = chat_completions || responses_api;
     caps.model_listing = model_listing;
     caps.usage_reporting = chat_completions || responses_api;
+    caps.tool_calls = chat_completions || responses_api;
     caps.requires_bearer_key = requires_key;
     caps.optional_bearer_key = !requires_key;
     caps.custom_headers = true;
@@ -2204,7 +2205,7 @@ ContextResult build_context(const cli::Options& input_options) {
         options.key = ascii_trim(options.key);
     }
     if (!options.list_models && !options.repl && !options.tui && !options.editor &&
-        !options.benchmark && !options.grade &&
+        !options.benchmark && !options.grade && !options.security_review &&
         ascii_trim(options.prompt).empty()) {
         return {{}, {ErrorCode::BadArgs, "prompt is empty; use -p/--prompt, --prompt-file, or --repl"}};
     }
@@ -2917,6 +2918,407 @@ Error send_chat(const RequestContext& context, DeltaCallback on_delta, ChatResul
     }
     messages.push_back({"user", context.options.prompt});
     return send_chat_messages(context, messages, on_delta, result, cancellation);
+}
+
+namespace {
+
+json::Value json_string_value(const std::string& text) {
+    json::Value value;
+    value.type = json::Value::Type::String;
+    value.string = text;
+    return value;
+}
+
+json::Value json_bool_value(bool boolean) {
+    json::Value value;
+    value.type = json::Value::Type::Bool;
+    value.boolean = boolean;
+    return value;
+}
+
+json::Value json_object_value() {
+    json::Value value;
+    value.type = json::Value::Type::Object;
+    return value;
+}
+
+json::Value json_array_value() {
+    json::Value value;
+    value.type = json::Value::Type::Array;
+    return value;
+}
+
+Error parse_continuation_item(const std::string& encoded, json::Value& value) {
+    json::ParseResult parsed = json::parse(encoded);
+    if (!parsed.error.ok() || !parsed.value.is_object()) {
+        return {ErrorCode::Internal, "invalid native tool continuation item"};
+    }
+    value = std::move(parsed.value);
+    return ok_error();
+}
+
+std::string response_item_text(const json::Value& item) {
+    std::string text;
+    if (const json::Value* content = item.get("content"); content != nullptr && content->is_array()) {
+        for (const json::Value& part : content->array) {
+            const json::Value* part_text = part.get("text");
+            if (part_text != nullptr && part_text->is_string()) text += part_text->string;
+        }
+    }
+    return text;
+}
+
+Error parse_chat_tool_root(const json::Value& root, ToolRoundResult& result) {
+    if (const std::string provider_msg = provider_error_message(root); !provider_msg.empty())
+        return {ErrorCode::ProviderSchema, "provider error: " + provider_msg};
+    if (const json::Value* model = root.get("model"); model != nullptr && model->is_string())
+        result.metrics.model = model->string;
+    if (const json::Value* usage = root.get("usage")) parse_usage(*usage, result.metrics);
+    const json::Value* choices = root.get("choices");
+    if (choices == nullptr || !choices->is_array() || choices->array.empty())
+        return {ErrorCode::ProviderSchema, "native-tool chat response did not contain choices[0]"};
+    const json::Value& choice = choices->array.front();
+    const json::Value* message = choice.get("message");
+    if (message == nullptr || !message->is_object())
+        return {ErrorCode::ProviderSchema, "native-tool chat response did not contain choices[0].message"};
+    if (const json::Value* content = message->get("content"); content != nullptr && content->is_string())
+        result.content = normalize_provider_text(content->string);
+    if (const json::Value* calls = message->get("tool_calls"); calls != nullptr) {
+        if (!calls->is_array()) return {ErrorCode::ProviderSchema, "assistant tool_calls must be an array"};
+        for (std::size_t index = 0; index < calls->array.size(); ++index) {
+            const json::Value& item = calls->array[index];
+            const json::Value* id = item.get("id");
+            const json::Value* function = item.get("function");
+            const json::Value* name = function == nullptr ? nullptr : function->get("name");
+            const json::Value* arguments = function == nullptr ? nullptr : function->get("arguments");
+            if (id == nullptr || !id->is_string() || name == nullptr || !name->is_string() ||
+                arguments == nullptr || !arguments->is_string())
+                return {ErrorCode::ProviderSchema, "assistant tool call is missing id, name, or string arguments"};
+            result.tool_calls.push_back({id->string, name->string, arguments->string, index});
+        }
+    }
+    if (const json::Value* finish = choice.get("finish_reason");
+        finish != nullptr && finish->is_string() && finish->string == "length") result.truncated = true;
+    result.continuation_items_json.push_back(json::stringify(*message));
+    if (result.content.empty() && result.tool_calls.empty() && !result.truncated)
+        return {ErrorCode::ProviderSchema, "native-tool chat response contained neither text nor tool calls"};
+    return ok_error();
+}
+
+Error parse_responses_tool_root(const json::Value& root, ToolRoundResult& result) {
+    if (const std::string provider_msg = provider_error_message(root); !provider_msg.empty())
+        return {ErrorCode::ProviderSchema, "provider error: " + provider_msg};
+    if (const json::Value* model = root.get("model"); model != nullptr && model->is_string())
+        result.metrics.model = model->string;
+    if (const json::Value* usage = root.get("usage")) parse_usage(*usage, result.metrics);
+    if (const json::Value* status = root.get("status");
+        status != nullptr && status->is_string() && status->string == "incomplete") result.truncated = true;
+    const json::Value* output_text = root.get("output_text");
+    const bool has_output_text = output_text != nullptr && output_text->is_string();
+    if (has_output_text) result.content = output_text->string;
+    const json::Value* output = root.get("output");
+    if (output == nullptr || !output->is_array()) {
+        if (!result.content.empty()) return ok_error();
+        return {ErrorCode::ProviderSchema, "native-tool Responses result did not contain output items"};
+    }
+    for (std::size_t index = 0; index < output->array.size(); ++index) {
+        const json::Value& item = output->array[index];
+        result.continuation_items_json.push_back(json::stringify(item));
+        const json::Value* type = item.get("type");
+        if (type != nullptr && type->is_string() && type->string == "function_call") {
+            const json::Value* call_id = item.get("call_id");
+            const json::Value* id = item.get("id");
+            const json::Value* name = item.get("name");
+            const json::Value* arguments = item.get("arguments");
+            const std::string resolved_id = call_id != nullptr && call_id->is_string()
+                                                ? call_id->string
+                                                : id != nullptr && id->is_string() ? id->string : std::string();
+            if (resolved_id.empty() || name == nullptr || !name->is_string() ||
+                arguments == nullptr || !arguments->is_string())
+                return {ErrorCode::ProviderSchema, "Responses function_call is missing call_id, name, or arguments"};
+            result.tool_calls.push_back({resolved_id, name->string, arguments->string, index});
+        } else if (!has_output_text) {
+            result.content += response_item_text(item);
+        }
+    }
+    if (result.content.empty() && result.tool_calls.empty() && !result.truncated)
+        return {ErrorCode::ProviderSchema, "native-tool Responses result contained neither text nor calls"};
+    return ok_error();
+}
+
+Error parse_chat_tool_stream(const std::string& body, ToolRoundResult& result) {
+    std::map<std::size_t, ToolCall> calls;
+    json::Value preserved = json_object_value();
+    auto process = [&](const std::string& data) -> Error {
+        if (data.empty() || data == "[DONE]") return ok_error();
+        json::ParseResult parsed = json::parse(data);
+        if (!parsed.error.ok()) return {ErrorCode::SseParse, parsed.error.message};
+        if (const std::string message = provider_error_message(parsed.value); !message.empty())
+            return {ErrorCode::ProviderSchema, "provider error: " + message};
+        if (const json::Value* model = parsed.value.get("model"); model != nullptr && model->is_string())
+            result.metrics.model = model->string;
+        if (const json::Value* usage = parsed.value.get("usage")) parse_usage(*usage, result.metrics);
+        const json::Value* choices = parsed.value.get("choices");
+        if (choices == nullptr || !choices->is_array() || choices->array.empty()) return ok_error();
+        const json::Value& choice = choices->array.front();
+        if (const json::Value* finish = choice.get("finish_reason");
+            finish != nullptr && finish->is_string() && finish->string == "length") result.truncated = true;
+        const json::Value* delta = choice.get("delta");
+        if (delta == nullptr || !delta->is_object()) return ok_error();
+        if (const json::Value* content = delta->get("content"); content != nullptr && content->is_string())
+            result.content += normalize_provider_text(content->string);
+        for (const auto& field : delta->object) {
+            if (field.first == "role" || field.first == "content" || field.first == "tool_calls") continue;
+            auto existing = preserved.object.find(field.first);
+            if (field.second.is_string()) {
+                if (existing == preserved.object.end()) preserved.object[field.first] = field.second;
+                else if (existing->second.is_string()) existing->second.string += field.second.string;
+            } else if (field.second.is_array()) {
+                if (existing == preserved.object.end()) preserved.object[field.first] = field.second;
+                else if (existing->second.is_array())
+                    existing->second.array.insert(existing->second.array.end(), field.second.array.begin(), field.second.array.end());
+            } else {
+                preserved.object[field.first] = field.second;
+            }
+        }
+        const json::Value* tool_calls = delta->get("tool_calls");
+        if (tool_calls == nullptr) return ok_error();
+        if (!tool_calls->is_array()) return {ErrorCode::ProviderSchema, "streamed tool_calls must be an array"};
+        for (const json::Value& item : tool_calls->array) {
+            const json::Value* index_value = item.get("index");
+            if (index_value == nullptr || index_value->type != json::Value::Type::Number ||
+                !std::isfinite(index_value->number) || index_value->number < 0 ||
+                index_value->number > 1000000 ||
+                index_value->number !=
+                    static_cast<double>(static_cast<std::size_t>(index_value->number)))
+                return {ErrorCode::ProviderSchema, "streamed tool call is missing a valid index"};
+            const std::size_t index = static_cast<std::size_t>(index_value->number);
+            ToolCall& call = calls[index];
+            call.index = index;
+            if (const json::Value* id = item.get("id"); id != nullptr && id->is_string()) call.id += id->string;
+            if (const json::Value* function = item.get("function"); function != nullptr) {
+                if (const json::Value* name = function->get("name"); name != nullptr && name->is_string()) call.name += name->string;
+                if (const json::Value* arguments = function->get("arguments"); arguments != nullptr && arguments->is_string())
+                    call.arguments_json += arguments->string;
+            }
+        }
+        return ok_error();
+    };
+    std::size_t pos = 0;
+    while (pos < body.size()) {
+        std::size_t end = 0;
+        std::size_t next = 0;
+        if (!find_sse_event_boundary(body, pos, end, next)) { end = body.size(); next = body.size(); }
+        const std::vector<std::string> lines = collect_sse_data_lines(body.substr(pos, end - pos));
+        if (!lines.empty()) {
+            Error error = process(join_sse_data_lines(lines));
+            if (!error.ok()) return error;
+        }
+        pos = next;
+    }
+    json::Value assistant = std::move(preserved);
+    assistant.object["role"] = json_string_value("assistant");
+    if (!result.content.empty()) assistant.object["content"] = json_string_value(result.content);
+    else assistant.object["content"] = json::Value{};
+    if (!calls.empty()) {
+        json::Value array = json_array_value();
+        for (auto& entry : calls) {
+            ToolCall call = std::move(entry.second);
+            if (call.id.empty() || call.name.empty())
+                return {ErrorCode::ProviderSchema, "stream ended with an incomplete native tool call"};
+            json::Value item = json_object_value();
+            item.object["id"] = json_string_value(call.id);
+            item.object["type"] = json_string_value("function");
+            json::Value function = json_object_value();
+            function.object["name"] = json_string_value(call.name);
+            function.object["arguments"] = json_string_value(call.arguments_json);
+            item.object["function"] = std::move(function);
+            array.array.push_back(std::move(item));
+            result.tool_calls.push_back(std::move(call));
+        }
+        assistant.object["tool_calls"] = std::move(array);
+    }
+    result.continuation_items_json.push_back(json::stringify(assistant));
+    if (result.content.empty() && result.tool_calls.empty() && !result.truncated)
+        return {ErrorCode::ProviderSchema, "native-tool stream contained neither text nor calls"};
+    return ok_error();
+}
+
+Error parse_responses_tool_stream(const std::string& body, ToolRoundResult& result) {
+    std::map<std::size_t, json::Value> items;
+    std::map<std::size_t, std::string> argument_fragments;
+    json::Value completed_response;
+    bool completed = false;
+    auto process = [&](const std::string& data) -> Error {
+        if (data.empty() || data == "[DONE]") return ok_error();
+        json::ParseResult parsed = json::parse(data);
+        if (!parsed.error.ok()) return {ErrorCode::SseParse, parsed.error.message};
+        const json::Value* type = parsed.value.get("type");
+        const std::string event = type != nullptr && type->is_string() ? type->string : std::string();
+        if (event == "response.completed" || event == "response.incomplete") {
+            if (const json::Value* response = parsed.value.get("response"); response != nullptr && response->is_object()) {
+                completed_response = *response;
+                completed = true;
+            }
+            if (event == "response.incomplete") result.truncated = true;
+            return ok_error();
+        }
+        const json::Value* output_index = parsed.value.get("output_index");
+        std::size_t index = 0;
+        if (output_index != nullptr) {
+            if (output_index->type != json::Value::Type::Number ||
+                !std::isfinite(output_index->number) || output_index->number < 0 ||
+                output_index->number > 1000000 ||
+                output_index->number !=
+                    static_cast<double>(static_cast<std::size_t>(output_index->number))) {
+                return {ErrorCode::ProviderSchema,
+                        "Responses stream event contains an invalid output_index"};
+            }
+            index = static_cast<std::size_t>(output_index->number);
+        }
+        if (event == "response.output_item.added" || event == "response.output_item.done") {
+            if (const json::Value* item = parsed.value.get("item"); item != nullptr && item->is_object()) items[index] = *item;
+        } else if (event == "response.function_call_arguments.delta") {
+            if (const json::Value* delta = parsed.value.get("delta"); delta != nullptr && delta->is_string())
+                argument_fragments[index] += delta->string;
+        } else if (event == "response.output_text.delta") {
+            if (const json::Value* delta = parsed.value.get("delta"); delta != nullptr && delta->is_string())
+                result.content += delta->string;
+        } else if (event == "error") {
+            return {ErrorCode::ProviderSchema, "Responses stream reported an error"};
+        }
+        return ok_error();
+    };
+    std::size_t pos = 0;
+    while (pos < body.size()) {
+        std::size_t end = 0;
+        std::size_t next = 0;
+        if (!find_sse_event_boundary(body, pos, end, next)) { end = body.size(); next = body.size(); }
+        const std::vector<std::string> lines = collect_sse_data_lines(body.substr(pos, end - pos));
+        if (!lines.empty()) {
+            Error error = process(join_sse_data_lines(lines));
+            if (!error.ok()) return error;
+        }
+        pos = next;
+    }
+    if (completed) return parse_responses_tool_root(completed_response, result);
+    json::Value root = json_object_value();
+    json::Value output = json_array_value();
+    for (auto& entry : items) {
+        json::Value item = std::move(entry.second);
+        const json::Value* type = item.get("type");
+        if (type != nullptr && type->is_string() && type->string == "function_call" &&
+            item.get("arguments") == nullptr)
+            item.object["arguments"] = json_string_value(argument_fragments[entry.first]);
+        output.array.push_back(std::move(item));
+    }
+    root.object["output"] = std::move(output);
+    if (!result.content.empty()) root.object["output_text"] = json_string_value(result.content);
+    return parse_responses_tool_root(root, result);
+}
+
+}  // namespace
+
+std::string serialize_tool_request(const RequestContext& context,
+                                   const ToolConversation& conversation,
+                                   const std::vector<FunctionDefinition>& tools) {
+    json::ParseResult parsed = json::parse(serialize_request(context, conversation.messages));
+    if (!parsed.error.ok() || !parsed.value.is_object()) return "{}";
+    json::Value& root = parsed.value;
+    const std::string item_key = context.api_kind == ApiKind::Responses ? "input" : "messages";
+    json::Value* items = &root.object[item_key];
+    for (const std::string& encoded : conversation.continuation_items_json) {
+        json::Value item;
+        if (!parse_continuation_item(encoded, item).ok()) return "{}";
+        items->array.push_back(std::move(item));
+    }
+    json::Value definitions = json_array_value();
+    for (const FunctionDefinition& definition : tools) {
+        json::ParseResult schema = json::parse(definition.parameters_json);
+        if (!schema.error.ok() || !schema.value.is_object()) return "{}";
+        json::Value item = json_object_value();
+        item.object["type"] = json_string_value("function");
+        if (context.api_kind == ApiKind::Responses) {
+            item.object["name"] = json_string_value(definition.name);
+            item.object["description"] = json_string_value(definition.description);
+            item.object["parameters"] = std::move(schema.value);
+            item.object["strict"] = json_bool_value(true);
+        } else {
+            json::Value function = json_object_value();
+            function.object["name"] = json_string_value(definition.name);
+            function.object["description"] = json_string_value(definition.description);
+            function.object["parameters"] = std::move(schema.value);
+            item.object["function"] = std::move(function);
+        }
+        definitions.array.push_back(std::move(item));
+    }
+    root.object["tools"] = std::move(definitions);
+    root.object["tool_choice"] = json_string_value("auto");
+    return json::stringify(root);
+}
+
+Error parse_tool_response(const RequestContext& context,
+                          const std::string& body,
+                          ToolRoundResult& result,
+                          bool streaming) {
+    result = ToolRoundResult{};
+    if (streaming)
+        return context.api_kind == ApiKind::Responses ? parse_responses_tool_stream(body, result)
+                                                       : parse_chat_tool_stream(body, result);
+    json::ParseResult parsed = json::parse(body);
+    if (!parsed.error.ok()) return parsed.error;
+    return context.api_kind == ApiKind::Responses ? parse_responses_tool_root(parsed.value, result)
+                                                   : parse_chat_tool_root(parsed.value, result);
+}
+
+void append_tool_results(const RequestContext& context,
+                         const std::vector<ToolCall>& calls,
+                         const std::vector<std::string>& result_json,
+                         ToolConversation& conversation) {
+    const std::size_t count = std::min(calls.size(), result_json.size());
+    for (std::size_t index = 0; index < count; ++index) {
+        json::Value item = json_object_value();
+        if (context.api_kind == ApiKind::Responses) {
+            item.object["type"] = json_string_value("function_call_output");
+            item.object["call_id"] = json_string_value(calls[index].id);
+            item.object["output"] = json_string_value(result_json[index]);
+        } else {
+            item.object["role"] = json_string_value("tool");
+            item.object["tool_call_id"] = json_string_value(calls[index].id);
+            item.object["content"] = json_string_value(result_json[index]);
+        }
+        conversation.continuation_items_json.push_back(json::stringify(item));
+    }
+}
+
+Error send_tool_round(const RequestContext& context,
+                      const ToolConversation& conversation,
+                      const std::vector<FunctionDefinition>& tools,
+                      ToolRoundResult& result,
+                      runtime::CancellationToken cancellation) {
+    if (context.profile.offline)
+        return {ErrorCode::UnsupportedFeature, "provider none disables native tool requests"};
+    if (tools.empty()) return {ErrorCode::BadArgs, "native tool request requires at least one function definition"};
+    if (cancellation.cancelled()) return {ErrorCode::Cancelled, "native tool request cancelled before it started"};
+    http::Request request = base_http_request(context, "POST", active_request_url(context), cancellation);
+    request.body = serialize_tool_request(context, conversation, tools);
+    request.max_body_bytes = 8L * 1024L * 1024L;
+    if (request.body == "{}") return {ErrorCode::Internal, "could not serialize native tool request"};
+    const auto started = std::chrono::steady_clock::now();
+    const http::Result response = http::perform(request, {context.api_key});
+    if (!response.error.ok()) return response.error;
+    if (response.response.status < 200 || response.response.status >= 300)
+        return http_status_error(context, response.response, request.url);
+    Error error = parse_tool_response(context, response.response.body, result, context.options.stream);
+    result.metrics.http_status = response.response.status;
+    result.metrics.total_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                  std::chrono::steady_clock::now() - started).count();
+    result.metrics.dns_ms = response.response.dns_ms;
+    result.metrics.connect_ms = response.response.connect_ms;
+    result.metrics.tls_ms = response.response.tls_ms;
+    result.metrics.time_to_first_byte_ms = response.response.time_to_first_byte_ms;
+    result.metrics.first_body_ms = response.response.first_body_ms;
+    return error;
 }
 
 std::string display_name_for_profile(const std::string& profile_name) {

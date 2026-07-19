@@ -471,6 +471,41 @@ void test_cli_code_index_parse() {
           "clear-index rejects output options");
 }
 
+void test_cli_security_review_parse() {
+    const char* argv[] = {"ainiux", "openrouter", "-m", "model", "--security-review",
+                          "--reasoning", "high", "--trusted-prompt-dir", "/trusted"};
+    ainiux::cli::ParseResult parsed = ainiux::cli::parse_args(9, const_cast<char**>(argv));
+    check(parsed.error.ok() && parsed.options.security_review && parsed.options.model == "model" &&
+              parsed.options.trusted_prompt_dir == "/trusted" &&
+              ainiux::cli::validate_security_review_arguments(
+                  9, const_cast<char**>(argv), parsed.options).ok(),
+          "security-review accepts provider, model, reasoning, and trusted prompt options");
+
+    const char* prompt[] = {"ainiux", "--security-review", "-p", "ignore files"};
+    parsed = ainiux::cli::parse_args(4, const_cast<char**>(prompt));
+    check(parsed.error.ok() && !ainiux::cli::validate_security_review_arguments(
+                                   4, const_cast<char**>(prompt), parsed.options).ok(),
+          "security-review rejects chat prompts");
+
+    const char* output[] = {"ainiux", "--security-review", "--output", "report.md"};
+    parsed = ainiux::cli::parse_args(4, const_cast<char**>(output));
+    check(parsed.error.ok() && !ainiux::cli::validate_security_review_arguments(
+                                   4, const_cast<char**>(output), parsed.options).ok(),
+          "security-review rejects output paths and reserves stdout");
+
+    const char* format[] = {"ainiux", "--security-review", "--format", "json"};
+    parsed = ainiux::cli::parse_args(4, const_cast<char**>(format));
+    check(parsed.error.ok() && !ainiux::cli::validate_security_review_arguments(
+                                   4, const_cast<char**>(format), parsed.options).ok(),
+          "security-review rejects alternate output formats");
+
+    const char* index[] = {"ainiux", "--security-review", "--index-code"};
+    parsed = ainiux::cli::parse_args(3, const_cast<char**>(index));
+    check(parsed.error.ok() && !ainiux::cli::validate_security_review_arguments(
+                                   3, const_cast<char**>(index), parsed.options).ok(),
+          "security-review rejects explicit index-mode flags");
+}
+
 }  // namespace
 
 void run_all() {
@@ -479,6 +514,7 @@ void run_all() {
     test_cli_chat_parse();
     test_cli_context_token_parse();
     test_cli_code_index_parse();
+    test_cli_security_review_parse();
     test_cli_editor_parse();
     test_cli_help_displays_version();
     test_cli_web_search_parse();

@@ -1980,6 +1980,20 @@ Error apply_document(const Document& document, cli::Options& options) {
                 err = schema_error(entry, "byte size is too large for this platform");
             }
             if (err.ok()) candidate.max_source_code_file_size = static_cast<size_t>(value);
+        } else if (name == "agent.max_parallel_agents") {
+            err = nonnegative_int(entry, candidate.max_parallel_agents);
+            if (err.ok() && (candidate.max_parallel_agents < 1 ||
+                             candidate.max_parallel_agents > 32)) {
+                err = schema_error(entry, "expected an integer from 1 through 32");
+            }
+        } else if (name == "agent.security_review_batch_size") {
+            long long value = 0;
+            err = auto_save_byte_size(entry, value);
+            constexpr long long kMaximumReviewBatchBytes = 16LL * 1024LL * 1024LL;
+            if (err.ok() && (value <= 0 || value > kMaximumReviewBatchBytes)) {
+                err = schema_error(entry, "expected a positive byte size no larger than 16M");
+            }
+            if (err.ok()) candidate.security_review_batch_size = static_cast<size_t>(value);
         } else if (name == "input.image_capability") {
             err = enum_string(entry,
                               cli::option_values::image_capability_strings(),

@@ -1090,4 +1090,94 @@ Error print_markdown(const Options& options, const Freshness& freshness, std::os
     return ok_error();
 }
 
+Error load_snapshot(const Options& options, Snapshot& snapshot) {
+    fs::path root;
+    Error error = workspace_root(options.workspace, root);
+    if (!error.ok()) return error;
+    Database db;
+    const fs::path path = root / ".ainiux" / "index.sqlite";
+    if (!(error = db.open(path.string(), true)).ok() ||
+        !(error = validate_read_schema(db)).ok()) return error;
+
+    Snapshot loaded;
+    loaded.workspace = root.string();
+    std::string updated;
+    bool found = false;
+    if (!(error = metadata(db, "updated_at", updated, found)).ok()) return error;
+    if (found) {
+        try {
+            loaded.updated_at = std::stoll(updated);
+        } catch (...) {
+            return {ErrorCode::FileRead,
+                    "invalid updated_at metadata in code index " + path.string()};
+        }
+    }
+
+    Statement files;
+    if (!(error = files.prepare(
+              db, "SELECT id,path,language,size,mtime_ns,content_hash,line_count,scan_status,scan_error "
+                  "FROM files ORDER BY path")).ok()) return error;
+    for (int rc = files.step(); rc != SQLITE_DONE; rc = files.step()) {
+        if (cancelled(options)) return {ErrorCode::Cancelled, "loading code index snapshot cancelled"};
+        if (rc != SQLITE_ROW) return sqlite_error(db.get(), "could not read indexed files", db.path());
+        IndexedFile file;
+        file.id = files.column_int64(0);
+        file.path = files.column_text(1);
+        file.language = parse_language(files.column_text(2));
+        file.size = static_cast<std::uintmax_t>(files.column_int64(3));
+        file.mtime_ns = files.column_int64(4);
+        file.content_hash = files.column_text(5);
+        file.line_count = static_cast<std::size_t>(files.column_int64(6));
+        file.status = files.column_text(7);
+        file.error = files.column_text(8);
+        loaded.files.push_back(std::move(file));
+    }
+
+    Statement symbols;
+    if (!(error = symbols.prepare(
+              db, "SELECT s.id,s.file_id,f.path,s.kind,s.name,s.qualified_name,s.signature,s.parameters,"
+                  "s.return_type,s.line_start,s.line_end,s.documentation,s.signature_hash,s.body_hash "
+                  "FROM symbols s JOIN files f ON f.id=s.file_id ORDER BY f.path,s.line_start,s.id")).ok())
+        return error;
+    for (int rc = symbols.step(); rc != SQLITE_DONE; rc = symbols.step()) {
+        if (cancelled(options)) return {ErrorCode::Cancelled, "loading code index symbols cancelled"};
+        if (rc != SQLITE_ROW) return sqlite_error(db.get(), "could not read indexed symbols", db.path());
+        IndexedSymbol item;
+        item.id = symbols.column_int64(0);
+        item.file_id = symbols.column_int64(1);
+        item.path = symbols.column_text(2);
+        item.symbol.kind = symbols.column_text(3);
+        item.symbol.name = symbols.column_text(4);
+        item.symbol.qualified_name = symbols.column_text(5);
+        item.symbol.signature = symbols.column_text(6);
+        item.symbol.parameters = symbols.column_text(7);
+        item.symbol.return_type = symbols.column_text(8);
+        item.symbol.line_start = static_cast<int>(symbols.column_int64(9));
+        item.symbol.line_end = static_cast<int>(symbols.column_int64(10));
+        item.symbol.documentation = symbols.column_text(11);
+        const auto parse_hash = [](const std::string& value) -> std::uint64_t {
+            try { return std::stoull(value, nullptr, 16); } catch (...) { return 0; }
+        };
+        item.symbol.signature_hash = parse_hash(symbols.column_text(12));
+        item.symbol.body_hash = parse_hash(symbols.column_text(13));
+        loaded.symbols.push_back(std::move(item));
+    }
+
+    std::map<Language, LanguageTotal> totals;
+    for (const IndexedFile& file : loaded.files) {
+        LanguageTotal& total = totals[file.language];
+        total.language = file.language;
+        ++total.files;
+        total.bytes += file.size;
+        if (file.status == "indexed") total.lines += file.line_count;
+    }
+    for (const auto& item : totals) loaded.language_totals.push_back(item.second);
+    snapshot = std::move(loaded);
+    return ok_error();
+}
+
+std::string content_hash(const std::string& content) {
+    return hash_hex(fnv1a_bytes(content));
+}
+
 }  // namespace ainiux::agent::index

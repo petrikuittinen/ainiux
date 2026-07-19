@@ -125,6 +125,33 @@ struct ChatResult {
     long long first_body_ms = -1;
 };
 
+struct FunctionDefinition {
+    std::string name;
+    std::string description;
+    std::string parameters_json;
+};
+
+struct ToolCall {
+    std::string id;
+    std::string name;
+    std::string arguments_json;
+    std::size_t index = 0;
+};
+
+struct ToolConversation {
+    std::vector<Message> messages;
+    // Opaque protocol-native assistant/output and tool-result items from prior rounds.
+    std::vector<std::string> continuation_items_json;
+};
+
+struct ToolRoundResult {
+    std::string content;
+    std::vector<ToolCall> tool_calls;
+    std::vector<std::string> continuation_items_json;
+    ChatResult metrics;
+    bool truncated = false;
+};
+
 struct ModelInfo {
     std::string id;
     std::map<std::string, std::string> attributes;
@@ -177,6 +204,22 @@ void apply_context_window_from_models(RequestContext& context,
 Error resolve_context_window(RequestContext& context, const std::string& model_selector = "");
 std::string serialize_request(const RequestContext& context, const std::vector<Message>& messages);
 std::string serialize_chat_request(const RequestContext& context, const std::vector<Message>& messages);
+std::string serialize_tool_request(const RequestContext& context,
+                                   const ToolConversation& conversation,
+                                   const std::vector<FunctionDefinition>& tools);
+Error parse_tool_response(const RequestContext& context,
+                          const std::string& body,
+                          ToolRoundResult& result,
+                          bool streaming);
+void append_tool_results(const RequestContext& context,
+                         const std::vector<ToolCall>& calls,
+                         const std::vector<std::string>& result_json,
+                         ToolConversation& conversation);
+Error send_tool_round(const RequestContext& context,
+                      const ToolConversation& conversation,
+                      const std::vector<FunctionDefinition>& tools,
+                      ToolRoundResult& result,
+                      runtime::CancellationToken cancellation = runtime::CancellationToken());
 Error list_models(const RequestContext& context,
                   ModelsResult& result,
                   runtime::CancellationToken cancellation = runtime::CancellationToken());

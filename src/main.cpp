@@ -165,6 +165,48 @@ int main(int argc, char** argv) {
         options.reasoning = ainiux::ReasoningSelection::automatic();
         options.reasoning_explicit = true;
     }
+    if (!options.security_review && !options.trusted_prompt_dir.empty()) {
+        ainiux::app::print_error({ainiux::ErrorCode::BadArgs,
+                                  "--trusted-prompt-dir requires --security-review"});
+        return ainiux::app::exit_code_for(ainiux::ErrorCode::BadArgs);
+    }
+    if (options.security_review) {
+        const ainiux::Error argument_error =
+            ainiux::cli::validate_security_review_arguments(argc, argv, options);
+        if (!argument_error.ok()) {
+            ainiux::app::print_error(argument_error);
+            return ainiux::app::exit_code_for(argument_error.code);
+        }
+        const ainiux::Error profile_error = ainiux::provider::validate_profile_name(options.provider);
+        if (!profile_error.ok()) {
+            ainiux::app::print_error(profile_error);
+            return ainiux::app::exit_code_for(profile_error.code);
+        }
+        if (!options.key.empty() && !options.quiet) {
+            std::cerr << "Warning: command line API keys may be visible to other local users; prefer --key-env, "
+                         "--key-file, or --key-stdin.\n";
+        }
+        if (options.insecure_tls) {
+            std::cerr << "Warning: TLS certificate verification is disabled by the effective configuration.\n";
+        }
+        ainiux::provider::ContextResult context_result = ainiux::provider::build_context(options);
+        if (!context_result.error.ok()) {
+            ainiux::app::print_error(context_result.error);
+            return ainiux::app::exit_code_for(context_result.error.code);
+        }
+        if (context_result.context.profile.offline) {
+            const ainiux::Error error{ainiux::ErrorCode::UnsupportedFeature,
+                                      "--security-review requires an online provider with native function calling"};
+            ainiux::app::print_error(error);
+            return ainiux::app::exit_code_for(error.code);
+        }
+        ainiux::Error model_error = ainiux::app::choose_default_model(context_result.context);
+        if (!model_error.ok()) {
+            ainiux::app::print_error(model_error);
+            return ainiux::app::exit_code_for(model_error.code);
+        }
+        return ainiux::app::run_security_review_mode(std::move(context_result.context));
+    }
     if (options.benchmark && options.grade) {
         ainiux::app::print_error({ainiux::ErrorCode::BadArgs,
                                   "--benchmark and --grade cannot be combined"});

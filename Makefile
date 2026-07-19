@@ -46,6 +46,10 @@ BUILTIN_BENCHMARK_HEADER := $(GENERATED_DIR)/builtin_dataset.hpp
 EDITOR_HELP_SRC := docs/editor_help.md
 EDITOR_HELP_HEADER := $(GENERATED_DIR)/embedded_editor_help.hpp
 EDITOR_HELP_INSTALL := $(DESTDIR)$(PREFIX)/share/ainiux/editor_help.md
+MASTER_PROMPT_SRC := resources/prompts/master_prompt.md
+SECURITY_PROMPT_SRC := resources/prompts/security_prompt.md
+AGENT_PROMPTS_HEADER := $(GENERATED_DIR)/embedded_agent_prompts.hpp
+AGENT_PROMPTS_INSTALL_DIR := $(DESTDIR)$(PREFIX)/share/ainiux/prompts
 BUILTIN_DATASET_PARTS := benchmarks/builtin/safety.jsonl \
                          benchmarks/builtin/reasoning.jsonl \
                          benchmarks/builtin/writing.jsonl \
@@ -115,6 +119,21 @@ $(EDITOR_HELP_HEADER): $(EDITOR_HELP_SRC)
 
 $(OBJ_DIR)/src/editor/editor_help.o: $(EDITOR_HELP_HEADER)
 
+$(AGENT_PROMPTS_HEADER): $(MASTER_PROMPT_SRC) $(SECURITY_PROMPT_SRC)
+	@mkdir -p $(dir $@)
+	@{ \
+		printf '%s\n' '#pragma once' 'namespace ainiux::agent {' \
+			'inline constexpr char kEmbeddedMasterPrompt[] = R"AINIUX_MASTER('; \
+		cat $(MASTER_PROMPT_SRC); \
+		printf '%s\n' ')AINIUX_MASTER";' \
+			'inline constexpr char kEmbeddedSecurityPrompt[] = R"AINIUX_SECURITY('; \
+		cat $(SECURITY_PROMPT_SRC); \
+		printf '%s\n' ')AINIUX_SECURITY";' '}  // namespace ainiux::agent'; \
+	} >$@.tmp
+	@mv $@.tmp $@
+
+$(OBJ_DIR)/src/agent/prompts.o: $(AGENT_PROMPTS_HEADER)
+
 -include $(DEP)
 
 test: test-unit
@@ -162,7 +181,7 @@ leak-check: $(BIN) $(TEST_BIN) $(IO_FAULT_BIN)
 
 test-leak: leak-check
 
-install: $(BIN) $(COMMON_CONFIG) $(EDITOR_COMMANDS_CONFIG) $(THEMES_CONFIG) $(BENCHMARKS_CONFIG) $(MODELS_CONFIG) $(EDITOR_HELP_SRC)
+install: $(BIN) $(COMMON_CONFIG) $(EDITOR_COMMANDS_CONFIG) $(THEMES_CONFIG) $(BENCHMARKS_CONFIG) $(MODELS_CONFIG) $(EDITOR_HELP_SRC) $(MASTER_PROMPT_SRC) $(SECURITY_PROMPT_SRC)
 	install -d "$(DESTDIR)$(PREFIX)/bin"
 	install -m 0755 $(BIN) "$(DESTDIR)$(PREFIX)/bin/$(BIN)"
 	install -d "$(COMMON_CONFIG_DIR)"
@@ -199,6 +218,8 @@ install: $(BIN) $(COMMON_CONFIG) $(EDITOR_COMMANDS_CONFIG) $(THEMES_CONFIG) $(BE
 	install -m 0644 "$(THEMES_CONFIG)" "$(THEMES_INSTALL)"
 	install -m 0644 "$(BENCHMARKS_CONFIG)" "$(BENCHMARKS_INSTALL)"
 	install -m 0644 "$(MODELS_CONFIG)" "$(MODELS_INSTALL)"
+	install -d "$(AGENT_PROMPTS_INSTALL_DIR)"
+	install -m 0644 "$(MASTER_PROMPT_SRC)" "$(SECURITY_PROMPT_SRC)" "$(AGENT_PROMPTS_INSTALL_DIR)"
 
 clean:
 	rm -rf $(BUILD_DIR) $(BIN) $(IO_FAULT_BIN)

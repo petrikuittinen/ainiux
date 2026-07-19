@@ -93,6 +93,40 @@ struct Freshness {
     std::string reason;
 };
 
+struct IndexedFile {
+    long long id = 0;
+    std::string path;
+    Language language = Language::Python;
+    std::uintmax_t size = 0;
+    long long mtime_ns = 0;
+    std::string content_hash;
+    std::size_t line_count = 0;
+    std::string status;
+    std::string error;
+};
+
+struct IndexedSymbol {
+    long long id = 0;
+    long long file_id = 0;
+    std::string path;
+    Symbol symbol;
+};
+
+struct LanguageTotal {
+    Language language = Language::Python;
+    std::size_t files = 0;
+    std::size_t lines = 0;
+    std::uintmax_t bytes = 0;
+};
+
+struct Snapshot {
+    std::string workspace;
+    long long updated_at = 0;
+    std::vector<IndexedFile> files;
+    std::vector<IndexedSymbol> symbols;
+    std::vector<LanguageTotal> language_totals;
+};
+
 const char* language_name(Language language);
 bool language_for_path(const std::string& path, Language& language);
 ScanResult scan_source(const std::string& path, const std::string& source, Language language);
@@ -102,5 +136,7 @@ Error clear_database(const Options& options, ClearStats& stats);
 Error refresh(const Options& options, RefreshStats& stats);
 Error check_freshness(const Options& options, Freshness& freshness);
 Error print_markdown(const Options& options, const Freshness& freshness, std::ostream& output);
+Error load_snapshot(const Options& options, Snapshot& snapshot);
+std::string content_hash(const std::string& content);
 
 }  // namespace ainiux::agent::index

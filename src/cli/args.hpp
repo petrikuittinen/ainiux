@@ -56,6 +56,7 @@ struct Options {
     bool index_code = false;
     bool print_index = false;
     bool clear_index = false;
+    bool security_review = false;
 
     std::string positional_url;
     std::string prompt;
@@ -93,6 +94,7 @@ struct Options {
     bool rendered_output_format_explicit = false;
     std::string save_chat_path;
     std::string load_chat_path;
+    std::string trusted_prompt_dir;
     std::string proxy;
     std::string context_policy = "error";
     std::string image_capability = "auto";
@@ -139,6 +141,8 @@ struct Options {
     bool max_web_search_results_explicit = false;
     long max_input_bytes = 1048576;
     size_t max_source_code_file_size = 10U * 1024U * 1024U;
+    int max_parallel_agents = 2;
+    size_t security_review_batch_size = 200U * 1024U;
     long max_image_bytes = 20971520;
     long media_max_size_to_store_to_db = 65536;
     int media_expiration_days = 7;
@@ -185,6 +189,7 @@ struct ParseResult {
 ParseResult parse_args(int argc, char** argv);
 ParseResult parse_args(int argc, char** argv, const Options& base_options);
 Error validate_index_mode_arguments(int argc, char** argv, const Options& options);
+Error validate_security_review_arguments(int argc, char** argv, const Options& options);
 std::string help_text();
 const char* format_name(OutputFormat format);
 

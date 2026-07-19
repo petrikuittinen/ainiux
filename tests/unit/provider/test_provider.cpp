@@ -1377,6 +1377,84 @@ void test_provider_unicode_request_serialization() {
           "Unicode chat request preserves Arabic, Chinese, and emoji message text");
 }
 
+void test_native_tool_protocols() {
+    ainiux::provider::RequestContext context;
+    context.options.model = "mock-model";
+    context.options.stream = false;
+    context.api_kind = ainiux::provider::ApiKind::ChatCompletions;
+    ainiux::provider::ToolConversation conversation;
+    conversation.messages = {{"system", "trusted"}, {"user", "review"}};
+    conversation.continuation_items_json = {
+        R"({"role":"assistant","content":null,"reasoning_details":[{"type":"reasoning.encrypted","data":"opaque"}],"tool_calls":[{"id":"call_1","type":"function","function":{"name":"read_file","arguments":"{\"path\":\"a.cpp\"}"}}]})",
+        R"({"role":"tool","tool_call_id":"call_1","content":"{\"ok\":true}"})"};
+    const std::vector<ainiux::provider::FunctionDefinition> definitions = {
+        {"read_file", "Read source", R"({"type":"object","properties":{"path":{"type":"string"}},"required":["path"],"additionalProperties":false})"}};
+    ainiux::json::ParseResult parsed = ainiux::json::parse(
+        ainiux::provider::serialize_tool_request(context, conversation, definitions));
+    check(parsed.error.ok(), "Chat native tool request is valid JSON");
+    const ainiux::json::Value* messages = parsed.value.get("messages");
+    check(messages != nullptr && messages->is_array() && messages->array.size() == 4,
+          "Chat native tool request replays assistant call and tool result");
+    const ainiux::json::Value* tools = parsed.value.get("tools");
+    check(tools != nullptr && tools->is_array() && tools->array.size() == 1,
+          "Chat native tool request serializes function definitions");
+
+    const std::string chat_body =
+        R"({"model":"mock-model","choices":[{"finish_reason":"tool_calls","message":{"role":"assistant","content":null,"reasoning_details":[{"type":"reasoning.encrypted","data":"opaque"}],"tool_calls":[{"id":"one","type":"function","function":{"name":"read_file","arguments":"{\"path\":\"a.cpp\"}"}},{"id":"two","type":"function","function":{"name":"glob","arguments":"{\"pattern\":\"**/*.cpp\"}"}}]}}]})";
+    ainiux::provider::ToolRoundResult round;
+    ainiux::Error error = ainiux::provider::parse_tool_response(context, chat_body, round, false);
+    check(error.ok() && round.tool_calls.size() == 2 && round.tool_calls[1].name == "glob",
+          "Chat native tool parser preserves parallel ordered calls");
+    check(round.continuation_items_json.front().find("reasoning_details") != std::string::npos,
+          "Chat native tool parser preserves opaque reasoning details");
+
+    const std::string chat_stream =
+        "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_\",\"function\":{\"name\":\"read_\",\"arguments\":\"{\\\"path\\\":\"}}]},\"finish_reason\":null}]}\n\n"
+        "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"9\",\"function\":{\"name\":\"file\",\"arguments\":\"\\\"a.cpp\\\"}\"}}]},\"finish_reason\":\"tool_calls\"}]}\n\n"
+        "data: [DONE]\n\n";
+    error = ainiux::provider::parse_tool_response(context, chat_stream, round, true);
+    check(error.ok() && round.tool_calls.size() == 1 && round.tool_calls[0].id == "call_9" &&
+              round.tool_calls[0].name == "read_file" &&
+              round.tool_calls[0].arguments_json == R"({"path":"a.cpp"})",
+          "fragmented streamed Chat tool call assembles id, name, and arguments by index");
+
+    context.api_kind = ainiux::provider::ApiKind::Responses;
+    context.options.api = "responses";
+    parsed = ainiux::json::parse(
+        ainiux::provider::serialize_tool_request(context, conversation, definitions));
+    check(parsed.error.ok(), "Responses native tool request is valid JSON");
+    const ainiux::json::Value* input = parsed.value.get("input");
+    check(input != nullptr && input->is_array() && input->array.size() == 3,
+          "Responses native request preserves continuation items in input");
+    tools = parsed.value.get("tools");
+    check(tools != nullptr && tools->at(0) != nullptr && tools->at(0)->get("function") == nullptr &&
+              tools->at(0)->get("name") != nullptr,
+          "Responses native definitions use the Responses function shape");
+
+    const std::string responses_body =
+        R"({"model":"mock-model","status":"completed","output":[{"type":"reasoning","id":"r1","encrypted_content":"opaque"},{"type":"function_call","id":"fc1","call_id":"call_7","name":"search_text","arguments":"{\"query\":\"auth\"}"}]})";
+    error = ainiux::provider::parse_tool_response(context, responses_body, round, false);
+    check(error.ok() && round.tool_calls.size() == 1 && round.tool_calls[0].id == "call_7" &&
+              round.continuation_items_json.size() == 2,
+          "Responses parser preserves reasoning and function_call output items");
+    ainiux::provider::append_tool_results(context, round.tool_calls, {R"({"ok":true})"}, conversation);
+    check(conversation.continuation_items_json.back().find("function_call_output") != std::string::npos &&
+              conversation.continuation_items_json.back().find("call_7") != std::string::npos,
+          "Responses tool results replay as function_call_output with call_id");
+
+    const std::string responses_text_body =
+        R"({"model":"mock-model","status":"completed","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"first"}]},{"type":"message","role":"assistant","content":[{"type":"output_text","text":" second"}]}]})";
+    error = ainiux::provider::parse_tool_response(context, responses_text_body, round, false);
+    check(error.ok() && round.content == "first second",
+          "Responses native tool parser accumulates text from every output message");
+
+    const std::string invalid_index_stream =
+        "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0.5,\"id\":\"call\",\"function\":{\"name\":\"read_file\",\"arguments\":\"{}\"}}]}}]}\n\n";
+    context.api_kind = ainiux::provider::ApiKind::ChatCompletions;
+    error = ainiux::provider::parse_tool_response(context, invalid_index_stream, round, true);
+    check(!error.ok(), "native tool stream rejects fractional call indexes");
+}
+
 }  // namespace
 
 void run_all() {
@@ -1418,6 +1496,7 @@ void run_all() {
     test_provider_registry_resolves_added_profiles();
     test_provider_responses_unsupported_and_override();
     test_provider_reasoning_request_compatibility();
+    test_native_tool_protocols();
 }
 
 }  // namespace ainiux::test::provider
