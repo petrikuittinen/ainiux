@@ -152,6 +152,37 @@ struct ToolRoundResult {
     bool truncated = false;
 };
 
+struct ToolSourceRange {
+    std::string path;
+    std::size_t byte_start = 0;
+    std::size_t byte_end = 0;
+    std::size_t line_start = 0;
+    std::size_t line_end = 0;
+};
+
+struct ToolRoundContext {
+    std::string stage;
+    std::size_t worker_slot = 0;
+    std::size_t task_number = 0;
+    std::size_t segment_number = 0;
+    std::size_t synthesis_group = 0;
+    std::size_t round = 0;
+    std::size_t retry_attempt = 0;
+    std::size_t cumulative_tool_calls = 0;
+    std::vector<ToolSourceRange> sources;
+};
+
+// Provider-neutral hooks used by bounded workflows that need an audit trail.
+// Callbacks are synchronous and must be thread-safe.
+struct ToolRoundObserver {
+    std::function<void(const ToolRoundContext&, const std::string& endpoint,
+                       const std::vector<std::string>& header_names,
+                       const std::string& serialized_body,
+                       const Error& serialization_error)> on_request;
+    std::function<void(const ToolRoundContext&, const http::Response&,
+                       const ToolRoundResult&, const Error& outcome)> on_response;
+};
+
 struct ModelInfo {
     std::string id;
     std::map<std::string, std::string> attributes;
@@ -219,7 +250,9 @@ Error send_tool_round(const RequestContext& context,
                       const ToolConversation& conversation,
                       const std::vector<FunctionDefinition>& tools,
                       ToolRoundResult& result,
-                      runtime::CancellationToken cancellation = runtime::CancellationToken());
+                      runtime::CancellationToken cancellation = runtime::CancellationToken(),
+                      const ToolRoundObserver* observer = nullptr,
+                      const ToolRoundContext& observation_context = ToolRoundContext{});
 Error list_models(const RequestContext& context,
                   ModelsResult& result,
                   runtime::CancellationToken cancellation = runtime::CancellationToken());

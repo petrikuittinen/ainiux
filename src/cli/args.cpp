@@ -280,6 +280,12 @@ ParseResult parse_args(int argc, char** argv, const Options& base_options) {
             opts.clear_index = true;
         } else if (arg == "--security-review") {
             opts.security_review = true;
+        } else if (arg == "--security-review-log") {
+            opts.security_review_log_enabled = true;
+            opts.security_review_log_cli_explicit = true;
+        } else if (arg == "--no-security-review-log") {
+            opts.security_review_log_enabled = false;
+            opts.security_review_log_cli_explicit = true;
         } else if (arg == "--stream") {
             opts.stream = true;
             opts.stream_explicit = true;
@@ -712,7 +718,8 @@ Error validate_security_review_arguments(int argc, char** argv, const Options& o
             positional_seen = true;
             continue;
         }
-        if (option == "--security-review" || option == "--responses" ||
+        if (option == "--security-review" || option == "--security-review-log" ||
+            option == "--no-security-review-log" || option == "--responses" ||
             option == "--key-stdin" || option == "--quiet" || option == "--debug" ||
             option == "--no-config" || option == "--trace-http" ||
             option == "--insecure-tls" || option == "--stream" || option == "--no-stream") {
@@ -813,6 +820,8 @@ Options:
       --print-index             Print the stored project code index as Markdown.
       --clear-index             Remove the project code index database.
       --security-review         Review every eligible indexed workspace file and print Markdown.
+      --security-review-log     Enable the local per-run JSONL diagnostic log (default).
+      --no-security-review-log  Disable the local per-run JSONL diagnostic log.
       --trusted-prompt-dir DIR  Trusted prompt resource override for testing/installations.
       --max-source-code-file-size SIZE
                                 Maximum supported source file size; default 10M.

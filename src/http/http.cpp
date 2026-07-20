@@ -210,6 +210,15 @@ size_t header_callback(char* ptr, size_t size, size_t nmemb, void* userdata) {
     if (!state->current_proxy_connect && lowered.rfind("content-type:", 0) == 0) {
         state->response.content_type = ascii_trim(trimmed.substr(std::string("Content-Type:").size()));
     }
+    const size_t colon = trimmed.find(':');
+    if (!state->current_proxy_connect && colon != std::string::npos) {
+        const std::string name = ascii_lower(ascii_trim(trimmed.substr(0, colon)));
+        const bool safe = name == "request-id" || name == "x-request-id" ||
+                          name == "openai-request-id" || name == "retry-after" ||
+                          name.rfind("x-ratelimit-", 0) == 0;
+        if (safe) state->response.diagnostic_headers[name] =
+                      ascii_trim(trimmed.substr(colon + 1));
+    }
 
     if (trimmed.empty()) {
         if (state->current_status >= 100 && state->current_status < 200) {

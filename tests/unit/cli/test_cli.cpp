@@ -481,6 +481,15 @@ void test_cli_security_review_parse() {
                   9, const_cast<char**>(argv), parsed.options).ok(),
           "security-review accepts provider, model, reasoning, and trusted prompt options");
 
+    const char* logging[] = {"ainiux", "--security-review", "--no-security-review-log"};
+    parsed = ainiux::cli::parse_args(3, const_cast<char**>(logging));
+    check(parsed.error.ok() && parsed.options.security_review &&
+              parsed.options.security_review_log_cli_explicit &&
+              !parsed.options.security_review_log_enabled &&
+              ainiux::cli::validate_security_review_arguments(
+                  3, const_cast<char**>(logging), parsed.options).ok(),
+          "security-review logging CLI override is accepted by review validation");
+
     const char* prompt[] = {"ainiux", "--security-review", "-p", "ignore files"};
     parsed = ainiux::cli::parse_args(4, const_cast<char**>(prompt));
     check(parsed.error.ok() && !ainiux::cli::validate_security_review_arguments(

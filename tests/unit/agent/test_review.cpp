@@ -3,12 +3,17 @@
 #include <chrono>
 #include <filesystem>
 #include <fstream>
+#include <memory>
+#include <set>
 #include <sstream>
+#include <thread>
+#include <sys/stat.h>
 
 #include "agent/index/index.hpp"
 #include "agent/process.hpp"
 #include "agent/prompts.hpp"
 #include "agent/review.hpp"
+#include "agent/review_log.hpp"
 #include "agent/tools.hpp"
 #include "html/html.hpp"
 #include "json/json.hpp"
@@ -207,6 +212,16 @@ void test_prompts_and_report() {
         R"({"findings":[],"coverage":["src/a.cpp","src/a.cpp"]})", snapshot,
         {"src/a.cpp"}, parsed_findings);
     check(!error.ok(), "worker output rejects duplicate coverage claims");
+    error = ainiux::agent::parse_review_worker_output(
+        R"({"findings":[})", snapshot, {"src/a.cpp"}, parsed_findings);
+    check(!error.ok() && error.code == ainiux::ErrorCode::JsonParse &&
+              error.message.find("JSON parse error at byte") != std::string::npos,
+          "syntactically malformed worker output preserves JsonParse and its byte offset");
+    error = ainiux::agent::parse_review_worker_output(
+        R"({"findings":{},"coverage":["src/a.cpp"]})", snapshot,
+        {"src/a.cpp"}, parsed_findings);
+    check(!error.ok() && error.code == ainiux::ErrorCode::ProviderSchema,
+          "valid worker JSON with the wrong shape reports ProviderSchema");
     ainiux::agent::ReviewReport report;
     report.workspace = "/workspace"; report.provider = "mock"; report.model = "model";
     report.api = "chat"; report.reasoning = "auto"; report.reviewed_at = 1;
@@ -275,6 +290,123 @@ void test_batch_and_chunk_planning() {
     check(valid, "pathological long lines split at UTF-8 boundaries within the source cap");
 }
 
+void test_review_logger() {
+    const fs::path root = temporary_workspace();
+    std::vector<std::string> warnings;
+    ainiux::Error error;
+    std::unique_ptr<ainiux::agent::ReviewLogger> logger =
+        ainiux::agent::ReviewLogger::create(root.string(), 3,
+            {"plain-secret", "quoted\"secret"},
+            [&](const std::string& warning) { warnings.push_back(warning); }, error);
+    check(error.ok() && logger != nullptr, "security-review logger creates secure run file");
+    if (logger) {
+        const fs::path partial = logger->partial_path();
+        struct stat info{};
+        check(::stat(partial.c_str(), &info) == 0 && (info.st_mode & 0777) == 0600,
+              "security-review partial log has mode 0600");
+        check(::stat(partial.parent_path().c_str(), &info) == 0 && (info.st_mode & 0777) == 0700,
+              "security-review log directory has mode 0700");
+
+        constexpr int threads = 6;
+        constexpr int per_thread = 25;
+        std::vector<std::thread> writers;
+        for (int thread = 0; thread < threads; ++thread) writers.emplace_back([&, thread] {
+            for (int item = 0; item < per_thread; ++item) {
+                ainiux::json::Value fields;
+                fields.type = ainiux::json::Value::Type::Object;
+                fields.object["value"].type = ainiux::json::Value::Type::String;
+                fields.object["value"].string = thread == 0 && item == 0
+                    ? "plain-secret quoted\"secret" : std::to_string(item);
+                logger->event("step_start", ainiux::agent::ReviewLogContext("worker_task"),
+                              std::move(fields), "success");
+            }
+        });
+        for (std::thread& writer : writers) writer.join();
+        ainiux::json::Value finish;
+        finish.type = ainiux::json::Value::Type::Object;
+        logger->finish(std::move(finish), "success");
+        check(fs::exists(logger->final_path()) && !fs::exists(partial),
+              "security-review logger atomically finalizes .partial as JSONL");
+
+        std::ifstream input(logger->final_path(), std::ios::binary);
+        std::string line;
+        std::string complete;
+        std::set<unsigned long long> sequences;
+        bool valid = true;
+        while (std::getline(input, line)) {
+            complete += line;
+            const ainiux::json::ParseResult parsed = ainiux::json::parse(line);
+            const ainiux::json::Value* sequence = parsed.error.ok() ? parsed.value.get("sequence") : nullptr;
+            const ainiux::json::Value* timestamp = parsed.error.ok() ? parsed.value.get("timestamp") : nullptr;
+            valid = valid && sequence != nullptr && sequence->type == ainiux::json::Value::Type::Number &&
+                    sequences.insert(static_cast<unsigned long long>(sequence->number)).second &&
+                    timestamp != nullptr && timestamp->is_string() && timestamp->string.size() == 24;
+        }
+        check(valid && sequences.size() == threads * per_thread + 1,
+              "concurrent JSONL records have unique sequences and millisecond timestamps");
+        check(complete.find("plain-secret") == std::string::npos &&
+                  complete.find("quoted\\\"secret") == std::string::npos &&
+                  complete.find("[REDACTED]") != std::string::npos,
+              "review logger redacts plain and JSON-escaped credential forms");
+    }
+
+    const ainiux::json::Value binary =
+        ainiux::agent::ReviewLogger::payload(std::string("a\xff", 2));
+    const ainiux::json::Value* encoding = binary.get("encoding");
+    const ainiux::json::Value* data = binary.get("data");
+    check(encoding != nullptr && encoding->string == "base64" &&
+              data != nullptr && data->string == "Yf8=",
+          "invalid UTF-8 diagnostic payloads use explicit round-trippable base64");
+
+    write_file(root / ".ainiux/logs/security-review/unrelated.jsonl", "keep\n");
+    const fs::path symlink_target = root / "retention-target";
+    write_file(symlink_target, "keep target\n");
+    const fs::path retention_symlink = root / ".ainiux/logs/security-review/security-review-20000101T000000.000Z-1-1.jsonl";
+    std::error_code retention_symlink_error;
+    fs::create_symlink(symlink_target, retention_symlink, retention_symlink_error);
+    check(!retention_symlink_error, "retention symlink fixture is created");
+    fs::path crash_partial;
+    {
+        std::unique_ptr<ainiux::agent::ReviewLogger> crashed =
+            ainiux::agent::ReviewLogger::create(root.string(), 3, {}, {}, error);
+        check(error.ok() && crashed != nullptr, "unfinished logger fixture is created");
+        if (crashed) crash_partial = crashed->partial_path();
+    }
+    check(!crash_partial.empty() && fs::exists(crash_partial),
+          "logger destruction without graceful finish preserves the partial crash log");
+    for (int run = 0; run < 5; ++run) {
+        std::unique_ptr<ainiux::agent::ReviewLogger> next =
+            ainiux::agent::ReviewLogger::create(root.string(), 3, {}, {}, error);
+        check(error.ok() && next != nullptr, "retention test logger is created");
+        if (next) {
+            ainiux::json::Value fields; fields.type = ainiux::json::Value::Type::Object;
+            next->finish(std::move(fields), "success");
+        }
+    }
+    std::size_t completed = 0;
+    for (const fs::directory_entry& entry : fs::directory_iterator(root / ".ainiux/logs/security-review"))
+        if (entry.symlink_status().type() == fs::file_type::regular &&
+            entry.path().filename().string().rfind("security-review-", 0) == 0 &&
+            entry.path().extension() == ".jsonl") ++completed;
+    check(completed == 3 && fs::exists(root / ".ainiux/logs/security-review/unrelated.jsonl") &&
+              fs::exists(crash_partial) && fs::is_symlink(fs::symlink_status(retention_symlink)) &&
+              fs::exists(symlink_target),
+          "retention preserves exactly three logs plus crash and unrelated files");
+
+    const fs::path symlink_root = temporary_workspace();
+    const fs::path target = temporary_workspace();
+    std::error_code symlink_error;
+    fs::create_directory_symlink(target, symlink_root / ".ainiux", symlink_error);
+    std::unique_ptr<ainiux::agent::ReviewLogger> refused =
+        ainiux::agent::ReviewLogger::create(symlink_root.string(), 3, {}, {}, error);
+    check(!refused && !error.ok(), "security-review logger refuses a symlinked log path");
+
+    std::error_code cleanup;
+    fs::remove_all(root, cleanup);
+    fs::remove_all(symlink_root, cleanup);
+    fs::remove_all(target, cleanup);
+}
+
 }  // namespace
 
 void run_all() {
@@ -282,6 +414,7 @@ void run_all() {
     test_process_runner();
     test_prompts_and_report();
     test_batch_and_chunk_planning();
+    test_review_logger();
 }
 
 }  // namespace ainiux::test::agent_review

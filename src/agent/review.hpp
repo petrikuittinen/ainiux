@@ -14,6 +14,8 @@
 
 namespace ainiux::agent {
 
+class ReviewLogger;
+
 struct Finding {
     std::string id;
     std::string title;
@@ -79,7 +81,8 @@ Error run_review(const provider::RequestContext& context,
                  std::size_t max_parallel_agents,
                  runtime::CancellationToken cancellation,
                  ProgressCallback progress,
-                 ReviewReport& report);
+                 ReviewReport& report,
+                 ReviewLogger* logger = nullptr);
 
 Error render_review_markdown(const ReviewReport& report, std::ostream& output);
 

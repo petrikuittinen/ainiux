@@ -1,6 +1,7 @@
 #pragma once
 
 #include <functional>
+#include <map>
 #include <string>
 #include <vector>
 
@@ -32,6 +33,8 @@ struct Response {
     long status = 0;
     std::string body;
     std::string content_type;
+    // Only non-sensitive request-correlation and rate-limit response headers.
+    std::map<std::string, std::string> diagnostic_headers;
     std::string stderr_text;
     long long dns_ms = -1;
     long long connect_ms = -1;

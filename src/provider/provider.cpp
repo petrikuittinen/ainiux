@@ -3295,21 +3295,48 @@ Error send_tool_round(const RequestContext& context,
                       const ToolConversation& conversation,
                       const std::vector<FunctionDefinition>& tools,
                       ToolRoundResult& result,
-                      runtime::CancellationToken cancellation) {
+                      runtime::CancellationToken cancellation,
+                      const ToolRoundObserver* observer,
+                      const ToolRoundContext& observation_context) {
+    Error precondition_error;
     if (context.profile.offline)
-        return {ErrorCode::UnsupportedFeature, "provider none disables native tool requests"};
-    if (tools.empty()) return {ErrorCode::BadArgs, "native tool request requires at least one function definition"};
-    if (cancellation.cancelled()) return {ErrorCode::Cancelled, "native tool request cancelled before it started"};
+        precondition_error = {ErrorCode::UnsupportedFeature, "provider none disables native tool requests"};
+    else if (tools.empty())
+        precondition_error = {ErrorCode::BadArgs, "native tool request requires at least one function definition"};
+    else if (cancellation.cancelled())
+        precondition_error = {ErrorCode::Cancelled, "native tool request cancelled before it started"};
+    if (!precondition_error.ok()) {
+        if (observer != nullptr && observer->on_response)
+            observer->on_response(observation_context, http::Response{}, result, precondition_error);
+        return precondition_error;
+    }
     http::Request request = base_http_request(context, "POST", active_request_url(context), cancellation);
     request.body = serialize_tool_request(context, conversation, tools);
     request.max_body_bytes = 8L * 1024L * 1024L;
-    if (request.body == "{}") return {ErrorCode::Internal, "could not serialize native tool request"};
+    std::vector<std::string> header_names;
+    header_names.reserve(request.headers.size());
+    for (const std::string& header : request.headers) {
+        const std::size_t colon = header.find(':');
+        header_names.push_back(ascii_trim(header.substr(0, colon)));
+    }
+    const Error serialization_error = request.body == "{}"
+        ? Error{ErrorCode::Internal, "could not serialize native tool request"} : ok_error();
+    if (observer != nullptr && observer->on_request)
+        observer->on_request(observation_context, request.url, header_names,
+                             request.body, serialization_error);
+    if (!serialization_error.ok()) {
+        if (observer != nullptr && observer->on_response)
+            observer->on_response(observation_context, http::Response{}, result,
+                                  serialization_error);
+        return serialization_error;
+    }
     const auto started = std::chrono::steady_clock::now();
     const http::Result response = http::perform(request, {context.api_key});
-    if (!response.error.ok()) return response.error;
-    if (response.response.status < 200 || response.response.status >= 300)
-        return http_status_error(context, response.response, request.url);
-    Error error = parse_tool_response(context, response.response.body, result, context.options.stream);
+    Error error = response.error;
+    if (error.ok() && (response.response.status < 200 || response.response.status >= 300))
+        error = http_status_error(context, response.response, request.url);
+    if (error.ok())
+        error = parse_tool_response(context, response.response.body, result, context.options.stream);
     result.metrics.http_status = response.response.status;
     result.metrics.total_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
                                   std::chrono::steady_clock::now() - started).count();
@@ -3318,6 +3345,8 @@ Error send_tool_round(const RequestContext& context,
     result.metrics.tls_ms = response.response.tls_ms;
     result.metrics.time_to_first_byte_ms = response.response.time_to_first_byte_ms;
     result.metrics.first_body_ms = response.response.first_body_ms;
+    if (observer != nullptr && observer->on_response)
+        observer->on_response(observation_context, response.response, result, error);
     return error;
 }
 

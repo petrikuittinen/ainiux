@@ -57,6 +57,8 @@ struct Options {
     bool print_index = false;
     bool clear_index = false;
     bool security_review = false;
+    bool security_review_log_enabled = true;
+    bool security_review_log_cli_explicit = false;
 
     std::string positional_url;
     std::string prompt;
@@ -143,6 +145,7 @@ struct Options {
     size_t max_source_code_file_size = 10U * 1024U * 1024U;
     int max_parallel_agents = 2;
     size_t security_review_batch_size = 200U * 1024U;
+    int security_review_log_keep_runs = 3;
     long max_image_bytes = 20971520;
     long media_max_size_to_store_to_db = 65536;
     int media_expiration_days = 7;

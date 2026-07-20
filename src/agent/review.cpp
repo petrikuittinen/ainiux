@@ -12,6 +12,7 @@
 #include <thread>
 
 #include "config/model_catalog.hpp"
+#include "agent/review_log.hpp"
 #include "json/json.hpp"
 
 namespace ainiux::agent {
@@ -35,13 +36,51 @@ struct ReviewTask {
 struct TaskResult {
     std::vector<Finding> findings;
     std::vector<std::string> reviewed_paths;
-    std::string error;
+    Error error;
+    std::size_t failing_segment = 0;
 };
 
 json::Value object_value() { json::Value value; value.type = json::Value::Type::Object; return value; }
 json::Value array_value() { json::Value value; value.type = json::Value::Type::Array; return value; }
 json::Value string_value(const std::string& text) { json::Value value; value.type = json::Value::Type::String; value.string = text; return value; }
 json::Value number_value(double number) { json::Value value; value.type = json::Value::Type::Number; value.number = number; return value; }
+json::Value bool_value(bool boolean) { json::Value value; value.type = json::Value::Type::Bool; value.boolean = boolean; return value; }
+
+void add_error_fields(json::Value& fields, const Error& error) {
+    if (error.ok()) return;
+    fields.object["error_code"] = string_value(error_code_name(error.code));
+    fields.object["error_message"] = string_value(error.message);
+}
+
+provider::ToolRoundContext provider_context(const ReviewLogContext& context) {
+    provider::ToolRoundContext result;
+    result.stage = context.stage;
+    result.worker_slot = context.worker_slot;
+    result.task_number = context.task_number;
+    result.segment_number = context.segment_number;
+    result.synthesis_group = context.synthesis_group;
+    result.round = context.round;
+    result.retry_attempt = context.retry_attempt;
+    result.cumulative_tool_calls = context.cumulative_tool_calls;
+    result.sources = context.sources;
+    return result;
+}
+
+ReviewLogContext source_context(const std::string& stage,
+                                std::size_t worker_slot,
+                                std::size_t task_number,
+                                std::size_t segment_number,
+                                const std::vector<SourceChunk>& chunks) {
+    ReviewLogContext context;
+    context.stage = stage;
+    context.worker_slot = worker_slot;
+    context.task_number = task_number;
+    context.segment_number = segment_number;
+    for (const SourceChunk& chunk : chunks)
+        context.sources.push_back({chunk.path, chunk.byte_start, chunk.byte_end,
+                                   chunk.line_start, chunk.line_end});
+    return context;
+}
 
 std::string severity_normalized(std::string severity) {
     severity = ascii_lower(ascii_trim(std::move(severity)));
@@ -99,9 +138,9 @@ Error parse_worker_json(const std::string& text,
                         std::vector<Finding>& findings,
                         const std::set<std::string>* expected_coverage = nullptr) {
     const json::ParseResult parsed = json::parse(ascii_trim(text));
-    if (!parsed.error.ok() || !parsed.value.is_object())
-        return {ErrorCode::ProviderSchema,
-                parsed.error.ok() ? "worker final output must be a JSON object" : parsed.error.message};
+    if (!parsed.error.ok()) return parsed.error;
+    if (!parsed.value.is_object())
+        return {ErrorCode::ProviderSchema, "worker final output must be a JSON object"};
     const json::Value* values = parsed.value.get("findings");
     if (values == nullptr || !values->is_array())
         return {ErrorCode::ProviderSchema, "worker final JSON must contain a findings array"};
@@ -249,12 +288,25 @@ Error send_with_retries(const provider::RequestContext& context,
                         const provider::ToolConversation& conversation,
                         const std::vector<provider::FunctionDefinition>& definitions,
                         runtime::CancellationToken cancellation,
-                        provider::ToolRoundResult& round) {
+                        provider::ToolRoundResult& round,
+                        ReviewLogger* logger,
+                        ReviewLogContext log_context) {
     Error error;
     for (int attempt = 0; attempt < 3; ++attempt) {
         round = provider::ToolRoundResult{};
-        error = provider::send_tool_round(context, conversation, definitions, round, cancellation);
+        log_context.retry_attempt = static_cast<std::size_t>(attempt + 1);
+        provider::ToolRoundObserver observer;
+        const provider::ToolRoundObserver* observer_pointer = nullptr;
+        if (logger != nullptr) { observer = logger->tool_round_observer(); observer_pointer = &observer; }
+        error = provider::send_tool_round(context, conversation, definitions, round, cancellation,
+                                          observer_pointer, provider_context(log_context));
         if (error.ok() || !transient_error(error) || attempt == 2) return error;
+        if (logger != nullptr) {
+            json::Value fields = object_value();
+            add_error_fields(fields, error);
+            fields.object["backoff_ms"] = number_value((attempt + 1) * 1000);
+            logger->event("retry_scheduled", log_context, std::move(fields), "failure");
+        }
         Error wait_error = cancellable_backoff(cancellation, attempt + 1);
         if (!wait_error.ok()) return wait_error;
     }
@@ -280,15 +332,20 @@ Error run_tool_loop(const provider::RequestContext& context,
                     const std::string& user_prompt,
                     const std::vector<std::string>& expected_coverage,
                     runtime::CancellationToken cancellation,
-                    std::vector<Finding>& findings) {
+                    std::vector<Finding>& findings,
+                    ReviewLogger* logger,
+                    ReviewLogContext log_context) {
     provider::ToolConversation conversation;
     conversation.messages.push_back({"system", system_prompt});
     conversation.messages.push_back({"user", user_prompt});
     std::size_t total_calls = 0;
     bool repaired = false;
     for (std::size_t round_index = 0; round_index < 16; ++round_index) {
+        log_context.round = round_index + 1;
+        log_context.cumulative_tool_calls = total_calls;
         provider::ToolRoundResult round;
-        Error error = send_with_retries(context, conversation, definitions, cancellation, round);
+        Error error = send_with_retries(context, conversation, definitions, cancellation, round,
+                                        logger, log_context);
         if (!error.ok()) return error;
         conversation.continuation_items_json.insert(conversation.continuation_items_json.end(),
                                                      round.continuation_items_json.begin(),
@@ -300,8 +357,27 @@ Error run_tool_loop(const provider::RequestContext& context,
             std::vector<std::string> outputs;
             outputs.reserve(round.tool_calls.size());
             for (const provider::ToolCall& call : round.tool_calls) {
-                if (round.truncated) outputs.push_back(tool_error_result("truncated_call", "provider truncated this tool-call round"));
-                else outputs.push_back(tools.execute(call.name, call.arguments_json, cancellation));
+                const auto started = std::chrono::steady_clock::now();
+                std::string output = round.truncated
+                    ? tool_error_result("truncated_call", "provider truncated this tool-call round")
+                    : tools.execute(call.name, call.arguments_json, cancellation);
+                if (logger != nullptr) {
+                    json::Value fields = object_value();
+                    fields.object["call_id"] = string_value(call.id);
+                    fields.object["tool_name"] = string_value(call.name);
+                    fields.object["arguments"] = ReviewLogger::payload(call.arguments_json);
+                    fields.object["result"] = ReviewLogger::payload(output);
+                    fields.object["duration_ms"] = number_value(std::chrono::duration_cast<std::chrono::milliseconds>(
+                        std::chrono::steady_clock::now() - started).count());
+                    const json::ParseResult parsed_output = json::parse(output);
+                    const json::Value* ok = parsed_output.error.ok() ? parsed_output.value.get("ok") : nullptr;
+                    const bool succeeded = ok != nullptr && ok->type == json::Value::Type::Bool && ok->boolean;
+                    ReviewLogContext tool_context = log_context;
+                    tool_context.cumulative_tool_calls = total_calls;
+                    logger->event("tool_result", tool_context, std::move(fields),
+                                  succeeded ? "success" : "failure");
+                }
+                outputs.push_back(std::move(output));
             }
             provider::append_tool_results(context, round.tool_calls, outputs, conversation);
             continue;
@@ -311,9 +387,26 @@ Error run_tool_loop(const provider::RequestContext& context,
                     ? Error{ErrorCode::ProviderSchema, "provider truncated the final review document"}
                     : parse_review_worker_output(round.content, tools.snapshot(),
                                                  expected_coverage, parsed);
+        if (logger != nullptr) {
+            json::Value fields = object_value();
+            fields.object["assistant_document"] = ReviewLogger::payload(round.content);
+            fields.object["truncated"] = bool_value(round.truncated);
+            add_error_fields(fields, error);
+            logger->event("validation_result", log_context, std::move(fields),
+                          error.ok() ? "success" : "failure");
+        }
         if (error.ok()) { findings.insert(findings.end(), std::make_move_iterator(parsed.begin()), std::make_move_iterator(parsed.end())); return ok_error(); }
-        if (repaired) return {ErrorCode::ProviderSchema, "invalid final review JSON after one repair turn: " + error.message};
+        if (repaired) {
+            error.message = "invalid final review JSON after one repair turn: " + error.message;
+            return error;
+        }
         repaired = true;
+        if (logger != nullptr) {
+            json::Value fields = object_value();
+            fields.object["reason"] = string_value(error.message);
+            add_error_fields(fields, error);
+            logger->event("repair_scheduled", log_context, std::move(fields), "failure");
+        }
         append_repair_message(context, conversation, error.message);
     }
     return {ErrorCode::ProviderSchema, "native tool loop exceeded 16 rounds"};
@@ -356,7 +449,9 @@ Error synthesize_coordinator_group(const provider::RequestContext& context,
                                    const std::string& input,
                                    const std::set<std::string>& expected_ids,
                                    runtime::CancellationToken cancellation,
-                                   std::vector<json::Value>& groups) {
+                                   std::vector<json::Value>& groups,
+                                   ReviewLogger* logger,
+                                   ReviewLogContext log_context) {
     provider::ToolConversation conversation;
     conversation.messages.push_back({
         "system", prompts.security_system_prompt() +
@@ -367,8 +462,11 @@ Error synthesize_coordinator_group(const provider::RequestContext& context,
     std::size_t call_count = 0;
     bool repaired = false;
     for (std::size_t round_index = 0; round_index < 16; ++round_index) {
+        log_context.round = round_index + 1;
+        log_context.cumulative_tool_calls = call_count;
         provider::ToolRoundResult round;
-        Error error = send_with_retries(context, conversation, definitions, cancellation, round);
+        Error error = send_with_retries(context, conversation, definitions, cancellation, round,
+                                        logger, log_context);
         if (!error.ok()) return error;
         conversation.continuation_items_json.insert(conversation.continuation_items_json.end(),
                                                      round.continuation_items_json.begin(), round.continuation_items_json.end());
@@ -377,8 +475,26 @@ Error synthesize_coordinator_group(const provider::RequestContext& context,
                 return {ErrorCode::ProviderSchema, "coordinator synthesis exceeded 64 native tool calls"};
             call_count += round.tool_calls.size();
             std::vector<std::string> outputs;
-            for (const provider::ToolCall& call : round.tool_calls)
-                outputs.push_back(tools.execute(call.name, call.arguments_json, cancellation));
+            for (const provider::ToolCall& call : round.tool_calls) {
+                const auto started = std::chrono::steady_clock::now();
+                std::string output = tools.execute(call.name, call.arguments_json, cancellation);
+                if (logger != nullptr) {
+                    json::Value fields = object_value();
+                    fields.object["call_id"] = string_value(call.id);
+                    fields.object["tool_name"] = string_value(call.name);
+                    fields.object["arguments"] = ReviewLogger::payload(call.arguments_json);
+                    fields.object["result"] = ReviewLogger::payload(output);
+                    fields.object["duration_ms"] = number_value(std::chrono::duration_cast<std::chrono::milliseconds>(
+                        std::chrono::steady_clock::now() - started).count());
+                    const json::ParseResult parsed_output = json::parse(output);
+                    const json::Value* ok = parsed_output.error.ok() ? parsed_output.value.get("ok") : nullptr;
+                    const bool succeeded = ok != nullptr && ok->type == json::Value::Type::Bool && ok->boolean;
+                    ReviewLogContext tool_context = log_context;
+                    tool_context.cumulative_tool_calls = call_count;
+                    logger->event("tool_result", tool_context, std::move(fields), succeeded ? "success" : "failure");
+                }
+                outputs.push_back(std::move(output));
+            }
             provider::append_tool_results(context, round.tool_calls, outputs, conversation);
             continue;
         }
@@ -403,13 +519,30 @@ Error synthesize_coordinator_group(const provider::RequestContext& context,
             }
             valid = valid && actual_ids == expected_ids;
             if (valid) {
+                if (logger != nullptr) {
+                    json::Value fields = object_value();
+                    fields.object["assistant_document"] = ReviewLogger::payload(round.content);
+                    logger->event("validation_result", log_context, std::move(fields), "success");
+                }
                 groups.insert(groups.end(), std::make_move_iterator(loaded.begin()), std::make_move_iterator(loaded.end()));
                 return ok_error();
             }
-            error = {ErrorCode::ProviderSchema, "coordinator synthesis JSON did not preserve every finding ID exactly once"};
+            if (!parsed.error.ok()) error = parsed.error;
+            else error = {ErrorCode::ProviderSchema, "coordinator synthesis JSON did not preserve every finding ID exactly once"};
         } else error = {ErrorCode::ProviderSchema, "coordinator synthesis output was truncated"};
+        if (logger != nullptr) {
+            json::Value fields = object_value();
+            fields.object["assistant_document"] = ReviewLogger::payload(round.content);
+            add_error_fields(fields, error);
+            logger->event("validation_result", log_context, std::move(fields), "failure");
+        }
         if (repaired) return error;
         repaired = true;
+        if (logger != nullptr) {
+            json::Value fields = object_value(); fields.object["reason"] = string_value(error.message);
+            add_error_fields(fields, error);
+            logger->event("repair_scheduled", log_context, std::move(fields), "failure");
+        }
         append_repair_message(context, conversation, error.message);
     }
     return {ErrorCode::ProviderSchema, "coordinator synthesis exceeded 16 native tool rounds"};
@@ -420,8 +553,9 @@ Error parse_coordinator_json(const std::string& text,
                              std::set<std::string>& rejected,
                              std::vector<Finding>& additions) {
     const json::ParseResult parsed = json::parse(ascii_trim(text));
-    if (!parsed.error.ok() || !parsed.value.is_object())
-        return {ErrorCode::ProviderSchema, "coordinator returned invalid JSON: " + parsed.error.message};
+    if (!parsed.error.ok()) return parsed.error;
+    if (!parsed.value.is_object())
+        return {ErrorCode::ProviderSchema, "coordinator final output must be a JSON object"};
     if (const json::Value* reject = parsed.value.get("reject"); reject != nullptr) {
         if (!reject->is_array()) return {ErrorCode::ProviderSchema, "coordinator reject must be an array"};
         for (const json::Value& id : reject->array) {
@@ -462,18 +596,24 @@ Error run_coordinator(const provider::RequestContext& context,
                       std::size_t input_limit,
                       runtime::CancellationToken cancellation,
                       std::set<std::string>& rejected,
-                      std::vector<Finding>& additions) {
+                      std::vector<Finding>& additions,
+                      ReviewLogger* logger) {
     std::string input = findings_json(findings, coverage);
     if (input.size() > input_limit) {
         std::vector<json::Value> synthesized;
         std::vector<Finding> group;
+        std::size_t synthesis_group_number = 0;
         auto flush_group = [&]() -> Error {
             if (group.empty()) return ok_error();
             std::set<std::string> ids;
             for (const Finding& finding : group) ids.insert(finding.id);
             const std::string group_input = findings_json(group, {});
+            ReviewLogContext log_context;
+            log_context.stage = "coordinator_synthesis";
+            log_context.synthesis_group = ++synthesis_group_number;
             Error error = synthesize_coordinator_group(context, prompts, tools, group_input,
-                                                       ids, cancellation, synthesized);
+                                                       ids, cancellation, synthesized,
+                                                       logger, log_context);
             group.clear();
             return error;
         };
@@ -510,24 +650,64 @@ Error run_coordinator(const provider::RequestContext& context,
     const std::vector<provider::FunctionDefinition> definitions = tools.definitions();
     std::size_t calls = 0;
     bool repaired = false;
+    ReviewLogContext log_context;
+    log_context.stage = "final_coordinator";
     for (std::size_t round_index = 0; round_index < 16; ++round_index) {
+        log_context.round = round_index + 1;
+        log_context.cumulative_tool_calls = calls;
         provider::ToolRoundResult round;
-        Error error = send_with_retries(context, conversation, definitions, cancellation, round);
+        Error error = send_with_retries(context, conversation, definitions, cancellation, round,
+                                        logger, log_context);
         if (!error.ok()) return error;
         conversation.continuation_items_json.insert(conversation.continuation_items_json.end(),
                                                      round.continuation_items_json.begin(), round.continuation_items_json.end());
         if (!round.tool_calls.empty()) {
             if (calls + round.tool_calls.size() > 64) return {ErrorCode::ProviderSchema, "coordinator exceeded 64 native tool calls"};
             calls += round.tool_calls.size(); std::vector<std::string> outputs;
-            for (const provider::ToolCall& call : round.tool_calls) outputs.push_back(tools.execute(call.name, call.arguments_json, cancellation));
+            for (const provider::ToolCall& call : round.tool_calls) {
+                const auto started = std::chrono::steady_clock::now();
+                std::string output = tools.execute(call.name, call.arguments_json, cancellation);
+                if (logger != nullptr) {
+                    json::Value fields = object_value(); fields.object["call_id"] = string_value(call.id);
+                    fields.object["tool_name"] = string_value(call.name);
+                    fields.object["arguments"] = ReviewLogger::payload(call.arguments_json);
+                    fields.object["result"] = ReviewLogger::payload(output);
+                    fields.object["duration_ms"] = number_value(std::chrono::duration_cast<std::chrono::milliseconds>(
+                        std::chrono::steady_clock::now() - started).count());
+                    const json::ParseResult parsed_output = json::parse(output);
+                    const json::Value* ok = parsed_output.error.ok() ? parsed_output.value.get("ok") : nullptr;
+                    const bool succeeded = ok != nullptr && ok->type == json::Value::Type::Bool && ok->boolean;
+                    ReviewLogContext tool_context = log_context;
+                    tool_context.cumulative_tool_calls = calls;
+                    logger->event("tool_result", tool_context, std::move(fields), succeeded ? "success" : "failure");
+                }
+                outputs.push_back(std::move(output));
+            }
             provider::append_tool_results(context, round.tool_calls, outputs, conversation); continue;
         }
         if (!round.truncated) {
             error = parse_coordinator_json(round.content, tools.snapshot(), rejected, additions);
-            if (error.ok()) return ok_error();
+            if (error.ok()) {
+                if (logger != nullptr) {
+                    json::Value fields = object_value(); fields.object["assistant_document"] = ReviewLogger::payload(round.content);
+                    logger->event("validation_result", log_context, std::move(fields), "success");
+                }
+                return ok_error();
+            }
         } else error = {ErrorCode::ProviderSchema, "coordinator output was truncated"};
+        if (logger != nullptr) {
+            json::Value fields = object_value(); fields.object["assistant_document"] = ReviewLogger::payload(round.content);
+            add_error_fields(fields, error);
+            logger->event("validation_result", log_context, std::move(fields), "failure");
+        }
         if (repaired) return error;
-        repaired = true; append_repair_message(context, conversation, error.message);
+        repaired = true;
+        if (logger != nullptr) {
+            json::Value fields = object_value(); fields.object["reason"] = string_value(error.message);
+            add_error_fields(fields, error);
+            logger->event("repair_scheduled", log_context, std::move(fields), "failure");
+        }
+        append_repair_message(context, conversation, error.message);
     }
     return {ErrorCode::ProviderSchema, "coordinator exceeded 16 native tool rounds"};
 }
@@ -641,7 +821,8 @@ Error run_review(const provider::RequestContext& context,
                  std::size_t max_parallel_agents,
                  runtime::CancellationToken cancellation,
                  ProgressCallback progress,
-                 ReviewReport& report) {
+                 ReviewReport& report,
+                 ReviewLogger* logger) {
     ReviewReport output;
     output.workspace = tools.snapshot().workspace;
     output.provider = context.profile.name;
@@ -660,7 +841,26 @@ Error run_review(const provider::RequestContext& context,
     Error error = build_tasks(tools, batch_size, tasks, preparation_errors);
     if (!error.ok()) return error;
     output.logical_batches = tasks.size();
+    if (logger != nullptr) {
+        json::Value fields = object_value();
+        fields.object["logical_batches"] = number_value(tasks.size());
+        fields.object["preparation_failure_count"] = number_value(preparation_errors.size());
+        json::Value planned = array_value();
+        for (const ReviewTask& task : tasks) {
+            json::Value item = object_value();
+            item.object["task_number"] = number_value(task.id);
+            item.object["segment_count"] = number_value(task.prompts.size());
+            json::Value paths = array_value();
+            for (const std::string& path : task.paths) paths.array.push_back(string_value(path));
+            item.object["paths"] = std::move(paths);
+            planned.array.push_back(std::move(item));
+        }
+        fields.object["tasks"] = std::move(planned);
+        logger->event("task_plan", {"planning"}, std::move(fields),
+                      preparation_errors.empty() ? "success" : "failure");
+    }
     std::map<std::string, FileCoverage> coverage;
+    Error first_failure;
     for (const index::IndexedFile& file : tools.snapshot().files) {
         FileCoverage item{file.path, file.status == "indexed" ? "pending" : "skipped", file.error};
         coverage[file.path] = std::move(item);
@@ -672,6 +872,7 @@ Error run_review(const provider::RequestContext& context,
     for (const auto& item : preparation_errors) {
         coverage[item.first] = {item.first, "failed", item.second}; output.errors.push_back(item.first + ": " + item.second);
         output.complete = false;
+        if (first_failure.ok()) first_failure = {ErrorCode::FileRead, item.second};
     }
     if (progress) progress("Prepared " + std::to_string(tasks.size()) + " logical review batch(es)");
 
@@ -682,13 +883,22 @@ Error run_review(const provider::RequestContext& context,
     std::vector<std::thread> workers;
     workers.reserve(worker_count);
     try {
-        for (std::size_t worker = 0; worker < worker_count; ++worker) workers.emplace_back([&] {
+        for (std::size_t worker = 0; worker < worker_count; ++worker) workers.emplace_back([&, worker] {
             while (!cancellation.cancelled()) {
                 const std::size_t task_index = cursor.fetch_add(1);
                 if (task_index >= tasks.size()) return;
                 const ReviewTask& task = tasks[task_index];
                 TaskResult result;
-                for (const std::vector<SourceChunk>& prompt_chunks : task.prompts) {
+                for (std::size_t segment_index = 0; segment_index < task.prompts.size(); ++segment_index) {
+                    const std::vector<SourceChunk>& prompt_chunks = task.prompts[segment_index];
+                    ReviewLogContext log_context = source_context("worker_task", worker + 1,
+                                                                  task.id, segment_index + 1,
+                                                                  prompt_chunks);
+                    if (logger != nullptr) {
+                        json::Value fields = object_value();
+                        fields.object["prompt_bytes"] = number_value(worker_prompt(prompt_chunks).size());
+                        logger->event("step_start", log_context, std::move(fields), "success");
+                    }
                     std::vector<std::string> expected_coverage;
                     for (const SourceChunk& chunk : prompt_chunks)
                         if (std::find(expected_coverage.begin(), expected_coverage.end(),
@@ -698,10 +908,19 @@ Error run_review(const provider::RequestContext& context,
                                                        prompts.security_system_prompt(),
                                                        worker_prompt(prompt_chunks), expected_coverage,
                                                        cancellation,
-                                                       result.findings);
-                    if (!worker_error.ok()) { result.error = worker_error.message; break; }
+                                                       result.findings, logger, log_context);
+                    if (logger != nullptr) {
+                        json::Value fields = object_value(); add_error_fields(fields, worker_error);
+                        logger->event("step_end", log_context, std::move(fields),
+                                      worker_error.ok() ? "success" : "failure");
+                    }
+                    if (!worker_error.ok()) {
+                        result.error = worker_error;
+                        result.failing_segment = segment_index + 1;
+                        break;
+                    }
                 }
-                if (result.error.empty()) result.reviewed_paths = task.paths;
+                if (result.error.ok()) result.reviewed_paths = task.paths;
                 results[task_index] = std::move(result);
                 if (progress) {
                     std::lock_guard<std::mutex> lock(progress_mutex);
@@ -715,12 +934,20 @@ Error run_review(const provider::RequestContext& context,
         return {ErrorCode::Internal, "could not start security-review workers: " + std::string(exception.what())};
     }
     for (std::thread& worker : workers) worker.join();
-    if (cancellation.cancelled()) { output.complete = false; output.errors.push_back("security review cancelled"); }
+    if (cancellation.cancelled()) {
+        output.complete = false; output.errors.push_back("security review cancelled");
+        first_failure = {ErrorCode::Cancelled, "security review cancelled"};
+    }
     for (std::size_t task_index = 0; task_index < tasks.size(); ++task_index) {
         TaskResult& result = results[task_index];
-        if (!result.error.empty()) {
-            output.complete = false; output.errors.push_back("batch " + std::to_string(task_index + 1) + ": " + result.error);
-            for (const std::string& path : tasks[task_index].paths) coverage[path] = {path, "failed", result.error};
+        if (!result.error.ok()) {
+            const std::string detail = "batch " + std::to_string(task_index + 1) +
+                " segment " + std::to_string(result.failing_segment) + ": " +
+                error_code_name(result.error.code) + ": " + result.error.message;
+            output.complete = false; output.errors.push_back(detail);
+            if (first_failure.ok()) first_failure = result.error;
+            for (const std::string& path : tasks[task_index].paths)
+                coverage[path] = {path, "failed", detail};
             continue;
         }
         for (const std::string& path : result.reviewed_paths) coverage[path] = {path, "reviewed", ""};
@@ -749,8 +976,12 @@ Error run_review(const provider::RequestContext& context,
         for (const auto& item : coverage) coverage_values.push_back(item.second);
         std::set<std::string> rejected; std::vector<Finding> additions;
         error = run_coordinator(context, prompts, tools, output.findings, coverage_values,
-                                batch_size, cancellation, rejected, additions);
-        if (!error.ok()) { output.complete = false; output.errors.push_back("coordinator: " + error.message); }
+                                batch_size, cancellation, rejected, additions, logger);
+        if (!error.ok()) {
+            output.complete = false; output.errors.push_back(
+                "coordinator: " + std::string(error_code_name(error.code)) + ": " + error.message);
+            if (first_failure.ok()) first_failure = error;
+        }
         else {
             output.findings.erase(std::remove_if(output.findings.begin(), output.findings.end(),
                                                  [&](const Finding& finding) { return rejected.find(finding.id) != rejected.end(); }),
@@ -774,6 +1005,7 @@ Error run_review(const provider::RequestContext& context,
         if (!evidence_error.ok()) {
             output.complete = false; output.errors.push_back("evidence " + finding.id + ": " + evidence_error.message);
             coverage[finding.path] = {finding.path, "stale", evidence_error.message};
+            if (first_failure.ok()) first_failure = evidence_error;
         } else finding.evidence = std::move(evidence.content);
     }
     std::sort(output.findings.begin(), output.findings.end(), [](const Finding& a, const Finding& b) {
@@ -784,9 +1016,9 @@ Error run_review(const provider::RequestContext& context,
     });
     for (const auto& item : coverage) output.coverage.push_back(item.second);
     report = std::move(output);
-    return report.complete ? ok_error()
-                           : Error{cancellation.cancelled() ? ErrorCode::Cancelled : ErrorCode::ProviderSchema,
-                                   "security review completed with incomplete coverage"};
+    if (report.complete) return ok_error();
+    if (!first_failure.ok()) return first_failure;
+    return {ErrorCode::ProviderSchema, "security review completed with incomplete coverage"};
 }
 
 Error render_review_markdown(const ReviewReport& report, std::ostream& output) {

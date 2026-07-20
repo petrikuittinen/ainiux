@@ -261,6 +261,72 @@ class Handler(BaseHTTPRequestHandler):
         last = self._responses_last_input(request)
         if not self._validate_request_shape(request, last, responses=True):
             return
+        input_items = request.get("input", [])
+        system_text = request.get("instructions", "")
+        if not isinstance(system_text, str):
+            system_text = ""
+        system_text += "\n" + "\n".join(
+            item.get("content", "")
+            for item in input_items
+            if isinstance(item, dict)
+            and item.get("role") == "system"
+            and isinstance(item.get("content"), str)
+        )
+        if request.get("tools") and "security-review worker" in system_text:
+            if "serialized cross-project coordinator" in system_text:
+                reply = json.dumps(
+                    {"keep": [], "reject": [], "merge": [], "findings": [], "notes": []}
+                )
+                self._send(
+                    200,
+                    json.dumps(
+                        {
+                            "id": "resp_review_coordinator",
+                            "object": "response",
+                            "model": self.model,
+                            "status": "completed",
+                            "output": [{"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": reply, "annotations": []}]}],
+                        }
+                    ),
+                )
+                return
+            tool_result_seen = any(
+                isinstance(item, dict) and item.get("type") == "function_call_output"
+                for item in input_items
+            )
+            user_text = "\n".join(
+                item.get("content", "")
+                for item in input_items
+                if isinstance(item, dict)
+                and item.get("role") == "user"
+                and isinstance(item.get("content"), str)
+            )
+            path_matches = re.findall(r"## File path \(JSON\): (\"(?:\\.|[^\"])*\")", user_text)
+            review_paths = [json.loads(path) for path in path_matches] or ["review.cpp"]
+            if not tool_result_seen:
+                output = [{
+                    "type": "function_call",
+                    "id": "fc_review_1",
+                    "call_id": "review_call_1",
+                    "name": "read_file",
+                    "arguments": json.dumps({"path": review_paths[0], "start_line": 1, "end_line": 1}),
+                }]
+            else:
+                reply = json.dumps({"findings": [], "coverage": review_paths, "notes": []})
+                output = [{"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": reply, "annotations": []}]}]
+            self._send(
+                200,
+                json.dumps(
+                    {
+                        "id": "resp_review_worker",
+                        "object": "response",
+                        "model": self.model,
+                        "status": "completed",
+                        "output": output,
+                    }
+                ),
+            )
+            return
         reply = "Hello"
         if last == "model?":
             reply = request.get("model", "<missing>")
@@ -400,8 +466,10 @@ class Handler(BaseHTTPRequestHandler):
                     ),
                 )
                 return
-            reply = json.dumps(
-                {"findings": [], "coverage": review_paths, "notes": []}
+            reply = (
+                "{malformed review output"
+                if "MALFORMED_REVIEW_OUTPUT" in user_text
+                else json.dumps({"findings": [], "coverage": review_paths, "notes": []})
             )
             self._send(
                 200,

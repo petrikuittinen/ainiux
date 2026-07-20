@@ -789,10 +789,89 @@ grep '`AGENTS.md` | reviewed' "$security_out" >/dev/null
 grep '`review.cpp` | reviewed' "$security_out" >/dev/null
 grep 'No evidence-backed findings were reported' "$security_out" >/dev/null
 grep '^Security review scope: 2 indexed file(s)' "$security_err" >/dev/null
+grep '^Security review diagnostic log: .*\.ainiux/logs/security-review/security-review-' "$security_err" >/dev/null
+security_log=$(find "$security_workspace/.ainiux/logs/security-review" -maxdepth 1 -type f -name 'security-review-*.jsonl' | head -n 1)
+test -n "$security_log"
+test "$(stat -c '%a' "$security_log")" = 600
+for event in run_start index_result task_plan step_start llm_request llm_response tool_result validation_result step_end freshness_result run_end; do
+    grep "\"event_type\":\"$event\"" "$security_log" >/dev/null
+done
+grep '"stage":"worker_task"' "$security_log" >/dev/null
+grep '"task_number":1' "$security_log" >/dev/null
+grep '"segment_number":1' "$security_log" >/dev/null
+grep '"serialized_body":{"data":' "$security_log" >/dev/null
+grep '"raw_response":{"data":' "$security_log" >/dev/null
+if grep -E 'Authorization:|Bearer |"cookie"[[:space:]]*:' "$security_log" >/dev/null; then
+    echo "sensitive header value leaked to security-review log" >&2
+    exit 1
+fi
 if grep -E 'Code index refreshed|Security review scope|Security review:' "$security_out" >/dev/null; then
     echo "security-review status leaked to stdout" >&2
     exit 1
 fi
+
+security_responses_out="$ROOT/build/security-review-responses.out"
+security_responses_err="$ROOT/build/security-review-responses.err"
+(
+    cd "$security_workspace"
+    "$ROOT/ainiux" "$BASE" --security-review --responses --no-stream --quiet -m "$MODEL" \
+        >"$security_responses_out" 2>"$security_responses_err"
+)
+grep 'Result: complete' "$security_responses_out" >/dev/null
+test ! -s "$security_responses_err"
+security_responses_log=$(find "$security_workspace/.ainiux/logs/security-review" -maxdepth 1 -type f -name 'security-review-*.jsonl' | sort | tail -n 1)
+grep '"api":"responses"' "$security_responses_log" >/dev/null
+grep '"event_type":"tool_result"' "$security_responses_log" >/dev/null
+grep '"event_type":"run_end".*"status":"success"' "$security_responses_log" >/dev/null
+
+security_log_failure_workspace="$ROOT/build/security-review-log-failure-workspace"
+security_log_target="$ROOT/build/security-review-log-target"
+rm -rf "$security_log_failure_workspace" "$security_log_target"
+mkdir -p "$security_log_failure_workspace/.ainiux" "$security_log_target"
+ln -s "$security_log_target" "$security_log_failure_workspace/.ainiux/logs"
+cat >"$security_log_failure_workspace/review.cpp" <<'CPP'
+int main() { return 0; }
+CPP
+security_log_failure_out="$ROOT/build/security-review-log-failure.out"
+security_log_failure_err="$ROOT/build/security-review-log-failure.err"
+(
+    cd "$security_log_failure_workspace"
+    "$ROOT/ainiux" "$BASE" --security-review --no-stream --quiet -m "$MODEL" \
+        >"$security_log_failure_out" 2>"$security_log_failure_err"
+)
+grep 'Result: complete' "$security_log_failure_out" >/dev/null
+test "$(grep -c '^SECURITY REVIEW LOGGING DISABLED:' "$security_log_failure_err")" = 1
+if grep -E 'Code index refreshed|Security review scope|Security review:' "$security_log_failure_out" >/dev/null; then
+    echo "logging failure status leaked to security-review stdout" >&2
+    exit 1
+fi
+
+security_invalid_workspace="$ROOT/build/security-review-invalid-workspace"
+rm -rf "$security_invalid_workspace"
+mkdir -p "$security_invalid_workspace"
+cat >"$security_invalid_workspace/review.cpp" <<'CPP'
+// MALFORMED_REVIEW_OUTPUT
+int main() { return 0; }
+CPP
+security_invalid_out="$ROOT/build/security-review-invalid.out"
+security_invalid_err="$ROOT/build/security-review-invalid.err"
+if (
+    cd "$security_invalid_workspace"
+    "$ROOT/ainiux" "$BASE" --security-review --no-stream --quiet -m "$MODEL" \
+        >"$security_invalid_out" 2>"$security_invalid_err"
+); then
+    echo "malformed security-review output should fail after one repair" >&2
+    exit 1
+fi
+grep 'Result: .*incomplete' "$security_invalid_out" >/dev/null
+grep '^AINIUX_ERR_JSON_PARSE:' "$security_invalid_err" >/dev/null
+security_invalid_log=$(find "$security_invalid_workspace/.ainiux/logs/security-review" -maxdepth 1 -type f -name 'security-review-*.jsonl' | head -n 1)
+grep '"event_type":"validation_result"' "$security_invalid_log" | \
+    grep '"error_code":"AINIUX_ERR_JSON_PARSE"' | \
+    grep '"stage":"worker_task"' | grep '"status":"failure"' >/dev/null
+grep '"assistant_document":{"data":"{malformed review output","encoding":"utf-8"}' "$security_invalid_log" >/dev/null
+grep '"event_type":"repair_scheduled"' "$security_invalid_log" >/dev/null
+grep '"event_type":"run_end".*"status":"failure"' "$security_invalid_log" >/dev/null
 
 ndjson=$("$ROOT/ainiux" "$BASE" --quiet --stream -m "$MODEL" -p "hello" --format ndjson)
 printf '%s\n' "$ndjson" | grep '"event":"delta"' >/dev/null

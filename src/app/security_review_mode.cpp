@@ -5,18 +5,28 @@
 #include <chrono>
 #include <csignal>
 #include <iostream>
+#include <map>
+#include <memory>
 #include <thread>
 
 #include "agent/index/index.hpp"
 #include "agent/prompts.hpp"
 #include "agent/review.hpp"
+#include "agent/review_log.hpp"
 #include "agent/tools.hpp"
 #include "security/redact.hpp"
+#include "json/json.hpp"
 
 namespace ainiux::app {
 namespace {
 
 volatile std::sig_atomic_t g_review_interrupt = 0;
+
+json::Value log_object() { json::Value value; value.type = json::Value::Type::Object; return value; }
+json::Value log_array() { json::Value value; value.type = json::Value::Type::Array; return value; }
+json::Value log_string(const std::string& text) { json::Value value; value.type = json::Value::Type::String; value.string = text; return value; }
+json::Value log_number(double number) { json::Value value; value.type = json::Value::Type::Number; value.number = number; return value; }
+json::Value log_bool(bool boolean) { json::Value value; value.type = json::Value::Type::Bool; value.boolean = boolean; return value; }
 
 void review_signal_handler(int) { g_review_interrupt = 1; }
 
@@ -89,6 +99,52 @@ int run_security_review_mode(provider::RequestContext context) {
         ~MonitorJoin() { finished.store(true, std::memory_order_release); if (thread.joinable()) thread.join(); }
     } monitor_join{finished, interrupt_monitor};
 
+    const std::vector<std::string> secrets = configured_secrets(context);
+    const auto review_started = std::chrono::steady_clock::now();
+    std::unique_ptr<agent::ReviewLogger> logger;
+    if (context.options.security_review_log_enabled) {
+        Error log_error;
+        logger = agent::ReviewLogger::create(
+            ".", context.options.security_review_log_keep_runs, secrets,
+            [&](const std::string& warning) { std::cerr << warning << "\n"; }, log_error);
+        if (!logger) {
+            std::cerr << "SECURITY REVIEW LOGGING DISABLED: "
+                      << redact_secrets(log_error.message, secrets)
+                      << "; the review will continue\n";
+        } else {
+            if (!context.options.quiet)
+                std::cerr << "Security review diagnostic log: " << logger->final_path() << "\n";
+            json::Value fields = log_object();
+            fields.object["workspace"] = log_string(".");
+            fields.object["provider"] = log_string(context.profile.name);
+            fields.object["model"] = log_string(context.options.model);
+            fields.object["api"] = log_string(context.api_kind == provider::ApiKind::Responses ? "responses" : "chat");
+            fields.object["streaming"] = log_bool(context.options.stream);
+            fields.object["reasoning_kind"] = log_number(static_cast<int>(context.options.reasoning.kind));
+            fields.object["reasoning_value"] = log_string(context.options.reasoning.value);
+            fields.object["reasoning_tokens"] = log_number(context.options.reasoning.tokens);
+            fields.object["batch_size"] = log_number(context.options.security_review_batch_size);
+            fields.object["parallelism"] = log_number(context.options.max_parallel_agents);
+            logger->event("run_start", {"run"}, std::move(fields), "success");
+        }
+    }
+    auto finish_log = [&](const Error& final_error, const agent::ReviewReport* report) {
+        if (!logger) return;
+        json::Value fields = log_object();
+        fields.object["duration_ms"] = log_number(std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now() - review_started).count());
+        fields.object["exit_code"] = log_number(exit_code_for(final_error.code));
+        fields.object["error_code"] = log_string(error_code_name(final_error.code));
+        fields.object["error_message"] = log_string(final_error.message);
+        std::map<std::string, std::size_t> counts;
+        if (report != nullptr) for (const agent::FileCoverage& coverage : report->coverage) ++counts[coverage.status];
+        json::Value coverage = log_object();
+        for (const auto& count : counts) coverage.object[count.first] = log_number(count.second);
+        fields.object["coverage_counts"] = std::move(coverage);
+        fields.object["finding_count"] = log_number(report == nullptr ? 0 : report->findings.size());
+        logger->finish(std::move(fields), final_error.ok() ? "success" : "failure");
+    };
+
     agent::index::Options index_options;
     index_options.workspace = ".";
     index_options.max_source_code_file_size = context.options.max_source_code_file_size;
@@ -96,8 +152,19 @@ int run_security_review_mode(provider::RequestContext context) {
     index_options.interrupted = [] { return g_review_interrupt != 0; };
     agent::index::RefreshStats index_stats;
     Error error = agent::index::refresh(index_options, index_stats);
-    if (!error.ok()) return render_failure_report(context, error);
-    const std::vector<std::string> secrets = configured_secrets(context);
+    if (logger) {
+        json::Value fields = log_object();
+        fields.object["discovered"] = log_number(index_stats.discovered);
+        fields.object["indexed"] = log_number(index_stats.indexed);
+        fields.object["unchanged"] = log_number(index_stats.unchanged);
+        fields.object["skipped"] = log_number(index_stats.skipped);
+        if (!error.ok()) {
+            fields.object["error_code"] = log_string(error_code_name(error.code));
+            fields.object["error_message"] = log_string(error.message);
+        }
+        logger->event("index_result", {"index"}, std::move(fields), error.ok() ? "success" : "failure");
+    }
+    if (!error.ok()) { finish_log(error, nullptr); return render_failure_report(context, error); }
     if (!context.options.quiet) {
         for (const std::string& diagnostic : index_stats.diagnostics)
             std::cerr << "Index warning: " << redact_secrets(diagnostic, secrets) << "\n";
@@ -108,7 +175,7 @@ int run_security_review_mode(provider::RequestContext context) {
 
     agent::index::Snapshot snapshot;
     error = agent::index::load_snapshot(index_options, snapshot);
-    if (!error.ok()) return render_failure_report(context, error);
+    if (!error.ok()) { finish_log(error, nullptr); return render_failure_report(context, error); }
     std::size_t source_files = 0;
     std::uintmax_t source_bytes = 0;
     for (const agent::index::IndexedFile& file : snapshot.files) if (file.status == "indexed") {
@@ -121,10 +188,10 @@ int run_security_review_mode(provider::RequestContext context) {
 
     agent::ReadToolRegistry tools;
     error = agent::ReadToolRegistry::create(index_options, std::move(snapshot), secrets, tools);
-    if (!error.ok()) return render_failure_report(context, error);
+    if (!error.ok()) { finish_log(error, nullptr); return render_failure_report(context, error); }
     agent::TrustedPrompts prompts;
     error = agent::load_trusted_prompts(context.options.trusted_prompt_dir, prompts);
-    if (!error.ok()) return render_failure_report(context, error);
+    if (!error.ok()) { finish_log(error, nullptr); return render_failure_report(context, error); }
 
     agent::ReviewReport report;
     Error review_error = agent::run_review(
@@ -132,10 +199,28 @@ int run_security_review_mode(provider::RequestContext context) {
         static_cast<std::size_t>(context.options.max_parallel_agents), cancellation.token(),
         [&](const std::string& message) {
             if (!context.options.quiet) std::cerr << "Security review: " << redact_secrets(message, secrets) << "\n";
-        }, report);
+        }, report, logger.get());
 
     agent::index::Freshness freshness;
     const Error freshness_error = agent::index::check_freshness(index_options, freshness);
+    if (logger) {
+        json::Value fields = log_object();
+        fields.object["fresh"] = log_bool(freshness.fresh);
+        const auto add_paths = [&](const char* name, const std::vector<std::string>& paths) {
+            json::Value values = log_array();
+            for (const std::string& path : paths) values.array.push_back(log_string(path));
+            fields.object[name] = std::move(values);
+        };
+        add_paths("changed", freshness.changed);
+        add_paths("added", freshness.added);
+        add_paths("removed", freshness.removed);
+        if (!freshness_error.ok()) {
+            fields.object["error_code"] = log_string(error_code_name(freshness_error.code));
+            fields.object["error_message"] = log_string(freshness_error.message);
+        }
+        logger->event("freshness_result", {"freshness"}, std::move(fields),
+                      freshness_error.ok() && freshness.fresh ? "success" : "failure");
+    }
     if (!freshness_error.ok()) {
         report.complete = false;
         report.errors.push_back("post-review freshness check: " + freshness_error.message);
@@ -163,13 +248,16 @@ int run_security_review_mode(provider::RequestContext context) {
     });
     const Error render_error = agent::render_review_markdown(report, std::cout);
     if (!render_error.ok()) {
+        finish_log(render_error, &report);
         print_error(render_error);
         return exit_code_for(render_error.code);
     }
     if (!review_error.ok()) {
+        finish_log(review_error, &report);
         print_error(review_error);
         return exit_code_for(review_error.code);
     }
+    finish_log(ok_error(), &report);
     return 0;
 }
 

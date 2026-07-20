@@ -1994,6 +1994,13 @@ Error apply_document(const Document& document, cli::Options& options) {
                 err = schema_error(entry, "expected a positive byte size no larger than 16M");
             }
             if (err.ok()) candidate.security_review_batch_size = static_cast<size_t>(value);
+        } else if (name == "agent.security_review_log_enabled") {
+            err = require_type(entry, Value::Type::Boolean);
+            if (err.ok()) candidate.security_review_log_enabled = entry.value.boolean;
+        } else if (name == "agent.security_review_log_keep_runs") {
+            err = nonnegative_int(entry, candidate.security_review_log_keep_runs);
+            if (err.ok() && candidate.security_review_log_keep_runs > 1000)
+                err = schema_error(entry, "expected an integer from 0 through 1000");
         } else if (name == "input.image_capability") {
             err = enum_string(entry,
                               cli::option_values::image_capability_strings(),

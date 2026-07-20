@@ -170,6 +170,11 @@ int main(int argc, char** argv) {
                                   "--trusted-prompt-dir requires --security-review"});
         return ainiux::app::exit_code_for(ainiux::ErrorCode::BadArgs);
     }
+    if (!options.security_review && options.security_review_log_cli_explicit) {
+        ainiux::app::print_error({ainiux::ErrorCode::BadArgs,
+                                  "--security-review-log and --no-security-review-log require --security-review"});
+        return ainiux::app::exit_code_for(ainiux::ErrorCode::BadArgs);
+    }
     if (options.security_review) {
         const ainiux::Error argument_error =
             ainiux::cli::validate_security_review_arguments(argc, argv, options);
