@@ -142,19 +142,34 @@ ReviewLogger::~ReviewLogger() {
     if (directory_fd_ >= 0) ::close(directory_fd_);
 }
 
+bool valid_run_kind(const std::string& run_kind) {
+    if (run_kind.empty() || run_kind.size() > 64) return false;
+    for (char ch : run_kind) {
+        const bool ok = (ch >= 'a' && ch <= 'z') || (ch >= '0' && ch <= '9') || ch == '-';
+        if (!ok) return false;
+    }
+    return true;
+}
+
 std::unique_ptr<ReviewLogger> ReviewLogger::create(const std::string& workspace,
                                                    int keep_runs,
                                                    std::vector<std::string> secrets,
                                                    WarningCallback warning,
-                                                   Error& error) {
+                                                   Error& error,
+                                                   const std::string& run_kind) {
     std::unique_ptr<ReviewLogger> logger(new ReviewLogger());
-    error = logger->initialize(workspace, keep_runs, std::move(secrets), std::move(warning));
+    error = logger->initialize(workspace, keep_runs, std::move(secrets), std::move(warning),
+                               run_kind);
     if (!error.ok()) return nullptr;
     return logger;
 }
 
 Error ReviewLogger::initialize(const std::string& workspace, int keep_runs,
-                               std::vector<std::string> secrets, WarningCallback warning) {
+                               std::vector<std::string> secrets, WarningCallback warning,
+                               const std::string& run_kind) {
+    if (!valid_run_kind(run_kind))
+        return {ErrorCode::BadArgs, "diagnostic log run kind must be [a-z0-9-]{1,64}"};
+    run_kind_ = run_kind;
     keep_runs_ = keep_runs;
     warning_ = std::move(warning);
     secrets_ = std::move(secrets);
@@ -178,13 +193,13 @@ Error ReviewLogger::initialize(const std::string& workspace, int keep_runs,
                                                     (root / ".ainiux/logs").string(), child);
     if (!directory_error.ok()) return directory_error;
     parent.reset(child.release());
-    directory_error = open_secure_child_directory(parent.get(), "security-review",
-                                                    (root / ".ainiux/logs/security-review").string(), child);
+    directory_error = open_secure_child_directory(parent.get(), run_kind_,
+                                                    (root / ".ainiux/logs" / run_kind_).string(), child);
     if (!directory_error.ok()) return directory_error;
     directory_fd_ = child.release();
-    directory_ = (root / ".ainiux/logs/security-review").string();
+    directory_ = (root / ".ainiux/logs" / run_kind_).string();
     static std::atomic<unsigned long long> counter{0};
-    const std::string prefix = "security-review-" + timestamp(true) + "-" +
+    const std::string prefix = run_kind_ + "-" + timestamp(true) + "-" +
                                std::to_string(static_cast<long long>(::getpid())) + "-";
     for (int attempts = 0; attempts < 1000; ++attempts) {
         const unsigned long long suffix = counter.fetch_add(1) + 1;
@@ -225,8 +240,11 @@ void ReviewLogger::fail_locked(const std::string& detail) {
     if (fd_ >= 0) { ::close(fd_); fd_ = -1; }
     if (!warned_) {
         warned_ = true;
-        const std::string warning = "SECURITY REVIEW LOGGING DISABLED: " + redact_secrets(detail, secrets_) +
-                                    "; the review will continue and any partial log is preserved";
+        const std::string label = run_kind_ == "security-review" ? "SECURITY REVIEW"
+                                                                : "AGENT";
+        const std::string warning = label + " LOGGING DISABLED: " +
+                                    redact_secrets(detail, secrets_) +
+                                    "; the run will continue and any partial log is preserved";
         if (warning_) warning_(warning);
     }
 }
@@ -247,6 +265,16 @@ bool ReviewLogger::write_record_locked(const std::string& record) {
             return false;
         }
         offset += static_cast<std::size_t>(written);
+    }
+    // Flush each record so `tail -f` on the live .partial path sees events as
+    // they happen (and so crash partials hold a complete JSONL prefix).
+#if defined(_POSIX_SYNCHRONIZED_IO) && _POSIX_SYNCHRONIZED_IO > 0
+    if (::fdatasync(fd_) != 0) {
+#else
+    if (::fsync(fd_) != 0) {
+#endif
+        fail_locked(errno_text("could not flush security-review log", partial_path_));
+        return false;
     }
     return true;
 }
@@ -357,15 +385,18 @@ void ReviewLogger::finish(json::Value fields, const std::string& status) {
 
 void ReviewLogger::prune_completed() {
     if (keep_runs_ == 0) return;
-    static const std::regex recognized(
-        R"(^security-review-[0-9]{8}T[0-9]{6}\.[0-9]{3}Z-[0-9]+-[0-9]+\.jsonl$)");
+    const std::string pattern =
+        "^" + run_kind_ + R"(-[0-9]{8}T[0-9]{6}\.[0-9]{3}Z-[0-9]+-[0-9]+\.jsonl$)";
+    const std::regex recognized(pattern);
+    const std::string warn_label =
+        run_kind_ == "security-review" ? "SECURITY REVIEW LOG WARNING: " : "AGENT LOG WARNING: ";
     const int duplicate = ::dup(directory_fd_);
     DIR* raw_directory = duplicate < 0 ? nullptr : ::fdopendir(duplicate);
     if (raw_directory == nullptr) {
         if (duplicate >= 0) ::close(duplicate);
         std::lock_guard<std::mutex> lock(mutex_);
-        if (!warned_ && warning_) warning_("SECURITY REVIEW LOG WARNING: " +
-            errno_text("could not enumerate completed logs", directory_));
+        if (!warned_ && warning_)
+            warning_(warn_label + errno_text("could not enumerate completed logs", directory_));
         warned_ = true;
         return;
     }
@@ -385,8 +416,8 @@ void ReviewLogger::prune_completed() {
     if (read_error != 0) {
         errno = read_error;
         std::lock_guard<std::mutex> lock(mutex_);
-        if (!warned_ && warning_) warning_("SECURITY REVIEW LOG WARNING: " +
-            errno_text("could not enumerate completed logs", directory_));
+        if (!warned_ && warning_)
+            warning_(warn_label + errno_text("could not enumerate completed logs", directory_));
         warned_ = true;
         return;
     }
@@ -398,8 +429,10 @@ void ReviewLogger::prune_completed() {
         if (::fstatat(directory_fd_, victim.c_str(), &info, AT_SYMLINK_NOFOLLOW) != 0 ||
             !S_ISREG(info.st_mode) || ::unlinkat(directory_fd_, victim.c_str(), 0) != 0) {
             std::lock_guard<std::mutex> lock(mutex_);
-            if (!warned_ && warning_) warning_("SECURITY REVIEW LOG WARNING: " +
-                errno_text("could not prune completed log", (fs::path(directory_) / victim).string()));
+            if (!warned_ && warning_)
+                warning_(warn_label +
+                         errno_text("could not prune completed log",
+                                    (fs::path(directory_) / victim).string()));
             warned_ = true;
             return;
         }

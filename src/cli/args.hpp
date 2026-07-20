@@ -59,6 +59,9 @@ struct Options {
     bool security_review = false;
     bool security_review_log_enabled = true;
     bool security_review_log_cli_explicit = false;
+    bool agent = false;
+    bool agent_log_enabled = true;
+    bool agent_log_cli_explicit = false;
 
     std::string positional_url;
     std::string prompt;
@@ -193,6 +196,7 @@ ParseResult parse_args(int argc, char** argv);
 ParseResult parse_args(int argc, char** argv, const Options& base_options);
 Error validate_index_mode_arguments(int argc, char** argv, const Options& options);
 Error validate_security_review_arguments(int argc, char** argv, const Options& options);
+Error validate_agent_mode_arguments(int argc, char** argv, const Options& options);
 std::string help_text();
 const char* format_name(OutputFormat format);
 

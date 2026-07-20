@@ -515,6 +515,42 @@ void test_cli_security_review_parse() {
           "security-review rejects explicit index-mode flags");
 }
 
+void test_cli_agent_mode_parse() {
+    const char* argv[] = {"ainiux", "agent", "openrouter", "-m", "model", "-p", "summarize the project"};
+    ainiux::cli::ParseResult parsed = ainiux::cli::parse_args(7, const_cast<char**>(argv));
+    check(parsed.error.ok() && parsed.options.agent && parsed.options.model == "model" &&
+              parsed.options.prompt == "summarize the project" &&
+              ainiux::cli::validate_agent_mode_arguments(7, const_cast<char**>(argv), parsed.options)
+                  .ok(),
+          "agent subcommand accepts provider, model, and goal prompt");
+
+    const char* flag[] = {"ainiux", "--agent", "-m", "model", "-p", "goal", "--no-agent-log"};
+    parsed = ainiux::cli::parse_args(7, const_cast<char**>(flag));
+    check(parsed.error.ok() && parsed.options.agent && parsed.options.agent_log_cli_explicit &&
+              !parsed.options.agent_log_enabled &&
+              ainiux::cli::validate_agent_mode_arguments(7, const_cast<char**>(flag), parsed.options)
+                  .ok(),
+          "agent flag accepts logging disable override");
+
+    const char* missing[] = {"ainiux", "--agent", "-m", "model"};
+    parsed = ainiux::cli::parse_args(4, const_cast<char**>(missing));
+    check(parsed.error.ok() && !ainiux::cli::validate_agent_mode_arguments(
+                                   4, const_cast<char**>(missing), parsed.options).ok(),
+          "agent mode requires a goal prompt");
+
+    const char* system[] = {"ainiux", "--agent", "-m", "model", "-p", "goal", "-s", "override"};
+    parsed = ainiux::cli::parse_args(8, const_cast<char**>(system));
+    check(parsed.error.ok() && !ainiux::cli::validate_agent_mode_arguments(
+                                   8, const_cast<char**>(system), parsed.options).ok(),
+          "agent mode rejects user system prompt overrides");
+
+    const char* combined[] = {"ainiux", "--agent", "--security-review", "-p", "goal"};
+    parsed = ainiux::cli::parse_args(5, const_cast<char**>(combined));
+    check(parsed.error.ok() && !ainiux::cli::validate_agent_mode_arguments(
+                                   5, const_cast<char**>(combined), parsed.options).ok(),
+          "agent mode rejects security-review combination");
+}
+
 }  // namespace
 
 void run_all() {
@@ -524,6 +560,7 @@ void run_all() {
     test_cli_context_token_parse();
     test_cli_code_index_parse();
     test_cli_security_review_parse();
+    test_cli_agent_mode_parse();
     test_cli_editor_parse();
     test_cli_help_displays_version();
     test_cli_web_search_parse();

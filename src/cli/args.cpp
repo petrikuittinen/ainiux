@@ -252,6 +252,8 @@ ParseResult parse_args(int argc, char** argv, const Options& base_options) {
         } else if ((arg == "benchmark" && i == 1) || arg == "--benchmark") {
             opts.benchmark = true;
             opts.format = OutputFormat::Ndjson;
+        } else if ((arg == "agent" && i == 1) || arg == "--agent") {
+            opts.agent = true;
         } else if ((arg == "grade" && i == 1) || arg == "--grade") {
             opts.grade = true;
             opts.format = OutputFormat::Ndjson;
@@ -286,6 +288,12 @@ ParseResult parse_args(int argc, char** argv, const Options& base_options) {
         } else if (arg == "--no-security-review-log") {
             opts.security_review_log_enabled = false;
             opts.security_review_log_cli_explicit = true;
+        } else if (arg == "--agent-log") {
+            opts.agent_log_enabled = true;
+            opts.agent_log_cli_explicit = true;
+        } else if (arg == "--no-agent-log") {
+            opts.agent_log_enabled = false;
+            opts.agent_log_cli_explicit = true;
         } else if (arg == "--stream") {
             opts.stream = true;
             opts.stream_explicit = true;
@@ -701,6 +709,9 @@ Error validate_index_mode_arguments(int argc, char** argv, const Options& option
 
 Error validate_security_review_arguments(int argc, char** argv, const Options& options) {
     if (!options.security_review) return ok_error();
+    if (options.agent) {
+        return {ErrorCode::BadArgs, "--security-review cannot be combined with agent mode"};
+    }
     if (options.index_code || options.print_index || options.clear_index) {
         return {ErrorCode::BadArgs,
                 "--security-review cannot be combined with code index mode flags; it refreshes the index itself"};
@@ -750,6 +761,78 @@ Error validate_security_review_arguments(int argc, char** argv, const Options& o
     return ok_error();
 }
 
+Error validate_agent_mode_arguments(int argc, char** argv, const Options& options) {
+    if (!options.agent) return ok_error();
+    if (options.security_review) {
+        return {ErrorCode::BadArgs, "agent mode cannot be combined with --security-review"};
+    }
+    if (options.benchmark || options.grade) {
+        return {ErrorCode::BadArgs, "agent mode cannot be combined with --benchmark or --grade"};
+    }
+    if (options.index_code || options.print_index || options.clear_index) {
+        return {ErrorCode::BadArgs,
+                "agent mode cannot be combined with code index mode flags; it refreshes the index itself"};
+    }
+    if (options.editor || options.repl || options.tui || options.list_models) {
+        return {ErrorCode::BadArgs,
+                "agent mode is non-interactive; use --chat/--repl/--editor separately"};
+    }
+    if (options.prompt.empty() && options.prompt_file.empty()) {
+        return {ErrorCode::BadArgs,
+                "agent mode requires -p/--prompt or --prompt-file with the user goal"};
+    }
+    if (!options.system.empty() || !options.system_file.empty()) {
+        return {ErrorCode::BadArgs,
+                "agent mode uses the trusted master/agent system prompt; omit -s/--system-file"};
+    }
+    bool positional_seen = false;
+    for (int i = 1; i < argc; ++i) {
+        const std::string argument = argv[i];
+        const std::size_t equals = argument.find('=');
+        const std::string option = equals == std::string::npos ? argument : argument.substr(0, equals);
+        if (!option.empty() && option.front() != '-') {
+            if (option == "agent" && i == 1) continue;
+            if (positional_seen) {
+                return {ErrorCode::BadArgs,
+                        "unexpected extra positional argument in agent mode: " + option};
+            }
+            positional_seen = true;
+            continue;
+        }
+        if (option == "--agent" || option == "agent" || option == "--agent-log" ||
+            option == "--no-agent-log" || option == "--responses" || option == "--key-stdin" ||
+            option == "--quiet" || option == "--debug" || option == "--no-config" ||
+            option == "--trace-http" || option == "--insecure-tls" || option == "--stream" ||
+            option == "--no-stream") {
+            continue;
+        }
+        const bool takes_value =
+            option == "-m" || option == "--model" || option == "-model" ||
+            option == "--provider" || option == "--profile" || option == "--api" ||
+            option == "--base-url" || option == "--chat-url" || option == "--models-url" ||
+            option == "--responses-url" || option == "--key-env" || option == "--key-file" ||
+            option == "-k" || option == "--key" || option == "--header" ||
+            option == "--reasoning" || option == "--connect-timeout" || option == "--timeout" ||
+            option == "--proxy" || option == "--trusted-prompt-dir" || option == "-p" ||
+            option == "--prompt" || option == "--prompt-file" ||
+            option == "--max-source-code-file-size";
+        if (takes_value) {
+            if (equals == std::string::npos) ++i;
+            continue;
+        }
+        return {ErrorCode::BadArgs, option + " cannot be combined with agent mode"};
+    }
+    if (options.format != OutputFormat::Text || options.rendered_output_format_explicit) {
+        return {ErrorCode::BadArgs,
+                "agent mode writes final assistant text to stdout and cannot use alternate formats"};
+    }
+    if (!options.output_path.empty()) {
+        return {ErrorCode::BadArgs,
+                "agent mode writes final text to stdout; redirect stdout instead of using --output"};
+    }
+    return ok_error();
+}
+
 std::string help_text() {
     return app_version_label() + R"( - script-friendly OpenAI-compatible chat CLI
 
@@ -769,6 +852,8 @@ Usage:
   ainiux --print-index [--output PATH]
   ainiux --clear-index
   ainiux [BASE_URL|PROFILE] -m MODEL --security-review
+  ainiux agent [BASE_URL|PROFILE] -m MODEL -p "goal"
+  ainiux --agent [BASE_URL|PROFILE] -m MODEL -p "goal"
 
 Examples:
   ainiux http://localhost:8000 -p "What is the capital of Norway?"
@@ -822,6 +907,9 @@ Options:
       --security-review         Review every eligible indexed workspace file and print Markdown.
       --security-review-log     Enable the local per-run JSONL diagnostic log (default).
       --no-security-review-log  Disable the local per-run JSONL diagnostic log.
+      --agent                   Run a one-shot read-only local agent goal (also: ainiux agent ...).
+      --agent-log               Enable the local per-run agent JSONL diagnostic log (default).
+      --no-agent-log            Disable the local per-run agent JSONL diagnostic log.
       --trusted-prompt-dir DIR  Trusted prompt resource override for testing/installations.
       --max-source-code-file-size SIZE
                                 Maximum supported source file size; default 10M.

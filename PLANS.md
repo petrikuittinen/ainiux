@@ -60,7 +60,7 @@ Each milestone should leave the program usable. Do not create a long-lived pile 
 
 ## Current baseline
 
-Implementation status (2026-07-19): `ainiux` is at v1.00. Active development targets the v0.9 milestone (benchmark cutoff mode, codebase refactor, and TUI/CLI polish) before local OpenAI-compatible server mode. The repository has the scriptable CLI, built-in provider registry and aliases, Chat Completions, text-only Responses API support, streaming SSE, a layered model capability catalog and unified reasoning selection, credential lookup, JSON chat import/export, SQLite-backed TUI chat persistence with durable image and canonical-Markdown attachments, cancellable runtime jobs, REPL, full-screen TUI foundation, editor with multiple file buffers, selection, copy/cut/paste across buffers, grapheme-aware Unicode navigation and terminal cell-width rendering, and cursor-aware AI continue/auto-write (`Ctrl+Space`), request-only context policies, context-use estimates, bounded text/HTML/Markdown input, JPEG/PNG/GIF image input for Chat Completions, safe URL fetching, Markdown output conversion, automatic system/user TOML-alike configuration loading, and concurrent JSONL benchmark execution. `--provider none` supports local conversion and editor workflows without a model endpoint. Standalone `--editor` accepts an optional startup path after a provider shortcut or base URL, creates a missing file before editing, prompts to save scratch buffers on quit, and asks for overwrite confirmation when saving to an existing path. Chat and editor discover models when an online provider is given without `--model`, auto-select a sole result, and open the shared selector for multiple results; bare offline startup performs neither action.
+Implementation status (2026-07-20): `ainiux` is at v1.01. Active development targets the v0.9 milestone (benchmark cutoff mode, codebase refactor, and TUI/CLI polish) before local OpenAI-compatible server mode. The repository has the scriptable CLI, built-in provider registry and aliases, Chat Completions, text-only Responses API support, streaming SSE, a layered model capability catalog and unified reasoning selection, credential lookup, JSON chat import/export, SQLite-backed TUI chat persistence with durable image and canonical-Markdown attachments, cancellable runtime jobs, REPL, full-screen TUI foundation, editor with multiple file buffers, selection, copy/cut/paste across buffers, grapheme-aware Unicode navigation and terminal cell-width rendering, and cursor-aware AI continue/auto-write (`Ctrl+Space`), request-only context policies, context-use estimates, bounded text/HTML/Markdown input, JPEG/PNG/GIF image input for Chat Completions, safe URL fetching, Markdown output conversion, automatic system/user TOML-alike configuration loading, and concurrent JSONL benchmark execution. `--provider none` supports local conversion and editor workflows without a model endpoint. Standalone `--editor` accepts an optional startup path after a provider shortcut or base URL, creates a missing file before editing, prompts to save scratch buffers on quit, and asks for overwrite confirmation when saving to an existing path. Chat and editor discover models when an online provider is given without `--model`, auto-select a sole result, and open the shared selector for multiple results; bare offline startup performs neither action.
 
 Implementation note (2026-07-18, corrected 2026-07-19): public reasoning control is now `--reasoning auto|VALUE|TOKENS` plus shared chat/editor `/reasoning`. Layered `models.conf` files provide validated family regexes, compact pipe-separated selector values, closed request protocols, documented defaults, advisory temperature capabilities, and optional-field purpose presets. Matching is case-insensitive and uses only the final slash-separated model component, with bundled families kept transport-neutral; Llama 3.x sizes/variants and both 20B/120B gpt-oss now share their family rules. Direct values remain forward-compatible and exact, but a matched family warns on an unlisted value and interactive commands require confirmation; approximate label↔token conversions remain removed. Chat persists reasoning per thread, editor asynchronously remembers its complete provider/model/API/reasoning selection in SQLite app state, and model changes reset reasoning to Auto. Shared model-selection validation/serialization is reusable by future surfaces, but no agent functionality was added.
 
@@ -3142,15 +3142,185 @@ Failure shape:
 }
 ```
 
-Text fallback for weaker models:
+All `max_*`, timeout, candidate-count, and truncation defaults are settings values, not hardcoded constants. If a tool parameter is `null` or omitted, resolve through the settings stack.
 
-```text
-<tool_call name="read_file">
-{"path":"src/main.cpp","start_line":1,"end_line":120}
+### 10.1 Tool-call reliability (detailed plan)
+
+This subsection is the merged tool-call reliability addendum for v1.0 local agent mode. It specifies how model tool calls are accepted, parsed, retried (transport only), bounded, and kept history-safe. Tool execution still must pass the sandbox/approval layer required by the rest of this milestone.
+
+### 10.2 Two tool-call channels, one argument format
+
+- Prefer the provider-native `tool_calls` field of Chat Completions whenever the model/provider supports it. It is the fastest and least ambiguous path.
+- For models that lack native tool calling or use it unreliably, use the XML-alike text protocol already proven in the AI editor. Tool arguments are always a single JSON object, in both channels, so exactly one argument parser exists.
+
+Native channel (preferred):
+
+```json
+{
+  "tool_calls": [
+    {
+      "id": "call_1",
+      "type": "function",
+      "function": {
+        "name": "read_file",
+        "arguments": "{\"path\": \"src/main.cpp\", \"max_bytes\": 65536}"
+      }
+    }
+  ]
+}
+```
+
+XML-alike fallback channel (arguments stay JSON):
+
+```xml
+<tool_call>
+<name>read_file</name>
+<args>{"path": "src/main.cpp", "max_bytes": 65536}</args>
 </tool_call>
 ```
 
-All `max_*`, timeout, candidate-count, and truncation defaults are settings values, not hardcoded constants. If a tool parameter is `null` or omitted, resolve through the settings stack.
+- One tool call per assistant turn in the XML channel. Reject and report multiple `<tool_call>` blocks with a tool-result error asking for one call at a time.
+- Channel selection is per model: the capability catalog (`models.conf`) may record `tool_protocol = native|xml`. Default is `native` when the provider advertises tool support, else `xml`.
+- Automatic downgrade: if a model on the native channel emits `<tool_call>` markup inside ordinary assistant text in 2 consecutive turns, switch that session to the XML channel and note it on `stderr`/status. Never upgrade automatically mid-session.
+
+(The older attribute-style sketch `<tool_call name="...">` with a bare JSON body is superseded by the named-child form above so name and args parsing stay uniform and less ambiguous.)
+
+### 10.3 Argument parsing pipeline
+
+Run the same lenient-but-bounded pipeline on the arguments string from either channel. Each stage is cheap, single-pass, and deterministic. Stop at the first stage that yields a valid object.
+
+```text
+1. Trim leading/trailing whitespace, strip UTF-8 BOM, strip surrounding
+   Markdown code fences (```json ... ```).
+2. Empty or whitespace-only arguments -> treat as {} (tools with no
+   required parameters are common and models often send "").
+3. Strict JSON parse. Success -> done.
+4. Concatenated-object extraction: if the text contains exactly one
+   balanced top-level {...} object with junk before/after (preamble,
+   trailing prose, a second partial object), extract and parse it.
+5. One-pass JSON repair: fix single quotes, trailing commas, unquoted
+   keys, unescaped newlines inside strings. One repair pass only; no
+   iterative fix-up loops.
+6. Schema-aware coercion: "true"/"false" -> bool, numeric strings ->
+   numbers, scalar -> single-element array, where the tool's declared
+   parameter schema expects it. Never invent values for missing
+   required fields.
+7. Tool-name repair: exact match first; then case-insensitive match;
+   then snake_case/camelCase normalization against the registry. No
+   fuzzy/edit-distance matching.
+8. Still invalid -> do NOT retry the request. Return a rich error as
+   the tool result and let the model correct itself.
+```
+
+Rich error tool-result format (bounded):
+
+```json
+{
+  "error": "invalid_arguments",
+  "tool": "read_file",
+  "message": "Expected JSON object with required field \"path\" (string).",
+  "received_arguments": "<original text, truncated to 2000 bytes>"
+}
+```
+
+Include the original arguments so the model can see exactly what it sent; cap them at 2000 bytes so a runaway generation cannot bloat context. Map this into the common `ToolResult` failure shape (`ok: false`, `error.code` / `error.message`, plus data carrying the truncated original) so UI and session logs stay consistent.
+
+### 10.4 Retry budgets
+
+Keep two completely separate budgets. Do not blend them.
+
+```text
+transport/sampling retries   3 attempts total per request
+                             - retry only on: timeout, connection reset,
+                               HTTP 429/500/502/503/529, malformed SSE stream
+                             - backoff: 1s, 2s, 4s (+ jitter); honor
+                               Retry-After when present
+                             - fail IMMEDIATELY (0 retries) on: HTTP 400,
+                               401, 403, 404, context-length-exceeded --
+                               deterministic failures never get retried
+
+tool re-execution retries    0. Never automatically re-run a failed tool.
+                             The failure (non-zero exit, exception, missing
+                             file, denied approval) becomes the tool result
+                             and the model decides the next step.
+```
+
+Failing deterministic errors instantly, instead of burning a backoff cycle on a 401, is a significant part of keeping the loop fast.
+
+### 10.5 Turn and loop limits (fallback ladder)
+
+Small fixed numbers, escalating from a nudge to a stop:
+
+```text
+identical tool call repeated 3x   soft: inject a system-role notice into the
+(same name + same normalized      next request: "You have repeated the same
+args)                             call 3 times with the same result. Try a
+                                  different approach or explain the blocker."
+
+identical tool call repeated 5x   hard: abort the agent task with a clear
+                                  error naming the looping tool call.
+
+3 consecutive turns where every   abort with a summary of the failing calls.
+tool call failed
+
+50 agent turns (scripted/non-     hard cap; interactive TUI mode instead
+interactive mode)                 asks the user whether to continue.
+```
+
+### 10.6 Conversation-history hygiene
+
+Two cheap invariants prevent permanently bricked sessions:
+
+- Never re-send known-invalid JSON arguments to the provider. When storing an assistant turn whose arguments failed parsing, persist the original text locally for the error tool-result, but serialize `"{}"` as the arguments in subsequent provider requests. Some providers hard-reject a history containing malformed `arguments`, which would otherwise poison every following request.
+- Every `tool_call` id in history must have a matching tool-result message. On cancellation, abort, or crash-resume, pair any dangling call with a synthetic result: `{"error":"cancelled","message":"Tool was not executed."}` before the next request is sent.
+
+### 10.7 Prompting rules (system prompt for agent mode)
+
+- State the protocol once, precisely, with one complete example of a correct call and one example of a correct reaction to an error tool-result.
+- XML channel: instruct "Emit exactly one <tool_call> block, nothing after it. Arguments must be one valid JSON object. Do not wrap the block in code fences."
+- Native channel: instruct "Use the provided tools; never describe a tool call in prose or invent XML tags."
+- Keep tool descriptions short and imperative; put parameter constraints in the JSON schema, not in prose.
+- Tell the model errors come back as tool results and that it should correct and continue, not apologize or restart.
+- Keep the agent system prompt static per session so provider-side prompt caching works; per-turn state (loop notices, budget warnings) is injected as separate messages, never edited into the system prompt.
+
+### 10.8 Explicit non-goals (tool-call reliability)
+
+- No fuzzy/edit-distance tool-name matching.
+- No scraping JSON out of prose on the native channel.
+- No silent default values for missing required arguments.
+- No multi-pass or LLM-assisted JSON repair.
+- No automatic tool re-execution, ever.
+- No streaming partial tool execution (execute only after the turn is complete and parsed).
+
+### 10.9 Tool-call reliability implementation steps
+
+- [ ] Inspect existing provider/runtime/editor XML-assist code and record reusable pieces.
+- [ ] Add `src/agent/` tool registry with JSON-schema parameter declarations.
+- [ ] Add native `tool_calls` request generation and response parsing in `src/provider/`.
+- [ ] Add the XML-alike channel parser reusing editor streaming-tag experience.
+- [ ] Implement the 8-stage argument parsing pipeline as pure, unit-testable functions.
+- [ ] Implement rich error tool-results with the 2000-byte original-arguments cap.
+- [ ] Implement transport retry budget (3, backoff+jitter, deterministic-fail list) in the shared HTTP path without affecting chat mode defaults.
+- [ ] Implement loop detection (3 soft / 5 hard), consecutive-failure abort, and turn caps.
+- [ ] Implement history hygiene: `"{}"` serialization for invalid args and synthetic results for dangling calls, including cancellation paths.
+- [ ] Add `tool_protocol` to the model capability catalog and the 2-strike native->XML downgrade.
+- [ ] Write the agent system prompt per the prompting rules; keep it static per session.
+- [ ] Add malformed-transcript fixtures: preamble junk, single quotes, trailing commas, empty args, concatenated objects, wrong-case names, dangling calls, repeated-call loops.
+- [ ] Unit, integration (mock server), sanitizer, and leak tests for success, malformed, cancelled, and aborted agent runs.
+- [ ] Update `README.md`, `docs/decisions.md`, `docs/security.md`, `TODO.md`.
+
+### 10.10 Tool-call reliability acceptance criteria
+
+- [ ] A model with native tool support completes a multi-step agent task using `tool_calls`; a weak local model completes the same task on the XML channel with unchanged tool implementations.
+- [ ] Every stage of the argument pipeline is unit-tested, including empty args -> `{}`, fenced JSON, single-quote repair, concatenated-object extraction, schema coercion, and case-repaired names.
+- [ ] Invalid arguments produce a rich error tool-result containing the truncated original text, and the provider request history never contains the invalid JSON.
+- [ ] HTTP 401/400 fail instantly with no retry; HTTP 429/5xx retry at most 3 times with backoff and honor `Retry-After`.
+- [ ] A failed tool execution is never automatically re-run; the failure appears as a tool result and the loop continues.
+- [ ] The 3x soft notice and 5x hard abort for repeated identical calls, the 3-consecutive-failure abort, and the 50-turn scripted cap are all covered by tests.
+- [ ] Cancellation mid-tool-call leaves the thread resumable: dangling calls are paired with synthetic results and the next request succeeds against the mock server.
+- [ ] Two consecutive turns of leaked `<tool_call>` markup on the native channel downgrade the session to XML with a visible notice.
+- [ ] No tool executes without passing the sandbox/approval layer required by the v1.0 milestone.
+- [ ] Sanitizer and leak checks pass for successful, malformed-argument, cancelled, and aborted agent runs where tooling is available.
 
 ---
 
@@ -4993,6 +5163,7 @@ This is the 80/20 approach: extremely fast on common cases, simple to reason abo
 | v3 | Agent runtime focus; guard; parallel tools; AGENTS.md; used pkchat naming |
 | **v4** | Merge: v3 basis + all accepted v2 features; ainiux branding; explicit central-DB boundary; architecture fit; merged milestones; safety choice A |
 | **v1.0 in PLANS.md** | Title simplified to “Local agent mode”; agent UI reuses chat TUI; mode cycle chat→editor→agent; project-local `agent.sqlite` for sessions |
+| **tool-call reliability addendum** | Merged into §10: dual native/XML channels, 8-stage argument pipeline, separate transport vs tool-retry budgets, loop/turn caps, history hygiene, prompting rules, steps, and acceptance criteria |
 
 Superseded drafts may remain in the repo for history; **implement against this v1.0 section**.
 

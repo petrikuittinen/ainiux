@@ -10,6 +10,7 @@
 #include <sstream>
 
 #include "agent/process.hpp"
+#include "agent/tool_args.hpp"
 #include "html/html.hpp"
 #include "json/json.hpp"
 #include "security/redact.hpp"
@@ -399,12 +400,50 @@ Error ReadToolRegistry::read_source(const std::string& path,
 std::string ReadToolRegistry::execute(const std::string& requested_name,
                                       const std::string& arguments_json,
                                       runtime::CancellationToken cancellation) const {
-    const std::string name = requested_name == "grep" || requested_name == "find" ? "search_text" : requested_name;
     if (cancellation.cancelled()) return tool_error_result("cancelled", "tool call cancelled");
-    const json::ParseResult parsed = json::parse(arguments_json);
-    if (!parsed.error.ok() || !parsed.value.is_object())
-        return tool_error_result("invalid_arguments", parsed.error.ok() ? "tool arguments must be a JSON object" : parsed.error.message);
-    const json::Value& args = parsed.value;
+
+    // Stage 7: exact alias mapping first, then case/snake-camel repair against
+    // the registry. grep/find remain explicit aliases of search_text.
+    std::string name = requested_name;
+    if (name == "grep" || name == "find") name = "search_text";
+    else {
+        std::vector<std::string> known;
+        known.reserve(16);
+        for (const provider::FunctionDefinition& definition : definitions())
+            known.push_back(definition.name);
+        const std::string repaired = repair_tool_name(requested_name, known);
+        if (!repaired.empty()) {
+            name = repaired;
+            if (name == "grep" || name == "find") name = "search_text";
+        }
+    }
+
+    // Stages 1-5 of the shared argument pipeline (empty -> {}, fence strip,
+    // strict JSON, single-object extraction, one-pass repair).
+    const ToolArgParseResult parsed = parse_tool_arguments(arguments_json);
+    if (!parsed.error.ok() || !parsed.value.is_object()) {
+        const std::string message = parsed.error.ok()
+                                        ? "tool arguments must be a JSON object"
+                                        : parsed.error.message;
+        return invalid_arguments_tool_result(requested_name, message,
+                                             parsed.original_arguments);
+    }
+    json::Value args = parsed.value;
+    // Stage 6: schema-aware coercion for the resolved tool, when known.
+    {
+        const std::string schema_name = name;
+        for (const provider::FunctionDefinition& definition : definitions()) {
+            if (definition.name != schema_name) continue;
+            const json::ParseResult schema = json::parse(definition.parameters_json);
+            if (schema.error.ok() && schema.value.is_object()) {
+                const json::Value* properties = schema.value.get("properties");
+                if (properties != nullptr && properties->is_object())
+                    coerce_tool_arguments(args, *properties);
+            }
+            break;
+        }
+    }
+
     std::string validation_error;
 
     if (name == "project_overview") {

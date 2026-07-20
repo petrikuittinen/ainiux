@@ -49,6 +49,32 @@ bool can_restore_model_selection(const cli::Options& configured_options,
            (has_base && profile.capabilities.model_listing);
 }
 
+void apply_cli_target_change(cli::Options& options,
+                             const cli::Options& previous_options,
+                             bool positional_target_changed) {
+    const bool provider_or_endpoint_changed =
+        positional_target_changed ||
+        (options.provider_explicit &&
+         canonical_profile_name(options.provider) !=
+             canonical_profile_name(previous_options.provider));
+    const bool model_changed =
+        options.model_explicit && options.model != previous_options.model;
+    const bool api_changed =
+        options.api_explicit && options.api != previous_options.api;
+
+    if (provider_or_endpoint_changed && !options.model_explicit) {
+        // Never carry a remembered or configured model id across a provider or
+        // endpoint switch. Interactive startup then discovers models the same
+        // way chat does (and auto-selects a single result).
+        options.model.clear();
+    }
+    if ((provider_or_endpoint_changed || model_changed || api_changed) &&
+        !options.reasoning_cli_explicit) {
+        options.reasoning = ReasoningSelection::automatic();
+        options.reasoning_explicit = true;
+    }
+}
+
 std::string serialize_model_selection(const ModelSelection& selection) {
     std::ostringstream out;
     out << "{\"provider\":" << json::quote(selection.provider)

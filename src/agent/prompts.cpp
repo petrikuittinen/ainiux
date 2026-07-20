@@ -26,7 +26,58 @@ Error load_directory(const fs::path& directory, TrustedPrompts& prompts) {
     return read_prompt(directory / "security_prompt.md", prompts.security);
 }
 
+// Always insert exactly one separating newline between non-empty parts so
+// security_system_prompt() remains master + "\n" + security even when the
+// master file already ends with a newline (common for Markdown sources).
+std::string join_prompt_parts(const std::string& left, const std::string& right) {
+    if (left.empty()) return right;
+    if (right.empty()) return left;
+    std::string head = left;
+    while (!head.empty() && (head.back() == '\n' || head.back() == '\r')) head.pop_back();
+    std::string tail = right;
+    while (!tail.empty() && (tail.front() == '\n' || tail.front() == '\r')) tail.erase(tail.begin());
+    return head + "\n" + tail;
+}
+
 }  // namespace
+
+const char* native_protocol_appendix() {
+    return R"AINIUX_NATIVE(
+## Active channel: native tools
+
+This session uses provider-native tool calling. Use the provided tools only. Do not describe tool calls in prose, and do not emit XML-style <tool_call> markup.
+)AINIUX_NATIVE";
+}
+
+const char* xml_protocol_appendix() {
+    return R"AINIUX_XML(
+## Active channel: XML tool markup
+
+This session does not use provider-native tool calling. Emit exactly one <tool_call> block per assistant turn, nothing after it. Arguments must be one valid JSON object. Do not wrap the block in Markdown code fences.
+
+Example:
+
+<tool_call>
+<name>read_file</name>
+<args>{"path":"src/main.cpp","max_bytes":65536}</args>
+</tool_call>
+)AINIUX_XML";
+}
+
+std::string TrustedPrompts::security_system_prompt() const {
+    // Preserve the historical exact concatenation used by security-review.
+    return master + "\n" + security;
+}
+
+std::string TrustedPrompts::agent_system_prompt(ToolProtocol protocol) const {
+    const char* appendix =
+        protocol == ToolProtocol::Xml ? xml_protocol_appendix() : native_protocol_appendix();
+    // Trim a single leading newline from the raw-string appendix for stable joins.
+    std::string block = appendix;
+    if (!block.empty() && block.front() == '\n') block.erase(block.begin());
+    while (!block.empty() && (block.back() == '\n' || block.back() == ' ')) block.pop_back();
+    return join_prompt_parts(master, block);
+}
 
 Error load_trusted_prompts(const std::string& override_directory, TrustedPrompts& prompts) {
     if (!override_directory.empty()) return load_directory(fs::path(override_directory), prompts);
@@ -48,6 +99,15 @@ Error load_trusted_prompts(const std::string& override_directory, TrustedPrompts
     prompts.master = kEmbeddedMasterPrompt;
     prompts.security = kEmbeddedSecurityPrompt;
     return ok_error();
+}
+
+void seed_agent_conversation(provider::ToolConversation& conversation,
+                             const TrustedPrompts& prompts,
+                             ToolProtocol protocol,
+                             const std::string& user_goal) {
+    conversation = provider::ToolConversation{};
+    conversation.messages.push_back({"system", prompts.agent_system_prompt(protocol)});
+    if (!user_goal.empty()) conversation.messages.push_back({"user", user_goal});
 }
 
 }  // namespace ainiux::agent

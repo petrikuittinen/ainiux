@@ -954,6 +954,82 @@ void test_editor_model_selection_restore_requires_available_endpoint() {
           "editor restores the explicit offline selection without an endpoint");
 }
 
+void test_cli_target_change_clears_stale_remembered_model() {
+    // Simulate editor_model_selection restore (remote Gemini) then CLI `vllm -e`.
+    ainiux::cli::Options remembered;
+    remembered.provider = "openrouter";
+    remembered.model = "google/gemini-3.1-flash-preview";
+    remembered.api = "chat";
+    remembered.reasoning = ainiux::ReasoningSelection::named("high");
+    remembered.reasoning_explicit = true;
+
+    const char* vllm_editor_argv[] = {"ainiux", "vllm", "-e"};
+    ainiux::cli::ParseResult parsed =
+        ainiux::cli::parse_args(3, const_cast<char**>(vllm_editor_argv), remembered);
+    check(parsed.error.ok(), "vllm editor args with remembered remote model parse");
+    check(parsed.options.model == "google/gemini-3.1-flash-preview",
+          "parse keeps inherited model until CLI target-change policy runs");
+    check(parsed.options.positional_url == "vllm", "vllm editor shortcut is positional");
+
+    const bool positional_changed =
+        ainiux::provider::canonical_profile_name(parsed.options.positional_url) !=
+        ainiux::provider::canonical_profile_name(remembered.provider);
+    check(positional_changed, "vllm positional differs from remembered openrouter");
+    ainiux::provider::apply_cli_target_change(parsed.options, remembered, positional_changed);
+    check(parsed.options.model.empty(),
+          "CLI provider change clears a remembered remote model so local discovery can run");
+    check(parsed.options.reasoning.is_auto(),
+          "CLI provider change resets reasoning when --reasoning was not given");
+
+    ainiux::provider::ContextResult context = ainiux::provider::build_context(parsed.options);
+    check(context.error.ok(), "vllm editor context builds after clearing stale model");
+    check(context.context.profile.name == "vllm", "vllm editor selects the local profile");
+    check(context.context.profile.local_endpoint, "vllm editor is a local endpoint");
+    check(context.context.options.model.empty(), "vllm editor model stays empty for discovery");
+    check(ainiux::provider::needs_interactive_model_selection(context.context),
+          "vllm editor without a model requires interactive model discovery like chat");
+
+    // Same local provider again: keep the remembered local model.
+    ainiux::cli::Options remembered_vllm;
+    remembered_vllm.provider = "vllm";
+    remembered_vllm.model = "local-served-model";
+    remembered_vllm.api = "chat";
+    ainiux::cli::ParseResult same =
+        ainiux::cli::parse_args(3, const_cast<char**>(vllm_editor_argv), remembered_vllm);
+    check(same.error.ok(), "vllm editor args with remembered local model parse");
+    const bool same_positional_changed =
+        ainiux::provider::canonical_profile_name(same.options.positional_url) !=
+        ainiux::provider::canonical_profile_name(remembered_vllm.provider);
+    check(!same_positional_changed, "same vllm positional does not count as a target change");
+    ainiux::provider::apply_cli_target_change(same.options, remembered_vllm,
+                                              same_positional_changed);
+    check(same.options.model == "local-served-model",
+          "restarting the same local provider keeps its remembered model");
+
+    // Explicit --provider change also clears without -m.
+    ainiux::cli::Options remembered_xai;
+    remembered_xai.provider = "xai";
+    remembered_xai.model = "grok-something";
+    const char* explicit_provider_argv[] = {"ainiux", "--provider", "vllm", "--editor"};
+    ainiux::cli::ParseResult explicit_parsed =
+        ainiux::cli::parse_args(5, const_cast<char**>(explicit_provider_argv), remembered_xai);
+    check(explicit_parsed.error.ok(), "explicit --provider vllm editor args parse");
+    ainiux::provider::apply_cli_target_change(explicit_parsed.options, remembered_xai, false);
+    check(explicit_parsed.options.model.empty(),
+          "explicit --provider change clears a remembered model without --model");
+
+    // Explicit -m wins over the clear policy.
+    const char* with_model_argv[] = {
+        "ainiux", "vllm", "-e", "-m", "override-model",
+    };
+    ainiux::cli::ParseResult with_model =
+        ainiux::cli::parse_args(5, const_cast<char**>(with_model_argv), remembered);
+    check(with_model.error.ok(), "vllm editor with explicit model parses");
+    ainiux::provider::apply_cli_target_change(with_model.options, remembered, true);
+    check(with_model.options.model == "override-model",
+          "explicit -m is preserved when the provider changes");
+}
+
 void test_openai_context_allows_missing_model() {
     const char* argv[] = {"ainiux", "--provider", "openai", "-p", "hello", "--header", "Authorization: Bearer test"};
     ainiux::cli::ParseResult parsed = ainiux::cli::parse_args(7, const_cast<char**>(argv));
@@ -1488,6 +1564,7 @@ void run_all() {
     test_editor_startup_local_only_default();
     test_editor_defaults_offline_without_credentials();
     test_editor_model_selection_restore_requires_available_endpoint();
+    test_cli_target_change_clears_stale_remembered_model();
     test_none_provider_allows_an_empty_endpoint();
     test_openai_context_allows_missing_model();
     test_openrouter_shortcut_context();

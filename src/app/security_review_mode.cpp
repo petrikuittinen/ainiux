@@ -4,6 +4,7 @@
 #include <atomic>
 #include <chrono>
 #include <csignal>
+#include <filesystem>
 #include <iostream>
 #include <map>
 #include <memory>
@@ -112,8 +113,15 @@ int run_security_review_mode(provider::RequestContext context) {
                       << redact_secrets(log_error.message, secrets)
                       << "; the review will continue\n";
         } else {
-            if (!context.options.quiet)
-                std::cerr << "Security review diagnostic log: " << logger->final_path() << "\n";
+            if (!context.options.quiet) {
+                // Events are appended and flushed to the live .partial path
+                // during the run; finish() renames it to final_path().
+                std::cerr << "Security review diagnostic log (live): "
+                          << logger->partial_path() << "\n"
+                          << "  tail -f that path while the review runs; "
+                             "finalized as " << logger->final_path()
+                          << " on completion\n";
+            }
             json::Value fields = log_object();
             fields.object["workspace"] = log_string(".");
             fields.object["provider"] = log_string(context.profile.name);
@@ -143,6 +151,12 @@ int run_security_review_mode(provider::RequestContext context) {
         fields.object["coverage_counts"] = std::move(coverage);
         fields.object["finding_count"] = log_number(report == nullptr ? 0 : report->findings.size());
         logger->finish(std::move(fields), final_error.ok() ? "success" : "failure");
+        if (!context.options.quiet) {
+            std::error_code exists_error;
+            if (std::filesystem::exists(logger->final_path(), exists_error) && !exists_error)
+                std::cerr << "Security review diagnostic log (final): "
+                          << logger->final_path() << "\n";
+        }
     };
 
     agent::index::Options index_options;

@@ -14,6 +14,7 @@
 #include "agent/prompts.hpp"
 #include "agent/review.hpp"
 #include "agent/review_log.hpp"
+#include "agent/tool_args.hpp"
 #include "agent/tools.hpp"
 #include "html/html.hpp"
 #include "json/json.hpp"
@@ -85,6 +86,16 @@ void test_read_tools_and_policy() {
     check(result_ok(result) && result.find("[REDACTED]") != std::string::npos &&
               result.find("SECRET_TOKEN") == std::string::npos && result.find("1: ") != std::string::npos,
           "read_file returns numbered fingerprinted source with configured secrets redacted");
+    result = tools.execute("ReadFile",
+                           "```json\n{\"path\":\"src/main.cpp\",\"start_line\":1,\"end_line\":1}\n```");
+    check(result_ok(result),
+          "read tools accept case-repaired names and fenced argument JSON");
+    result = tools.execute("project_overview", "");
+    check(result_ok(result), "tools with no required args accept empty argument text as {}");
+    result = tools.execute("read_file", "definitely-not-json");
+    check(!result_ok(result) && result.find("received_arguments") != std::string::npos &&
+              result.find("definitely-not-json") != std::string::npos,
+          "invalid tool arguments return a rich error containing the original text");
     check(!result_ok(tools.execute("read_file", R"({"path":"../outside.cpp"})")),
           "read_file rejects traversal");
     check(!result_ok(tools.execute("read_file", R"({"path":"ignored.cpp"})")),
@@ -193,9 +204,31 @@ void test_prompts_and_report() {
     ainiux::Error error = ainiux::agent::load_trusted_prompts("", prompts);
     check(error.ok() && prompts.security_system_prompt() == prompts.master + "\n" + prompts.security &&
               prompts.master.find("untrusted") != std::string::npos &&
+              prompts.master.find("Native tool channel") != std::string::npos &&
+              prompts.master.find("error tool-result") != std::string::npos &&
               prompts.security.find("submit_security_review") != std::string::npos &&
-              prompts.security.find("EXPECTED_COVERAGE") != std::string::npos,
+              prompts.security.find("EXPECTED_COVERAGE") != std::string::npos &&
+              prompts.security.find("Review the supplied source batch") != std::string::npos,
           "trusted security prompt is exact master plus newline plus security prompt");
+    const std::string agent_native =
+        prompts.agent_system_prompt(ainiux::agent::ToolProtocol::Native);
+    const std::string agent_xml = prompts.agent_system_prompt(ainiux::agent::ToolProtocol::Xml);
+    check(agent_native.find(prompts.master) != std::string::npos &&
+              agent_native.find("Active channel: native tools") != std::string::npos &&
+              agent_native.find("submit_security_review") == std::string::npos,
+          "agent native system prompt is master plus native protocol, without security task layer");
+    check(agent_xml.find(prompts.master) != std::string::npos &&
+              agent_xml.find("Active channel: XML tool markup") != std::string::npos &&
+              agent_xml.find("<tool_call>") != std::string::npos &&
+              agent_xml.find("exactly one") != std::string::npos,
+          "agent XML system prompt is master plus static XML protocol appendix");
+    ainiux::provider::ToolConversation seeded;
+    ainiux::agent::seed_agent_conversation(seeded, prompts, ainiux::agent::ToolProtocol::Native,
+                                           "List the project overview.");
+    check(seeded.messages.size() == 2 && seeded.messages[0].role == "system" &&
+              seeded.messages[0].content == agent_native && seeded.messages[1].role == "user" &&
+              seeded.messages[1].content == "List the project overview.",
+          "seed_agent_conversation installs a static system prompt and the user goal");
     ainiux::agent::index::Snapshot snapshot;
     ainiux::agent::index::IndexedFile indexed;
     indexed.path = "src/a.cpp";
@@ -340,6 +373,102 @@ void test_batch_and_chunk_planning() {
     check(valid, "pathological long lines split at UTF-8 boundaries within the source cap");
 }
 
+void test_tool_argument_pipeline() {
+    using ainiux::agent::parse_tool_arguments;
+    using ainiux::agent::parse_xml_tool_call;
+    using ainiux::agent::repair_tool_name;
+    using ainiux::agent::truncate_tool_arguments_for_error;
+    using ainiux::agent::coerce_tool_arguments;
+    using ainiux::agent::invalid_arguments_tool_result;
+    using ainiux::agent::ToolArgStage;
+
+    auto empty = parse_tool_arguments("");
+    check(empty.error.ok() && empty.value.is_object() && empty.value.object.empty() &&
+              empty.stage == ToolArgStage::EmptyObject,
+          "empty tool arguments become {}");
+    auto whitespace = parse_tool_arguments("  \n\t  ");
+    check(whitespace.error.ok() && whitespace.value.is_object() &&
+              whitespace.stage == ToolArgStage::EmptyObject,
+          "whitespace-only tool arguments become {}");
+
+    auto fenced = parse_tool_arguments("```json\n{\"path\":\"src/main.cpp\"}\n```");
+    check(fenced.error.ok() && fenced.value.is_object() &&
+              fenced.value.get("path") != nullptr &&
+              fenced.value.get("path")->string == "src/main.cpp",
+          "fenced JSON arguments are accepted");
+
+    auto preamble = parse_tool_arguments("Sure:\n{\"path\":\"a.cpp\",\"max_bytes\":10}\nThanks");
+    check(preamble.error.ok() && preamble.stage == ToolArgStage::ExtractedObject &&
+              preamble.value.get("path") != nullptr &&
+              preamble.value.get("path")->string == "a.cpp",
+          "single balanced object is extracted from preamble junk");
+
+    auto repaired = parse_tool_arguments("{'path': 'src/main.cpp', 'max_bytes': 32,}");
+    check(repaired.error.ok() && repaired.stage == ToolArgStage::RepairedJson &&
+              repaired.value.get("path") != nullptr &&
+              repaired.value.get("path")->string == "src/main.cpp" &&
+              repaired.value.get("max_bytes") != nullptr &&
+              repaired.value.get("max_bytes")->number == 32,
+          "one-pass repair handles single quotes, trailing commas, and unquoted keys");
+
+    auto invalid = parse_tool_arguments("not-json-at-all");
+    check(!invalid.error.ok(), "unrecoverable argument text remains invalid");
+    const std::string rich = invalid_arguments_tool_result(
+        "read_file", "bad args", std::string(3000, 'x'));
+    const ainiux::json::ParseResult rich_parsed = ainiux::json::parse(rich);
+    check(rich_parsed.error.ok() && rich_parsed.value.get("data") != nullptr &&
+              rich_parsed.value.get("data")->get("received_arguments") != nullptr &&
+              rich_parsed.value.get("data")->get("received_arguments")->string.size() ==
+                  ainiux::agent::kToolArgumentsErrorCap,
+          "invalid argument tool results cap original text at 2000 bytes");
+    check(truncate_tool_arguments_for_error("abc", 2) == "ab",
+          "argument error truncation is byte-capped");
+
+    ainiux::json::Value schema;
+    schema.type = ainiux::json::Value::Type::Object;
+    schema.object["flag"].type = ainiux::json::Value::Type::Object;
+    schema.object["flag"].object["type"].type = ainiux::json::Value::Type::String;
+    schema.object["flag"].object["type"].string = "boolean";
+    schema.object["count"].type = ainiux::json::Value::Type::Object;
+    schema.object["count"].object["type"].type = ainiux::json::Value::Type::String;
+    schema.object["count"].object["type"].string = "integer";
+    schema.object["items"].type = ainiux::json::Value::Type::Object;
+    schema.object["items"].object["type"].type = ainiux::json::Value::Type::String;
+    schema.object["items"].object["type"].string = "array";
+    ainiux::json::Value args;
+    args.type = ainiux::json::Value::Type::Object;
+    args.object["flag"].type = ainiux::json::Value::Type::String;
+    args.object["flag"].string = "true";
+    args.object["count"].type = ainiux::json::Value::Type::String;
+    args.object["count"].string = "7";
+    args.object["items"].type = ainiux::json::Value::Type::String;
+    args.object["items"].string = "only";
+    check(coerce_tool_arguments(args, schema).ok() &&
+              args.get("flag")->type == ainiux::json::Value::Type::Bool &&
+              args.get("flag")->boolean &&
+              args.get("count")->type == ainiux::json::Value::Type::Number &&
+              args.get("count")->number == 7 &&
+              args.get("items")->is_array() && args.get("items")->array.size() == 1,
+          "schema-aware coercion converts bool/number strings and scalar arrays");
+
+    const std::vector<std::string> known = {"read_file", "search_text", "project_overview"};
+    check(repair_tool_name("read_file", known) == "read_file", "exact tool name matches");
+    check(repair_tool_name("Read_File", known) == "read_file", "case-insensitive tool name repair");
+    check(repair_tool_name("readFile", known) == "read_file", "camelCase tool name repair");
+    check(repair_tool_name("nope", known).empty(), "unknown tool names are not fuzzy-matched");
+
+    auto xml = parse_xml_tool_call(
+        "prefix\n<tool_call>\n<name>read_file</name>\n"
+        "<args>{\"path\":\"src/main.cpp\"}</args>\n</tool_call>\n");
+    check(xml.error.ok() && xml.found && xml.name == "read_file" &&
+              xml.arguments_text.find("src/main.cpp") != std::string::npos,
+          "XML tool channel extracts one name/args block");
+    auto multi = parse_xml_tool_call(
+        "<tool_call><name>a</name><args>{}</args></tool_call>"
+        "<tool_call><name>b</name><args>{}</args></tool_call>");
+    check(!multi.error.ok(), "XML channel rejects multiple tool_call blocks");
+}
+
 void test_review_logger() {
     const fs::path root = temporary_workspace();
     std::vector<std::string> warnings;
@@ -356,6 +485,21 @@ void test_review_logger() {
               "security-review partial log has mode 0600");
         check(::stat(partial.parent_path().c_str(), &info) == 0 && (info.st_mode & 0777) == 0700,
               "security-review log directory has mode 0700");
+
+        ainiux::json::Value first_fields;
+        first_fields.type = ainiux::json::Value::Type::Object;
+        first_fields.object["marker"].type = ainiux::json::Value::Type::String;
+        first_fields.object["marker"].string = "live-before-finish";
+        logger->event("step_start", ainiux::agent::ReviewLogContext("worker_task"),
+                      std::move(first_fields), "success");
+        {
+            std::ifstream live(partial, std::ios::binary);
+            std::string live_text((std::istreambuf_iterator<char>(live)),
+                                  std::istreambuf_iterator<char>());
+            check(live.good() && live_text.find("live-before-finish") != std::string::npos &&
+                      live_text.find("\n") != std::string::npos,
+                  "security-review log is readable mid-run from the live .partial path");
+        }
 
         constexpr int threads = 6;
         constexpr int per_thread = 25;
@@ -392,7 +536,7 @@ void test_review_logger() {
                     sequences.insert(static_cast<unsigned long long>(sequence->number)).second &&
                     timestamp != nullptr && timestamp->is_string() && timestamp->string.size() == 24;
         }
-        check(valid && sequences.size() == threads * per_thread + 1,
+        check(valid && sequences.size() == threads * per_thread + 2,
               "concurrent JSONL records have unique sequences and millisecond timestamps");
         check(complete.find("plain-secret") == std::string::npos &&
                   complete.find("quoted\\\"secret") == std::string::npos &&
@@ -443,6 +587,22 @@ void test_review_logger() {
               fs::exists(symlink_target),
           "retention preserves exactly three logs plus crash and unrelated files");
 
+    {
+        std::unique_ptr<ainiux::agent::ReviewLogger> agent_logger =
+            ainiux::agent::ReviewLogger::create(root.string(), 3, {}, {}, error, "agent");
+        check(error.ok() && agent_logger != nullptr && agent_logger->run_kind() == "agent",
+              "agent diagnostic logger uses the agent run kind");
+        if (agent_logger) {
+            check(agent_logger->partial_path().find("/.ainiux/logs/agent/") != std::string::npos,
+                  "agent diagnostic logs live under .ainiux/logs/agent/");
+            ainiux::json::Value fields;
+            fields.type = ainiux::json::Value::Type::Object;
+            agent_logger->finish(std::move(fields), "success");
+            check(fs::exists(agent_logger->final_path()),
+                  "agent diagnostic logger finalizes under the agent directory");
+        }
+    }
+
     const fs::path symlink_root = temporary_workspace();
     const fs::path target = temporary_workspace();
     std::error_code symlink_error;
@@ -460,6 +620,7 @@ void test_review_logger() {
 }  // namespace
 
 void run_all() {
+    test_tool_argument_pipeline();
     test_read_tools_and_policy();
     test_process_runner();
     test_prompts_and_report();

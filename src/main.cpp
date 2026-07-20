@@ -154,26 +154,59 @@ int main(int argc, char** argv) {
                 ainiux::provider::canonical_profile_name(configured.options.provider);
         }
     }
-    const bool explicit_target_changed =
-        positional_target_changed ||
-        (options.provider_explicit &&
-         ainiux::provider::canonical_profile_name(options.provider) !=
-             ainiux::provider::canonical_profile_name(configured.options.provider)) ||
-        (options.model_explicit && options.model != configured.options.model) ||
-        (options.api_explicit && options.api != configured.options.api);
-    if (explicit_target_changed && !options.reasoning_cli_explicit) {
-        options.reasoning = ainiux::ReasoningSelection::automatic();
-        options.reasoning_explicit = true;
-    }
-    if (!options.security_review && !options.trusted_prompt_dir.empty()) {
+    ainiux::provider::apply_cli_target_change(options, configured.options,
+                                              positional_target_changed);
+    if (!options.security_review && !options.agent && !options.trusted_prompt_dir.empty()) {
         ainiux::app::print_error({ainiux::ErrorCode::BadArgs,
-                                  "--trusted-prompt-dir requires --security-review"});
+                                  "--trusted-prompt-dir requires --security-review or agent mode"});
         return ainiux::app::exit_code_for(ainiux::ErrorCode::BadArgs);
     }
     if (!options.security_review && options.security_review_log_cli_explicit) {
         ainiux::app::print_error({ainiux::ErrorCode::BadArgs,
                                   "--security-review-log and --no-security-review-log require --security-review"});
         return ainiux::app::exit_code_for(ainiux::ErrorCode::BadArgs);
+    }
+    if (!options.agent && options.agent_log_cli_explicit) {
+        ainiux::app::print_error({ainiux::ErrorCode::BadArgs,
+                                  "--agent-log and --no-agent-log require agent mode"});
+        return ainiux::app::exit_code_for(ainiux::ErrorCode::BadArgs);
+    }
+    if (options.agent) {
+        const ainiux::Error argument_error =
+            ainiux::cli::validate_agent_mode_arguments(argc, argv, options);
+        if (!argument_error.ok()) {
+            ainiux::app::print_error(argument_error);
+            return ainiux::app::exit_code_for(argument_error.code);
+        }
+        const ainiux::Error profile_error = ainiux::provider::validate_profile_name(options.provider);
+        if (!profile_error.ok()) {
+            ainiux::app::print_error(profile_error);
+            return ainiux::app::exit_code_for(profile_error.code);
+        }
+        if (!options.key.empty() && !options.quiet) {
+            std::cerr << "Warning: command line API keys may be visible to other local users; prefer --key-env, "
+                         "--key-file, or --key-stdin.\n";
+        }
+        if (options.insecure_tls) {
+            std::cerr << "Warning: TLS certificate verification is disabled by the effective configuration.\n";
+        }
+        ainiux::provider::ContextResult context_result = ainiux::provider::build_context(options);
+        if (!context_result.error.ok()) {
+            ainiux::app::print_error(context_result.error);
+            return ainiux::app::exit_code_for(context_result.error.code);
+        }
+        if (context_result.context.profile.offline) {
+            const ainiux::Error error{ainiux::ErrorCode::UnsupportedFeature,
+                                      "agent mode requires an online provider with native function calling"};
+            ainiux::app::print_error(error);
+            return ainiux::app::exit_code_for(error.code);
+        }
+        ainiux::Error model_error = ainiux::app::choose_default_model(context_result.context);
+        if (!model_error.ok()) {
+            ainiux::app::print_error(model_error);
+            return ainiux::app::exit_code_for(model_error.code);
+        }
+        return ainiux::app::run_agent_mode(std::move(context_result.context));
     }
     if (options.security_review) {
         const ainiux::Error argument_error =

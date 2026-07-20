@@ -1,6 +1,7 @@
 #include <iostream>
 
 #include "benchmark/test_benchmark.hpp"
+#include "agent/test_agent_loop.hpp"
 #include "agent/test_index.hpp"
 #include "agent/test_review.hpp"
 #include "chat/test_chat.hpp"
@@ -26,6 +27,7 @@
 
 int main() {
     ainiux::test::agent_index::run_all();
+    ainiux::test::agent_loop::run_all();
     ainiux::test::agent_review::run_all();
     ainiux::test::output::run_all();
     ainiux::test::config::run_all();

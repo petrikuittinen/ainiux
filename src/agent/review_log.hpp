@@ -35,15 +35,20 @@ class ReviewLogger {
     ReviewLogger(const ReviewLogger&) = delete;
     ReviewLogger& operator=(const ReviewLogger&) = delete;
 
+    // run_kind selects the log subdirectory and filename prefix under
+    // .ainiux/logs/<run_kind>/ (for example "security-review" or "agent").
+    // Only lowercase letters, digits, and '-' are accepted.
     static std::unique_ptr<ReviewLogger> create(const std::string& workspace,
                                                 int keep_runs,
                                                 std::vector<std::string> secrets,
                                                 WarningCallback warning,
-                                                Error& error);
+                                                Error& error,
+                                                const std::string& run_kind = "security-review");
 
     const std::string& final_path() const { return final_path_; }
     const std::string& partial_path() const { return partial_path_; }
     const std::string& run_id() const { return run_id_; }
+    const std::string& run_kind() const { return run_kind_; }
     bool enabled() const;
 
     void event(const std::string& event_type,
@@ -59,7 +64,8 @@ class ReviewLogger {
    private:
     ReviewLogger() = default;
     Error initialize(const std::string& workspace, int keep_runs,
-                     std::vector<std::string> secrets, WarningCallback warning);
+                     std::vector<std::string> secrets, WarningCallback warning,
+                     const std::string& run_kind);
     void fail_locked(const std::string& detail);
     bool write_record_locked(const std::string& record);
     void prune_completed();
@@ -71,6 +77,7 @@ class ReviewLogger {
     unsigned long long sequence_ = 0;
     bool active_ = false;
     bool warned_ = false;
+    std::string run_kind_ = "security-review";
     std::string directory_;
     std::string final_path_;
     std::string partial_path_;

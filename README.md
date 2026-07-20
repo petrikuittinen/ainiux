@@ -100,7 +100,7 @@ export OPENROUTER_API_KEY=...
 
 ## Current status
 
-**v1.00** — active development. Core surfaces are usable daily: scriptable CLI, REPL, full-screen chat TUI, AI editor, multi-provider chat, durable image and canonical-Markdown attachments, safe URL fetch, web search hooks, document conversion, concurrent benchmarks, judge grading, and a headless whole-project security review. Interactive/autonomous local agent mode remains later roadmap work.
+**v1.01** — active development. Core surfaces are usable daily: scriptable CLI, REPL, full-screen chat TUI, AI editor, multi-provider chat, durable image and canonical-Markdown attachments, safe URL fetch, web search hooks, document conversion, concurrent benchmarks, judge grading, headless whole-project security review, and a one-shot read-only local agent (`ainiux agent` / `--agent`). Interactive multi-surface agent UI, writes, and approvals remain later roadmap work.
 
 Under the hood: libcurl HTTP/SSE, cancellable runtime jobs, Chat Completions plus text-only Responses API support, a layered model capability catalog with unified reasoning controls, SQLite-backed TUI threads, JSON chat import/export, multi-language syntax highlighting, grapheme-aware editing, and layered TOML-alike configuration.
 
@@ -307,9 +307,21 @@ The generated Markdown report is the only normal `stdout` content. Index diagnos
 
 Review workers can only use bounded read tools over the completed index snapshot plus a shell-free inspection runner for `pwd`, bounded `ls`, `rg`, non-recursive `grep`, non-mutating `find`, and snapshot-safe Git status/file/workspace metadata. Paths are workspace-relative and fingerprint checked; symlinks, traversal, `.ainiux`, VCS metadata, ignored paths, command separators, interpreters, builds, tests, writes, Git history/object/diff reads, environment overrides, external helpers, and mutating commands are denied. Every worker must claim every supplied batch path exactly once before that batch counts as reviewed, and must not add paths opened only through tools. Coverage failures identify exact missing and unexpected paths in the repair turn. Compatibility parsing can extract one intact valid JSON object from a preamble or Markdown fence; it rejects ambiguous multiple objects and never rewrites malformed JSON. Exact configured credential values are redacted from batches, tool results, diagnostics, and reports, and model-controlled report fields are escaped before Markdown rendering.
 
-Trusted prompts are installed under `share/ainiux/prompts/` and have embedded build fallbacks. Project `AGENTS.md`, `SKILL.md`, documentation, comments, fixtures, transcripts, and other source are review data only and never become instructions. `--trusted-prompt-dir DIR` is an explicit testing/packaging override and is accepted only with `--security-review`.
+Trusted prompts are installed under `share/ainiux/prompts/` and have embedded build fallbacks. Project `AGENTS.md`, `SKILL.md`, documentation, comments, fixtures, transcripts, and other source are review data only and never become instructions. `--trusted-prompt-dir DIR` is an explicit testing/packaging override accepted with `--security-review` or agent mode.
 
-This workflow does not create `agent.sqlite` or an interactive agent transcript and cannot edit project sources. It does create the refreshed code index and the diagnostic logs described above. Logging failures warn once on `stderr` (including under `--quiet`) but never change the report or review exit semantics. The logs redact configured credentials and never store authorization/cookie header values, but intentionally persist full prompts, source code, tool payloads, and model responses; unknown project secrets may therefore appear. Keep `.ainiux/logs/security-review/` private. Logs remain local and are never sent to a provider. This is not interactive agent mode, `--plan`, or `--code`.
+This workflow does not create `agent.sqlite` or an interactive agent transcript and cannot edit project sources. It does create the refreshed code index and the diagnostic logs described above. Logging failures warn once on `stderr` (including under `--quiet`) but never change the report or review exit semantics. The logs redact configured credentials and never store authorization/cookie header values, but intentionally persist full prompts, source code, tool payloads, and model responses; unknown project secrets may therefore appear. Keep `.ainiux/logs/security-review/` private. Logs remain local and are never sent to a provider. This is not interactive agent UI, `--plan`, or `--code`.
+
+## One-shot local agent
+
+Run a single read-only agent goal against the current project (refreshes the code index, uses native tools, writes final text to `stdout`):
+
+```sh
+./ainiux agent openrouter -m MODEL -p "Summarize the project layout and main entry points"
+./ainiux --agent --provider openai -m MODEL -p "Where is HTTP timeout handling implemented?"
+./ainiux agent lmstudio -m MODEL --prompt-file goal.txt --no-agent-log
+```
+
+Agent mode uses the trusted master prompt plus a static native-tool protocol appendix (not the security-review task prompt). It reuses the same snapshot-backed read tools and inspection allowlist as security review: no writes, no unrestricted shell, no `agent.sqlite`. Loop limits, transport retries, history hygiene, and identical-call guards come from the shared agent loop. Status and the live diagnostic path print on `stderr`; the final assistant answer is the only normal `stdout` content. Logs default under `.ainiux/logs/agent/` with the same live-flush / finalize behavior as security-review logs (`tail -f` the printed `.partial` path). Disable with `--no-agent-log`.
 
 ## Editor Mode
 

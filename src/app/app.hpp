@@ -52,6 +52,7 @@ int run_benchmark_mode(const cli::Options& options);
 int run_grade_mode(const cli::Options& options);
 int run_index_mode(const cli::Options& options);
 int run_security_review_mode(provider::RequestContext context);
+int run_agent_mode(provider::RequestContext context);
 
 void refresh_session_metadata(chat::Session& session, const provider::RequestContext& context);
 void apply_system_prompt(chat::Session& session, const std::string& system);
