@@ -192,7 +192,9 @@ void test_prompts_and_report() {
     ainiux::agent::TrustedPrompts prompts;
     ainiux::Error error = ainiux::agent::load_trusted_prompts("", prompts);
     check(error.ok() && prompts.security_system_prompt() == prompts.master + "\n" + prompts.security &&
-              prompts.master.find("untrusted") != std::string::npos,
+              prompts.master.find("untrusted") != std::string::npos &&
+              prompts.security.find("submit_security_review") != std::string::npos &&
+              prompts.security.find("EXPECTED_COVERAGE") != std::string::npos,
           "trusted security prompt is exact master plus newline plus security prompt");
     ainiux::agent::index::Snapshot snapshot;
     ainiux::agent::index::IndexedFile indexed;
@@ -206,12 +208,60 @@ void test_prompts_and_report() {
         {"src/a.cpp"}, parsed_findings);
     check(error.ok(), "worker output accepts exact supplied-path coverage");
     error = ainiux::agent::parse_review_worker_output(
+        R"({"findings":[{"path":"src/a.cpp","line_start":1,"line_end":1,"impact":"Concrete impact"}],"coverage":["src/a.cpp"]})",
+        snapshot, {"src/a.cpp"}, parsed_findings);
+    check(error.ok() && parsed_findings.back().title == "Untitled security finding" &&
+              parsed_findings.back().severity == "info" &&
+              parsed_findings.back().confidence == "low" &&
+              parsed_findings.back().category == "Uncategorized" &&
+              parsed_findings.back().impact == "Concrete impact" &&
+              parsed_findings.back().remediation == "No remediation supplied.",
+          "worker output normalizes omitted optional finding metadata");
+    error = ainiux::agent::parse_review_worker_output(
+        R"({"findings":[{"title":"Concrete title","severity":"","confidence":"","category":"","cwe":null,"path":"src/a.cpp","line_start":1,"line_end":1,"impact":"","remediation":null}],"coverage":["src/a.cpp"],"notes":[]})",
+        snapshot, {"src/a.cpp"}, parsed_findings);
+    check(error.ok() && parsed_findings.back().title == "Concrete title" &&
+              parsed_findings.back().severity == "info" &&
+              parsed_findings.back().confidence == "low" &&
+              parsed_findings.back().category == "Uncategorized" &&
+              parsed_findings.back().impact == "No impact description supplied." &&
+              parsed_findings.back().remediation == "No remediation supplied.",
+          "worker output normalizes empty or null optional finding metadata");
+    error = ainiux::agent::parse_review_worker_output(
+        R"({"findings":[{"path":"src/a.cpp","line_start":1,"line_end":1}],"coverage":["src/a.cpp"]})",
+        snapshot, {"src/a.cpp"}, parsed_findings);
+    check(!error.ok() && error.code == ainiux::ErrorCode::ProviderSchema,
+          "worker output still requires a title or impact description");
+    error = ainiux::agent::parse_review_worker_output(
+        "Here is the requested response:\n"
+        R"({"findings":[],"coverage":["src/a.cpp"],"notes":[]})"
+        "\nThis concludes the review.",
+        snapshot, {"src/a.cpp"}, parsed_findings);
+    check(error.ok(), "worker output safely extracts one valid JSON object after a preamble");
+    error = ainiux::agent::parse_review_worker_output(
+        "```json\n"
+        R"({"findings":[],"coverage":["src/a.cpp"],"notes":["brace { in a string }"]})"
+        "\n```",
+        snapshot, {"src/a.cpp"}, parsed_findings);
+    check(error.ok(), "worker output safely unwraps a fenced JSON object");
+    error = ainiux::agent::parse_review_worker_output(
+        R"({"findings":[],"coverage":["src/a.cpp"],"notes":[]} {"findings":[],"coverage":["src/a.cpp"],"notes":[]})",
+        snapshot, {"src/a.cpp"}, parsed_findings);
+    check(!error.ok() && error.code == ainiux::ErrorCode::ProviderSchema,
+          "worker output rejects ambiguous responses containing two valid JSON objects");
+    error = ainiux::agent::parse_review_worker_output(
         R"({"findings":[],"notes":[]})", snapshot, {"src/a.cpp"}, parsed_findings);
     check(!error.ok(), "worker output rejects missing supplied-path coverage");
     error = ainiux::agent::parse_review_worker_output(
         R"({"findings":[],"coverage":["src/a.cpp","src/a.cpp"]})", snapshot,
         {"src/a.cpp"}, parsed_findings);
     check(!error.ok(), "worker output rejects duplicate coverage claims");
+    error = ainiux::agent::parse_review_worker_output(
+        R"({"findings":[],"coverage":["tool-read.cpp"]})", snapshot,
+        {"src/a.cpp"}, parsed_findings);
+    check(!error.ok() && error.message.find("missing=[\"src/a.cpp\"]") != std::string::npos &&
+              error.message.find("unexpected=[\"tool-read.cpp\"]") != std::string::npos,
+          "worker coverage failure identifies missing and tool-read-only paths");
     error = ainiux::agent::parse_review_worker_output(
         R"({"findings":[})", snapshot, {"src/a.cpp"}, parsed_findings);
     check(!error.ok() && error.code == ainiux::ErrorCode::JsonParse &&

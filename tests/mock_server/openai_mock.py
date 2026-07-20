@@ -312,8 +312,15 @@ class Handler(BaseHTTPRequestHandler):
                     "arguments": json.dumps({"path": review_paths[0], "start_line": 1, "end_line": 1}),
                 }]
             else:
-                reply = json.dumps({"findings": [], "coverage": review_paths, "notes": []})
-                output = [{"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": reply, "annotations": []}]}]
+                output = [{
+                    "type": "function_call",
+                    "id": "fc_review_submit_1",
+                    "call_id": "review_submit_1",
+                    "name": "submit_security_review",
+                    "arguments": json.dumps(
+                        {"findings": [], "coverage": review_paths, "notes": []}
+                    ),
+                }]
             self._send(
                 200,
                 json.dumps(
@@ -425,6 +432,11 @@ class Handler(BaseHTTPRequestHandler):
                 isinstance(message, dict) and message.get("role") == "tool"
                 for message in messages
             )
+            tool_result_count = sum(
+                1
+                for message in messages
+                if isinstance(message, dict) and message.get("role") == "tool"
+            )
             user_text = "\n".join(
                 message.get("content", "")
                 for message in messages
@@ -435,7 +447,9 @@ class Handler(BaseHTTPRequestHandler):
             path_matches = re.findall(r"## File path \(JSON\): (\"(?:\\.|[^\"])*\")", user_text)
             review_paths = [json.loads(path) for path in path_matches] or ["review.cpp"]
             review_path = review_paths[0]
-            if not tool_result_seen:
+            overexplore = "OVEREXPLORE_REVIEW" in user_text
+            finalization_requested = "Inspection budget is nearly exhausted." in user_text
+            if not tool_result_seen or (overexplore and not finalization_requested):
                 self._send(
                     200,
                     json.dumps(
@@ -451,7 +465,7 @@ class Handler(BaseHTTPRequestHandler):
                                         "reasoning_details": [{"type": "reasoning.encrypted", "data": "opaque-review-state"}],
                                         "tool_calls": [
                                             {
-                                                "id": "review_call_1",
+                                                "id": f"review_call_{tool_result_count + 1}",
                                                 "type": "function",
                                                 "function": {
                                                     "name": "read_file",
@@ -466,17 +480,46 @@ class Handler(BaseHTTPRequestHandler):
                     ),
                 )
                 return
-            reply = (
-                "{malformed review output"
-                if "MALFORMED_REVIEW_OUTPUT" in user_text
-                else json.dumps({"findings": [], "coverage": review_paths, "notes": []})
-            )
+            if "MALFORMED_REVIEW_OUTPUT" in user_text:
+                reply = "{malformed review output"
+                choice = {
+                    "index": 0,
+                    "finish_reason": "stop",
+                    "message": {"role": "assistant", "content": reply},
+                }
+            else:
+                review_findings = []
+                if overexplore:
+                    review_findings = [{
+                        "path": review_path,
+                        "line_start": 1,
+                        "line_end": 1,
+                        "impact": "Mock evidence-backed impact with omitted optional metadata",
+                    }]
+                choice = {
+                    "index": 0,
+                    "finish_reason": "tool_calls",
+                    "message": {
+                        "role": "assistant",
+                        "content": None,
+                        "tool_calls": [{
+                            "id": "review_submit_1",
+                            "type": "function",
+                            "function": {
+                                "name": "submit_security_review",
+                                "arguments": json.dumps(
+                                    {"findings": review_findings, "coverage": review_paths}
+                                ),
+                            },
+                        }],
+                    },
+                }
             self._send(
                 200,
                 json.dumps(
                     {
                         "model": self.model,
-                        "choices": [{"index": 0, "finish_reason": "stop", "message": {"role": "assistant", "content": reply}}],
+                        "choices": [choice],
                     }
                 ),
             )

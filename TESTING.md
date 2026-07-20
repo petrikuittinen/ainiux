@@ -51,14 +51,14 @@ Approximate size today: **900+** unit assertions, **170+** integration checks in
 - Runtime cancellation and event delivery
 - Security redaction helpers
 - Native Chat/Responses tool definition, call, streamed-fragment/index validation, multi-item text, continuation, and result serialization
-- Security-review read tools, exact batch coverage, index fingerprint checks, ignored/traversal/symlink rejection, secret redaction, command/helper allowlisting, Markdown-field escaping, deterministic report rendering, and concurrent secure JSONL diagnostic logging/finalization/retention
+- Security-review read tools, explicit exact batch coverage, native final submission, conservative normalization of omitted/empty optional finding metadata, bounded finalization of over-exploring workers, safe single-object extraction from JSON preambles/fences, ambiguous/malformed response rejection, index fingerprint checks, ignored/traversal/symlink rejection, secret redaction, command/helper allowlisting, Markdown-field escaping, deterministic report rendering, and concurrent secure JSONL diagnostic logging/finalization/retention
 - Unicode, numeric, and malformed-input edge cases
 
 **Integration coverage**
 
 - Project-local code-index creation/printing/clearing, full editor-language discovery and reporting, JavaScript and TypeScript module/JSX endings, binary skips, ignore rules, stale reporting, output files, and option rejection
 - Chat Completions and Responses API against `openai_mock.py`, including strict exact reasoning shapes and unlisted-value CLI/REPL warnings
-- Headless security review with an incremental project index, native multi-round `read_file`, opaque reasoning continuation, untrusted `AGENTS.md` data, coordinator output, per-run request/response/tool/validation logs, and clean stdout/stderr separation
+- Headless security review with an incremental project index, native multi-round `read_file`, schema-defined `submit_security_review`, explicit expected coverage, opaque reasoning continuation, untrusted `AGENTS.md` data, coordinator output, per-run request/response/tool/validation logs, and clean stdout/stderr separation
 - Streaming, JSON/NDJSON output, thinking-trace redaction
 - REPL, benchmark modes, action-balanced safety ratings, configurable judge grading, URL fetch safety, attachments, images
 - Editor/chat shared provider/model selectors, colored selector panels, explicit-provider startup discovery, one-model auto-selection, multiple-model selection, and non-modal bare-offline startup

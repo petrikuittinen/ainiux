@@ -84,7 +84,7 @@ Rules:
 - Do not introduce raw owning pointers in new C++ code.
 - Wrap C resources in RAII: `CURL*`, `curl_slist*`, `sqlite3*`, `FILE*`, file descriptors, sockets, `DIR*`, terminal state, temporary files, and allocated buffers.
 - At C API boundaries, define who allocates, who frees, and which free function is used.
-- A feature is not done until normal success paths and important failure paths have been checked for leaks where tooling is available (`make test-sanitize`, `make test-leak`).
+- Changes that affect allocation, resource ownership, cancellation, or cleanup must add focused coverage for normal and important failure paths. Full sanitizer and Valgrind suites follow the slow-test policy below; they are not required after every minor change unless the user explicitly requests them.
 
 ## Active priorities
 
@@ -422,6 +422,17 @@ Do not implement browser web UI while v0.9 / server mode work remains the roadma
 
 Add tests with every behavior change. Do not rely only on manual testing. See `TESTING.md`.
 
+### Test selection policy
+
+Keep the edit-test loop proportional to the change. Do not automatically run every available suite after a minor or localized change.
+
+- For documentation-only changes, inspect the diff and run only relevant formatting, generation, or link checks when available. Do not build or run test suites merely because a document changed.
+- For localized C++ changes, build the affected target and run the nearest relevant unit coverage. `make build/test_runner && build/test_runner` is the ordinary broad in-process unit check when a narrower executable is unavailable; it avoids the slower fault and integration paths included by `make test-unit` and `make test`.
+- Run `make test-unit-faults` only for relevant file-I/O, HTTP timeout, cancellation, permission, or failure-path changes. Note that `make test-unit` includes these slower fault and ENOSPC checks in addition to the ordinary unit runner.
+- Treat `make test`, `make test-integration`, `make test-integration-sqlite`, `tests/integration/test_mock_server.sh`, `make test-sanitize`, `make leak-check`, and `make test-leak` as slow suites. Do not run them by default. Run them only when the user explicitly requests full testing, the task is specifically release/CI/full-validation work, or the user explicitly asks for the directly relevant slow suite.
+- `make test-sanitize` is especially expensive because it performs a clean ASan/UBSan rebuild and then the full test path. Valgrind is also intentionally opt-in. Mock-server and SQLite/TUI integration scripts start subprocesses and PTY scenarios and are not part of the routine minor-change loop.
+- Before starting an opt-in slow suite, tell the user which suite will run and why. In the final response, list exactly what was run and identify relevant suites that were intentionally not run.
+
 Minimum areas (many already have coverage — extend rather than replace):
 
 ```text
@@ -492,14 +503,14 @@ A change is not done until:
 
 1. It builds with the documented command.
 2. Relevant tests exist or there is a clear explanation why not.
-3. Existing tests pass, if runnable.
+3. The relevant tests selected under the test-selection policy pass, if runnable. Full suites are not a default completion requirement.
 4. Errors are specific and actionable.
 5. Credentials are not leaked in logs, saved files, traces, terminal output, or future web/server responses.
 6. Documentation is updated when behavior changes.
 7. Script-friendly stdout/stderr behavior remains intact for CLI paths.
 8. The implementation fits this architecture.
 9. Long-running work is cancellable and does not block TUI/editor loops where those modes are involved.
-10. Leak checks pass for the touched path where tooling is available.
+10. Changes affecting resource lifetimes have focused cleanup/error-path coverage. Full sanitizer or Valgrind verification is required only when requested under the slow-test policy; otherwise report that it was not run.
 
 ## Git and worktree safety for agents
 

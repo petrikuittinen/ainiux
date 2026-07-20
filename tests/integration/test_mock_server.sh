@@ -799,6 +799,9 @@ done
 grep '"stage":"worker_task"' "$security_log" >/dev/null
 grep '"task_number":1' "$security_log" >/dev/null
 grep '"segment_number":1' "$security_log" >/dev/null
+grep 'EXPECTED_COVERAGE' "$security_log" >/dev/null
+grep '"tool_name":"submit_security_review"' "$security_log" >/dev/null
+grep '"submission_method":"native_tool"' "$security_log" >/dev/null
 grep '"serialized_body":{"data":' "$security_log" >/dev/null
 grep '"raw_response":{"data":' "$security_log" >/dev/null
 if grep -E 'Authorization:|Bearer |"cookie"[[:space:]]*:' "$security_log" >/dev/null; then
@@ -807,6 +810,35 @@ if grep -E 'Authorization:|Bearer |"cookie"[[:space:]]*:' "$security_log" >/dev/
 fi
 if grep -E 'Code index refreshed|Security review scope|Security review:' "$security_out" >/dev/null; then
     echo "security-review status leaked to stdout" >&2
+    exit 1
+fi
+
+security_tolerant_workspace="$ROOT/build/security-review-tolerant-workspace"
+rm -rf "$security_tolerant_workspace"
+mkdir -p "$security_tolerant_workspace"
+cat >"$security_tolerant_workspace/review.cpp" <<'CPP'
+// OVEREXPLORE_REVIEW
+int main() { return 0; }
+CPP
+security_tolerant_out="$ROOT/build/security-review-tolerant.out"
+security_tolerant_err="$ROOT/build/security-review-tolerant.err"
+(
+    cd "$security_tolerant_workspace"
+    "$ROOT/ainiux" "$BASE" --security-review --no-stream --quiet -m "$MODEL" \
+        >"$security_tolerant_out" 2>"$security_tolerant_err"
+)
+grep 'Result: complete' "$security_tolerant_out" >/dev/null
+grep 'Untitled security finding' "$security_tolerant_out" >/dev/null
+grep 'Severity: \*\*info\*\*' "$security_tolerant_out" >/dev/null
+grep 'Category: Uncategorized' "$security_tolerant_out" >/dev/null
+grep 'Remediation: No remediation supplied' "$security_tolerant_out" >/dev/null
+test ! -s "$security_tolerant_err"
+security_tolerant_log=$(find "$security_tolerant_workspace/.ainiux/logs/security-review" -maxdepth 1 -type f -name 'security-review-*.jsonl' | head -n 1)
+grep '"event_type":"finalization_scheduled"' "$security_tolerant_log" >/dev/null
+grep '"tool_name":"submit_security_review"' "$security_tolerant_log" | \
+    grep '"status":"success"' >/dev/null
+if grep '"event_type":"repair_scheduled"' "$security_tolerant_log" >/dev/null; then
+    echo "omitted optional security-review metadata unexpectedly required repair" >&2
     exit 1
 fi
 
@@ -822,6 +854,7 @@ test ! -s "$security_responses_err"
 security_responses_log=$(find "$security_workspace/.ainiux/logs/security-review" -maxdepth 1 -type f -name 'security-review-*.jsonl' | sort | tail -n 1)
 grep '"api":"responses"' "$security_responses_log" >/dev/null
 grep '"event_type":"tool_result"' "$security_responses_log" >/dev/null
+grep '"tool_name":"submit_security_review"' "$security_responses_log" >/dev/null
 grep '"event_type":"run_end".*"status":"success"' "$security_responses_log" >/dev/null
 
 security_log_failure_workspace="$ROOT/build/security-review-log-failure-workspace"

@@ -2262,6 +2262,10 @@ This is the v1.0 plan for ainiux local agent mode (merged from the former standa
 
 **Implemented read-only review slice (2026-07-19):** `--security-review` refreshes that index, batches every eligible source file, runs bounded parallel native-tool model workers, and serializes one cross-project coordinator before locally rendering source-verified Markdown. Chat Completions/OpenRouter and Responses preserve their native call/result and opaque continuation items. Snapshot-backed read/search/symbol tools and a shell-free allowlisted inspection runner cannot write or escape the workspace; project instruction files remain untrusted data. This slice intentionally has no interactive agent mode, writes, approval UI, `agent.sqlite`, `--plan`, or `--code`. References/FTS/PageRank/call graphs also remain unimplemented.
 
+**Security-review output hardening (2026-07-20):** worker prompts now end with an exact machine-readable coverage manifest and no-findings example, and expose a schema-defined native final-submission tool. Coverage repairs name missing and unexpected paths. Compatible free-form endpoints may wrap one intact JSON object in a short preamble or Markdown fence; normalization extracts that object without rewriting malformed syntax and rejects ambiguous multiple objects.
+
+**Security-review model compatibility (2026-07-20):** omitted or empty optional finding metadata now receives explicit conservative defaults before coordinator review, while evidence location and a title/impact description remain strict. Workers that continue reading receive a round-12 finalization reminder, see only the submission tool from round 16, and retain a bounded 20-round/64-call ceiling.
+
 ---
 
 ## 1. Scope
