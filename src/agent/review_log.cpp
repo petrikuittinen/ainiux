@@ -15,6 +15,7 @@
 #include <fcntl.h>
 #include <unistd.h>
 
+#include "agent/project_paths.hpp"
 #include "html/html.hpp"
 #include "security/redact.hpp"
 
@@ -185,19 +186,20 @@ Error ReviewLogger::initialize(const std::string& workspace, int keep_runs,
     if (parent.get() < 0)
         return {ErrorCode::FileWrite, errno_text("could not open security-review workspace", root.string())};
     FdHandle child;
-    Error directory_error = open_secure_child_directory(parent.get(), ".ainiux",
-                                                         (root / ".ainiux").string(), child);
+    Error directory_error = open_secure_child_directory(
+        parent.get(), kProjectStateDirName, (root / kProjectStateDirName).string(), child);
     if (!directory_error.ok()) return directory_error;
     parent.reset(child.release());
-    directory_error = open_secure_child_directory(parent.get(), "logs",
-                                                    (root / ".ainiux/logs").string(), child);
+    directory_error = open_secure_child_directory(
+        parent.get(), "logs", (root / kProjectStateDirName / "logs").string(), child);
     if (!directory_error.ok()) return directory_error;
     parent.reset(child.release());
-    directory_error = open_secure_child_directory(parent.get(), run_kind_,
-                                                    (root / ".ainiux/logs" / run_kind_).string(), child);
+    directory_error = open_secure_child_directory(
+        parent.get(), run_kind_,
+        (root / kProjectStateDirName / "logs" / run_kind_).string(), child);
     if (!directory_error.ok()) return directory_error;
     directory_fd_ = child.release();
-    directory_ = (root / ".ainiux/logs" / run_kind_).string();
+    directory_ = (root / kProjectStateDirName / "logs" / run_kind_).string();
     static std::atomic<unsigned long long> counter{0};
     const std::string prefix = run_kind_ + "-" + timestamp(true) + "-" +
                                std::to_string(static_cast<long long>(::getpid())) + "-";

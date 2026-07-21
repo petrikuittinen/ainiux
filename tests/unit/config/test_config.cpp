@@ -731,7 +731,7 @@ void test_config_reads_models_template() {
 void test_config_reads_common_template() {
     ainiux::config::ParseResult parsed = ainiux::config::read_file("config/ainiux.conf");
     check(parsed.error.ok(), "common config file parses");
-    check(parsed.document.entries.size() == 61, "common config has every expected setting");
+    check(parsed.document.entries.size() == 66, "common config has every expected setting");
     ainiux::cli::Options highlight_options;
     ainiux::Error apply_error = ainiux::config::apply_document(parsed.document, highlight_options);
     check(apply_error.ok() && highlight_options.tui_highlight,
@@ -780,7 +780,12 @@ void test_config_reads_common_template() {
               options.max_parallel_agents == 2 &&
               options.security_review_batch_size == 200U * 1024U &&
               options.security_review_log_enabled &&
-              options.security_review_log_keep_runs == 3,
+              options.security_review_log_keep_runs == 3 &&
+              options.agent_history_backup_enabled &&
+              options.agent_history_backup_max_bytes == 1024U * 1024U &&
+              options.agent_history_backup_ttl_days == 7 &&
+              options.agent_auto_compact &&
+              !options.agent_show_command_output,
           "common config maps to the built-in runtime defaults");
     check(options.model_catalog.models.empty(),
           "common config leaves model capabilities to models.conf");

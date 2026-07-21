@@ -55,8 +55,8 @@ std::string build_injection(const AgentsMdBundle& bundle) {
 
 // True when component is a safe relative path piece (no traversal / metadata).
 bool safe_component(const std::string& value) {
-    return !value.empty() && value != "." && value != ".." && value != ".ainiux" &&
-           value != ".git" && value != ".hg" && value != ".svn";
+    return !value.empty() && value != "." && value != ".." && value != ".ainiux-pr" &&
+           value != ".ainiux" && value != ".git" && value != ".hg" && value != ".svn";
 }
 
 // Candidate workspace-relative AGENTS.md paths from root down to the directory of

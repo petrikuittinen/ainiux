@@ -11,6 +11,7 @@
 #include "agent/test_review.hpp"
 #include "agent/test_session_store.hpp"
 #include "agent/test_session_runtime.hpp"
+#include "agent/test_project_root.hpp"
 #include "chat/test_chat.hpp"
 #include "cli/test_cli.hpp"
 #include "config/test_config.hpp"
@@ -40,6 +41,7 @@ int main() {
     ainiux::test::agent_apply_patch::run_all();
     ainiux::test::agent_session_store::run_all();
     ainiux::test::agent_session_runtime::run_all();
+    ainiux::test::agent_project_root::run_all();
     ainiux::test::agent_command_guard::run_all();
     ainiux::test::agent_adversarial::run_all();
     ainiux::test::agent_review::run_all();

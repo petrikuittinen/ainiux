@@ -644,7 +644,7 @@ void test_refresh_incremental_report_and_skips() {
     check(error.ok(), "initial project index refresh succeeds");
     check(first.discovered == 5 && first.indexed == 2 && first.skipped == 3,
           "discovery honors ignores and records binary, invalid UTF-8, and oversized skips");
-    check(fs::exists(root / ".ainiux" / "index.sqlite"), "project-local SQLite index is created");
+    check(fs::exists(root / ".ainiux-pr" / "index.sqlite"), "project-local SQLite index is created");
 
     ainiux::agent::index::RefreshStats second;
     error = ainiux::agent::index::refresh(options, second);
@@ -714,7 +714,7 @@ void test_refresh_incremental_report_and_skips() {
 void test_corrupt_index_errors() {
     const fs::path root = temporary_workspace("corrupt");
     write_file(root / "main.c", "int main(void);\n");
-    write_file(root / ".ainiux" / "index.sqlite", "not a sqlite database");
+    write_file(root / ".ainiux-pr" / "index.sqlite", "not a sqlite database");
     ainiux::agent::index::Options options;
     options.workspace = root.string();
     ainiux::agent::index::Freshness freshness;
@@ -730,11 +730,11 @@ void test_schema_upgrade_adds_line_counts() {
     const fs::path root = temporary_workspace("schema-upgrade");
     write_file(root / "legacy.js", "function first() {}\nfunction second() {}\n");
     std::error_code directory_error;
-    fs::create_directories(root / ".ainiux", directory_error);
+    fs::create_directories(root / ".ainiux-pr", directory_error);
     check(!directory_error, "legacy index directory is created");
     {
         TestSqliteDatabase database;
-        check(database.open(root / ".ainiux" / "index.sqlite"), "legacy SQLite index is opened");
+        check(database.open(root / ".ainiux-pr" / "index.sqlite"), "legacy SQLite index is opened");
         check(database.execute(
                   "CREATE TABLE metadata(key TEXT PRIMARY KEY,value TEXT NOT NULL);"
                   "CREATE TABLE files(id INTEGER PRIMARY KEY,path TEXT NOT NULL UNIQUE,language TEXT NOT NULL,"
@@ -780,7 +780,7 @@ void test_clear_database() {
     check(error.ok() && refresh_stats.indexed == 1,
           "clear test creates an index containing JSX source");
 
-    const fs::path database = root / ".ainiux" / "index.sqlite";
+    const fs::path database = root / ".ainiux-pr" / "index.sqlite";
     write_file(fs::path(database.string() + "-wal"), "stale wal");
     write_file(fs::path(database.string() + "-shm"), "stale shm");
     ainiux::agent::index::ClearStats clear_stats;
@@ -796,16 +796,16 @@ void test_clear_database() {
           "clearing an absent code index is idempotent");
 
     std::error_code cleanup_error;
-    fs::remove_all(root / ".ainiux", cleanup_error);
+    fs::remove_all(root / ".ainiux-pr", cleanup_error);
     check(!cleanup_error, "empty index state directory is removed for symlink safety test");
     const fs::path outside = temporary_workspace("clear-outside");
     write_file(outside / "index.sqlite", "outside database");
-    fs::create_directory_symlink(outside, root / ".ainiux", cleanup_error);
+    fs::create_directory_symlink(outside, root / ".ainiux-pr", cleanup_error);
     check(!cleanup_error, "symlinked index state directory fixture is created");
     clear_stats = {};
     error = ainiux::agent::index::clear_database(options, clear_stats);
     check(!error.ok() && fs::exists(outside / "index.sqlite"),
-          "clear-index refuses a symlinked .ainiux directory and preserves its target");
+          "clear-index refuses a symlinked .ainiux-pr directory and preserves its target");
 
     cleanup_error.clear();
     fs::remove_all(root, cleanup_error);

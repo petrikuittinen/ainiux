@@ -2001,6 +2001,30 @@ Error apply_document(const Document& document, cli::Options& options) {
             err = nonnegative_int(entry, candidate.security_review_log_keep_runs);
             if (err.ok() && candidate.security_review_log_keep_runs > 1000)
                 err = schema_error(entry, "expected an integer from 0 through 1000");
+        } else if (name == "agent.history_backup_enabled") {
+            err = require_type(entry, Value::Type::Boolean);
+            if (err.ok()) candidate.agent_history_backup_enabled = entry.value.boolean;
+        } else if (name == "agent.history_backup_max_bytes") {
+            long long value = 0;
+            err = auto_save_byte_size(entry, value);
+            if (err.ok() && value < 0)
+                err = schema_error(entry, "expected a non-negative byte size");
+            if (err.ok())
+                candidate.agent_history_backup_max_bytes = static_cast<size_t>(value);
+        } else if (name == "agent.history_backup_ttl_days") {
+            err = nonnegative_int(entry, candidate.agent_history_backup_ttl_days);
+            if (err.ok() && candidate.agent_history_backup_ttl_days > 3650)
+                err = schema_error(entry, "expected an integer from 0 through 3650");
+        } else if (name == "agent.auto_compact") {
+            err = require_type(entry, Value::Type::Boolean);
+            if (err.ok()) candidate.agent_auto_compact = entry.value.boolean;
+        } else if (name == "agent.compact_limit") {
+            err = nonnegative_int(entry, candidate.agent_compact_limit);
+            if (err.ok() && candidate.agent_compact_limit > 100)
+                err = schema_error(entry, "expected an integer from 0 through 100 (0=auto)");
+        } else if (name == "agent.show_command_output") {
+            err = require_type(entry, Value::Type::Boolean);
+            if (err.ok()) candidate.agent_show_command_output = entry.value.boolean;
         } else if (name == "input.image_capability") {
             err = enum_string(entry,
                               cli::option_values::image_capability_strings(),

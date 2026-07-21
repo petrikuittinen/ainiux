@@ -2,7 +2,7 @@
 
 ## Local agent mode (v1.0)
 
-- Interactive agent TUI shell + multi-turn `AgentSessionRuntime` + mode cycling (`/chat` `/agent` `/editor` `/mode` `/cycle`) landed on project `.ainiux/agent.sqlite`. Next slices: interactive approval UI for Guard `Ask` (still maps to Deny headless), richer tool/status display in the agent transcript, optional session resume/list from agent.sqlite, and stronger editor↔agent buffer handoff.
+- Project-centric agent rework landed: singleton `.ainiux-pr/agent.sqlite` v2, one-backup history policy, compact tool lines, window-% auto-compact, Chat/Agent chrome, `/cmd-out`. Next: interactive Guard `Ask` approvals, stream tool lines live mid-turn, load agent transcript as sole TUI source of truth (less chat-session coupling), plan/security agent modes, stronger editor↔agent handoff.
 - Keep security-review strictly read-only when expanding agent tools (`run_command` stays index-scoped there).
 
 ## Syntax Highlighting

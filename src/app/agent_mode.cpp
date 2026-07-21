@@ -54,6 +54,12 @@ AgentGoalResult run_agent_goal(provider::RequestContext context,
     options.security_review_log_keep_runs = context.options.security_review_log_keep_runs;
     options.trusted_prompt_dir = context.options.trusted_prompt_dir;
     options.max_source_code_file_size = context.options.max_source_code_file_size;
+    options.history_backup.enabled = context.options.agent_history_backup_enabled;
+    options.history_backup.max_bytes = context.options.agent_history_backup_max_bytes;
+    options.history_backup.ttl_days = context.options.agent_history_backup_ttl_days;
+    options.auto_compact = context.options.agent_auto_compact;
+    options.compact_limit = context.options.agent_compact_limit;
+    options.show_command_output = context.options.agent_show_command_output;
     options.on_progress = std::move(on_progress);
 
     agent::AgentSessionRuntime runtime;

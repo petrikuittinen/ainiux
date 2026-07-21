@@ -669,7 +669,7 @@ void test_tui_markdown_history_highlighting() {
 
 void test_tui_input_label_and_activity_indicators() {
     const std::string label = ainiux::tui::input_label_text();
-    check(label == ainiux::app_version_label() + ainiux::tui::input_label_status_message(),
+    check(label == ainiux::tui::input_label_text_for_mode(false),
           "TUI input label concatenates app version branding with helper text");
     check(label.find(ainiux::versionNumber) != std::string::npos, "TUI input label includes the current version");
     check(label.find("/help") != std::string::npos &&

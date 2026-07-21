@@ -958,7 +958,7 @@ Options:
       --run-file PATH           One-shot agent goal from a file; use '-' for stdin.
       --benchmark               Run benchmark mode (also: ainiux benchmark ...).
       --grade                   Grade benchmark results with a judge model (also: ainiux grade ...).
-      --index-code              Create or incrementally refresh .ainiux/index.sqlite.
+      --index-code              Create or incrementally refresh .ainiux-pr/index.sqlite.
       --print-index             Print the stored project code index as Markdown.
       --clear-index             Remove the project code index database.
       --security-review         Review every eligible indexed workspace file and print Markdown.

@@ -12,10 +12,12 @@
 #include <regex>
 #include <set>
 #include <sstream>
+#include <sys/stat.h>
 #include <unistd.h>
 
 #include "agent/apply_patch.hpp"
 #include "agent/process.hpp"
+#include "agent/project_paths.hpp"
 #include "agent/text_match.hpp"
 #include "agent/tool_args.hpp"
 #include "html/html.hpp"
@@ -106,7 +108,7 @@ bool safe_relative_path(const std::string& path) {
     if (candidate.is_absolute()) return false;
     for (const fs::path& component : candidate) {
         const std::string value = component.string();
-        if (value == ".." || value == ".ainiux" || value == ".git" || value == ".hg" || value == ".svn")
+        if (value == ".." || is_protected_state_dir_name(value))
             return false;
     }
     return true;
@@ -298,7 +300,7 @@ bool visible_workspace_path(const index::Snapshot& snapshot,
 }
 
 bool is_protected_listing_name(const std::string& name) {
-    return name == ".ainiux" || name == ".git" || name == ".hg" || name == ".svn";
+    return is_protected_state_dir_name(name);
 }
 
 bool path_allowed_for_command(const index::Snapshot& snapshot,
@@ -401,9 +403,10 @@ Error ReadToolRegistry::create(index::Options index_options,
     loaded.snapshot_ = std::move(snapshot);
     loaded.secrets_ = std::move(secrets);
     loaded.allow_mutations_ = options.allow_mutations;
-    loaded.history_sequence_ = 0;
+    loaded.history_backup_ = options.history_backup;
     registry = std::move(loaded);
     registry.rebuild_file_map();
+    (void)registry.purge_expired_history_backups();
     return ok_error();
 }
 
@@ -435,38 +438,68 @@ Error ReadToolRegistry::resolve_writable_path(const std::string& relative_path,
     return ok_error();
 }
 
+Error ReadToolRegistry::purge_expired_history_backups() const {
+    if (!history_backup_.enabled || history_backup_.ttl_days <= 0) return ok_error();
+    const fs::path history_dir =
+        fs::path(snapshot_.workspace) / kProjectStateDirName / "history";
+    std::error_code ec;
+    if (!fs::is_directory(history_dir, ec) || ec) return ok_error();
+    const std::time_t now_tt = std::time(nullptr);
+    const std::time_t ttl_sec = static_cast<std::time_t>(history_backup_.ttl_days) * 86400;
+    for (fs::directory_iterator it(history_dir, ec), end; !ec && it != end; it.increment(ec)) {
+        if (ec) break;
+        if (!it->is_regular_file(ec) || ec) continue;
+        const std::string name = it->path().filename().string();
+        if (name.size() < 4 || name.compare(name.size() - 4, 4, ".bak") != 0) continue;
+#if defined(_WIN32)
+        (void)now_tt;
+        (void)ttl_sec;
+#else
+        struct stat st {};
+        if (::stat(it->path().c_str(), &st) != 0) continue;
+        if (now_tt >= st.st_mtime && (now_tt - st.st_mtime) > ttl_sec) {
+            std::error_code rm_ec;
+            fs::remove(it->path(), rm_ec);
+        }
+#endif
+    }
+    return ok_error();
+}
+
 Error ReadToolRegistry::save_history_copy(const std::string& relative_path,
                                           const std::string& previous_content,
                                           std::string& history_path) const {
-    const fs::path history_dir = fs::path(snapshot_.workspace) / ".ainiux" / "history";
+    history_path.clear();
+    if (!history_backup_.enabled) return ok_error();
+    if (history_backup_.max_bytes > 0 && previous_content.size() > history_backup_.max_bytes) {
+        return ok_error();  // too large — skip without error
+    }
+
+    const fs::path history_dir =
+        fs::path(snapshot_.workspace) / kProjectStateDirName / "history";
     std::error_code ec;
     fs::create_directories(history_dir, ec);
     if (ec) return {ErrorCode::FileWrite, "could not create history directory: " + ec.message()};
 
-    const auto now = std::chrono::system_clock::now();
-    const std::time_t time = std::chrono::system_clock::to_time_t(now);
-    std::tm tm_value{};
-#if defined(_WIN32)
-    gmtime_s(&tm_value, &time);
-#else
-    gmtime_r(&time, &tm_value);
-#endif
-    std::ostringstream stamp;
-    stamp << std::put_time(&tm_value, "%Y%m%d-%H%M%S") << '-'
-          << std::setw(3) << std::setfill('0') << (++history_sequence_);
-    std::string safe_name = relative_path;
-    for (char& ch : safe_name) {
+    // One stable slot per workspace path (hash of generic relative path).
+    const std::string generic = fs::path(relative_path).generic_string();
+    const std::string digest = index::content_hash(generic);
+    std::string short_hash = digest.size() > 16 ? digest.substr(0, 16) : digest;
+    std::string safe_tail = generic;
+    for (char& ch : safe_tail) {
         if (ch == '/' || ch == '\\' || ch == ':' || ch == ' ') ch = '_';
     }
-    if (safe_name.size() > 120) safe_name.resize(120);
-    const fs::path history_file = history_dir / (stamp.str() + "-" + safe_name + ".bak");
+    if (safe_tail.size() > 48) safe_tail = safe_tail.substr(safe_tail.size() - 48);
+    const fs::path history_file = history_dir / (short_hash + "-" + safe_tail + ".bak");
     {
         std::ofstream out(history_file, std::ios::binary | std::ios::trunc);
         if (!out) return {ErrorCode::FileWrite, "could not open history file: " + history_file.string()};
         out.write(previous_content.data(), static_cast<std::streamsize>(previous_content.size()));
         if (!out) return {ErrorCode::FileWrite, "could not write history file: " + history_file.string()};
     }
-    history_path = (fs::path(".ainiux") / "history" / history_file.filename()).generic_string();
+    history_path =
+        (fs::path(kProjectStateDirName) / "history" / history_file.filename()).generic_string();
+    (void)purge_expired_history_backups();
     return ok_error();
 }
 

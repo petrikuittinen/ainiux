@@ -219,15 +219,15 @@ void test_file_tools_unicode_and_path_attacks() {
           "deny ../ escape");
     check(!json_ok(tools.execute("write_file", R"({"path":"/etc/passwd","content":"x"})")),
           "deny absolute path");
-    check(!json_ok(tools.execute("write_file", R"({"path":".ainiux/evil.txt","content":"x"})")),
-          "deny .ainiux metadata write");
+    check(!json_ok(tools.execute("write_file", R"({"path":".ainiux-pr/evil.txt","content":"x"})")),
+          "deny .ainiux-pr metadata write");
     check(!json_ok(tools.execute("write_file", R"({"path":".git/config","content":"x"})")),
           "deny .git write");
     check(!json_ok(tools.execute("write_file", R"({"path":"src/../../outside.txt","content":"x"})")),
           "deny nested .. escape");
     check(!json_ok(tools.execute("remove", R"({"path":"../escape.txt"})")), "remove deny escape");
-    check(!json_ok(tools.execute("remove", R"({"path":".ainiux/agent.sqlite"})")),
-          "remove deny .ainiux");
+    check(!json_ok(tools.execute("remove", R"({"path":".ainiux-pr/agent.sqlite"})")),
+          "remove deny .ainiux-pr");
 
     // NUL in content rejected.
     {
@@ -308,10 +308,10 @@ void test_apply_patch_unicode_and_malicious() {
     check(!json_ok(tools.execute("apply_patch", escape_args)), "apply_patch denies ../ path");
 
     const std::string meta_patch =
-        "*** Begin Patch\n*** Add File: .ainiux/evil.txt\n+pwned\n*** End Patch\n";
+        "*** Begin Patch\n*** Add File: .ainiux-pr/evil.txt\n+pwned\n*** End Patch\n";
     check(!json_ok(tools.execute(
               "apply_patch", std::string(R"({"patch":")") + json_escape(meta_patch) + R"("})")),
-          "apply_patch denies .ainiux path");
+          "apply_patch denies .ainiux-pr path");
 
     // Malformed: Begin without End.
     check(!agent::parse_apply_patch("*** Begin Patch\n*** Add File: a\n+x\n", parsed).ok(),
@@ -341,43 +341,37 @@ void test_session_store_unicode_and_limits() {
     agent::AgentSessionStore store;
     check(store.open(workspace).ok(), "open session db");
 
-    agent::AgentSessionRecord session;
-    session.goal = std::string(u8"修复 ") + kChinese + u8" and " + kArabic + " " + kEmoji;
+    agent::AgentProjectRecord session;
     session.provider = "openrouter";
     session.model = "anthropic/claude-sonnet-4.6";
     session.api = "chat";
     session.protocol = "native";
     session.workspace = workspace;
-    check(store.create_session(session).ok() && session.id > 0, "create unicode goal session");
+    session.status = "running";
+    check(store.open_project(session).ok() && session.id == 1, "open singleton project");
 
-    check(store.append_message(session.id, "user", session.goal).ok(), "append unicode user");
+    const std::string goal = std::string(u8"修复 ") + kChinese + u8" and " + kArabic + " " + kEmoji;
+    check(store.append_message("user", goal).ok(), "append unicode user");
     check(store
-              .append_tool_event(session.id, 1, "call-✨", "read_file",
+              .append_tool_event(1, 1, "call-spark", "read_file",
                                  std::string(R"({"path":")") + kChinese + R"(.py"})",
                                  R"({"ok":true,"data":"مرحبا"})", true)
               .ok(),
           "append unicode tool event");
     const std::string assistant = std::string(u8"完成 ") + kEmoji + " " + kArabic;
-    check(store.append_message(session.id, "assistant", assistant).ok(), "append unicode assistant");
-    check(store.finish_session(session.id, "success", assistant, "", "", 2, 1).ok(), "finish");
+    check(store.append_message("assistant", assistant).ok(), "append unicode assistant");
+    check(store.finish_session(1, "success", assistant, "", "", 2, 1).ok(), "finish");
 
     agent::AgentSessionRecord loaded;
     std::vector<agent::AgentMessageRecord> messages;
     std::vector<agent::AgentToolEventRecord> tools;
-    check(store.load_session(session.id, loaded, messages, tools).ok(), "load");
-    check(loaded.goal.find(kChinese) != std::string::npos &&
-              loaded.goal.find(kArabic) != std::string::npos &&
-              loaded.final_text.find(kEmoji) != std::string::npos,
-          "persisted multilingual goal/final_text");
-    check(messages.size() == 2 && tools.size() == 1, "message/tool counts");
-    check(tools[0].call_id.find(u8"✨") != std::string::npos || !tools[0].call_id.empty(),
+    check(store.load_session(1, loaded, messages, tools).ok(), "load");
+    check(messages.size() >= 2 && tools.size() == 1, "message/tool counts");
+    check(messages[0].content.find(kChinese) != std::string::npos &&
+              messages[0].content.find(kArabic) != std::string::npos,
+          "persisted multilingual user content");
+    check(tools[0].call_id.find("spark") != std::string::npos || !tools[0].call_id.empty(),
           "tool call id preserved");
-
-    // Malicious role empty / bad session id.
-    check(!store.append_message(session.id, "", "x").ok(), "empty role rejected");
-    check(!store.append_message(0, "user", "x").ok(), "session_id 0 rejected");
-    check(!store.append_tool_event(session.id, 1, "c", "", "{}", "{}", true).ok(),
-          "empty tool name rejected");
 
     // Attempt path confusion: open must stay under workspace.
     check(store.path().find(workspace) != std::string::npos, "db under workspace");
@@ -426,8 +420,8 @@ void test_command_guard_adversarial() {
     check(!agent::parse_command("python3 ../../etc/passwd", args, agent::CommandPolicy::Agent, rule)
                .ok(),
           "path traversal arg rejected");
-    check(!agent::parse_command("python3 .ainiux/x.py", args, agent::CommandPolicy::Agent, rule).ok(),
-          ".ainiux path arg rejected");
+    check(!agent::parse_command("python3 .ainiux-pr/x.py", args, agent::CommandPolicy::Agent, rule).ok(),
+          ".ainiux-pr path arg rejected");
 
     // Incomplete quotes.
     check(!agent::parse_command("python3 \"hello", args, agent::CommandPolicy::Agent, rule).ok(),

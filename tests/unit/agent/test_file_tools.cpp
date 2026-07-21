@@ -286,7 +286,7 @@ void test_write_file_create_and_readback() {
         tools.execute("write_file", R"({"path":"../outside.txt","content":"x\n"})");
     check(!json_ok(escape), "path escape is denied");
     const std::string protected_path =
-        tools.execute("write_file", R"({"path":".ainiux/evil.txt","content":"x\n"})");
+        tools.execute("write_file", R"({"path":".ainiux-pr/evil.txt","content":"x\n"})");
     check(!json_ok(protected_path), "protected metadata path is denied");
 
     std::error_code ec;

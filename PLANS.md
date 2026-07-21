@@ -60,7 +60,7 @@ Each milestone should leave the program usable. Do not create a long-lived pile 
 
 ## Current baseline
 
-Implementation status (2026-07-21): `ainiux` is at v1.02. Active development continues the v1.0 local agent track (ordinary workspace writes landed; interactive TUI/approvals/deletes later) alongside remaining v0.9 polish before local OpenAI-compatible server mode. The repository has the scriptable CLI, built-in provider registry and aliases, Chat Completions, text-only Responses API support, streaming SSE, a layered model capability catalog and unified reasoning selection, credential lookup, JSON chat import/export, SQLite-backed TUI chat persistence with durable image and canonical-Markdown attachments, cancellable runtime jobs, REPL, full-screen TUI foundation, editor with multiple file buffers, selection, copy/cut/paste across buffers, grapheme-aware Unicode navigation and terminal cell-width rendering, and cursor-aware AI continue/auto-write (`Ctrl+Space`), request-only context policies, context-use estimates, bounded text/HTML/Markdown input, JPEG/PNG/GIF image input for Chat Completions, safe URL fetching, Markdown output conversion, automatic system/user TOML-alike configuration loading, and concurrent JSONL benchmark execution. `--provider none` supports local conversion and editor workflows without a model endpoint. Standalone `--editor` accepts an optional startup path after a provider shortcut or base URL, creates a missing file before editing, prompts to save scratch buffers on quit, and asks for overwrite confirmation when saving to an existing path. Chat and editor discover models when an online provider is given without `--model`, auto-select a sole result, and open the shared selector for multiple results; bare offline startup performs neither action.
+Implementation status (2026-07-21): `ainiux` is at v1.03. Active development continues the v1.0 local agent track (project `.ainiux-pr/` state, one-shot `--run` and interactive `--agent`, multi-turn session, compact tool lines, window-% auto-compact landed; Guard Ask approvals and plan/security agent modes later) alongside remaining v0.9 polish before local OpenAI-compatible server mode. The repository has the scriptable CLI, built-in provider registry and aliases, Chat Completions, text-only Responses API support, streaming SSE, a layered model capability catalog and unified reasoning selection, credential lookup, JSON chat import/export, SQLite-backed TUI chat persistence with durable image and canonical-Markdown attachments, cancellable runtime jobs, REPL, full-screen TUI foundation, editor with multiple file buffers, selection, copy/cut/paste across buffers, grapheme-aware Unicode navigation and terminal cell-width rendering, and cursor-aware AI continue/auto-write (`Ctrl+Space`), request-only context policies, context-use estimates, bounded text/HTML/Markdown input, JPEG/PNG/GIF image input for Chat Completions, safe URL fetching, Markdown output conversion, automatic system/user TOML-alike configuration loading, and concurrent JSONL benchmark execution. `--provider none` supports local conversion and editor workflows without a model endpoint. Standalone `--editor` accepts an optional startup path after a provider shortcut or base URL, creates a missing file before editing, prompts to save scratch buffers on quit, and asks for overwrite confirmation when saving to an existing path. Chat and editor discover models when an online provider is given without `--model`, auto-select a sole result, and open the shared selector for multiple results; bare offline startup performs neither action.
 
 Implementation note (2026-07-18, corrected 2026-07-19): public reasoning control is now `--reasoning auto|VALUE|TOKENS` plus shared chat/editor `/reasoning`. Layered `models.conf` files provide validated family regexes, compact pipe-separated selector values, closed request protocols, documented defaults, advisory temperature capabilities, and optional-field purpose presets. Matching is case-insensitive and uses only the final slash-separated model component, with bundled families kept transport-neutral; Llama 3.x sizes/variants and both 20B/120B gpt-oss now share their family rules. Direct values remain forward-compatible and exact, but a matched family warns on an unlisted value and interactive commands require confirmation; approximate label↔token conversions remain removed. Chat persists reasoning per thread, editor asynchronously remembers its complete provider/model/API/reasoning selection in SQLite app state, and model changes reset reasoning to Auto. Shared model-selection validation/serialization is reusable by future surfaces, but no agent functionality was added.
 
@@ -2258,7 +2258,7 @@ This is the v1.0 plan for ainiux local agent mode (merged from the former standa
 **Also includes:** project-local SQLite code index, scanners, PageRank, fuzzy edits, preferred tool strategies.  
 **Product name:** ainiux throughout.
 
-**Implemented first slice (2026-07-19):** standalone `--index-code`, `--print-index`, and `--clear-index` modes now provide the project-local `.ainiux/index.sqlite` foundation for the editor's complete language set: Markdown, Python, C/C++, C#, Java, JavaScript/JSX, TypeScript/TSX, HTML/HTML-only, CSS, XML, JSON, Bash, PHP, Perl, Ruby, Rust, Go, PowerShell, Assembly, SQL, TOML, YAML, and INI. This includes `.mts`/`.cts`, embedded HTML script/style scanning, structural document/configuration symbols, and physical line totals. The schema stores files, line counts, and symbols only and uses parallel discovery/scanning, lightweight lexical extraction, root ignore files, incremental size/mtime checks, transactional refresh, read-only Markdown reporting, and isolated database removal.
+**Implemented first slice (2026-07-19):** standalone `--index-code`, `--print-index`, and `--clear-index` modes now provide the project-local `.ainiux-pr/index.sqlite` foundation for the editor's complete language set: Markdown, Python, C/C++, C#, Java, JavaScript/JSX, TypeScript/TSX, HTML/HTML-only, CSS, XML, JSON, Bash, PHP, Perl, Ruby, Rust, Go, PowerShell, Assembly, SQL, TOML, YAML, and INI. This includes `.mts`/`.cts`, embedded HTML script/style scanning, structural document/configuration symbols, and physical line totals. The schema stores files, line counts, and symbols only and uses parallel discovery/scanning, lightweight lexical extraction, root ignore files, incremental size/mtime checks, transactional refresh, read-only Markdown reporting, and isolated database removal.
 
 **Implemented read-only review slice (2026-07-19):** `--security-review` refreshes that index, batches every eligible source file, runs bounded parallel native-tool model workers, and serializes one cross-project coordinator before locally rendering source-verified Markdown. Chat Completions/OpenRouter and Responses preserve their native call/result and opaque continuation items. Snapshot-backed read/search/symbol tools and a shell-free allowlisted inspection runner cannot write or escape the workspace; project instruction files remain untrusted data. This slice intentionally has no interactive agent mode, writes, approval UI, `agent.sqlite`, `--plan`, or `--code`. References/FTS/PageRank/call graphs also remain unimplemented.
 
@@ -2266,7 +2266,7 @@ This is the v1.0 plan for ainiux local agent mode (merged from the former standa
 
 **Security-review model compatibility (2026-07-20):** omitted or empty optional finding metadata now receives explicit conservative defaults before coordinator review, while evidence location and a title/impact description remain strict. Workers that continue reading receive a round-12 finalization reminder, see only the submission tool from round 16, and retain a bounded 20-round/64-call ceiling.
 
-**Agent write tools slice (2026-07-21):** one-shot `ainiux agent` / `--agent` now enables ordinary workspace mutations on top of the existing read-only tool registry. `write_file` and exact `str_replace` are exposed only when the registry is created with `allow_mutations=true` (agent mode); `--security-review` remains read-only. Writes refuse path escape / protected metadata / symlinks, support `expected_file_hash` stale checks, store pre-overwrite backups under `.ainiux/history/`, and refresh the in-memory snapshot so later reads in the same run succeed. Fuzzy `str_replace`, `edit_file`, `apply_patch`, `remove`, approval UI, and `agent.sqlite` remain unimplemented. Agent mode also falls back to the XML tool channel when the provider/API path lacks native function calling.
+**Agent write tools slice (2026-07-21):** one-shot `ainiux agent` / `--agent` now enables ordinary workspace mutations on top of the existing read-only tool registry. `write_file` and exact `str_replace` are exposed only when the registry is created with `allow_mutations=true` (agent mode); `--security-review` remains read-only. Writes refuse path escape / protected metadata / symlinks, support `expected_file_hash` stale checks, store pre-overwrite backups under `.ainiux-pr/history/`, and refresh the in-memory snapshot so later reads in the same run succeed. Fuzzy `str_replace`, `edit_file`, `apply_patch`, `remove`, approval UI, and `agent.sqlite` remain unimplemented. Agent mode also falls back to the XML tool channel when the provider/API path lacks native function calling.
 
 **Agent edit_file + AGENTS.md slice (2026-07-21):** agent mode loads workspace-root `AGENTS.md` (UTF-8, byte-capped, non-symlink) into a separate untrusted user message while keeping the system prompt static. Mutation tools add preferred `edit_file` with `replace_range`, `insert_at`, `delete_range`, exact `replace_text` (optional `line_range_hint`), and standalone `create_file`. Multi line-ops apply bottom-to-top in memory before one atomic write. `replace_symbol`, fuzzy matching, nearest nested `AGENTS.md` chain, `apply_patch`, and `remove` remain later work.
 
@@ -2274,11 +2274,13 @@ This is the v1.0 plan for ainiux local agent mode (merged from the former standa
 
 **Agent apply_patch + FS visibility polish (2026-07-21):** `apply_patch` accepts OpenAI/Codex `*** Begin Patch` envelopes (`Add File` / `Update File` hunks / `Delete File`), validates all ops then writes with history backups and snapshot refresh, supports `patch`/`input`/`diff` aliases and fuzzy hunk matching, and is mutation-only. `list_directory` uses real readdir (empty dirs, `#names#`); plain `remove` requires `confirm=true` when a `#name#` sibling exists. `agent.sqlite`, interactive TUI/approvals, mode cycling, and broader command guard remain later work.
 
-**Agent session DB slice (2026-07-21):** project-local `.ainiux/agent.sqlite` (WAL) stores sessions, messages, tool_events, and an approvals table stub. One-shot `ainiux agent` opens the DB, creates a running session, appends the goal/tool events/final assistant text (secrets redacted), and finishes with success/error/cancelled/aborted. Never uses `~/.ainiux/ainiux.db`. Interactive TUI agent shell, mode cycling, command guard expansion, and approvals UI remain later work.
+**Agent session DB slice (2026-07-21):** project-local `.ainiux-pr/agent.sqlite` (WAL) stores sessions, messages, tool_events, and an approvals table stub. One-shot `ainiux agent` opens the DB, creates a running session, appends the goal/tool events/final assistant text (secrets redacted), and finishes with success/error/cancelled/aborted. Never uses `~/.ainiux/ainiux.db`. Interactive TUI agent shell, mode cycling, command guard expansion, and approvals UI remain later work.
 
 **Agent run_command + destructive guard slice (2026-07-21):** agent mode (`allow_mutations`) expands `run_command` beyond the security-review inspection allowlist to include common build/test/run tools (`python3`, `make`, `ctest`, `node`, `go`, `cargo`, compilers, …) still without a shell. A DCG-style `command_guard` denies `rm -rf`, destructive git, destructive SQL, `find -delete`, shell wrappers, and sudo; headless Ask maps to Deny. Security-review remains inspection-only. Interactive approval UI remains later work.
 
 **Interactive agent TUI shell + mode cycle slice (2026-07-21):** `AgentSessionRuntime` prepares index/tools/`agent.sqlite` once and runs multi-turn goals without re-seeding the system prompt each message. One-shot `--run` and interactive `--agent` share that runtime. Interactive agent keeps a warm project session; `/chat`, `/agent`, `/editor`, `/mode`, and `/cycle` switch among chat ↔ editor ↔ agent without process restart while keeping tools disarmed outside agent mode. Interactive approval UI for Guard Ask decisions remains later work.
+
+**Agent project rework slice (2026-07-21):** project-centric agent only (ambiguous parent/nested project markers refused). Project state dir is **`.ainiux-pr/`** (index, agent.sqlite, history, logs); user profile remains **`~/.ainiux/`** (chat DB/media) and is never a project marker. Single project transcript in `agent.sqlite` schema v2. History backups: one slot per path, max 1M, 7-day TTL. Compact tool lines; window-% auto-compact; Chat/Agent chrome; `/cmd-out`. Plan/security agent modes still deferred.
 
 ---
 
@@ -2302,7 +2304,7 @@ This plan covers:
 - agent loop and provider-neutral tool calls
 - **agent UI that reuses the chat TUI** (thread area + bottom input + shared status/selectors)
 - **mode cycling and slash mode switches** among chat, editor, and agent
-- project-local `.ainiux/` store including **`index.sqlite`** and **agent session DB**
+- project-local **`.ainiux-pr/`** store including **`index.sqlite`** and **agent session DB** (user chat remains `~/.ainiux/`)
 - SQLite code index, incremental updates, C++17 scanners, ranking
 - file/search/edit/web/command/git tools (`glob`, `grep`, and other compatibility aliases)
 - file-level content hashes as primary freshness/edit safety
@@ -2422,7 +2424,7 @@ Examples:
 - In chat: type `/agent` → enter agent mode for the current working directory / configured workspace.
 - In agent: type `/editor` or `/editor src/main.cpp` → open standalone editor (preserve agent session in project DB; do not tear down project index needlessly).
 - In editor: type `/agent` → return to agent thread for this project.
-- In agent: type `/chat` → ordinary chat TUI (central chat DB); agent project session remains on disk under `.ainiux/`.
+- In agent: type `/chat` → ordinary chat TUI (central chat DB); agent project session remains on disk under `.ainiux-pr/`.
 
 Rules:
 
@@ -2438,18 +2440,19 @@ Agent mode works on a **project** (workspace root), not on the global chat libra
 
 | Store | Path | Owns |
 | --- | --- | --- |
-| Central chat library | `~/.ainiux/ainiux.db` | Ordinary chat threads only |
-| Project code index | `.ainiux/index.sqlite` | Symbols, refs, FTS, file fingerprints |
-| Project agent DB | `.ainiux/agent.sqlite` | Agent sessions, thread messages, tool events, approvals log metadata |
-| Session append log | `.ainiux/session.jsonl` | Optional durable event stream / export-friendly log |
-| Memory / history / plans | `.ainiux/memory.md`, `history/`, `plans/` | Generated memory, reverse patches, saved plans |
+| Central chat library | `~/.ainiux/ainiux.db` | Ordinary chat threads only (user profile) |
+| Project code index | `.ainiux-pr/index.sqlite` | Symbols, refs, FTS, file fingerprints |
+| Project agent DB | `.ainiux-pr/agent.sqlite` | Single project transcript, tool events, approvals metadata |
+| Session append log | `.ainiux-pr/session.jsonl` | Optional durable event stream / export-friendly log |
+| Memory / history / plans | `.ainiux-pr/memory.md`, `history/`, `plans/` | Generated memory, reverse patches, saved plans |
 
 Hard rules:
 
 - Never write agent transcripts or the code index into `~/.ainiux/ainiux.db`.
+- Never treat `~/.ainiux/` as a project marker (only `.ainiux-pr/` marks a project).
 - Never require a network “account” or home-directory project registry for basic agent use.
-- Copying the project directory (including `.ainiux/`) must carry index + agent session data to another machine.
-- If `.ainiux/` cannot be created, fail clearly; do not silently fall back to the central chat DB.
+- Copying the project directory (including `.ainiux-pr/`) must carry index + agent session data to another machine.
+- If `.ainiux-pr/` cannot be created, fail clearly; do not silently fall back to the central chat DB.
 
 The agent UI thread is backed by the **project agent DB** (and/or session log), even though the **widgets** look like chat. Chat mode continues to use the central chat library.
 
@@ -2499,7 +2502,7 @@ The first version should be pragmatic, fast, and useful on ordinary projects.
 Use a hidden **project-local** directory under the workspace root:
 
 ```text
-.ainiux/
+.ainiux-pr/
   index.sqlite
   agent.sqlite
   settings.json
@@ -2526,9 +2529,9 @@ Purposes:
 ### 3.1 Hard boundary: no central DB for project agent data
 
 ```text
-~/.ainiux/ainiux.db     # TUI chat library ONLY
-.ainiux/index.sqlite    # THIS project's code index
-.ainiux/agent.sqlite    # THIS project's agent sessions / thread UI data
+~/.ainiux/ainiux.db        # TUI chat library ONLY (user profile)
+.ainiux-pr/index.sqlite    # THIS project's code index
+.ainiux-pr/agent.sqlite    # THIS project's agent transcript / tool events
 ```
 
 Reasons:
@@ -2537,7 +2540,7 @@ Reasons:
 - Different projects must not share or pollute one another’s symbol graphs or agent transcripts.
 - Central DB lifecycle (chat threads, media, app state) must stay independent of agent indexing and agent sessions.
 
-If `index.sqlite` or `agent.sqlite` is missing, create it on first agent/index use inside the workspace. If the workspace is not writable, fail with a clear error and do not fall back to `~/.ainiux/`.
+If `index.sqlite` or `agent.sqlite` is missing, create it under `.ainiux-pr/` on first agent/index use inside the workspace. If the workspace is not writable, fail with a clear error and do not fall back to `~/.ainiux/`.
 
 ### 3.2 Settings and configurable limits
 
@@ -2548,7 +2551,7 @@ Resolution order (most specific wins):
 ```text
 compiled safe defaults
 user-global agent settings
-project-local .ainiux/settings.json
+project-local .ainiux-pr/settings.json
 session overrides from /settings
 single tool-call parameter
 ```
@@ -2563,7 +2566,7 @@ fallback: ~/.config/ainiux/agent-settings.json
 Project-local:
 
 ```text
-.ainiux/settings.json
+.ainiux-pr/settings.json
 ```
 
 Main ainiux `config.conf` continues to own ordinary product settings (providers, themes, benchmarks). Agent tool limits live in the JSON stack above unless later explicitly mirrored into `config.conf`.
@@ -2680,7 +2683,7 @@ Suggested file fingerprint output:
 Store the index at:
 
 ```text
-.ainiux/index.sqlite
+.ainiux-pr/index.sqlite
 ```
 
 Use SQLite3 with WAL mode enabled.
@@ -3606,7 +3609,7 @@ Return: same shape as `search_text`. Internally dispatch with `regex = false`.
 
 ### 12.8 `search_symbol`
 
-Purpose: search the SQLite symbol/code index in `.ainiux/index.sqlite`.
+Purpose: search the SQLite symbol/code index in `.ainiux-pr/index.sqlite`.
 
 Parameters:
 
@@ -3855,7 +3858,7 @@ Return data:
 Rules:
 
 - Refuse recursive deletion by default unless explicitly requested and guard allows it.
-- Ask before deleting database files such as `*.sqlite`, `*.sqlite3`, `*.db`, `*.db3`, `*.duckdb` (includes project `.ainiux/index.sqlite`).
+- Ask before deleting database files such as `*.sqlite`, `*.sqlite3`, `*.db`, `*.db3`, `*.duckdb` (includes project `.ainiux-pr/index.sqlite`).
 - Refuse deletion outside workspace root or trusted temp directories.
 - Record rollback data where practical; update the index.
 
@@ -3914,7 +3917,7 @@ Return data:
   "operations_applied": 2,
   "old_file_hash": "fnv1a64:...",
   "new_file_hash": "fnv1a64:...",
-  "reverse_patch_path": ".ainiux/history/20260719-120000-001.patch",
+  "reverse_patch_path": ".ainiux-pr/history/20260719-120000-001.patch",
   "index_updated": true,
   "summary": ["replaced lines 42-118", "inserted before line 7"],
   "warnings": []
@@ -3958,7 +3961,7 @@ Return data:
   "match_mode": "exact|normalized_whitespace|indent_stripped",
   "old_file_hash": "fnv1a64:...",
   "new_file_hash": "fnv1a64:...",
-  "reverse_patch_path": ".ainiux/history/20260719-120000-002.patch",
+  "reverse_patch_path": ".ainiux-pr/history/20260719-120000-002.patch",
   "index_updated": true
 }
 ```
@@ -3987,7 +3990,7 @@ Return data:
   "files_changed": ["src/a.cpp", "src/b.cpp"],
   "operations_applied": 4,
   "new_hashes": {"src/a.cpp":"fnv1a64:...", "src/b.cpp":"fnv1a64:..."},
-  "reverse_patch_path": ".ainiux/history/20260719-120000-003.patch",
+  "reverse_patch_path": ".ainiux-pr/history/20260719-120000-003.patch",
   "index_updated": true,
   "warnings": []
 }
@@ -4224,7 +4227,7 @@ If no provider is configured, return `web_search_unavailable`. Do not hardcode o
 
 ### 12.26 `index_status`
 
-Purpose: report index state for `.ainiux/index.sqlite`.
+Purpose: report index state for `.ainiux-pr/index.sqlite`.
 
 Parameters:
 
@@ -4240,7 +4243,7 @@ Return data:
 ```json
 {
   "index_exists": true,
-  "path": ".ainiux/index.sqlite",
+  "path": ".ainiux-pr/index.sqlite",
   "fresh": true,
   "files_indexed": 220,
   "symbols_indexed": 6400,
@@ -4639,7 +4642,7 @@ model-generated plan
 The base built-in agent prompt must include:
 
 ```text
-Use the local project index (.ainiux/index.sqlite) first because it is cheap, but treat it
+Use the local project index (.ainiux-pr/index.sqlite) first because it is cheap, but treat it
 as a hint, not truth. The scanner can miss symbols, embedded code, macro-generated code,
 overloaded functions, dynamic calls, and unusual syntax. Never blindly trust get_skeleton,
 search_symbol, PageRank, or call graph data. If the indexed view looks incomplete, stale,
@@ -4768,7 +4771,7 @@ Mode switches (also available from chat and editor where practical):
 ```text
 /chat     → chat TUI (central ~/.ainiux/ainiux.db)
 /editor   → standalone editor
-/agent    → agent TUI for current project (.ainiux/agent.sqlite + index)
+/agent    → agent TUI for current project (.ainiux-pr/agent.sqlite + index)
 /mode     → show or set mode
 /cycle    → chat → editor → agent → chat
 ```
@@ -4786,8 +4789,8 @@ git branch
 dirty files
 current provider / model / reasoning
 context usage estimate
-index path (.ainiux/index.sqlite) and freshness
-agent session path (.ainiux/agent.sqlite)
+index path (.ainiux-pr/index.sqlite) and freshness
+agent session path (.ainiux-pr/agent.sqlite)
 last test result
 guard enabled/disabled status
 loaded AGENTS.md files
@@ -4808,21 +4811,21 @@ Second Ctrl-C: abort current agent task; remain in agent UI input (or return to 
 
 ### 19.1 Session log
 
-Use append-only `.ainiux/session.jsonl` as the source of truth.
+Use append-only `.ainiux-pr/session.jsonl` as the source of truth.
 
 Example events:
 
 ```json
 {"type":"user_goal","text":"Add agent mode"}
 {"type":"tool_call","name":"search_symbol","args":{"query":"agent loop"}}
-{"type":"edit","files":["src/agent.cpp"],"reverse_patch":".ainiux/history/001.patch"}
+{"type":"edit","files":["src/agent.cpp"],"reverse_patch":".ainiux-pr/history/001.patch"}
 {"type":"test","command":"make test","exit_code":0}
 {"type":"decision","text":"Use replace_range as primary edit primitive"}
 ```
 
 ### 19.2 Generated memory
 
-Generate `.ainiux/memory.md` from the event log.
+Generate `.ainiux-pr/memory.md` from the event log.
 
 Suggested shape:
 
@@ -4835,7 +4838,7 @@ Implement agent mode for ainiux.
 ## Decisions
 - Use file-level hashes as the primary edit-safety mechanism.
 - Use range replacement as the primary edit primitive.
-- Store code index in project-local .ainiux/index.sqlite.
+- Store code index in project-local .ainiux-pr/index.sqlite.
 - Use git CLI instead of libgit2.
 
 ## Modified files
@@ -4890,7 +4893,7 @@ failed search paths that do not matter
 Before each edit batch, store rollback data:
 
 ```text
-.ainiux/history/YYYYMMDD-HHMMSS-NNN.patch
+.ainiux-pr/history/YYYYMMDD-HHMMSS-NNN.patch
 ```
 
 Successful edit results should include: files changed, operation count, old and new file hashes, reverse patch path, index update status.
@@ -4936,7 +4939,7 @@ Tasks:
 - Wire `ainiux agent` / `--agent` mode dispatch without enabling tools in normal chat
 - Full-screen agent UI shell: **reuse chat thread area + bottom input + status line**
 - Shared provider / model / reasoning selectors work in agent mode
-- Project-local `.ainiux/agent.sqlite` session bootstrap (empty thread ok)
+- Project-local `.ainiux-pr/agent.sqlite` session bootstrap (empty thread ok)
 - Mode switches: `/agent`, `/chat`, `/editor`, `/cycle` (and documented cycle keybinding if added)
 
 Verification:
@@ -4969,7 +4972,7 @@ Tasks:
 - `str_replace` compatibility wrapper
 - Fuzzy fallback: exact, normalized whitespace, indent stripped
 - `apply_patch` compatibility parser
-- Rollback patch creation under `.ainiux/history/`
+- Rollback patch creation under `.ainiux-pr/history/`
 - Hook for reindex of touched files (may no-op until Milestone 4)
 
 Tests: `test_edit_tools`, `test_str_replace_fuzzy`, `test_apply_patch`.
@@ -4980,7 +4983,7 @@ Files: `index/*`, scanners
 
 Tasks:
 
-- Create/open `.ainiux/index.sqlite` (never central chat DB)
+- Create/open `.ainiux-pr/index.sqlite` (never central chat DB)
 - Schema: files, symbols, refs, FTS when available
 - Incremental scan using size/mtime/hash
 - Immediate reindex after ainiux edits
@@ -4993,7 +4996,7 @@ Success criteria:
 - Changed ainiux-edited files reindex immediately
 - External changes detected by timestamp plus hash
 - Skeletons and symbol search fast enough for interactive use
-- Index file lives at `.ainiux/index.sqlite` and is portable with the project
+- Index file lives at `.ainiux-pr/index.sqlite` and is portable with the project
 
 ### Milestone 5: ranking and task inspection
 
@@ -5034,7 +5037,7 @@ sqlite3 app.sqlite "DROP TABLE users;"
 sqlite3 app.sqlite "DELETE FROM users;"
 find . -delete
 rm app.sqlite
-rm .ainiux/index.sqlite
+rm .ainiux-pr/index.sqlite
 write outside workspace
 write to /tmp/ainiux-test-file
 ```
@@ -5060,7 +5063,7 @@ Tasks:
 
 - Load short built-in prompts (base + one task-specific)
 - Load root and nearest `AGENTS.md` with precedence
-- Generate `.ainiux/session.jsonl` and `.ainiux/memory.md`
+- Generate `.ainiux-pr/session.jsonl` and `.ainiux-pr/memory.md`
 - `/compact`, `/compact auto`, `/compact off`
 - `/plan`, `/resume`, `/memory`
 
@@ -5128,7 +5131,7 @@ destructive SQL blocked/asked
 workspace escape blocked
 parallel read calls succeed
 parallel same-file edits serialize
-index created at .ainiux/index.sqlite not ~/.ainiux/ainiux.db
+index created at .ainiux-pr/index.sqlite not ~/.ainiux/ainiux.db
 incremental reindex after edit
 scanner extracts common C++/Python symbols
 FTS fallback when FTS5 unavailable (if practical to simulate)
@@ -5148,7 +5151,7 @@ The first serious ainiux agent mode should be built around:
 - **UI reused from chat mode** (thread + input + status + provider/model/reasoning)
 - **mode cycle and slash jumps**: chat ↔ editor ↔ agent (`/chat`, `/editor`, `/agent`, `/cycle`)
 - reuse of provider, runtime, fetch, search, security, and TUI layers
-- project-local store under `.ainiux/` with **`index.sqlite`** and **`agent.sqlite`** (never the central TUI chat DB)
+- project-local store under `.ainiux-pr/` with **`index.sqlite`** and **`agent.sqlite`** (never the central TUI chat DB)
 - fast C++17 `std::regex`/pattern scanning for priority languages
 - SQLite3 WAL index with optional FTS5 / trigram
 - incremental per-file updates and settings-driven SQLite pragmas
@@ -5165,7 +5168,7 @@ The first serious ainiux agent mode should be built around:
 - short built-in prompts plus project `AGENTS.md` precedence
 - practical default safety (workspace edits allowed; destructive actions ask/deny)
 
-This is the 80/20 approach: extremely fast on common cases, simple to reason about, dependency-light, portable per project via `.ainiux/index.sqlite`, and able to fall back to slower generic tools when the index is wrong.
+This is the 80/20 approach: extremely fast on common cases, simple to reason about, dependency-light, portable per project via `.ainiux-pr/index.sqlite`, and able to fall back to slower generic tools when the index is wrong.
 
 ---
 
@@ -5173,7 +5176,7 @@ This is the 80/20 approach: extremely fast on common cases, simple to reason abo
 
 | Version | Notes |
 | --- | --- |
-| v2 | Deep index/scanner/ranking plan; project `.ainiux/index.sqlite` |
+| v2 | Deep index/scanner/ranking plan; project `.ainiux-pr/index.sqlite` |
 | v3 | Agent runtime focus; guard; parallel tools; AGENTS.md; used pkchat naming |
 | **v4** | Merge: v3 basis + all accepted v2 features; ainiux branding; explicit central-DB boundary; architecture fit; merged milestones; safety choice A |
 | **v1.0 in PLANS.md** | Title simplified to “Local agent mode”; agent UI reuses chat TUI; mode cycle chat→editor→agent; project-local `agent.sqlite` for sessions |

@@ -30,6 +30,7 @@ struct SessionTurnResult {
     std::size_t session_tool_calls = 0;
     bool needs_user_continue = false;
     std::string notice;
+    std::vector<std::string> compact_tool_lines;  // this turn
 };
 
 struct SessionRuntimeOptions {
@@ -41,6 +42,10 @@ struct SessionRuntimeOptions {
     int security_review_log_keep_runs = 20;
     std::string trusted_prompt_dir;
     std::size_t max_source_code_file_size = 10 * 1024 * 1024;
+    HistoryBackupPolicy history_backup;
+    bool auto_compact = true;
+    int compact_limit = 0;  // 0 = derive from window
+    bool show_command_output = false;
     std::function<void(const std::string& status_line)> on_progress;
 };
 

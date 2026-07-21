@@ -24,12 +24,14 @@
 
 #include <sys/stat.h>
 
+#include "agent/project_paths.hpp"
 #include "html/html.hpp"
 
 namespace ainiux::agent::index {
 namespace {
 
 namespace fs = std::filesystem;
+using ::ainiux::agent::kProjectStateDirName;
 
 struct FileRecord {
     sqlite3_int64 id = 0;
@@ -429,7 +431,8 @@ Error load_ignore_rules(const fs::path& root, IgnoreRules& rules) {
 
 bool excluded_directory(const std::string& name) {
     static const std::set<std::string> excluded = {
-        ".ainiux", ".git", ".hg", ".svn", "build", "node_modules", "vendor", "target",
+        kProjectStateDirName, ".ainiux", ".git", ".hg", ".svn", "build", "node_modules", "vendor",
+        "target",
         "dist", "out", ".cache", ".venv", "venv", "env", "__pycache__"};
     return excluded.find(name) != excluded.end();
 }
@@ -745,7 +748,7 @@ std::string utc_time(std::string seconds) {
 }  // namespace
 
 std::string database_path(const std::string& workspace) {
-    return (fs::path(workspace) / ".ainiux" / "index.sqlite").string();
+    return (fs::path(workspace) / kProjectStateDirName / "index.sqlite").string();
 }
 
 Error clear_database(const Options& options, ClearStats& stats) {
@@ -753,7 +756,7 @@ Error clear_database(const Options& options, ClearStats& stats) {
     Error error = workspace_root(options.workspace, root);
     if (!error.ok()) return error;
 
-    const fs::path state_directory = root / ".ainiux";
+    const fs::path state_directory = root / kProjectStateDirName;
     std::error_code filesystem_error;
     const fs::file_status directory_status = fs::symlink_status(state_directory, filesystem_error);
     if (filesystem_error == std::errc::no_such_file_or_directory) return ok_error();
@@ -808,7 +811,7 @@ Error refresh(const Options& options, RefreshStats& stats) {
     stats.discovered = candidates.size();
     if (cancelled(options)) return {ErrorCode::Cancelled, "code indexing cancelled"};
 
-    const fs::path state_directory = root / ".ainiux";
+    const fs::path state_directory = root / kProjectStateDirName;
     std::error_code filesystem_error;
     const bool created_state_directory = fs::create_directories(state_directory, filesystem_error);
     if (filesystem_error) {
@@ -941,7 +944,7 @@ Error check_freshness(const Options& options, Freshness& freshness) {
     fs::path root;
     Error error = workspace_root(options.workspace, root);
     if (!error.ok()) return error;
-    const fs::path path = root / ".ainiux" / "index.sqlite";
+    const fs::path path = root / kProjectStateDirName / "index.sqlite";
     Database db;
     if (!(error = db.open(path.string(), true)).ok()) {
         return {ErrorCode::FileRead,
@@ -983,7 +986,7 @@ Error print_markdown(const Options& options, const Freshness& freshness, std::os
     fs::path root;
     Error error = workspace_root(options.workspace, root);
     if (!error.ok()) return error;
-    const fs::path path = root / ".ainiux" / "index.sqlite";
+    const fs::path path = root / kProjectStateDirName / "index.sqlite";
     Database db;
     if (!(error = db.open(path.string(), true)).ok() || !(error = validate_read_schema(db)).ok()) return error;
     std::string updated;
@@ -1095,7 +1098,7 @@ Error load_snapshot(const Options& options, Snapshot& snapshot) {
     Error error = workspace_root(options.workspace, root);
     if (!error.ok()) return error;
     Database db;
-    const fs::path path = root / ".ainiux" / "index.sqlite";
+    const fs::path path = root / kProjectStateDirName / "index.sqlite";
     if (!(error = db.open(path.string(), true)).ok() ||
         !(error = validate_read_schema(db)).ok()) return error;
 

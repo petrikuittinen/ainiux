@@ -7,6 +7,8 @@
 #include <filesystem>
 #include <utility>
 
+#include "agent/project_paths.hpp"
+
 namespace ainiux::agent {
 namespace {
 namespace fs = std::filesystem;
@@ -47,8 +49,14 @@ class Statement {
                    ? ok_error()
                    : sqlite_error(db, "could not bind integer", path);
     }
+    Error bind_int(sqlite3* db, const std::string& path, int index, int value) {
+        return sqlite3_bind_int(statement_, index, value) == SQLITE_OK
+                   ? ok_error()
+                   : sqlite_error(db, "could not bind integer", path);
+    }
     int step() { return sqlite3_step(statement_); }
     sqlite3_int64 column_int64(int column) const { return sqlite3_column_int64(statement_, column); }
+    int column_int(int column) const { return sqlite3_column_int(statement_, column); }
     std::string column_text(int column) const {
         const unsigned char* value = sqlite3_column_text(statement_, column);
         return value == nullptr ? std::string{} : reinterpret_cast<const char*>(value);
@@ -62,36 +70,10 @@ class Statement {
     sqlite3_stmt* statement_ = nullptr;
 };
 
-AgentSessionRecord row_to_session(Statement& statement) {
-    AgentSessionRecord record;
-    record.id = statement.column_int64(0);
-    record.created_at = statement.column_int64(1);
-    record.updated_at = statement.column_int64(2);
-    record.finished_at = statement.column_int64(3);
-    record.status = statement.column_text(4);
-    record.goal = statement.column_text(5);
-    record.provider = statement.column_text(6);
-    record.model = statement.column_text(7);
-    record.api = statement.column_text(8);
-    record.protocol = statement.column_text(9);
-    record.workspace = statement.column_text(10);
-    record.final_text = statement.column_text(11);
-    record.error_code = statement.column_text(12);
-    record.error_message = statement.column_text(13);
-    record.turns = statement.column_int64(14);
-    record.tool_calls = statement.column_int64(15);
-    record.run_id = statement.column_text(16);
-    return record;
-}
-
-const char* kSessionSelectColumns =
-    "id, created_at, updated_at, finished_at, status, goal, provider, model, api, protocol, "
-    "workspace, final_text, error_code, error_message, turns, tool_calls, run_id";
-
 }  // namespace
 
 std::string AgentSessionStore::database_path(const std::string& workspace) {
-    return (fs::path(workspace) / ".ainiux" / "agent.sqlite").string();
+    return (fs::path(workspace) / kProjectStateDirName / "agent.sqlite").string();
 }
 
 AgentSessionStore::~AgentSessionStore() { close(); }
@@ -133,7 +115,8 @@ Error AgentSessionStore::open(const std::string& workspace) {
     fs::create_directories(fs::path(path_).parent_path(), ec);
     if (ec)
         return {ErrorCode::FileWrite,
-                "could not create .ainiux for agent session DB: " + ec.message()};
+                std::string("could not create ") + kProjectStateDirName +
+                    " for agent session DB: " + ec.message()};
 
     const int rc =
         sqlite3_open_v2(path_.c_str(), &db_,
@@ -184,81 +167,84 @@ Error AgentSessionStore::open(const std::string& workspace) {
 
 Error AgentSessionStore::ensure_schema() {
     char* message = nullptr;
-    const char* sql =
+    auto exec = [&](const char* sql) -> Error {
+        const int rc = sqlite3_exec(db_, sql, nullptr, nullptr, &message);
+        if (rc == SQLITE_OK) return ok_error();
+        const std::string detail = message == nullptr ? sqlite3_errmsg(db_) : message;
+        sqlite3_free(message);
+        message = nullptr;
+        return {ErrorCode::FileWrite, "agent schema: " + detail};
+    };
+
+    Error error = exec(
         "CREATE TABLE IF NOT EXISTS schema_migrations("
         "  version INTEGER PRIMARY KEY,"
         "  applied_at INTEGER NOT NULL"
-        ");"
-        "CREATE TABLE IF NOT EXISTS sessions("
-        "  id INTEGER PRIMARY KEY AUTOINCREMENT,"
+        ");");
+    if (!error.ok()) return error;
+
+    int applied = 0;
+    {
+        Statement check;
+        error = check.prepare(db_, path_, "SELECT MAX(version) FROM schema_migrations");
+        if (!error.ok()) return error;
+        if (check.step() == SQLITE_ROW) applied = static_cast<int>(check.column_int64(0));
+    }
+
+    if (applied > 0 && applied != kAgentSessionSchemaVersion) {
+        // Hard reset: schema is not migrated across agent reworks.
+        error = exec(
+            "DROP TABLE IF EXISTS tool_events;"
+            "DROP TABLE IF EXISTS messages;"
+            "DROP TABLE IF EXISTS approvals;"
+            "DROP TABLE IF EXISTS sessions;"
+            "DROP TABLE IF EXISTS project;"
+            "DELETE FROM schema_migrations;");
+        if (!error.ok()) return error;
+        applied = 0;
+    }
+
+    if (applied == kAgentSessionSchemaVersion) return ok_error();
+
+    error = exec(
+        "CREATE TABLE IF NOT EXISTS project("
+        "  id INTEGER PRIMARY KEY CHECK (id = 1),"
         "  created_at INTEGER NOT NULL,"
         "  updated_at INTEGER NOT NULL,"
-        "  finished_at INTEGER,"
         "  status TEXT NOT NULL,"
-        "  goal TEXT NOT NULL,"
         "  provider TEXT,"
         "  model TEXT,"
         "  api TEXT,"
         "  protocol TEXT,"
         "  workspace TEXT NOT NULL,"
-        "  final_text TEXT,"
-        "  error_code TEXT,"
-        "  error_message TEXT,"
+        "  summary_text TEXT,"
         "  turns INTEGER NOT NULL DEFAULT 0,"
-        "  tool_calls INTEGER NOT NULL DEFAULT 0,"
-        "  run_id TEXT"
+        "  tool_calls INTEGER NOT NULL DEFAULT 0"
         ");"
         "CREATE TABLE IF NOT EXISTS messages("
         "  id INTEGER PRIMARY KEY AUTOINCREMENT,"
-        "  session_id INTEGER NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,"
-        "  seq INTEGER NOT NULL,"
+        "  seq INTEGER NOT NULL UNIQUE,"
         "  created_at INTEGER NOT NULL,"
         "  role TEXT NOT NULL,"
         "  content TEXT NOT NULL,"
-        "  tool_call_id TEXT,"
-        "  UNIQUE(session_id, seq)"
+        "  tool_name TEXT,"
+        "  tool_ok INTEGER NOT NULL DEFAULT 1,"
+        "  args_preview TEXT"
         ");"
         "CREATE TABLE IF NOT EXISTS tool_events("
         "  id INTEGER PRIMARY KEY AUTOINCREMENT,"
-        "  session_id INTEGER NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,"
-        "  seq INTEGER NOT NULL,"
+        "  seq INTEGER NOT NULL UNIQUE,"
         "  created_at INTEGER NOT NULL,"
         "  turn INTEGER NOT NULL,"
         "  call_id TEXT,"
         "  tool_name TEXT NOT NULL,"
         "  arguments TEXT NOT NULL,"
         "  result TEXT NOT NULL,"
-        "  ok INTEGER NOT NULL DEFAULT 1,"
-        "  UNIQUE(session_id, seq)"
+        "  ok INTEGER NOT NULL DEFAULT 1"
         ");"
-        "CREATE TABLE IF NOT EXISTS approvals("
-        "  id INTEGER PRIMARY KEY AUTOINCREMENT,"
-        "  session_id INTEGER NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,"
-        "  created_at INTEGER NOT NULL,"
-        "  action TEXT NOT NULL,"
-        "  path_or_command TEXT,"
-        "  decision TEXT NOT NULL,"
-        "  rule_id TEXT,"
-        "  detail TEXT"
-        ");"
-        "CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(session_id, seq);"
-        "CREATE INDEX IF NOT EXISTS idx_tool_events_session ON tool_events(session_id, seq);"
-        "CREATE INDEX IF NOT EXISTS idx_sessions_updated ON sessions(updated_at DESC);";
-
-    const int rc = sqlite3_exec(db_, sql, nullptr, nullptr, &message);
-    if (rc != SQLITE_OK) {
-        const std::string detail = message == nullptr ? sqlite3_errmsg(db_) : message;
-        sqlite3_free(message);
-        return {ErrorCode::FileWrite, "could not create agent session schema: " + detail};
-    }
-
-    // Record schema version if missing.
-    Statement check;
-    Error error = check.prepare(db_, path_, "SELECT version FROM schema_migrations WHERE version=?");
+        "CREATE INDEX IF NOT EXISTS idx_agent_messages_seq ON messages(seq);"
+        "CREATE INDEX IF NOT EXISTS idx_agent_tools_seq ON tool_events(seq);");
     if (!error.ok()) return error;
-    error = check.bind_int64(db_, path_, 1, kAgentSessionSchemaVersion);
-    if (!error.ok()) return error;
-    if (check.step() == SQLITE_ROW) return ok_error();
 
     Statement insert;
     error = insert.prepare(db_, path_,
@@ -272,286 +258,396 @@ Error AgentSessionStore::ensure_schema() {
     return ok_error();
 }
 
-Error AgentSessionStore::next_seq(long long session_id, long long& seq) {
-    // Max of message and tool_event seq so ordering is global within a session.
+Error AgentSessionStore::next_seq(long long& seq) {
     Statement statement;
     Error error = statement.prepare(
         db_, path_,
-        "SELECT COALESCE(MAX(s), 0) FROM ("
-        "  SELECT MAX(seq) AS s FROM messages WHERE session_id=?"
-        "  UNION ALL"
-        "  SELECT MAX(seq) AS s FROM tool_events WHERE session_id=?"
+        "SELECT COALESCE(MAX(seq), 0) FROM ("
+        "  SELECT seq FROM messages UNION ALL SELECT seq FROM tool_events"
         ")");
-    if (!error.ok()) return error;
-    error = statement.bind_int64(db_, path_, 1, session_id);
-    if (!error.ok()) return error;
-    error = statement.bind_int64(db_, path_, 2, session_id);
     if (!error.ok()) return error;
     if (statement.step() != SQLITE_ROW) return sqlite_error(db_, "could not allocate seq", path_);
     seq = statement.column_int64(0) + 1;
     return ok_error();
 }
 
-Error AgentSessionStore::touch_session(long long session_id) {
+Error AgentSessionStore::touch() {
     Statement statement;
     Error error =
-        statement.prepare(db_, path_, "UPDATE sessions SET updated_at=? WHERE id=?");
+        statement.prepare(db_, path_, "UPDATE project SET updated_at=? WHERE id=1");
     if (!error.ok()) return error;
     error = statement.bind_int64(db_, path_, 1, now_unix_seconds());
     if (!error.ok()) return error;
-    error = statement.bind_int64(db_, path_, 2, session_id);
-    if (!error.ok()) return error;
-    if (statement.step() != SQLITE_DONE) return sqlite_error(db_, "could not touch session", path_);
+    if (statement.step() != SQLITE_DONE) return sqlite_error(db_, "could not touch project", path_);
     return ok_error();
 }
 
-Error AgentSessionStore::create_session(AgentSessionRecord& record) {
-    if (db_ == nullptr) return {ErrorCode::Internal, "agent session DB is not open"};
-    if (record.goal.empty()) return {ErrorCode::BadArgs, "session goal must not be empty"};
-    if (record.workspace.empty()) record.workspace = workspace_;
-    if (record.status.empty()) record.status = "running";
+Error AgentSessionStore::open_project(AgentProjectRecord& record) {
+    if (!is_open()) return {ErrorCode::Internal, "agent session DB is not open"};
+    Statement select;
+    Error error = select.prepare(
+        db_, path_,
+        "SELECT id, created_at, updated_at, status, provider, model, api, protocol, workspace, "
+        "summary_text, turns, tool_calls FROM project WHERE id=1");
+    if (!error.ok()) return error;
+    if (select.step() == SQLITE_ROW) {
+        record.id = select.column_int64(0);
+        record.created_at = select.column_int64(1);
+        record.updated_at = select.column_int64(2);
+        record.status = select.column_text(3);
+        record.provider = select.column_text(4);
+        record.model = select.column_text(5);
+        record.api = select.column_text(6);
+        record.protocol = select.column_text(7);
+        record.workspace = select.column_text(8);
+        record.summary_text = select.column_text(9);
+        record.turns = select.column_int64(10);
+        record.tool_calls = select.column_int64(11);
+        return ok_error();
+    }
 
     const long long now = now_unix_seconds();
+    Statement insert;
+    error = insert.prepare(
+        db_, path_,
+        "INSERT INTO project(id, created_at, updated_at, status, provider, model, api, protocol, "
+        "workspace, summary_text, turns, tool_calls) VALUES(1,?,?,?,?,?,?,?,?,?,?,?)");
+    if (!error.ok()) return error;
+    error = insert.bind_int64(db_, path_, 1, now);
+    if (!error.ok()) return error;
+    error = insert.bind_int64(db_, path_, 2, now);
+    if (!error.ok()) return error;
+    error = insert.bind_text(db_, path_, 3, record.status.empty() ? "idle" : record.status);
+    if (!error.ok()) return error;
+    error = insert.bind_text(db_, path_, 4, record.provider);
+    if (!error.ok()) return error;
+    error = insert.bind_text(db_, path_, 5, record.model);
+    if (!error.ok()) return error;
+    error = insert.bind_text(db_, path_, 6, record.api);
+    if (!error.ok()) return error;
+    error = insert.bind_text(db_, path_, 7, record.protocol);
+    if (!error.ok()) return error;
+    error = insert.bind_text(db_, path_, 8,
+                             record.workspace.empty() ? workspace_ : record.workspace);
+    if (!error.ok()) return error;
+    error = insert.bind_text(db_, path_, 9, record.summary_text);
+    if (!error.ok()) return error;
+    error = insert.bind_int64(db_, path_, 10, record.turns);
+    if (!error.ok()) return error;
+    error = insert.bind_int64(db_, path_, 11, record.tool_calls);
+    if (!error.ok()) return error;
+    if (insert.step() != SQLITE_DONE) return sqlite_error(db_, "could not create project row", path_);
+
+    record.id = 1;
     record.created_at = now;
     record.updated_at = now;
-    record.finished_at = 0;
+    if (record.status.empty()) record.status = "idle";
+    if (record.workspace.empty()) record.workspace = workspace_;
+    return ok_error();
+}
 
+Error AgentSessionStore::update_project_meta(const AgentProjectRecord& record) {
     Statement statement;
     Error error = statement.prepare(
         db_, path_,
-        "INSERT INTO sessions(created_at, updated_at, finished_at, status, goal, provider, model, "
-        "api, protocol, workspace, final_text, error_code, error_message, turns, tool_calls, run_id) "
-        "VALUES(?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, 0, 0, ?)");
+        "UPDATE project SET updated_at=?, status=?, provider=?, model=?, api=?, protocol=?, "
+        "workspace=?, summary_text=?, turns=?, tool_calls=? WHERE id=1");
     if (!error.ok()) return error;
-    int bind = 1;
-    error = statement.bind_int64(db_, path_, bind++, now);
+    error = statement.bind_int64(db_, path_, 1, now_unix_seconds());
     if (!error.ok()) return error;
-    error = statement.bind_int64(db_, path_, bind++, now);
+    error = statement.bind_text(db_, path_, 2, record.status);
     if (!error.ok()) return error;
-    error = statement.bind_text(db_, path_, bind++, record.status);
+    error = statement.bind_text(db_, path_, 3, record.provider);
     if (!error.ok()) return error;
-    error = statement.bind_text(db_, path_, bind++, record.goal);
+    error = statement.bind_text(db_, path_, 4, record.model);
     if (!error.ok()) return error;
-    error = statement.bind_text(db_, path_, bind++, record.provider);
+    error = statement.bind_text(db_, path_, 5, record.api);
     if (!error.ok()) return error;
-    error = statement.bind_text(db_, path_, bind++, record.model);
+    error = statement.bind_text(db_, path_, 6, record.protocol);
     if (!error.ok()) return error;
-    error = statement.bind_text(db_, path_, bind++, record.api);
+    error = statement.bind_text(db_, path_, 7, record.workspace);
     if (!error.ok()) return error;
-    error = statement.bind_text(db_, path_, bind++, record.protocol);
+    error = statement.bind_text(db_, path_, 8, record.summary_text);
     if (!error.ok()) return error;
-    error = statement.bind_text(db_, path_, bind++, record.workspace);
+    error = statement.bind_int64(db_, path_, 9, record.turns);
     if (!error.ok()) return error;
-    error = statement.bind_text(db_, path_, bind++, record.run_id);
+    error = statement.bind_int64(db_, path_, 10, record.tool_calls);
     if (!error.ok()) return error;
-    if (statement.step() != SQLITE_DONE) return sqlite_error(db_, "could not create session", path_);
-    record.id = static_cast<long long>(sqlite3_last_insert_rowid(db_));
+    if (statement.step() != SQLITE_DONE)
+        return sqlite_error(db_, "could not update project meta", path_);
     return ok_error();
 }
 
-Error AgentSessionStore::append_message(long long session_id,
-                                        const std::string& role,
+Error AgentSessionStore::append_message(const std::string& role,
                                         const std::string& content,
-                                        const std::string& tool_call_id) {
-    if (db_ == nullptr) return {ErrorCode::Internal, "agent session DB is not open"};
-    if (session_id <= 0) return {ErrorCode::BadArgs, "session_id must be positive"};
-    if (role.empty()) return {ErrorCode::BadArgs, "message role must not be empty"};
-
+                                        const std::string& tool_name,
+                                        bool tool_ok,
+                                        const std::string& args_preview) {
     long long seq = 0;
-    Error error = next_seq(session_id, seq);
+    Error error = next_seq(seq);
     if (!error.ok()) return error;
-
     Statement statement;
     error = statement.prepare(
         db_, path_,
-        "INSERT INTO messages(session_id, seq, created_at, role, content, tool_call_id) "
-        "VALUES(?, ?, ?, ?, ?, ?)");
+        "INSERT INTO messages(seq, created_at, role, content, tool_name, tool_ok, args_preview) "
+        "VALUES(?,?,?,?,?,?,?)");
     if (!error.ok()) return error;
-    error = statement.bind_int64(db_, path_, 1, session_id);
+    error = statement.bind_int64(db_, path_, 1, seq);
     if (!error.ok()) return error;
-    error = statement.bind_int64(db_, path_, 2, seq);
+    error = statement.bind_int64(db_, path_, 2, now_unix_seconds());
     if (!error.ok()) return error;
-    error = statement.bind_int64(db_, path_, 3, now_unix_seconds());
+    error = statement.bind_text(db_, path_, 3, role);
     if (!error.ok()) return error;
-    error = statement.bind_text(db_, path_, 4, role);
+    error = statement.bind_text(db_, path_, 4, content);
     if (!error.ok()) return error;
-    error = statement.bind_text(db_, path_, 5, content);
+    error = statement.bind_text(db_, path_, 5, tool_name);
     if (!error.ok()) return error;
-    error = statement.bind_text(db_, path_, 6, tool_call_id);
+    error = statement.bind_int(db_, path_, 6, tool_ok ? 1 : 0);
+    if (!error.ok()) return error;
+    error = statement.bind_text(db_, path_, 7, args_preview);
     if (!error.ok()) return error;
     if (statement.step() != SQLITE_DONE) return sqlite_error(db_, "could not append message", path_);
-    return touch_session(session_id);
+    return touch();
 }
 
-Error AgentSessionStore::append_tool_event(long long session_id,
+Error AgentSessionStore::append_message(long long /*session_id*/,
+                                        const std::string& role,
+                                        const std::string& content,
+                                        const std::string& /*tool_call_id*/) {
+    return append_message(role, content, {}, true, {});
+}
+
+Error AgentSessionStore::append_tool_event(long long /*session_id*/,
                                            long long turn,
                                            const std::string& call_id,
                                            const std::string& tool_name,
                                            const std::string& arguments,
                                            const std::string& result,
                                            bool ok) {
-    if (db_ == nullptr) return {ErrorCode::Internal, "agent session DB is not open"};
-    if (session_id <= 0) return {ErrorCode::BadArgs, "session_id must be positive"};
-    if (tool_name.empty()) return {ErrorCode::BadArgs, "tool_name must not be empty"};
-
     long long seq = 0;
-    Error error = next_seq(session_id, seq);
+    Error error = next_seq(seq);
     if (!error.ok()) return error;
-
     Statement statement;
     error = statement.prepare(
         db_, path_,
-        "INSERT INTO tool_events(session_id, seq, created_at, turn, call_id, tool_name, "
-        "arguments, result, ok) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)");
+        "INSERT INTO tool_events(seq, created_at, turn, call_id, tool_name, arguments, result, ok) "
+        "VALUES(?,?,?,?,?,?,?,?)");
     if (!error.ok()) return error;
-    error = statement.bind_int64(db_, path_, 1, session_id);
+    error = statement.bind_int64(db_, path_, 1, seq);
     if (!error.ok()) return error;
-    error = statement.bind_int64(db_, path_, 2, seq);
+    error = statement.bind_int64(db_, path_, 2, now_unix_seconds());
     if (!error.ok()) return error;
-    error = statement.bind_int64(db_, path_, 3, now_unix_seconds());
+    error = statement.bind_int64(db_, path_, 3, turn);
     if (!error.ok()) return error;
-    error = statement.bind_int64(db_, path_, 4, turn);
+    error = statement.bind_text(db_, path_, 4, call_id);
     if (!error.ok()) return error;
-    error = statement.bind_text(db_, path_, 5, call_id);
+    error = statement.bind_text(db_, path_, 5, tool_name);
     if (!error.ok()) return error;
-    error = statement.bind_text(db_, path_, 6, tool_name);
+    error = statement.bind_text(db_, path_, 6, arguments);
     if (!error.ok()) return error;
-    error = statement.bind_text(db_, path_, 7, arguments);
+    error = statement.bind_text(db_, path_, 7, result);
     if (!error.ok()) return error;
-    error = statement.bind_text(db_, path_, 8, result);
-    if (!error.ok()) return error;
-    error = statement.bind_int64(db_, path_, 9, ok ? 1 : 0);
+    error = statement.bind_int(db_, path_, 8, ok ? 1 : 0);
     if (!error.ok()) return error;
     if (statement.step() != SQLITE_DONE)
         return sqlite_error(db_, "could not append tool event", path_);
-    return touch_session(session_id);
+    return touch();
 }
 
-Error AgentSessionStore::finish_session(long long session_id,
+Error AgentSessionStore::load_messages(std::vector<AgentMessageRecord>& messages, int limit) const {
+    messages.clear();
+    std::string sql =
+        "SELECT id, seq, created_at, role, content, tool_name, tool_ok, args_preview "
+        "FROM messages ORDER BY seq ASC";
+    if (limit > 0) sql += " LIMIT " + std::to_string(limit);
+    Statement statement;
+    Error error = statement.prepare(db_, path_, sql.c_str());
+    if (!error.ok()) return error;
+    while (statement.step() == SQLITE_ROW) {
+        AgentMessageRecord row;
+        row.id = statement.column_int64(0);
+        row.seq = statement.column_int64(1);
+        row.created_at = statement.column_int64(2);
+        row.role = statement.column_text(3);
+        row.content = statement.column_text(4);
+        row.tool_name = statement.column_text(5);
+        row.tool_ok = statement.column_int(6) != 0;
+        row.args_preview = statement.column_text(7);
+        messages.push_back(std::move(row));
+    }
+    return ok_error();
+}
+
+Error AgentSessionStore::compact_with_summary(const std::string& summary_text, int keep_recent) {
+    if (keep_recent < 0) keep_recent = 0;
+    std::vector<AgentMessageRecord> all;
+    Error error = load_messages(all, 0);
+    if (!error.ok()) return error;
+    if (static_cast<int>(all.size()) <= keep_recent) {
+        // Nothing to drop; only store summary metadata.
+        AgentProjectRecord project;
+        error = open_project(project);
+        if (!error.ok()) return error;
+        project.summary_text = summary_text;
+        return update_project_meta(project);
+    }
+
+    char* message = nullptr;
+    if (sqlite3_exec(db_, "BEGIN IMMEDIATE", nullptr, nullptr, &message) != SQLITE_OK) {
+        const std::string detail = message == nullptr ? sqlite3_errmsg(db_) : message;
+        sqlite3_free(message);
+        return {ErrorCode::FileWrite, "could not begin compact: " + detail};
+    }
+
+    auto rollback = [&]() {
+        sqlite3_exec(db_, "ROLLBACK", nullptr, nullptr, nullptr);
+    };
+
+    const std::size_t keep_from =
+        all.size() > static_cast<std::size_t>(keep_recent)
+            ? all.size() - static_cast<std::size_t>(keep_recent)
+            : 0;
+    if (sqlite3_exec(db_, "DELETE FROM messages", nullptr, nullptr, &message) != SQLITE_OK) {
+        const std::string detail = message == nullptr ? sqlite3_errmsg(db_) : message;
+        sqlite3_free(message);
+        rollback();
+        return {ErrorCode::FileWrite, "could not clear messages for compact: " + detail};
+    }
+
+    error = append_message("summary", summary_text);
+    if (!error.ok()) {
+        rollback();
+        return error;
+    }
+    for (std::size_t i = keep_from; i < all.size(); ++i) {
+        error = append_message(all[i].role, all[i].content, all[i].tool_name, all[i].tool_ok,
+                               all[i].args_preview);
+        if (!error.ok()) {
+            rollback();
+            return error;
+        }
+    }
+
+    AgentProjectRecord project;
+    error = open_project(project);
+    if (!error.ok()) {
+        rollback();
+        return error;
+    }
+    project.summary_text = summary_text;
+    error = update_project_meta(project);
+    if (!error.ok()) {
+        rollback();
+        return error;
+    }
+
+    if (sqlite3_exec(db_, "COMMIT", nullptr, nullptr, &message) != SQLITE_OK) {
+        const std::string detail = message == nullptr ? sqlite3_errmsg(db_) : message;
+        sqlite3_free(message);
+        rollback();
+        return {ErrorCode::FileWrite, "could not commit compact: " + detail};
+    }
+    return ok_error();
+}
+
+Error AgentSessionStore::set_status(const std::string& status) {
+    AgentProjectRecord project;
+    Error error = open_project(project);
+    if (!error.ok()) return error;
+    project.status = status;
+    return update_project_meta(project);
+}
+
+Error AgentSessionStore::bump_counters(long long turns_delta, long long tool_calls_delta) {
+    AgentProjectRecord project;
+    Error error = open_project(project);
+    if (!error.ok()) return error;
+    project.turns += turns_delta;
+    project.tool_calls += tool_calls_delta;
+    return update_project_meta(project);
+}
+
+Error AgentSessionStore::finish_session(long long /*session_id*/,
                                         const std::string& status,
                                         const std::string& final_text,
-                                        const std::string& error_code,
+                                        const std::string& /*error_code*/,
                                         const std::string& error_message,
                                         long long turns,
                                         long long tool_calls) {
-    if (db_ == nullptr) return {ErrorCode::Internal, "agent session DB is not open"};
-    if (session_id <= 0) return {ErrorCode::BadArgs, "session_id must be positive"};
-    if (status.empty()) return {ErrorCode::BadArgs, "session status must not be empty"};
-
-    const long long now = now_unix_seconds();
-    Statement statement;
-    Error error = statement.prepare(
-        db_, path_,
-        "UPDATE sessions SET updated_at=?, finished_at=?, status=?, final_text=?, "
-        "error_code=?, error_message=?, turns=?, tool_calls=? WHERE id=?");
+    AgentProjectRecord project;
+    Error error = open_project(project);
     if (!error.ok()) return error;
-    error = statement.bind_int64(db_, path_, 1, now);
-    if (!error.ok()) return error;
-    error = statement.bind_int64(db_, path_, 2, now);
-    if (!error.ok()) return error;
-    error = statement.bind_text(db_, path_, 3, status);
-    if (!error.ok()) return error;
-    error = statement.bind_text(db_, path_, 4, final_text);
-    if (!error.ok()) return error;
-    error = statement.bind_text(db_, path_, 5, error_code);
-    if (!error.ok()) return error;
-    error = statement.bind_text(db_, path_, 6, error_message);
-    if (!error.ok()) return error;
-    error = statement.bind_int64(db_, path_, 7, turns);
-    if (!error.ok()) return error;
-    error = statement.bind_int64(db_, path_, 8, tool_calls);
-    if (!error.ok()) return error;
-    error = statement.bind_int64(db_, path_, 9, session_id);
-    if (!error.ok()) return error;
-    if (statement.step() != SQLITE_DONE) return sqlite_error(db_, "could not finish session", path_);
-    if (sqlite3_changes(db_) == 0)
-        return {ErrorCode::FileRead, "agent session not found: " + std::to_string(session_id)};
-    return ok_error();
+    project.status = status == "success" ? "idle" : status;
+    project.turns = turns;
+    project.tool_calls = tool_calls;
+    if (!final_text.empty()) {
+        // Keep last final text available as a lightweight summary hint.
+        if (project.summary_text.empty()) project.summary_text = final_text;
+    }
+    if (!error_message.empty() && status != "success") {
+        (void)append_message("notice", error_message);
+    }
+    return update_project_meta(project);
 }
 
-Error AgentSessionStore::list_sessions(std::vector<AgentSessionRecord>& sessions,
-                                       int limit) const {
+Error AgentSessionStore::list_sessions(std::vector<AgentSessionRecord>& sessions, int /*limit*/) const {
     sessions.clear();
-    if (db_ == nullptr) return {ErrorCode::Internal, "agent session DB is not open"};
-    if (limit <= 0) limit = 50;
-    if (limit > 500) limit = 500;
-
-    Statement statement;
-    Error error = statement.prepare(
+    AgentProjectRecord project;
+    // load without mutating
+    Statement select;
+    Error error = select.prepare(
         db_, path_,
-        (std::string("SELECT ") + kSessionSelectColumns +
-         " FROM sessions ORDER BY updated_at DESC, id DESC LIMIT ?")
-            .c_str());
+        "SELECT id, created_at, updated_at, status, provider, model, api, protocol, workspace, "
+        "summary_text, turns, tool_calls FROM project WHERE id=1");
     if (!error.ok()) return error;
-    error = statement.bind_int64(db_, path_, 1, limit);
-    if (!error.ok()) return error;
-    while (statement.step() == SQLITE_ROW) sessions.push_back(row_to_session(statement));
+    if (select.step() != SQLITE_ROW) return ok_error();
+    project.id = select.column_int64(0);
+    project.created_at = select.column_int64(1);
+    project.updated_at = select.column_int64(2);
+    project.status = select.column_text(3);
+    project.provider = select.column_text(4);
+    project.model = select.column_text(5);
+    project.api = select.column_text(6);
+    project.protocol = select.column_text(7);
+    project.workspace = select.column_text(8);
+    project.summary_text = select.column_text(9);
+    project.turns = select.column_int64(10);
+    project.tool_calls = select.column_int64(11);
+    sessions.push_back(std::move(project));
     return ok_error();
 }
 
-Error AgentSessionStore::load_session(long long session_id,
+Error AgentSessionStore::load_session(long long /*session_id*/,
                                       AgentSessionRecord& session,
                                       std::vector<AgentMessageRecord>& messages,
                                       std::vector<AgentToolEventRecord>& tool_events) const {
-    session = AgentSessionRecord{};
-    messages.clear();
     tool_events.clear();
-    if (db_ == nullptr) return {ErrorCode::Internal, "agent session DB is not open"};
-    if (session_id <= 0) return {ErrorCode::BadArgs, "session_id must be positive"};
+    std::vector<AgentSessionRecord> listed;
+    Error error = list_sessions(listed, 1);
+    if (!error.ok()) return error;
+    if (listed.empty()) return {ErrorCode::FileRead, "no agent project session"};
+    session = listed.front();
+    error = load_messages(messages, 0);
+    if (!error.ok()) return error;
 
-    Statement session_stmt;
-    Error error = session_stmt.prepare(
+    Statement tools;
+    error = tools.prepare(
         db_, path_,
-        (std::string("SELECT ") + kSessionSelectColumns + " FROM sessions WHERE id=?")
-            .c_str());
+        "SELECT id, seq, created_at, turn, call_id, tool_name, arguments, result, ok "
+        "FROM tool_events ORDER BY seq ASC");
     if (!error.ok()) return error;
-    error = session_stmt.bind_int64(db_, path_, 1, session_id);
-    if (!error.ok()) return error;
-    if (session_stmt.step() != SQLITE_ROW)
-        return {ErrorCode::FileRead, "agent session not found: " + std::to_string(session_id)};
-    session = row_to_session(session_stmt);
-
-    Statement msg_stmt;
-    error = msg_stmt.prepare(
-        db_, path_,
-        "SELECT id, session_id, seq, created_at, role, content, tool_call_id "
-        "FROM messages WHERE session_id=? ORDER BY seq ASC");
-    if (!error.ok()) return error;
-    error = msg_stmt.bind_int64(db_, path_, 1, session_id);
-    if (!error.ok()) return error;
-    while (msg_stmt.step() == SQLITE_ROW) {
-        AgentMessageRecord message;
-        message.id = msg_stmt.column_int64(0);
-        message.session_id = msg_stmt.column_int64(1);
-        message.seq = msg_stmt.column_int64(2);
-        message.created_at = msg_stmt.column_int64(3);
-        message.role = msg_stmt.column_text(4);
-        message.content = msg_stmt.column_text(5);
-        message.tool_call_id = msg_stmt.column_text(6);
-        messages.push_back(std::move(message));
-    }
-
-    Statement tool_stmt;
-    error = tool_stmt.prepare(
-        db_, path_,
-        "SELECT id, session_id, seq, created_at, turn, call_id, tool_name, arguments, result, ok "
-        "FROM tool_events WHERE session_id=? ORDER BY seq ASC");
-    if (!error.ok()) return error;
-    error = tool_stmt.bind_int64(db_, path_, 1, session_id);
-    if (!error.ok()) return error;
-    while (tool_stmt.step() == SQLITE_ROW) {
-        AgentToolEventRecord event;
-        event.id = tool_stmt.column_int64(0);
-        event.session_id = tool_stmt.column_int64(1);
-        event.seq = tool_stmt.column_int64(2);
-        event.created_at = tool_stmt.column_int64(3);
-        event.turn = tool_stmt.column_int64(4);
-        event.call_id = tool_stmt.column_text(5);
-        event.tool_name = tool_stmt.column_text(6);
-        event.arguments = tool_stmt.column_text(7);
-        event.result = tool_stmt.column_text(8);
-        event.ok = tool_stmt.column_int64(9) != 0;
-        tool_events.push_back(std::move(event));
+    while (tools.step() == SQLITE_ROW) {
+        AgentToolEventRecord row;
+        row.id = tools.column_int64(0);
+        row.seq = tools.column_int64(1);
+        row.created_at = tools.column_int64(2);
+        row.turn = tools.column_int64(3);
+        row.call_id = tools.column_text(4);
+        row.tool_name = tools.column_text(5);
+        row.arguments = tools.column_text(6);
+        row.result = tools.column_text(7);
+        row.ok = tools.column_int(8) != 0;
+        tool_events.push_back(std::move(row));
     }
     return ok_error();
 }

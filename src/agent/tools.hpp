@@ -29,8 +29,15 @@ struct SourceRange {
 // Snapshot-backed workspace tools. Security-review keeps allow_mutations=false
 // (read/search/inspect only). Agent mode sets allow_mutations=true to expose
 // write_file, edit_file, str_replace (with fuzzy fallback), remove, and apply_patch.
+struct HistoryBackupPolicy {
+    bool enabled = true;
+    std::size_t max_bytes = 1024U * 1024U;  // 1 MiB
+    int ttl_days = 7;
+};
+
 struct ToolRegistryOptions {
     bool allow_mutations = false;
+    HistoryBackupPolicy history_backup;
 };
 
 class ReadToolRegistry {
@@ -119,6 +126,7 @@ class ReadToolRegistry {
     Error save_history_copy(const std::string& relative_path,
                             const std::string& previous_content,
                             std::string& history_path) const;
+    Error purge_expired_history_backups() const;
 
     index::Options index_options_;
     // Mutable so const execute() can refresh hashes after agent writes without
@@ -127,7 +135,7 @@ class ReadToolRegistry {
     std::vector<std::string> secrets_;
     mutable std::map<std::string, const index::IndexedFile*> files_;
     bool allow_mutations_ = false;
-    mutable std::size_t history_sequence_ = 0;
+    HistoryBackupPolicy history_backup_{};
 };
 
 std::string tool_error_result(const std::string& code, const std::string& message);

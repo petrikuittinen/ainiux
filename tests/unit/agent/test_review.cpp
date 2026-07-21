@@ -144,7 +144,7 @@ void test_read_tools_and_policy() {
           "run_command rejects explicit paths outside the eligible index snapshot");
     result = tools.execute("run_command", R"({"command":"find . -maxdepth 2 -print"})");
     check(result_ok(result) && result.find("ignored.cpp") == std::string::npos &&
-              result.find(".ainiux") == std::string::npos,
+              result.find(".ainiux-pr") == std::string::npos,
           "run_command filters find output to eligible indexed paths");
 
     write_file(root / "src/main.cpp", "int changed() { return 2; }\n");
@@ -552,10 +552,10 @@ void test_review_logger() {
               data != nullptr && data->string == "Yf8=",
           "invalid UTF-8 diagnostic payloads use explicit round-trippable base64");
 
-    write_file(root / ".ainiux/logs/security-review/unrelated.jsonl", "keep\n");
+    write_file(root / ".ainiux-pr/logs/security-review/unrelated.jsonl", "keep\n");
     const fs::path symlink_target = root / "retention-target";
     write_file(symlink_target, "keep target\n");
-    const fs::path retention_symlink = root / ".ainiux/logs/security-review/security-review-20000101T000000.000Z-1-1.jsonl";
+    const fs::path retention_symlink = root / ".ainiux-pr/logs/security-review/security-review-20000101T000000.000Z-1-1.jsonl";
     std::error_code retention_symlink_error;
     fs::create_symlink(symlink_target, retention_symlink, retention_symlink_error);
     check(!retention_symlink_error, "retention symlink fixture is created");
@@ -578,11 +578,11 @@ void test_review_logger() {
         }
     }
     std::size_t completed = 0;
-    for (const fs::directory_entry& entry : fs::directory_iterator(root / ".ainiux/logs/security-review"))
+    for (const fs::directory_entry& entry : fs::directory_iterator(root / ".ainiux-pr/logs/security-review"))
         if (entry.symlink_status().type() == fs::file_type::regular &&
             entry.path().filename().string().rfind("security-review-", 0) == 0 &&
             entry.path().extension() == ".jsonl") ++completed;
-    check(completed == 3 && fs::exists(root / ".ainiux/logs/security-review/unrelated.jsonl") &&
+    check(completed == 3 && fs::exists(root / ".ainiux-pr/logs/security-review/unrelated.jsonl") &&
               fs::exists(crash_partial) && fs::is_symlink(fs::symlink_status(retention_symlink)) &&
               fs::exists(symlink_target),
           "retention preserves exactly three logs plus crash and unrelated files");
@@ -593,8 +593,8 @@ void test_review_logger() {
         check(error.ok() && agent_logger != nullptr && agent_logger->run_kind() == "agent",
               "agent diagnostic logger uses the agent run kind");
         if (agent_logger) {
-            check(agent_logger->partial_path().find("/.ainiux/logs/agent/") != std::string::npos,
-                  "agent diagnostic logs live under .ainiux/logs/agent/");
+            check(agent_logger->partial_path().find("/.ainiux-pr/logs/agent/") != std::string::npos,
+                  "agent diagnostic logs live under .ainiux-pr/logs/agent/");
             ainiux::json::Value fields;
             fields.type = ainiux::json::Value::Type::Object;
             agent_logger->finish(std::move(fields), "success");
@@ -606,7 +606,7 @@ void test_review_logger() {
     const fs::path symlink_root = temporary_workspace();
     const fs::path target = temporary_workspace();
     std::error_code symlink_error;
-    fs::create_directory_symlink(target, symlink_root / ".ainiux", symlink_error);
+    fs::create_directory_symlink(target, symlink_root / ".ainiux-pr", symlink_error);
     std::unique_ptr<ainiux::agent::ReviewLogger> refused =
         ainiux::agent::ReviewLogger::create(symlink_root.string(), 3, {}, {}, error);
     check(!refused && !error.ok(), "security-review logger refuses a symlinked log path");

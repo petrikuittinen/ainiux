@@ -56,6 +56,9 @@ void test_prepare_opens_session_db_and_tools() {
     options.enable_session_db = true;
     options.enable_agent_log = false;
     options.max_source_code_file_size = 1024 * 1024;
+    options.history_backup.enabled = true;
+    options.history_backup.max_bytes = 1024 * 1024;
+    options.history_backup.ttl_days = 7;
 
     provider::RequestContext context = offline_context(workspace);
     // prepare does not need a live model; tool registry + index only.
@@ -63,7 +66,7 @@ void test_prepare_opens_session_db_and_tools() {
     check(error.ok(), "prepare agent runtime: " + error.message);
     check(runtime.prepared(), "runtime reports prepared");
     check(runtime.session_db_path().find("agent.sqlite") != std::string::npos,
-          "session db path under .ainiux");
+          "session db path under .ainiux-pr");
     check(fs::exists(runtime.session_db_path()), "agent.sqlite created on prepare");
     check(runtime.session_id() == 0, "session id deferred until first user turn");
 

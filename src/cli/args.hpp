@@ -152,6 +152,14 @@ struct Options {
     int max_parallel_agents = 2;
     size_t security_review_batch_size = 200U * 1024U;
     int security_review_log_keep_runs = 3;
+    // Agent project policy (interactive + --run).
+    bool agent_history_backup_enabled = true;
+    size_t agent_history_backup_max_bytes = 1024U * 1024U;  // 1M
+    int agent_history_backup_ttl_days = 7;
+    bool agent_auto_compact = true;
+    // 0 = derive from context window (75% if >64k tokens, else 100%).
+    int agent_compact_limit = 0;
+    bool agent_show_command_output = false;
     long max_image_bytes = 20971520;
     long media_max_size_to_store_to_db = 65536;
     int media_expiration_days = 7;

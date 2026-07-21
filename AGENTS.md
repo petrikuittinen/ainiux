@@ -23,7 +23,7 @@ The program must stay excellent as a scriptable CLI. Keep the core engine indepe
 
 ## Current product snapshot
 
-Status: **v1.02** (see `README.md` and `PLANS.md` implementation notes). One-shot (`--run`) and interactive (`--agent`) local agent with workspace writes, multi-turn session runtime, and chat↔editor↔agent mode cycling are landed; interactive Guard approvals remain later. Active development also continues remaining **v0.9** polish and **v0.90** local OpenAI-compatible server mode. Browser web UI is postponed.
+Status: **v1.03** (see `README.md` and `PLANS.md` implementation notes). One-shot (`--run` / `-r`) and interactive (`--agent` / `-a`) local agent with workspace writes, multi-turn project session (`.ainiux-pr/`), compact tool lines, window-% auto-compact, and chat↔editor↔agent mode cycling are landed; interactive Guard approvals remain later. User profile stays `~/.ainiux/` (chat DB/media). Active development also continues remaining **v0.9** polish and **v0.90** local OpenAI-compatible server mode. Browser web UI is postponed.
 
 ### Implemented modes
 
@@ -37,10 +37,10 @@ Status: **v1.02** (see `README.md` and `PLANS.md` implementation notes). One-sho
 | Standalone editor | `--editor [path]` | multi-buffer piece-table editor; optional AI assist |
 | Benchmark | `benchmark` / `--benchmark` | concurrent JSONL dataset runner |
 | Grade | `--grade` | second-pass judge scoring of benchmark results (not combined with `--benchmark`) |
-| Interactive agent | `agent` / `--agent` / `-a` | **Separate mode from `--chat`**. Shares full-screen TUI shell and provider/model/reasoning pickers; each user turn runs the agent tool loop (workspace writes enabled) |
-| One-shot agent | `run` / `--run` / `-r` / `--run-file` | headless index refresh + tool loop; root AGENTS.md injection; read tools + mutations; stdout = final answer |
+| Interactive agent | `agent` / `--agent` / `-a` | **Separate mode from `--chat`**. Project-local `.ainiux-pr/`; one transcript thread; compact tool lines; shared TUI shell + provider/model/reasoning pickers |
+| One-shot agent | `run` / `--run` / `-r` / `--run-file` | headless same project tools; compact tool lines on stderr; stdout = final answer |
 | Security review | `--security-review` | headless read-only whole-project review |
-| Code index | `--index-code` / `--print-index` / `--clear-index` | project-local `.ainiux/index.sqlite` |
+| Code index | `--index-code` / `--print-index` / `--clear-index` | project-local `.ainiux-pr/index.sqlite` |
 
 ### Implemented capabilities agents must respect
 
@@ -385,7 +385,7 @@ The TUI is a shipped foundation, not a future milestone. Continue improving it w
 
 - Enter only via `--agent` / `-a` / `ainiux agent` (`InteractiveMode::Agent`, `options.agent`), or explicit `/agent` / `/cycle` from chat/editor.
 - Share presentation and selector widgets with chat; keep generation on `AgentSessionRuntime` / `run_user_turn`, not plain `send_chat_messages`.
-- Multi-turn agent state lives in project `.ainiux/agent.sqlite` (and in-memory tools/conversation); never in `~/.ainiux/ainiux.db`.
+- Multi-turn agent state lives in project `.ainiux-pr/` (`agent.sqlite`, index, history, logs); never in user `~/.ainiux/` (chat DB/media only).
 - Mode cycle chat ↔ editor ↔ agent is an **explicit** handoff (`/chat`, `/agent`, `/editor`, `/mode`, `/cycle`); never silent tool enablement inside chat.
 - Leaving agent finishes the open project session cleanly and disarms tools.
 

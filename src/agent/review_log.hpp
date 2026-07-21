@@ -36,7 +36,7 @@ class ReviewLogger {
     ReviewLogger& operator=(const ReviewLogger&) = delete;
 
     // run_kind selects the log subdirectory and filename prefix under
-    // .ainiux/logs/<run_kind>/ (for example "security-review" or "agent").
+    // .ainiux-pr/logs/<run_kind>/ (for example "security-review" or "agent").
     // Only lowercase letters, digits, and '-' are accepted.
     static std::unique_ptr<ReviewLogger> create(const std::string& workspace,
                                                 int keep_runs,

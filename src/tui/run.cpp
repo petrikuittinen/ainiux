@@ -98,14 +98,14 @@ app::TuiRunResult run(provider::RequestContext context,
     bool completion_pending = false;
     std::string status = ready_status();
     if (context.options.agent) {
-        status = "Agent mode · workspace tools enabled · /mode · /chat · /editor";
+        status = "agent · project tools · /mode · /chat";
     }
     std::string theme = "dark";
     context.options.tui_themes.normalize_name(context.options.tui_theme, theme);
     const bool use_colors = !context.options.no_colors;
     bool quit = false;
     app::InteractiveUiTarget leave_target = app::InteractiveUiTarget::Quit;
-    // Warm multi-turn agent session (project .ainiux/agent.sqlite). Prepared on first turn.
+    // Warm multi-turn agent session (project .ainiux-pr/agent.sqlite). Prepared on first turn.
     std::shared_ptr<agent::AgentSessionRuntime> agent_runtime =
         context.options.agent ? std::make_shared<agent::AgentSessionRuntime>()
                               : std::shared_ptr<agent::AgentSessionRuntime>{};
@@ -545,8 +545,7 @@ app::TuiRunResult run(provider::RequestContext context,
             return;
         }
         if (context.options.agent) {
-            status = provider_model_status_message(
-                context, "agent · tools on · /mode chat|editor · /cycle");
+            status = provider_model_status_message(context, "agent · /mode · /cmd-out");
             return;
         }
         status = chat_startup_status(context);
@@ -653,22 +652,34 @@ app::TuiRunResult run(provider::RequestContext context,
                         options.trusted_prompt_dir = job_context.options.trusted_prompt_dir;
                         options.max_source_code_file_size =
                             job_context.options.max_source_code_file_size;
+                        options.history_backup.enabled =
+                            job_context.options.agent_history_backup_enabled;
+                        options.history_backup.max_bytes =
+                            job_context.options.agent_history_backup_max_bytes;
+                        options.history_backup.ttl_days =
+                            job_context.options.agent_history_backup_ttl_days;
+                        options.auto_compact = job_context.options.agent_auto_compact;
+                        options.compact_limit = job_context.options.agent_compact_limit;
+                        options.show_command_output =
+                            job_context.options.agent_show_command_output;
                         send_error = runtime->prepare(job_context, token, {}, options);
                     }
                     if (send_error.ok()) {
                         agent::SessionTurnResult turn =
                             runtime->run_user_turn(job_context, agent_goal, token, {});
                         send_error = turn.error;
-                        if (send_error.ok()) {
-                            chat_result.content = turn.final_text;
-                            chat_result.model = model_name;
-                            if (!turn.final_text.empty()) {
-                                TuiEvent delta;
-                                delta.type = TuiEventType::Delta;
-                                delta.text = turn.final_text;
-                                events.push(std::move(delta));
-                            }
+                        // Compact tool lines + final answer (Done sets assistant content).
+                        std::string display;
+                        for (const std::string& line : turn.compact_tool_lines) {
+                            if (!display.empty()) display.push_back('\n');
+                            display += line;
                         }
+                        if (!turn.final_text.empty()) {
+                            if (!display.empty()) display.push_back('\n');
+                            display += turn.final_text;
+                        }
+                        chat_result.content = display;
+                        chat_result.model = model_name;
                     }
                 }
             } else {
@@ -1361,7 +1372,8 @@ app::TuiRunResult run(provider::RequestContext context,
     ActivityKind activity_kind = ActivityKind::None;
     detail::render(session, input, status, history_scroll, show_thinking_traces, mode, visible_panel,
                    activity_kind, render_frame, syntax_highlight,
-                   detail::RenderStyle{&context.options.tui_themes, theme, use_colors}, panel_title());
+                   detail::RenderStyle{&context.options.tui_themes, theme, use_colors}, panel_title(),
+                   context.options.agent);
     while (!quit) {
         TuiEvent event;
         while (events.try_pop(event)) {
@@ -1947,7 +1959,8 @@ app::TuiRunResult run(provider::RequestContext context,
         ++render_frame;
         detail::render(session, input, status, history_scroll, show_thinking_traces, mode, visible_panel,
                        activity_kind, render_frame, syntax_highlight,
-                       detail::RenderStyle{&context.options.tui_themes, theme, use_colors}, panel_title());
+                       detail::RenderStyle{&context.options.tui_themes, theme, use_colors},
+                       panel_title(), context.options.agent);
     }
 
     model_job.cancel();

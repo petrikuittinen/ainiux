@@ -154,8 +154,8 @@ Error enforce_common_safety(const std::vector<std::string>& args) {
             return {ErrorCode::BadArgs, "run_command rejects absolute path arguments"};
         for (const fs::path& component : possible_path) {
             const std::string value = component.string();
-            if (value == ".." || value == ".ainiux" || value == ".git" || value == ".hg" ||
-                value == ".svn")
+            if (value == ".." || value == ".ainiux-pr" || value == ".ainiux" || value == ".git" ||
+                value == ".hg" || value == ".svn")
                 return {ErrorCode::BadArgs,
                         "run_command rejects traversal and protected metadata paths"};
         }

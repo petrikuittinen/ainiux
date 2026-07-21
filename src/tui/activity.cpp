@@ -50,6 +50,10 @@ void append_segment(std::vector<StyledSegment>& segments, std::string text, Styl
 constexpr const char kInputLabelStatusMessage[] =
     " | /help | history Ctrl+B ↑ Ctrl+D ↓";
 
+// Short mode tags (user-facing chrome). Keep compact for narrow terminals.
+constexpr const char kChatModeTag[] = " Chat";
+constexpr const char kAgentModeTag[] = " Agent";
+
 }  // namespace
 
 const char* input_label_status_message() {
@@ -57,15 +61,26 @@ const char* input_label_status_message() {
 }
 
 std::string input_label_text() {
-    return app_version_label() + input_label_status_message();
+    return app_version_label() + kChatModeTag + input_label_status_message();
+}
+
+std::string input_label_text_for_mode(bool agent_mode) {
+    return app_version_label() + (agent_mode ? kAgentModeTag : kChatModeTag) +
+           input_label_status_message();
 }
 
 std::vector<StyledSegment> input_label_segments() {
-    const std::string label = input_label_text();
+    return input_label_segments_for_mode(false);
+}
+
+std::vector<StyledSegment> input_label_segments_for_mode(bool agent_mode) {
+    const std::string label = input_label_text_for_mode(agent_mode);
     const std::string& version = app_version_label();
+    const std::string mode_tag = agent_mode ? kAgentModeTag : kChatModeTag;
     return {
         {version, StyleRole::PanelTitle},
-        {label.substr(version.size()), StyleRole::InputLabel},
+        {mode_tag, agent_mode ? StyleRole::PanelHighlight : StyleRole::InputLabel},
+        {label.substr(version.size() + mode_tag.size()), StyleRole::InputLabel},
     };
 }
 

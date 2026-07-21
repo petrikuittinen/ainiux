@@ -39,7 +39,8 @@ void render(const chat::Session& session,
             size_t activity_frame,
             bool syntax_highlight,
             const RenderStyle& style,
-            const char* panel_title_override) {
+            const char* panel_title_override,
+            bool agent_mode) {
     const TuiSize terminal = terminal_size();
     const Layout layout = layout_for_terminal(terminal.rows, terminal.cols);
     const int cols = layout.cols;
@@ -103,7 +104,8 @@ void render(const chat::Session& session,
         draw_line(layout.status_row, cols, displayed_status,
                   status_role_for_text(displayed_status), style);
     }
-    draw_line(layout.input_label_row, cols, input_label_segments(), StyleRole::InputLabel, style);
+    draw_line(layout.input_label_row, cols, input_label_segments_for_mode(agent_mode),
+              StyleRole::InputLabel, style);
 
     for (int row = 0; row < layout.input_rect.height; ++row) {
         const size_t index = static_cast<size_t>(row);

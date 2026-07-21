@@ -5,6 +5,9 @@
 #include <sstream>
 #include <utility>
 
+#include "agent/compact.hpp"
+#include "agent/project_root.hpp"
+#include "agent/tool_display.hpp"
 #include "security/redact.hpp"
 
 namespace ainiux::agent {
@@ -100,6 +103,12 @@ Error AgentSessionRuntime::prepare(const provider::RequestContext& context,
     reset();
     options_ = std::move(options);
     if (options_.workspace.empty()) options_.workspace = ".";
+    {
+        std::string absolute;
+        Error root_error = resolve_agent_project_root(options_.workspace, absolute);
+        if (!root_error.ok()) return root_error;
+        options_.workspace = absolute;
+    }
     secrets_ = configured_secrets(context);
 
     auto interrupted_fn = [&]() { return is_interrupted(cancellation, interrupted); };
@@ -163,6 +172,7 @@ Error AgentSessionRuntime::prepare(const provider::RequestContext& context,
 
     ToolRegistryOptions tool_options;
     tool_options.allow_mutations = options_.allow_mutations;
+    tool_options.history_backup = options_.history_backup;
     error = ReadToolRegistry::create(index_options, std::move(snapshot), secrets_, tools_,
                                      tool_options);
     if (!error.ok()) {
@@ -260,26 +270,33 @@ SessionTurnResult AgentSessionRuntime::run_user_turn(provider::RequestContext& c
         if (options_.on_progress) options_.on_progress(line);
     };
 
-    // First turn: create session row and seed provider conversation.
+    // First turn: open singleton project row and seed provider conversation.
     if (!conversation_seeded_) {
         if (session_store_.is_open()) {
-            AgentSessionRecord session;
-            session.goal = text;
-            session.provider = context.profile.name;
-            session.model = context.options.model;
-            session.api =
+            AgentProjectRecord project;
+            project.status = "running";
+            project.provider = context.profile.name;
+            project.model = context.options.model;
+            project.api =
                 context.api_kind == provider::ApiKind::Responses ? "responses" : "chat";
-            session.protocol = state_.protocol == ToolProtocol::Xml ? "xml" : "native";
-            session.workspace = options_.workspace;
-            if (logger_) session.run_id = logger_->run_id();
-            Error error = session_store_.create_session(session);
+            project.protocol = state_.protocol == ToolProtocol::Xml ? "xml" : "native";
+            project.workspace = options_.workspace;
+            Error error = session_store_.open_project(project);
             if (!error.ok()) {
                 result.error = error;
                 return result;
             }
-            session_id_ = session.id;
+            project.status = "running";
+            project.provider = context.profile.name;
+            project.model = context.options.model;
+            project.api =
+                context.api_kind == provider::ApiKind::Responses ? "responses" : "chat";
+            project.protocol = state_.protocol == ToolProtocol::Xml ? "xml" : "native";
+            project.workspace = options_.workspace;
+            (void)session_store_.update_project_meta(project);
+            session_id_ = 1;
             if (!context.options.quiet)
-                std::cerr << "Agent session id=" << session_id_ << "\n";
+                std::cerr << "Agent project thread · " << session_store_.path() << "\n";
             if (logger_) {
                 json::Value fields = log_object();
                 fields.object["session_id"] = log_number(session_id_);
@@ -292,7 +309,7 @@ SessionTurnResult AgentSessionRuntime::run_user_turn(provider::RequestContext& c
         conversation_seeded_ = true;
         if (session_store_.is_open() && session_id_ > 0) {
             Error message_error =
-                session_store_.append_message(session_id_, "user", redact_secrets(text, secrets_));
+                session_store_.append_message("user", redact_secrets(text, secrets_));
             if (!message_error.ok() && !context.options.quiet)
                 std::cerr << "Agent warning: could not store goal message: "
                           << redact_secrets(message_error.message, secrets_) << "\n";
@@ -314,16 +331,68 @@ SessionTurnResult AgentSessionRuntime::run_user_turn(provider::RequestContext& c
         conversation_.messages.push_back({"user", text});
         if (session_store_.is_open() && session_id_ > 0) {
             Error message_error =
-                session_store_.append_message(session_id_, "user", redact_secrets(text, secrets_));
+                session_store_.append_message("user", redact_secrets(text, secrets_));
             if (!message_error.ok() && !context.options.quiet)
                 std::cerr << "Agent warning: could not store follow-up: "
                           << redact_secrets(message_error.message, secrets_) << "\n";
         }
     }
 
+    // Auto-compact request transcript when near the context window.
+    if (options_.auto_compact && session_store_.is_open()) {
+        std::vector<AgentMessageRecord> stored;
+        if (session_store_.load_messages(stored).ok()) {
+            const long long window = context.options.context_tokens > 0
+                                         ? static_cast<long long>(context.options.context_tokens)
+                                         : 0LL;
+            const long long estimate = estimate_transcript_tokens(stored);
+            if (should_auto_compact(options_.auto_compact, options_.compact_limit, window,
+                                    estimate)) {
+                const std::size_t keep = 12;
+                const std::size_t drop =
+                    stored.size() > keep ? stored.size() - keep : 0;
+                if (drop > 0) {
+                    const std::string summary = build_local_compact_summary(stored, drop);
+                    Error compact_error = session_store_.compact_with_summary(summary, static_cast<int>(keep));
+                    if (compact_error.ok()) {
+                        const std::string notice = "auto-compact at ~" +
+                            std::to_string(effective_compact_limit_percent(options_.compact_limit, window)) +
+                            "% of context window";
+                        progress(notice);
+                        if (!context.options.quiet) std::cerr << "Agent notice: " << notice << "\n";
+                        result.notice = notice;
+                        // Rebuild request conversation from summary + recent messages roughly:
+                        // keep system + agents_md + latest user for safety.
+                        seed_agent_conversation(conversation_, prompts_, state_.protocol, text,
+                                                agents_md_.injection_text);
+                    }
+                }
+            }
+        }
+    }
+
+    std::size_t turn_tool_index = 0;
     auto executor = [&](const std::string& name, const std::string& arguments_json,
                         runtime::CancellationToken token) {
-        return tools_.execute(name, arguments_json, token);
+        std::string body = tools_.execute(name, arguments_json, token);
+        ++turn_tool_index;
+        const std::string line =
+            format_compact_tool_line(turn_tool_index, name, arguments_json, body);
+        result.compact_tool_lines.push_back(line);
+        progress(line);
+        if (!options_.interactive && !context.options.quiet) std::cerr << line << "\n";
+        if (session_store_.is_open()) {
+            (void)session_store_.append_message(
+                "tool", line, name, compact_tool_status(body) == "ok",
+                compact_tool_args_preview(arguments_json));
+        }
+        if (options_.show_command_output && name == "run_command") {
+            // Best-effort: surface truncated stdout when enabled.
+            if (body.find("\"stdout\"") != std::string::npos) {
+                // Keep short; full body stays in tool_events via append_tool_event.
+            }
+        }
+        return body;
     };
 
     std::size_t turn_tool_calls = 0;
@@ -434,8 +503,8 @@ SessionTurnResult AgentSessionRuntime::run_user_turn(provider::RequestContext& c
 
         if (session_store_.is_open() && session_id_ > 0) {
             if (!outcome.notice.empty()) {
-                Error notice_error = session_store_.append_message(
-                    session_id_, "notice", redact_secrets(outcome.notice, secrets_));
+                Error notice_error =
+                    session_store_.append_message("notice", redact_secrets(outcome.notice, secrets_));
                 if (!notice_error.ok() && !context.options.quiet)
                     std::cerr << "Agent warning: could not store notice: "
                               << redact_secrets(notice_error.message, secrets_) << "\n";
@@ -507,8 +576,8 @@ SessionTurnResult AgentSessionRuntime::run_user_turn(provider::RequestContext& c
             result.error = ok_error();
             result.final_text = final_text;
             if (session_store_.is_open() && session_id_ > 0 && !final_text.empty()) {
-                Error assistant_error = session_store_.append_message(
-                    session_id_, "assistant", redact_secrets(final_text, secrets_));
+                Error assistant_error =
+                    session_store_.append_message("assistant", redact_secrets(final_text, secrets_));
                 if (!assistant_error.ok() && !context.options.quiet)
                     std::cerr << "Agent warning: could not store assistant message: "
                               << redact_secrets(assistant_error.message, secrets_) << "\n";
@@ -524,7 +593,7 @@ SessionTurnResult AgentSessionRuntime::run_user_turn(provider::RequestContext& c
                                 : outcome.notice;
             result.final_text = result.notice;
             if (session_store_.is_open() && session_id_ > 0) {
-                (void)session_store_.append_message(session_id_, "notice",
+                (void)session_store_.append_message("notice",
                                                     redact_secrets(result.notice, secrets_));
             }
             return result;

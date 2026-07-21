@@ -90,6 +90,7 @@ void handle_tui_command(const std::string& text, TuiCommandContext& ctx, TuiComm
                 "/agent (switch to interactive agent mode)\n"
                 "/mode [chat|editor|agent] (show or jump modes)\n"
                 "/cycle (chat → editor → agent → chat)\n"
+                "/cmd-out [on|off] (agent: show run_command stdout)\n"
                 "AI commands from editor-commands.conf (/spell, /grammar, /continue,\n"
                 "/Chinese, /German, /Japanese, /prompt, /regenerate, and custom commands)";
             ctx.status = "Help shown; /help hides it";
@@ -254,6 +255,29 @@ void handle_tui_command(const std::string& text, TuiCommandContext& ctx, TuiComm
             return;
         }
         ctx.status = "Usage: /mode [chat|editor|agent]";
+        return;
+    }
+    if (text == "/cmd-out" || text.rfind("/cmd-out ", 0) == 0) {
+        if (!ctx.context.options.agent) {
+            ctx.status = "/cmd-out is for agent mode only";
+            return;
+        }
+        const std::string arg = app::detail::trim_ascii(text.size() > 8 ? text.substr(8) : "");
+        if (arg.empty()) {
+            ctx.status = ctx.context.options.agent_show_command_output ? "cmd-out on" : "cmd-out off";
+            return;
+        }
+        if (arg == "on" || arg == "true" || arg == "1") {
+            ctx.context.options.agent_show_command_output = true;
+            ctx.status = "cmd-out on";
+            return;
+        }
+        if (arg == "off" || arg == "false" || arg == "0") {
+            ctx.context.options.agent_show_command_output = false;
+            ctx.status = "cmd-out off";
+            return;
+        }
+        ctx.status = "Usage: /cmd-out [on|off]";
         return;
     }
     if (text == "/edit") {

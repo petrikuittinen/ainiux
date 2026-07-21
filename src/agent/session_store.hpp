@@ -11,53 +11,39 @@ struct sqlite3;
 
 namespace ainiux::agent {
 
-// Project-local agent UI/session database at .ainiux/agent.sqlite (never
-// ~/.ainiux/ainiux.db). Portable with the workspace tree.
+// Project-local agent UI/session database at .ainiux-pr/agent.sqlite (never
+// ~/.ainiux/ainiux.db). One durable transcript thread per project.
 
-inline constexpr int kAgentSessionSchemaVersion = 1;
+inline constexpr int kAgentSessionSchemaVersion = 2;
 
-struct AgentSessionRecord {
-    long long id = 0;
+struct AgentProjectRecord {
+    long long id = 1;
     long long created_at = 0;
     long long updated_at = 0;
-    long long finished_at = 0;
-    std::string status;  // running | success | error | cancelled | aborted
-    std::string goal;
+    std::string status;  // idle | running
     std::string provider;
     std::string model;
     std::string api;
     std::string protocol;  // native | xml
     std::string workspace;
-    std::string final_text;
-    std::string error_code;
-    std::string error_message;
+    std::string summary_text;
     long long turns = 0;
     long long tool_calls = 0;
-    std::string run_id;  // optional diagnostic log run id
 };
 
 struct AgentMessageRecord {
     long long id = 0;
-    long long session_id = 0;
     long long seq = 0;
     long long created_at = 0;
-    std::string role;  // system | user | assistant | tool | notice
+    std::string role;  // user | assistant | tool | notice | summary
     std::string content;
-    std::string tool_call_id;
+    std::string tool_name;
+    bool tool_ok = true;
+    std::string args_preview;
 };
 
-struct AgentToolEventRecord {
-    long long id = 0;
-    long long session_id = 0;
-    long long seq = 0;
-    long long created_at = 0;
-    long long turn = 0;
-    std::string call_id;
-    std::string tool_name;
-    std::string arguments;
-    std::string result;
-    bool ok = true;
-};
+// Backward-compatible aliases used by older call sites during transition.
+using AgentSessionRecord = AgentProjectRecord;
 
 class AgentSessionStore {
    public:
@@ -68,7 +54,6 @@ class AgentSessionStore {
     AgentSessionStore(AgentSessionStore&& other) noexcept;
     AgentSessionStore& operator=(AgentSessionStore&& other) noexcept;
 
-    // Creates .ainiux/ if needed and opens/creates agent.sqlite under workspace.
     Error open(const std::string& workspace);
     void close();
     bool is_open() const { return db_ != nullptr; }
@@ -77,15 +62,27 @@ class AgentSessionStore {
 
     static std::string database_path(const std::string& workspace);
 
-    // Creates a running session; fills record.id / timestamps on success.
-    Error create_session(AgentSessionRecord& record);
+    // Open or create the singleton project row (id=1). Fills record.
+    Error open_project(AgentProjectRecord& record);
 
-    Error append_message(long long session_id,
+    // Legacy name: same as open_project (single thread).
+    Error create_session(AgentSessionRecord& record) { return open_project(record); }
+
+    Error update_project_meta(const AgentProjectRecord& record);
+
+    Error append_message(const std::string& role,
+                         const std::string& content,
+                         const std::string& tool_name = {},
+                         bool tool_ok = true,
+                         const std::string& args_preview = {});
+
+    // Legacy overload used by older runtime (session_id ignored; singleton).
+    Error append_message(long long /*session_id*/,
                          const std::string& role,
                          const std::string& content,
                          const std::string& tool_call_id = {});
 
-    Error append_tool_event(long long session_id,
+    Error append_tool_event(long long /*session_id*/,
                             long long turn,
                             const std::string& call_id,
                             const std::string& tool_name,
@@ -93,8 +90,16 @@ class AgentSessionStore {
                             const std::string& result,
                             bool ok);
 
-    // status: success | error | cancelled | aborted
-    Error finish_session(long long session_id,
+    Error load_messages(std::vector<AgentMessageRecord>& messages, int limit = 0) const;
+
+    // Replace older messages with a summary + tail. Keeps last keep_recent messages.
+    Error compact_with_summary(const std::string& summary_text, int keep_recent = 12);
+
+    Error set_status(const std::string& status);
+    Error bump_counters(long long turns_delta, long long tool_calls_delta);
+
+    // Legacy finish_session: mark idle and store final note in summary if provided.
+    Error finish_session(long long /*session_id*/,
                          const std::string& status,
                          const std::string& final_text,
                          const std::string& error_code,
@@ -106,16 +111,30 @@ class AgentSessionStore {
     Error load_session(long long session_id,
                        AgentSessionRecord& session,
                        std::vector<AgentMessageRecord>& messages,
-                       std::vector<AgentToolEventRecord>& tool_events) const;
+                       std::vector<struct AgentToolEventRecord>& tool_events) const;
 
    private:
     Error ensure_schema();
-    Error next_seq(long long session_id, long long& seq);
-    Error touch_session(long long session_id);
+    Error next_seq(long long& seq);
+    Error touch();
 
     sqlite3* db_ = nullptr;
     std::string path_;
     std::string workspace_;
+};
+
+// Kept for unit tests that still reference tool_events table shape.
+struct AgentToolEventRecord {
+    long long id = 0;
+    long long session_id = 0;
+    long long seq = 0;
+    long long created_at = 0;
+    long long turn = 0;
+    std::string call_id;
+    std::string tool_name;
+    std::string arguments;
+    std::string result;
+    bool ok = true;
 };
 
 }  // namespace ainiux::agent
