@@ -35,8 +35,10 @@ Error load_root_agents_md(const std::string& workspace,
                           std::size_t max_bytes,
                           AgentsMdBundle& bundle);
 
-// Future: also load AGENTS.md files between workspace root and a target path.
-// For now this is an alias of load_root_agents_md (root only).
+// Load AGENTS.md from the workspace root and each directory on the path toward
+// relative_path (nearest nested files last). Root rules come first; more specific
+// nested files follow. Total content is capped by max_bytes across all documents.
+// relative_path may be empty (root only), a file path, or a directory path.
 Error load_agents_md_for_path(const std::string& workspace,
                               const std::string& relative_path,
                               std::size_t max_bytes,

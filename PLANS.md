@@ -2270,6 +2270,8 @@ This is the v1.0 plan for ainiux local agent mode (merged from the former standa
 
 **Agent edit_file + AGENTS.md slice (2026-07-21):** agent mode loads workspace-root `AGENTS.md` (UTF-8, byte-capped, non-symlink) into a separate untrusted user message while keeping the system prompt static. Mutation tools add preferred `edit_file` with `replace_range`, `insert_at`, `delete_range`, exact `replace_text` (optional `line_range_hint`), and standalone `create_file`. Multi line-ops apply bottom-to-top in memory before one atomic write. `replace_symbol`, fuzzy matching, nearest nested `AGENTS.md` chain, `apply_patch`, and `remove` remain later work.
 
+**Agent edit engine + AGENTS.md chain slice (2026-07-21):** `load_agents_md_for_path` walks root→nearest nested `AGENTS.md` files under a shared byte budget. `str_replace` and `edit_file.replace_text` use the §13 fallback order (exact → flexible whitespace → indent-stripped) with optional `fuzzy=false`, `line_range_hint`, and `match_mode` reporting. `edit_file.replace_symbol` rewrites an indexed symbol’s line range by `symbol_id`. `remove` deletes files or empty directories (recursive optional) with history backups for UTF-8 text, snapshot updates, and headless denials for database files / symlink trees. In-memory snapshot re-scans symbols after writes. `apply_patch`, `agent.sqlite`, interactive TUI/approvals, and mode cycling remain later work.
+
 ---
 
 ## 1. Scope

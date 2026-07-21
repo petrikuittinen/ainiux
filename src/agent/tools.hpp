@@ -28,7 +28,7 @@ struct SourceRange {
 
 // Snapshot-backed workspace tools. Security-review keeps allow_mutations=false
 // (read/search/inspect only). Agent mode sets allow_mutations=true to expose
-// write_file and exact str_replace for ordinary in-workspace edits.
+// write_file, edit_file, str_replace (with fuzzy fallback), and remove.
 struct ToolRegistryOptions {
     bool allow_mutations = false;
 };
@@ -71,12 +71,17 @@ class ReadToolRegistry {
                                      const std::string& old_text,
                                      const std::string& new_text,
                                      bool replace_all,
+                                     bool allow_fuzzy,
+                                     std::size_t hint_start_line,
+                                     std::size_t hint_end_line,
                                      const std::string& expected_file_hash,
                                      std::string& history_path,
                                      std::size_t& matches_found,
                                      std::size_t& replacements_made,
+                                     std::string& match_mode,
                                      std::string& old_hash,
-                                     std::string& new_hash) const;
+                                     std::string& new_hash,
+                                     std::vector<std::string>& candidate_lines) const;
     Error edit_workspace_file(const std::string& relative_path,
                               const std::string& expected_file_hash,
                               const json::Value& ops,
@@ -87,7 +92,19 @@ class ReadToolRegistry {
                               std::size_t& operations_applied,
                               std::vector<std::string>& summary,
                               std::vector<std::string>& warnings) const;
+    Error remove_workspace_path(const std::string& relative_path,
+                                bool recursive,
+                                bool confirm,
+                                const std::string& expected_file_hash,
+                                std::string& history_path,
+                                bool& was_directory,
+                                std::string& guard_decision,
+                                std::string& guard_rule_id,
+                                std::string& old_hash,
+                                std::vector<std::string>& suggestions,
+                                std::vector<std::string>& warnings) const;
     void note_written_file(const std::string& relative_path, const std::string& content) const;
+    void note_removed_path(const std::string& relative_path) const;
     void rebuild_file_map() const;
     Error resolve_writable_path(const std::string& relative_path, std::filesystem::path& absolute) const;
     Error save_history_copy(const std::string& relative_path,

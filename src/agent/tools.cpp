@@ -15,6 +15,7 @@
 #include <unistd.h>
 
 #include "agent/process.hpp"
+#include "agent/text_match.hpp"
 #include "agent/tool_args.hpp"
 #include "html/html.hpp"
 #include "json/json.hpp"
@@ -262,7 +263,8 @@ std::string normalized_workspace_path(const std::string& cwd, const std::string&
     return normalized;
 }
 
-bool eligible_virtual_path(const index::Snapshot& snapshot,
+// Index-only eligibility (code files known to the snapshot).
+bool eligible_indexed_path(const index::Snapshot& snapshot,
                            const std::string& path,
                            bool allow_directory) {
     if (path.empty()) return true;
@@ -274,13 +276,48 @@ bool eligible_virtual_path(const index::Snapshot& snapshot,
     return false;
 }
 
+// Real workspace visibility for listing/inspection: any safe non-symlink path that
+// exists on disk (including empty directories and non-source files like #backup#).
+// Falls back to the index when the path is not on disk yet but is snapshot-known.
+bool visible_workspace_path(const index::Snapshot& snapshot,
+                            const std::string& path,
+                            bool allow_directory) {
+    if (path.empty()) return true;
+    if (!safe_relative_path(path)) return false;
+    std::error_code ec;
+    const fs::path absolute = fs::path(snapshot.workspace) / path;
+    const fs::file_status status = fs::symlink_status(absolute, ec);
+    if (!ec && status.type() != fs::file_type::not_found) {
+        if (fs::is_symlink(status)) return false;
+        if (fs::is_directory(status)) return allow_directory;
+        if (fs::is_regular_file(status)) return true;
+        return false;
+    }
+    return eligible_indexed_path(snapshot, path, allow_directory);
+}
+
+bool is_protected_listing_name(const std::string& name) {
+    return name == ".ainiux" || name == ".git" || name == ".hg" || name == ".svn";
+}
+
+bool path_allowed_for_command(const index::Snapshot& snapshot,
+                              const std::string& path,
+                              bool allow_directory,
+                              bool index_only) {
+    if (index_only) return eligible_indexed_path(snapshot, path, allow_directory);
+    return visible_workspace_path(snapshot, path, allow_directory);
+}
+
 Error validate_command_workspace_paths(const index::Snapshot& snapshot,
                                        const std::vector<std::string>& arguments,
-                                       const std::string& cwd) {
+                                       const std::string& cwd,
+                                       bool index_only) {
     const std::string normalized_cwd = normalized_workspace_path("", cwd.empty() ? "." : cwd);
     if (!safe_relative_path(normalized_cwd) ||
-        !eligible_virtual_path(snapshot, normalized_cwd, true))
-        return {ErrorCode::BadArgs, "run_command cwd has no eligible indexed content"};
+        !path_allowed_for_command(snapshot, normalized_cwd, true, index_only))
+        return {ErrorCode::BadArgs,
+                index_only ? "run_command cwd has no eligible indexed content"
+                           : "run_command cwd is outside the workspace or not visible"};
     for (std::size_t index = 1; index < arguments.size(); ++index) {
         const std::string& argument = arguments[index];
         if (argument.empty() || argument.front() == '-') continue;
@@ -290,9 +327,12 @@ Error validate_command_workspace_paths(const index::Snapshot& snapshot,
         std::error_code ec;
         const fs::file_status status = fs::symlink_status(fs::path(snapshot.workspace) / relative, ec);
         if (!ec && status.type() != fs::file_type::not_found &&
-            !eligible_virtual_path(snapshot, relative, fs::is_directory(status)))
+            !path_allowed_for_command(snapshot, relative, fs::is_directory(status), index_only))
             return {ErrorCode::BadArgs,
-                    "run_command path is not eligible in the completed index snapshot: " + relative};
+                    index_only
+                        ? ("run_command path is not eligible in the completed index snapshot: " +
+                           relative)
+                        : ("run_command path is not a visible workspace entry: " + relative)};
     }
     return ok_error();
 }
@@ -302,7 +342,8 @@ std::string filter_path_lines(const index::Snapshot& snapshot,
                               const std::string& text,
                               const std::string& command,
                               const std::vector<std::string>& arguments,
-                              bool& filtered) {
+                              bool& filtered,
+                              bool index_only) {
     std::string listing_base = cwd;
     if (command == "ls") {
         for (std::size_t index = 1; index < arguments.size(); ++index) {
@@ -330,7 +371,7 @@ std::string filter_path_lines(const index::Snapshot& snapshot,
         const std::string relative = normalized_workspace_path(
             command == "ls" ? listing_base : cwd, candidate);
         if (!candidate.empty() && safe_relative_path(relative) &&
-            eligible_virtual_path(snapshot, relative, allow_directory)) {
+            path_allowed_for_command(snapshot, relative, allow_directory, index_only)) {
             output << line;
             if (newline != std::string::npos) output << '\n';
         } else if (!line.empty()) {
@@ -439,6 +480,7 @@ void ReadToolRegistry::note_written_file(const std::string& relative_path,
                                              (content.back() == '\n' ? 0 : 1));
     index::Language language = index::Language::Markdown;
     index::language_for_path(generic, language);
+    long long file_id = 0;
     bool found = false;
     for (index::IndexedFile& file : snapshot_.files) {
         if (file.path != generic) continue;
@@ -448,19 +490,67 @@ void ReadToolRegistry::note_written_file(const std::string& relative_path,
         file.line_count = line_count;
         file.status = "indexed";
         file.error.clear();
+        file_id = file.id;
         found = true;
         break;
     }
     if (!found) {
+        long long next_file_id = 1;
+        for (const index::IndexedFile& file : snapshot_.files)
+            next_file_id = std::max(next_file_id, file.id + 1);
         index::IndexedFile file;
+        file.id = next_file_id;
         file.path = generic;
         file.language = language;
         file.size = content.size();
         file.content_hash = hash;
         file.line_count = line_count;
         file.status = "indexed";
+        file_id = file.id;
         snapshot_.files.push_back(std::move(file));
     }
+
+    // Drop stale symbols for this path and re-scan so replace_symbol / read_symbol
+    // stay consistent within the same agent run after mutations.
+    snapshot_.symbols.erase(
+        std::remove_if(snapshot_.symbols.begin(), snapshot_.symbols.end(),
+                       [&](const index::IndexedSymbol& symbol) { return symbol.path == generic; }),
+        snapshot_.symbols.end());
+    const index::ScanResult scan = index::scan_source(generic, content, language);
+    long long next_symbol_id = 1;
+    for (const index::IndexedSymbol& symbol : snapshot_.symbols)
+        next_symbol_id = std::max(next_symbol_id, symbol.id + 1);
+    for (const index::Symbol& symbol : scan.symbols) {
+        index::IndexedSymbol entry;
+        entry.id = next_symbol_id++;
+        entry.file_id = file_id;
+        entry.path = generic;
+        entry.symbol = symbol;
+        snapshot_.symbols.push_back(std::move(entry));
+    }
+    rebuild_file_map();
+}
+
+void ReadToolRegistry::note_removed_path(const std::string& relative_path) const {
+    const std::string generic = fs::path(relative_path).generic_string();
+    snapshot_.files.erase(
+        std::remove_if(snapshot_.files.begin(), snapshot_.files.end(),
+                       [&](const index::IndexedFile& file) {
+                           return file.path == generic ||
+                                  (file.path.size() > generic.size() &&
+                                   file.path.compare(0, generic.size(), generic) == 0 &&
+                                   file.path[generic.size()] == '/');
+                       }),
+        snapshot_.files.end());
+    snapshot_.symbols.erase(
+        std::remove_if(snapshot_.symbols.begin(), snapshot_.symbols.end(),
+                       [&](const index::IndexedSymbol& symbol) {
+                           return symbol.path == generic ||
+                                  (symbol.path.size() > generic.size() &&
+                                   symbol.path.compare(0, generic.size(), generic) == 0 &&
+                                   symbol.path[generic.size()] == '/');
+                       }),
+        snapshot_.symbols.end());
     rebuild_file_map();
 }
 
@@ -580,21 +670,132 @@ Error ReadToolRegistry::write_workspace_file(const std::string& relative_path,
     return ok_error();
 }
 
+namespace {
+
+// Map optional 1-based line_range_hint into a byte region inside content.
+// When both lines are 0, the whole file is used.
+Error region_from_line_hint(const std::string& content,
+                            std::size_t start_line,
+                            std::size_t end_line,
+                            std::size_t& region_start,
+                            std::size_t& region_end) {
+    region_start = 0;
+    region_end = content.size();
+    if (start_line == 0 && end_line == 0) return ok_error();
+    if (start_line == 0 || end_line == 0 || end_line < start_line)
+        return {ErrorCode::BadArgs, "line_range_hint requires start_line and end_line >= 1"};
+    const std::vector<std::string> lines = split_lines(content);
+    if (start_line > lines.size() || end_line > lines.size())
+        return {ErrorCode::BadArgs, "line_range_hint is outside file"};
+    std::size_t start_byte = 0;
+    for (std::size_t i = 1; i < start_line; ++i) start_byte += lines[i - 1].size();
+    std::size_t end_byte = start_byte;
+    for (std::size_t i = start_line; i <= end_line; ++i) end_byte += lines[i - 1].size();
+    region_start = start_byte;
+    region_end = end_byte;
+    return ok_error();
+}
+
+// When multiple matches exist and replace_all is false, pick the match whose start
+// line is closest to the midpoint of the hint (or fail if no hint).
+Error disambiguate_matches(const TextMatchResult& found,
+                           bool replace_all,
+                           std::size_t hint_start_line,
+                           std::size_t hint_end_line,
+                           std::vector<TextSpan>& chosen,
+                           std::vector<std::string>& candidate_lines,
+                           std::size_t& matches_found) {
+    chosen.clear();
+    candidate_lines.clear();
+    matches_found = found.matches.size();
+    if (found.matches.empty())
+        return {ErrorCode::FileWrite, "old_text not found in file"};
+    if (replace_all) {
+        chosen = found.matches;
+        return ok_error();
+    }
+    if (found.matches.size() == 1) {
+        chosen.push_back(found.matches.front());
+        return ok_error();
+    }
+    if (hint_start_line > 0 && hint_end_line >= hint_start_line) {
+        const std::size_t mid = hint_start_line + (hint_end_line - hint_start_line) / 2;
+        const TextSpan* best = nullptr;
+        std::size_t best_dist = std::numeric_limits<std::size_t>::max();
+        std::size_t best_count = 0;
+        for (const TextSpan& span : found.matches) {
+            // Prefer spans that overlap the hint range.
+            const bool overlaps =
+                !(span.end_line < hint_start_line || span.start_line > hint_end_line);
+            const std::size_t dist =
+                span.start_line >= mid ? span.start_line - mid : mid - span.start_line;
+            if (overlaps) {
+                if (best == nullptr || dist < best_dist) {
+                    best = &span;
+                    best_dist = dist;
+                    best_count = 1;
+                } else if (dist == best_dist) {
+                    ++best_count;
+                }
+            }
+        }
+        if (best != nullptr && best_count == 1) {
+            chosen.push_back(*best);
+            return ok_error();
+        }
+    }
+    for (const TextSpan& span : found.matches) {
+        candidate_lines.push_back(std::to_string(span.start_line) +
+                                  (span.end_line != span.start_line
+                                       ? "-" + std::to_string(span.end_line)
+                                       : ""));
+    }
+    return {ErrorCode::FileWrite,
+            "old_text matches " + std::to_string(found.matches.size()) +
+                " times; pass replace_all=true, narrow with line_range_hint, or provide a more "
+                "specific old_text"};
+}
+
+bool is_database_path(const std::string& relative_path) {
+    const std::string lower = [&] {
+        std::string out = relative_path;
+        for (char& ch : out) {
+            if (ch >= 'A' && ch <= 'Z') ch = static_cast<char>(ch - 'A' + 'a');
+        }
+        return out;
+    }();
+    static const char* kSuffixes[] = {".sqlite", ".sqlite3", ".db", ".db3", ".duckdb"};
+    for (const char* suffix : kSuffixes) {
+        const std::size_t n = std::char_traits<char>::length(suffix);
+        if (lower.size() >= n && lower.compare(lower.size() - n, n, suffix) == 0) return true;
+    }
+    return false;
+}
+
+}  // namespace
+
 Error ReadToolRegistry::str_replace_workspace_file(const std::string& relative_path,
                                                    const std::string& old_text,
                                                    const std::string& new_text,
                                                    bool replace_all,
+                                                   bool allow_fuzzy,
+                                                   std::size_t hint_start_line,
+                                                   std::size_t hint_end_line,
                                                    const std::string& expected_file_hash,
                                                    std::string& history_path,
                                                    std::size_t& matches_found,
                                                    std::size_t& replacements_made,
+                                                   std::string& match_mode,
                                                    std::string& old_hash,
-                                                   std::string& new_hash) const {
+                                                   std::string& new_hash,
+                                                   std::vector<std::string>& candidate_lines) const {
     history_path.clear();
     matches_found = 0;
     replacements_made = 0;
+    match_mode.clear();
     old_hash.clear();
     new_hash.clear();
+    candidate_lines.clear();
     if (!allow_mutations_) return {ErrorCode::UnsupportedFeature, "workspace writes are disabled for this tool session"};
     if (old_text.empty()) return {ErrorCode::BadArgs, "old_text must not be empty"};
     if (old_text.find('\0') != std::string::npos || new_text.find('\0') != std::string::npos)
@@ -620,39 +821,25 @@ Error ReadToolRegistry::str_replace_workspace_file(const std::string& relative_p
     if (!expected_file_hash.empty() && expected_file_hash != old_hash)
         return {ErrorCode::FileWrite, "stale_file: expected_file_hash does not match current file content"};
 
-    std::size_t pos = 0;
-    while ((pos = previous.find(old_text, pos)) != std::string::npos) {
-        ++matches_found;
-        pos += old_text.empty() ? 1 : old_text.size();
-    }
-    if (matches_found == 0)
-        return {ErrorCode::FileWrite, "old_text not found in file: " + relative_path};
-    if (!replace_all && matches_found > 1)
-        return {ErrorCode::FileWrite,
-                "old_text matches " + std::to_string(matches_found) +
-                    " times; pass replace_all=true or provide a more specific old_text"};
+    std::size_t region_start = 0;
+    std::size_t region_end = previous.size();
+    error = region_from_line_hint(previous, hint_start_line, hint_end_line, region_start, region_end);
+    if (!error.ok()) return error;
 
-    std::string updated;
-    if (replace_all) {
-        updated.reserve(previous.size());
-        pos = 0;
-        while (pos < previous.size()) {
-            const std::size_t found = previous.find(old_text, pos);
-            if (found == std::string::npos) {
-                updated.append(previous, pos, std::string::npos);
-                break;
-            }
-            updated.append(previous, pos, found - pos);
-            updated.append(new_text);
-            ++replacements_made;
-            pos = found + old_text.size();
-        }
-    } else {
-        const std::size_t found = previous.find(old_text);
-        updated = previous;
-        updated.replace(found, old_text.size(), new_text);
-        replacements_made = 1;
+    const TextMatchResult found =
+        find_text_matches(previous, old_text, allow_fuzzy, region_start, region_end);
+    std::vector<TextSpan> chosen;
+    error = disambiguate_matches(found, replace_all, hint_start_line, hint_end_line, chosen,
+                                 candidate_lines, matches_found);
+    if (!error.ok()) {
+        if (matches_found == 0)
+            return {ErrorCode::FileWrite, "old_text not found in file: " + relative_path};
+        return error;
     }
+    match_mode = found.mode;
+
+    const std::string updated =
+        apply_text_replacements(previous, chosen, new_text, replace_all, replacements_made);
 
     if (updated.size() > index_options_.max_source_code_file_size)
         return {ErrorCode::BadArgs,
@@ -665,6 +852,218 @@ Error ReadToolRegistry::str_replace_workspace_file(const std::string& relative_p
     if (!error.ok()) return error;
     new_hash = index::content_hash(updated);
     note_written_file(relative_path, updated);
+    return ok_error();
+}
+
+namespace {
+
+// Collect sibling basenames in a directory (best-effort; ignores protected names).
+std::vector<std::string> sibling_names(const fs::path& directory) {
+    std::vector<std::string> names;
+    std::error_code ec;
+    fs::directory_iterator it(directory, fs::directory_options::skip_permission_denied, ec);
+    if (ec) return names;
+    for (const fs::directory_entry& entry : it) {
+        const std::string name = entry.path().filename().string();
+        if (name.empty() || name == "." || name == ".." || is_protected_listing_name(name)) continue;
+        names.push_back(name);
+    }
+    std::sort(names.begin(), names.end());
+    return names;
+}
+
+// Suggest nearby names when a remove path is missing (literal # backups, close stems).
+std::vector<std::string> suggest_remove_paths(const fs::path& parent,
+                                              const std::string& basename) {
+    std::vector<std::string> suggestions;
+    const std::vector<std::string> names = sibling_names(parent);
+    const std::string wrapped = "#" + basename + "#";
+    const std::string hash_prefix = "#" + basename;
+    for (const std::string& name : names) {
+        if (name == wrapped || name == hash_prefix || name == basename + "~" ||
+            name == basename + ".bak" || name == "#" + basename + "#") {
+            suggestions.push_back(name);
+            continue;
+        }
+        // Containment: basename inside sibling or vice versa (bounded).
+        if ((!basename.empty() && name.find(basename) != std::string::npos) ||
+            (!name.empty() && basename.find(name) != std::string::npos && name.size() >= 3)) {
+            if (std::find(suggestions.begin(), suggestions.end(), name) == suggestions.end())
+                suggestions.push_back(name);
+        }
+    }
+    if (suggestions.size() > 8) suggestions.resize(8);
+    return suggestions;
+}
+
+// True when both plain basename and a #basename# (or #basename) sibling exist.
+bool has_hash_wrapped_sibling(const fs::path& parent, const std::string& basename) {
+    if (basename.empty()) return false;
+    // Only apply when the requested name itself is not already hash-wrapped.
+    if (!basename.empty() && basename.front() == '#' && basename.back() == '#' && basename.size() > 2)
+        return false;
+    std::error_code ec;
+    if (fs::exists(parent / ("#" + basename + "#"), ec) && !ec) return true;
+    if (fs::exists(parent / ("#" + basename), ec) && !ec) return true;
+    return false;
+}
+
+}  // namespace
+
+Error ReadToolRegistry::remove_workspace_path(const std::string& relative_path,
+                                              bool recursive,
+                                              bool confirm,
+                                              const std::string& expected_file_hash,
+                                              std::string& history_path,
+                                              bool& was_directory,
+                                              std::string& guard_decision,
+                                              std::string& guard_rule_id,
+                                              std::string& old_hash,
+                                              std::vector<std::string>& suggestions,
+                                              std::vector<std::string>& warnings) const {
+    history_path.clear();
+    was_directory = false;
+    guard_decision = "deny";
+    guard_rule_id.clear();
+    old_hash.clear();
+    suggestions.clear();
+    warnings.clear();
+    if (!allow_mutations_)
+        return {ErrorCode::UnsupportedFeature, "workspace writes are disabled for this tool session"};
+
+    fs::path absolute;
+    Error error = resolve_writable_path(relative_path, absolute);
+    if (!error.ok()) return error;
+
+    const std::string generic = fs::path(relative_path).generic_string();
+    const std::string basename = absolute.filename().string();
+    const fs::path parent = absolute.parent_path();
+
+    std::error_code ec;
+    if (!fs::exists(absolute, ec) || ec) {
+        suggestions = suggest_remove_paths(parent, basename);
+        std::string message = "path does not exist: " + relative_path;
+        if (!suggestions.empty()) {
+            message += "; did you mean one of: ";
+            for (std::size_t i = 0; i < suggestions.size(); ++i) {
+                if (i) message += ", ";
+                message += suggestions[i];
+            }
+            message += "? Filenames may include literal # characters—use list_directory and the exact name.";
+        }
+        return {ErrorCode::FileRead, message};
+    }
+    if (fs::is_symlink(fs::symlink_status(absolute, ec)) || ec) {
+        guard_rule_id = "refuse_symlink";
+        return {ErrorCode::FileWrite, "refusing to remove symlink: " + relative_path};
+    }
+
+    if (is_database_path(generic)) {
+        // No interactive approval UI in one-shot agent yet — deny high-risk DB deletes.
+        guard_rule_id = "ask_on_database_delete";
+        return {ErrorCode::FileWrite,
+                "refusing to delete database file without interactive approval: " + generic +
+                    " (remove is blocked for *.sqlite/*.db/*.duckdb in headless agent mode)"};
+    }
+
+    // Models often strip Markdown-like # from "#file#" and delete the plain file instead.
+    // When both exist, require an explicit confirm=true for the plain name.
+    if (!confirm && has_hash_wrapped_sibling(parent, basename)) {
+        guard_rule_id = "ambiguous_hash_sibling";
+        suggestions = suggest_remove_paths(parent, basename);
+        if (std::find(suggestions.begin(), suggestions.end(), basename) == suggestions.end())
+            suggestions.insert(suggestions.begin(), basename);
+        return {ErrorCode::FileWrite,
+                "ambiguous remove: both \"" + basename +
+                    "\" and a #…# sibling exist. If you intend the plain name, re-call remove with "
+                    "confirm=true. If the user named a #wrapped# file, use that exact path "
+                    "(list_directory first). Do not strip # from filenames."};
+    }
+    if (has_hash_wrapped_sibling(parent, basename)) {
+        warnings.push_back(
+            "sibling #…# name also exists; confirm=true accepted for plain path \"" + basename +
+            "\"");
+    }
+
+    was_directory = fs::is_directory(absolute, ec);
+    if (ec) return {ErrorCode::FileWrite, "could not inspect path: " + ec.message()};
+
+    if (was_directory) {
+        if (!recursive) {
+            // Empty directory only — but nested empty dirs mean "not empty".
+            const bool empty = fs::is_empty(absolute, ec);
+            if (ec) return {ErrorCode::FileWrite, "could not inspect directory: " + ec.message()};
+            if (!empty) {
+                guard_rule_id = "recursive_required";
+                // Hint whether children are only empty subdirs.
+                std::vector<std::string> children;
+                for (const std::string& name : sibling_names(absolute)) children.push_back(name);
+                std::string message =
+                    "directory is not empty; pass recursive=true to remove it (guarded)";
+                if (!children.empty()) {
+                    message += "; children: ";
+                    for (std::size_t i = 0; i < children.size() && i < 12; ++i) {
+                        if (i) message += ", ";
+                        message += children[i];
+                    }
+                }
+                return {ErrorCode::FileWrite, message};
+            }
+        } else {
+            // Recursive: still refuse if any nested path looks like a database file.
+            for (fs::recursive_directory_iterator it(absolute, ec), end; !ec && it != end;
+                 it.increment(ec)) {
+                const std::string name = it->path().filename().string();
+                std::string rel = generic;
+                const fs::path nested = it->path().lexically_relative(absolute);
+                if (!nested.empty() && nested != ".")
+                    rel = (fs::path(generic) / nested).generic_string();
+                if (is_database_path(name) || is_database_path(rel)) {
+                    guard_rule_id = "ask_on_database_delete";
+                    return {ErrorCode::FileWrite,
+                            "refusing recursive remove because it would delete database file: " +
+                                rel};
+                }
+                if (fs::is_symlink(it->symlink_status(ec)) || ec) {
+                    guard_rule_id = "refuse_symlink";
+                    return {ErrorCode::FileWrite,
+                            "refusing recursive remove of tree containing symlink: " + rel};
+                }
+            }
+            if (ec) return {ErrorCode::FileWrite, "could not walk directory: " + ec.message()};
+        }
+        if (!expected_file_hash.empty())
+            return {ErrorCode::BadArgs, "expected_file_hash is only valid for file removals"};
+        fs::remove_all(absolute, ec);
+        if (ec) return {ErrorCode::FileWrite, "could not remove directory: " + ec.message()};
+        guard_decision = "allow";
+        note_removed_path(generic);
+        return ok_error();
+    }
+
+    // Regular file.
+    if (!fs::is_regular_file(absolute, ec) || ec)
+        return {ErrorCode::FileWrite, "path is not a removable regular file or directory: " + generic};
+
+    std::string previous = read_all_bytes(absolute, error);
+    if (!error.ok()) return error;
+    // History only for text-ish content (no NULs); binary still removable without history.
+    const bool text_ok = previous.find('\0') == std::string::npos && html::is_valid_utf8(previous);
+    if (text_ok) {
+        old_hash = index::content_hash(previous);
+        if (!expected_file_hash.empty() && expected_file_hash != old_hash)
+            return {ErrorCode::FileWrite,
+                    "stale_file: expected_file_hash does not match current file content"};
+        error = save_history_copy(relative_path, previous, history_path);
+        if (!error.ok()) return error;
+    } else if (!expected_file_hash.empty()) {
+        return {ErrorCode::BadArgs, "expected_file_hash is only supported for UTF-8 text files"};
+    }
+
+    fs::remove(absolute, ec);
+    if (ec) return {ErrorCode::FileWrite, "could not remove file: " + ec.message()};
+    guard_decision = "allow";
+    note_removed_path(generic);
     return ok_error();
 }
 
@@ -752,14 +1151,16 @@ std::string infer_edit_op_type(const json::Value& op) {
 }
 
 struct LineEditOp {
-    enum class Type { ReplaceRange, InsertAt, DeleteRange, ReplaceText };
+    enum class Type { ReplaceRange, InsertAt, DeleteRange, ReplaceText, ReplaceSymbol };
     Type type = Type::ReplaceRange;
-    std::size_t start_line = 0;  // 1-based; insert uses line
+    std::size_t start_line = 0;  // 1-based; insert uses line; replace_text uses as hint
     std::size_t end_line = 0;
     std::string text;            // replacement / new_text
     std::string old_text;        // replace_text only
     bool replace_all = false;
+    bool allow_fuzzy = true;     // replace_text / str_replace fallback
     std::string expected_hash;
+    std::size_t symbol_id = 0;   // replace_symbol only
     std::size_t original_index = 0;
 };
 
@@ -916,6 +1317,8 @@ Error ReadToolRegistry::edit_workspace_file(const std::string& relative_path,
             std::string validation_error;
             if (!get_bool(op, "replace_all", false, item.replace_all, validation_error))
                 return {ErrorCode::BadArgs, validation_error};
+            if (!get_bool(op, "fuzzy", true, item.allow_fuzzy, validation_error))
+                return {ErrorCode::BadArgs, validation_error};
             // Optional line_range_hint narrows the search window.
             const json::Value* hint = op.get("line_range_hint");
             if (hint != nullptr) {
@@ -926,8 +1329,21 @@ Error ReadToolRegistry::edit_workspace_file(const std::string& relative_path,
                     return {ErrorCode::BadArgs, validation_error};
             }
         } else if (type == "replace_symbol") {
-            return {ErrorCode::UnsupportedFeature,
-                    "replace_symbol is not implemented yet; use replace_range or replace_text"};
+            item.type = LineEditOp::Type::ReplaceSymbol;
+            std::string validation_error;
+            if (!get_size(op, "symbol_id", 0, static_cast<std::size_t>(std::numeric_limits<int>::max()),
+                          item.symbol_id, validation_error) ||
+                item.symbol_id == 0)
+                return {ErrorCode::BadArgs,
+                        validation_error.empty() ? "replace_symbol requires positive symbol_id"
+                                                 : validation_error};
+            const json::Value* text = op.get("replacement");
+            if (text == nullptr) text = op.get("new_text");
+            if (text == nullptr) text = op.get("text");
+            if (text == nullptr || !text->is_string())
+                return {ErrorCode::BadArgs, "replace_symbol requires replacement"};
+            item.text = text->string;
+            // expected_hash already parsed into item.expected_hash above.
         } else if (type == "create_file") {
             // Handled above.
             continue;
@@ -961,6 +1377,38 @@ Error ReadToolRegistry::edit_workspace_file(const std::string& relative_path,
         return {ErrorCode::FileWrite, "stale_file: expected_file_hash does not match current file content"};
 
     std::vector<std::string> lines = split_lines(previous);
+
+    // Resolve replace_symbol into replace_range against the current snapshot index.
+    for (LineEditOp& op : parsed) {
+        if (op.type != LineEditOp::Type::ReplaceSymbol) continue;
+        const index::IndexedSymbol* found = nullptr;
+        for (const index::IndexedSymbol& symbol : snapshot_.symbols) {
+            if (symbol.id == static_cast<long long>(op.symbol_id)) {
+                found = &symbol;
+                break;
+            }
+        }
+        if (found == nullptr)
+            return {ErrorCode::FileRead,
+                    "replace_symbol: indexed symbol id was not found: " +
+                        std::to_string(op.symbol_id)};
+        if (found->path != fs::path(relative_path).generic_string())
+            return {ErrorCode::BadArgs,
+                    "replace_symbol: symbol_id " + std::to_string(op.symbol_id) + " is in " +
+                        found->path + ", not " + fs::path(relative_path).generic_string()};
+        if (found->symbol.line_start <= 0 || found->symbol.line_end < found->symbol.line_start)
+            return {ErrorCode::Internal, "replace_symbol: symbol has invalid line range"};
+        op.type = LineEditOp::Type::ReplaceRange;
+        op.start_line = static_cast<std::size_t>(found->symbol.line_start);
+        op.end_line = static_cast<std::size_t>(found->symbol.line_end);
+        // Prefer body hash from the index when the model did not supply expected_hash.
+        if (op.expected_hash.empty() && found->symbol.body_hash != 0) {
+            // body_hash is stored as raw uint64 fingerprint; range check uses content_hash
+            // of the source slice, so leave expected_hash empty unless the model set it.
+        }
+        summary.push_back("replace_symbol id=" + std::to_string(op.symbol_id) + " -> lines " +
+                          std::to_string(op.start_line) + "-" + std::to_string(op.end_line));
+    }
 
     // Apply line ops bottom-to-top so earlier higher-line edits do not shift later ones.
     std::vector<LineEditOp> line_ops;
@@ -1061,55 +1509,29 @@ Error ReadToolRegistry::edit_workspace_file(const std::string& relative_path,
               [](const LineEditOp& a, const LineEditOp& b) { return a.original_index < b.original_index; });
     std::string content = join_lines(lines);
     for (const LineEditOp& op : text_ops) {
-        std::string haystack = content;
         std::size_t region_start = 0;
         std::size_t region_end = content.size();
-        if (op.start_line > 0 && op.end_line >= op.start_line) {
-            const std::vector<std::string> current_lines = split_lines(content);
-            if (op.start_line > current_lines.size() || op.end_line > current_lines.size())
-                return {ErrorCode::BadArgs, "line_range_hint is outside file for replace_text"};
-            std::size_t start_byte = 0;
-            for (std::size_t i = 1; i < op.start_line; ++i) start_byte += current_lines[i - 1].size();
-            std::size_t end_byte = start_byte;
-            for (std::size_t i = op.start_line; i <= op.end_line; ++i)
-                end_byte += current_lines[i - 1].size();
-            region_start = start_byte;
-            region_end = end_byte;
-            haystack = content.substr(region_start, region_end - region_start);
+        Error region_error =
+            region_from_line_hint(content, op.start_line, op.end_line, region_start, region_end);
+        if (!region_error.ok()) return region_error;
+
+        const TextMatchResult found =
+            find_text_matches(content, op.old_text, op.allow_fuzzy, region_start, region_end);
+        std::vector<TextSpan> chosen;
+        std::vector<std::string> candidate_lines;
+        std::size_t matches_found = 0;
+        Error match_error =
+            disambiguate_matches(found, op.replace_all, op.start_line, op.end_line, chosen,
+                                 candidate_lines, matches_found);
+        if (!match_error.ok()) {
+            if (matches_found == 0)
+                return {ErrorCode::FileWrite, "old_text not found for replace_text"};
+            return match_error;
         }
-        std::size_t matches = 0;
-        std::size_t pos = 0;
-        while ((pos = haystack.find(op.old_text, pos)) != std::string::npos) {
-            ++matches;
-            pos += op.old_text.size();
-        }
-        if (matches == 0)
-            return {ErrorCode::FileWrite, "old_text not found for replace_text"};
-        if (!op.replace_all && matches > 1)
-            return {ErrorCode::FileWrite,
-                    "old_text matches " + std::to_string(matches) +
-                        " times; pass replace_all=true or narrow with line_range_hint"};
-        std::string region = haystack;
-        if (op.replace_all) {
-            std::string rebuilt;
-            pos = 0;
-            while (pos < region.size()) {
-                const std::size_t found = region.find(op.old_text, pos);
-                if (found == std::string::npos) {
-                    rebuilt.append(region, pos, std::string::npos);
-                    break;
-                }
-                rebuilt.append(region, pos, found - pos);
-                rebuilt.append(op.text);
-                pos = found + op.old_text.size();
-            }
-            region = std::move(rebuilt);
-        } else {
-            const std::size_t found = region.find(op.old_text);
-            region.replace(found, op.old_text.size(), op.text);
-        }
-        content.replace(region_start, region_end - region_start, region);
-        summary.push_back(std::string("replace_text (") + (op.replace_all ? "all" : "one") + ")");
+        std::size_t replacements_made = 0;
+        content = apply_text_replacements(content, chosen, op.text, op.replace_all, replacements_made);
+        summary.push_back(std::string("replace_text (") + found.mode + ", " +
+                          (op.replace_all ? "all" : "one") + ")");
         ++operations_applied;
     }
 
@@ -1145,6 +1567,7 @@ std::vector<provider::FunctionDefinition> ReadToolRegistry::definitions() const 
         "\"text\":{\"type\":\"string\"},"
         "\"old_text\":{\"type\":\"string\"},"
         "\"replace_all\":{\"type\":\"boolean\"},"
+        "\"fuzzy\":{\"type\":\"boolean\"},"
         "\"expected_hash\":{\"type\":\"string\"},"
         "\"symbol_id\":{\"type\":\"integer\",\"minimum\":1}";
     const std::string edit_nested_object =
@@ -1160,11 +1583,20 @@ std::vector<provider::FunctionDefinition> ReadToolRegistry::definitions() const 
         "\"replace_range\":" +
         edit_nested_object +
         ",\"insert_at\":" + edit_nested_object + ",\"delete_range\":" + edit_nested_object +
-        ",\"replace_text\":" + edit_nested_object + ",\"create_file\":" + edit_nested_object +
+        ",\"replace_text\":" + edit_nested_object + ",\"replace_symbol\":" + edit_nested_object +
+        ",\"create_file\":" + edit_nested_object +
         "}}";
     std::vector<provider::FunctionDefinition> tools = {
-        {"project_overview", "Summarize indexed languages, files, lines, likely entry points/tests, and freshness.", schema("")},
-        {"list_directory", "List bounded indexed entries in a workspace-relative directory.", schema(path + ",\"max_entries\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":500}")},
+        {"project_overview",
+         "Summarize the code index (languages, indexed files, symbols hints, freshness). "
+         "This is NOT a full filesystem listing—empty directories and non-source files are omitted. "
+         "Use list_directory for the real workspace tree.",
+         schema("")},
+        {"list_directory",
+         "List real filesystem entries in a workspace-relative directory (files, empty dirs, "
+         "non-source names). Names are literal (may include #, spaces). Index-only tools miss "
+         "empty directories and non-code files—prefer this for layout questions and before remove.",
+         schema(path + ",\"max_entries\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":500}")},
         {"glob", "Match indexed relative file paths using *, ?, **, and brace alternatives.", schema("\"pattern\":{\"type\":\"string\"},\"max_results\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":1000}", "\"pattern\"")},
         {"search_text", "Search indexed UTF-8 files using bounded literal or line-oriented regex matching.", schema("\"query\":{\"type\":\"string\"},\"regex\":{\"type\":\"boolean\"},\"case_sensitive\":{\"type\":\"boolean\"},\"word\":{\"type\":\"boolean\"},\"glob\":{\"type\":\"string\"},\"context\":{\"type\":\"integer\",\"minimum\":0,\"maximum\":10},\"max_results\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":500}", "\"query\"")},
         {"grep", "Alias for search_text.", schema("\"query\":{\"type\":\"string\"},\"regex\":{\"type\":\"boolean\"},\"case_sensitive\":{\"type\":\"boolean\"},\"word\":{\"type\":\"boolean\"},\"glob\":{\"type\":\"string\"},\"context\":{\"type\":\"integer\",\"minimum\":0,\"maximum\":10},\"max_results\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":500}", "\"query\"")},
@@ -1179,8 +1611,10 @@ std::vector<provider::FunctionDefinition> ReadToolRegistry::definitions() const 
     if (allow_mutations_) {
         tools.push_back(
             {"edit_file",
-             "Preferred structured edit: ops replace_range|insert_at|delete_range|replace_text|create_file. "
-             "Line ops apply bottom-to-top; create_file is alone for new files.",
+             "Preferred in-file edit (not for deleting whole files—use remove). Ops: "
+             "insert_at (add lines), replace_range (rewrite line spans; include full old text in "
+             "replacement when substituting), delete_range, replace_text (exact then fuzzy), "
+             "replace_symbol, create_file (alone). Line ops apply bottom-to-top.",
              schema(path + ",\"expected_file_hash\":{\"type\":\"string\"},"
                            "\"create_dirs\":{\"type\":\"boolean\"},"
                            "\"ops\":{\"type\":\"array\",\"minItems\":1,\"maxItems\":100,"
@@ -1197,12 +1631,28 @@ std::vector<provider::FunctionDefinition> ReadToolRegistry::definitions() const 
                     "\"path\",\"content\"")});
         tools.push_back(
             {"str_replace",
-             "Exact text replacement in one workspace file. Prefer edit_file when possible. "
-             "Fails on 0 matches or ambiguous multi-match without replace_all.",
+             "Text replacement in one workspace file (exact, then optional fuzzy whitespace/indent). "
+             "Prefer edit_file when possible. Fails on 0 matches or ambiguous multi-match without "
+             "replace_all or line_range_hint.",
              schema(path + ",\"old_text\":{\"type\":\"string\"},\"new_text\":{\"type\":\"string\"},"
                            "\"replace_all\":{\"type\":\"boolean\"},"
+                           "\"fuzzy\":{\"type\":\"boolean\"},"
+                           "\"line_range_hint\":{\"type\":\"object\",\"properties\":{"
+                           "\"start_line\":{\"type\":\"integer\",\"minimum\":1},"
+                           "\"end_line\":{\"type\":\"integer\",\"minimum\":1}}},"
                            "\"expected_file_hash\":{\"type\":\"string\"}",
                     "\"path\",\"old_text\",\"new_text\"")});
+        tools.push_back(
+            {"remove",
+             "Delete a workspace-relative file or empty directory (recursive=true for non-empty "
+             "dirs). Use the exact filename from list_directory—do not strip # or other "
+             "punctuation. When both name and #name# exist, plain name requires confirm=true. "
+             "Database files (*.sqlite/*.db) are refused in headless mode. Prefer remove over "
+             "edit_file for deleting files.",
+             schema(path + ",\"recursive\":{\"type\":\"boolean\"},"
+                           "\"confirm\":{\"type\":\"boolean\"},"
+                           "\"expected_file_hash\":{\"type\":\"string\"}",
+                    "\"path\"")});
     }
     return tools;
 }
@@ -1377,31 +1827,113 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
         if (!get_string(args, "path", path, false, validation_error) ||
             !get_size(args, "max_entries", 200, 500, maximum, validation_error))
             return tool_error_result("invalid_arguments", validation_error);
-        if (!safe_relative_path(path)) return tool_error_result("policy_denied", "directory path escapes or targets protected metadata");
+        if (!safe_relative_path(path))
+            return tool_error_result("policy_denied",
+                                    "directory path escapes or targets protected metadata");
         path = path == "." ? "" : fs::path(path).generic_string();
         if (!path.empty() && path.back() == '/') path.pop_back();
-        const std::string prefix = path.empty() ? "" : path + "/";
-        std::map<std::string, std::pair<std::string, std::uintmax_t>> entries;
-        for (const index::IndexedFile& file : snapshot_.files) {
-            if (file.path.rfind(prefix, 0) != 0) continue;
-            const std::string tail = file.path.substr(prefix.size());
-            const std::size_t slash = tail.find('/');
-            const std::string child = slash == std::string::npos ? tail : tail.substr(0, slash);
-            if (child.empty()) continue;
-            entries[child] = slash == std::string::npos
-                                 ? std::make_pair(std::string("file"), file.size)
-                                 : std::make_pair(std::string("directory"), std::uintmax_t{0});
+
+        const fs::path absolute =
+            path.empty() ? fs::path(snapshot_.workspace) : fs::path(snapshot_.workspace) / path;
+        std::error_code ec;
+        if (!path.empty()) {
+            // Walk components and refuse symlinks / missing parents.
+            fs::path current(snapshot_.workspace);
+            for (const fs::path& component : fs::path(path)) {
+                current /= component;
+                const fs::file_status status = fs::symlink_status(current, ec);
+                if (ec || status.type() == fs::file_type::not_found)
+                    return tool_error_result("not_found", "directory does not exist: " + path);
+                if (fs::is_symlink(status))
+                    return tool_error_result("policy_denied",
+                                            "refusing symlink path in list_directory: " + path);
+            }
+            if (!fs::is_directory(absolute, ec) || ec)
+                return tool_error_result("not_found", "path is not a directory: " + path);
         }
-        if (entries.empty() && !path.empty()) return tool_error_result("not_found", "directory has no eligible indexed entries: " + path);
+
+        // Real readdir so empty directories and non-indexed files (e.g. #backup#) appear.
+        struct DirEntry {
+            std::string name;
+            std::string type;  // file | directory | other
+            std::uintmax_t size = 0;
+            bool empty = false;
+            bool indexed = false;
+        };
+        std::map<std::string, DirEntry> entries;
+        fs::directory_iterator it(absolute, fs::directory_options::skip_permission_denied, ec);
+        if (ec)
+            return tool_error_result("file_read",
+                                    "could not list directory: " + (path.empty() ? std::string(".") : path) +
+                                        ": " + ec.message());
+        for (const fs::directory_entry& entry : it) {
+            const std::string name = entry.path().filename().string();
+            if (name.empty() || name == "." || name == "..") continue;
+            if (is_protected_listing_name(name)) continue;
+            // Skip hidden protected-style components only; other dotfiles remain visible.
+            const fs::file_status status = entry.symlink_status(ec);
+            if (ec) continue;
+            if (fs::is_symlink(status)) {
+                DirEntry item;
+                item.name = name;
+                item.type = "symlink";
+                entries[name] = std::move(item);
+                continue;
+            }
+            DirEntry item;
+            item.name = name;
+            if (fs::is_directory(status)) {
+                item.type = "directory";
+                bool is_empty = true;
+                std::error_code empty_ec;
+                fs::directory_iterator child(entry.path(),
+                                             fs::directory_options::skip_permission_denied,
+                                             empty_ec);
+                if (!empty_ec) {
+                    for (const fs::directory_entry& nested : child) {
+                        const std::string nested_name = nested.path().filename().string();
+                        if (nested_name == "." || nested_name == "..") continue;
+                        is_empty = false;
+                        break;
+                    }
+                }
+                item.empty = is_empty;
+            } else if (fs::is_regular_file(status)) {
+                item.type = "file";
+                item.size = entry.file_size(ec);
+                if (ec) item.size = 0;
+            } else {
+                item.type = "other";
+            }
+            const std::string relative =
+                path.empty() ? name : (fs::path(path) / name).generic_string();
+            item.indexed = eligible_indexed_path(snapshot_, relative, false) ||
+                           (item.type == "directory" &&
+                            eligible_indexed_path(snapshot_, relative, true));
+            entries[name] = std::move(item);
+        }
+
         json::Value data = array_value();
         bool truncated = false;
         for (const auto& entry : entries) {
-            if (data.array.size() >= maximum) { truncated = true; break; }
-            json::Value item = object_value(); item.object["name"] = string_value(entry.first);
-            item.object["type"] = string_value(entry.second.first); item.object["size"] = number_value(static_cast<double>(entry.second.second));
-            data.array.push_back(std::move(item));
+            if (data.array.size() >= maximum) {
+                truncated = true;
+                break;
+            }
+            const DirEntry& item = entry.second;
+            json::Value row = object_value();
+            row.object["name"] = string_value(item.name);
+            row.object["type"] = string_value(item.type);
+            row.object["size"] = number_value(static_cast<double>(item.size));
+            row.object["indexed"] = bool_value(item.indexed);
+            if (item.type == "directory") row.object["empty"] = bool_value(item.empty);
+            data.array.push_back(std::move(row));
         }
-        return envelope(true, std::move(data), "", "", {}, truncated);
+        std::vector<std::string> warnings;
+        if (path.empty())
+            warnings.push_back(
+                "filesystem listing (not index-only); empty directories and non-source files included");
+        return envelope(true, std::move(data), "", "", warnings, truncated);
     }
 
     if (name == "glob") {
@@ -1593,7 +2125,11 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
         std::vector<std::string> parsed_arguments;
         Error policy_error = parse_inspection_command(command, parsed_arguments);
         if (!policy_error.ok()) return tool_error_result(error_code_string(policy_error.code), policy_error.message);
-        policy_error = validate_command_workspace_paths(snapshot_, parsed_arguments, cwd);
+        // Security-review (allow_mutations=false) keeps run_command scoped to the
+        // completed index. Agent mode allows real workspace paths (empty dirs, #files#).
+        const bool index_only_commands = !allow_mutations_;
+        policy_error =
+            validate_command_workspace_paths(snapshot_, parsed_arguments, cwd, index_only_commands);
         if (!policy_error.ok()) return tool_error_result("policy_denied", policy_error.message);
         ProcessOptions options; options.workspace = snapshot_.workspace; options.cwd = cwd; options.timeout_ms = static_cast<long>(timeout); options.cancellation = cancellation;
         ProcessResult process; const Error error = run_inspection_command(command, options, process);
@@ -1607,7 +2143,8 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
                            command_name == "rg" || command_name == "grep" || git_file_listing)) {
             process.stdout_text = filter_path_lines(snapshot_, cwd, process.stdout_text,
                                                     git_file_listing ? "find" : command_name,
-                                                    parsed_arguments, output_filtered);
+                                                    parsed_arguments, output_filtered,
+                                                    index_only_commands);
         }
         json::Value data = object_value(); json::Value arguments = array_value();
         for (const std::string& argument : process.arguments)
@@ -1652,7 +2189,7 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
                 if (nested_path == nullptr || !nested_path->is_string() || nested_path->string.empty()) {
                     for (const char* nested_key :
                          {"replace_range", "insert_at", "delete_range", "replace_text",
-                          "create_file"}) {
+                          "replace_symbol", "create_file"}) {
                         const json::Value* nested = op.get(nested_key);
                         if (nested != nullptr && nested->is_object()) {
                             nested_path = nested->get("path");
@@ -1765,32 +2302,51 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
             return tool_error_result("policy_denied", "str_replace is not enabled in this session");
         std::string path, old_text, new_text, expected_hash;
         bool replace_all = false;
+        bool allow_fuzzy = true;
         if (!get_string(args, "path", path, true, validation_error) ||
             !get_string(args, "old_text", old_text, true, validation_error) ||
             !get_string(args, "new_text", new_text, false, validation_error) ||
             !get_bool(args, "replace_all", false, replace_all, validation_error) ||
+            !get_bool(args, "fuzzy", true, allow_fuzzy, validation_error) ||
             !get_string(args, "expected_file_hash", expected_hash, false, validation_error))
             return tool_error_result("invalid_arguments", validation_error);
         // new_text may be empty (delete match); require the key explicitly.
         if (args.get("new_text") == nullptr || !args.get("new_text")->is_string())
             return tool_error_result("invalid_arguments", "missing required string argument: new_text");
         new_text = args.get("new_text")->string;
-        std::string history_path, old_hash, new_hash;
+        std::size_t hint_start = 0;
+        std::size_t hint_end = 0;
+        const json::Value* hint = args.get("line_range_hint");
+        if (hint != nullptr) {
+            if (!hint->is_object())
+                return tool_error_result("invalid_arguments", "line_range_hint must be an object");
+            if (!get_size(*hint, "start_line", 0, 100000000, hint_start, validation_error) ||
+                !get_size(*hint, "end_line", 0, 100000000, hint_end, validation_error))
+                return tool_error_result("invalid_arguments", validation_error);
+        }
+        std::string history_path, old_hash, new_hash, match_mode;
         std::size_t matches_found = 0;
         std::size_t replacements_made = 0;
-        const Error error =
-            str_replace_workspace_file(path, old_text, new_text, replace_all, expected_hash,
-                                       history_path, matches_found, replacements_made, old_hash,
-                                       new_hash);
+        std::vector<std::string> candidate_lines;
+        const Error error = str_replace_workspace_file(
+            path, old_text, new_text, replace_all, allow_fuzzy, hint_start, hint_end, expected_hash,
+            history_path, matches_found, replacements_made, match_mode, old_hash, new_hash,
+            candidate_lines);
         json::Value data = object_value();
         data.object["path"] = string_value(fs::path(path).generic_string());
         data.object["matches_found"] = number_value(static_cast<double>(matches_found));
         data.object["replacements_made"] = number_value(static_cast<double>(replacements_made));
-        data.object["match_mode"] = string_value("exact");
+        data.object["match_mode"] = string_value(match_mode.empty() ? "exact" : match_mode);
         data.object["old_file_hash"] = string_value(old_hash);
         data.object["new_file_hash"] = string_value(new_hash);
         data.object["history_path"] = string_value(history_path);
         data.object["indexed_snapshot_updated"] = bool_value(error.ok());
+        if (!candidate_lines.empty()) {
+            json::Value candidates = array_value();
+            for (const std::string& line : candidate_lines)
+                candidates.array.push_back(string_value(line));
+            data.object["candidate_lines"] = std::move(candidates);
+        }
         if (!error.ok()) {
             const std::string code =
                 error.message.find("stale_file") != std::string::npos ? "stale_file"
@@ -1802,6 +2358,55 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
             return envelope(false, std::move(data), code, error.message, {}, false);
         }
         return envelope(true, std::move(data), "", "", {}, false);
+    }
+
+    if (name == "remove") {
+        if (!allow_mutations_)
+            return tool_error_result("policy_denied", "remove is not enabled in this session");
+        std::string path, expected_hash;
+        bool recursive = false;
+        bool confirm = false;
+        if (!get_string(args, "path", path, true, validation_error) ||
+            !get_bool(args, "recursive", false, recursive, validation_error) ||
+            !get_bool(args, "confirm", false, confirm, validation_error) ||
+            !get_string(args, "expected_file_hash", expected_hash, false, validation_error))
+            return tool_error_result("invalid_arguments", validation_error);
+        std::string history_path, old_hash, guard_decision, guard_rule_id;
+        bool was_directory = false;
+        std::vector<std::string> suggestions;
+        std::vector<std::string> warnings;
+        const Error error = remove_workspace_path(path, recursive, confirm, expected_hash,
+                                                  history_path, was_directory, guard_decision,
+                                                  guard_rule_id, old_hash, suggestions, warnings);
+        json::Value data = object_value();
+        data.object["path"] = string_value(fs::path(path).generic_string());
+        data.object["removed"] = bool_value(error.ok());
+        data.object["was_directory"] = bool_value(was_directory);
+        data.object["history_path"] = string_value(history_path);
+        data.object["old_file_hash"] = string_value(old_hash);
+        data.object["index_updated"] = bool_value(error.ok());
+        if (!suggestions.empty()) {
+            json::Value list = array_value();
+            for (const std::string& item : suggestions) list.array.push_back(string_value(item));
+            data.object["suggestions"] = std::move(list);
+        }
+        json::Value guard = object_value();
+        guard.object["decision"] = string_value(guard_decision);
+        if (!guard_rule_id.empty()) guard.object["rule_id"] = string_value(guard_rule_id);
+        else guard.object["rule_id"] = json::Value{};
+        data.object["guard"] = std::move(guard);
+        if (!error.ok()) {
+            const std::string code =
+                error.message.find("stale_file") != std::string::npos       ? "stale_file"
+                : error.message.find("does not exist") != std::string::npos ? "not_found"
+                : error.message.find("ambiguous") != std::string::npos      ? "ambiguous_match"
+                : error.message.find("refusing") != std::string::npos       ? "policy_denied"
+                : error.code == ErrorCode::BadArgs                          ? "invalid_arguments"
+                : error.code == ErrorCode::UnsupportedFeature               ? "policy_denied"
+                                                                            : error_code_string(error.code);
+            return envelope(false, std::move(data), code, error.message, warnings, false);
+        }
+        return envelope(true, std::move(data), "", "", warnings, false);
     }
 
     return tool_error_result("unknown_tool", "unknown native tool: " + requested_name);

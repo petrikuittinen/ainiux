@@ -82,12 +82,59 @@ void test_truncation() {
     fs::remove_all(workspace, ec);
 }
 
+void test_nearest_path_chain() {
+    const std::string workspace = temp_workspace("chain");
+    fs::create_directories(fs::path(workspace) / "src" / "ui");
+    {
+        std::ofstream out(fs::path(workspace) / "AGENTS.md");
+        out << "root rules\n";
+    }
+    {
+        std::ofstream out(fs::path(workspace) / "src" / "AGENTS.md");
+        out << "src rules\n";
+    }
+    {
+        std::ofstream out(fs::path(workspace) / "src" / "ui" / "AGENTS.md");
+        out << "ui rules\n";
+    }
+
+    agent::AgentsMdBundle bundle;
+    const Error error =
+        agent::load_agents_md_for_path(workspace, "src/ui/button.cpp", 20000, bundle);
+    check(error.ok(), "load chain for file path");
+    check(bundle.documents.size() == 3, "root + src + ui AGENTS.md loaded");
+    check(bundle.documents[0].path == "AGENTS.md", "root first");
+    check(bundle.documents[1].path == "src/AGENTS.md", "src second");
+    check(bundle.documents[2].path == "src/ui/AGENTS.md", "ui nearest last");
+    check(bundle.injection_text.find("root rules") != std::string::npos &&
+              bundle.injection_text.find("ui rules") != std::string::npos,
+          "injection includes root and nearest");
+
+    agent::AgentsMdBundle dir_bundle;
+    const Error dir_error =
+        agent::load_agents_md_for_path(workspace, "src/ui", 20000, dir_bundle);
+    check(dir_error.ok() && dir_bundle.documents.size() == 3,
+          "directory path includes leaf directory AGENTS.md");
+
+    // Byte budget applies across the chain; later docs may be truncated/omitted.
+    agent::AgentsMdBundle tight;
+    const Error tight_error =
+        agent::load_agents_md_for_path(workspace, "src/ui/button.cpp", 15, tight);
+    check(tight_error.ok() && tight.truncated, "chain respects shared byte budget");
+    check(tight.total_bytes <= 15, "total bytes within budget");
+    check(!tight.documents.empty(), "at least root content when budget is small");
+
+    std::error_code ec;
+    fs::remove_all(workspace, ec);
+}
+
 }  // namespace
 
 void run_all() {
     test_missing_agents_md();
     test_load_and_seed_injection();
     test_truncation();
+    test_nearest_path_chain();
 }
 
 }  // namespace ainiux::test::agent_agents_md

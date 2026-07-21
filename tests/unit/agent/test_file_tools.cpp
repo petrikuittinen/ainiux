@@ -96,6 +96,21 @@ bool json_array_contains_string(const std::string& result, const std::string& ne
     return false;
 }
 
+bool json_array_contains_string_field(const std::string& result,
+                                      const std::string& field,
+                                      const std::string& needle) {
+    const json::ParseResult parsed = json::parse(result);
+    if (!parsed.error.ok() || !parsed.value.is_object()) return false;
+    const json::Value* data = parsed.value.get("data");
+    if (data == nullptr || !data->is_array()) return false;
+    for (const json::Value& item : data->array) {
+        if (!item.is_object()) continue;
+        const json::Value* value = item.get(field);
+        if (value != nullptr && value->is_string() && value->string == needle) return true;
+    }
+    return false;
+}
+
 void assert_schema_arrays_have_items(const json::Value& node, const std::string& path,
                                      std::vector<std::string>& failures) {
     if (node.is_object()) {
@@ -196,11 +211,16 @@ void test_read_only_registry_hides_writes() {
     agent::ReadToolRegistry tools = make_registry(workspace, false);
     bool has_write = false;
     bool has_replace = false;
+    bool has_remove = false;
+    bool has_edit = false;
     for (const provider::FunctionDefinition& definition : tools.definitions()) {
         if (definition.name == "write_file") has_write = true;
         if (definition.name == "str_replace") has_replace = true;
+        if (definition.name == "remove") has_remove = true;
+        if (definition.name == "edit_file") has_edit = true;
     }
-    check(!has_write && !has_replace, "read-only registry omits mutation tools");
+    check(!has_write && !has_replace && !has_remove && !has_edit,
+          "read-only registry omits mutation tools");
     const std::string denied =
         tools.execute("write_file", R"({"path":"src/x.cpp","content":"x\n"})");
     check(!json_ok(denied) && json_error_code(denied) == "policy_denied",
@@ -471,6 +491,216 @@ void test_edit_file_ops() {
     fs::remove_all(workspace, ec);
 }
 
+void test_str_replace_fuzzy_whitespace_and_indent() {
+    const std::string workspace = write_temp_workspace("fuzzy");
+    write_text(fs::path(workspace) / "src" / "ws.cpp",
+               "int add(  int a,\n  int b ) {\n  return a + b;\n}\n");
+    agent::ReadToolRegistry tools = make_registry(workspace, true);
+
+    // Needle has different internal whitespace than the file.
+    const std::string ws = tools.execute(
+        "str_replace",
+        R"JSON({"path":"src/ws.cpp","old_text":"int add(int a, int b)","new_text":"int add(int x, int y)"})JSON");
+    check(json_ok(ws), "normalized whitespace str_replace succeeds: " + ws);
+    check(json_data_string(ws, "match_mode") == "normalized_whitespace",
+          "match_mode reports normalized_whitespace: " + ws);
+    check(read_text(fs::path(workspace) / "src" / "ws.cpp").find("int add(int x, int y)") !=
+              std::string::npos,
+          "whitespace-fuzzy replace updated signature");
+
+    // Multi-line block with wrong leading indent.
+    write_text(fs::path(workspace) / "src" / "indent.cpp",
+               "void f() {\n    if (true) {\n        do_work();\n    }\n}\n");
+    tools = make_registry(workspace, true);
+    const std::string indent = tools.execute(
+        "str_replace",
+        R"JSON({"path":"src/indent.cpp","old_text":"if (true) {\n    do_work();\n}","new_text":"if (ready) {\n    do_work();\n}"})JSON");
+    check(json_ok(indent), "indent-stripped str_replace succeeds: " + indent);
+    // May resolve via normalized_whitespace or indent_stripped depending on snippet shape.
+    check(json_data_string(indent, "match_mode") == "indent_stripped" ||
+              json_data_string(indent, "match_mode") == "normalized_whitespace",
+          "match_mode reports a fuzzy mode: " + indent);
+    check(read_text(fs::path(workspace) / "src" / "indent.cpp").find("if (ready)") !=
+              std::string::npos,
+          "indent-fuzzy replace updated condition");
+
+    // fuzzy=false must not fall back.
+    write_text(fs::path(workspace) / "src" / "exact_only.cpp", "foo(  1,  2 )\n");
+    tools = make_registry(workspace, true);
+    const std::string no_fuzzy = tools.execute(
+        "str_replace",
+        R"JSON({"path":"src/exact_only.cpp","old_text":"foo(1, 2)","new_text":"foo(3, 4)","fuzzy":false})JSON");
+    check(!json_ok(no_fuzzy) && json_error_code(no_fuzzy) == "not_found",
+          "fuzzy=false rejects whitespace-only mismatch: " + no_fuzzy);
+
+    // edit_file.replace_text also uses fuzzy fallback.
+    write_text(fs::path(workspace) / "src" / "edit_ws.cpp", "print(  'hi'  )\n");
+    tools = make_registry(workspace, true);
+    const std::string edit_ws = tools.execute(
+        "edit_file",
+        R"JSON({"path":"src/edit_ws.cpp","ops":[{"type":"replace_text","old_text":"print('hi')","new_text":"print('ok')"}]})JSON");
+    check(json_ok(edit_ws), "edit_file replace_text fuzzy succeeds: " + edit_ws);
+    check(read_text(fs::path(workspace) / "src" / "edit_ws.cpp") == "print('ok')\n",
+          "edit_file fuzzy replace_text content");
+
+    std::error_code ec;
+    fs::remove_all(workspace, ec);
+}
+
+void test_remove_tool() {
+    const std::string workspace = write_temp_workspace("remove");
+    write_text(fs::path(workspace) / "src" / "gone.cpp", "int x;\n");
+    fs::create_directories(fs::path(workspace) / "src" / "empty_dir");
+    fs::create_directories(fs::path(workspace) / "src" / "full_dir");
+    write_text(fs::path(workspace) / "src" / "full_dir" / "keep.cpp", "int y;\n");
+    write_text(fs::path(workspace) / "data.sqlite", "not-a-real-db");
+    agent::ReadToolRegistry tools = make_registry(workspace, true);
+
+    bool has_remove = false;
+    for (const provider::FunctionDefinition& definition : tools.definitions())
+        if (definition.name == "remove") has_remove = true;
+    check(has_remove, "mutation registry exposes remove");
+
+    const std::string removed =
+        tools.execute("remove", R"JSON({"path":"src/gone.cpp"})JSON");
+    check(json_ok(removed), "remove file succeeds: " + removed);
+    check(!fs::exists(fs::path(workspace) / "src" / "gone.cpp"), "file was removed");
+    check(!json_data_string(removed, "history_path").empty(), "remove records history for text");
+
+    const std::string empty =
+        tools.execute("remove", R"JSON({"path":"src/empty_dir"})JSON");
+    check(json_ok(empty), "remove empty directory succeeds: " + empty);
+
+    const std::string nonempty =
+        tools.execute("remove", R"JSON({"path":"src/full_dir"})JSON");
+    check(!json_ok(nonempty), "non-empty directory without recursive fails: " + nonempty);
+
+    const std::string recursive =
+        tools.execute("remove", R"JSON({"path":"src/full_dir","recursive":true})JSON");
+    check(json_ok(recursive), "recursive remove succeeds: " + recursive);
+    check(!fs::exists(fs::path(workspace) / "src" / "full_dir"), "directory tree removed");
+
+    const std::string db =
+        tools.execute("remove", R"JSON({"path":"data.sqlite"})JSON");
+    check(!json_ok(db) && json_error_code(db) == "policy_denied",
+          "database file remove denied in headless mode: " + db);
+    check(fs::exists(fs::path(workspace) / "data.sqlite"), "database file still present");
+
+    // Missing path suggests #wrapped# siblings.
+    write_text(fs::path(workspace) / "plain.txt", "a\n");
+    write_text(fs::path(workspace) / "#plain.txt#", "backup\n");
+    tools = make_registry(workspace, true);
+    const std::string missing =
+        tools.execute("remove", R"JSON({"path":"nope.txt"})JSON");
+    check(!json_ok(missing) && json_error_code(missing) == "not_found",
+          "missing path fails: " + missing);
+
+    // Plain name blocked when #plain.txt# also exists unless confirm=true.
+    const std::string ambiguous =
+        tools.execute("remove", R"JSON({"path":"plain.txt"})JSON");
+    check(!json_ok(ambiguous) && json_error_code(ambiguous) == "ambiguous_match",
+          "plain remove blocked when #sibling# exists: " + ambiguous);
+    check(fs::exists(fs::path(workspace) / "plain.txt"), "plain file kept without confirm");
+
+    const std::string hash_name =
+        tools.execute("remove", R"JSON({"path":"#plain.txt#"})JSON");
+    check(json_ok(hash_name), "exact #wrapped# remove succeeds: " + hash_name);
+    check(!fs::exists(fs::path(workspace) / "#plain.txt#"), "hash-wrapped file removed");
+    check(fs::exists(fs::path(workspace) / "plain.txt"), "plain sibling still present");
+
+    // Recreate wrapper; confirm=true allows deleting the plain name intentionally.
+    write_text(fs::path(workspace) / "#plain.txt#", "backup2\n");
+    tools = make_registry(workspace, true);
+    const std::string confirmed =
+        tools.execute("remove", R"JSON({"path":"plain.txt","confirm":true})JSON");
+    check(json_ok(confirmed), "confirm=true removes plain when sibling exists: " + confirmed);
+    check(!fs::exists(fs::path(workspace) / "plain.txt"), "plain removed with confirm");
+
+    const std::string denied =
+        make_registry(workspace, false).execute("remove", R"JSON({"path":"src/hello.cpp"})JSON");
+    check(!json_ok(denied) && json_error_code(denied) == "policy_denied",
+          "read-only registry denies remove");
+
+    std::error_code ec;
+    fs::remove_all(workspace, ec);
+}
+
+void test_list_directory_filesystem() {
+    const std::string workspace = write_temp_workspace("listdir");
+    // Empty nested dirs (parent is non-empty only because of the child dir).
+    fs::create_directories(fs::path(workspace) / "you_can_remove_me" / "del_me");
+    // Non-source / unusual names are invisible to the code index.
+    write_text(fs::path(workspace) / "#hello_world.py#", "backup content\n");
+    write_text(fs::path(workspace) / "notes.txt", "not indexed as code if unknown? may be skipped\n");
+    agent::ReadToolRegistry tools = make_registry(workspace, false);
+
+    const std::string root = tools.execute("list_directory", R"JSON({"path":"."})JSON");
+    check(json_ok(root), "list_directory root succeeds: " + root);
+    check(json_array_contains_string_field(root, "name", "you_can_remove_me") ||
+              root.find("you_can_remove_me") != std::string::npos,
+          "lists non-indexed empty-parent directory: " + root);
+    check(root.find("#hello_world.py#") != std::string::npos,
+          "lists #wrapped# non-indexed file: " + root);
+    check(root.find("hello.cpp") != std::string::npos || root.find("\"src\"") != std::string::npos,
+          "still lists indexed tree: " + root);
+
+    // Parent dir is not empty (has del_me); del_me itself is empty.
+    const std::string nested =
+        tools.execute("list_directory", R"JSON({"path":"you_can_remove_me"})JSON");
+    check(json_ok(nested) && nested.find("del_me") != std::string::npos,
+          "lists nested directory entry: " + nested);
+    check(nested.find("\"empty\":true") != std::string::npos ||
+              nested.find("\"empty\": true") != std::string::npos,
+          "marks empty child directory: " + nested);
+
+    const std::string empty_leaf =
+        tools.execute("list_directory", R"JSON({"path":"you_can_remove_me/del_me"})JSON");
+    check(json_ok(empty_leaf), "list empty directory succeeds: " + empty_leaf);
+
+    std::error_code ec;
+    fs::remove_all(workspace, ec);
+}
+
+void test_replace_symbol() {
+    const std::string workspace = write_temp_workspace("symbol");
+    write_text(fs::path(workspace) / "src" / "sym.cpp",
+               "int alpha() {\n  return 1;\n}\n\nint beta() {\n  return 2;\n}\n");
+    agent::ReadToolRegistry tools = make_registry(workspace, true);
+
+    const std::string search =
+        tools.execute("search_symbol", R"JSON({"query":"alpha","max_results":10})JSON");
+    check(json_ok(search), "search_symbol finds alpha: " + search);
+    const json::ParseResult parsed = json::parse(search);
+    check(parsed.error.ok() && parsed.value.get("data") != nullptr &&
+              parsed.value.get("data")->is_array() && !parsed.value.get("data")->array.empty(),
+          "search_symbol returns hits");
+    const json::Value& hit = parsed.value.get("data")->array.front();
+    const json::Value* id_value = hit.get("id");
+    if (id_value == nullptr) id_value = hit.get("symbol_id");
+    check(id_value != nullptr && id_value->type == json::Value::Type::Number,
+          "hit has id: " + search);
+    const long long symbol_id = static_cast<long long>(id_value->number);
+
+    const std::string replaced = tools.execute(
+        "edit_file",
+        ("{\"path\":\"src/sym.cpp\",\"ops\":[{\"type\":\"replace_symbol\",\"symbol_id\":" +
+         std::to_string(symbol_id) +
+         ",\"replacement\":\"int alpha() {\\n  return 42;\\n}\\n\"}]}")
+            .c_str());
+    check(json_ok(replaced), "replace_symbol succeeds: " + replaced);
+    const std::string content = read_text(fs::path(workspace) / "src" / "sym.cpp");
+    check(content.find("return 42;") != std::string::npos, "symbol body updated");
+    check(content.find("int beta()") != std::string::npos, "other symbol preserved");
+
+    const std::string missing = tools.execute(
+        "edit_file",
+        R"JSON({"path":"src/sym.cpp","ops":[{"type":"replace_symbol","symbol_id":999999,"replacement":"x"}]})JSON");
+    check(!json_ok(missing), "unknown symbol_id fails: " + missing);
+
+    std::error_code ec;
+    fs::remove_all(workspace, ec);
+}
+
 }  // namespace
 
 void run_all() {
@@ -480,6 +710,10 @@ void run_all() {
     test_write_file_create_and_readback();
     test_str_replace_exact();
     test_edit_file_ops();
+    test_str_replace_fuzzy_whitespace_and_indent();
+    test_remove_tool();
+    test_list_directory_filesystem();
+    test_replace_symbol();
 }
 
 }  // namespace ainiux::test::agent_file_tools
