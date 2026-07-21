@@ -684,21 +684,52 @@ Error http_status_error(const RequestContext& context, const http::Response& res
 }
 
 std::string provider_error_message(const json::Value& root) {
+    auto message_from_error_object = [](const json::Value& err) -> std::string {
+        if (err.is_string()) return err.string;
+        if (!err.is_object()) return "";
+        if (const json::Value* msg = err.get("message")) {
+            if (msg->is_string() && !msg->string.empty()) return msg->string;
+        }
+        if (const json::Value* msg = err.get("detail")) {
+            if (msg->is_string() && !msg->string.empty()) return msg->string;
+        }
+        return "";
+    };
+
     const json::Value* err = root.get("error");
     if (err != nullptr) {
-        if (err->is_string()) {
-            return err->string;
-        }
-        if (const json::Value* msg = err->get("message")) {
-            if (msg->is_string()) {
-                return msg->string;
+        std::string top = message_from_error_object(*err);
+        // OpenRouter often wraps the real upstream (Gemini/Google) message as a
+        // JSON string in error.metadata.raw. Prefer that when the top message is
+        // the generic "Provider returned error".
+        if (err->is_object()) {
+            const json::Value* metadata = err->get("metadata");
+            if (metadata != nullptr && metadata->is_object()) {
+                const json::Value* raw = metadata->get("raw");
+                if (raw != nullptr && raw->is_string() && !raw->string.empty()) {
+                    const json::ParseResult nested = json::parse(raw->string);
+                    if (nested.error.ok()) {
+                        std::string nested_msg;
+                        if (const json::Value* nested_err = nested.value.get("error"))
+                            nested_msg = message_from_error_object(*nested_err);
+                        if (nested_msg.empty()) nested_msg = message_from_error_object(nested.value);
+                        if (!nested_msg.empty()) {
+                            const std::string provider_name =
+                                (metadata->get("provider_name") != nullptr &&
+                                 metadata->get("provider_name")->is_string())
+                                    ? metadata->get("provider_name")->string
+                                    : std::string{};
+                            if (!provider_name.empty())
+                                return provider_name + ": " + nested_msg;
+                            return nested_msg;
+                        }
+                    } else if (top.empty() || top == "Provider returned error") {
+                        return compact_provider_detail(raw->string);
+                    }
+                }
             }
         }
-        if (const json::Value* msg = err->get("detail")) {
-            if (msg->is_string()) {
-                return msg->string;
-            }
-        }
+        if (!top.empty()) return top;
     }
     if (const json::Value* msg = root.get("message")) {
         if (msg->is_string()) {

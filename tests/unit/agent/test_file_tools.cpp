@@ -96,6 +96,63 @@ bool json_array_contains_string(const std::string& result, const std::string& ne
     return false;
 }
 
+void assert_schema_arrays_have_items(const json::Value& node, const std::string& path,
+                                     std::vector<std::string>& failures) {
+    if (node.is_object()) {
+        const json::Value* type = node.get("type");
+        if (type != nullptr && type->is_string() && type->string == "array") {
+            const json::Value* items = node.get("items");
+            if (items == nullptr)
+                failures.push_back(path + ": array missing items (Gemini/Google require this)");
+            else
+                assert_schema_arrays_have_items(*items, path + ".items", failures);
+        }
+        const json::Value* properties = node.get("properties");
+        if (properties != nullptr && properties->is_object()) {
+            for (const auto& entry : properties->object)
+                assert_schema_arrays_have_items(entry.second, path + "." + entry.first, failures);
+        }
+        for (const char* key : {"items", "additionalProperties"}) {
+            const json::Value* child = node.get(key);
+            if (child != nullptr && child->is_object())
+                assert_schema_arrays_have_items(*child, path + "." + key, failures);
+        }
+    } else if (node.is_array()) {
+        for (std::size_t i = 0; i < node.array.size(); ++i)
+            assert_schema_arrays_have_items(node.array[i], path + "[" + std::to_string(i) + "]",
+                                            failures);
+    }
+}
+
+void test_tool_schemas_gemini_compatible() {
+    const std::string workspace = write_temp_workspace("schema");
+    agent::ReadToolRegistry tools = make_registry(workspace, true);
+    std::vector<std::string> failures;
+    bool saw_edit = false;
+    for (const provider::FunctionDefinition& definition : tools.definitions()) {
+        const json::ParseResult parsed = json::parse(definition.parameters_json);
+        check(parsed.error.ok() && parsed.value.is_object(),
+              "tool schema parses for " + definition.name + ": " + definition.parameters_json);
+        assert_schema_arrays_have_items(parsed.value, definition.name, failures);
+        if (definition.name == "edit_file") {
+            saw_edit = true;
+            const json::Value* properties = parsed.value.get("properties");
+            check(properties != nullptr && properties->is_object(), "edit_file has properties");
+            const json::Value* ops = properties->get("ops");
+            check(ops != nullptr && ops->is_object(), "edit_file has ops");
+            const json::Value* items = ops->get("items");
+            check(items != nullptr && items->is_object(),
+                  "edit_file.ops.items present for Gemini");
+        }
+    }
+    check(saw_edit, "mutation registry includes edit_file");
+    check(failures.empty(),
+          failures.empty() ? "schemas ok"
+                           : ("schema array items missing: " + failures.front()));
+    std::error_code ec;
+    fs::remove_all(workspace, ec);
+}
+
 void test_glob_recursive_root_and_nested() {
     const std::string workspace = write_temp_workspace("glob");
     write_text(fs::path(workspace) / "hello.py", "print(1)\n");
@@ -406,6 +463,7 @@ void test_edit_file_ops() {
 }  // namespace
 
 void run_all() {
+    test_tool_schemas_gemini_compatible();
     test_glob_recursive_root_and_nested();
     test_read_only_registry_hides_writes();
     test_write_file_create_and_readback();

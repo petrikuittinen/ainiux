@@ -321,6 +321,22 @@ void test_http_status_errors_are_friendly() {
           "HTTP error does not expose raw JSON error dumps");
 }
 
+void test_openrouter_nested_provider_errors_are_unwrapped() {
+    // OpenRouter wraps Gemini/Google schema failures as error.metadata.raw JSON.
+    const std::string body =
+        R"({"error":{"message":"Provider returned error","code":400,"metadata":{"raw":"{\"error\":{\"code\":400,\"message\":\"* properties[ops].items: missing field.\\n\",\"status\":\"INVALID_ARGUMENT\"}}","provider_name":"Google AI Studio"}}})";
+    const ainiux::Error err =
+        run_chat_http_status_response(400, "Bad Request", "application/json", body);
+    check(!err.ok(), "OpenRouter nested 400 returns an error");
+    check(err.message.find("Google AI Studio") != std::string::npos,
+          "nested error names the upstream provider");
+    check(err.message.find("properties[ops].items: missing field") != std::string::npos,
+          "nested error surfaces the real Gemini schema message: " + err.message);
+    check(err.message.find("Provider returned error") == std::string::npos ||
+              err.message.find("properties[ops].items") != std::string::npos,
+          "nested detail is preferred over the generic OpenRouter shell message");
+}
+
 void test_chat_sse_accepts_cr_only_event_boundaries() {
     const std::string body =
         "data: {\"choices\":[{\"delta\":{\"content\":\"Hello\"}}]}\r\r"
@@ -1535,6 +1551,7 @@ void test_native_tool_protocols() {
 
 void run_all() {
     test_http_status_errors_are_friendly();
+    test_openrouter_nested_provider_errors_are_unwrapped();
     test_chat_sse_accepts_cr_only_event_boundaries();
     test_chat_sse_streaming_reasoning_content();
     test_chat_sse_openrouter_reasoning_details_text();

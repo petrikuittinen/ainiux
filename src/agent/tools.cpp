@@ -1133,6 +1133,35 @@ std::vector<provider::FunctionDefinition> ReadToolRegistry::definitions() const 
     const std::string range = path + ",\"start_line\":{\"type\":\"integer\",\"minimum\":1},"
                                       "\"end_line\":{\"type\":\"integer\",\"minimum\":1},"
                                       "\"max_bytes\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":262144}";
+    // Gemini / Google AI Studio reject array properties without an items schema
+    // (OpenRouter surfaces: properties[ops].items: missing field). Keep op items
+    // permissive so flat, nested, and alias argument shapes remain accepted.
+    const std::string edit_line_fields =
+        "\"start_line\":{\"type\":\"integer\",\"minimum\":1},"
+        "\"end_line\":{\"type\":\"integer\",\"minimum\":1},"
+        "\"line\":{\"type\":\"integer\",\"minimum\":1},"
+        "\"new_text\":{\"type\":\"string\"},"
+        "\"replacement\":{\"type\":\"string\"},"
+        "\"text\":{\"type\":\"string\"},"
+        "\"old_text\":{\"type\":\"string\"},"
+        "\"replace_all\":{\"type\":\"boolean\"},"
+        "\"expected_hash\":{\"type\":\"string\"},"
+        "\"symbol_id\":{\"type\":\"integer\",\"minimum\":1}";
+    const std::string edit_nested_object =
+        "{\"type\":\"object\",\"properties\":{" + edit_line_fields + "}}";
+    const std::string edit_op_item =
+        "{\"type\":\"object\",\"properties\":{"
+        "\"type\":{\"type\":\"string\"},"
+        "\"op\":{\"type\":\"string\"}," +
+        edit_line_fields +
+        ",\"line_range_hint\":{\"type\":\"object\",\"properties\":{"
+        "\"start_line\":{\"type\":\"integer\",\"minimum\":1},"
+        "\"end_line\":{\"type\":\"integer\",\"minimum\":1}}},"
+        "\"replace_range\":" +
+        edit_nested_object +
+        ",\"insert_at\":" + edit_nested_object + ",\"delete_range\":" + edit_nested_object +
+        ",\"replace_text\":" + edit_nested_object + ",\"create_file\":" + edit_nested_object +
+        "}}";
     std::vector<provider::FunctionDefinition> tools = {
         {"project_overview", "Summarize indexed languages, files, lines, likely entry points/tests, and freshness.", schema("")},
         {"list_directory", "List bounded indexed entries in a workspace-relative directory.", schema(path + ",\"max_entries\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":500}")},
@@ -1154,7 +1183,9 @@ std::vector<provider::FunctionDefinition> ReadToolRegistry::definitions() const 
              "Line ops apply bottom-to-top; create_file is alone for new files.",
              schema(path + ",\"expected_file_hash\":{\"type\":\"string\"},"
                            "\"create_dirs\":{\"type\":\"boolean\"},"
-                           "\"ops\":{\"type\":\"array\",\"minItems\":1,\"maxItems\":100}",
+                           "\"ops\":{\"type\":\"array\",\"minItems\":1,\"maxItems\":100,"
+                           "\"items\":" +
+                           edit_op_item + "}",
                     "\"path\",\"ops\"")});
         tools.push_back(
             {"write_file",
