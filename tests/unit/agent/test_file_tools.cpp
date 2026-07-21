@@ -456,6 +456,17 @@ void test_edit_file_ops() {
     check(strict.find("current_range_hash=") != std::string::npos,
           "stale_range error includes current_range_hash");
 
+    // Natural-language agents (Qwen etc.) often nest path inside the op object.
+    write_text(fs::path(workspace) / "src" / "nested_path.py", "# first\nprint(1)\n");
+    tools = make_registry(workspace, true);
+    const std::string nested_path = tools.execute(
+        "edit_file",
+        R"JSON({"ops":[{"op":"replace_range","path":"src/nested_path.py","start_line":1,"end_line":1,"new_text":"# first\n# second line\n"}]})JSON");
+    check(json_ok(nested_path),
+          "edit_file promotes path from ops when top-level path is missing: " + nested_path);
+    check(read_text(fs::path(workspace) / "src" / "nested_path.py") == "# first\n# second line\nprint(1)\n",
+          "nested-path edit inserted second comment line");
+
     std::error_code ec;
     fs::remove_all(workspace, ec);
 }

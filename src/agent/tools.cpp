@@ -1626,21 +1626,74 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
     if (name == "edit_file") {
         if (!allow_mutations_)
             return tool_error_result("policy_denied", "edit_file is not enabled in this session");
+        // Models (esp. under natural-language goals) often nest path inside ops[i]
+        // instead of the top-level edit_file.path required by the schema. Promote
+        // common top-level fields from ops when missing so the call still works.
+        json::Value edit_args = args;
+        if (!edit_args.is_object())
+            return tool_error_result("invalid_arguments", "edit_file arguments must be an object");
+        json::Value* ops_value = nullptr;
+        {
+            auto it = edit_args.object.find("ops");
+            if (it != edit_args.object.end()) ops_value = &it->second;
+        }
+        if (ops_value == nullptr || !ops_value->is_array())
+            return tool_error_result("invalid_arguments", "edit_file requires ops array");
+
+        auto top_string = [&](const char* key) -> std::string {
+            const json::Value* value = edit_args.get(key);
+            return value != nullptr && value->is_string() ? value->string : std::string{};
+        };
+        if (top_string("path").empty()) {
+            for (json::Value& op : ops_value->array) {
+                if (!op.is_object()) continue;
+                // Flat op.path or nested op.replace_range.path etc.
+                const json::Value* nested_path = op.get("path");
+                if (nested_path == nullptr || !nested_path->is_string() || nested_path->string.empty()) {
+                    for (const char* nested_key :
+                         {"replace_range", "insert_at", "delete_range", "replace_text",
+                          "create_file"}) {
+                        const json::Value* nested = op.get(nested_key);
+                        if (nested != nullptr && nested->is_object()) {
+                            nested_path = nested->get("path");
+                            if (nested_path != nullptr && nested_path->is_string() &&
+                                !nested_path->string.empty())
+                                break;
+                            nested_path = nullptr;
+                        }
+                    }
+                }
+                if (nested_path != nullptr && nested_path->is_string() &&
+                    !nested_path->string.empty()) {
+                    edit_args.object["path"] = string_value(nested_path->string);
+                    break;
+                }
+            }
+        }
+        if (top_string("expected_file_hash").empty()) {
+            for (const json::Value& op : ops_value->array) {
+                if (!op.is_object()) continue;
+                const json::Value* hash = op.get("expected_file_hash");
+                if (hash != nullptr && hash->is_string() && !hash->string.empty()) {
+                    edit_args.object["expected_file_hash"] = *hash;
+                    break;
+                }
+            }
+        }
+
         std::string path, expected_hash;
         bool create_dirs = false;
-        if (!get_string(args, "path", path, true, validation_error) ||
-            !get_bool(args, "create_dirs", false, create_dirs, validation_error) ||
-            !get_string(args, "expected_file_hash", expected_hash, false, validation_error))
+        if (!get_string(edit_args, "path", path, true, validation_error) ||
+            !get_bool(edit_args, "create_dirs", false, create_dirs, validation_error) ||
+            !get_string(edit_args, "expected_file_hash", expected_hash, false, validation_error))
             return tool_error_result("invalid_arguments", validation_error);
-        const json::Value* ops = args.get("ops");
-        if (ops == nullptr || !ops->is_array())
-            return tool_error_result("invalid_arguments", "edit_file requires ops array");
+        const json::Value& ops = *ops_value;
         std::string history_path, old_hash, new_hash;
         std::size_t operations_applied = 0;
         std::vector<std::string> summary;
         std::vector<std::string> warnings;
         const Error error =
-            edit_workspace_file(path, expected_hash, *ops, create_dirs, history_path, old_hash,
+            edit_workspace_file(path, expected_hash, ops, create_dirs, history_path, old_hash,
                                 new_hash, operations_applied, summary, warnings);
         json::Value data = object_value();
         data.object["path"] = string_value(fs::path(path).generic_string());
