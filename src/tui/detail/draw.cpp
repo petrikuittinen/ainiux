@@ -4,6 +4,7 @@
 #include "tui/theme_registry.hpp"
 #include "tui/tui.hpp"
 
+#include "agent/tool_display.hpp"
 #include "app/detail.hpp"
 #include "provider/provider.hpp"
 
@@ -380,8 +381,13 @@ std::vector<StyledLine> history_lines_for_session(const chat::Session& session,
                                                   bool agent_mode) {
     std::vector<StyledLine> history;
     const int min_content_width = 8;
+    // Agent elapsed times are relative to the most recent user message timestamp.
+    long long agent_turn_start_ms = 0;
     for (size_t message_index = 0; message_index < session.messages.size(); ++message_index) {
         const provider::Message& message = session.messages[message_index];
+        if (agent_mode && message.role == "user" && message.created_at_ms > 0) {
+            agent_turn_start_ms = message.created_at_ms;
+        }
         // Agent mode chrome is minimal: user prompts as "> text", tool/assistant
         // output flush-left without "Assistant:" / "Tool:" labels or hanging indent.
         std::string prefix;
@@ -451,6 +457,21 @@ std::vector<StyledLine> history_lines_for_session(const chat::Session& session,
                 prefixed.insert(prefixed.end(), content_segments.begin(), content_segments.end());
                 content_segments = std::move(prefixed);
             }
+        }
+        // Agent UI: append relative elapsed time (not a full wall-clock stamp).
+        // User prompts mark turn origin (no elapsed). Tool/assistant/notice show
+        // "N.NN seconds elapsed" from that user message.
+        std::string elapsed_suffix;
+        if (agent_mode && message.created_at_ms > 0 && agent_turn_start_ms > 0 &&
+            message.role != "user" && !show_thinking_placeholder && !show_streaming_placeholder) {
+            // Skip if content already carries a live progress elapsed suffix.
+            if (content.find("seconds elapsed") == std::string::npos) {
+                const long long elapsed_ms = message.created_at_ms - agent_turn_start_ms;
+                elapsed_suffix = "  " + agent::format_elapsed_seconds(elapsed_ms);
+            }
+        }
+        if (!elapsed_suffix.empty()) {
+            content_segments.push_back({elapsed_suffix, StyleRole::Muted});
         }
         std::vector<std::vector<StyledSegment>> wrapped;
         const int prefix_cells = static_cast<int>(prefix.size());

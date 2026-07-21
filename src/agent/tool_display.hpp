@@ -20,6 +20,16 @@ std::size_t terminal_column_count(std::size_t fallback = 80);
 // Appends "..." when truncated. Empty max_cells yields empty string.
 std::string clip_to_cells(const std::string& text, std::size_t max_cells);
 
+// Format elapsed wall time for agent UI: "6.54 seconds elapsed" (2 decimal places).
+// Negative or zero still formats as "0.00 seconds elapsed".
+std::string format_elapsed_seconds(long long elapsed_ms);
+
+// Normalize stored timestamps: values below 1e12 are treated as Unix seconds.
+long long normalize_timestamp_ms(long long stored_created_at);
+
+// Current wall-clock time in Unix milliseconds.
+long long now_unix_ms();
+
 // Build a truncated preview of JSON tool arguments (paths preferred).
 std::string compact_tool_args_preview(const std::string& arguments_json,
                                       std::size_t max_cells = 72);

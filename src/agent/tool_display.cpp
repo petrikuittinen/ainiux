@@ -1,7 +1,9 @@
 #include "agent/tool_display.hpp"
 
 #include <cctype>
+#include <chrono>
 #include <cstdlib>
+#include <iomanip>
 #include <sstream>
 #include <sys/ioctl.h>
 #include <unistd.h>
@@ -71,6 +73,27 @@ std::size_t terminal_column_count(std::size_t fallback) {
 
 std::string clip_to_cells(const std::string& text, std::size_t max_cells) {
     return truncate_cells(text, max_cells);
+}
+
+long long now_unix_ms() {
+    return std::chrono::duration_cast<std::chrono::milliseconds>(
+               std::chrono::system_clock::now().time_since_epoch())
+        .count();
+}
+
+long long normalize_timestamp_ms(long long stored_created_at) {
+    if (stored_created_at <= 0) return 0;
+    // Unix seconds are ~1e9; milliseconds are ~1e12.
+    if (stored_created_at < 1000000000000LL) return stored_created_at * 1000;
+    return stored_created_at;
+}
+
+std::string format_elapsed_seconds(long long elapsed_ms) {
+    if (elapsed_ms < 0) elapsed_ms = 0;
+    const double seconds = static_cast<double>(elapsed_ms) / 1000.0;
+    std::ostringstream out;
+    out << std::fixed << std::setprecision(2) << seconds << " seconds elapsed";
+    return out.str();
 }
 
 std::string compact_tool_args_preview(const std::string& arguments_json, std::size_t max_cells) {

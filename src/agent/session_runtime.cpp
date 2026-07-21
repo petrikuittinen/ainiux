@@ -250,6 +250,7 @@ Error AgentSessionRuntime::load_display_messages(std::vector<provider::Message>&
         } else {
             message.content = row.content;
         }
+        message.created_at_ms = normalize_timestamp_ms(row.created_at);
         out.push_back(std::move(message));
     }
     return ok_error();
@@ -296,13 +297,21 @@ SessionTurnResult AgentSessionRuntime::run_user_turn(
         return result;
     }
 
+    result.turn_started_ms = now_unix_ms();
     // Prefer the per-turn callback (TUI streaming); fall back to prepare-time options.
-    auto progress = [&](const std::string& line) {
+    // Tool progress lines include elapsed-since-turn for live UI; DB stores raw lines.
+    auto progress = [&](const std::string& line, bool with_elapsed = false) {
+        std::string out = line;
+        if (with_elapsed && result.turn_started_ms > 0) {
+            const long long elapsed = now_unix_ms() - result.turn_started_ms;
+            out += "  ";
+            out += format_elapsed_seconds(elapsed);
+        }
         if (on_progress) {
-            on_progress(line);
+            on_progress(out);
             return;
         }
-        if (options_.on_progress) options_.on_progress(line);
+        if (options_.on_progress) options_.on_progress(out);
     };
 
     // First turn: open singleton project row and seed provider conversation.
@@ -426,6 +435,9 @@ SessionTurnResult AgentSessionRuntime::run_user_turn(
     }
 
     const std::size_t log_width = terminal_column_count();
+    // Leave room for "  N.NN seconds elapsed" on live progress lines.
+    const std::size_t tool_line_width =
+        log_width > 28 ? log_width - 28 : (log_width > 8 ? log_width : 8);
     std::size_t turn_tool_index = 0;
     auto executor = [&](const std::string& name, const std::string& arguments_json,
                         runtime::CancellationToken token) {
@@ -435,16 +447,22 @@ SessionTurnResult AgentSessionRuntime::run_user_turn(
         {
             std::ostringstream running;
             running << turn_tool_index << ": " << (name.empty() ? "tool" : name) << '('
-                    << compact_tool_args_preview(arguments_json, log_width > 24 ? log_width - 24 : 8)
+                    << compact_tool_args_preview(arguments_json,
+                                                 tool_line_width > 24 ? tool_line_width - 24 : 8)
                     << ") …";
-            progress(clip_to_cells(running.str(), log_width));
+            progress(clip_to_cells(running.str(), tool_line_width), true);
         }
         std::string body = tools_.execute(name, arguments_json, token);
+        const long long completed_ms = now_unix_ms();
         const std::string line =
-            format_compact_tool_line(turn_tool_index, name, arguments_json, body, log_width);
+            format_compact_tool_line(turn_tool_index, name, arguments_json, body, tool_line_width);
         result.compact_tool_lines.push_back(line);
-        progress(line);
-        if (!options_.interactive && !context.options.quiet) std::cerr << line << "\n";
+        result.compact_tool_line_ms.push_back(completed_ms);
+        progress(line, true);
+        if (!options_.interactive && !context.options.quiet) {
+            const long long elapsed = completed_ms - result.turn_started_ms;
+            std::cerr << line << "  " << format_elapsed_seconds(elapsed) << "\n";
+        }
         if (session_store_.is_open()) {
             (void)session_store_.append_message(
                 "tool", line, name, compact_tool_status(body) == "ok",
@@ -472,6 +490,7 @@ SessionTurnResult AgentSessionRuntime::run_user_turn(
             result.tool_calls = turn_tool_calls;
             result.session_turns = session_turns_;
             result.session_tool_calls = session_tool_calls_;
+            result.finished_at_ms = now_unix_ms();
             return result;
         }
 
@@ -518,6 +537,7 @@ SessionTurnResult AgentSessionRuntime::run_user_turn(
             result.tool_calls = turn_tool_calls;
             result.session_turns = session_turns_;
             result.session_tool_calls = session_tool_calls_;
+            result.finished_at_ms = now_unix_ms();
             return result;
         }
 
@@ -643,6 +663,7 @@ SessionTurnResult AgentSessionRuntime::run_user_turn(
             final_text = outcome.final_text;
             result.error = ok_error();
             result.final_text = final_text;
+            result.finished_at_ms = now_unix_ms();
             if (session_store_.is_open() && session_id_ > 0 && !final_text.empty()) {
                 Error assistant_error =
                     session_store_.append_message("assistant", redact_secrets(final_text, secrets_));
@@ -660,6 +681,7 @@ SessionTurnResult AgentSessionRuntime::run_user_turn(
                                 ? "Agent turn limit reached; send another message to continue."
                                 : outcome.notice;
             result.final_text = result.notice;
+            result.finished_at_ms = now_unix_ms();
             if (session_store_.is_open() && session_id_ > 0) {
                 (void)session_store_.append_message("notice",
                                                     redact_secrets(result.notice, secrets_));
@@ -674,6 +696,7 @@ SessionTurnResult AgentSessionRuntime::run_user_turn(
                            : outcome.error;
         result.final_text = final_text;
         result.notice = outcome.notice;
+        result.finished_at_ms = now_unix_ms();
         return result;
     }
 }

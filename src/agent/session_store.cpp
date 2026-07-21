@@ -19,6 +19,14 @@ long long now_unix_seconds() {
         .count();
 }
 
+// Message/tool event timestamps use milliseconds (INTEGER). Older rows may still
+// hold Unix seconds; readers normalize via normalize_timestamp_ms().
+long long now_unix_ms() {
+    return std::chrono::duration_cast<std::chrono::milliseconds>(
+               std::chrono::system_clock::now().time_since_epoch())
+        .count();
+}
+
 Error sqlite_error(sqlite3* db, const std::string& action, const std::string& path) {
     return {ErrorCode::FileWrite,
             action + " for agent session DB " + path + ": " +
@@ -394,7 +402,7 @@ Error AgentSessionStore::append_message(const std::string& role,
     if (!error.ok()) return error;
     error = statement.bind_int64(db_, path_, 1, seq);
     if (!error.ok()) return error;
-    error = statement.bind_int64(db_, path_, 2, now_unix_seconds());
+    error = statement.bind_int64(db_, path_, 2, now_unix_ms());
     if (!error.ok()) return error;
     error = statement.bind_text(db_, path_, 3, role);
     if (!error.ok()) return error;
@@ -435,7 +443,7 @@ Error AgentSessionStore::append_tool_event(long long /*session_id*/,
     if (!error.ok()) return error;
     error = statement.bind_int64(db_, path_, 1, seq);
     if (!error.ok()) return error;
-    error = statement.bind_int64(db_, path_, 2, now_unix_seconds());
+    error = statement.bind_int64(db_, path_, 2, now_unix_ms());
     if (!error.ok()) return error;
     error = statement.bind_int64(db_, path_, 3, turn);
     if (!error.ok()) return error;

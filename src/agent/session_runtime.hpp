@@ -30,7 +30,12 @@ struct SessionTurnResult {
     std::size_t session_tool_calls = 0;
     bool needs_user_continue = false;
     std::string notice;
-    std::vector<std::string> compact_tool_lines;  // this turn
+    std::vector<std::string> compact_tool_lines;  // this turn (no elapsed suffix)
+    // Wall-clock ms for each compact_tool_lines entry / final answer / turn start.
+    // Used by the agent TUI to show "N.NN seconds elapsed" without full timestamps.
+    std::vector<long long> compact_tool_line_ms;
+    long long turn_started_ms = 0;
+    long long finished_at_ms = 0;
 };
 
 struct SessionRuntimeOptions {

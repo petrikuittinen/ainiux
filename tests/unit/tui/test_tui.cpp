@@ -669,9 +669,15 @@ void test_tui_markdown_history_highlighting() {
 
 void test_tui_agent_history_chrome() {
     ainiux::chat::Session session;
-    session.messages.push_back({"user", "fix the attempts"});
-    session.messages.push_back({"tool", "1: read_file(\"game.py\") → ok"});
-    session.messages.push_back({"assistant", "Updated medium and hard to 8 attempts."});
+    ainiux::provider::Message user{"user", "fix the attempts"};
+    user.created_at_ms = 1'000'000;
+    ainiux::provider::Message tool{"tool", "1: read_file(\"game.py\") → ok"};
+    tool.created_at_ms = 1'006'540;  // +6.54s
+    ainiux::provider::Message assistant{"assistant", "Updated medium and hard to 8 attempts."};
+    assistant.created_at_ms = 1'012'000;  // +12.00s
+    session.messages.push_back(std::move(user));
+    session.messages.push_back(std::move(tool));
+    session.messages.push_back(std::move(assistant));
 
     // Chat mode keeps classic labels.
     std::vector<ainiux::tui::StyledLine> chat_lines =
@@ -696,6 +702,9 @@ void test_tui_agent_history_chrome() {
     bool saw_tool_label = false;
     bool saw_tool_body = false;
     bool saw_answer = false;
+    bool saw_tool_elapsed = false;
+    bool saw_answer_elapsed = false;
+    bool saw_full_wall_clock = false;
     for (const auto& line : agent_lines) {
         std::string joined;
         for (const auto& seg : line.segments) joined += seg.text;
@@ -704,11 +713,18 @@ void test_tui_agent_history_chrome() {
         if (joined.find("Tool:") != std::string::npos) saw_tool_label = true;
         if (joined.find("1: read_file") != std::string::npos) saw_tool_body = true;
         if (joined.find("Updated medium") != std::string::npos) saw_answer = true;
+        if (joined.find("6.54 seconds elapsed") != std::string::npos) saw_tool_elapsed = true;
+        if (joined.find("12.00 seconds elapsed") != std::string::npos) saw_answer_elapsed = true;
+        if (joined.find("1970") != std::string::npos || joined.find("T") == 0)
+            saw_full_wall_clock = true;
     }
     check(saw_prompt_marker, "agent mode shows user prompts as \"> \"");
     check(!saw_assistant_label_agent, "agent mode omits Assistant: label");
     check(!saw_tool_label, "agent mode omits Tool: label");
     check(saw_tool_body && saw_answer, "agent mode still shows tool lines and answers flush-left");
+    check(saw_tool_elapsed && saw_answer_elapsed,
+          "agent mode shows elapsed seconds at 2 decimal places");
+    check(!saw_full_wall_clock, "agent mode does not show full wall-clock timestamps by default");
 }
 
 void test_tui_input_label_and_activity_indicators() {

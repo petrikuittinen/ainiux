@@ -95,6 +95,9 @@ struct Message {
     std::string content;
     std::vector<ImageInput> images;
     std::vector<TextAttachment> text_attachments;
+    // Optional wall-clock timestamp in milliseconds since Unix epoch. Used for
+    // UI elapsed-time display (agent transcript); never serialized to providers.
+    long long created_at_ms = 0;
 
     Message() = default;
     Message(std::string message_role,

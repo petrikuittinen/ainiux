@@ -19,6 +19,7 @@
 #include "app/interactive_mode.hpp"
 #include "app/detail.hpp"
 #include "agent/session_runtime.hpp"
+#include "agent/tool_display.hpp"
 #include "chat/settings.hpp"
 #include "chat/media_store.hpp"
 #include "ainiux/model_setting.hpp"
@@ -661,6 +662,8 @@ app::TuiRunResult run(provider::RequestContext context,
             provider::ChatResult chat_result;
             Error send_error = ok_error();
             ainiux::context::PreparedMessages prepared;
+            agent::SessionTurnResult agent_turn;
+            bool have_agent_turn = false;
             if (agent_mode) {
                 // Interactive agent turn: multi-turn session runtime (shared tools/DB).
                 const std::string model_name = job_context.options.model;
@@ -677,9 +680,7 @@ app::TuiRunResult run(provider::RequestContext context,
                     }
                     if (send_error.ok()) {
                         // Stream tool activity into the chat panel as each call runs.
-                        // Skip "Agent turn N" banners (status noise); keep tool lines
-                        // and compact notices. Done still replaces with the final
-                        // composed transcript (tool lines + answer).
+                        // Progress lines already include "N.NN seconds elapsed".
                         auto agent_progress = [&events](const std::string& line) {
                             if (line.empty()) return;
                             if (line.rfind("Agent turn ", 0) == 0) return;
@@ -689,19 +690,26 @@ app::TuiRunResult run(provider::RequestContext context,
                             if (delta.text.back() != '\n') delta.text.push_back('\n');
                             events.push(std::move(delta));
                         };
-                        agent::SessionTurnResult turn = runtime->run_user_turn(
-                            job_context, agent_goal, token, {}, agent_progress);
-                        send_error = turn.error;
-                        // Compact tool lines + final answer (Done sets assistant content).
-                        // Only final tool results (not the transient "…" running lines).
+                        agent_turn = runtime->run_user_turn(job_context, agent_goal, token, {},
+                                                            agent_progress);
+                        have_agent_turn = true;
+                        send_error = agent_turn.error;
+                        // Fallback single-blob content (Done prefers structured fields).
                         std::string display;
-                        for (const std::string& line : turn.compact_tool_lines) {
+                        for (std::size_t i = 0; i < agent_turn.compact_tool_lines.size(); ++i) {
                             if (!display.empty()) display.push_back('\n');
-                            display += line;
+                            display += agent_turn.compact_tool_lines[i];
+                            if (i < agent_turn.compact_tool_line_ms.size() &&
+                                agent_turn.turn_started_ms > 0) {
+                                display += "  ";
+                                display += agent::format_elapsed_seconds(
+                                    agent_turn.compact_tool_line_ms[i] -
+                                    agent_turn.turn_started_ms);
+                            }
                         }
-                        if (!turn.final_text.empty()) {
+                        if (!agent_turn.final_text.empty()) {
                             if (!display.empty()) display.push_back('\n');
-                            display += turn.final_text;
+                            display += agent_turn.final_text;
                         }
                         chat_result.content = display;
                         chat_result.model = model_name;
@@ -747,6 +755,14 @@ app::TuiRunResult run(provider::RequestContext context,
                 event.chat = std::move(chat_result);
                 event.compaction = std::move(prepared.event);
                 event.compacted = prepared.compacted;
+                if (have_agent_turn) {
+                    event.agent_turn = true;
+                    event.agent_tool_lines = std::move(agent_turn.compact_tool_lines);
+                    event.agent_tool_line_ms = std::move(agent_turn.compact_tool_line_ms);
+                    event.agent_final_text = std::move(agent_turn.final_text);
+                    event.agent_turn_started_ms = agent_turn.turn_started_ms;
+                    event.agent_finished_at_ms = agent_turn.finished_at_ms;
+                }
             } else {
                 event.type = TuiEventType::Error;
                 event.error = send_error;
@@ -774,7 +790,9 @@ app::TuiRunResult run(provider::RequestContext context,
         pending_user = session.messages.size();
         pending_user_added_for_job = true;
         inflight_image_count = pending_image_count;
-        session.messages.push_back({"user", history_content, images, text_attachments});
+        provider::Message user_msg{"user", history_content, images, text_attachments};
+        user_msg.created_at_ms = agent::now_unix_ms();
+        session.messages.push_back(std::move(user_msg));
         start_assistant_response();
     };
 
@@ -1448,8 +1466,42 @@ app::TuiRunResult run(provider::RequestContext context,
                     model_job.join();
                     const bool should_regenerate = regenerate_after_cancel;
                     const size_t regenerate_erase_from = pending_user;
-                    if (pending_assistant != static_cast<size_t>(-1) && pending_assistant < session.messages.size()) {
+                    if (event.agent_turn) {
+                        // Expand into tool/assistant rows with wall-clock ms so the
+                        // history renderer can show "N.NN seconds elapsed".
+                        if (pending_user != static_cast<size_t>(-1) &&
+                            pending_user < session.messages.size() &&
+                            session.messages[pending_user].created_at_ms <= 0 &&
+                            event.agent_turn_started_ms > 0) {
+                            session.messages[pending_user].created_at_ms =
+                                event.agent_turn_started_ms;
+                        }
+                        if (pending_assistant != static_cast<size_t>(-1) &&
+                            pending_assistant < session.messages.size()) {
+                            session.messages.erase(session.messages.begin() +
+                                                   static_cast<long>(pending_assistant));
+                        }
+                        for (std::size_t i = 0; i < event.agent_tool_lines.size(); ++i) {
+                            provider::Message tool_msg{"tool", event.agent_tool_lines[i]};
+                            if (i < event.agent_tool_line_ms.size()) {
+                                tool_msg.created_at_ms = event.agent_tool_line_ms[i];
+                            }
+                            session.messages.push_back(std::move(tool_msg));
+                        }
+                        if (!event.agent_final_text.empty()) {
+                            provider::Message assistant_msg{"assistant", event.agent_final_text};
+                            assistant_msg.created_at_ms = event.agent_finished_at_ms > 0
+                                                              ? event.agent_finished_at_ms
+                                                              : agent::now_unix_ms();
+                            session.messages.push_back(std::move(assistant_msg));
+                        }
+                    } else if (pending_assistant != static_cast<size_t>(-1) &&
+                               pending_assistant < session.messages.size()) {
                         session.messages[pending_assistant].content = event.chat.content;
+                        if (session.messages[pending_assistant].created_at_ms <= 0) {
+                            session.messages[pending_assistant].created_at_ms =
+                                agent::now_unix_ms();
+                        }
                     }
                     if (!event.chat.model.empty()) {
                         context.options.model = event.chat.model;

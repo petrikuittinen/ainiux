@@ -23,7 +23,7 @@ The program must stay excellent as a scriptable CLI. Keep the core engine indepe
 
 ## Current product snapshot
 
-Status: **v1.03** (see `README.md` and `PLANS.md` implementation notes). One-shot (`--run` / `-r`) and interactive (`--agent` / `-a`) local agent with workspace writes, multi-turn project session (`.ainiux-pr/`), compact tool lines, window-% auto-compact, and chat↔editor↔agent mode cycling are landed; interactive Guard approvals remain later. User profile stays `~/.ainiux/` (chat DB/media). Active development also continues remaining **v0.9** polish and **v0.90** local OpenAI-compatible server mode. Browser web UI is postponed.
+Status: **v1.04** (see `README.md` and `PLANS.md` implementation notes). One-shot (`--run` / `-r`) and interactive (`--agent` / `-a`) local agent with workspace writes, multi-turn project session (`.ainiux-pr/`), compact tool lines, live tool streaming, elapsed-time display, window-% auto-compact, and chat↔editor↔agent mode cycling are landed; interactive Guard approvals remain later. User profile stays `~/.ainiux/` (chat DB/media). Active development also continues remaining **v0.9** polish and **v0.90** local OpenAI-compatible server mode. Browser web UI is postponed.
 
 ### Implemented modes
 

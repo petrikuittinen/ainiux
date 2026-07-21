@@ -100,6 +100,16 @@ void test_tool_display_clips_to_width() {
     check(agent::terminal_column_count(80) >= 20, "terminal columns at least 20");
 }
 
+void test_elapsed_seconds_format() {
+    check(agent::format_elapsed_seconds(6540) == "6.54 seconds elapsed", "6.54s format");
+    check(agent::format_elapsed_seconds(0) == "0.00 seconds elapsed", "zero elapsed");
+    check(agent::format_elapsed_seconds(-5) == "0.00 seconds elapsed", "negative clamps");
+    check(agent::format_elapsed_seconds(100) == "0.10 seconds elapsed", "tenths");
+    check(agent::normalize_timestamp_ms(1700000000) == 1700000000000LL, "seconds promote to ms");
+    check(agent::normalize_timestamp_ms(1700000000123LL) == 1700000000123LL, "ms unchanged");
+    check(agent::now_unix_ms() > 1000000000000LL, "now is millisecond scale");
+}
+
 void test_prior_session_context_includes_recent_work() {
     std::vector<agent::AgentMessageRecord> messages(4);
     messages[0].role = "user";
@@ -128,6 +138,7 @@ void run_all() {
     test_compact_threshold_defaults();
     test_tool_display_format();
     test_tool_display_clips_to_width();
+    test_elapsed_seconds_format();
     test_prior_session_context_includes_recent_work();
 }
 

@@ -75,6 +75,13 @@ struct TuiEvent {
     std::string attached_source;
     provider::TextAttachment text_attachment;
     bool text_attachment_ready = false;
+    // Agent turn completion: structured tool lines + timestamps for elapsed UI.
+    bool agent_turn = false;
+    std::vector<std::string> agent_tool_lines;
+    std::vector<long long> agent_tool_line_ms;
+    std::string agent_final_text;
+    long long agent_turn_started_ms = 0;
+    long long agent_finished_at_ms = 0;
 };
 
 enum class EscapeResult {
