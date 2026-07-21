@@ -1,12 +1,15 @@
 #include <iostream>
 
 #include "benchmark/test_benchmark.hpp"
+#include "agent/test_agent_adversarial.hpp"
 #include "agent/test_agent_loop.hpp"
 #include "agent/test_agents_md.hpp"
 #include "agent/test_apply_patch.hpp"
+#include "agent/test_command_guard.hpp"
 #include "agent/test_file_tools.hpp"
 #include "agent/test_index.hpp"
 #include "agent/test_review.hpp"
+#include "agent/test_session_store.hpp"
 #include "chat/test_chat.hpp"
 #include "cli/test_cli.hpp"
 #include "config/test_config.hpp"
@@ -34,6 +37,9 @@ int main() {
     ainiux::test::agent_agents_md::run_all();
     ainiux::test::agent_file_tools::run_all();
     ainiux::test::agent_apply_patch::run_all();
+    ainiux::test::agent_session_store::run_all();
+    ainiux::test::agent_command_guard::run_all();
+    ainiux::test::agent_adversarial::run_all();
     ainiux::test::agent_review::run_all();
     ainiux::test::output::run_all();
     ainiux::test::config::run_all();

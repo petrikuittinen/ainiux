@@ -1785,7 +1785,17 @@ std::vector<provider::FunctionDefinition> ReadToolRegistry::definitions() const 
         {"read_symbol", "Fingerprint-verify and read the actual indexed source range for a symbol id.", schema("\"symbol_id\":{\"type\":\"integer\",\"minimum\":1}", "\"symbol_id\"")},
         {"read_file", "Fingerprint-verify and read a bounded UTF-8 line range with hashes and line numbers.", schema(range, "\"path\"")},
         {"read_many", "Read multiple bounded line ranges under one aggregate byte cap.", schema("\"items\":{\"type\":\"array\",\"items\":" + schema(range, "\"path\"") + ",\"maxItems\":100},\"max_bytes\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":262144}", "\"items\"")},
-        {"run_command", "Run one allowlisted read-only inspection command without a shell.", schema("\"command\":{\"type\":\"string\"},\"cwd\":{\"type\":\"string\"},\"timeout_ms\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":10000}", "\"command\"")},
+        {"run_command",
+         allow_mutations_
+             ? "Run an allowlisted workspace command without a shell (python3/make/ctest/node/go/"
+               "cargo/g++ plus read-only ls/rg/find/git). Destructive commands (rm -rf, git "
+               "reset --hard, shells, sudo) are denied. Prefer native tools for file edits."
+             : "Run one allowlisted read-only inspection command without a shell "
+               "(pwd/ls/rg/grep/find/git).",
+         schema("\"command\":{\"type\":\"string\"},\"cwd\":{\"type\":\"string\"},"
+                "\"timeout_ms\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":" +
+                    std::string(allow_mutations_ ? "120000" : "10000") + "}",
+                "\"command\"")},
     };
     if (allow_mutations_) {
         tools.push_back(
@@ -2316,21 +2326,42 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
 
     if (name == "run_command") {
         std::string command, cwd;
-        std::size_t timeout = 10000;
-        if (!get_string(args, "command", command, true, validation_error) || !get_string(args, "cwd", cwd, false, validation_error) ||
-            !get_size(args, "timeout_ms", 10000, 10000, timeout, validation_error) || timeout == 0)
-            return tool_error_result("invalid_arguments", validation_error.empty() ? "timeout_ms must be positive" : validation_error);
+        const std::size_t timeout_cap = allow_mutations_ ? 120000 : 10000;
+        std::size_t timeout = allow_mutations_ ? 30000 : 10000;
+        if (!get_string(args, "command", command, true, validation_error) ||
+            !get_string(args, "cwd", cwd, false, validation_error) ||
+            !get_size(args, "timeout_ms", timeout, timeout_cap, timeout, validation_error) ||
+            timeout == 0)
+            return tool_error_result("invalid_arguments",
+                                    validation_error.empty() ? "timeout_ms must be positive"
+                                                             : validation_error);
         std::vector<std::string> parsed_arguments;
-        Error policy_error = parse_inspection_command(command, parsed_arguments);
-        if (!policy_error.ok()) return tool_error_result(error_code_string(policy_error.code), policy_error.message);
-        // Security-review (allow_mutations=false) keeps run_command scoped to the
-        // completed index. Agent mode allows real workspace paths (empty dirs, #files#).
+        std::string guard_rule_id;
+        const CommandPolicy policy =
+            allow_mutations_ ? CommandPolicy::Agent : CommandPolicy::InspectionOnly;
+        Error policy_error = parse_command(command, parsed_arguments, policy, guard_rule_id);
+        if (!policy_error.ok()) {
+            const std::string code =
+                policy_error.message.find("refusing") != std::string::npos ||
+                        policy_error.message.find("not allowed") != std::string::npos ||
+                        policy_error.message.find("blocked") != std::string::npos
+                    ? "policy_denied"
+                    : error_code_string(policy_error.code);
+            return tool_error_result(code, policy_error.message);
+        }
+        // Security-review keeps path scope to the completed index. Agent mode allows
+        // real workspace paths (empty dirs, #files#, scripts to execute).
         const bool index_only_commands = !allow_mutations_;
         policy_error =
             validate_command_workspace_paths(snapshot_, parsed_arguments, cwd, index_only_commands);
         if (!policy_error.ok()) return tool_error_result("policy_denied", policy_error.message);
-        ProcessOptions options; options.workspace = snapshot_.workspace; options.cwd = cwd; options.timeout_ms = static_cast<long>(timeout); options.cancellation = cancellation;
-        ProcessResult process; const Error error = run_inspection_command(command, options, process);
+        ProcessOptions options;
+        options.workspace = snapshot_.workspace;
+        options.cwd = cwd;
+        options.timeout_ms = static_cast<long>(timeout);
+        options.cancellation = cancellation;
+        ProcessResult process;
+        const Error error = run_command(command, options, process, policy);
         bool output_filtered = false;
         const std::string command_name = parsed_arguments.empty() ? std::string() : parsed_arguments.front();
         // parse_inspection_command has already inserted the fixed Git -c
@@ -2348,14 +2379,36 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
         for (const std::string& argument : process.arguments)
             arguments.array.push_back(string_value(redact_secrets(argument, secrets_)));
         data.object["arguments"] = std::move(arguments); data.object["cwd"] = string_value(process.cwd);
-        data.object["exit_status"] = number_value(process.exit_status); data.object["signal"] = number_value(process.signal);
-        data.object["duration_ms"] = number_value(process.duration_ms); data.object["stdout"] = string_value(redact_secrets(process.stdout_text, secrets_));
-        data.object["stderr"] = string_value(redact_secrets(process.stderr_text, secrets_)); data.object["stdout_truncated"] = bool_value(process.stdout_truncated);
-        data.object["stderr_truncated"] = bool_value(process.stderr_truncated); data.object["policy"] = string_value(process.policy);
+        data.object["exit_status"] = number_value(process.exit_status);
+        data.object["signal"] = number_value(process.signal);
+        data.object["duration_ms"] = number_value(process.duration_ms);
+        data.object["stdout"] = string_value(redact_secrets(process.stdout_text, secrets_));
+        data.object["stderr"] = string_value(redact_secrets(process.stderr_text, secrets_));
+        data.object["stdout_truncated"] = bool_value(process.stdout_truncated);
+        data.object["stderr_truncated"] = bool_value(process.stderr_truncated);
+        data.object["policy"] = string_value(process.policy);
+        json::Value guard = object_value();
+        guard.object["decision"] = string_value(error.ok() ? "allow" : "deny");
+        if (!process.guard_rule_id.empty())
+            guard.object["rule_id"] = string_value(process.guard_rule_id);
+        else if (!guard_rule_id.empty())
+            guard.object["rule_id"] = string_value(guard_rule_id);
+        else
+            guard.object["rule_id"] = json::Value{};
+        data.object["guard"] = std::move(guard);
         std::vector<std::string> warnings;
         if (output_filtered) warnings.push_back("output referring to non-indexed paths was omitted");
-        if (!error.ok()) return envelope(false, std::move(data), error_code_string(error.code), error.message, warnings, process.stdout_truncated || process.stderr_truncated);
-        return envelope(true, std::move(data), "", "", warnings, process.stdout_truncated || process.stderr_truncated);
+        if (!error.ok()) {
+            const std::string code =
+                error.message.find("refusing") != std::string::npos ||
+                        error.message.find("not allowed") != std::string::npos
+                    ? "policy_denied"
+                    : error_code_string(error.code);
+            return envelope(false, std::move(data), code, error.message, warnings,
+                            process.stdout_truncated || process.stderr_truncated);
+        }
+        return envelope(true, std::move(data), "", "", warnings,
+                        process.stdout_truncated || process.stderr_truncated);
     }
 
     if (name == "edit_file") {

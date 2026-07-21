@@ -2274,6 +2274,10 @@ This is the v1.0 plan for ainiux local agent mode (merged from the former standa
 
 **Agent apply_patch + FS visibility polish (2026-07-21):** `apply_patch` accepts OpenAI/Codex `*** Begin Patch` envelopes (`Add File` / `Update File` hunks / `Delete File`), validates all ops then writes with history backups and snapshot refresh, supports `patch`/`input`/`diff` aliases and fuzzy hunk matching, and is mutation-only. `list_directory` uses real readdir (empty dirs, `#names#`); plain `remove` requires `confirm=true` when a `#name#` sibling exists. `agent.sqlite`, interactive TUI/approvals, mode cycling, and broader command guard remain later work.
 
+**Agent session DB slice (2026-07-21):** project-local `.ainiux/agent.sqlite` (WAL) stores sessions, messages, tool_events, and an approvals table stub. One-shot `ainiux agent` opens the DB, creates a running session, appends the goal/tool events/final assistant text (secrets redacted), and finishes with success/error/cancelled/aborted. Never uses `~/.ainiux/ainiux.db`. Interactive TUI agent shell, mode cycling, command guard expansion, and approvals UI remain later work.
+
+**Agent run_command + destructive guard slice (2026-07-21):** agent mode (`allow_mutations`) expands `run_command` beyond the security-review inspection allowlist to include common build/test/run tools (`python3`, `make`, `ctest`, `node`, `go`, `cargo`, compilers, …) still without a shell. A DCG-style `command_guard` denies `rm -rf`, destructive git, destructive SQL, `find -delete`, shell wrappers, and sudo; headless Ask maps to Deny. Security-review remains inspection-only. Interactive approval UI remains later work.
+
 ---
 
 ## 1. Scope

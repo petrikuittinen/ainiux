@@ -14,6 +14,7 @@
 #include "agent/index/index.hpp"
 #include "agent/prompts.hpp"
 #include "agent/review_log.hpp"
+#include "agent/session_store.hpp"
 #include "agent/tools.hpp"
 #include "json/json.hpp"
 #include "security/redact.hpp"
@@ -136,8 +137,33 @@ int run_agent_mode(provider::RequestContext context) {
         }
     }
 
+    agent::AgentSessionStore session_store;
+    long long session_id = 0;
+    auto finish_session_store = [&](const Error& final_error, const std::string& final_text,
+                                    std::size_t turns, std::size_t tool_calls) {
+        if (!session_store.is_open() || session_id <= 0) return;
+        std::string status = "success";
+        if (!final_error.ok()) {
+            if (final_error.code == ErrorCode::Cancelled)
+                status = "cancelled";
+            else if (final_error.message.find("abort") != std::string::npos)
+                status = "aborted";
+            else
+                status = "error";
+        }
+        Error store_error = session_store.finish_session(
+            session_id, status, redact_secrets(final_text, secrets),
+            final_error.ok() ? std::string{} : error_code_name(final_error.code),
+            final_error.ok() ? std::string{} : redact_secrets(final_error.message, secrets),
+            static_cast<long long>(turns), static_cast<long long>(tool_calls));
+        if (!store_error.ok() && !context.options.quiet)
+            std::cerr << "Agent warning: could not finish session DB: "
+                      << redact_secrets(store_error.message, secrets) << "\n";
+    };
+
     auto finish_log = [&](const Error& final_error, const std::string& final_text,
                           std::size_t turns, std::size_t tool_calls) {
+        finish_session_store(final_error, final_text, turns, tool_calls);
         if (!logger) return;
         json::Value fields = log_object();
         fields.object["duration_ms"] = log_number(std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -149,6 +175,7 @@ int run_agent_mode(provider::RequestContext context) {
         fields.object["turns"] = log_number(turns);
         fields.object["tool_calls"] = log_number(tool_calls);
         fields.object["final_text_bytes"] = log_number(final_text.size());
+        if (session_id > 0) fields.object["session_id"] = log_number(session_id);
         logger->finish(std::move(fields), final_error.ok() ? "success" : "failure");
         if (!context.options.quiet) {
             std::error_code exists_error;
@@ -237,6 +264,45 @@ int run_agent_mode(provider::RequestContext context) {
     agent::AgentLoopLimits limits;
     limits.interactive = false;
     limits.max_scripted_turns = 50;
+
+    // Project-local agent session DB (foundation for interactive agent TUI later).
+    error = session_store.open(".");
+    if (!error.ok()) {
+        finish_log(error, "", 0, 0);
+        print_error(error);
+        return exit_code_for(error.code);
+    }
+    {
+        agent::AgentSessionRecord session;
+        session.goal = goal;
+        session.provider = context.profile.name;
+        session.model = context.options.model;
+        session.api =
+            context.api_kind == provider::ApiKind::Responses ? "responses" : "chat";
+        session.protocol = state.protocol == agent::ToolProtocol::Xml ? "xml" : "native";
+        session.workspace = ".";
+        if (logger) session.run_id = logger->run_id();
+        error = session_store.create_session(session);
+        if (!error.ok()) {
+            finish_log(error, "", 0, 0);
+            print_error(error);
+            return exit_code_for(error.code);
+        }
+        session_id = session.id;
+        Error message_error =
+            session_store.append_message(session_id, "user", redact_secrets(goal, secrets));
+        if (!message_error.ok() && !context.options.quiet)
+            std::cerr << "Agent warning: could not store goal message: "
+                      << redact_secrets(message_error.message, secrets) << "\n";
+        if (!context.options.quiet)
+            std::cerr << "Agent session: " << session_store.path() << " id=" << session_id << "\n";
+        if (logger) {
+            json::Value fields = log_object();
+            fields.object["session_id"] = log_number(session_id);
+            fields.object["path"] = log_string(session_store.path());
+            logger->event("agent_session", {"session"}, std::move(fields), "success");
+        }
+    }
 
     agent::AgentsMdBundle agents_md;
     error = agent::load_root_agents_md(".", agent::kDefaultAgentsMdMaxBytes, agents_md);
@@ -378,6 +444,40 @@ int run_agent_mode(provider::RequestContext context) {
                     tool_fields.object["result"] =
                         agent::ReviewLogger::payload(outcome.tool_results[i]);
                 logger->event("tool_result", log_context, std::move(tool_fields), "success");
+            }
+        }
+
+        // Persist tool events and notices into project agent.sqlite for later TUI resume.
+        if (session_store.is_open() && session_id > 0) {
+            if (!outcome.notice.empty()) {
+                Error notice_error = session_store.append_message(
+                    session_id, "notice", redact_secrets(outcome.notice, secrets));
+                if (!notice_error.ok() && !context.options.quiet)
+                    std::cerr << "Agent warning: could not store notice: "
+                              << redact_secrets(notice_error.message, secrets) << "\n";
+            }
+            for (std::size_t i = 0; i < outcome.prepared_calls.size(); ++i) {
+                const std::string& result_body =
+                    i < outcome.tool_results.size() ? outcome.tool_results[i] : std::string{};
+                const bool tool_ok = result_body.find("\"ok\":true") != std::string::npos ||
+                                     result_body.find("\"ok\": true") != std::string::npos ||
+                                     result_body.empty();
+                Error tool_error = session_store.append_tool_event(
+                    session_id, static_cast<long long>(state.turn),
+                    outcome.prepared_calls[i].id, outcome.prepared_calls[i].name,
+                    redact_secrets(outcome.prepared_calls[i].original_arguments, secrets),
+                    redact_secrets(result_body, secrets), tool_ok);
+                if (!tool_error.ok() && !context.options.quiet)
+                    std::cerr << "Agent warning: could not store tool event: "
+                              << redact_secrets(tool_error.message, secrets) << "\n";
+            }
+            if (outcome.kind == agent::AgentRoundOutcome::Kind::FinalText &&
+                !outcome.final_text.empty()) {
+                Error assistant_error = session_store.append_message(
+                    session_id, "assistant", redact_secrets(outcome.final_text, secrets));
+                if (!assistant_error.ok() && !context.options.quiet)
+                    std::cerr << "Agent warning: could not store assistant message: "
+                              << redact_secrets(assistant_error.message, secrets) << "\n";
             }
         }
 

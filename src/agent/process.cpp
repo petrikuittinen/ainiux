@@ -1,5 +1,7 @@
 #include "agent/process.hpp"
 
+#include "agent/command_guard.hpp"
+
 #include <algorithm>
 #include <cerrno>
 #include <chrono>
@@ -142,7 +144,7 @@ Error enforce_git_policy(const std::vector<std::string>& args) {
             "git subcommand is not available in snapshot-only security review mode: " + subcommand};
 }
 
-Error enforce_policy(std::vector<std::string>& args) {
+Error enforce_common_safety(const std::vector<std::string>& args) {
     if (args.empty()) return {ErrorCode::BadArgs, "run_command command is empty"};
     for (const std::string& arg : args) {
         if (dangerous_argument(arg))
@@ -152,13 +154,22 @@ Error enforce_policy(std::vector<std::string>& args) {
             return {ErrorCode::BadArgs, "run_command rejects absolute path arguments"};
         for (const fs::path& component : possible_path) {
             const std::string value = component.string();
-            if (value == ".." || value == ".ainiux" || value == ".git" || value == ".hg" || value == ".svn")
-                return {ErrorCode::BadArgs, "run_command rejects traversal and protected metadata paths"};
+            if (value == ".." || value == ".ainiux" || value == ".git" || value == ".hg" ||
+                value == ".svn")
+                return {ErrorCode::BadArgs,
+                        "run_command rejects traversal and protected metadata paths"};
         }
     }
+    return ok_error();
+}
+
+Error enforce_inspection_policy(std::vector<std::string>& args) {
+    Error error = enforce_common_safety(args);
+    if (!error.ok()) return error;
     const std::string& command = args.front();
     if (command == "pwd") {
-        if (args.size() != 1) return {ErrorCode::BadArgs, "pwd does not accept arguments in security review mode"};
+        if (args.size() != 1)
+            return {ErrorCode::BadArgs, "pwd does not accept arguments in security review mode"};
         return ok_error();
     }
     if (command == "ls") {
@@ -177,20 +188,24 @@ Error enforce_policy(std::vector<std::string>& args) {
         for (const std::string& arg : args) {
             if (arg == "--pre" || arg.rfind("--pre=", 0) == 0 || arg == "--pre-glob" ||
                 arg == "--type-add" || arg == "--type-clear" ||
-                option_or_assignment(arg, "--hostname-bin") ||
-                arg == "-z" || arg == "--search-zip")
-                return {ErrorCode::BadArgs, "run_command rejected an option that can invoke or configure external processing"};
+                option_or_assignment(arg, "--hostname-bin") || arg == "-z" ||
+                arg == "--search-zip")
+                return {ErrorCode::BadArgs,
+                        "run_command rejected an option that can invoke or configure external "
+                        "processing"};
             if (arg == "--hidden" || arg == "--no-ignore" || arg == "--no-ignore-vcs" ||
                 arg == "-u" || arg == "-uu" || arg == "-uuu" ||
                 (command == "grep" && (arg == "-r" || arg == "-R" || arg == "--recursive")))
-                return {ErrorCode::BadArgs, "run_command cannot bypass workspace ignore rules or recursively grep"};
+                return {ErrorCode::BadArgs,
+                        "run_command cannot bypass workspace ignore rules or recursively grep"};
             if (arg == "--json" || arg == "--files" || arg == "--files-with-matches" ||
-                arg == "--files-without-match" || arg == "-l" || arg == "-L" ||
-                arg == "--null" || arg == "-0" || arg == "--null-data")
+                arg == "--files-without-match" || arg == "-l" || arg == "-L" || arg == "--null" ||
+                arg == "-0" || arg == "--null-data")
                 return {ErrorCode::BadArgs, "run_command requires line-oriented search output"};
         }
         if (command == "rg")
-            args.insert(args.begin() + 1, {"--with-filename", "--line-number", "--no-heading", "--color=never"});
+            args.insert(args.begin() + 1,
+                        {"--with-filename", "--line-number", "--no-heading", "--color=never"});
         else
             args.insert(args.begin() + 1, {"-H", "-n"});
         return ok_error();
@@ -210,12 +225,145 @@ Error enforce_policy(std::vector<std::string>& args) {
         if (!git_error.ok()) return git_error;
         const std::string subcommand = args[1];
         args.erase(args.begin() + 1);
-        args.insert(args.begin() + 1, {"-c", "core.pager=cat", "-c", "pager.show=false",
-                                      "-c", "pager.diff=false", "-c", "diff.external=", subcommand});
+        args.insert(args.begin() + 1,
+                    {"-c", "core.pager=cat", "-c", "pager.show=false", "-c", "pager.diff=false",
+                     "-c", "diff.external=", subcommand});
         if (subcommand == "status") args.insert(args.begin() + 10, "--untracked-files=no");
         return ok_error();
     }
-    return {ErrorCode::BadArgs, "command is not on the security-review inspection allowlist: " + command};
+    return {ErrorCode::BadArgs,
+            "command is not on the security-review inspection allowlist: " + command +
+                " (allowed: pwd, ls, rg, grep, find, git status/diff/…)"};
+}
+
+// Agent mode: inspection tools plus common build/test/run interpreters. No shell.
+bool is_agent_allowed_command(const std::string& command) {
+    static const char* kAllowed[] = {
+        // inspection (same as security-review)
+        "pwd", "ls", "rg", "grep", "find", "git",
+        // interpreters / runtimes for verifying edits
+        "python", "python3", "python3.11", "python3.12", "python3.13",
+        "node", "nodejs",
+        // build / test
+        "make", "cmake", "ctest", "ninja",
+        "go", "cargo", "rustc",
+        "g++", "gcc", "clang", "clang++", "c++",
+        "npm", "npx", "yarn", "pnpm",
+        // lightweight helpers
+        "true", "false", "echo", "printf", "wc", "head", "tail", "cat", "diff", "sort", "uniq",
+    };
+    for (const char* name : kAllowed) {
+        if (command == name) return true;
+    }
+    return false;
+}
+
+Error enforce_agent_policy(std::vector<std::string>& args, std::string& guard_rule_id) {
+    guard_rule_id.clear();
+    Error error = enforce_common_safety(args);
+    if (!error.ok()) return error;
+
+    // Destructive guard first so rm -rf never runs even if allowlisted later.
+    GuardResult guard = finalize_guard_for_headless(evaluate_command_guard(args));
+    if (guard.decision != GuardDecision::Allow) {
+        guard_rule_id = guard.rule_id;
+        return {ErrorCode::BadArgs, guard.message.empty()
+                                        ? "command blocked by destructive-command guard"
+                                        : guard.message};
+    }
+
+    const std::string& command = args.front();
+    // Prefer the strict inspection path for inspection tools (keeps rg/git hardening).
+    if (command == "pwd" || command == "ls" || command == "rg" || command == "grep" ||
+        command == "find" || command == "git") {
+        return enforce_inspection_policy(args);
+    }
+
+    if (!is_agent_allowed_command(command))
+        return {ErrorCode::BadArgs,
+                "command is not on the agent run_command allowlist: " + command +
+                    " (examples: python3, make, ctest, node, go, cargo, g++; no shell wrappers)"};
+
+    // Extra limits for package runners (avoid install/publish).
+    if (command == "npm" || command == "npx" || command == "yarn" || command == "pnpm") {
+        if (args.size() >= 2) {
+            const std::string sub = args[1];
+            if (sub == "publish" || sub == "add" || sub == "install" || sub == "i" ||
+                sub == "uninstall" || sub == "update" || sub == "upgrade")
+                return {ErrorCode::BadArgs,
+                        command + " " + sub + " is not allowed via run_command "
+                                              "(install/publish changes environment)"};
+        }
+    }
+    if (command == "cargo" && args.size() >= 2) {
+        const std::string sub = args[1];
+        if (sub == "publish" || sub == "install" || sub == "login")
+            return {ErrorCode::BadArgs, "cargo " + sub + " is not allowed via run_command"};
+    }
+    if (command == "go" && args.size() >= 2) {
+        const std::string sub = args[1];
+        if (sub == "get" || sub == "install")
+            return {ErrorCode::BadArgs, "go " + sub + " is not allowed via run_command"};
+    }
+
+    // cat/head/tail: at most a few relative paths.
+    if (command == "cat" || command == "head" || command == "tail" || command == "wc") {
+        std::size_t operands = 0;
+        for (std::size_t i = 1; i < args.size(); ++i) {
+            if (!args[i].empty() && args[i].front() == '-') continue;
+            ++operands;
+        }
+        if (operands > 8)
+            return {ErrorCode::BadArgs, command + " permits at most 8 path operands"};
+    }
+    return ok_error();
+}
+
+Error tokenize_command(const std::string& command, std::vector<std::string>& arguments) {
+    arguments.clear();
+    std::string current;
+    char quote = 0;
+    bool escaping = false;
+    bool token_started = false;
+    for (char ch : command) {
+        if (escaping) {
+            current.push_back(ch);
+            escaping = false;
+            token_started = true;
+            continue;
+        }
+        if (ch == '\\') {
+            escaping = true;
+            token_started = true;
+            continue;
+        }
+        if (quote != 0) {
+            if (ch == quote)
+                quote = 0;
+            else
+                current.push_back(ch);
+            continue;
+        }
+        if (ch == '\'' || ch == '"') {
+            quote = ch;
+            token_started = true;
+            continue;
+        }
+        if (ch == ' ' || ch == '\t') {
+            if (token_started) {
+                arguments.push_back(std::move(current));
+                current.clear();
+                token_started = false;
+            }
+            continue;
+        }
+        current.push_back(ch);
+        token_started = true;
+    }
+    if (escaping || quote != 0)
+        return {ErrorCode::BadArgs, "run_command contains an incomplete quote or escape"};
+    if (token_started) arguments.push_back(std::move(current));
+    return ok_error();
 }
 
 void append_bounded(std::string& output, const char* data, std::size_t count,
@@ -241,42 +389,37 @@ void drain_fd(int fd, std::string& output, std::size_t limit, bool& truncated, b
 }  // namespace
 
 Error parse_inspection_command(const std::string& command, std::vector<std::string>& arguments) {
-    arguments.clear();
-    std::string current;
-    char quote = 0;
-    bool escaping = false;
-    bool token_started = false;
-    for (char ch : command) {
-        if (escaping) { current.push_back(ch); escaping = false; token_started = true; continue; }
-        if (ch == '\\') { escaping = true; token_started = true; continue; }
-        if (quote != 0) {
-            if (ch == quote) quote = 0;
-            else current.push_back(ch);
-            continue;
-        }
-        if (ch == '\'' || ch == '"') { quote = ch; token_started = true; continue; }
-        if (ch == ' ' || ch == '\t') {
-            if (token_started) {
-                arguments.push_back(std::move(current));
-                current.clear();
-                token_started = false;
-            }
-            continue;
-        }
-        current.push_back(ch);
-        token_started = true;
-    }
-    if (escaping || quote != 0) return {ErrorCode::BadArgs, "run_command contains an incomplete quote or escape"};
-    if (token_started) arguments.push_back(std::move(current));
-    return enforce_policy(arguments);
+    std::string unused_rule;
+    return parse_command(command, arguments, CommandPolicy::InspectionOnly, unused_rule);
+}
+
+Error parse_command(const std::string& command,
+                    std::vector<std::string>& arguments,
+                    CommandPolicy policy,
+                    std::string& guard_rule_id) {
+    guard_rule_id.clear();
+    Error error = tokenize_command(command, arguments);
+    if (!error.ok()) return error;
+    if (policy == CommandPolicy::Agent) return enforce_agent_policy(arguments, guard_rule_id);
+    return enforce_inspection_policy(arguments);
 }
 
 Error run_inspection_command(const std::string& command,
                              const ProcessOptions& options,
                              ProcessResult& result) {
+    return run_command(command, options, result, CommandPolicy::InspectionOnly);
+}
+
+Error run_command(const std::string& command,
+                  const ProcessOptions& options,
+                  ProcessResult& result,
+                  CommandPolicy policy) {
     ProcessResult output;
-    Error error = parse_inspection_command(command, output.arguments);
-    if (!error.ok()) { result = std::move(output); return error; }
+    Error error = parse_command(command, output.arguments, policy, output.guard_rule_id);
+    if (!error.ok()) {
+        result = std::move(output);
+        return error;
+    }
     fs::path root;
     fs::path cwd;
     if (!(error = resolve_cwd(options, root, cwd)).ok()) { result = std::move(output); return error; }
@@ -360,10 +503,11 @@ Error run_inspection_command(const std::string& command,
                              std::chrono::steady_clock::now() - started).count();
     if (WIFEXITED(wait_status)) output.exit_status = WEXITSTATUS(wait_status);
     if (WIFSIGNALED(wait_status)) output.signal = WTERMSIG(wait_status);
-    output.policy = "allowed-read-only";
+    output.policy =
+        policy == CommandPolicy::Agent ? "allowed-agent" : "allowed-read-only";
     result = std::move(output);
-    if (result.cancelled) return {ErrorCode::Cancelled, "inspection command cancelled"};
-    if (result.timed_out) return {ErrorCode::Timeout, "inspection command exceeded its timeout"};
+    if (result.cancelled) return {ErrorCode::Cancelled, "run_command cancelled"};
+    if (result.timed_out) return {ErrorCode::Timeout, "run_command exceeded its timeout"};
     return ok_error();
 }
 
