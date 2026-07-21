@@ -845,7 +845,7 @@ v0.90 unifies chat and editor keyboard shortcuts: `Ctrl+Z`/`Ctrl+U` undo, `Ctrl+
 
 ### v0.99 read-only security-review slice
 
-v0.99 introduced `--security-review`, a headless read-only whole-project workflow on the project index and native provider function calls. v1.01 added one-shot agent mode; v1.02 enabled ordinary workspace writes; v1.03 separates user profile (`~/.ainiux/`) from project agent/index state (`.ainiux-pr/`), adds multi-turn project sessions, compact tool lines, and window-% auto-compact. Entry points: one-shot `ainiux run` / `--run` / `-r` and interactive `ainiux agent` / `--agent` / `-a`. Security review remains read-only. Later v1.0 work includes Guard Ask approvals and plan/security agent modes.
+v0.99 introduced `--security-review`, a headless read-only whole-project workflow on the project index and native provider function calls. v1.01 added one-shot agent mode; v1.02 enabled ordinary workspace writes; v1.03 separates user profile (`~/.ainiux/`) from project agent/index state (`.ainiux-pr/`), adds multi-turn project sessions, compact tool lines, and window-% auto-compact; v1.04 streams tool activity live, shows elapsed seconds, and keeps chat/agent transcripts isolated. Entry points: one-shot `ainiux run` / `--run` / `-r` and interactive `ainiux agent` / `--agent` / `-a`. Security review remains read-only. Later v1.0 work includes Guard Ask approvals and plan/security agent modes.
 
 ### v0.98 unified reasoning and model catalog
 
