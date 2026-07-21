@@ -48,6 +48,7 @@ int run_interactive(InteractiveSession session) {
                                                                       session.ai_continue,
                                                                       session.assist_config,
                                                                       &session);
+            // Editor currently only cycles into ordinary Chat, not Agent.
             if (result.next != InteractiveUiTarget::Chat) {
                 return result.exit_code;
             }
@@ -57,12 +58,31 @@ int run_interactive(InteractiveSession session) {
             continue;
         }
 
+        // Chat and Agent both use the shared full-screen TUI shell (history,
+        // input editor, /provider /model /reasoning pickers). Generation differs
+        // by session.context.options.agent (set only for InteractiveMode::Agent).
         const TuiRunResult result = tui::run(session.context, session.chat_session, &session);
-        if (result.next != InteractiveUiTarget::Editor) {
-            return result.exit_code;
+        if (result.next == InteractiveUiTarget::Editor) {
+            // Agent does not currently cycle into the standalone editor surface.
+            if (mode == InteractiveMode::Agent) {
+                return result.exit_code;
+            }
+            sync_shared_provider_to_editor(session);
+            mode = InteractiveMode::Editor;
+            continue;
         }
-        sync_shared_provider_to_editor(session);
-        mode = InteractiveMode::Editor;
+        if (result.next == InteractiveUiTarget::Agent && mode == InteractiveMode::Chat) {
+            // Future: explicit chat → agent handoff without restarting the process.
+            session.context.options.agent = true;
+            mode = InteractiveMode::Agent;
+            continue;
+        }
+        if (result.next == InteractiveUiTarget::Chat && mode == InteractiveMode::Agent) {
+            session.context.options.agent = false;
+            mode = InteractiveMode::Chat;
+            continue;
+        }
+        return result.exit_code;
     }
 }
 

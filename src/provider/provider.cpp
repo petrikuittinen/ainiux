@@ -2236,9 +2236,11 @@ ContextResult build_context(const cli::Options& input_options) {
         options.key = ascii_trim(options.key);
     }
     if (!options.list_models && !options.repl && !options.tui && !options.editor &&
-        !options.benchmark && !options.grade && !options.security_review &&
-        ascii_trim(options.prompt).empty()) {
-        return {{}, {ErrorCode::BadArgs, "prompt is empty; use -p/--prompt, --prompt-file, or --repl"}};
+        !options.benchmark && !options.grade && !options.security_review && !options.agent &&
+        !options.agent_run && ascii_trim(options.prompt).empty()) {
+        return {{},
+                {ErrorCode::BadArgs,
+                 "prompt is empty; use -p/--prompt, --prompt-file, --run, --run-file, or --repl"}};
     }
 
     if (provider_requests_responses(options.provider)) {
@@ -2360,7 +2362,9 @@ bool editor_has_configured_model_endpoint(const cli::Options& options) {
 }
 
 bool tui_needs_startup_provider_selection(const cli::Options& options) {
-    return options.tui && !options.provider_explicit && options.positional_url.empty() &&
+    // Shared by full-screen Chat and interactive Agent (same provider picker UX).
+    const bool fullscreen_interactive = options.tui || options.agent;
+    return fullscreen_interactive && !options.provider_explicit && options.positional_url.empty() &&
            options.base_url.empty() && options.chat_url.empty() && options.models_url.empty() &&
            options.responses_url.empty();
 }

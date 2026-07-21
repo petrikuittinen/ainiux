@@ -1,11 +1,13 @@
 #include "app/app.hpp"
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <csignal>
 #include <filesystem>
 #include <iostream>
 #include <memory>
+#include <sstream>
 #include <thread>
 #include <vector>
 
@@ -90,35 +92,29 @@ std::vector<std::string> known_tool_names(const agent::ReadToolRegistry& tools) 
 
 }  // namespace
 
-int run_agent_mode(provider::RequestContext context) {
-    AgentSignalGuard signal_guard;
-    runtime::CancellationSource cancellation;
-    std::atomic<bool> finished{false};
-    std::thread interrupt_monitor([&] {
-        while (!finished.load(std::memory_order_acquire)) {
-            if (g_agent_interrupt != 0) {
-                cancellation.cancel();
-                return;
-            }
-            std::this_thread::sleep_for(std::chrono::milliseconds(25));
-        }
-    });
-    struct MonitorJoin {
-        std::atomic<bool>& finished;
-        std::thread& thread;
-        ~MonitorJoin() {
-            finished.store(true, std::memory_order_release);
-            if (thread.joinable()) thread.join();
-        }
-    } monitor_join{finished, interrupt_monitor};
+AgentGoalResult run_agent_goal(provider::RequestContext context,
+                               const std::string& goal_text,
+                               runtime::CancellationToken cancellation,
+                               std::function<bool()> interrupted,
+                               bool write_final_to_stdout,
+                               std::function<void(const std::string& status_line)> on_progress) {
+    AgentGoalResult result;
+    auto is_interrupted = [&]() {
+        if (cancellation.cancelled()) return true;
+        if (interrupted && interrupted()) return true;
+        if (g_agent_interrupt != 0) return true;
+        return false;
+    };
+    auto progress = [&](const std::string& line) {
+        if (on_progress) on_progress(line);
+    };
 
     const std::vector<std::string> secrets = configured_secrets(context);
     const auto started = std::chrono::steady_clock::now();
-    const std::string goal = ascii_trim(context.options.prompt);
+    const std::string goal = ascii_trim(goal_text);
     if (goal.empty()) {
-        const Error error{ErrorCode::BadArgs, "agent mode requires a non-empty user goal"};
-        print_error(error);
-        return exit_code_for(error.code);
+        result.error = {ErrorCode::BadArgs, "agent goal is empty; pass -r/--run TEXT or --run-file PATH"};
+        return result;
     }
 
     std::unique_ptr<agent::ReviewLogger> logger;
@@ -199,8 +195,8 @@ int run_agent_mode(provider::RequestContext context) {
     agent::index::Options index_options;
     index_options.workspace = ".";
     index_options.max_source_code_file_size = context.options.max_source_code_file_size;
-    index_options.cancellation = cancellation.token();
-    index_options.interrupted = [] { return g_agent_interrupt != 0; };
+    index_options.cancellation = cancellation;
+    index_options.interrupted = is_interrupted;
     agent::index::RefreshStats index_stats;
     Error error = agent::index::refresh(index_options, index_stats);
     if (logger) {
@@ -218,8 +214,8 @@ int run_agent_mode(provider::RequestContext context) {
     }
     if (!error.ok()) {
         finish_log(error, "", 0, 0);
-        print_error(error);
-        return exit_code_for(error.code);
+        result.error = error;
+        return result;
     }
     if (!context.options.quiet) {
         for (const std::string& diagnostic : index_stats.diagnostics)
@@ -233,8 +229,8 @@ int run_agent_mode(provider::RequestContext context) {
     error = agent::index::load_snapshot(index_options, snapshot);
     if (!error.ok()) {
         finish_log(error, "", 0, 0);
-        print_error(error);
-        return exit_code_for(error.code);
+        result.error = error;
+        return result;
     }
 
     agent::ReadToolRegistry tools;
@@ -244,16 +240,16 @@ int run_agent_mode(provider::RequestContext context) {
                                             tool_options);
     if (!error.ok()) {
         finish_log(error, "", 0, 0);
-        print_error(error);
-        return exit_code_for(error.code);
+        result.error = error;
+        return result;
     }
 
     agent::TrustedPrompts prompts;
     error = agent::load_trusted_prompts(context.options.trusted_prompt_dir, prompts);
     if (!error.ok()) {
         finish_log(error, "", 0, 0);
-        print_error(error);
-        return exit_code_for(error.code);
+        result.error = error;
+        return result;
     }
 
     // Native function calling when the provider/API path supports it; otherwise
@@ -262,15 +258,15 @@ int run_agent_mode(provider::RequestContext context) {
     agent::AgentLoopState state;
     state.protocol = agent::default_tool_protocol(supports_tools);
     agent::AgentLoopLimits limits;
-    limits.interactive = false;
+    limits.interactive = !write_final_to_stdout;
     limits.max_scripted_turns = 50;
 
     // Project-local agent session DB (foundation for interactive agent TUI later).
     error = session_store.open(".");
     if (!error.ok()) {
         finish_log(error, "", 0, 0);
-        print_error(error);
-        return exit_code_for(error.code);
+        result.error = error;
+        return result;
     }
     {
         agent::AgentSessionRecord session;
@@ -285,8 +281,8 @@ int run_agent_mode(provider::RequestContext context) {
         error = session_store.create_session(session);
         if (!error.ok()) {
             finish_log(error, "", 0, 0);
-            print_error(error);
-            return exit_code_for(error.code);
+            result.error = error;
+            return result;
         }
         session_id = session.id;
         Error message_error =
@@ -358,12 +354,15 @@ int run_agent_mode(provider::RequestContext context) {
     };
 
     for (;;) {
-        if (cancellation.token().cancelled() || g_agent_interrupt != 0) {
+        if (is_interrupted()) {
             agent::pair_dangling_tool_calls(context, conversation, state);
             error = {ErrorCode::Cancelled, "agent run cancelled"};
             finish_log(error, final_text, state.turn, total_tool_calls);
-            print_error(error);
-            return exit_code_for(error.code);
+            result.error = error;
+            result.final_text = final_text;
+            result.turns = state.turn;
+            result.tool_calls = total_tool_calls;
+            return result;
         }
 
         provider::ToolRoundResult round;
@@ -378,7 +377,7 @@ int run_agent_mode(provider::RequestContext context) {
         }
 
         error = agent::send_tool_round_with_transport_retries(
-            context, conversation, definitions, round, cancellation.token(),
+            context, conversation, definitions, round, cancellation,
             limits.transport_attempts, observer_pointer,
             [&]() {
                 provider::ToolRoundContext ctx;
@@ -399,14 +398,17 @@ int run_agent_mode(provider::RequestContext context) {
         if (!error.ok()) {
             agent::pair_dangling_tool_calls(context, conversation, state);
             finish_log(error, final_text, state.turn, total_tool_calls);
-            print_error(error);
-            return exit_code_for(error.code);
+            result.error = error;
+            result.final_text = final_text;
+            result.turns = state.turn;
+            result.tool_calls = total_tool_calls;
+            return result;
         }
 
         total_tool_calls += round.tool_calls.size();
         agent::AgentRoundOutcome outcome = agent::handle_agent_tool_round(
             state, limits, context, conversation, std::move(round), known, executor,
-            cancellation.token());
+            cancellation);
 
         if (logger) {
             json::Value fields = log_object();
@@ -484,47 +486,55 @@ int run_agent_mode(provider::RequestContext context) {
         if (!outcome.notice.empty() && !context.options.quiet)
             std::cerr << "Agent notice: " << redact_secrets(outcome.notice, secrets) << "\n";
 
-        // Progress on stderr so long model/tool rounds do not look hung (stdout stays
-        // reserved for the final assistant answer).
-        if (!context.options.quiet) {
-            std::cerr << "Agent turn " << state.turn << " ("
-                      << (state.protocol == agent::ToolProtocol::Xml ? "xml" : "native") << "): ";
+        // Progress on stderr (one-shot) and optional callback (interactive TUI).
+        {
+            std::ostringstream progress_line;
+            progress_line << "Agent turn " << state.turn << " ("
+                          << (state.protocol == agent::ToolProtocol::Xml ? "xml" : "native") << "): ";
             if (outcome.kind == agent::AgentRoundOutcome::Kind::FinalText) {
-                std::cerr << "final answer (" << outcome.final_text.size() << " bytes)\n";
+                progress_line << "final answer (" << outcome.final_text.size() << " bytes)";
             } else if (outcome.kind == agent::AgentRoundOutcome::Kind::Continue) {
                 if (outcome.prepared_calls.empty()) {
-                    std::cerr << "continue\n";
+                    progress_line << "continue";
                 } else {
-                    std::cerr << outcome.prepared_calls.size() << " tool call(s):";
+                    progress_line << outcome.prepared_calls.size() << " tool call(s):";
                     for (std::size_t i = 0; i < outcome.prepared_calls.size(); ++i) {
-                        std::cerr << " " << outcome.prepared_calls[i].name;
+                        progress_line << " " << outcome.prepared_calls[i].name;
                         if (i < outcome.tool_results.size()) {
                             const std::string& body = outcome.tool_results[i];
                             const bool ok = body.find("\"ok\":true") != std::string::npos ||
                                             body.find("\"ok\": true") != std::string::npos;
-                            std::cerr << (ok ? "[ok]" : "[err]");
+                            progress_line << (ok ? "[ok]" : "[err]");
                         }
                     }
-                    std::cerr << "\n";
                 }
             } else {
-                std::cerr << "stop ("
-                          << (outcome.kind == agent::AgentRoundOutcome::Kind::Aborted ? "aborted"
-                              : outcome.kind == agent::AgentRoundOutcome::Kind::NeedsUserContinue
-                                  ? "needs continue"
-                                  : "error")
-                          << ")\n";
+                progress_line << "stop ("
+                              << (outcome.kind == agent::AgentRoundOutcome::Kind::Aborted ? "aborted"
+                                  : outcome.kind == agent::AgentRoundOutcome::Kind::NeedsUserContinue
+                                      ? "needs continue"
+                                      : "error")
+                              << ")";
             }
+            const std::string line = progress_line.str();
+            progress(line);
+            if (!context.options.quiet && write_final_to_stdout) std::cerr << line << "\n";
         }
 
         if (outcome.kind == agent::AgentRoundOutcome::Kind::Continue) continue;
 
         if (outcome.kind == agent::AgentRoundOutcome::Kind::FinalText) {
             final_text = outcome.final_text;
-            std::cout << final_text;
-            if (!final_text.empty() && final_text.back() != '\n') std::cout << '\n';
+            if (write_final_to_stdout) {
+                std::cout << final_text;
+                if (!final_text.empty() && final_text.back() != '\n') std::cout << '\n';
+            }
             finish_log(ok_error(), final_text, state.turn, total_tool_calls);
-            return 0;
+            result.error = ok_error();
+            result.final_text = final_text;
+            result.turns = state.turn;
+            result.tool_calls = total_tool_calls;
+            return result;
         }
 
         agent::pair_dangling_tool_calls(context, conversation, state);
@@ -533,9 +543,44 @@ int run_agent_mode(provider::RequestContext context) {
                             outcome.notice.empty() ? "agent run aborted" : outcome.notice}
                     : outcome.error;
         finish_log(error, final_text, state.turn, total_tool_calls);
-        print_error(error);
-        return exit_code_for(error.code);
+        result.error = error;
+        result.final_text = final_text;
+        result.turns = state.turn;
+        result.tool_calls = total_tool_calls;
+        return result;
     }
+}
+
+int run_agent_mode(provider::RequestContext context) {
+    AgentSignalGuard signal_guard;
+    runtime::CancellationSource cancellation;
+    std::atomic<bool> finished{false};
+    std::thread interrupt_monitor([&] {
+        while (!finished.load(std::memory_order_acquire)) {
+            if (g_agent_interrupt != 0) {
+                cancellation.cancel();
+                return;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(25));
+        }
+    });
+    struct MonitorJoin {
+        std::atomic<bool>& finished;
+        std::thread& thread;
+        ~MonitorJoin() {
+            finished.store(true, std::memory_order_release);
+            if (thread.joinable()) thread.join();
+        }
+    } monitor_join{finished, interrupt_monitor};
+
+    const std::string goal = ascii_trim(context.options.prompt);
+    AgentGoalResult result = run_agent_goal(std::move(context), goal, cancellation.token(),
+                                            [] { return g_agent_interrupt != 0; }, true, {});
+    if (!result.error.ok()) {
+        print_error(result.error);
+        return exit_code_for(result.error.code);
+    }
+    return 0;
 }
 
 }  // namespace ainiux::app

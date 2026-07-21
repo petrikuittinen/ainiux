@@ -100,7 +100,7 @@ export OPENROUTER_API_KEY=...
 
 ## Current status
 
-**v1.02** — active development. Core surfaces are usable daily: scriptable CLI, REPL, full-screen chat TUI, AI editor, multi-provider chat, durable image and canonical-Markdown attachments, safe URL fetch, web search hooks, document conversion, concurrent benchmarks, judge grading, headless whole-project security review, and a one-shot local agent (`ainiux agent` / `--agent`) with read tools, root `AGENTS.md` injection, and ordinary workspace edits (`edit_file`, `write_file`, exact `str_replace`). Interactive multi-surface agent UI, destructive deletes, approval prompts, fuzzy/`apply_patch` engines, and `agent.sqlite` remain later roadmap work.
+**v1.02** — active development. Core surfaces are usable daily: scriptable CLI, REPL, full-screen chat TUI, AI editor, multi-provider chat, durable image and canonical-Markdown attachments, safe URL fetch, web search hooks, document conversion, concurrent benchmarks, judge grading, headless whole-project security review, a one-shot local agent (`ainiux run` / `--run` / `-r` / `--run-file`) and an interactive agent TUI (`ainiux agent` / `--agent` / `-a`) with read tools, root `AGENTS.md` injection, and ordinary workspace edits. Approval prompts, mode cycling polish, and more remain later roadmap work.
 
 Under the hood: libcurl HTTP/SSE, cancellable runtime jobs, Chat Completions plus text-only Responses API support, a layered model capability catalog with unified reasoning controls, SQLite-backed TUI threads, JSON chat import/export, multi-language syntax highlighting, grapheme-aware editing, and layered TOML-alike configuration.
 
@@ -316,10 +316,13 @@ This workflow does not create `agent.sqlite` or an interactive agent transcript 
 Run a single agent goal against the current project (refreshes the code index, uses tools, writes final text to `stdout`):
 
 ```sh
-./ainiux agent openrouter -m MODEL -p "Summarize the project layout and main entry points"
-./ainiux --agent --provider openai -m MODEL -p "Where is HTTP timeout handling implemented?"
-./ainiux agent lmstudio -m MODEL --prompt-file goal.txt --no-agent-log
-./ainiux agent openrouter -m MODEL -p "Create src/scratch/hello.txt with one short greeting"
+./ainiux -a openrouter -m MODEL
+./ainiux --agent --provider openai -m MODEL
+./ainiux agent lmstudio -m MODEL
+./ainiux http://localhost:30000 -m MODEL -r "Summarize the project layout and main entry points"
+./ainiux run openrouter -m MODEL --run "Where is HTTP timeout handling implemented?"
+./ainiux run lmstudio -m MODEL --run-file goal.txt --no-agent-log
+./ainiux --provider openai -m MODEL -r "Create src/scratch/hello.txt with one short greeting"
 ```
 
 Agent mode uses the trusted master prompt plus a static protocol appendix (native tools when the provider supports function calling, otherwise the XML `<tool_call>` channel). When present, workspace-root `AGENTS.md` is loaded (capped, UTF-8 only) and injected as a separate **untrusted** user-context message—never as system policy. It reuses the security-review read/search/inspect tools and, unlike security review, also enables ordinary workspace mutations:
@@ -842,7 +845,7 @@ v0.90 unifies chat and editor keyboard shortcuts: `Ctrl+Z`/`Ctrl+U` undo, `Ctrl+
 
 ### v0.99 read-only security-review slice
 
-v0.99 introduced `--security-review`, a headless read-only whole-project workflow on the project index and native provider function calls. v1.01 added one-shot `ainiux agent` / `--agent`; v1.02 enables ordinary workspace writes (`write_file`, exact `str_replace`) for agent mode only. Security review remains read-only. The broader v1.0 plan still covers interactive TUI agent mode, `agent.sqlite`, destructive deletes, approvals, chat-TUI reuse, and mode cycling.
+v0.99 introduced `--security-review`, a headless read-only whole-project workflow on the project index and native provider function calls. v1.01 added one-shot agent mode; v1.02 enables ordinary workspace writes for agent runs. Entry points are now one-shot `ainiux run` / `--run` / `-r` and interactive `ainiux agent` / `--agent` / `-a` (chat-like TUI + tool loop). Security review remains read-only. The broader v1.0 plan still covers approvals, mode cycling polish, and related UI work.
 
 ### v0.98 unified reasoning and model catalog
 

@@ -12,15 +12,20 @@
 
 namespace ainiux::app {
 
+// Distinct interactive product surfaces. Chat and Agent share the full-screen
+// TUI shell and provider/model/reasoning selectors, but they are not the same
+// mode: Chat is ordinary conversation; Agent runs the tool-using agent loop.
 enum class InteractiveMode {
     Editor,
     Chat,
+    Agent,
 };
 
 enum class InteractiveUiTarget {
     Quit,
     Editor,
     Chat,
+    Agent,  // reserved for future mode-cycle chat ↔ editor ↔ agent
 };
 
 struct PendingEditorAssistFromChat {

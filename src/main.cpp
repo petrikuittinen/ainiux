@@ -156,9 +156,10 @@ int main(int argc, char** argv) {
     }
     ainiux::provider::apply_cli_target_change(options, configured.options,
                                               positional_target_changed);
-    if (!options.security_review && !options.agent && !options.trusted_prompt_dir.empty()) {
+    if (!options.security_review && !options.agent && !options.agent_run &&
+        !options.trusted_prompt_dir.empty()) {
         ainiux::app::print_error({ainiux::ErrorCode::BadArgs,
-                                  "--trusted-prompt-dir requires --security-review or agent mode"});
+                                  "--trusted-prompt-dir requires --security-review, --agent, or --run"});
         return ainiux::app::exit_code_for(ainiux::ErrorCode::BadArgs);
     }
     if (!options.security_review && options.security_review_log_cli_explicit) {
@@ -166,14 +167,20 @@ int main(int argc, char** argv) {
                                   "--security-review-log and --no-security-review-log require --security-review"});
         return ainiux::app::exit_code_for(ainiux::ErrorCode::BadArgs);
     }
-    if (!options.agent && options.agent_log_cli_explicit) {
+    if (!options.agent && !options.agent_run && options.agent_log_cli_explicit) {
         ainiux::app::print_error({ainiux::ErrorCode::BadArgs,
-                                  "--agent-log and --no-agent-log require agent mode"});
+                                  "--agent-log and --no-agent-log require --agent or --run"});
         return ainiux::app::exit_code_for(ainiux::ErrorCode::BadArgs);
     }
-    if (options.agent) {
+    if (options.agent && options.agent_run) {
+        ainiux::app::print_error({ainiux::ErrorCode::BadArgs,
+                                  "--agent and --run cannot be combined; use --agent for the interactive "
+                                  "agent TUI or --run for a one-shot goal"});
+        return ainiux::app::exit_code_for(ainiux::ErrorCode::BadArgs);
+    }
+    if (options.agent_run) {
         const ainiux::Error argument_error =
-            ainiux::cli::validate_agent_mode_arguments(argc, argv, options);
+            ainiux::cli::validate_agent_run_arguments(argc, argv, options);
         if (!argument_error.ok()) {
             ainiux::app::print_error(argument_error);
             return ainiux::app::exit_code_for(argument_error.code);
@@ -197,7 +204,7 @@ int main(int argc, char** argv) {
         }
         if (context_result.context.profile.offline) {
             const ainiux::Error error{ainiux::ErrorCode::UnsupportedFeature,
-                                      "agent mode requires an online provider with native function calling"};
+                                      "--run requires an online provider with tool-capable models"};
             ainiux::app::print_error(error);
             return ainiux::app::exit_code_for(error.code);
         }
@@ -207,6 +214,17 @@ int main(int argc, char** argv) {
             return ainiux::app::exit_code_for(model_error.code);
         }
         return ainiux::app::run_agent_mode(std::move(context_result.context));
+    }
+    if (options.agent) {
+        const ainiux::Error argument_error =
+            ainiux::cli::validate_agent_interactive_arguments(argc, argv, options);
+        if (!argument_error.ok()) {
+            ainiux::app::print_error(argument_error);
+            return ainiux::app::exit_code_for(argument_error.code);
+        }
+        // Interactive agent is a separate product mode from --chat. It shares the
+        // full-screen TUI shell and provider/model/reasoning selectors, but must
+        // not set options.tui (that flag remains chat-only).
     }
     if (options.security_review) {
         const ainiux::Error argument_error =
@@ -334,12 +352,19 @@ int main(int argc, char** argv) {
             {ainiux::ErrorCode::BadArgs, "rendered --output-format cannot be combined with --list-models"});
         return ainiux::app::exit_code_for(ainiux::ErrorCode::BadArgs);
     }
-    if (options.editor && (options.repl || options.tui)) {
-        ainiux::app::print_error({ainiux::ErrorCode::BadArgs, "--editor cannot be combined with --repl or --chat"});
+    if (options.editor && (options.repl || options.tui || options.agent)) {
+        ainiux::app::print_error(
+            {ainiux::ErrorCode::BadArgs, "--editor cannot be combined with --repl, --chat, or --agent"});
         return ainiux::app::exit_code_for(ainiux::ErrorCode::BadArgs);
     }
-    if (options.repl && options.tui) {
-        ainiux::app::print_error({ainiux::ErrorCode::BadArgs, "--repl cannot be combined with --chat"});
+    if (options.repl && (options.tui || options.agent)) {
+        ainiux::app::print_error(
+            {ainiux::ErrorCode::BadArgs, "--repl cannot be combined with --chat or --agent"});
+        return ainiux::app::exit_code_for(ainiux::ErrorCode::BadArgs);
+    }
+    if (options.tui && options.agent) {
+        ainiux::app::print_error(
+            {ainiux::ErrorCode::BadArgs, "--chat and --agent are separate modes and cannot be combined"});
         return ainiux::app::exit_code_for(ainiux::ErrorCode::BadArgs);
     }
     if (options.repl && options.list_models) {
@@ -575,7 +600,7 @@ int main(int argc, char** argv) {
     if (!loaded_session) {
         session = ainiux::chat::new_session(context);
     }
-    if (!model_chosen && !context.options.tui) {
+    if (!model_chosen && !context.options.tui && !context.options.agent) {
         ainiux::Error model_err = ainiux::app::choose_default_model(context);
         if (!model_err.ok()) {
             ainiux::app::print_error(model_err);
@@ -585,9 +610,25 @@ int main(int argc, char** argv) {
     ainiux::app::refresh_session_metadata(session, context);
     ainiux::app::apply_system_prompt(session, context.options.system);
 
-    if (context.options.tui) {
+    // Full-screen interactive surfaces: Chat (--chat/-c) and Agent (--agent/-a).
+    // They share TUI widgets (history, input, provider/model/reasoning pickers)
+    // but remain separate modes and entry points.
+    if (context.options.tui || context.options.agent) {
+        if (context.options.tui && context.options.agent) {
+            const ainiux::Error error{ainiux::ErrorCode::BadArgs,
+                                      "--chat and --agent are separate modes and cannot be combined"};
+            ainiux::app::print_error(error);
+            return ainiux::app::exit_code_for(error.code);
+        }
+        if (context.options.agent && context.profile.offline) {
+            const ainiux::Error error{ainiux::ErrorCode::UnsupportedFeature,
+                                      "--agent requires an online provider with tool-capable models"};
+            ainiux::app::print_error(error);
+            return ainiux::app::exit_code_for(error.code);
+        }
         ainiux::app::InteractiveSession interactive;
-        interactive.start_mode = ainiux::app::InteractiveMode::Chat;
+        interactive.start_mode = context.options.agent ? ainiux::app::InteractiveMode::Agent
+                                                       : ainiux::app::InteractiveMode::Chat;
         interactive.context = std::move(context);
         interactive.chat_session = std::move(session);
         interactive.chat_session_initialized = true;

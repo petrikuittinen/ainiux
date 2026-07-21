@@ -4,7 +4,7 @@
 - `-k`/`--key` is supported for testing but warns because command-line arguments may be visible to other local users.
 - Authorization-like headers and configured key values are redacted from transport errors.
 - LM Studio authentication is optional by default.
-- Local web mode and interactive multi-surface agent UI are not implemented. Two headless tool-using workflows exist: read-only `--security-review`, and one-shot `agent` / `--agent` which adds ordinary workspace writes (`write_file`, exact `str_replace`) but not deletes, approvals, or unrestricted shell.
+- Local web mode and interactive multi-surface agent UI are not implemented. Two headless tool-using workflows exist: read-only `--security-review`, and one-shot `run` / `--run` (interactive `agent` / `--agent`) which adds ordinary workspace writes (`write_file`, exact `str_replace`) but not deletes, approvals, or unrestricted shell.
 
 ## Headless Security Review
 
@@ -24,7 +24,7 @@ The diagnostic log intentionally preserves source and model payloads without tru
 
 ## Headless one-shot agent
 
-`ainiux agent` / `--agent` is a non-interactive coding agent for a single user goal (`-p` / `--prompt-file`). It refreshes `.ainiux/index.sqlite`, loads the trusted master prompt plus a static native or XML protocol appendix, optionally injects workspace-root `AGENTS.md` as a separate untrusted user-context message (capped; never system prompt), and runs the shared agent loop with the same snapshot-backed read tools and inspection command allowlist as security review, plus ordinary workspace mutations when the agent registry is created with writes enabled:
+`ainiux run` / `--run` / `-r` / `--run-file` is a non-interactive coding agent for a single user goal. Interactive `ainiux agent` / `--agent` / `-a` uses the same tools from a chat-like TUI. It refreshes `.ainiux/index.sqlite`, loads the trusted master prompt plus a static native or XML protocol appendix, optionally injects workspace-root `AGENTS.md` as a separate untrusted user-context message (capped; never system prompt), and runs the shared agent loop with the same snapshot-backed read tools and inspection command allowlist as security review, plus ordinary workspace mutations when the agent registry is created with writes enabled:
 
 - `edit_file` (preferred), `write_file`, and exact `str_replace` may create/overwrite workspace-relative UTF-8 files only.
 - Path escape, `.ainiux` / `.git` components, and symlink components are refused.

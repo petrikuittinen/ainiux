@@ -37,7 +37,8 @@ Status: **v1.02** (see `README.md` and `PLANS.md` implementation notes). One-sho
 | Standalone editor | `--editor [path]` | multi-buffer piece-table editor; optional AI assist |
 | Benchmark | `benchmark` / `--benchmark` | concurrent JSONL dataset runner |
 | Grade | `--grade` | second-pass judge scoring of benchmark results (not combined with `--benchmark`) |
-| One-shot agent | `agent` / `--agent` | index refresh + tool loop; root AGENTS.md injection; read tools + `edit_file` / `write_file` / exact `str_replace`; no TUI/approvals yet |
+| Interactive agent | `agent` / `--agent` / `-a` | **Separate mode from `--chat`**. Shares full-screen TUI shell and provider/model/reasoning pickers; each user turn runs the agent tool loop (workspace writes enabled) |
+| One-shot agent | `run` / `--run` / `-r` / `--run-file` | headless index refresh + tool loop; root AGENTS.md injection; read tools + mutations; stdout = final answer |
 | Security review | `--security-review` | headless read-only whole-project review |
 | Code index | `--index-code` / `--print-index` / `--clear-index` | project-local `.ainiux/index.sqlite` |
 
@@ -61,7 +62,7 @@ Status: **v1.02** (see `README.md` and `PLANS.md` implementation notes). One-sho
 
 - Local OpenAI-compatible **server** mode (`--server` in `PLANS.md` v0.90)
 - Browser local web UI (`src/web/` reserved; `docs/web-mode.md` is still a stub plan)
-- Full interactive/autonomous **agent** mode (TUI shell, approvals, `agent.sqlite`, mode cycling); one-shot `ainiux agent` / `--agent` with read tools + ordinary workspace writes is landed
+- Full interactive agent polish (approvals UI, mode cycling chat↔editor↔agent, shared agent session resume); one-shot `ainiux run` / `--run` / `-r` and interactive `ainiux agent` / `--agent` / `-a` with tools + workspace writes are landed
 - PDF / DOCX conversion modules
 - Native Anthropic Messages adapter; full live capability probing for all models
 - ncurses-based TUI (current UI uses POSIX `termios` + ANSI)
@@ -378,6 +379,13 @@ The TUI is a shipped foundation, not a future milestone. Continue improving it w
 - Streaming must not corrupt the input editor.
 - Long-running work runs as runtime jobs; user can scroll, edit, open help/pickers, and cancel in-flight generation.
 - Themes: semantic colors via `themes.conf`; `--nocolors` disables styling without removing control sequences.
+- **Do not merge chat with agent.** `--chat` is ordinary conversation only (no workspace tools). Interactive agent is a separate entry (`--agent` / `-a`). They may share the TUI shell and provider/model/reasoning selectors (`src/ui/`, `src/tui/`), not product semantics.
+
+### Interactive agent TUI rules
+
+- Enter only via `--agent` / `-a` / `ainiux agent` (`InteractiveMode::Agent`, `options.agent`).
+- Share presentation and selector widgets with chat; keep generation on the agent tool loop (`run_agent_goal`), not plain `send_chat_messages`.
+- Future mode cycle chat ↔ editor ↔ agent must be an **explicit** handoff, never silent tool enablement inside chat.
 
 ### Standalone editor rules
 

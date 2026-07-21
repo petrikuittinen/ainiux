@@ -59,7 +59,10 @@ struct Options {
     bool security_review = false;
     bool security_review_log_enabled = true;
     bool security_review_log_cli_explicit = false;
+    // Interactive agent TUI (chat-like UI + agent tool loop): -a / --agent / ainiux agent
     bool agent = false;
+    // One-shot headless agent goal: -r / --run / --run-file / ainiux run
+    bool agent_run = false;
     bool agent_log_enabled = true;
     bool agent_log_cli_explicit = false;
 
@@ -196,7 +199,10 @@ ParseResult parse_args(int argc, char** argv);
 ParseResult parse_args(int argc, char** argv, const Options& base_options);
 Error validate_index_mode_arguments(int argc, char** argv, const Options& options);
 Error validate_security_review_arguments(int argc, char** argv, const Options& options);
-Error validate_agent_mode_arguments(int argc, char** argv, const Options& options);
+// One-shot headless agent: --run / -r / --run-file / ainiux run
+Error validate_agent_run_arguments(int argc, char** argv, const Options& options);
+// Interactive agent TUI: --agent / -a / ainiux agent
+Error validate_agent_interactive_arguments(int argc, char** argv, const Options& options);
 std::string help_text();
 const char* format_name(OutputFormat format);
 

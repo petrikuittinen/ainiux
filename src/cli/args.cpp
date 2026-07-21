@@ -31,7 +31,8 @@ bool needs_value(const std::string& opt) {
         "--context", "--context-policy", "--image-capability",
         "--save-chat", "--load-chat", "--dataset", "--grade-input", "--category", "--case",
         "--runs", "--warmup", "--limit", "--mode", "--concurrency", "--duration",
-        "--summary-format"};
+        "--summary-format",
+        "-r", "--run", "--run-file"};
     for (const char* item : with_values) {
         if (opt == item) {
             return true;
@@ -231,8 +232,10 @@ ParseResult parse_args(int argc, char** argv, const Options& base_options) {
         } else if ((arg == "benchmark" && i == 1) || arg == "--benchmark") {
             opts.benchmark = true;
             opts.format = OutputFormat::Ndjson;
-        } else if ((arg == "agent" && i == 1) || arg == "--agent") {
+        } else if ((arg == "agent" && i == 1) || arg == "--agent" || arg == "-a") {
             opts.agent = true;
+        } else if ((arg == "run" && i == 1)) {
+            opts.agent_run = true;
         } else if ((arg == "grade" && i == 1) || arg == "--grade") {
             opts.grade = true;
             opts.format = OutputFormat::Ndjson;
@@ -320,6 +323,12 @@ ParseResult parse_args(int argc, char** argv, const Options& base_options) {
             if (opt == "-p" || opt == "--prompt") {
                 opts.prompt = value;
             } else if (opt == "--prompt-file") {
+                opts.prompt_file = value;
+            } else if (opt == "-r" || opt == "--run") {
+                opts.agent_run = true;
+                opts.prompt = value;
+            } else if (opt == "--run-file") {
+                opts.agent_run = true;
                 opts.prompt_file = value;
             } else if (opt == "-s" || opt == "--system") {
                 opts.system = value;
@@ -659,8 +668,9 @@ Error validate_index_mode_arguments(int argc, char** argv, const Options& option
 
 Error validate_security_review_arguments(int argc, char** argv, const Options& options) {
     if (!options.security_review) return ok_error();
-    if (options.agent) {
-        return {ErrorCode::BadArgs, "--security-review cannot be combined with agent mode"};
+    if (options.agent || options.agent_run) {
+        return {ErrorCode::BadArgs,
+                "--security-review cannot be combined with --agent or --run"};
     }
     if (options.index_code || options.print_index || options.clear_index) {
         return {ErrorCode::BadArgs,
@@ -711,25 +721,108 @@ Error validate_security_review_arguments(int argc, char** argv, const Options& o
     return ok_error();
 }
 
-Error validate_agent_mode_arguments(int argc, char** argv, const Options& options) {
-    if (!options.agent) return ok_error();
+Error validate_agent_run_arguments(int argc, char** argv, const Options& options) {
+    if (!options.agent_run) return ok_error();
+    if (options.agent) {
+        return {ErrorCode::BadArgs,
+                "--run cannot be combined with interactive --agent/-a; use one entry mode"};
+    }
     if (options.security_review) {
-        return {ErrorCode::BadArgs, "agent mode cannot be combined with --security-review"};
+        return {ErrorCode::BadArgs, "--run cannot be combined with --security-review"};
     }
     if (options.benchmark || options.grade) {
-        return {ErrorCode::BadArgs, "agent mode cannot be combined with --benchmark or --grade"};
+        return {ErrorCode::BadArgs, "--run cannot be combined with --benchmark or --grade"};
     }
     if (options.index_code || options.print_index || options.clear_index) {
         return {ErrorCode::BadArgs,
-                "agent mode cannot be combined with code index mode flags; it refreshes the index itself"};
+                "--run cannot be combined with code index mode flags; it refreshes the index itself"};
     }
     if (options.editor || options.repl || options.tui || options.list_models) {
         return {ErrorCode::BadArgs,
-                "agent mode is non-interactive; use --chat/--repl/--editor separately"};
+                "--run is a one-shot headless agent; use --agent/-a for the interactive agent TUI, "
+                "or --chat/--repl/--editor for ordinary interactive modes"};
     }
     if (options.prompt.empty() && options.prompt_file.empty()) {
         return {ErrorCode::BadArgs,
-                "agent mode requires -p/--prompt or --prompt-file with the user goal"};
+                "one-shot agent requires a goal via -r/--run TEXT or --run-file PATH"};
+    }
+    if (!options.system.empty() || !options.system_file.empty()) {
+        return {ErrorCode::BadArgs,
+                "one-shot agent uses the trusted master/agent system prompt; omit -s/--system-file"};
+    }
+    bool positional_seen = false;
+    for (int i = 1; i < argc; ++i) {
+        const std::string argument = argv[i];
+        const std::size_t equals = argument.find('=');
+        const std::string option = equals == std::string::npos ? argument : argument.substr(0, equals);
+        if (!option.empty() && option.front() != '-') {
+            if (option == "run" && i == 1) continue;
+            if (positional_seen) {
+                return {ErrorCode::BadArgs,
+                        "unexpected extra positional argument in --run mode: " + option};
+            }
+            positional_seen = true;
+            continue;
+        }
+        if (option == "run" || option == "--agent-log" || option == "--no-agent-log" ||
+            option == "--responses" || option == "--key-stdin" || option == "--quiet" ||
+            option == "--debug" || option == "--no-config" || option == "--trace-http" ||
+            option == "--insecure-tls" || option == "--stream" || option == "--no-stream") {
+            continue;
+        }
+        // Goal comes only from --run/--run-file; reject ordinary -p for this mode.
+        if (option == "-p" || option == "--prompt" || option == "--prompt-file") {
+            return {ErrorCode::BadArgs,
+                    "one-shot agent goal comes from -r/--run or --run-file; do not also pass "
+                    "-p/--prompt/--prompt-file"};
+        }
+        const bool takes_value =
+            option == "-m" || option == "--model" || option == "-model" ||
+            option == "--provider" || option == "--profile" || option == "--api" ||
+            option == "--base-url" || option == "--chat-url" || option == "--models-url" ||
+            option == "--responses-url" || option == "--key-env" || option == "--key-file" ||
+            option == "-k" || option == "--key" || option == "--header" ||
+            option == "--reasoning" || option == "--connect-timeout" || option == "--timeout" ||
+            option == "--proxy" || option == "--trusted-prompt-dir" ||
+            option == "--max-source-code-file-size" || option == "-r" || option == "--run" ||
+            option == "--run-file";
+        if (takes_value) {
+            if (equals == std::string::npos) ++i;
+            continue;
+        }
+        return {ErrorCode::BadArgs, option + " cannot be combined with --run"};
+    }
+    if (options.format != OutputFormat::Text || options.rendered_output_format_explicit) {
+        return {ErrorCode::BadArgs,
+                "--run writes final assistant text to stdout and cannot use alternate formats"};
+    }
+    if (!options.output_path.empty()) {
+        return {ErrorCode::BadArgs,
+                "--run writes final text to stdout; redirect stdout instead of using --output"};
+    }
+    return ok_error();
+}
+
+Error validate_agent_interactive_arguments(int argc, char** argv, const Options& options) {
+    if (!options.agent) return ok_error();
+    if (options.agent_run) {
+        return {ErrorCode::BadArgs,
+                "--agent cannot be combined with --run; use --agent for the interactive TUI or "
+                "--run for a one-shot goal"};
+    }
+    if (options.security_review) {
+        return {ErrorCode::BadArgs, "--agent cannot be combined with --security-review"};
+    }
+    if (options.benchmark || options.grade) {
+        return {ErrorCode::BadArgs, "--agent cannot be combined with --benchmark or --grade"};
+    }
+    if (options.index_code || options.print_index || options.clear_index) {
+        return {ErrorCode::BadArgs,
+                "--agent cannot be combined with code index mode flags; it refreshes the index itself"};
+    }
+    if (options.editor || options.repl || options.tui || options.list_models) {
+        return {ErrorCode::BadArgs,
+                "--agent cannot be combined with --chat/--repl/--editor/--list-models"};
     }
     if (!options.system.empty() || !options.system_file.empty()) {
         return {ErrorCode::BadArgs,
@@ -744,16 +837,16 @@ Error validate_agent_mode_arguments(int argc, char** argv, const Options& option
             if (option == "agent" && i == 1) continue;
             if (positional_seen) {
                 return {ErrorCode::BadArgs,
-                        "unexpected extra positional argument in agent mode: " + option};
+                        "unexpected extra positional argument in --agent mode: " + option};
             }
             positional_seen = true;
             continue;
         }
-        if (option == "--agent" || option == "agent" || option == "--agent-log" ||
+        if (option == "--agent" || option == "-a" || option == "agent" || option == "--agent-log" ||
             option == "--no-agent-log" || option == "--responses" || option == "--key-stdin" ||
             option == "--quiet" || option == "--debug" || option == "--no-config" ||
             option == "--trace-http" || option == "--insecure-tls" || option == "--stream" ||
-            option == "--no-stream") {
+            option == "--no-stream" || option == "--nocolors" || option == "--no-colors") {
             continue;
         }
         const bool takes_value =
@@ -765,20 +858,19 @@ Error validate_agent_mode_arguments(int argc, char** argv, const Options& option
             option == "--reasoning" || option == "--connect-timeout" || option == "--timeout" ||
             option == "--proxy" || option == "--trusted-prompt-dir" || option == "-p" ||
             option == "--prompt" || option == "--prompt-file" ||
-            option == "--max-source-code-file-size";
+            option == "--max-source-code-file-size" || option == "--load-chat" ||
+            option == "--save-chat";
         if (takes_value) {
             if (equals == std::string::npos) ++i;
             continue;
         }
-        return {ErrorCode::BadArgs, option + " cannot be combined with agent mode"};
+        return {ErrorCode::BadArgs, option + " cannot be combined with --agent"};
     }
     if (options.format != OutputFormat::Text || options.rendered_output_format_explicit) {
-        return {ErrorCode::BadArgs,
-                "agent mode writes final assistant text to stdout and cannot use alternate formats"};
+        return {ErrorCode::BadArgs, "--agent currently supports --format text only"};
     }
     if (!options.output_path.empty()) {
-        return {ErrorCode::BadArgs,
-                "agent mode writes final text to stdout; redirect stdout instead of using --output"};
+        return {ErrorCode::BadArgs, "--agent cannot be combined with --output"};
     }
     return ok_error();
 }
@@ -802,8 +894,11 @@ Usage:
   ainiux --print-index [--output PATH]
   ainiux --clear-index
   ainiux [BASE_URL|PROFILE] -m MODEL --security-review
-  ainiux agent [BASE_URL|PROFILE] -m MODEL -p "goal"
-  ainiux --agent [BASE_URL|PROFILE] -m MODEL -p "goal"
+  ainiux -a, --agent [BASE_URL|PROFILE] [-m MODEL]
+  ainiux agent [BASE_URL|PROFILE] [-m MODEL]
+  ainiux [BASE_URL|PROFILE] -m MODEL -r, --run "goal"
+  ainiux run [BASE_URL|PROFILE] -m MODEL -r "goal"
+  ainiux [BASE_URL|PROFILE] -m MODEL --run-file PATH
 
 Examples:
   ainiux http://localhost:8000 -p "What is the capital of Norway?"
@@ -833,6 +928,12 @@ Examples:
   command | ainiux http://localhost:8000 -p "Summarize" --attach stdin
   ainiux http://localhost:8000 -p "Compare these" --attach one.md --attach two.txt
   ainiux http://localhost:30000 -p "Describe this image" --input photo.png
+  ainiux -a lmstudio -m MODEL
+  ainiux --agent openrouter -m MODEL
+  ainiux agent http://localhost:30000 -m MODEL
+  ainiux http://localhost:30000 -m MODEL -r "remove all empty files and folders"
+  ainiux run openrouter -m MODEL --run "add unit tests to compute.py"
+  ainiux run lmstudio -m MODEL --run-file goal.txt
   ainiux benchmark --validate-dataset
   ainiux benchmark --category reasoning --limit 2 --provider lm_studio -m MODEL
   ainiux --benchmark --dataset prompts.jsonl --mode speed --concurrency 4 --duration 60s
@@ -849,6 +950,12 @@ Options:
                                 A provider shortcut/profile may precede -e/--editor without
                                 -m/--model; choose a model inside the editor with /model
                                 (like -c/--chat). Use --provider none for offline local editing.
+  -a, --agent                   Start interactive agent mode (separate from --chat; shares
+                                the full-screen shell and provider/model/reasoning pickers,
+                                but runs the agent tool loop; also: ainiux agent ...).
+  -r, --run TEXT                One-shot headless agent goal with read+write tools
+                                (also: ainiux run ...).
+      --run-file PATH           One-shot agent goal from a file; use '-' for stdin.
       --benchmark               Run benchmark mode (also: ainiux benchmark ...).
       --grade                   Grade benchmark results with a judge model (also: ainiux grade ...).
       --index-code              Create or incrementally refresh .ainiux/index.sqlite.
@@ -857,8 +964,8 @@ Options:
       --security-review         Review every eligible indexed workspace file and print Markdown.
       --security-review-log     Enable the local per-run JSONL diagnostic log (default).
       --no-security-review-log  Disable the local per-run JSONL diagnostic log.
-      --agent                   Run a one-shot local agent goal with read+write tools (also: ainiux agent ...).
-      --agent-log               Enable the local per-run agent JSONL diagnostic log (default).
+      --agent-log               Enable the local per-run agent JSONL diagnostic log (default;
+                                used with --run / interactive --agent).
       --no-agent-log            Disable the local per-run agent JSONL diagnostic log.
       --trusted-prompt-dir DIR  Trusted prompt resource override for testing/installations.
       --max-source-code-file-size SIZE

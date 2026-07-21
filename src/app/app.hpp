@@ -1,6 +1,7 @@
 #pragma once
 
 #include <fstream>
+#include <functional>
 #include <iosfwd>
 #include <string>
 #include <vector>
@@ -14,6 +15,7 @@
 #include "input/input.hpp"
 #include "markdown/markdown.hpp"
 #include "provider/provider.hpp"
+#include "runtime/runtime.hpp"
 
 namespace ainiux::app {
 
@@ -52,7 +54,24 @@ int run_benchmark_mode(const cli::Options& options);
 int run_grade_mode(const cli::Options& options);
 int run_index_mode(const cli::Options& options);
 int run_security_review_mode(provider::RequestContext context);
+
+// One-shot headless agent (--run / -r / ainiux run). Writes final answer to stdout.
 int run_agent_mode(provider::RequestContext context);
+
+// Shared agent goal runner used by one-shot --run and the interactive agent TUI.
+struct AgentGoalResult {
+    Error error;
+    std::string final_text;
+    std::size_t turns = 0;
+    std::size_t tool_calls = 0;
+};
+AgentGoalResult run_agent_goal(
+    provider::RequestContext context,
+    const std::string& goal,
+    runtime::CancellationToken cancellation = runtime::CancellationToken(),
+    std::function<bool()> interrupted = {},
+    bool write_final_to_stdout = false,
+    std::function<void(const std::string& status_line)> on_progress = {});
 
 void refresh_session_metadata(chat::Session& session, const provider::RequestContext& context);
 void apply_system_prompt(chat::Session& session, const std::string& system);

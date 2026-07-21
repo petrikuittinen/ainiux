@@ -600,42 +600,76 @@ app::TuiRunResult run(provider::RequestContext context,
         const size_t max_attachment_bytes = context.options.max_input_bytes > 0
                                                 ? static_cast<size_t>(context.options.max_input_bytes)
                                                 : 0U;
+        // Agent is a separate mode from Chat (options.agent), but both use this
+        // TUI shell. Chat sends ordinary completions; Agent runs the tool loop.
+        const bool agent_mode = context.options.agent;
+        std::string agent_goal;
+        if (agent_mode) {
+            for (auto it = request_messages.rbegin(); it != request_messages.rend(); ++it) {
+                if (it->role == "user") {
+                    agent_goal = it->content;
+                    break;
+                }
+            }
+        }
         model_job.start([job_context, request_messages = std::move(request_messages),
-                         media_database_path, max_image_bytes, max_attachment_bytes,
+                         media_database_path, max_image_bytes, max_attachment_bytes, agent_mode,
+                         agent_goal = std::move(agent_goal),
                          &events](runtime::CancellationToken token) mutable {
             provider::ChatResult chat_result;
-            Error send_error = chat::hydrate_message_text_attachments(
-                media_database_path, request_messages, max_attachment_bytes, token);
+            Error send_error = ok_error();
             ainiux::context::PreparedMessages prepared;
-            if (send_error.ok()) {
-                prepared = ainiux::context::prepare(
-                    request_messages,
-                    job_context.options.context_policy,
-                    job_context.options.max_context_bytes > 0
-                        ? static_cast<size_t>(job_context.options.max_context_bytes)
-                        : 0U);
-                send_error = prepared.error;
-            }
-            if (send_error.ok()) {
-                send_error = chat::hydrate_message_images(
-                    media_database_path, prepared.messages, max_image_bytes, token);
-            }
-            if (send_error.ok()) {
-                send_error = provider::send_chat_messages(
-                    job_context,
-                    prepared.messages,
-                [&](const std::string& delta) -> Error {
-                    TuiEvent event;
-                    event.type = TuiEventType::Delta;
-                    event.text = delta;
-                    events.push(std::move(event));
-                    if (token.cancelled()) {
-                        return {ErrorCode::Cancelled, "chat request cancelled while streaming"};
+            if (agent_mode) {
+                // Interactive agent turn: tool-using goal runner (not plain chat).
+                // Quiet one-shot stderr so it does not corrupt the shared TUI.
+                const std::string model_name = job_context.options.model;
+                job_context.options.quiet = true;
+                app::AgentGoalResult agent_result =
+                    app::run_agent_goal(std::move(job_context), agent_goal, token, {}, false, {});
+                send_error = agent_result.error;
+                if (send_error.ok()) {
+                    chat_result.content = agent_result.final_text;
+                    chat_result.model = model_name;
+                    if (!agent_result.final_text.empty()) {
+                        TuiEvent delta;
+                        delta.type = TuiEventType::Delta;
+                        delta.text = agent_result.final_text;
+                        events.push(std::move(delta));
                     }
-                    return ok_error();
-                },
-                chat_result,
-                token);
+                }
+            } else {
+                send_error = chat::hydrate_message_text_attachments(
+                    media_database_path, request_messages, max_attachment_bytes, token);
+                if (send_error.ok()) {
+                    prepared = ainiux::context::prepare(
+                        request_messages,
+                        job_context.options.context_policy,
+                        job_context.options.max_context_bytes > 0
+                            ? static_cast<size_t>(job_context.options.max_context_bytes)
+                            : 0U);
+                    send_error = prepared.error;
+                }
+                if (send_error.ok()) {
+                    send_error = chat::hydrate_message_images(
+                        media_database_path, prepared.messages, max_image_bytes, token);
+                }
+                if (send_error.ok()) {
+                    send_error = provider::send_chat_messages(
+                        job_context,
+                        prepared.messages,
+                    [&](const std::string& delta) -> Error {
+                        TuiEvent event;
+                        event.type = TuiEventType::Delta;
+                        event.text = delta;
+                        events.push(std::move(event));
+                        if (token.cancelled()) {
+                            return {ErrorCode::Cancelled, "chat request cancelled while streaming"};
+                        }
+                        return ok_error();
+                    },
+                    chat_result,
+                    token);
+                }
             }
             TuiEvent event;
             if (send_error.ok()) {
@@ -649,7 +683,7 @@ app::TuiRunResult run(provider::RequestContext context,
             }
             events.push(std::move(event));
         });
-        status = "Waiting for response...";
+        status = agent_mode ? "Agent working (tools enabled)..." : "Waiting for response...";
     };
 
     auto start_turn_with_payload = [&](const std::string& history_content,

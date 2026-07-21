@@ -492,39 +492,112 @@ void test_cli_security_review_parse() {
 }
 
 void test_cli_agent_mode_parse() {
-    const char* argv[] = {"ainiux", "agent", "openrouter", "-m", "model", "-p", "summarize the project"};
-    ainiux::cli::ParseResult parsed = ainiux::cli::parse_args(7, const_cast<char**>(argv));
-    check(parsed.error.ok() && parsed.options.agent && parsed.options.model == "model" &&
-              parsed.options.prompt == "summarize the project" &&
-              ainiux::cli::validate_agent_mode_arguments(7, const_cast<char**>(argv), parsed.options)
+    // Interactive agent: -a / --agent / ainiux agent (no goal required on CLI).
+    const char* interactive[] = {"ainiux", "agent", "openrouter", "-m", "model"};
+    ainiux::cli::ParseResult parsed = ainiux::cli::parse_args(5, const_cast<char**>(interactive));
+    check(parsed.error.ok() && parsed.options.agent && !parsed.options.agent_run &&
+              parsed.options.model == "model" && parsed.options.positional_url == "openrouter" &&
+              ainiux::cli::validate_agent_interactive_arguments(5, const_cast<char**>(interactive),
+                                                               parsed.options)
                   .ok(),
-          "agent subcommand accepts provider, model, and goal prompt");
+          "agent subcommand starts interactive agent with provider and model");
 
-    const char* flag[] = {"ainiux", "--agent", "-m", "model", "-p", "goal", "--no-agent-log"};
-    parsed = ainiux::cli::parse_args(7, const_cast<char**>(flag));
+    const char* short_agent[] = {"ainiux", "-a", "lmstudio", "-m", "model"};
+    parsed = ainiux::cli::parse_args(5, const_cast<char**>(short_agent));
+    check(parsed.error.ok() && parsed.options.agent && !parsed.options.agent_run &&
+              parsed.options.positional_url == "lmstudio" &&
+              ainiux::cli::validate_agent_interactive_arguments(5, const_cast<char**>(short_agent),
+                                                               parsed.options)
+                  .ok(),
+          "interactive agent short -a accepts provider shortcut");
+
+    const char* flag[] = {"ainiux", "--agent", "-m", "model", "--no-agent-log"};
+    parsed = ainiux::cli::parse_args(5, const_cast<char**>(flag));
     check(parsed.error.ok() && parsed.options.agent && parsed.options.agent_log_cli_explicit &&
               !parsed.options.agent_log_enabled &&
-              ainiux::cli::validate_agent_mode_arguments(7, const_cast<char**>(flag), parsed.options)
+              ainiux::cli::validate_agent_interactive_arguments(5, const_cast<char**>(flag),
+                                                               parsed.options)
                   .ok(),
           "agent flag accepts logging disable override");
 
-    const char* missing[] = {"ainiux", "--agent", "-m", "model"};
-    parsed = ainiux::cli::parse_args(4, const_cast<char**>(missing));
-    check(parsed.error.ok() && !ainiux::cli::validate_agent_mode_arguments(
-                                   4, const_cast<char**>(missing), parsed.options).ok(),
-          "agent mode requires a goal prompt");
+    const char* system[] = {"ainiux", "--agent", "-m", "model", "-s", "override"};
+    parsed = ainiux::cli::parse_args(6, const_cast<char**>(system));
+    check(parsed.error.ok() && !ainiux::cli::validate_agent_interactive_arguments(
+                                   6, const_cast<char**>(system), parsed.options)
+                                   .ok(),
+          "interactive agent rejects user system prompt overrides");
 
-    const char* system[] = {"ainiux", "--agent", "-m", "model", "-p", "goal", "-s", "override"};
-    parsed = ainiux::cli::parse_args(8, const_cast<char**>(system));
-    check(parsed.error.ok() && !ainiux::cli::validate_agent_mode_arguments(
-                                   8, const_cast<char**>(system), parsed.options).ok(),
-          "agent mode rejects user system prompt overrides");
+    const char* combined[] = {"ainiux", "--agent", "--security-review"};
+    parsed = ainiux::cli::parse_args(3, const_cast<char**>(combined));
+    check(parsed.error.ok() && !ainiux::cli::validate_agent_interactive_arguments(
+                                   3, const_cast<char**>(combined), parsed.options)
+                                   .ok(),
+          "interactive agent rejects security-review combination");
 
-    const char* combined[] = {"ainiux", "--agent", "--security-review", "-p", "goal"};
-    parsed = ainiux::cli::parse_args(5, const_cast<char**>(combined));
-    check(parsed.error.ok() && !ainiux::cli::validate_agent_mode_arguments(
-                                   5, const_cast<char**>(combined), parsed.options).ok(),
-          "agent mode rejects security-review combination");
+    // One-shot agent: -r / --run / --run-file / ainiux run
+    const char* run_flag[] = {"ainiux", "http://localhost:30000", "-m", "model", "-r",
+                              "remove empty folders"};
+    parsed = ainiux::cli::parse_args(6, const_cast<char**>(run_flag));
+    check(parsed.error.ok() && parsed.options.agent_run && !parsed.options.agent &&
+              parsed.options.prompt == "remove empty folders" &&
+              parsed.options.positional_url == "http://localhost:30000" &&
+              ainiux::cli::validate_agent_run_arguments(6, const_cast<char**>(run_flag),
+                                                       parsed.options)
+                  .ok(),
+          "--run sets one-shot agent goal and accepts base URL");
+
+    const char* run_sub[] = {"ainiux", "run", "openrouter", "-m", "model", "--run",
+                             "add unit tests"};
+    parsed = ainiux::cli::parse_args(7, const_cast<char**>(run_sub));
+    check(parsed.error.ok() && parsed.options.agent_run && !parsed.options.agent &&
+              parsed.options.prompt == "add unit tests" &&
+              parsed.options.positional_url == "openrouter" &&
+              ainiux::cli::validate_agent_run_arguments(7, const_cast<char**>(run_sub),
+                                                       parsed.options)
+                  .ok(),
+          "ainiux run accepts provider shortcut with --run goal");
+
+    const char* run_file[] = {"ainiux", "run", "lmstudio", "-m", "model", "--run-file", "goal.txt"};
+    parsed = ainiux::cli::parse_args(7, const_cast<char**>(run_file));
+    check(parsed.error.ok() && parsed.options.agent_run &&
+              parsed.options.prompt_file == "goal.txt" &&
+              parsed.options.positional_url == "lmstudio" &&
+              ainiux::cli::validate_agent_run_arguments(7, const_cast<char**>(run_file),
+                                                       parsed.options)
+                  .ok(),
+          "ainiux run accepts --run-file with provider name");
+
+    const char* missing[] = {"ainiux", "--run"};
+    // --run without value should fail parse
+    parsed = ainiux::cli::parse_args(2, const_cast<char**>(missing));
+    check(!parsed.error.ok(), "--run without a goal value is a parse error");
+
+    const char* no_goal[] = {"ainiux", "run", "-m", "model"};
+    parsed = ainiux::cli::parse_args(4, const_cast<char**>(no_goal));
+    check(parsed.error.ok() && parsed.options.agent_run &&
+              !ainiux::cli::validate_agent_run_arguments(4, const_cast<char**>(no_goal),
+                                                        parsed.options)
+                   .ok(),
+          "one-shot agent requires a goal via --run or --run-file");
+
+    const char* with_p[] = {"ainiux", "-r", "goal", "-p", "other"};
+    parsed = ainiux::cli::parse_args(5, const_cast<char**>(with_p));
+    check(parsed.error.ok() && parsed.options.agent_run &&
+              !ainiux::cli::validate_agent_run_arguments(5, const_cast<char**>(with_p),
+                                                        parsed.options)
+                   .ok(),
+          "one-shot agent rejects combining --run with -p");
+
+    const char* both_modes[] = {"ainiux", "--agent", "-r", "goal"};
+    parsed = ainiux::cli::parse_args(4, const_cast<char**>(both_modes));
+    check(parsed.error.ok() && parsed.options.agent && parsed.options.agent_run &&
+              !ainiux::cli::validate_agent_run_arguments(4, const_cast<char**>(both_modes),
+                                                        parsed.options)
+                   .ok() &&
+              !ainiux::cli::validate_agent_interactive_arguments(4, const_cast<char**>(both_modes),
+                                                                parsed.options)
+                   .ok(),
+          "interactive --agent and one-shot --run cannot be combined");
 }
 
 }  // namespace
