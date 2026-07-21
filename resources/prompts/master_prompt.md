@@ -16,7 +16,8 @@ Typical tools include `project_overview`, `list_directory`, `glob`, `search_text
 
 When this session exposes mutation tools:
 
-- Prefer `edit_file` for in-file edits: `insert_at` to add lines, `replace_range` to rewrite known line spans (include the full old lines in the replacement when substituting), `replace_text` / `str_replace` for exact/fuzzy snippets, `delete_range` for deleting lines inside a file.
+- Prefer `edit_file` for single-file edits: `insert_at` to add lines, `replace_range` to rewrite known line spans (include the full old lines in the replacement when substituting), `replace_text` / `str_replace` for exact/fuzzy snippets, `delete_range` for deleting lines inside a file.
+- Use `apply_patch` for multi-file or multi-hunk Codex/OpenAI-style patches (`*** Begin Patch` … `*** End Patch` with Add/Update/Delete File sections).
 - Use `remove` to delete files or directories—never use `edit_file` or `write_file` to “delete” a path.
 - Use `write_file` / `create_file` only for new files or intentional full rewrites.
 - Pass `expected_file_hash` (and per-op `expected_hash` for ranges) when you already know the current hash so concurrent edits fail cleanly.

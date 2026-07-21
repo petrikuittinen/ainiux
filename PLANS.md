@@ -2272,6 +2272,8 @@ This is the v1.0 plan for ainiux local agent mode (merged from the former standa
 
 **Agent edit engine + AGENTS.md chain slice (2026-07-21):** `load_agents_md_for_path` walks root→nearest nested `AGENTS.md` files under a shared byte budget. `str_replace` and `edit_file.replace_text` use the §13 fallback order (exact → flexible whitespace → indent-stripped) with optional `fuzzy=false`, `line_range_hint`, and `match_mode` reporting. `edit_file.replace_symbol` rewrites an indexed symbol’s line range by `symbol_id`. `remove` deletes files or empty directories (recursive optional) with history backups for UTF-8 text, snapshot updates, and headless denials for database files / symlink trees. In-memory snapshot re-scans symbols after writes. `apply_patch`, `agent.sqlite`, interactive TUI/approvals, and mode cycling remain later work.
 
+**Agent apply_patch + FS visibility polish (2026-07-21):** `apply_patch` accepts OpenAI/Codex `*** Begin Patch` envelopes (`Add File` / `Update File` hunks / `Delete File`), validates all ops then writes with history backups and snapshot refresh, supports `patch`/`input`/`diff` aliases and fuzzy hunk matching, and is mutation-only. `list_directory` uses real readdir (empty dirs, `#names#`); plain `remove` requires `confirm=true` when a `#name#` sibling exists. `agent.sqlite`, interactive TUI/approvals, mode cycling, and broader command guard remain later work.
+
 ---
 
 ## 1. Scope

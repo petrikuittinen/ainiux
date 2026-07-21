@@ -2,7 +2,7 @@
 
 ## Local agent mode (v1.0)
 
-- One-shot agent with read tools, nearest-path `AGENTS.md` chain, `edit_file` (range/insert/delete/replace_text with fuzzy fallback/`replace_symbol`/create_file), `write_file`, fuzzy `str_replace`, and guarded `remove` is landed; `list_directory` is real filesystem (empty dirs / `#names#`); remove blocks plain names when a `#name#` sibling exists unless `confirm=true`. Next slices: `apply_patch`, project `agent.sqlite`, interactive TUI agent shell, mode cycling, command guard for broader `run_command`, interactive approval for destructive deletes.
+- One-shot agent edit engine is largely complete: nearest-path `AGENTS.md`, `edit_file` ops (including fuzzy `replace_text` / `replace_symbol`), `write_file`, fuzzy `str_replace`, guarded `remove`, real `list_directory`, and Codex/OpenAI-style `apply_patch`. Next slices: project `agent.sqlite`, interactive TUI agent shell, mode cycling, command guard for broader `run_command`, interactive approval for destructive deletes.
 - Keep security-review strictly read-only when expanding agent tools (`run_command` stays index-scoped there).
 
 ## Syntax Highlighting

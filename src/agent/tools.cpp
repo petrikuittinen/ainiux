@@ -14,6 +14,7 @@
 #include <sstream>
 #include <unistd.h>
 
+#include "agent/apply_patch.hpp"
 #include "agent/process.hpp"
 #include "agent/text_match.hpp"
 #include "agent/tool_args.hpp"
@@ -1067,6 +1068,184 @@ Error ReadToolRegistry::remove_workspace_path(const std::string& relative_path,
     return ok_error();
 }
 
+Error ReadToolRegistry::apply_workspace_patch(const std::string& patch_text,
+                                              bool atomic,
+                                              bool allow_fuzzy,
+                                              std::vector<std::string>& files_changed,
+                                              std::size_t& operations_applied,
+                                              std::map<std::string, std::string>& new_hashes,
+                                              std::string& reverse_patch_path,
+                                              std::vector<std::string>& summary,
+                                              std::vector<std::string>& warnings) const {
+    files_changed.clear();
+    operations_applied = 0;
+    new_hashes.clear();
+    reverse_patch_path.clear();
+    summary.clear();
+    warnings.clear();
+    if (!allow_mutations_)
+        return {ErrorCode::UnsupportedFeature, "workspace writes are disabled for this tool session"};
+
+    ParsedPatch parsed;
+    Error error = parse_apply_patch(patch_text, parsed);
+    if (!error.ok()) return error;
+
+    struct Planned {
+        PatchOpKind kind = PatchOpKind::UpdateFile;
+        std::string path;
+        std::string previous;   // empty if new
+        std::string next;       // empty if delete
+        bool existed = false;
+        std::vector<std::string> match_modes;
+    };
+    std::vector<Planned> plan;
+    plan.reserve(parsed.ops.size());
+
+    for (const PatchFileOp& op : parsed.ops) {
+        Planned item;
+        item.kind = op.kind;
+        item.path = fs::path(op.path).generic_string();
+        if (item.path.empty() || !safe_relative_path(item.path))
+            return {ErrorCode::BadArgs, "apply_patch path must be a safe workspace-relative path: " +
+                                            op.path};
+        if (is_database_path(item.path))
+            return {ErrorCode::FileWrite,
+                    "refusing apply_patch delete/write on database file: " + item.path};
+
+        fs::path absolute;
+        error = resolve_writable_path(item.path, absolute);
+        if (!error.ok()) return error;
+
+        std::error_code ec;
+        const bool exists = fs::exists(absolute, ec) && !ec;
+        if (ec) return {ErrorCode::FileWrite, "could not inspect path: " + ec.message()};
+        if (exists && fs::is_symlink(fs::symlink_status(absolute, ec)))
+            return {ErrorCode::FileWrite, "refusing symlink path in apply_patch: " + item.path};
+        if (exists && fs::is_directory(absolute, ec))
+            return {ErrorCode::FileWrite, "apply_patch path is a directory: " + item.path};
+
+        if (op.kind == PatchOpKind::AddFile) {
+            if (exists)
+                return {ErrorCode::FileWrite,
+                        "Add File target already exists (use Update File): " + item.path};
+            if (op.add_content.find('\0') != std::string::npos)
+                return {ErrorCode::BadArgs, "Add File content must not contain NUL bytes"};
+            if (!html::is_valid_utf8(op.add_content))
+                return {ErrorCode::BadArgs, "Add File content must be valid UTF-8"};
+            if (op.add_content.size() > index_options_.max_source_code_file_size)
+                return {ErrorCode::BadArgs, "Add File content exceeds max_source_code_file_size"};
+            item.existed = false;
+            item.next = op.add_content;
+            plan.push_back(std::move(item));
+            continue;
+        }
+
+        if (op.kind == PatchOpKind::DeleteFile) {
+            if (!exists)
+                return {ErrorCode::FileRead, "Delete File target does not exist: " + item.path};
+            item.existed = true;
+            item.previous = read_all_bytes(absolute, error);
+            if (!error.ok()) return error;
+            plan.push_back(std::move(item));
+            continue;
+        }
+
+        // UpdateFile
+        if (!exists)
+            return {ErrorCode::FileRead, "Update File target does not exist: " + item.path};
+        item.existed = true;
+        item.previous = read_all_bytes(absolute, error);
+        if (!error.ok()) return error;
+        if (item.previous.find('\0') != std::string::npos || !html::is_valid_utf8(item.previous))
+            return {ErrorCode::FileRead, "Update File target is not valid UTF-8 text: " + item.path};
+        error = apply_patch_hunks(item.previous, op.hunks, allow_fuzzy, item.next, item.match_modes);
+        if (!error.ok()) {
+            error.message = item.path + ": " + error.message;
+            return error;
+        }
+        if (item.next.size() > index_options_.max_source_code_file_size)
+            return {ErrorCode::BadArgs,
+                    "Update File result exceeds max_source_code_file_size for " + item.path};
+        if (!html::is_valid_utf8(item.next))
+            return {ErrorCode::FileWrite, "Update File result is not valid UTF-8 for " + item.path};
+        plan.push_back(std::move(item));
+    }
+
+    // Atomic by default: all plan entries validated before any mutation.
+    // Non-atomic still applies in order but stops on first I/O failure after partial writes.
+    (void)atomic;
+
+    for (const Planned& item : plan) {
+        fs::path absolute;
+        error = resolve_writable_path(item.path, absolute);
+        if (!error.ok()) return error;
+
+        if (item.kind == PatchOpKind::DeleteFile) {
+            std::string history_path;
+            if (item.previous.find('\0') == std::string::npos &&
+                html::is_valid_utf8(item.previous)) {
+                error = save_history_copy(item.path, item.previous, history_path);
+                if (!error.ok()) return error;
+                if (reverse_patch_path.empty()) reverse_patch_path = history_path;
+            }
+            std::error_code ec;
+            fs::remove(absolute, ec);
+            if (ec)
+                return {ErrorCode::FileWrite,
+                        "could not delete " + item.path + ": " + ec.message()};
+            note_removed_path(item.path);
+            files_changed.push_back(item.path);
+            summary.push_back("deleted " + item.path);
+            ++operations_applied;
+            continue;
+        }
+
+        // Add or update: write content.
+        if (item.existed) {
+            std::string history_path;
+            error = save_history_copy(item.path, item.previous, history_path);
+            if (!error.ok()) return error;
+            if (reverse_patch_path.empty()) reverse_patch_path = history_path;
+        } else {
+            const fs::path parent = absolute.parent_path();
+            std::error_code ec;
+            if (!parent.empty() && (!fs::exists(parent, ec) || ec)) {
+                fs::create_directories(parent, ec);
+                if (ec)
+                    return {ErrorCode::FileWrite,
+                            "could not create parent directories for " + item.path + ": " +
+                                ec.message()};
+            }
+        }
+        error = write_bytes_atomic(absolute, item.next);
+        if (!error.ok()) return error;
+        note_written_file(item.path, item.next);
+        new_hashes[item.path] = index::content_hash(item.next);
+        files_changed.push_back(item.path);
+        if (item.kind == PatchOpKind::AddFile) {
+            summary.push_back("added " + item.path);
+        } else {
+            std::string modes;
+            for (std::size_t i = 0; i < item.match_modes.size(); ++i) {
+                if (i) modes += ",";
+                modes += item.match_modes[i];
+            }
+            summary.push_back("updated " + item.path +
+                              (modes.empty() ? std::string() : " (" + modes + ")"));
+            if (allow_fuzzy) {
+                for (const std::string& mode : item.match_modes) {
+                    if (mode != "exact" && mode != "eof_insert") {
+                        warnings.push_back("fuzzy hunk match on " + item.path + ": " + mode);
+                        break;
+                    }
+                }
+            }
+        }
+        ++operations_applied;
+    }
+    return ok_error();
+}
+
 namespace {
 
 std::string join_lines(const std::vector<std::string>& lines) {
@@ -1653,6 +1832,25 @@ std::vector<provider::FunctionDefinition> ReadToolRegistry::definitions() const 
                            "\"confirm\":{\"type\":\"boolean\"},"
                            "\"expected_file_hash\":{\"type\":\"string\"}",
                     "\"path\"")});
+        tools.push_back(
+            {"apply_patch",
+             "Apply an OpenAI/Codex-style multi-file patch. Prefer edit_file for simple "
+             "single-file edits. Preferred form:\n"
+             "*** Begin Patch\n"
+             "*** Update File: path\n"
+             "@@\n"
+             " context\n"
+             "-old\n"
+             "+new\n"
+             "*** End Patch\n"
+             "Also accepts bare *** Update/Add/Delete File sections without Begin/End "
+             "(common with local models). patch/input/diff aliases; fuzzy=true default.",
+             schema("\"patch\":{\"type\":\"string\"},"
+                    "\"input\":{\"type\":\"string\"},"
+                    "\"diff\":{\"type\":\"string\"},"
+                    "\"atomic\":{\"type\":\"boolean\"},"
+                    "\"fuzzy\":{\"type\":\"boolean\"}",
+                    "")});
     }
     return tools;
 }
@@ -2404,6 +2602,68 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
                 : error.code == ErrorCode::BadArgs                          ? "invalid_arguments"
                 : error.code == ErrorCode::UnsupportedFeature               ? "policy_denied"
                                                                             : error_code_string(error.code);
+            return envelope(false, std::move(data), code, error.message, warnings, false);
+        }
+        return envelope(true, std::move(data), "", "", warnings, false);
+    }
+
+    if (name == "apply_patch") {
+        if (!allow_mutations_)
+            return tool_error_result("policy_denied", "apply_patch is not enabled in this session");
+        // Accept patch / input / diff aliases (OpenAI tool variants).
+        std::string patch_text;
+        if (!get_string(args, "patch", patch_text, false, validation_error))
+            return tool_error_result("invalid_arguments", validation_error);
+        if (patch_text.empty()) {
+            if (!get_string(args, "input", patch_text, false, validation_error))
+                return tool_error_result("invalid_arguments", validation_error);
+        }
+        if (patch_text.empty()) {
+            if (!get_string(args, "diff", patch_text, false, validation_error))
+                return tool_error_result("invalid_arguments", validation_error);
+        }
+        if (patch_text.empty())
+            return tool_error_result("invalid_arguments",
+                                    "apply_patch requires patch (or input/diff) string");
+        bool atomic = true;
+        bool allow_fuzzy = true;
+        if (!get_bool(args, "atomic", true, atomic, validation_error) ||
+            !get_bool(args, "fuzzy", true, allow_fuzzy, validation_error))
+            return tool_error_result("invalid_arguments", validation_error);
+
+        std::vector<std::string> files_changed;
+        std::size_t operations_applied = 0;
+        std::map<std::string, std::string> new_hashes;
+        std::string reverse_patch_path;
+        std::vector<std::string> summary;
+        std::vector<std::string> warnings;
+        const Error error =
+            apply_workspace_patch(patch_text, atomic, allow_fuzzy, files_changed, operations_applied,
+                                  new_hashes, reverse_patch_path, summary, warnings);
+        json::Value data = object_value();
+        data.object["applied"] = bool_value(error.ok());
+        data.object["operations_applied"] = number_value(static_cast<double>(operations_applied));
+        data.object["reverse_patch_path"] = string_value(reverse_patch_path);
+        data.object["index_updated"] = bool_value(error.ok());
+        json::Value files = array_value();
+        for (const std::string& file : files_changed) files.array.push_back(string_value(file));
+        data.object["files_changed"] = std::move(files);
+        json::Value hashes = object_value();
+        for (const auto& entry : new_hashes)
+            hashes.object[entry.first] = string_value(entry.second);
+        data.object["new_hashes"] = std::move(hashes);
+        json::Value summary_array = array_value();
+        for (const std::string& item : summary) summary_array.array.push_back(string_value(item));
+        data.object["summary"] = std::move(summary_array);
+        if (!error.ok()) {
+            const std::string code =
+                error.message.find("not found") != std::string::npos     ? "not_found"
+                : error.message.find("matches ") != std::string::npos    ? "ambiguous_match"
+                : error.message.find("refusing") != std::string::npos    ? "policy_denied"
+                : error.message.find("does not exist") != std::string::npos ? "not_found"
+                : error.code == ErrorCode::BadArgs                       ? "invalid_arguments"
+                : error.code == ErrorCode::UnsupportedFeature            ? "policy_denied"
+                                                                         : error_code_string(error.code);
             return envelope(false, std::move(data), code, error.message, warnings, false);
         }
         return envelope(true, std::move(data), "", "", warnings, false);

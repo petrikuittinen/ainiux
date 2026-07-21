@@ -28,7 +28,7 @@ struct SourceRange {
 
 // Snapshot-backed workspace tools. Security-review keeps allow_mutations=false
 // (read/search/inspect only). Agent mode sets allow_mutations=true to expose
-// write_file, edit_file, str_replace (with fuzzy fallback), and remove.
+// write_file, edit_file, str_replace (with fuzzy fallback), remove, and apply_patch.
 struct ToolRegistryOptions {
     bool allow_mutations = false;
 };
@@ -102,6 +102,15 @@ class ReadToolRegistry {
                                 std::string& guard_rule_id,
                                 std::string& old_hash,
                                 std::vector<std::string>& suggestions,
+                                std::vector<std::string>& warnings) const;
+    Error apply_workspace_patch(const std::string& patch_text,
+                                bool atomic,
+                                bool allow_fuzzy,
+                                std::vector<std::string>& files_changed,
+                                std::size_t& operations_applied,
+                                std::map<std::string, std::string>& new_hashes,
+                                std::string& reverse_patch_path,
+                                std::vector<std::string>& summary,
                                 std::vector<std::string>& warnings) const;
     void note_written_file(const std::string& relative_path, const std::string& content) const;
     void note_removed_path(const std::string& relative_path) const;
