@@ -40,6 +40,10 @@ void ensure_chat_session_initialized(InteractiveSession& session) {
 
 int run_interactive(InteractiveSession session) {
     InteractiveMode mode = session.start_mode;
+    // Keep options.agent aligned with the active product mode.
+    session.context.options.agent = (mode == InteractiveMode::Agent);
+    session.context.options.tui = (mode == InteractiveMode::Chat);
+
     while (true) {
         if (mode == InteractiveMode::Editor) {
             const EditorRunResult result = editor::run_editor(session.editor_path,
@@ -48,12 +52,21 @@ int run_interactive(InteractiveSession session) {
                                                                       session.ai_continue,
                                                                       session.assist_config,
                                                                       &session);
-            // Editor currently only cycles into ordinary Chat, not Agent.
+            if (result.next == InteractiveUiTarget::Agent) {
+                sync_editor_provider_to_shared(session, session.ai_continue);
+                ensure_chat_session_initialized(session);
+                session.context.options.agent = true;
+                session.context.options.tui = false;
+                mode = InteractiveMode::Agent;
+                continue;
+            }
             if (result.next != InteractiveUiTarget::Chat) {
                 return result.exit_code;
             }
             sync_editor_provider_to_shared(session, session.ai_continue);
             ensure_chat_session_initialized(session);
+            session.context.options.agent = false;
+            session.context.options.tui = true;
             mode = InteractiveMode::Chat;
             continue;
         }
@@ -61,24 +74,25 @@ int run_interactive(InteractiveSession session) {
         // Chat and Agent both use the shared full-screen TUI shell (history,
         // input editor, /provider /model /reasoning pickers). Generation differs
         // by session.context.options.agent (set only for InteractiveMode::Agent).
+        session.context.options.agent = (mode == InteractiveMode::Agent);
+        session.context.options.tui = (mode == InteractiveMode::Chat);
         const TuiRunResult result = tui::run(session.context, session.chat_session, &session);
         if (result.next == InteractiveUiTarget::Editor) {
-            // Agent does not currently cycle into the standalone editor surface.
-            if (mode == InteractiveMode::Agent) {
-                return result.exit_code;
-            }
             sync_shared_provider_to_editor(session);
+            session.context.options.agent = false;
+            session.context.options.tui = false;
             mode = InteractiveMode::Editor;
             continue;
         }
-        if (result.next == InteractiveUiTarget::Agent && mode == InteractiveMode::Chat) {
-            // Future: explicit chat → agent handoff without restarting the process.
+        if (result.next == InteractiveUiTarget::Agent) {
             session.context.options.agent = true;
+            session.context.options.tui = false;
             mode = InteractiveMode::Agent;
             continue;
         }
-        if (result.next == InteractiveUiTarget::Chat && mode == InteractiveMode::Agent) {
+        if (result.next == InteractiveUiTarget::Chat) {
             session.context.options.agent = false;
+            session.context.options.tui = true;
             mode = InteractiveMode::Chat;
             continue;
         }

@@ -86,6 +86,10 @@ void handle_tui_command(const std::string& text, TuiCommandContext& ctx, TuiComm
                 "/highlight [on|off]\n"
                 "/thinking [trace|notrace]\n"
                 "/editor (Ctrl+P; switch to editor mode)\n"
+                "/chat (switch to ordinary chat mode)\n"
+                "/agent (switch to interactive agent mode)\n"
+                "/mode [chat|editor|agent] (show or jump modes)\n"
+                "/cycle (chat → editor → agent → chat)\n"
                 "AI commands from editor-commands.conf (/spell, /grammar, /continue,\n"
                 "/Chinese, /German, /Japanese, /prompt, /regenerate, and custom commands)";
             ctx.status = "Help shown; /help hides it";
@@ -183,6 +187,73 @@ void handle_tui_command(const std::string& text, TuiCommandContext& ctx, TuiComm
             return;
         }
         handlers.switch_to_editor();
+        return;
+    }
+    if (text == "/chat") {
+        if (ctx.active_job != ActiveJob::None) {
+            ctx.status = "Cannot switch mode while a model job is running";
+            return;
+        }
+        if (handlers.switch_to_chat) {
+            handlers.switch_to_chat();
+        } else {
+            ctx.status = "Chat mode switch is unavailable";
+        }
+        return;
+    }
+    if (text == "/agent") {
+        if (ctx.active_job != ActiveJob::None) {
+            ctx.status = "Cannot switch mode while a model job is running";
+            return;
+        }
+        if (handlers.switch_to_agent) {
+            handlers.switch_to_agent();
+        } else {
+            ctx.status = "Agent mode switch is unavailable";
+        }
+        return;
+    }
+    if (text == "/cycle") {
+        if (ctx.active_job != ActiveJob::None) {
+            ctx.status = "Cannot switch mode while a model job is running";
+            return;
+        }
+        if (handlers.cycle_mode) {
+            handlers.cycle_mode();
+        } else {
+            ctx.status = "Mode cycle is unavailable";
+        }
+        return;
+    }
+    if (text == "/mode" || text.rfind("/mode ", 0) == 0) {
+        if (ctx.active_job != ActiveJob::None) {
+            ctx.status = "Cannot switch mode while a model job is running";
+            return;
+        }
+        const std::string arg = app::detail::trim_ascii(text.size() > 5 ? text.substr(5) : "");
+        if (arg.empty()) {
+            if (ctx.context.options.agent) {
+                ctx.status = "Mode: agent · /mode chat|editor|agent · /cycle";
+            } else {
+                ctx.status = "Mode: chat · /mode chat|editor|agent · /cycle";
+            }
+            return;
+        }
+        if (arg == "chat") {
+            if (handlers.switch_to_chat) handlers.switch_to_chat();
+            else ctx.status = "Chat mode switch is unavailable";
+            return;
+        }
+        if (arg == "editor") {
+            handlers.switch_to_editor();
+            return;
+        }
+        if (arg == "agent") {
+            if (handlers.switch_to_agent) handlers.switch_to_agent();
+            else ctx.status = "Agent mode switch is unavailable";
+            return;
+        }
+        ctx.status = "Usage: /mode [chat|editor|agent]";
         return;
     }
     if (text == "/edit") {

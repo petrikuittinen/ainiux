@@ -2,7 +2,7 @@
 
 ## Local agent mode (v1.0)
 
-- One-shot agent edit engine is largely complete, plus project-local `.ainiux/agent.sqlite` session persistence and agent-mode `run_command` (python3/make/… allowlist + destructive-command guard; security-review stays inspection-only). Next slices: interactive TUI agent shell on the session DB, mode cycling, interactive approval for destructive deletes (Ask→Deny is headless for now).
+- Interactive agent TUI shell + multi-turn `AgentSessionRuntime` + mode cycling (`/chat` `/agent` `/editor` `/mode` `/cycle`) landed on project `.ainiux/agent.sqlite`. Next slices: interactive approval UI for Guard `Ask` (still maps to Deny headless), richer tool/status display in the agent transcript, optional session resume/list from agent.sqlite, and stronger editor↔agent buffer handoff.
 - Keep security-review strictly read-only when expanding agent tools (`run_command` stays index-scoped there).
 
 ## Syntax Highlighting

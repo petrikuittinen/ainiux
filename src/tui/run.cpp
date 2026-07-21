@@ -18,6 +18,7 @@
 #include "app/app.hpp"
 #include "app/interactive_mode.hpp"
 #include "app/detail.hpp"
+#include "agent/session_runtime.hpp"
 #include "chat/settings.hpp"
 #include "chat/media_store.hpp"
 #include "ainiux/model_setting.hpp"
@@ -39,6 +40,7 @@
 #include <cerrno>
 #include <cstring>
 #include <iostream>
+#include <memory>
 #include <optional>
 #include <sys/select.h>
 #include <unistd.h>
@@ -95,11 +97,18 @@ app::TuiRunResult run(provider::RequestContext context,
     size_t completion_generation = 0;
     bool completion_pending = false;
     std::string status = ready_status();
+    if (context.options.agent) {
+        status = "Agent mode · workspace tools enabled · /mode · /chat · /editor";
+    }
     std::string theme = "dark";
     context.options.tui_themes.normalize_name(context.options.tui_theme, theme);
     const bool use_colors = !context.options.no_colors;
     bool quit = false;
-    bool switch_to_editor = false;
+    app::InteractiveUiTarget leave_target = app::InteractiveUiTarget::Quit;
+    // Warm multi-turn agent session (project .ainiux/agent.sqlite). Prepared on first turn.
+    std::shared_ptr<agent::AgentSessionRuntime> agent_runtime =
+        context.options.agent ? std::make_shared<agent::AgentSessionRuntime>()
+                              : std::shared_ptr<agent::AgentSessionRuntime>{};
     bool show_thinking_traces = context.options.show_thinking_traces;
     size_t pending_user = static_cast<size_t>(-1);
     size_t pending_assistant = static_cast<size_t>(-1);
@@ -531,8 +540,13 @@ app::TuiRunResult run(provider::RequestContext context,
     };
 
     auto refresh_startup_status = [&]() {
-        if (!sqlite_available) {
+        if (!sqlite_available && !context.options.agent) {
             status = sqlite_unavailable_message();
+            return;
+        }
+        if (context.options.agent) {
+            status = provider_model_status_message(
+                context, "agent · tools on · /mode chat|editor · /cycle");
             return;
         }
         status = chat_startup_status(context);
@@ -614,27 +628,47 @@ app::TuiRunResult run(provider::RequestContext context,
         }
         model_job.start([job_context, request_messages = std::move(request_messages),
                          media_database_path, max_image_bytes, max_attachment_bytes, agent_mode,
-                         agent_goal = std::move(agent_goal),
+                         agent_goal = std::move(agent_goal), agent_runtime,
                          &events](runtime::CancellationToken token) mutable {
             provider::ChatResult chat_result;
             Error send_error = ok_error();
             ainiux::context::PreparedMessages prepared;
             if (agent_mode) {
-                // Interactive agent turn: tool-using goal runner (not plain chat).
-                // Quiet one-shot stderr so it does not corrupt the shared TUI.
+                // Interactive agent turn: multi-turn session runtime (shared tools/DB).
                 const std::string model_name = job_context.options.model;
                 job_context.options.quiet = true;
-                app::AgentGoalResult agent_result =
-                    app::run_agent_goal(std::move(job_context), agent_goal, token, {}, false, {});
-                send_error = agent_result.error;
-                if (send_error.ok()) {
-                    chat_result.content = agent_result.final_text;
-                    chat_result.model = model_name;
-                    if (!agent_result.final_text.empty()) {
-                        TuiEvent delta;
-                        delta.type = TuiEventType::Delta;
-                        delta.text = agent_result.final_text;
-                        events.push(std::move(delta));
+                std::shared_ptr<agent::AgentSessionRuntime> runtime = agent_runtime;
+                if (!runtime) {
+                    send_error = {ErrorCode::Internal, "agent session runtime is missing"};
+                } else {
+                    if (!runtime->prepared()) {
+                        agent::SessionRuntimeOptions options;
+                        options.workspace = ".";
+                        options.allow_mutations = true;
+                        options.interactive = true;
+                        options.enable_session_db = true;
+                        options.enable_agent_log = job_context.options.agent_log_enabled;
+                        options.security_review_log_keep_runs =
+                            job_context.options.security_review_log_keep_runs;
+                        options.trusted_prompt_dir = job_context.options.trusted_prompt_dir;
+                        options.max_source_code_file_size =
+                            job_context.options.max_source_code_file_size;
+                        send_error = runtime->prepare(job_context, token, {}, options);
+                    }
+                    if (send_error.ok()) {
+                        agent::SessionTurnResult turn =
+                            runtime->run_user_turn(job_context, agent_goal, token, {});
+                        send_error = turn.error;
+                        if (send_error.ok()) {
+                            chat_result.content = turn.final_text;
+                            chat_result.model = model_name;
+                            if (!turn.final_text.empty()) {
+                                TuiEvent delta;
+                                delta.type = TuiEventType::Delta;
+                                delta.text = turn.final_text;
+                                events.push(std::move(delta));
+                            }
+                        }
                     }
                 }
             } else {
@@ -936,7 +970,7 @@ app::TuiRunResult run(provider::RequestContext context,
             interactive->pending_editor_assist.active = true;
             interactive->pending_editor_assist.command_index = pending.command_index;
             interactive->pending_editor_assist.selection_text = pending.selection_text;
-            switch_to_editor = true;
+            leave_target = app::InteractiveUiTarget::Editor;
             quit = true;
             return true;
         };
@@ -1019,17 +1053,50 @@ app::TuiRunResult run(provider::RequestContext context,
                                       session.thread_id, false);
     };
     command_handlers.set_thinking_trace_mode = set_thinking_trace_mode;
-    command_handlers.switch_to_editor = [&]() {
-        if (interactive == nullptr) {
+    auto leave_for = [&](app::InteractiveUiTarget target) {
+        if (active_job != ActiveJob::None) {
+            status = "Cannot switch mode while a model job is running";
+            return;
+        }
+        if (target == app::InteractiveUiTarget::Editor && interactive == nullptr) {
             status = "Editor mode is unavailable";
             return;
         }
-        if (active_job != ActiveJob::None) {
-            status = "Cannot switch to editor while a model job is running";
+        // Leaving agent: finish project session without tearing down chat DB.
+        if (context.options.agent && agent_runtime && agent_runtime->prepared() &&
+            agent_runtime->session_id() > 0) {
+            (void)agent_runtime->finish_session("cancelled", "", "Cancelled",
+                                                "left agent mode");
+        }
+        leave_target = target;
+        quit = true;
+    };
+    command_handlers.switch_to_editor = [&]() { leave_for(app::InteractiveUiTarget::Editor); };
+    command_handlers.switch_to_chat = [&]() {
+        if (!context.options.agent) {
+            status = "Already in chat mode";
             return;
         }
-        switch_to_editor = true;
-        quit = true;
+        leave_for(app::InteractiveUiTarget::Chat);
+    };
+    command_handlers.switch_to_agent = [&]() {
+        if (context.options.agent) {
+            status = "Already in agent mode · tools enabled for this workspace";
+            return;
+        }
+        leave_for(app::InteractiveUiTarget::Agent);
+    };
+    command_handlers.cycle_mode = [&]() {
+        if (context.options.agent) {
+            leave_for(app::InteractiveUiTarget::Chat);
+        } else {
+            // chat → editor when interactive shell is available, else chat → agent
+            if (interactive != nullptr) {
+                leave_for(app::InteractiveUiTarget::Editor);
+            } else {
+                leave_for(app::InteractiveUiTarget::Agent);
+            }
+        }
     };
 
     TuiCommandContext command_context{context,
@@ -1912,14 +1979,23 @@ app::TuiRunResult run(provider::RequestContext context,
         deferred_store_save.reset();
     }
     remove_empty_thread_on_exit();
-    if (switch_to_editor && interactive != nullptr) {
-        interactive->context = context;
-        interactive->chat_session = session;
-        interactive->chat_session_initialized = true;
-        interactive->ai_continue = ai_continue;
-        interactive->assist_config = ai_continue.assist_config;
-        interactive->highlight_enabled = syntax_highlight;
-        return {0, app::InteractiveUiTarget::Editor};
+    if (leave_target == app::InteractiveUiTarget::Editor ||
+        leave_target == app::InteractiveUiTarget::Chat ||
+        leave_target == app::InteractiveUiTarget::Agent) {
+        if (interactive != nullptr) {
+            interactive->context = context;
+            interactive->chat_session = session;
+            interactive->chat_session_initialized = true;
+            interactive->ai_continue = ai_continue;
+            interactive->assist_config = ai_continue.assist_config;
+            interactive->highlight_enabled = syntax_highlight;
+        }
+        return {0, leave_target};
+    }
+    // Process exit from agent: finish open session if any.
+    if (context.options.agent && agent_runtime && agent_runtime->prepared() &&
+        agent_runtime->session_id() > 0) {
+        (void)agent_runtime->finish_session("success", "", "", "");
     }
     return {0, app::InteractiveUiTarget::Quit};
 }

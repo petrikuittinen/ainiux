@@ -39,6 +39,10 @@ struct TuiCommandHandlers {
     std::function<void()> start_media_cleanup;
     std::function<void(bool)> set_thinking_trace_mode;
     std::function<void()> switch_to_editor;
+    // Explicit mode jumps among chat / editor / agent (InteractiveUiTarget).
+    std::function<void()> switch_to_chat;
+    std::function<void()> switch_to_agent;
+    std::function<void()> cycle_mode;
 };
 
 struct TuiCommandContext {

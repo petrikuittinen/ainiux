@@ -2278,6 +2278,8 @@ This is the v1.0 plan for ainiux local agent mode (merged from the former standa
 
 **Agent run_command + destructive guard slice (2026-07-21):** agent mode (`allow_mutations`) expands `run_command` beyond the security-review inspection allowlist to include common build/test/run tools (`python3`, `make`, `ctest`, `node`, `go`, `cargo`, compilers, …) still without a shell. A DCG-style `command_guard` denies `rm -rf`, destructive git, destructive SQL, `find -delete`, shell wrappers, and sudo; headless Ask maps to Deny. Security-review remains inspection-only. Interactive approval UI remains later work.
 
+**Interactive agent TUI shell + mode cycle slice (2026-07-21):** `AgentSessionRuntime` prepares index/tools/`agent.sqlite` once and runs multi-turn goals without re-seeding the system prompt each message. One-shot `--run` and interactive `--agent` share that runtime. Interactive agent keeps a warm project session; `/chat`, `/agent`, `/editor`, `/mode`, and `/cycle` switch among chat ↔ editor ↔ agent without process restart while keeping tools disarmed outside agent mode. Interactive approval UI for Guard Ask decisions remains later work.
+
 ---
 
 ## 1. Scope
