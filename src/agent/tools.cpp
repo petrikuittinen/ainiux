@@ -154,15 +154,49 @@ void expand_braces(const std::string& pattern, std::vector<std::string>& output)
     }
 }
 
+// Normalize workspace-relative glob patterns and indexed paths to a common form:
+// forward slashes, no leading "./", no trailing slash (except bare ".").
+std::string normalize_glob_path(std::string path) {
+    for (char& ch : path) {
+        if (ch == '\\') ch = '/';
+    }
+    while (path.size() >= 2 && path[0] == '.' && path[1] == '/') path.erase(0, 2);
+    while (path.size() > 1 && path.back() == '/') path.pop_back();
+    return path;
+}
+
+// Convert a single glob alternative to a std::regex.
+// Important: "**/name" must match root-level "name" as well as "dir/name".
+// The previous converter mapped "**/" to ".*/", which required a slash and
+// therefore missed workspace-root files (DeepSeek/Gemma often emit **/hello.py).
 std::regex glob_expression(const std::string& pattern) {
     std::string output = "^";
     for (std::size_t i = 0; i < pattern.size(); ++i) {
         const char ch = pattern[i];
         if (ch == '*') {
-            if (i + 1 < pattern.size() && pattern[i + 1] == '*') { ++i; output += ".*"; }
-            else output += "[^/]*";
-        } else if (ch == '?') output += "[^/]";
-        else output += regex_escape(std::string(1, ch));
+            if (i + 1 < pattern.size() && pattern[i + 1] == '*') {
+                ++i;  // consume second '*'
+                // "**/..." → zero or more directories (including none at workspace root).
+                // Use (?:.*/)? so "**/hello.py" matches "hello.py", "src/hello.py",
+                // and "a/b/hello.py". A single (?:.+/)? only covers one directory.
+                if (i + 1 < pattern.size() && pattern[i + 1] == '/') {
+                    ++i;
+                    output += "(?:.*/)?";
+                } else if (i + 1 == pattern.size()) {
+                    // trailing "**" matches the rest of the path
+                    output += ".*";
+                } else {
+                    // bare "**" mid-pattern without slash (unusual)
+                    output += ".*";
+                }
+            } else {
+                output += "[^/]*";
+            }
+        } else if (ch == '?') {
+            output += "[^/]";
+        } else {
+            output += regex_escape(std::string(1, ch));
+        }
     }
     output += "$";
     return std::regex(output, std::regex::optimize);
@@ -170,11 +204,28 @@ std::regex glob_expression(const std::string& pattern) {
 
 bool glob_matches(const std::string& path, const std::string& pattern) {
     if (pattern.empty()) return true;
+    const std::string normalized_path = normalize_glob_path(path);
     std::vector<std::string> alternatives;
-    expand_braces(pattern, alternatives);
-    for (const std::string& alternative : alternatives) {
-        try { if (std::regex_match(path, glob_expression(alternative))) return true; }
-        catch (const std::regex_error&) { return false; }
+    expand_braces(normalize_glob_path(pattern), alternatives);
+    for (std::string alternative : alternatives) {
+        alternative = normalize_glob_path(alternative);
+        if (alternative.empty() || alternative == ".") {
+            if (normalized_path.empty() || normalized_path == ".") return true;
+            continue;
+        }
+        try {
+            if (std::regex_match(normalized_path, glob_expression(alternative))) return true;
+            // Basename-only patterns: "hello.py" should also match "src/hello.py"
+            // when the model omits **/. Prefer explicit **/ when possible; this
+            // is a soft compatibility path for patterns with no slash.
+            if (alternative.find('/') == std::string::npos &&
+                alternative.find("**") == std::string::npos) {
+                const std::string recursive = "**/" + alternative;
+                if (std::regex_match(normalized_path, glob_expression(recursive))) return true;
+            }
+        } catch (const std::regex_error&) {
+            return false;
+        }
     }
     return false;
 }

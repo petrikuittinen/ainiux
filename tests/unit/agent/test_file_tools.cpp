@@ -85,6 +85,55 @@ agent::ReadToolRegistry make_registry(const std::string& workspace, bool allow_m
     return tools;
 }
 
+bool json_array_contains_string(const std::string& result, const std::string& needle) {
+    const json::ParseResult parsed = json::parse(result);
+    if (!parsed.error.ok() || !parsed.value.is_object()) return false;
+    const json::Value* data = parsed.value.get("data");
+    if (data == nullptr || !data->is_array()) return false;
+    for (const json::Value& item : data->array) {
+        if (item.is_string() && item.string == needle) return true;
+    }
+    return false;
+}
+
+void test_glob_recursive_root_and_nested() {
+    const std::string workspace = write_temp_workspace("glob");
+    write_text(fs::path(workspace) / "hello.py", "print(1)\n");
+    write_text(fs::path(workspace) / "src" / "hello.py", "print(2)\n");
+    fs::create_directories(fs::path(workspace) / "a" / "b");
+    write_text(fs::path(workspace) / "a" / "b" / "hello.py", "print(3)\n");
+    write_text(fs::path(workspace) / "src" / "other.cpp", "int x;\n");
+    agent::ReadToolRegistry tools = make_registry(workspace, false);
+
+    const std::string starstar = tools.execute("glob", R"JSON({"pattern":"**/hello.py"})JSON");
+    check(json_ok(starstar), "glob **/hello.py succeeds: " + starstar);
+    check(json_array_contains_string(starstar, "hello.py"),
+          "**/hello.py matches workspace-root hello.py");
+    check(json_array_contains_string(starstar, "src/hello.py"),
+          "**/hello.py matches nested src/hello.py");
+    check(json_array_contains_string(starstar, "a/b/hello.py"),
+          "**/hello.py matches deeply nested hello.py");
+
+    const std::string basename = tools.execute("glob", R"JSON({"pattern":"hello.py"})JSON");
+    check(json_ok(basename) && json_array_contains_string(basename, "hello.py") &&
+              json_array_contains_string(basename, "src/hello.py"),
+          "basename-only hello.py matches root and nested paths");
+
+    const std::string src_cpp =
+        tools.execute("glob", R"JSON({"pattern":"src/**/*.cpp"})JSON");
+    check(json_ok(src_cpp) && json_array_contains_string(src_cpp, "src/other.cpp"),
+          "src/**/*.cpp matches src/other.cpp: " + src_cpp);
+
+    const std::string braces =
+        tools.execute("glob", R"JSON({"pattern":"src/*.{cpp,py}"})JSON");
+    check(json_ok(braces) && json_array_contains_string(braces, "src/hello.py") &&
+              json_array_contains_string(braces, "src/other.cpp"),
+          "brace alternatives still work: " + braces);
+
+    std::error_code ec;
+    fs::remove_all(workspace, ec);
+}
+
 void test_read_only_registry_hides_writes() {
     const std::string workspace = write_temp_workspace("readonly");
     agent::ReadToolRegistry tools = make_registry(workspace, false);
@@ -357,6 +406,7 @@ void test_edit_file_ops() {
 }  // namespace
 
 void run_all() {
+    test_glob_recursive_root_and_nested();
     test_read_only_registry_hides_writes();
     test_write_file_create_and_readback();
     test_str_replace_exact();
