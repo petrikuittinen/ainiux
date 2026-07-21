@@ -226,6 +226,18 @@ AgentRoundOutcome execute_prepared_calls(AgentLoopState& state,
 
 }  // namespace
 
+void append_conversation_text(provider::ToolConversation& conversation,
+                              const std::string& role,
+                              const std::string& content) {
+    json::Value item;
+    item.type = json::Value::Type::Object;
+    item.object["role"].type = json::Value::Type::String;
+    item.object["role"].string = role;
+    item.object["content"].type = json::Value::Type::String;
+    item.object["content"].string = content;
+    conversation.continuation_items_json.push_back(json::stringify(item));
+}
+
 ToolProtocol default_tool_protocol(bool provider_supports_tool_calls) {
     return provider_supports_tool_calls ? ToolProtocol::Native : ToolProtocol::Xml;
 }

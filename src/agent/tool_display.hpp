@@ -13,6 +13,13 @@ struct CompactToolLine {
     std::string text;  // full formatted line without trailing newline
 };
 
+// Best-effort terminal width (ioctl / COLUMNS), never below 20.
+std::size_t terminal_column_count(std::size_t fallback = 80);
+
+// Clip text to at most max_cells code units (ASCII-heavy agent logs).
+// Appends "..." when truncated. Empty max_cells yields empty string.
+std::string clip_to_cells(const std::string& text, std::size_t max_cells);
+
 // Build a truncated preview of JSON tool arguments (paths preferred).
 std::string compact_tool_args_preview(const std::string& arguments_json,
                                       std::size_t max_cells = 72);
@@ -21,10 +28,12 @@ std::string compact_tool_args_preview(const std::string& arguments_json,
 std::string compact_tool_status(const std::string& result_json);
 
 // Format: N: name(args_preview) → ok|error
+// When max_line_cells is 0, uses terminal_column_count(). The final line is
+// always clipped to that width so agent logs stay on one screen row.
 std::string format_compact_tool_line(std::size_t index,
                                      const std::string& tool_name,
                                      const std::string& arguments_json,
                                      const std::string& result_json,
-                                     std::size_t max_arg_cells = 72);
+                                     std::size_t max_line_cells = 0);
 
 }  // namespace ainiux::agent

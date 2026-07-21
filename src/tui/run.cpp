@@ -105,10 +105,30 @@ app::TuiRunResult run(provider::RequestContext context,
     const bool use_colors = !context.options.no_colors;
     bool quit = false;
     app::InteractiveUiTarget leave_target = app::InteractiveUiTarget::Quit;
-    // Warm multi-turn agent session (project .ainiux-pr/agent.sqlite). Prepared on first turn.
+    // Warm multi-turn agent session (project .ainiux-pr/agent.sqlite).
+    // Prepared on agent-mode entry (index refresh + history load), not deferred
+    // until the first user turn.
     std::shared_ptr<agent::AgentSessionRuntime> agent_runtime =
         context.options.agent ? std::make_shared<agent::AgentSessionRuntime>()
                               : std::shared_ptr<agent::AgentSessionRuntime>{};
+    auto make_agent_runtime_options = [&]() {
+        agent::SessionRuntimeOptions options;
+        options.workspace = ".";
+        options.allow_mutations = true;
+        options.interactive = true;
+        options.enable_session_db = true;
+        options.enable_agent_log = context.options.agent_log_enabled;
+        options.security_review_log_keep_runs = context.options.security_review_log_keep_runs;
+        options.trusted_prompt_dir = context.options.trusted_prompt_dir;
+        options.max_source_code_file_size = context.options.max_source_code_file_size;
+        options.history_backup.enabled = context.options.agent_history_backup_enabled;
+        options.history_backup.max_bytes = context.options.agent_history_backup_max_bytes;
+        options.history_backup.ttl_days = context.options.agent_history_backup_ttl_days;
+        options.auto_compact = context.options.agent_auto_compact;
+        options.compact_limit = context.options.agent_compact_limit;
+        options.show_command_output = context.options.agent_show_command_output;
+        return options;
+    };
     bool show_thinking_traces = context.options.show_thinking_traces;
     size_t pending_user = static_cast<size_t>(-1);
     size_t pending_assistant = static_cast<size_t>(-1);
@@ -411,6 +431,12 @@ app::TuiRunResult run(provider::RequestContext context,
     };
 
     auto start_store_save = [&]() {
+        // Agent mode persists to .ainiux-pr/agent.sqlite only. The chat library
+        // rejects tool/notice/summary roles, which caused
+        // AINIUX_ERR_PROVIDER_SCHEMA after agent turns.
+        if (context.options.agent) {
+            return;
+        }
         if (!sqlite_available || session.read_only) {
             return;
         }
@@ -625,9 +651,12 @@ app::TuiRunResult run(provider::RequestContext context,
                 }
             }
         }
+        // Fallback options if startup prepare failed; normally the runtime is already prepared.
+        agent::SessionRuntimeOptions agent_prep_options = make_agent_runtime_options();
         model_job.start([job_context, request_messages = std::move(request_messages),
                          media_database_path, max_image_bytes, max_attachment_bytes, agent_mode,
                          agent_goal = std::move(agent_goal), agent_runtime,
+                         agent_prep_options = std::move(agent_prep_options),
                          &events](runtime::CancellationToken token) mutable {
             provider::ChatResult chat_result;
             Error send_error = ok_error();
@@ -640,35 +669,31 @@ app::TuiRunResult run(provider::RequestContext context,
                 if (!runtime) {
                     send_error = {ErrorCode::Internal, "agent session runtime is missing"};
                 } else {
+                    // prepare() normally runs at agent-mode entry; re-try only if
+                    // that bootstrap failed or the runtime was reset.
                     if (!runtime->prepared()) {
-                        agent::SessionRuntimeOptions options;
-                        options.workspace = ".";
-                        options.allow_mutations = true;
-                        options.interactive = true;
-                        options.enable_session_db = true;
-                        options.enable_agent_log = job_context.options.agent_log_enabled;
-                        options.security_review_log_keep_runs =
-                            job_context.options.security_review_log_keep_runs;
-                        options.trusted_prompt_dir = job_context.options.trusted_prompt_dir;
-                        options.max_source_code_file_size =
-                            job_context.options.max_source_code_file_size;
-                        options.history_backup.enabled =
-                            job_context.options.agent_history_backup_enabled;
-                        options.history_backup.max_bytes =
-                            job_context.options.agent_history_backup_max_bytes;
-                        options.history_backup.ttl_days =
-                            job_context.options.agent_history_backup_ttl_days;
-                        options.auto_compact = job_context.options.agent_auto_compact;
-                        options.compact_limit = job_context.options.agent_compact_limit;
-                        options.show_command_output =
-                            job_context.options.agent_show_command_output;
-                        send_error = runtime->prepare(job_context, token, {}, options);
+                        send_error =
+                            runtime->prepare(job_context, token, {}, agent_prep_options);
                     }
                     if (send_error.ok()) {
-                        agent::SessionTurnResult turn =
-                            runtime->run_user_turn(job_context, agent_goal, token, {});
+                        // Stream tool activity into the chat panel as each call runs.
+                        // Skip "Agent turn N" banners (status noise); keep tool lines
+                        // and compact notices. Done still replaces with the final
+                        // composed transcript (tool lines + answer).
+                        auto agent_progress = [&events](const std::string& line) {
+                            if (line.empty()) return;
+                            if (line.rfind("Agent turn ", 0) == 0) return;
+                            TuiEvent delta;
+                            delta.type = TuiEventType::Delta;
+                            delta.text = line;
+                            if (delta.text.back() != '\n') delta.text.push_back('\n');
+                            events.push(std::move(delta));
+                        };
+                        agent::SessionTurnResult turn = runtime->run_user_turn(
+                            job_context, agent_goal, token, {}, agent_progress);
                         send_error = turn.error;
                         // Compact tool lines + final answer (Done sets assistant content).
+                        // Only final tool results (not the transient "…" running lines).
                         std::string display;
                         for (const std::string& line : turn.compact_tool_lines) {
                             if (!display.empty()) display.push_back('\n');
@@ -1097,16 +1122,15 @@ app::TuiRunResult run(provider::RequestContext context,
         }
         leave_for(app::InteractiveUiTarget::Agent);
     };
+    // Ring: chat → editor → agent → chat (Ctrl+P / /cycle).
     command_handlers.cycle_mode = [&]() {
         if (context.options.agent) {
             leave_for(app::InteractiveUiTarget::Chat);
+        } else if (interactive != nullptr) {
+            leave_for(app::InteractiveUiTarget::Editor);
         } else {
-            // chat → editor when interactive shell is available, else chat → agent
-            if (interactive != nullptr) {
-                leave_for(app::InteractiveUiTarget::Editor);
-            } else {
-                leave_for(app::InteractiveUiTarget::Agent);
-            }
+            // Standalone chat TUI without interactive shell: chat ↔ agent only.
+            leave_for(app::InteractiveUiTarget::Agent);
         }
     };
 
@@ -1356,7 +1380,43 @@ app::TuiRunResult run(provider::RequestContext context,
         start_models(ModelsRequestPurpose::Preview);
     }
 
-    refresh_startup_status();
+    // Agent mode: refresh the code index and restore project history before the
+    // first user turn so reopening a .ainiux-pr workspace is not a blank UI.
+    if (context.options.agent && agent_runtime) {
+        status = "Refreshing code index...";
+        std::string visible_panel_boot = panel_text();
+        size_t render_frame_boot = 0;
+        ActivityKind activity_boot = ActivityKind::None;
+        detail::render(session, input, status, history_scroll, show_thinking_traces, mode,
+                       visible_panel_boot, activity_boot, render_frame_boot, syntax_highlight,
+                       detail::RenderStyle{&context.options.tui_themes, theme, use_colors},
+                       panel_title(), true);
+
+        provider::RequestContext prep_context = context;
+        prep_context.options.quiet = true;  // keep index chatter off the alternate screen
+        agent::SessionRuntimeOptions prep_options = make_agent_runtime_options();
+        Error prep_error = agent_runtime->prepare(prep_context, {}, {}, prep_options);
+        if (!prep_error.ok()) {
+            status = detail::error_line(prep_error);
+        } else {
+            std::vector<provider::Message> history;
+            Error history_error = agent_runtime->load_display_messages(history);
+            if (!history_error.ok()) {
+                status = "Agent ready · history load failed: " + history_error.message;
+            } else if (!history.empty()) {
+                // Show the durable project transcript (last actions), not an empty chat.
+                session.messages = std::move(history);
+                history_scroll = history_scroll_for_thread_end();
+                status = provider_model_status_message(
+                    context, "agent · resumed · " + std::to_string(session.messages.size()) +
+                                 " message(s) · /mode · /cmd-out");
+            } else {
+                status = provider_model_status_message(context, "agent · ready · /mode · /cmd-out");
+            }
+        }
+    } else {
+        refresh_startup_status();
+    }
 
     file_jobs.start_media_cleanup(context.options.media_auto_expiration_days,
                                   session.thread_id, true);
@@ -1997,8 +2057,13 @@ app::TuiRunResult run(provider::RequestContext context,
         leave_target == app::InteractiveUiTarget::Agent) {
         if (interactive != nullptr) {
             interactive->context = context;
-            interactive->chat_session = session;
-            interactive->chat_session_initialized = true;
+            // Never write agent transcript into the chat library session. Agent
+            // history is project-local (.ainiux-pr/agent.sqlite) and must not
+            // reappear under Chat after Ctrl+P /cycle.
+            if (!context.options.agent) {
+                interactive->chat_session = session;
+                interactive->chat_session_initialized = true;
+            }
             interactive->ai_continue = ai_continue;
             interactive->assist_config = ai_continue.assist_config;
             interactive->highlight_enabled = syntax_highlight;

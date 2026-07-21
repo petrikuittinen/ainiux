@@ -159,6 +159,15 @@ std::string message_label(const std::string& role) {
     if (role == "system") {
         return "System";
     }
+    if (role == "tool") {
+        return "Tool";
+    }
+    if (role == "notice") {
+        return "Notice";
+    }
+    if (role == "summary") {
+        return "Summary";
+    }
     return role;
 }
 
@@ -367,19 +376,32 @@ std::vector<StyledLine> history_lines_for_session(const chat::Session& session,
                                                   bool show_thinking_traces,
                                                   ActivityKind activity_kind,
                                                   size_t activity_frame,
-                                                  bool markdown_highlight) {
+                                                  bool markdown_highlight,
+                                                  bool agent_mode) {
     std::vector<StyledLine> history;
     const int min_content_width = 8;
     for (size_t message_index = 0; message_index < session.messages.size(); ++message_index) {
         const provider::Message& message = session.messages[message_index];
-        const std::string prefix = message_label(message.role) + ": ";
-        const StyleRole label_role = label_role_for_message(message.role);
+        // Agent mode chrome is minimal: user prompts as "> text", tool/assistant
+        // output flush-left without "Assistant:" / "Tool:" labels or hanging indent.
+        std::string prefix;
+        StyleRole label_role = StyleRole::Muted;
+        if (agent_mode) {
+            if (message.role == "user") {
+                prefix = "> ";
+                label_role = StyleRole::UserLabel;
+            }
+            // assistant / tool / notice / summary / system: no label, no indent
+        } else {
+            prefix = message_label(message.role) + ": ";
+            label_role = label_role_for_message(message.role);
+        }
         const bool is_last_message = message_index + 1 == session.messages.size();
         std::string content = message.content;
         if (message.role == "assistant") {
             if (message.content.empty()) {
                 if (!is_last_message || activity_kind == ActivityKind::None) {
-                    content = "(waiting...)";
+                    content = agent_mode ? "..." : "(waiting...)";
                 } else {
                     content.clear();
                 }
@@ -410,7 +432,8 @@ std::vector<StyledLine> history_lines_for_session(const chat::Session& session,
         } else if (show_streaming_placeholder) {
             content_segments =
                 activity_placeholder_segments(session_status_label(session), ActivityKind::Streaming,
-                                              activity_frame, "streaming response ...");
+                                              activity_frame,
+                                              agent_mode ? "working..." : "streaming response ...");
         } else {
             content_segments = markdown_highlight ? markdown_segments(content) : plain_text_segments(content);
             if (message.role == "assistant" && show_thinking_traces) {
@@ -430,14 +453,25 @@ std::vector<StyledLine> history_lines_for_session(const chat::Session& session,
             }
         }
         std::vector<std::vector<StyledSegment>> wrapped;
+        const int prefix_cells = static_cast<int>(prefix.size());
         append_wrapped_segments(wrapped, content_segments,
-                                std::max(min_content_width, cols - static_cast<int>(prefix.size())));
+                                std::max(min_content_width, cols - prefix_cells));
+        if (wrapped.empty() && !prefix.empty()) {
+            // Keep a lone "> " line if content is empty (unlikely for user).
+            StyledLine line;
+            line.segments.push_back({prefix, label_role});
+            history.push_back(std::move(line));
+            continue;
+        }
         for (size_t i = 0; i < wrapped.size(); ++i) {
             StyledLine line;
-            if (i == 0) {
-                line.segments.push_back({prefix, label_role});
-            } else {
-                line.segments.push_back({std::string(prefix.size(), ' '), StyleRole::Muted});
+            if (!prefix.empty()) {
+                if (i == 0) {
+                    line.segments.push_back({prefix, label_role});
+                } else {
+                    // Hanging indent only for chat labels (and agent "> " multi-line user).
+                    line.segments.push_back({std::string(prefix.size(), ' '), StyleRole::Muted});
+                }
             }
             line.segments.insert(line.segments.end(), wrapped[i].begin(), wrapped[i].end());
             history.push_back(std::move(line));

@@ -72,12 +72,20 @@ class AgentSessionRuntime {
                   std::function<bool()> interrupted = {},
                   SessionRuntimeOptions options = {});
 
+    // After prepare: load the project transcript for TUI display (roles
+    // user/assistant/tool/notice/summary). Empty when the DB has no messages.
+    Error load_display_messages(std::vector<provider::Message>& out) const;
+
     // Run one user goal/follow-up until FinalText, NeedsUserContinue, abort, or error.
     // First turn seeds the tool conversation; later turns append a user message.
-    SessionTurnResult run_user_turn(provider::RequestContext& context,
-                                    const std::string& user_text,
-                                    runtime::CancellationToken cancellation = runtime::CancellationToken(),
-                                    std::function<bool()> interrupted = {});
+    // Optional on_progress receives compact tool lines (and brief notices) as they
+    // happen so interactive UIs can stream them without waiting for the final answer.
+    SessionTurnResult run_user_turn(
+        provider::RequestContext& context,
+        const std::string& user_text,
+        runtime::CancellationToken cancellation = runtime::CancellationToken(),
+        std::function<bool()> interrupted = {},
+        std::function<void(const std::string& status_line)> on_progress = {});
 
     // Mark session finished in agent.sqlite (success/error/cancelled/aborted).
     Error finish_session(const std::string& status,

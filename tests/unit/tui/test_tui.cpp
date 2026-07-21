@@ -667,6 +667,50 @@ void test_tui_markdown_history_highlighting() {
           "TUI chat highlights newly supported SQL and YAML Markdown fences");
 }
 
+void test_tui_agent_history_chrome() {
+    ainiux::chat::Session session;
+    session.messages.push_back({"user", "fix the attempts"});
+    session.messages.push_back({"tool", "1: read_file(\"game.py\") → ok"});
+    session.messages.push_back({"assistant", "Updated medium and hard to 8 attempts."});
+
+    // Chat mode keeps classic labels.
+    std::vector<ainiux::tui::StyledLine> chat_lines =
+        ainiux::tui::detail::history_lines_for_session(
+            session, 100, false, ainiux::tui::ActivityKind::None, 0, false, false);
+    bool saw_you = false;
+    bool saw_assistant_label = false;
+    for (const auto& line : chat_lines) {
+        if (line.segments.empty()) continue;
+        if (line.segments.front().text.find("You:") != std::string::npos) saw_you = true;
+        if (line.segments.front().text.find("Assistant:") != std::string::npos)
+            saw_assistant_label = true;
+    }
+    check(saw_you && saw_assistant_label, "chat mode keeps You:/Assistant: labels");
+
+    // Agent mode: "> prompt", no Assistant:/Tool: labels, no hanging indent on tools.
+    std::vector<ainiux::tui::StyledLine> agent_lines =
+        ainiux::tui::detail::history_lines_for_session(
+            session, 100, false, ainiux::tui::ActivityKind::None, 0, false, true);
+    bool saw_prompt_marker = false;
+    bool saw_assistant_label_agent = false;
+    bool saw_tool_label = false;
+    bool saw_tool_body = false;
+    bool saw_answer = false;
+    for (const auto& line : agent_lines) {
+        std::string joined;
+        for (const auto& seg : line.segments) joined += seg.text;
+        if (!line.segments.empty() && line.segments.front().text == "> ") saw_prompt_marker = true;
+        if (joined.find("Assistant:") != std::string::npos) saw_assistant_label_agent = true;
+        if (joined.find("Tool:") != std::string::npos) saw_tool_label = true;
+        if (joined.find("1: read_file") != std::string::npos) saw_tool_body = true;
+        if (joined.find("Updated medium") != std::string::npos) saw_answer = true;
+    }
+    check(saw_prompt_marker, "agent mode shows user prompts as \"> \"");
+    check(!saw_assistant_label_agent, "agent mode omits Assistant: label");
+    check(!saw_tool_label, "agent mode omits Tool: label");
+    check(saw_tool_body && saw_answer, "agent mode still shows tool lines and answers flush-left");
+}
+
 void test_tui_input_label_and_activity_indicators() {
     const std::string label = ainiux::tui::input_label_text();
     check(label == ainiux::tui::input_label_text_for_mode(false),
@@ -1070,6 +1114,7 @@ void run_all() {
     test_tui_buffer_list_uses_colored_panel_widget();
     test_tui_thinking_trace_display();
     test_tui_markdown_history_highlighting();
+    test_tui_agent_history_chrome();
 }
 
 }  // namespace ainiux::test::tui

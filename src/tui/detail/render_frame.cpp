@@ -51,7 +51,7 @@ void render(const chat::Session& session,
     std::vector<StyledLine> history =
         panel_active ? panel_lines_for_text(panel_text, mode, cols, panel_title_override)
                      : history_lines_for_session(session, cols, show_thinking_traces, activity_kind,
-                                                 activity_frame, syntax_highlight);
+                                                 activity_frame, syntax_highlight, agent_mode);
     const bool picker_top_aligned = mode == TuiMode::ThreadList || mode == TuiMode::ProviderList ||
                                     mode == TuiMode::ModelList || mode == TuiMode::ReasoningList;
     const int max_history_scroll = std::max(0, static_cast<int>(history.size()) - layout.history_rows);

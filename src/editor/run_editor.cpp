@@ -114,6 +114,7 @@ app::EditorRunResult run_editor(const std::string& path,
     std::string initial_linebreak_warning;
     std::string initial_lock_warning;
     bool switch_to_chat = false;
+    bool switch_to_agent = false;
     std::vector<EditorState> buffers;
     size_t active_buffer = 0;
     SplitLayout split_layout;
@@ -315,7 +316,7 @@ app::EditorRunResult run_editor(const std::string& path,
         split_layout.set_focused_buffer(active_buffer);
     };
 
-    auto can_switch_to_chat = [&]() {
+    auto can_leave_editor_for_mode_switch = [&]() {
         if (interactive == nullptr) {
             return false;
         }
@@ -324,10 +325,10 @@ app::EditorRunResult run_editor(const std::string& path,
                !reformat_session.active && !insert_session.active && !window_prefix_active;
     };
 
-    auto request_switch_to_chat = [&]() {
-        if (!can_switch_to_chat()) {
+    auto leave_editor_for = [&](app::InteractiveUiTarget target) {
+        if (!can_leave_editor_for_mode_switch()) {
             if (interactive != nullptr) {
-                minibuffer_message(minibuffer, "Cannot switch to chat right now");
+                minibuffer_message(minibuffer, "Cannot switch mode right now");
             }
             return;
         }
@@ -345,9 +346,17 @@ app::EditorRunResult run_editor(const std::string& path,
         interactive->highlight_enabled = highlight_enabled;
         interactive->ai_continue = ai_continue;
         app::sync_editor_provider_to_shared(*interactive, ai_continue);
-        switch_to_chat = true;
+        if (target == app::InteractiveUiTarget::Agent) {
+            switch_to_agent = true;
+        } else {
+            switch_to_chat = true;
+        }
         quit = true;
     };
+
+    auto request_switch_to_chat = [&]() { leave_editor_for(app::InteractiveUiTarget::Chat); };
+    // Ctrl+P cycle next from editor is Agent (chat → editor → agent → chat).
+    auto request_switch_to_agent = [&]() { leave_editor_for(app::InteractiveUiTarget::Agent); };
 
     auto selected_buffer_status = [&]() {
         return ui::text_selector_status("Selected buffer", buffer_list_selected, buffers.size());
@@ -2499,7 +2508,8 @@ app::EditorRunResult run_editor(const std::string& path,
         }
 
         if (ch == 16) {
-            request_switch_to_chat();
+            // Ctrl+P: advance mode ring editor → agent (then agent → chat → editor).
+            request_switch_to_agent();
             return;
         }
         if (ch == 18) {
@@ -2837,6 +2847,9 @@ app::EditorRunResult run_editor(const std::string& path,
         }
     }
     sync_active_buffer();
+    if (switch_to_agent) {
+        return {0, app::InteractiveUiTarget::Agent};
+    }
     if (switch_to_chat) {
         return {0, app::InteractiveUiTarget::Chat};
     }

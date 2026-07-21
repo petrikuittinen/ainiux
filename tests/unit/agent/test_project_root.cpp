@@ -82,10 +82,40 @@ void test_compact_threshold_defaults() {
 
 void test_tool_display_format() {
     const std::string line = agent::format_compact_tool_line(
-        1, "read_file", R"({"path":"example.txt"})", R"({"ok":true})");
+        1, "read_file", R"({"path":"example.txt"})", R"({"ok":true})", 80);
     check(line.find("1: read_file(") != std::string::npos, "index and name");
     check(line.find("example.txt") != std::string::npos, "path preview");
     check(line.find("→ ok") != std::string::npos || line.find("ok") != std::string::npos, "ok status");
+}
+
+void test_tool_display_clips_to_width() {
+    const std::string long_path(200, 'x');
+    const std::string args = std::string(R"({"path":")") + long_path + R"("})";
+    const std::string line =
+        agent::format_compact_tool_line(12, "read_file", args, R"({"ok":true})", 40);
+    check(line.size() <= 40, "tool line clipped to 40 cells");
+    check(line.find("...") != std::string::npos, "ellipsis when clipped");
+    check(agent::clip_to_cells("hello world", 5) == "he...", "clip_to_cells short");
+    check(agent::clip_to_cells("hi", 10) == "hi", "clip_to_cells no-op");
+    check(agent::terminal_column_count(80) >= 20, "terminal columns at least 20");
+}
+
+void test_prior_session_context_includes_recent_work() {
+    std::vector<agent::AgentMessageRecord> messages(4);
+    messages[0].role = "user";
+    messages[0].content = "write a game";
+    messages[1].role = "tool";
+    messages[1].content = "1: write_file(\"game.py\") → ok";
+    messages[1].tool_name = "write_file";
+    messages[2].role = "assistant";
+    messages[2].content = "created game.py";
+    messages[3].role = "notice";
+    messages[3].content = "left agent mode";
+    const std::string context = agent::build_prior_session_context(messages, 4000);
+    check(!context.empty(), "prior context non-empty");
+    check(context.find("write a game") != std::string::npos, "includes prior user goal");
+    check(context.find("write_file") != std::string::npos, "includes tool activity");
+    check(context.find("left agent mode") == std::string::npos, "skips leave notices");
 }
 
 }  // namespace
@@ -97,6 +127,8 @@ void run_all() {
     test_reject_nested_child_ainiux();
     test_compact_threshold_defaults();
     test_tool_display_format();
+    test_tool_display_clips_to_width();
+    test_prior_session_context_includes_recent_work();
 }
 
 }  // namespace ainiux::test::agent_project_root

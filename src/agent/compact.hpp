@@ -27,4 +27,9 @@ long long estimate_transcript_tokens(const std::vector<AgentMessageRecord>& mess
 std::string build_local_compact_summary(const std::vector<AgentMessageRecord>& messages,
                                         std::size_t drop_count);
 
+// Build a bounded prior-session context block for model reseed after reopen.
+// Returns empty when there is nothing useful to inject.
+std::string build_prior_session_context(const std::vector<AgentMessageRecord>& messages,
+                                        std::size_t max_chars = 24000);
+
 }  // namespace ainiux::agent

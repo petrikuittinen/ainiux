@@ -1,7 +1,10 @@
 #include "agent/tool_display.hpp"
 
 #include <cctype>
+#include <cstdlib>
 #include <sstream>
+#include <sys/ioctl.h>
+#include <unistd.h>
 
 #include "json/json.hpp"
 
@@ -12,7 +15,7 @@ std::string truncate_cells(std::string text, std::size_t max_cells) {
     if (max_cells == 0) return {};
     // Approximate cells as UTF-8 bytes for now (agent lines stay ASCII-heavy).
     if (text.size() <= max_cells) return text;
-    if (max_cells <= 3) return "...";
+    if (max_cells <= 3) return std::string(max_cells, '.');
     text.resize(max_cells - 3);
     text += "...";
     return text;
@@ -45,6 +48,30 @@ bool looks_like_path_key(const std::string& key) {
 }
 
 }  // namespace
+
+std::size_t terminal_column_count(std::size_t fallback) {
+    if (fallback < 20) fallback = 20;
+    winsize ws{};
+    if (isatty(STDOUT_FILENO) && ioctl(STDOUT_FILENO, TIOCGWINSZ, &ws) == 0 && ws.ws_col >= 20) {
+        return static_cast<std::size_t>(ws.ws_col);
+    }
+    if (isatty(STDERR_FILENO) && ioctl(STDERR_FILENO, TIOCGWINSZ, &ws) == 0 && ws.ws_col >= 20) {
+        return static_cast<std::size_t>(ws.ws_col);
+    }
+    const char* columns = std::getenv("COLUMNS");
+    if (columns != nullptr && columns[0] != '\0') {
+        char* end = nullptr;
+        const long value = std::strtol(columns, &end, 10);
+        if (end != columns && value >= 20 && value <= 1000) {
+            return static_cast<std::size_t>(value);
+        }
+    }
+    return fallback;
+}
+
+std::string clip_to_cells(const std::string& text, std::size_t max_cells) {
+    return truncate_cells(text, max_cells);
+}
 
 std::string compact_tool_args_preview(const std::string& arguments_json, std::size_t max_cells) {
     if (arguments_json.empty() || arguments_json == "{}") return "";
@@ -125,12 +152,24 @@ std::string format_compact_tool_line(std::size_t index,
                                      const std::string& tool_name,
                                      const std::string& arguments_json,
                                      const std::string& result_json,
-                                     std::size_t max_arg_cells) {
+                                     std::size_t max_line_cells) {
+    if (max_line_cells == 0) max_line_cells = terminal_column_count();
+    if (max_line_cells < 20) max_line_cells = 20;
+
+    const std::string name = tool_name.empty() ? "tool" : tool_name;
+    const std::string status = compact_tool_status(result_json);
+    // Fixed framing: "N: name() → status"
+    const std::string prefix = std::to_string(index) + ": " + name + "(";
+    const std::string suffix = ") → " + status;
+    const std::size_t framing = prefix.size() + suffix.size();
+    const std::size_t arg_budget =
+        max_line_cells > framing ? max_line_cells - framing : 0;
+
     std::ostringstream out;
-    out << index << ": " << (tool_name.empty() ? "tool" : tool_name) << '(';
-    out << compact_tool_args_preview(arguments_json, max_arg_cells);
-    out << ") → " << compact_tool_status(result_json);
-    return out.str();
+    out << prefix;
+    if (arg_budget > 0) out << compact_tool_args_preview(arguments_json, arg_budget);
+    out << suffix;
+    return clip_to_cells(out.str(), max_line_cells);
 }
 
 }  // namespace ainiux::agent

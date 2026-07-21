@@ -88,11 +88,71 @@ void test_empty_turn_rejected_when_unprepared() {
     check(!turn.error.ok(), "unprepared runtime rejects turns");
 }
 
+void test_prepare_loads_existing_display_history() {
+    const std::string workspace = temp_workspace("history");
+    const std::string previous = fs::current_path().string();
+    fs::current_path(workspace);
+
+    // Seed agent.sqlite as if a prior agent run completed.
+    {
+        agent::AgentSessionStore store;
+        check(store.open(workspace).ok(), "seed open store");
+        agent::AgentProjectRecord project;
+        project.workspace = workspace;
+        project.status = "idle";
+        project.provider = "none";
+        project.model = "test";
+        check(store.open_project(project).ok(), "seed project");
+        check(store.append_message("user", "earlier goal").ok(), "seed user");
+        check(store.append_message("tool", "1: read_file(\"src/hello.cpp\") → ok", "read_file",
+                                   true, "\"src/hello.cpp\"")
+                  .ok(),
+              "seed tool");
+        check(store.append_message("assistant", "all done").ok(), "seed assistant");
+        store.close();
+    }
+
+    agent::AgentSessionRuntime runtime;
+    agent::SessionRuntimeOptions options;
+    options.workspace = workspace;
+    options.allow_mutations = true;
+    options.interactive = true;
+    options.enable_session_db = true;
+    options.enable_agent_log = false;
+    options.max_source_code_file_size = 1024 * 1024;
+
+    provider::RequestContext context = offline_context(workspace);
+    Error error = runtime.prepare(context, {}, {}, options);
+    check(error.ok(), "prepare with existing history: " + error.message);
+
+    std::vector<provider::Message> display;
+    error = runtime.load_display_messages(display);
+    check(error.ok(), "load_display_messages: " + error.message);
+    check(display.size() >= 3, "history has at least user/tool/assistant");
+    check(display[0].role == "user" && display[0].content.find("earlier goal") != std::string::npos,
+          "first message is prior user goal");
+    bool saw_tool = false;
+    bool saw_assistant = false;
+    for (const auto& message : display) {
+        if (message.role == "tool") saw_tool = true;
+        if (message.role == "assistant" && message.content.find("all done") != std::string::npos)
+            saw_assistant = true;
+    }
+    check(saw_tool, "tool activity restored for UI");
+    check(saw_assistant, "assistant reply restored for UI");
+
+    runtime.reset();
+    fs::current_path(previous);
+    std::error_code ec;
+    fs::remove_all(workspace, ec);
+}
+
 }  // namespace
 
 void run_all() {
     test_prepare_opens_session_db_and_tools();
     test_empty_turn_rejected_when_unprepared();
+    test_prepare_loads_existing_display_history();
 }
 
 }  // namespace ainiux::test::agent_session_runtime

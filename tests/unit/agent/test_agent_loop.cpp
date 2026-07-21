@@ -449,6 +449,48 @@ void test_scripted_turn_cap() {
           "interactive mode asks the user at the turn cap");
 }
 
+void test_follow_up_user_appends_after_tool_history() {
+    // Regression: follow-ups used to push into conversation.messages, which
+    // serialize_tool_request places BEFORE continuation tool history. The model
+    // then saw the new user request before prior tool results.
+    provider::RequestContext context = chat_context();
+    context.options.model = "mock-model";
+    context.options.stream = false;
+    provider::ToolConversation conversation;
+    conversation.messages = {{"system", "trusted"}, {"user", "write a game"}};
+    conversation.continuation_items_json = {
+        R"({"role":"assistant","content":null,"tool_calls":[{"id":"call_1","type":"function","function":{"name":"write_file","arguments":"{\"path\":\"game.py\"}"}}]})",
+        R"({"role":"tool","tool_call_id":"call_1","content":"{\"ok\":true}"})",
+        R"({"role":"assistant","content":"Created game.py"})"};
+
+    agent::append_conversation_text(conversation, "user", "change attempts to 8");
+
+    const std::vector<provider::FunctionDefinition> definitions = {
+        {"write_file", "Write a file",
+         R"({"type":"object","properties":{"path":{"type":"string"}},"required":["path"],"additionalProperties":false})"}};
+    json::ParseResult parsed =
+        json::parse(provider::serialize_tool_request(context, conversation, definitions));
+    check(parsed.error.ok(), "follow-up request serializes");
+    const json::Value* messages = parsed.value.get("messages");
+    check(messages != nullptr && messages->is_array() && messages->array.size() == 6,
+          "seed + tool history + follow-up = 6 messages");
+    // Expected order: system, user(goal), assistant(tool_calls), tool, assistant(text), user(follow-up)
+    check(messages->array[1].get("role") != nullptr &&
+              messages->array[1].get("role")->string == "user" &&
+              messages->array[1].get("content") != nullptr &&
+              messages->array[1].get("content")->string.find("write a game") != std::string::npos,
+          "original goal stays second");
+    check(messages->array[2].get("tool_calls") != nullptr ||
+              (messages->array[2].get("role") != nullptr &&
+               messages->array[2].get("role")->string == "assistant"),
+          "tool-call assistant precedes follow-up");
+    check(messages->array[5].get("role") != nullptr &&
+              messages->array[5].get("role")->string == "user" &&
+              messages->array[5].get("content") != nullptr &&
+              messages->array[5].get("content")->string.find("attempts to 8") != std::string::npos,
+          "follow-up user is last after tool history");
+}
+
 }  // namespace
 
 void run_all() {
@@ -458,6 +500,7 @@ void run_all() {
     test_protocol_downgrade_and_xml();
     test_invalid_args_not_executed();
     test_scripted_turn_cap();
+    test_follow_up_user_appends_after_tool_history();
 }
 
 }  // namespace ainiux::test::agent_loop

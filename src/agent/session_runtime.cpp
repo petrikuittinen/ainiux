@@ -5,6 +5,7 @@
 #include <sstream>
 #include <utility>
 
+#include "agent/agent_loop.hpp"
 #include "agent/compact.hpp"
 #include "agent/project_root.hpp"
 #include "agent/tool_display.hpp"
@@ -227,6 +228,33 @@ Error AgentSessionRuntime::prepare(const provider::RequestContext& context,
     return ok_error();
 }
 
+Error AgentSessionRuntime::load_display_messages(std::vector<provider::Message>& out) const {
+    out.clear();
+    if (!prepared_ || !session_store_.is_open()) return ok_error();
+    std::vector<AgentMessageRecord> rows;
+    Error error = session_store_.load_messages(rows);
+    if (!error.ok()) return error;
+    out.reserve(rows.size());
+    const std::size_t cols = terminal_column_count();
+    for (const AgentMessageRecord& row : rows) {
+        provider::Message message;
+        if (row.role == "user" || row.role == "assistant" || row.role == "system" ||
+            row.role == "tool" || row.role == "notice" || row.role == "summary") {
+            message.role = row.role;
+        } else {
+            message.role = "notice";
+        }
+        // Tool/notice lines are single-row activity; clip to terminal width.
+        if (row.role == "tool" || row.role == "notice") {
+            message.content = clip_to_cells(row.content, cols);
+        } else {
+            message.content = row.content;
+        }
+        out.push_back(std::move(message));
+    }
+    return ok_error();
+}
+
 Error AgentSessionRuntime::finish_session(const std::string& status,
                                           const std::string& final_text,
                                           const std::string& error_code,
@@ -251,10 +279,12 @@ Error AgentSessionRuntime::finish_session(const std::string& status,
     return error;
 }
 
-SessionTurnResult AgentSessionRuntime::run_user_turn(provider::RequestContext& context,
-                                                     const std::string& user_text,
-                                                     runtime::CancellationToken cancellation,
-                                                     std::function<bool()> interrupted) {
+SessionTurnResult AgentSessionRuntime::run_user_turn(
+    provider::RequestContext& context,
+    const std::string& user_text,
+    runtime::CancellationToken cancellation,
+    std::function<bool()> interrupted,
+    std::function<void(const std::string& status_line)> on_progress) {
     SessionTurnResult result;
     if (!prepared_) {
         result.error = {ErrorCode::Internal, "agent session runtime is not prepared"};
@@ -266,7 +296,12 @@ SessionTurnResult AgentSessionRuntime::run_user_turn(provider::RequestContext& c
         return result;
     }
 
+    // Prefer the per-turn callback (TUI streaming); fall back to prepare-time options.
     auto progress = [&](const std::string& line) {
+        if (on_progress) {
+            on_progress(line);
+            return;
+        }
         if (options_.on_progress) options_.on_progress(line);
     };
 
@@ -304,8 +339,24 @@ SessionTurnResult AgentSessionRuntime::run_user_turn(provider::RequestContext& c
                 logger_->event("agent_session", {"session"}, std::move(fields), "success");
             }
         }
-        seed_agent_conversation(conversation_, prompts_, state_.protocol, text,
-                                agents_md_.injection_text);
+        // Seed system (+ optional AGENTS.md). If agent.sqlite already has a
+        // transcript (reopened project), inject it as model context so the first
+        // turn after resume is not amnesiac. The new goal is always last.
+        std::vector<AgentMessageRecord> prior;
+        if (session_store_.is_open()) (void)session_store_.load_messages(prior);
+        const std::string prior_context = build_prior_session_context(prior);
+        if (prior_context.empty()) {
+            seed_agent_conversation(conversation_, prompts_, state_.protocol, text,
+                                    agents_md_.injection_text);
+        } else {
+            seed_agent_conversation(conversation_, prompts_, state_.protocol, "",
+                                    agents_md_.injection_text);
+            conversation_.messages.push_back({"user", prior_context});
+            conversation_.messages.push_back({"user", text});
+            if (!context.options.quiet)
+                std::cerr << "Injected prior agent transcript (" << prior.size()
+                          << " stored messages) into model context.\n";
+        }
         conversation_seeded_ = true;
         if (session_store_.is_open() && session_id_ > 0) {
             Error message_error =
@@ -328,7 +379,10 @@ SessionTurnResult AgentSessionRuntime::run_user_turn(provider::RequestContext& c
             }
         }
     } else {
-        conversation_.messages.push_back({"user", text});
+        // Tool/assistant history lives in continuation_items_json. Follow-up
+        // user turns must append there so serialize_tool_request places them
+        // after prior tool results (not between the seed goal and tools).
+        append_conversation_text(conversation_, "user", text);
         if (session_store_.is_open() && session_id_ > 0) {
             Error message_error =
                 session_store_.append_message("user", redact_secrets(text, secrets_));
@@ -371,13 +425,23 @@ SessionTurnResult AgentSessionRuntime::run_user_turn(provider::RequestContext& c
         }
     }
 
+    const std::size_t log_width = terminal_column_count();
     std::size_t turn_tool_index = 0;
     auto executor = [&](const std::string& name, const std::string& arguments_json,
                         runtime::CancellationToken token) {
-        std::string body = tools_.execute(name, arguments_json, token);
         ++turn_tool_index;
+        // Surface the call immediately so interactive UIs are not stuck on a blank
+        // "streaming..." placeholder while the tool (or the next model round) runs.
+        {
+            std::ostringstream running;
+            running << turn_tool_index << ": " << (name.empty() ? "tool" : name) << '('
+                    << compact_tool_args_preview(arguments_json, log_width > 24 ? log_width - 24 : 8)
+                    << ") …";
+            progress(clip_to_cells(running.str(), log_width));
+        }
+        std::string body = tools_.execute(name, arguments_json, token);
         const std::string line =
-            format_compact_tool_line(turn_tool_index, name, arguments_json, body);
+            format_compact_tool_line(turn_tool_index, name, arguments_json, body, log_width);
         result.compact_tool_lines.push_back(line);
         progress(line);
         if (!options_.interactive && !context.options.quiet) std::cerr << line << "\n";
@@ -555,11 +619,15 @@ SessionTurnResult AgentSessionRuntime::run_user_turn(provider::RequestContext& c
                                                                                   : "error")
                               << ")";
             }
-            const std::string line = progress_line.str();
+            const std::string line = clip_to_cells(progress_line.str(), log_width);
             progress(line);
             if (!context.options.quiet && !options_.interactive) std::cerr << line << "\n";
-            if (!outcome.notice.empty() && !context.options.quiet && !options_.interactive)
-                std::cerr << "Agent notice: " << redact_secrets(outcome.notice, secrets_) << "\n";
+            if (!outcome.notice.empty() && !context.options.quiet && !options_.interactive) {
+                const std::string notice =
+                    clip_to_cells("Agent notice: " + redact_secrets(outcome.notice, secrets_),
+                                  log_width);
+                std::cerr << notice << "\n";
+            }
         }
 
         if (outcome.kind == AgentRoundOutcome::Kind::Continue) continue;

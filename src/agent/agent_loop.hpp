@@ -108,6 +108,13 @@ Error sanitize_round_continuation_for_history(provider::ApiKind api_kind,
                                               provider::ToolRoundResult& round,
                                               const std::vector<PreparedToolCall>& prepared);
 
+// Append a role/content message onto continuation_items_json (after tool history).
+// Follow-up user turns must use this — not conversation.messages — so they serialize
+// after assistant/tool items rather than between the seed goal and tool history.
+void append_conversation_text(provider::ToolConversation& conversation,
+                              const std::string& role,
+                              const std::string& content);
+
 // Append assistant continuation (already sanitized) then tool results.
 void append_prepared_tool_results(const provider::RequestContext& context,
                                   provider::ToolConversation& conversation,

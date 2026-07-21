@@ -67,4 +67,41 @@ std::string build_local_compact_summary(const std::vector<AgentMessageRecord>& m
     return out.str();
 }
 
+std::string build_prior_session_context(const std::vector<AgentMessageRecord>& messages,
+                                        std::size_t max_chars) {
+    if (messages.empty() || max_chars == 0) return {};
+
+    // Prefer the newest messages when the transcript exceeds the budget.
+    std::size_t start = 0;
+    if (messages.size() > 80) start = messages.size() - 80;
+
+    std::ostringstream body;
+    for (std::size_t i = start; i < messages.size(); ++i) {
+        const AgentMessageRecord& message = messages[i];
+        if (message.role == "notice" &&
+            (message.content.find("left agent") != std::string::npos ||
+             message.content.find("Cancelled") != std::string::npos)) {
+            continue;
+        }
+        std::string content = message.content;
+        if (content.size() > 1500) content = content.substr(0, 1497) + "...";
+        body << "[" << (message.role.empty() ? "message" : message.role) << "] " << content
+             << "\n";
+    }
+    std::string text = body.str();
+    if (text.empty()) return {};
+    if (text.size() > max_chars) {
+        // Keep the tail (most recent activity).
+        text = text.substr(text.size() - max_chars);
+        const std::size_t nl = text.find('\n');
+        if (nl != std::string::npos && nl + 1 < text.size()) text = text.substr(nl + 1);
+    }
+
+    std::ostringstream out;
+    out << "Prior agent work on this project (read-only context from earlier turns; "
+           "use tools for the current request; do not restate this block unless asked):\n"
+        << text;
+    return out.str();
+}
+
 }  // namespace ainiux::agent

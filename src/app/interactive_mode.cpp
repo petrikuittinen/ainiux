@@ -71,12 +71,26 @@ int run_interactive(InteractiveSession session) {
             continue;
         }
 
-        // Chat and Agent both use the shared full-screen TUI shell (history,
-        // input editor, /provider /model /reasoning pickers). Generation differs
-        // by session.context.options.agent (set only for InteractiveMode::Agent).
+        // Chat and Agent share the TUI shell (input, pickers) but must NOT share
+        // transcript state. Agent history lives in .ainiux-pr/agent.sqlite and is
+        // loaded into a disposable view session; chat keeps chat_session only.
+        // Mixing them made Chat show tool lines and triggered HTTP 400 when the
+        // provider received unsupported "tool" roles on ordinary completions.
         session.context.options.agent = (mode == InteractiveMode::Agent);
         session.context.options.tui = (mode == InteractiveMode::Chat);
-        const TuiRunResult result = tui::run(session.context, session.chat_session, &session);
+
+        TuiRunResult result;
+        if (mode == InteractiveMode::Agent) {
+            ensure_chat_session_initialized(session);
+            chat::Session agent_view = chat::new_session(session.context);
+            // No chat system prompt / thread id — agent has its own prompts + DB.
+            agent_view.messages.clear();
+            result = tui::run(session.context, std::move(agent_view), &session);
+        } else {
+            ensure_chat_session_initialized(session);
+            result = tui::run(session.context, session.chat_session, &session);
+        }
+
         if (result.next == InteractiveUiTarget::Editor) {
             sync_shared_provider_to_editor(session);
             session.context.options.agent = false;
