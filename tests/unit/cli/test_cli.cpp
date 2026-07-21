@@ -127,39 +127,13 @@ void test_cli_editor_parse() {
     check(parsed.options.positional_url == "openrouter", "provider shortcut stays positional");
     check(parsed.options.editor_path == "openrouter", "editor path named like provider stays on --editor");
 
-    const char* continue_argv[] = {"ainiux", "--editor",
-                                   "--editor-continue-prefix-max-chars", "0",
-                                   "--editor-continue-postfix-max-chars", "17",
-                                   "--editor-continue-prose-prefix-max-chars", "23",
-                                   "--editor-continue-prose-postfix-max-chars", "0",
-                                   "--editor-continue-max-tokens", "2048"};
-    parsed = ainiux::cli::parse_args(12, const_cast<char**>(continue_argv));
-    check(parsed.error.ok(), "editor continue settings args parse");
-    check(parsed.options.editor_ai_continue_prefix_max_chars == 0,
-          "editor continue prefix accepts zero to disable prefix context");
-    check(parsed.options.editor_ai_continue_postfix_max_chars == 17,
-          "editor continue postfix character limit parses");
-    check(parsed.options.editor_ai_continue_prose_prefix_max_chars == 23,
-          "editor prose continue prefix character limit parses");
-    check(parsed.options.editor_ai_continue_prose_postfix_max_chars == 0,
-          "editor prose continue postfix accepts zero to disable postfix context");
-    check(parsed.options.editor_ai_continue_max_tokens == 2048,
-          "editor continue max tokens parsed");
-
     const char* old_argv[] = {"ainiux", "--editor-continue-read", "1"};
     parsed = ainiux::cli::parse_args(3, const_cast<char**>(old_argv));
     check(!parsed.error.ok(), "removed --editor-continue-read option is rejected");
-    const char* overflow_argv[] = {
-        "ainiux", "--editor-continue-prefix-max-chars", "999999999999999999999999999999"};
-    parsed = ainiux::cli::parse_args(3, const_cast<char**>(overflow_argv));
-    check(!parsed.error.ok() && parsed.error.message.find("too large") != std::string::npos,
-          "overflowing editor continuation character limit is rejected");
-    const char* prose_overflow_argv[] = {
-        "ainiux", "--editor-continue-prose-postfix-max-chars",
-        "999999999999999999999999999999"};
-    parsed = ainiux::cli::parse_args(3, const_cast<char**>(prose_overflow_argv));
-    check(!parsed.error.ok() && parsed.error.message.find("too large") != std::string::npos,
-          "overflowing prose continuation character limit is rejected");
+    const char* removed_continue_argv[] = {
+        "ainiux", "--editor-continue-prefix-max-chars", "100"};
+    parsed = ainiux::cli::parse_args(3, const_cast<char**>(removed_continue_argv));
+    check(!parsed.error.ok(), "removed editor continue CLI options are rejected");
 }
 
 void test_cli_help_displays_version() {
@@ -181,12 +155,14 @@ void test_cli_help_displays_version() {
               help.find("Provider and endpoint:") != std::string::npos &&
               help.find("Benchmark:") != std::string::npos,
           "CLI help groups options into logical sections");
-    check(help.find("--editor-continue-prefix-max-chars") != std::string::npos &&
-              help.find("--editor-continue-postfix-max-chars") != std::string::npos &&
-              help.find("--editor-continue-prose-prefix-max-chars") != std::string::npos &&
-              help.find("--editor-continue-prose-postfix-max-chars") != std::string::npos &&
-              help.find("--editor-continue-read") == std::string::npos,
-          "CLI help documents only the new editor continue context settings");
+    check(help.find("--editor-continue-prefix-max-chars") == std::string::npos &&
+              help.find("--editor-continue-postfix-max-chars") == std::string::npos &&
+              help.find("--editor-continue-prose-prefix-max-chars") == std::string::npos &&
+              help.find("--editor-continue-prose-postfix-max-chars") == std::string::npos &&
+              help.find("--editor-continue-max-tokens") == std::string::npos &&
+              help.find("--editor-continue-read") == std::string::npos &&
+              help.find("Editor AI continue:") == std::string::npos,
+          "CLI help no longer documents removed editor continue options");
 }
 
 void test_cli_web_search_parse() {

@@ -272,7 +272,12 @@ class Handler(BaseHTTPRequestHandler):
             and item.get("role") == "system"
             and isinstance(item.get("content"), str)
         )
-        if request.get("tools") and "security-review worker" in system_text:
+        # Detect security-review from the task-layer prompt / tool schema, not
+        # the shared master foundation wording (which may change).
+        if request.get("tools") and (
+            "submit_security_review" in system_text
+            or "Review the supplied source batch" in system_text
+        ):
             if "serialized cross-project coordinator" in system_text:
                 reply = json.dumps(
                     {"keep": [], "reject": [], "merge": [], "findings": [], "notes": []}
@@ -413,7 +418,12 @@ class Handler(BaseHTTPRequestHandler):
             and message.get("role") == "system"
             and isinstance(message.get("content"), str)
         )
-        if request.get("tools") and "security-review worker" in system_text:
+        # Detect security-review from the task-layer prompt / tool schema, not
+        # the shared master foundation wording (which may change).
+        if request.get("tools") and (
+            "submit_security_review" in system_text
+            or "Review the supplied source batch" in system_text
+        ):
             if "serialized cross-project coordinator" in system_text:
                 reply = json.dumps(
                     {"keep": [], "reject": [], "merge": [], "findings": [], "notes": []}

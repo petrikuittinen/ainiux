@@ -789,7 +789,8 @@ grep '`AGENTS.md` | reviewed' "$security_out" >/dev/null
 grep '`review.cpp` | reviewed' "$security_out" >/dev/null
 grep 'No evidence-backed findings were reported' "$security_out" >/dev/null
 grep '^Security review scope: 2 indexed file(s)' "$security_err" >/dev/null
-grep '^Security review diagnostic log: .*\.ainiux/logs/security-review/security-review-' "$security_err" >/dev/null
+grep '^Security review diagnostic log (live): .*\.ainiux/logs/security-review/security-review-' "$security_err" >/dev/null
+grep '^Security review diagnostic log (final): .*\.ainiux/logs/security-review/security-review-' "$security_err" >/dev/null
 security_log=$(find "$security_workspace/.ainiux/logs/security-review" -maxdepth 1 -type f -name 'security-review-*.jsonl' | head -n 1)
 test -n "$security_log"
 test "$(stat -c '%a' "$security_log")" = 600

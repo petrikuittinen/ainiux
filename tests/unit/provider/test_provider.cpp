@@ -1012,7 +1012,7 @@ void test_cli_target_change_clears_stale_remembered_model() {
     remembered_xai.model = "grok-something";
     const char* explicit_provider_argv[] = {"ainiux", "--provider", "vllm", "--editor"};
     ainiux::cli::ParseResult explicit_parsed =
-        ainiux::cli::parse_args(5, const_cast<char**>(explicit_provider_argv), remembered_xai);
+        ainiux::cli::parse_args(4, const_cast<char**>(explicit_provider_argv), remembered_xai);
     check(explicit_parsed.error.ok(), "explicit --provider vllm editor args parse");
     ainiux::provider::apply_cli_target_change(explicit_parsed.options, remembered_xai, false);
     check(explicit_parsed.options.model.empty(),

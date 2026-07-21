@@ -108,17 +108,11 @@ void test_config_applies_user_settings() {
     check(ainiux::config::apply_document(system_continue_config.document, layered).ok() &&
               ainiux::config::apply_document(user_continue_config.document, layered).ok(),
           "system and user continuation settings layer successfully");
-    const char* layered_argv[] = {
-        "ainiux", "--editor-continue-postfix-max-chars", "40",
-        "--editor-continue-prose-postfix-max-chars", "400"};
-    const ainiux::cli::ParseResult layered_cli =
-        ainiux::cli::parse_args(5, const_cast<char**>(layered_argv), layered);
-    check(layered_cli.error.ok() &&
-              layered_cli.options.editor_ai_continue_prefix_max_chars == 30 &&
-              layered_cli.options.editor_ai_continue_postfix_max_chars == 40 &&
-              layered_cli.options.editor_ai_continue_prose_prefix_max_chars == 300 &&
-              layered_cli.options.editor_ai_continue_prose_postfix_max_chars == 400,
-          "continuation settings follow system then user then CLI precedence");
+    check(layered.editor_ai_continue_prefix_max_chars == 30 &&
+              layered.editor_ai_continue_postfix_max_chars == 20 &&
+              layered.editor_ai_continue_prose_prefix_max_chars == 300 &&
+              layered.editor_ai_continue_prose_postfix_max_chars == 200,
+          "continuation settings follow system then user config precedence");
 
     ainiux::config::ParseResult insert_config = ainiux::config::parse(
         "[input]\nauto-convert-html-to-md = no\n", "insert.conf");

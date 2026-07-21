@@ -31,9 +31,7 @@ bool needs_value(const std::string& opt) {
         "--context", "--context-policy", "--image-capability",
         "--save-chat", "--load-chat", "--dataset", "--grade-input", "--category", "--case",
         "--runs", "--warmup", "--limit", "--mode", "--concurrency", "--duration",
-        "--summary-format", "--editor-continue-prefix-max-chars",
-        "--editor-continue-postfix-max-chars", "--editor-continue-prose-prefix-max-chars",
-        "--editor-continue-prose-postfix-max-chars", "--editor-continue-max-tokens"};
+        "--summary-format"};
     for (const char* item : with_values) {
         if (opt == item) {
             return true;
@@ -70,25 +68,6 @@ Error parse_int(const std::string& name, const std::string& text, int& out) {
         return {ErrorCode::BadArgs, name + " value is too large"};
     }
     out = static_cast<int>(value);
-    return ok_error();
-}
-
-Error parse_nonnegative_size(const std::string& name, const std::string& text, size_t& out) {
-    if (text.empty()) {
-        return {ErrorCode::BadArgs, name + " expects a non-negative integer"};
-    }
-    size_t value = 0;
-    for (char ch : text) {
-        if (ch < '0' || ch > '9') {
-            return {ErrorCode::BadArgs, name + " expects a non-negative integer"};
-        }
-        const size_t digit = static_cast<size_t>(ch - '0');
-        if (value > (std::numeric_limits<size_t>::max() - digit) / 10) {
-            return {ErrorCode::BadArgs, name + " value is too large"};
-        }
-        value = value * 10 + digit;
-    }
-    out = value;
     return ok_error();
 }
 
@@ -409,35 +388,6 @@ ParseResult parse_args(int argc, char** argv, const Options& base_options) {
                     return {opts, err};
                 }
                 opts.has_max_output_tokens = true;
-            } else if (opt == "--editor-continue-prefix-max-chars") {
-                Error err = parse_nonnegative_size(
-                    opt, value, opts.editor_ai_continue_prefix_max_chars);
-                if (!err.ok()) {
-                    return {opts, err};
-                }
-            } else if (opt == "--editor-continue-postfix-max-chars") {
-                Error err = parse_nonnegative_size(
-                    opt, value, opts.editor_ai_continue_postfix_max_chars);
-                if (!err.ok()) {
-                    return {opts, err};
-                }
-            } else if (opt == "--editor-continue-prose-prefix-max-chars") {
-                Error err = parse_nonnegative_size(
-                    opt, value, opts.editor_ai_continue_prose_prefix_max_chars);
-                if (!err.ok()) {
-                    return {opts, err};
-                }
-            } else if (opt == "--editor-continue-prose-postfix-max-chars") {
-                Error err = parse_nonnegative_size(
-                    opt, value, opts.editor_ai_continue_prose_postfix_max_chars);
-                if (!err.ok()) {
-                    return {opts, err};
-                }
-            } else if (opt == "--editor-continue-max-tokens") {
-                Error err = parse_int(opt, value, opts.editor_ai_continue_max_tokens);
-                if (!err.ok()) {
-                    return {opts, err};
-                }
             } else if (opt == "--format") {
                 if (value == "text") {
                     opts.format = OutputFormat::Text;
@@ -968,22 +918,6 @@ Options:
   Chat history:
       --save-chat PATH          Save JSON chat history after a successful reply.
       --load-chat PATH          Load JSON chat history before sending.
-
-  Editor AI continue:
-      --editor-continue-prefix-max-chars N
-                                Characters before the cursor sent for Ctrl+Space /continue;
-                                default 4000; 0 disables prefix context.
-      --editor-continue-postfix-max-chars N
-                                Characters after the cursor sent for code completion;
-                                default 2000; 0 disables postfix context.
-      --editor-continue-prose-prefix-max-chars N
-                                Characters before the cursor sent for text/Markdown continuation;
-                                default 16384; 0 disables prose prefix context.
-      --editor-continue-prose-postfix-max-chars N
-                                Characters after the cursor sent for text/Markdown continuation;
-                                default 4096; 0 disables prose postfix context.
-      --editor-continue-max-tokens N
-                                Maximum streamed output tokens for editor AI continue; default 32768.
 
   Benchmark:
       --dataset PATH            Benchmark JSONL dataset; default 'builtin'.

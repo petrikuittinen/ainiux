@@ -129,17 +129,17 @@ Requires a configured provider **and** model. If either is missing, `Ctrl+Space`
 5. Keeps thinking traces out of the buffer and shows `thinking...` / `writing.` status.
 6. `Esc` cancels generation but keeps partial output; the stream remains one undoable edit.
 
-Context settings:
+Context settings live under `[editor]` in `config.conf` (and optional environment overrides):
 
-| Side | Default | Config | CLI | Environment |
-|------|---------|--------|-----|-------------|
-| Prose prefix | 16384 | `continue_prose_prefix_max_chars` | `--editor-continue-prose-prefix-max-chars N` | `MAX_CONTINUE_PROSE_PREFIX` |
-| Prose postfix | 4096 | `continue_prose_postfix_max_chars` | `--editor-continue-prose-postfix-max-chars N` | `MAX_CONTINUE_PROSE_POSTFIX` |
-| Code prefix | 4000 | `continue_prefix_max_chars` | `--editor-continue-prefix-max-chars N` | `MAX_CONTINUE_PREFIX` |
-| Code postfix | 2000 | `continue_postfix_max_chars` | `--editor-continue-postfix-max-chars N` | `MAX_CONTINUE_POSTFIX` |
-| Output tokens | 32768 | `continue_max_tokens` | `--editor-continue-max-tokens N` | `MAX_AI_CONTINUE_TOKENS` |
+| Side | Default | Config | Environment |
+|------|---------|--------|-------------|
+| Prose prefix | 16384 | `continue_prose_prefix_max_chars` | `MAX_CONTINUE_PROSE_PREFIX` |
+| Prose postfix | 4096 | `continue_prose_postfix_max_chars` | `MAX_CONTINUE_PROSE_POSTFIX` |
+| Code prefix | 4000 | `continue_prefix_max_chars` | `MAX_CONTINUE_PREFIX` |
+| Code postfix | 2000 | `continue_postfix_max_chars` | `MAX_CONTINUE_POSTFIX` |
+| Output tokens | 32768 | `continue_max_tokens` | `MAX_AI_CONTINUE_TOKENS` |
 
-For any context side, `0` disables that side; it does not mean unlimited. Setting precedence is built-in, system config, user config, CLI, then environment. The output-token setting is shared by prose and code.
+For any context side, `0` disables that side; it does not mean unlimited. Setting precedence is built-in default, system config, user config, then environment. The output-token setting is shared by prose and code.
 
 ## Editor commands (`Esc` then type command)
 
