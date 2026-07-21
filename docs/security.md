@@ -4,7 +4,7 @@
 - `-k`/`--key` is supported for testing but warns because command-line arguments may be visible to other local users.
 - Authorization-like headers and configured key values are redacted from transport errors.
 - LM Studio authentication is optional by default.
-- Local web mode and interactive multi-surface agent UI are not implemented. Two headless tool-using workflows exist and are read-only: `--security-review` and one-shot `agent` / `--agent`.
+- Local web mode and interactive multi-surface agent UI are not implemented. Two headless tool-using workflows exist: read-only `--security-review`, and one-shot `agent` / `--agent` which adds ordinary workspace writes (`write_file`, exact `str_replace`) but not deletes, approvals, or unrestricted shell.
 
 ## Headless Security Review
 
@@ -24,7 +24,15 @@ The diagnostic log intentionally preserves source and model payloads without tru
 
 ## Headless one-shot agent
 
-`ainiux agent` / `--agent` is a non-interactive, read-only coding agent for a single user goal (`-p` / `--prompt-file`). It refreshes `.ainiux/index.sqlite`, loads the trusted master prompt plus a static native protocol appendix, and runs the shared agent loop with the same snapshot-backed read tools and inspection command allowlist as security review. It does not enable writes, approvals, `agent.sqlite`, interactive TUI agent mode, or shell beyond the allowlist. Final assistant text is written to `stdout`; status, notices, and errors go to `stderr`. Turn/loop limits and transport retries follow the agent-loop reliability rules (identical-call soft/hard caps, consecutive-failure abort, 50-turn scripted cap, no automatic tool re-execution).
+`ainiux agent` / `--agent` is a non-interactive coding agent for a single user goal (`-p` / `--prompt-file`). It refreshes `.ainiux/index.sqlite`, loads the trusted master prompt plus a static native or XML protocol appendix, and runs the shared agent loop with the same snapshot-backed read tools and inspection command allowlist as security review, plus ordinary workspace mutations when the agent registry is created with writes enabled:
+
+- `write_file` and exact `str_replace` may create/overwrite workspace-relative UTF-8 files only.
+- Path escape, `.ainiux` / `.git` components, and symlink components are refused.
+- Optional `expected_file_hash` rejects stale concurrent edits.
+- Pre-overwrite copies are stored under `.ainiux/history/` (project-local; mode depends on umask/filesystem defaults).
+- In-memory index snapshot hashes are updated after a successful write so later reads in the same run stay consistent. Full on-disk reindex of symbols still happens on the next agent/index refresh.
+
+Security-review never enables these mutation tools. Agent mode still does not enable `remove`/recursive delete, approval UI, `agent.sqlite`, interactive TUI agent mode, or shell beyond the inspection allowlist. Final assistant text is written to `stdout`; status, notices, and errors go to `stderr`. Turn/loop limits and transport retries follow the agent-loop reliability rules (identical-call soft/hard caps, consecutive-failure abort, 50-turn scripted cap, no automatic tool re-execution).
 
 ## Editor Advisory Locks
 

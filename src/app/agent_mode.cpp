@@ -210,7 +210,10 @@ int run_agent_mode(provider::RequestContext context) {
     }
 
     agent::ReadToolRegistry tools;
-    error = agent::ReadToolRegistry::create(index_options, std::move(snapshot), secrets, tools);
+    agent::ToolRegistryOptions tool_options;
+    tool_options.allow_mutations = true;  // ordinary workspace writes; security-review stays read-only
+    error = agent::ReadToolRegistry::create(index_options, std::move(snapshot), secrets, tools,
+                                            tool_options);
     if (!error.ok()) {
         finish_log(error, "", 0, 0);
         print_error(error);
@@ -225,15 +228,9 @@ int run_agent_mode(provider::RequestContext context) {
         return exit_code_for(error.code);
     }
 
+    // Native function calling when the provider/API path supports it; otherwise
+    // the XML tool channel (models without reliable tool_calls).
     const bool supports_tools = provider::capabilities_for(context).tool_calls;
-    if (!supports_tools) {
-        error = {ErrorCode::UnsupportedFeature,
-                 "agent mode requires a provider/API path with native function calling"};
-        finish_log(error, "", 0, 0);
-        print_error(error);
-        return exit_code_for(error.code);
-    }
-
     agent::AgentLoopState state;
     state.protocol = agent::default_tool_protocol(supports_tools);
     agent::AgentLoopLimits limits;
@@ -246,11 +243,16 @@ int run_agent_mode(provider::RequestContext context) {
         std::cerr << "Agent goal: " << redact_secrets(goal, secrets) << "\n"
                   << "Using " << context.profile.name << "/" << context.options.model
                   << " with protocol "
-                  << (state.protocol == agent::ToolProtocol::Xml ? "xml" : "native") << ".\n";
+                  << (state.protocol == agent::ToolProtocol::Xml ? "xml" : "native")
+                  << " (workspace writes enabled).\n";
     }
 
     const std::vector<std::string> known = known_tool_names(tools);
-    const std::vector<provider::FunctionDefinition> definitions = tools.definitions();
+    // On the XML channel, omit native tool schemas so weak/local endpoints that
+    // reject `tools` still accept the request; the model uses <tool_call> markup.
+    const std::vector<provider::FunctionDefinition> definitions =
+        state.protocol == agent::ToolProtocol::Xml ? std::vector<provider::FunctionDefinition>{}
+                                                   : tools.definitions();
     std::size_t total_tool_calls = 0;
     std::string final_text;
 

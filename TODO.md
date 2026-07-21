@@ -1,5 +1,10 @@
 # TODO
 
+## Local agent mode (v1.0)
+
+- One-shot agent with read tools + `write_file` / exact `str_replace` is landed; next slices: fuzzy edits / `edit_file` / `apply_patch`, `remove` with guard, AGENTS.md injection, project `agent.sqlite`, interactive TUI agent shell, mode cycling, command guard for broader `run_command`.
+- Keep security-review strictly read-only when expanding agent tools.
+
 ## Syntax Highlighting
 
 - Let the Markdown-only editor/chat preview settle before adding Python, C/C++, C#, Java, JavaScript/TypeScript, HTML/CSS/XML, JSON, and Bash modes.

@@ -857,7 +857,7 @@ Options:
       --security-review         Review every eligible indexed workspace file and print Markdown.
       --security-review-log     Enable the local per-run JSONL diagnostic log (default).
       --no-security-review-log  Disable the local per-run JSONL diagnostic log.
-      --agent                   Run a one-shot read-only local agent goal (also: ainiux agent ...).
+      --agent                   Run a one-shot local agent goal with read+write tools (also: ainiux agent ...).
       --agent-log               Enable the local per-run agent JSONL diagnostic log (default).
       --no-agent-log            Disable the local per-run agent JSONL diagnostic log.
       --trusted-prompt-dir DIR  Trusted prompt resource override for testing/installations.

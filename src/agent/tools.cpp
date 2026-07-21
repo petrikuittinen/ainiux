@@ -1,13 +1,18 @@
 #include "agent/tools.hpp"
 
 #include <algorithm>
+#include <chrono>
+#include <cstdio>
+#include <ctime>
 #include <filesystem>
 #include <fstream>
+#include <iomanip>
 #include <iterator>
 #include <limits>
 #include <regex>
 #include <set>
 #include <sstream>
+#include <unistd.h>
 
 #include "agent/process.hpp"
 #include "agent/tool_args.hpp"
@@ -295,16 +300,320 @@ std::string tool_error_result(const std::string& code, const std::string& messag
 Error ReadToolRegistry::create(index::Options index_options,
                                index::Snapshot snapshot,
                                std::vector<std::string> secrets,
-                               ReadToolRegistry& registry) {
+                               ReadToolRegistry& registry,
+                               ToolRegistryOptions options) {
     if (snapshot.workspace.empty()) return {ErrorCode::Internal, "tool registry requires a completed index snapshot"};
     ReadToolRegistry loaded;
     loaded.index_options_ = std::move(index_options);
     loaded.snapshot_ = std::move(snapshot);
     loaded.secrets_ = std::move(secrets);
+    loaded.allow_mutations_ = options.allow_mutations;
+    loaded.history_sequence_ = 0;
     registry = std::move(loaded);
-    registry.files_.clear();
-    for (const index::IndexedFile& file : registry.snapshot_.files)
-        registry.files_[file.path] = &file;
+    registry.rebuild_file_map();
+    return ok_error();
+}
+
+void ReadToolRegistry::rebuild_file_map() const {
+    files_.clear();
+    for (const index::IndexedFile& file : snapshot_.files) files_[file.path] = &file;
+}
+
+Error ReadToolRegistry::resolve_writable_path(const std::string& relative_path,
+                                              fs::path& absolute) const {
+    if (relative_path.empty() || !safe_relative_path(relative_path))
+        return {ErrorCode::BadArgs, "path must be a safe workspace-relative file path"};
+    const std::string generic = fs::path(relative_path).generic_string();
+    if (generic.empty() || generic == ".")
+        return {ErrorCode::BadArgs, "path must name a file, not the workspace root"};
+    fs::path current(snapshot_.workspace);
+    fs::path remaining = fs::path(generic);
+    // Walk existing parents and refuse symlink components before creating anything.
+    for (const fs::path& component : remaining) {
+        current /= component;
+        std::error_code ec;
+        if (!fs::exists(current, ec) || ec) break;
+        const fs::file_status status = fs::symlink_status(current, ec);
+        if (ec) return {ErrorCode::FileWrite, "could not inspect path " + generic + ": " + ec.message()};
+        if (fs::is_symlink(status))
+            return {ErrorCode::FileWrite, "refusing symlink path in workspace write: " + generic};
+    }
+    absolute = fs::path(snapshot_.workspace) / remaining;
+    return ok_error();
+}
+
+Error ReadToolRegistry::save_history_copy(const std::string& relative_path,
+                                          const std::string& previous_content,
+                                          std::string& history_path) const {
+    const fs::path history_dir = fs::path(snapshot_.workspace) / ".ainiux" / "history";
+    std::error_code ec;
+    fs::create_directories(history_dir, ec);
+    if (ec) return {ErrorCode::FileWrite, "could not create history directory: " + ec.message()};
+
+    const auto now = std::chrono::system_clock::now();
+    const std::time_t time = std::chrono::system_clock::to_time_t(now);
+    std::tm tm_value{};
+#if defined(_WIN32)
+    gmtime_s(&tm_value, &time);
+#else
+    gmtime_r(&time, &tm_value);
+#endif
+    std::ostringstream stamp;
+    stamp << std::put_time(&tm_value, "%Y%m%d-%H%M%S") << '-'
+          << std::setw(3) << std::setfill('0') << (++history_sequence_);
+    std::string safe_name = relative_path;
+    for (char& ch : safe_name) {
+        if (ch == '/' || ch == '\\' || ch == ':' || ch == ' ') ch = '_';
+    }
+    if (safe_name.size() > 120) safe_name.resize(120);
+    const fs::path history_file = history_dir / (stamp.str() + "-" + safe_name + ".bak");
+    {
+        std::ofstream out(history_file, std::ios::binary | std::ios::trunc);
+        if (!out) return {ErrorCode::FileWrite, "could not open history file: " + history_file.string()};
+        out.write(previous_content.data(), static_cast<std::streamsize>(previous_content.size()));
+        if (!out) return {ErrorCode::FileWrite, "could not write history file: " + history_file.string()};
+    }
+    history_path = (fs::path(".ainiux") / "history" / history_file.filename()).generic_string();
+    return ok_error();
+}
+
+void ReadToolRegistry::note_written_file(const std::string& relative_path,
+                                         const std::string& content) const {
+    const std::string generic = fs::path(relative_path).generic_string();
+    const std::string hash = index::content_hash(content);
+    const std::size_t line_count = content.empty()
+                                       ? 0
+                                       : static_cast<std::size_t>(
+                                             std::count(content.begin(), content.end(), '\n') +
+                                             (content.back() == '\n' ? 0 : 1));
+    index::Language language = index::Language::Markdown;
+    index::language_for_path(generic, language);
+    bool found = false;
+    for (index::IndexedFile& file : snapshot_.files) {
+        if (file.path != generic) continue;
+        file.language = language;
+        file.size = content.size();
+        file.content_hash = hash;
+        file.line_count = line_count;
+        file.status = "indexed";
+        file.error.clear();
+        found = true;
+        break;
+    }
+    if (!found) {
+        index::IndexedFile file;
+        file.path = generic;
+        file.language = language;
+        file.size = content.size();
+        file.content_hash = hash;
+        file.line_count = line_count;
+        file.status = "indexed";
+        snapshot_.files.push_back(std::move(file));
+    }
+    rebuild_file_map();
+}
+
+namespace {
+
+Error write_bytes_atomic(const fs::path& absolute, const std::string& content) {
+    const fs::path temporary =
+        absolute.string() + ".ainiux-tmp." + std::to_string(static_cast<long long>(::getpid()));
+    {
+        std::ofstream out(temporary, std::ios::binary | std::ios::trunc);
+        if (!out) return {ErrorCode::FileWrite, "could not open temporary file: " + temporary.string()};
+        out.write(content.data(), static_cast<std::streamsize>(content.size()));
+        if (!out) {
+            std::error_code ignore;
+            fs::remove(temporary, ignore);
+            return {ErrorCode::FileWrite, "could not write temporary file: " + temporary.string()};
+        }
+    }
+    std::error_code ec;
+    fs::rename(temporary, absolute, ec);
+    if (ec) {
+        std::error_code ignore;
+        fs::remove(temporary, ignore);
+        return {ErrorCode::FileWrite, "could not replace file " + absolute.string() + ": " + ec.message()};
+    }
+    return ok_error();
+}
+
+std::string read_all_bytes(const fs::path& absolute, Error& error) {
+    std::ifstream input(absolute, std::ios::binary);
+    if (!input) {
+        error = {ErrorCode::FileRead, "could not open file: " + absolute.string()};
+        return {};
+    }
+    std::string content{std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>()};
+    if (input.bad()) {
+        error = {ErrorCode::FileRead, "could not read file: " + absolute.string()};
+        return {};
+    }
+    error = ok_error();
+    return content;
+}
+
+}  // namespace
+
+Error ReadToolRegistry::write_workspace_file(const std::string& relative_path,
+                                             const std::string& content,
+                                             bool create_dirs,
+                                             const std::string& mode,
+                                             const std::string& expected_file_hash,
+                                             std::string& history_path,
+                                             bool& created,
+                                             std::string& old_hash,
+                                             std::string& new_hash) const {
+    history_path.clear();
+    created = false;
+    old_hash.clear();
+    new_hash.clear();
+    if (!allow_mutations_) return {ErrorCode::UnsupportedFeature, "workspace writes are disabled for this tool session"};
+    if (content.find('\0') != std::string::npos)
+        return {ErrorCode::BadArgs, "write_file content must be UTF-8 text without NUL bytes"};
+    if (!html::is_valid_utf8(content))
+        return {ErrorCode::BadArgs, "write_file content must be valid UTF-8"};
+    if (content.size() > index_options_.max_source_code_file_size)
+        return {ErrorCode::BadArgs,
+                "write_file content exceeds max_source_code_file_size (" +
+                    std::to_string(index_options_.max_source_code_file_size) + " bytes)"};
+
+    std::string write_mode = mode.empty() ? "overwrite" : mode;
+    if (write_mode != "overwrite" && write_mode != "create_new")
+        return {ErrorCode::BadArgs, "mode must be overwrite or create_new"};
+
+    fs::path absolute;
+    Error error = resolve_writable_path(relative_path, absolute);
+    if (!error.ok()) return error;
+
+    std::error_code ec;
+    const bool exists = fs::exists(absolute, ec) && !ec;
+    if (ec) return {ErrorCode::FileWrite, "could not inspect destination: " + ec.message()};
+    if (exists && fs::is_directory(absolute, ec))
+        return {ErrorCode::FileWrite, "destination path is a directory: " + relative_path};
+    if (write_mode == "create_new" && exists)
+        return {ErrorCode::FileWrite, "file already exists (mode=create_new): " + relative_path};
+
+    std::string previous;
+    if (exists) {
+        previous = read_all_bytes(absolute, error);
+        if (!error.ok()) return error;
+        old_hash = index::content_hash(previous);
+        if (!expected_file_hash.empty() && expected_file_hash != old_hash)
+            return {ErrorCode::FileWrite,
+                    "stale_file: expected_file_hash does not match current file content"};
+        error = save_history_copy(relative_path, previous, history_path);
+        if (!error.ok()) return error;
+    } else if (!expected_file_hash.empty()) {
+        return {ErrorCode::FileWrite, "stale_file: expected_file_hash set but file does not exist"};
+    }
+
+    const fs::path parent = absolute.parent_path();
+    if (!parent.empty()) {
+        const bool parent_exists = fs::exists(parent, ec) && !ec;
+        if (!parent_exists) {
+            if (!create_dirs)
+                return {ErrorCode::FileWrite,
+                        "parent directory does not exist; pass create_dirs=true"};
+            fs::create_directories(parent, ec);
+            if (ec)
+                return {ErrorCode::FileWrite, "could not create parent directories: " + ec.message()};
+        }
+    }
+
+    error = write_bytes_atomic(absolute, content);
+    if (!error.ok()) return error;
+    created = !exists;
+    new_hash = index::content_hash(content);
+    note_written_file(relative_path, content);
+    return ok_error();
+}
+
+Error ReadToolRegistry::str_replace_workspace_file(const std::string& relative_path,
+                                                   const std::string& old_text,
+                                                   const std::string& new_text,
+                                                   bool replace_all,
+                                                   const std::string& expected_file_hash,
+                                                   std::string& history_path,
+                                                   std::size_t& matches_found,
+                                                   std::size_t& replacements_made,
+                                                   std::string& old_hash,
+                                                   std::string& new_hash) const {
+    history_path.clear();
+    matches_found = 0;
+    replacements_made = 0;
+    old_hash.clear();
+    new_hash.clear();
+    if (!allow_mutations_) return {ErrorCode::UnsupportedFeature, "workspace writes are disabled for this tool session"};
+    if (old_text.empty()) return {ErrorCode::BadArgs, "old_text must not be empty"};
+    if (old_text.find('\0') != std::string::npos || new_text.find('\0') != std::string::npos)
+        return {ErrorCode::BadArgs, "str_replace text must not contain NUL bytes"};
+    if (!html::is_valid_utf8(old_text) || !html::is_valid_utf8(new_text))
+        return {ErrorCode::BadArgs, "str_replace text must be valid UTF-8"};
+
+    fs::path absolute;
+    Error error = resolve_writable_path(relative_path, absolute);
+    if (!error.ok()) return error;
+
+    std::error_code ec;
+    if (!fs::exists(absolute, ec) || ec)
+        return {ErrorCode::FileRead, "file does not exist: " + relative_path};
+    if (fs::is_directory(absolute, ec))
+        return {ErrorCode::FileWrite, "path is a directory: " + relative_path};
+
+    const std::string previous = read_all_bytes(absolute, error);
+    if (!error.ok()) return error;
+    if (previous.find('\0') != std::string::npos || !html::is_valid_utf8(previous))
+        return {ErrorCode::FileRead, "file is not valid UTF-8 text: " + relative_path};
+    old_hash = index::content_hash(previous);
+    if (!expected_file_hash.empty() && expected_file_hash != old_hash)
+        return {ErrorCode::FileWrite, "stale_file: expected_file_hash does not match current file content"};
+
+    std::size_t pos = 0;
+    while ((pos = previous.find(old_text, pos)) != std::string::npos) {
+        ++matches_found;
+        pos += old_text.empty() ? 1 : old_text.size();
+    }
+    if (matches_found == 0)
+        return {ErrorCode::FileWrite, "old_text not found in file: " + relative_path};
+    if (!replace_all && matches_found > 1)
+        return {ErrorCode::FileWrite,
+                "old_text matches " + std::to_string(matches_found) +
+                    " times; pass replace_all=true or provide a more specific old_text"};
+
+    std::string updated;
+    if (replace_all) {
+        updated.reserve(previous.size());
+        pos = 0;
+        while (pos < previous.size()) {
+            const std::size_t found = previous.find(old_text, pos);
+            if (found == std::string::npos) {
+                updated.append(previous, pos, std::string::npos);
+                break;
+            }
+            updated.append(previous, pos, found - pos);
+            updated.append(new_text);
+            ++replacements_made;
+            pos = found + old_text.size();
+        }
+    } else {
+        const std::size_t found = previous.find(old_text);
+        updated = previous;
+        updated.replace(found, old_text.size(), new_text);
+        replacements_made = 1;
+    }
+
+    if (updated.size() > index_options_.max_source_code_file_size)
+        return {ErrorCode::BadArgs,
+                "str_replace result exceeds max_source_code_file_size (" +
+                    std::to_string(index_options_.max_source_code_file_size) + " bytes)"};
+
+    error = save_history_copy(relative_path, previous, history_path);
+    if (!error.ok()) return error;
+    error = write_bytes_atomic(absolute, updated);
+    if (!error.ok()) return error;
+    new_hash = index::content_hash(updated);
+    note_written_file(relative_path, updated);
     return ok_error();
 }
 
@@ -313,7 +622,7 @@ std::vector<provider::FunctionDefinition> ReadToolRegistry::definitions() const 
     const std::string range = path + ",\"start_line\":{\"type\":\"integer\",\"minimum\":1},"
                                       "\"end_line\":{\"type\":\"integer\",\"minimum\":1},"
                                       "\"max_bytes\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":262144}";
-    return {
+    std::vector<provider::FunctionDefinition> tools = {
         {"project_overview", "Summarize indexed languages, files, lines, likely entry points/tests, and freshness.", schema("")},
         {"list_directory", "List bounded indexed entries in a workspace-relative directory.", schema(path + ",\"max_entries\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":500}")},
         {"glob", "Match indexed relative file paths using *, ?, **, and brace alternatives.", schema("\"pattern\":{\"type\":\"string\"},\"max_results\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":1000}", "\"pattern\"")},
@@ -327,6 +636,24 @@ std::vector<provider::FunctionDefinition> ReadToolRegistry::definitions() const 
         {"read_many", "Read multiple bounded line ranges under one aggregate byte cap.", schema("\"items\":{\"type\":\"array\",\"items\":" + schema(range, "\"path\"") + ",\"maxItems\":100},\"max_bytes\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":262144}", "\"items\"")},
         {"run_command", "Run one allowlisted read-only inspection command without a shell.", schema("\"command\":{\"type\":\"string\"},\"cwd\":{\"type\":\"string\"},\"timeout_ms\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":10000}", "\"command\"")},
     };
+    if (allow_mutations_) {
+        tools.push_back(
+            {"write_file",
+             "Create or overwrite a workspace-relative UTF-8 file. Prefer str_replace for small edits.",
+             schema(path + ",\"content\":{\"type\":\"string\"},"
+                           "\"create_dirs\":{\"type\":\"boolean\"},"
+                           "\"expected_file_hash\":{\"type\":\"string\"},"
+                           "\"mode\":{\"type\":\"string\",\"enum\":[\"overwrite\",\"create_new\"]}",
+                    "\"path\",\"content\"")});
+        tools.push_back(
+            {"str_replace",
+             "Exact text replacement in one workspace file. Fails on 0 matches or ambiguous multi-match without replace_all.",
+             schema(path + ",\"old_text\":{\"type\":\"string\"},\"new_text\":{\"type\":\"string\"},"
+                           "\"replace_all\":{\"type\":\"boolean\"},"
+                           "\"expected_file_hash\":{\"type\":\"string\"}",
+                    "\"path\",\"old_text\",\"new_text\"")});
+    }
+    return tools;
 }
 
 Error ReadToolRegistry::read_source(const std::string& path,
@@ -745,7 +1072,91 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
         return envelope(true, std::move(data), "", "", warnings, process.stdout_truncated || process.stderr_truncated);
     }
 
-    return tool_error_result("unknown_tool", "unknown native read tool: " + requested_name);
+    if (name == "write_file") {
+        if (!allow_mutations_)
+            return tool_error_result("policy_denied", "write_file is not enabled in this session");
+        std::string path, content, mode, expected_hash;
+        bool create_dirs = false;
+        if (!get_string(args, "path", path, true, validation_error) ||
+            !get_bool(args, "create_dirs", false, create_dirs, validation_error) ||
+            !get_string(args, "mode", mode, false, validation_error) ||
+            !get_string(args, "expected_file_hash", expected_hash, false, validation_error))
+            return tool_error_result("invalid_arguments", validation_error);
+        // content may be empty for intentionally blank files; only require the key.
+        if (args.get("content") == nullptr || !args.get("content")->is_string())
+            return tool_error_result("invalid_arguments", "missing required string argument: content");
+        content = args.get("content")->string;
+        std::string history_path, old_hash, new_hash;
+        bool created = false;
+        const Error error = write_workspace_file(path, content, create_dirs, mode, expected_hash,
+                                                 history_path, created, old_hash, new_hash);
+        json::Value data = object_value();
+        data.object["path"] = string_value(fs::path(path).generic_string());
+        data.object["bytes_written"] = number_value(static_cast<double>(content.size()));
+        data.object["created"] = bool_value(created);
+        data.object["old_file_hash"] = string_value(old_hash);
+        data.object["new_file_hash"] = string_value(new_hash);
+        data.object["history_path"] = string_value(history_path);
+        data.object["indexed_snapshot_updated"] = bool_value(error.ok());
+        json::Value guard = object_value();
+        guard.object["decision"] = string_value(error.ok() ? "allow" : "deny");
+        data.object["guard"] = std::move(guard);
+        if (!error.ok()) {
+            const std::string code =
+                error.message.find("stale_file") != std::string::npos ? "stale_file"
+                : error.code == ErrorCode::BadArgs                   ? "invalid_arguments"
+                : error.code == ErrorCode::UnsupportedFeature        ? "policy_denied"
+                                                                     : error_code_string(error.code);
+            return envelope(false, std::move(data), code, error.message, {}, false);
+        }
+        return envelope(true, std::move(data), "", "", {}, false);
+    }
+
+    if (name == "str_replace") {
+        if (!allow_mutations_)
+            return tool_error_result("policy_denied", "str_replace is not enabled in this session");
+        std::string path, old_text, new_text, expected_hash;
+        bool replace_all = false;
+        if (!get_string(args, "path", path, true, validation_error) ||
+            !get_string(args, "old_text", old_text, true, validation_error) ||
+            !get_string(args, "new_text", new_text, false, validation_error) ||
+            !get_bool(args, "replace_all", false, replace_all, validation_error) ||
+            !get_string(args, "expected_file_hash", expected_hash, false, validation_error))
+            return tool_error_result("invalid_arguments", validation_error);
+        // new_text may be empty (delete match); require the key explicitly.
+        if (args.get("new_text") == nullptr || !args.get("new_text")->is_string())
+            return tool_error_result("invalid_arguments", "missing required string argument: new_text");
+        new_text = args.get("new_text")->string;
+        std::string history_path, old_hash, new_hash;
+        std::size_t matches_found = 0;
+        std::size_t replacements_made = 0;
+        const Error error =
+            str_replace_workspace_file(path, old_text, new_text, replace_all, expected_hash,
+                                       history_path, matches_found, replacements_made, old_hash,
+                                       new_hash);
+        json::Value data = object_value();
+        data.object["path"] = string_value(fs::path(path).generic_string());
+        data.object["matches_found"] = number_value(static_cast<double>(matches_found));
+        data.object["replacements_made"] = number_value(static_cast<double>(replacements_made));
+        data.object["match_mode"] = string_value("exact");
+        data.object["old_file_hash"] = string_value(old_hash);
+        data.object["new_file_hash"] = string_value(new_hash);
+        data.object["history_path"] = string_value(history_path);
+        data.object["indexed_snapshot_updated"] = bool_value(error.ok());
+        if (!error.ok()) {
+            const std::string code =
+                error.message.find("stale_file") != std::string::npos ? "stale_file"
+                : error.message.find("not found") != std::string::npos ? "not_found"
+                : error.message.find("matches ") != std::string::npos  ? "ambiguous_match"
+                : error.code == ErrorCode::BadArgs                     ? "invalid_arguments"
+                : error.code == ErrorCode::UnsupportedFeature          ? "policy_denied"
+                                                                       : error_code_string(error.code);
+            return envelope(false, std::move(data), code, error.message, {}, false);
+        }
+        return envelope(true, std::move(data), "", "", {}, false);
+    }
+
+    return tool_error_result("unknown_tool", "unknown native tool: " + requested_name);
 }
 
 }  // namespace ainiux::agent

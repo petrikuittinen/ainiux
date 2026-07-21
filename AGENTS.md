@@ -23,7 +23,7 @@ The program must stay excellent as a scriptable CLI. Keep the core engine indepe
 
 ## Current product snapshot
 
-Status: **v0.99** (see `README.md` and `PLANS.md` implementation notes). Active development targets **v0.9** polish (benchmark cutoff work, refactor, TUI/CLI polish), then **v0.90** local OpenAI-compatible server mode. Browser web UI is postponed. Local agent mode is deliberately late.
+Status: **v1.02** (see `README.md` and `PLANS.md` implementation notes). One-shot local agent with ordinary workspace writes is landed; interactive agent TUI/approvals remain later. Active development also continues remaining **v0.9** polish and **v0.90** local OpenAI-compatible server mode. Browser web UI is postponed.
 
 ### Implemented modes
 
@@ -37,6 +37,9 @@ Status: **v0.99** (see `README.md` and `PLANS.md` implementation notes). Active 
 | Standalone editor | `--editor [path]` | multi-buffer piece-table editor; optional AI assist |
 | Benchmark | `benchmark` / `--benchmark` | concurrent JSONL dataset runner |
 | Grade | `--grade` | second-pass judge scoring of benchmark results (not combined with `--benchmark`) |
+| One-shot agent | `agent` / `--agent` | index refresh + tool loop; read tools and ordinary writes (`write_file`, exact `str_replace`); no TUI/approvals yet |
+| Security review | `--security-review` | headless read-only whole-project review |
+| Code index | `--index-code` / `--print-index` / `--clear-index` | project-local `.ainiux/index.sqlite` |
 
 ### Implemented capabilities agents must respect
 
@@ -58,7 +61,7 @@ Status: **v0.99** (see `README.md` and `PLANS.md` implementation notes). Active 
 
 - Local OpenAI-compatible **server** mode (`--server` in `PLANS.md` v0.90)
 - Browser local web UI (`src/web/` reserved; `docs/web-mode.md` is still a stub plan)
-- Autonomous **agent** mode (`ainiux agent`, v1.0) with sandbox/approval
+- Full interactive/autonomous **agent** mode (TUI shell, approvals, `agent.sqlite`, mode cycling); one-shot `ainiux agent` / `--agent` with read tools + ordinary workspace writes is landed
 - PDF / DOCX conversion modules
 - Native Anthropic Messages adapter; full live capability probing for all models
 - ncurses-based TUI (current UI uses POSIX `termios` + ANSI)
