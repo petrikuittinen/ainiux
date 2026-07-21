@@ -100,7 +100,7 @@ export OPENROUTER_API_KEY=...
 
 ## Current status
 
-**v1.02** — active development. Core surfaces are usable daily: scriptable CLI, REPL, full-screen chat TUI, AI editor, multi-provider chat, durable image and canonical-Markdown attachments, safe URL fetch, web search hooks, document conversion, concurrent benchmarks, judge grading, headless whole-project security review, and a one-shot local agent (`ainiux agent` / `--agent`) with read tools plus ordinary workspace writes (`write_file`, exact `str_replace`). Interactive multi-surface agent UI, destructive deletes, approval prompts, and fuller edit engines remain later roadmap work.
+**v1.02** — active development. Core surfaces are usable daily: scriptable CLI, REPL, full-screen chat TUI, AI editor, multi-provider chat, durable image and canonical-Markdown attachments, safe URL fetch, web search hooks, document conversion, concurrent benchmarks, judge grading, headless whole-project security review, and a one-shot local agent (`ainiux agent` / `--agent`) with read tools, root `AGENTS.md` injection, and ordinary workspace edits (`edit_file`, `write_file`, exact `str_replace`). Interactive multi-surface agent UI, destructive deletes, approval prompts, fuzzy/`apply_patch` engines, and `agent.sqlite` remain later roadmap work.
 
 Under the hood: libcurl HTTP/SSE, cancellable runtime jobs, Chat Completions plus text-only Responses API support, a layered model capability catalog with unified reasoning controls, SQLite-backed TUI threads, JSON chat import/export, multi-language syntax highlighting, grapheme-aware editing, and layered TOML-alike configuration.
 
@@ -322,8 +322,9 @@ Run a single agent goal against the current project (refreshes the code index, u
 ./ainiux agent openrouter -m MODEL -p "Create src/scratch/hello.txt with one short greeting"
 ```
 
-Agent mode uses the trusted master prompt plus a static protocol appendix (native tools when the provider supports function calling, otherwise the XML `<tool_call>` channel). It reuses the security-review read/search/inspect tools and, unlike security review, also enables ordinary workspace mutations:
+Agent mode uses the trusted master prompt plus a static protocol appendix (native tools when the provider supports function calling, otherwise the XML `<tool_call>` channel). When present, workspace-root `AGENTS.md` is loaded (capped, UTF-8 only) and injected as a separate **untrusted** user-context message—never as system policy. It reuses the security-review read/search/inspect tools and, unlike security review, also enables ordinary workspace mutations:
 
+- `edit_file` — preferred structured edits via `ops`: `replace_range`, `insert_at`, `delete_range`, exact `replace_text`, and standalone `create_file` (optional `expected_file_hash` / per-op `expected_hash`; line ops apply bottom-to-top)
 - `write_file` — create or overwrite a workspace-relative UTF-8 file (`mode=overwrite|create_new`, optional `create_dirs`, optional `expected_file_hash`)
 - `str_replace` — exact text replacement (`replace_all` for multi-match; no fuzzy matching yet)
 

@@ -2,7 +2,7 @@
 
 ## Local agent mode (v1.0)
 
-- One-shot agent with read tools + `write_file` / exact `str_replace` is landed; next slices: fuzzy edits / `edit_file` / `apply_patch`, `remove` with guard, AGENTS.md injection, project `agent.sqlite`, interactive TUI agent shell, mode cycling, command guard for broader `run_command`.
+- One-shot agent with read tools, root `AGENTS.md` injection, `edit_file` (range/insert/delete/exact replace_text/create_file), `write_file`, and exact `str_replace` is landed; next slices: fuzzy edits / `apply_patch` / `replace_symbol`, nearest-path AGENTS.md chain, `remove` with guard, project `agent.sqlite`, interactive TUI agent shell, mode cycling, command guard for broader `run_command`.
 - Keep security-review strictly read-only when expanding agent tools.
 
 ## Syntax Highlighting

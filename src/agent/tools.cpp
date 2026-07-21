@@ -617,6 +617,466 @@ Error ReadToolRegistry::str_replace_workspace_file(const std::string& relative_p
     return ok_error();
 }
 
+namespace {
+
+std::string join_lines(const std::vector<std::string>& lines) {
+    std::string output;
+    for (const std::string& line : lines) output += line;
+    return output;
+}
+
+// Weak models often omit trailing newlines in replacement text. When the replaced
+// range ended with '\n', preserve that terminator so "# comment" does not glue to
+// the next line ("# commentprint(...)").
+std::string preserve_range_newline(const std::string& previous_range,
+                                   const std::string& replacement) {
+    if (replacement.empty()) return replacement;
+    if (!previous_range.empty() && previous_range.back() == '\n' && replacement.back() != '\n')
+        return replacement + "\n";
+    return replacement;
+}
+
+// Some models (e.g. DeepSeek via OpenRouter) nest the operation:
+//   {"replace_range":{"start_line":1,"end_line":1,"new_text":"..."}}
+// or split text outside the nested object:
+//   {"replace_range":{"start_line":1,"end_line":1},"text":"..."}
+// Flatten that into the flat schema before type inference / parsing.
+json::Value normalize_edit_op_shape(const json::Value& op) {
+    if (!op.is_object()) return op;
+    static const char* kNestedTypes[] = {"replace_range", "insert_at", "delete_range",
+                                         "replace_text",  "replace_symbol", "create_file"};
+    const json::Value* nested = nullptr;
+    std::string nested_type;
+    for (const char* name : kNestedTypes) {
+        const json::Value* candidate = op.get(name);
+        if (candidate != nullptr && candidate->is_object()) {
+            // Prefer the first nested op-type key; ignore if multiple (ambiguous).
+            if (nested != nullptr) return op;
+            nested = candidate;
+            nested_type = name;
+        }
+    }
+    if (nested == nullptr) return op;
+
+    json::Value flat = object_value();
+    flat.object["type"] = string_value(nested_type);
+    for (const auto& entry : nested->object) flat.object[entry.first] = entry.second;
+    // Preserve top-level siblings (text, expected_hash, replace_all, …).
+    for (const auto& entry : op.object) {
+        if (entry.first == nested_type) continue;
+        if (flat.object.find(entry.first) == flat.object.end())
+            flat.object[entry.first] = entry.second;
+    }
+    // "text" is a common alias for replacement/new_text.
+    if (flat.get("new_text") == nullptr && flat.get("replacement") == nullptr) {
+        const json::Value* text = flat.get("text");
+        if (text != nullptr && text->is_string()) flat.object["new_text"] = *text;
+    }
+    return flat;
+}
+
+// Infer edit op type when models omit "type"/"op" but send enough fields.
+// Returns empty string when ambiguous.
+std::string infer_edit_op_type(const json::Value& op) {
+    const json::Value* type_value = op.get("type");
+    if (type_value == nullptr) type_value = op.get("op");
+    if (type_value != nullptr && type_value->is_string() && !type_value->string.empty())
+        return type_value->string;
+
+    const bool has_start = op.get("start_line") != nullptr;
+    const bool has_end = op.get("end_line") != nullptr;
+    const bool has_line = op.get("line") != nullptr;
+    const bool has_old = op.get("old_text") != nullptr;
+    const bool has_new = op.get("new_text") != nullptr || op.get("replacement") != nullptr ||
+                         op.get("text") != nullptr;
+    const bool has_symbol = op.get("symbol_id") != nullptr;
+
+    if (has_old && has_new && !has_start && !has_end) return "replace_text";
+    if (has_line && has_new && !has_start && !has_end) return "insert_at";
+    if (has_start && has_end && has_new) return "replace_range";
+    if (has_start && has_end && !has_new) return "delete_range";
+    if (has_symbol && has_new) return "replace_symbol";
+    if (has_new && !has_start && !has_end && !has_line && !has_old) return "create_file";
+    return {};
+}
+
+struct LineEditOp {
+    enum class Type { ReplaceRange, InsertAt, DeleteRange, ReplaceText };
+    Type type = Type::ReplaceRange;
+    std::size_t start_line = 0;  // 1-based; insert uses line
+    std::size_t end_line = 0;
+    std::string text;            // replacement / new_text
+    std::string old_text;        // replace_text only
+    bool replace_all = false;
+    std::string expected_hash;
+    std::size_t original_index = 0;
+};
+
+bool is_line_op(LineEditOp::Type type) {
+    return type == LineEditOp::Type::ReplaceRange || type == LineEditOp::Type::InsertAt ||
+           type == LineEditOp::Type::DeleteRange;
+}
+
+}  // namespace
+
+Error ReadToolRegistry::edit_workspace_file(const std::string& relative_path,
+                                            const std::string& expected_file_hash,
+                                            const json::Value& ops,
+                                            bool create_dirs,
+                                            std::string& history_path,
+                                            std::string& old_hash,
+                                            std::string& new_hash,
+                                            std::size_t& operations_applied,
+                                            std::vector<std::string>& summary,
+                                            std::vector<std::string>& warnings) const {
+    history_path.clear();
+    old_hash.clear();
+    new_hash.clear();
+    operations_applied = 0;
+    summary.clear();
+    warnings.clear();
+    if (!allow_mutations_)
+        return {ErrorCode::UnsupportedFeature, "workspace writes are disabled for this tool session"};
+    if (!ops.is_array() || ops.array.empty())
+        return {ErrorCode::BadArgs, "edit_file requires a non-empty ops array"};
+    if (ops.array.size() > 100)
+        return {ErrorCode::BadArgs, "edit_file supports at most 100 operations per call"};
+
+    // Normalize nested/aliased op shapes once so create-file detection and parsing agree.
+    std::vector<json::Value> normalized_ops;
+    normalized_ops.reserve(ops.array.size());
+    for (const json::Value& raw_op : ops.array) {
+        if (!raw_op.is_object()) return {ErrorCode::BadArgs, "each edit_file op must be an object"};
+        normalized_ops.push_back(normalize_edit_op_shape(raw_op));
+    }
+
+    // create_file may stand alone (or with only create_file ops) to make a new file.
+    bool create_file_only = true;
+    std::string create_content;
+    bool saw_create = false;
+    for (const json::Value& op : normalized_ops) {
+        const std::string type = infer_edit_op_type(op);
+        if (type.empty())
+            return {ErrorCode::BadArgs,
+                    "each edit_file op requires type/op or enough fields to infer the operation "
+                    "(replace_range needs start_line+end_line+new_text; replace_text needs "
+                    "old_text+new_text; insert_at needs line+new_text; delete_range needs "
+                    "start_line+end_line). Nested shapes like "
+                    "{\"replace_range\":{\"start_line\":1,\"end_line\":1,\"new_text\":\"...\"}} "
+                    "are also accepted."};
+        if (type == "create_file") {
+            saw_create = true;
+            const json::Value* text = op.get("new_text");
+            if (text == nullptr) text = op.get("replacement");
+            if (text == nullptr) text = op.get("text");
+            if (text == nullptr || !text->is_string())
+                return {ErrorCode::BadArgs, "create_file requires new_text"};
+            if (saw_create && !create_content.empty() && create_content != text->string)
+                return {ErrorCode::BadArgs, "edit_file allows only one create_file content"};
+            create_content = text->string;
+        } else {
+            create_file_only = false;
+        }
+    }
+    if (saw_create && !create_file_only)
+        return {ErrorCode::BadArgs, "create_file cannot be combined with other edit_file ops"};
+    if (saw_create && create_file_only) {
+        bool created = false;
+        const Error create_error =
+            write_workspace_file(relative_path, create_content, create_dirs, "create_new",
+                                 expected_file_hash, history_path, created, old_hash, new_hash);
+        if (create_error.ok()) {
+            operations_applied = 1;
+            summary.push_back("created file");
+        }
+        return create_error;
+    }
+
+    std::vector<LineEditOp> parsed;
+    parsed.reserve(normalized_ops.size());
+    for (std::size_t index = 0; index < normalized_ops.size(); ++index) {
+        const json::Value& op = normalized_ops[index];
+        const std::string type = infer_edit_op_type(op);
+        if (type.empty())
+            return {ErrorCode::BadArgs,
+                    "each edit_file op requires type/op or enough fields to infer the operation"};
+        LineEditOp item;
+        item.original_index = index;
+        const json::Value* expected = op.get("expected_hash");
+        if (expected != nullptr) {
+            if (!expected->is_string())
+                return {ErrorCode::BadArgs, "op expected_hash must be a string"};
+            item.expected_hash = expected->string;
+        }
+        if (type == "replace_range") {
+            item.type = LineEditOp::Type::ReplaceRange;
+            std::string validation_error;
+            if (!get_size(op, "start_line", 0, 100000000, item.start_line, validation_error) ||
+                item.start_line == 0 ||
+                !get_size(op, "end_line", 0, 100000000, item.end_line, validation_error) ||
+                item.end_line == 0)
+                return {ErrorCode::BadArgs,
+                        validation_error.empty() ? "replace_range requires start_line and end_line"
+                                                 : validation_error};
+            if (item.end_line < item.start_line)
+                return {ErrorCode::BadArgs, "replace_range end_line must be >= start_line"};
+            const json::Value* text = op.get("replacement");
+            if (text == nullptr) text = op.get("new_text");
+            if (text == nullptr) text = op.get("text");
+            if (text == nullptr || !text->is_string())
+                return {ErrorCode::BadArgs, "replace_range requires replacement"};
+            item.text = text->string;
+        } else if (type == "insert_at") {
+            item.type = LineEditOp::Type::InsertAt;
+            std::string validation_error;
+            if (!get_size(op, "line", 0, 100000000, item.start_line, validation_error) ||
+                item.start_line == 0)
+                return {ErrorCode::BadArgs,
+                        validation_error.empty() ? "insert_at requires line" : validation_error};
+            const json::Value* text = op.get("new_text");
+            if (text == nullptr) text = op.get("replacement");
+            if (text == nullptr) text = op.get("text");
+            if (text == nullptr || !text->is_string())
+                return {ErrorCode::BadArgs, "insert_at requires new_text"};
+            item.text = text->string;
+        } else if (type == "delete_range") {
+            item.type = LineEditOp::Type::DeleteRange;
+            std::string validation_error;
+            if (!get_size(op, "start_line", 0, 100000000, item.start_line, validation_error) ||
+                item.start_line == 0 ||
+                !get_size(op, "end_line", 0, 100000000, item.end_line, validation_error) ||
+                item.end_line == 0)
+                return {ErrorCode::BadArgs,
+                        validation_error.empty() ? "delete_range requires start_line and end_line"
+                                                 : validation_error};
+            if (item.end_line < item.start_line)
+                return {ErrorCode::BadArgs, "delete_range end_line must be >= start_line"};
+        } else if (type == "replace_text") {
+            item.type = LineEditOp::Type::ReplaceText;
+            const json::Value* old_text = op.get("old_text");
+            const json::Value* new_text = op.get("new_text");
+            if (new_text == nullptr) new_text = op.get("text");
+            if (old_text == nullptr || !old_text->is_string() || old_text->string.empty())
+                return {ErrorCode::BadArgs, "replace_text requires non-empty old_text"};
+            if (new_text == nullptr || !new_text->is_string())
+                return {ErrorCode::BadArgs, "replace_text requires new_text"};
+            item.old_text = old_text->string;
+            item.text = new_text->string;
+            std::string validation_error;
+            if (!get_bool(op, "replace_all", false, item.replace_all, validation_error))
+                return {ErrorCode::BadArgs, validation_error};
+            // Optional line_range_hint narrows the search window.
+            const json::Value* hint = op.get("line_range_hint");
+            if (hint != nullptr) {
+                if (!hint->is_object())
+                    return {ErrorCode::BadArgs, "line_range_hint must be an object"};
+                if (!get_size(*hint, "start_line", 0, 100000000, item.start_line, validation_error) ||
+                    !get_size(*hint, "end_line", 0, 100000000, item.end_line, validation_error))
+                    return {ErrorCode::BadArgs, validation_error};
+            }
+        } else if (type == "replace_symbol") {
+            return {ErrorCode::UnsupportedFeature,
+                    "replace_symbol is not implemented yet; use replace_range or replace_text"};
+        } else if (type == "create_file") {
+            // Handled above.
+            continue;
+        } else {
+            return {ErrorCode::BadArgs, "unknown edit_file op type: " + type};
+        }
+        if (item.text.find('\0') != std::string::npos || item.old_text.find('\0') != std::string::npos)
+            return {ErrorCode::BadArgs, "edit_file text must not contain NUL bytes"};
+        if ((!item.text.empty() && !html::is_valid_utf8(item.text)) ||
+            (!item.old_text.empty() && !html::is_valid_utf8(item.old_text)))
+            return {ErrorCode::BadArgs, "edit_file text must be valid UTF-8"};
+        parsed.push_back(std::move(item));
+    }
+    if (parsed.empty()) return {ErrorCode::BadArgs, "edit_file ops produced no applicable operations"};
+
+    fs::path absolute;
+    Error error = resolve_writable_path(relative_path, absolute);
+    if (!error.ok()) return error;
+    std::error_code ec;
+    if (!fs::exists(absolute, ec) || ec)
+        return {ErrorCode::FileRead, "file does not exist: " + relative_path};
+    if (fs::is_directory(absolute, ec))
+        return {ErrorCode::FileWrite, "path is a directory: " + relative_path};
+
+    const std::string previous = read_all_bytes(absolute, error);
+    if (!error.ok()) return error;
+    if (previous.find('\0') != std::string::npos || !html::is_valid_utf8(previous))
+        return {ErrorCode::FileRead, "file is not valid UTF-8 text: " + relative_path};
+    old_hash = index::content_hash(previous);
+    if (!expected_file_hash.empty() && expected_file_hash != old_hash)
+        return {ErrorCode::FileWrite, "stale_file: expected_file_hash does not match current file content"};
+
+    std::vector<std::string> lines = split_lines(previous);
+
+    // Apply line ops bottom-to-top so earlier higher-line edits do not shift later ones.
+    std::vector<LineEditOp> line_ops;
+    std::vector<LineEditOp> text_ops;
+    for (const LineEditOp& op : parsed) {
+        if (is_line_op(op.type)) line_ops.push_back(op);
+        else text_ops.push_back(op);
+    }
+    std::sort(line_ops.begin(), line_ops.end(), [](const LineEditOp& a, const LineEditOp& b) {
+        if (a.start_line != b.start_line) return a.start_line > b.start_line;
+        return a.original_index > b.original_index;
+    });
+
+    auto range_slice = [&](std::size_t start, std::size_t end) -> std::string {
+        std::string out;
+        if (lines.empty() || start == 0) return out;
+        const std::size_t last = std::min(end, lines.size());
+        for (std::size_t i = start; i <= last; ++i) out += lines[i - 1];
+        return out;
+    };
+
+    for (const LineEditOp& op : line_ops) {
+        if (op.type == LineEditOp::Type::InsertAt) {
+            if (op.start_line > lines.size() + 1)
+                return {ErrorCode::BadArgs,
+                        "insert_at line is outside file (1.." + std::to_string(lines.size() + 1) +
+                            ")"};
+            if (!op.expected_hash.empty()) {
+                // expected_hash on insert is optional and unused for content checks.
+            }
+            std::vector<std::string> inserted = split_lines(op.text);
+            const std::size_t at = op.start_line - 1;
+            lines.insert(lines.begin() + static_cast<std::ptrdiff_t>(at), inserted.begin(),
+                         inserted.end());
+            summary.push_back("inserted before line " + std::to_string(op.start_line));
+            ++operations_applied;
+            continue;
+        }
+        if (op.start_line == 0 || op.start_line > lines.size() || op.end_line < op.start_line ||
+            op.end_line > lines.size())
+            return {ErrorCode::BadArgs,
+                    "line range is outside file for op starting at line " +
+                        std::to_string(op.start_line)};
+        const std::string current_range = range_slice(op.start_line, op.end_line);
+        const std::string current_range_hash = index::content_hash(current_range);
+        if (!op.expected_hash.empty() && op.expected_hash != current_range_hash) {
+            // Models often invent range hashes or paste file_hash into expected_hash.
+            // When the whole-file fingerprint already matched (or the model supplied the
+            // whole-file hash as the range hash), treat expected_hash as advisory.
+            const bool file_fingerprint_ok =
+                (!expected_file_hash.empty() && expected_file_hash == old_hash) ||
+                op.expected_hash == old_hash;
+            if (file_fingerprint_ok) {
+                warnings.push_back(
+                    "ignored mismatched expected_hash for lines " +
+                    std::to_string(op.start_line) + "-" + std::to_string(op.end_line) +
+                    " (current_range_hash=" + current_range_hash +
+                    "); file fingerprint matched so the edit proceeded");
+            } else {
+                std::string preview = current_range;
+                if (preview.size() > 120) {
+                    preview.resize(utf8_prefix(preview, 120));
+                    preview += "…";
+                }
+                for (char& ch : preview) {
+                    if (ch == '\n' || ch == '\r') ch = ' ';
+                }
+                return {ErrorCode::FileWrite,
+                        "stale_range: expected_hash does not match lines " +
+                            std::to_string(op.start_line) + "-" + std::to_string(op.end_line) +
+                            " (current_range_hash=" + current_range_hash +
+                            ", preview=\"" + preview +
+                            "\"); re-read that line range and use its range_hash, or omit "
+                            "expected_hash when expected_file_hash already matches"};
+            }
+        }
+        if (op.type == LineEditOp::Type::DeleteRange) {
+            lines.erase(lines.begin() + static_cast<std::ptrdiff_t>(op.start_line - 1),
+                        lines.begin() + static_cast<std::ptrdiff_t>(op.end_line));
+            summary.push_back("deleted lines " + std::to_string(op.start_line) + "-" +
+                              std::to_string(op.end_line));
+            ++operations_applied;
+        } else if (op.type == LineEditOp::Type::ReplaceRange) {
+            const std::string normalized = preserve_range_newline(current_range, op.text);
+            std::vector<std::string> replacement = split_lines(normalized);
+            lines.erase(lines.begin() + static_cast<std::ptrdiff_t>(op.start_line - 1),
+                        lines.begin() + static_cast<std::ptrdiff_t>(op.end_line));
+            lines.insert(lines.begin() + static_cast<std::ptrdiff_t>(op.start_line - 1),
+                         replacement.begin(), replacement.end());
+            summary.push_back("replaced lines " + std::to_string(op.start_line) + "-" +
+                              std::to_string(op.end_line));
+            ++operations_applied;
+        }
+    }
+
+    // Text ops run after line ops on the resulting content, in original order.
+    std::sort(text_ops.begin(), text_ops.end(),
+              [](const LineEditOp& a, const LineEditOp& b) { return a.original_index < b.original_index; });
+    std::string content = join_lines(lines);
+    for (const LineEditOp& op : text_ops) {
+        std::string haystack = content;
+        std::size_t region_start = 0;
+        std::size_t region_end = content.size();
+        if (op.start_line > 0 && op.end_line >= op.start_line) {
+            const std::vector<std::string> current_lines = split_lines(content);
+            if (op.start_line > current_lines.size() || op.end_line > current_lines.size())
+                return {ErrorCode::BadArgs, "line_range_hint is outside file for replace_text"};
+            std::size_t start_byte = 0;
+            for (std::size_t i = 1; i < op.start_line; ++i) start_byte += current_lines[i - 1].size();
+            std::size_t end_byte = start_byte;
+            for (std::size_t i = op.start_line; i <= op.end_line; ++i)
+                end_byte += current_lines[i - 1].size();
+            region_start = start_byte;
+            region_end = end_byte;
+            haystack = content.substr(region_start, region_end - region_start);
+        }
+        std::size_t matches = 0;
+        std::size_t pos = 0;
+        while ((pos = haystack.find(op.old_text, pos)) != std::string::npos) {
+            ++matches;
+            pos += op.old_text.size();
+        }
+        if (matches == 0)
+            return {ErrorCode::FileWrite, "old_text not found for replace_text"};
+        if (!op.replace_all && matches > 1)
+            return {ErrorCode::FileWrite,
+                    "old_text matches " + std::to_string(matches) +
+                        " times; pass replace_all=true or narrow with line_range_hint"};
+        std::string region = haystack;
+        if (op.replace_all) {
+            std::string rebuilt;
+            pos = 0;
+            while (pos < region.size()) {
+                const std::size_t found = region.find(op.old_text, pos);
+                if (found == std::string::npos) {
+                    rebuilt.append(region, pos, std::string::npos);
+                    break;
+                }
+                rebuilt.append(region, pos, found - pos);
+                rebuilt.append(op.text);
+                pos = found + op.old_text.size();
+            }
+            region = std::move(rebuilt);
+        } else {
+            const std::size_t found = region.find(op.old_text);
+            region.replace(found, op.old_text.size(), op.text);
+        }
+        content.replace(region_start, region_end - region_start, region);
+        summary.push_back(std::string("replace_text (") + (op.replace_all ? "all" : "one") + ")");
+        ++operations_applied;
+    }
+
+    if (content.size() > index_options_.max_source_code_file_size)
+        return {ErrorCode::BadArgs,
+                "edit_file result exceeds max_source_code_file_size (" +
+                    std::to_string(index_options_.max_source_code_file_size) + " bytes)"};
+
+    // Re-apply create_dirs only if needed for... not for existing files.
+    error = save_history_copy(relative_path, previous, history_path);
+    if (!error.ok()) return error;
+    error = write_bytes_atomic(absolute, content);
+    if (!error.ok()) return error;
+    new_hash = index::content_hash(content);
+    note_written_file(relative_path, content);
+    return ok_error();
+}
+
 std::vector<provider::FunctionDefinition> ReadToolRegistry::definitions() const {
     const std::string path = "\"path\":{\"type\":\"string\"}";
     const std::string range = path + ",\"start_line\":{\"type\":\"integer\",\"minimum\":1},"
@@ -638,8 +1098,16 @@ std::vector<provider::FunctionDefinition> ReadToolRegistry::definitions() const 
     };
     if (allow_mutations_) {
         tools.push_back(
+            {"edit_file",
+             "Preferred structured edit: ops replace_range|insert_at|delete_range|replace_text|create_file. "
+             "Line ops apply bottom-to-top; create_file is alone for new files.",
+             schema(path + ",\"expected_file_hash\":{\"type\":\"string\"},"
+                           "\"create_dirs\":{\"type\":\"boolean\"},"
+                           "\"ops\":{\"type\":\"array\",\"minItems\":1,\"maxItems\":100}",
+                    "\"path\",\"ops\"")});
+        tools.push_back(
             {"write_file",
-             "Create or overwrite a workspace-relative UTF-8 file. Prefer str_replace for small edits.",
+             "Create or overwrite a workspace-relative UTF-8 file. Prefer edit_file.replace_range for edits.",
              schema(path + ",\"content\":{\"type\":\"string\"},"
                            "\"create_dirs\":{\"type\":\"boolean\"},"
                            "\"expected_file_hash\":{\"type\":\"string\"},"
@@ -647,7 +1115,8 @@ std::vector<provider::FunctionDefinition> ReadToolRegistry::definitions() const 
                     "\"path\",\"content\"")});
         tools.push_back(
             {"str_replace",
-             "Exact text replacement in one workspace file. Fails on 0 matches or ambiguous multi-match without replace_all.",
+             "Exact text replacement in one workspace file. Prefer edit_file when possible. "
+             "Fails on 0 matches or ambiguous multi-match without replace_all.",
              schema(path + ",\"old_text\":{\"type\":\"string\"},\"new_text\":{\"type\":\"string\"},"
                            "\"replace_all\":{\"type\":\"boolean\"},"
                            "\"expected_file_hash\":{\"type\":\"string\"}",
@@ -1070,6 +1539,50 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
         if (output_filtered) warnings.push_back("output referring to non-indexed paths was omitted");
         if (!error.ok()) return envelope(false, std::move(data), error_code_string(error.code), error.message, warnings, process.stdout_truncated || process.stderr_truncated);
         return envelope(true, std::move(data), "", "", warnings, process.stdout_truncated || process.stderr_truncated);
+    }
+
+    if (name == "edit_file") {
+        if (!allow_mutations_)
+            return tool_error_result("policy_denied", "edit_file is not enabled in this session");
+        std::string path, expected_hash;
+        bool create_dirs = false;
+        if (!get_string(args, "path", path, true, validation_error) ||
+            !get_bool(args, "create_dirs", false, create_dirs, validation_error) ||
+            !get_string(args, "expected_file_hash", expected_hash, false, validation_error))
+            return tool_error_result("invalid_arguments", validation_error);
+        const json::Value* ops = args.get("ops");
+        if (ops == nullptr || !ops->is_array())
+            return tool_error_result("invalid_arguments", "edit_file requires ops array");
+        std::string history_path, old_hash, new_hash;
+        std::size_t operations_applied = 0;
+        std::vector<std::string> summary;
+        std::vector<std::string> warnings;
+        const Error error =
+            edit_workspace_file(path, expected_hash, *ops, create_dirs, history_path, old_hash,
+                                new_hash, operations_applied, summary, warnings);
+        json::Value data = object_value();
+        data.object["path"] = string_value(fs::path(path).generic_string());
+        data.object["applied"] = bool_value(error.ok());
+        data.object["operations_applied"] = number_value(static_cast<double>(operations_applied));
+        data.object["old_file_hash"] = string_value(old_hash);
+        data.object["new_file_hash"] = string_value(new_hash);
+        data.object["history_path"] = string_value(history_path);
+        data.object["indexed_snapshot_updated"] = bool_value(error.ok());
+        json::Value summary_array = array_value();
+        for (const std::string& item : summary) summary_array.array.push_back(string_value(item));
+        data.object["summary"] = std::move(summary_array);
+        if (!error.ok()) {
+            const std::string code =
+                error.message.find("stale_file") != std::string::npos    ? "stale_file"
+                : error.message.find("stale_range") != std::string::npos ? "stale_range"
+                : error.message.find("not found") != std::string::npos   ? "not_found"
+                : error.message.find("matches ") != std::string::npos    ? "ambiguous_match"
+                : error.code == ErrorCode::BadArgs                       ? "invalid_arguments"
+                : error.code == ErrorCode::UnsupportedFeature            ? "policy_denied"
+                                                                         : error_code_string(error.code);
+            return envelope(false, std::move(data), code, error.message, warnings, false);
+        }
+        return envelope(true, std::move(data), "", "", warnings, false);
     }
 
     if (name == "write_file") {

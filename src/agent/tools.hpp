@@ -8,6 +8,7 @@
 
 #include "agent/index/index.hpp"
 #include "common.hpp"
+#include "json/json.hpp"
 #include "provider/provider.hpp"
 #include "runtime/runtime.hpp"
 
@@ -76,6 +77,16 @@ class ReadToolRegistry {
                                      std::size_t& replacements_made,
                                      std::string& old_hash,
                                      std::string& new_hash) const;
+    Error edit_workspace_file(const std::string& relative_path,
+                              const std::string& expected_file_hash,
+                              const json::Value& ops,
+                              bool create_dirs,
+                              std::string& history_path,
+                              std::string& old_hash,
+                              std::string& new_hash,
+                              std::size_t& operations_applied,
+                              std::vector<std::string>& summary,
+                              std::vector<std::string>& warnings) const;
     void note_written_file(const std::string& relative_path, const std::string& content) const;
     void rebuild_file_map() const;
     Error resolve_writable_path(const std::string& relative_path, std::filesystem::path& absolute) const;

@@ -2268,6 +2268,8 @@ This is the v1.0 plan for ainiux local agent mode (merged from the former standa
 
 **Agent write tools slice (2026-07-21):** one-shot `ainiux agent` / `--agent` now enables ordinary workspace mutations on top of the existing read-only tool registry. `write_file` and exact `str_replace` are exposed only when the registry is created with `allow_mutations=true` (agent mode); `--security-review` remains read-only. Writes refuse path escape / protected metadata / symlinks, support `expected_file_hash` stale checks, store pre-overwrite backups under `.ainiux/history/`, and refresh the in-memory snapshot so later reads in the same run succeed. Fuzzy `str_replace`, `edit_file`, `apply_patch`, `remove`, approval UI, and `agent.sqlite` remain unimplemented. Agent mode also falls back to the XML tool channel when the provider/API path lacks native function calling.
 
+**Agent edit_file + AGENTS.md slice (2026-07-21):** agent mode loads workspace-root `AGENTS.md` (UTF-8, byte-capped, non-symlink) into a separate untrusted user message while keeping the system prompt static. Mutation tools add preferred `edit_file` with `replace_range`, `insert_at`, `delete_range`, exact `replace_text` (optional `line_range_hint`), and standalone `create_file`. Multi line-ops apply bottom-to-top in memory before one atomic write. `replace_symbol`, fuzzy matching, nearest nested `AGENTS.md` chain, `apply_patch`, and `remove` remain later work.
+
 ---
 
 ## 1. Scope

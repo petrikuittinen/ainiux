@@ -104,9 +104,14 @@ Error load_trusted_prompts(const std::string& override_directory, TrustedPrompts
 void seed_agent_conversation(provider::ToolConversation& conversation,
                              const TrustedPrompts& prompts,
                              ToolProtocol protocol,
-                             const std::string& user_goal) {
+                             const std::string& user_goal,
+                             const std::string& agents_md_injection) {
     conversation = provider::ToolConversation{};
     conversation.messages.push_back({"system", prompts.agent_system_prompt(protocol)});
+    // Keep the system prompt static for provider-side caching; project rules are
+    // separate user-role context and remain untrusted data.
+    if (!agents_md_injection.empty())
+        conversation.messages.push_back({"user", agents_md_injection});
     if (!user_goal.empty()) conversation.messages.push_back({"user", user_goal});
 }
 

@@ -10,6 +10,7 @@
 #include <vector>
 
 #include "agent/agent_loop.hpp"
+#include "agent/agents_md.hpp"
 #include "agent/index/index.hpp"
 #include "agent/prompts.hpp"
 #include "agent/review_log.hpp"
@@ -237,14 +238,43 @@ int run_agent_mode(provider::RequestContext context) {
     limits.interactive = false;
     limits.max_scripted_turns = 50;
 
+    agent::AgentsMdBundle agents_md;
+    error = agent::load_root_agents_md(".", agent::kDefaultAgentsMdMaxBytes, agents_md);
+    if (!error.ok()) {
+        // Missing AGENTS.md is not an error; only real read/parse failures land here.
+        if (!context.options.quiet)
+            std::cerr << "Agent warning: could not load AGENTS.md: "
+                      << redact_secrets(error.message, secrets) << "\n";
+        if (logger) {
+            json::Value fields = log_object();
+            fields.object["error_code"] = log_string(error_code_name(error.code));
+            fields.object["error_message"] = log_string(error.message);
+            logger->event("agents_md", {"agents_md"}, std::move(fields), "failure");
+        }
+        agents_md = agent::AgentsMdBundle{};
+        error = ok_error();
+    } else if (logger) {
+        json::Value fields = log_object();
+        fields.object["documents"] = log_number(agents_md.documents.size());
+        fields.object["total_bytes"] = log_number(agents_md.total_bytes);
+        fields.object["truncated"] = log_bool(agents_md.truncated);
+        logger->event("agents_md", {"agents_md"}, std::move(fields), "success");
+    }
+
     provider::ToolConversation conversation;
-    agent::seed_agent_conversation(conversation, prompts, state.protocol, goal);
+    agent::seed_agent_conversation(conversation, prompts, state.protocol, goal,
+                                   agents_md.injection_text);
     if (!context.options.quiet) {
         std::cerr << "Agent goal: " << redact_secrets(goal, secrets) << "\n"
                   << "Using " << context.profile.name << "/" << context.options.model
                   << " with protocol "
                   << (state.protocol == agent::ToolProtocol::Xml ? "xml" : "native")
                   << " (workspace writes enabled).\n";
+        if (!agents_md.documents.empty()) {
+            std::cerr << "Loaded project AGENTS.md (" << agents_md.total_bytes << " bytes";
+            if (agents_md.truncated) std::cerr << ", truncated";
+            std::cerr << ").\n";
+        }
     }
 
     const std::vector<std::string> known = known_tool_names(tools);
@@ -353,6 +383,39 @@ int run_agent_mode(provider::RequestContext context) {
 
         if (!outcome.notice.empty() && !context.options.quiet)
             std::cerr << "Agent notice: " << redact_secrets(outcome.notice, secrets) << "\n";
+
+        // Progress on stderr so long model/tool rounds do not look hung (stdout stays
+        // reserved for the final assistant answer).
+        if (!context.options.quiet) {
+            std::cerr << "Agent turn " << state.turn << " ("
+                      << (state.protocol == agent::ToolProtocol::Xml ? "xml" : "native") << "): ";
+            if (outcome.kind == agent::AgentRoundOutcome::Kind::FinalText) {
+                std::cerr << "final answer (" << outcome.final_text.size() << " bytes)\n";
+            } else if (outcome.kind == agent::AgentRoundOutcome::Kind::Continue) {
+                if (outcome.prepared_calls.empty()) {
+                    std::cerr << "continue\n";
+                } else {
+                    std::cerr << outcome.prepared_calls.size() << " tool call(s):";
+                    for (std::size_t i = 0; i < outcome.prepared_calls.size(); ++i) {
+                        std::cerr << " " << outcome.prepared_calls[i].name;
+                        if (i < outcome.tool_results.size()) {
+                            const std::string& body = outcome.tool_results[i];
+                            const bool ok = body.find("\"ok\":true") != std::string::npos ||
+                                            body.find("\"ok\": true") != std::string::npos;
+                            std::cerr << (ok ? "[ok]" : "[err]");
+                        }
+                    }
+                    std::cerr << "\n";
+                }
+            } else {
+                std::cerr << "stop ("
+                          << (outcome.kind == agent::AgentRoundOutcome::Kind::Aborted ? "aborted"
+                              : outcome.kind == agent::AgentRoundOutcome::Kind::NeedsUserContinue
+                                  ? "needs continue"
+                                  : "error")
+                          << ")\n";
+            }
+        }
 
         if (outcome.kind == agent::AgentRoundOutcome::Kind::Continue) continue;
 

@@ -37,7 +37,7 @@ Status: **v1.02** (see `README.md` and `PLANS.md` implementation notes). One-sho
 | Standalone editor | `--editor [path]` | multi-buffer piece-table editor; optional AI assist |
 | Benchmark | `benchmark` / `--benchmark` | concurrent JSONL dataset runner |
 | Grade | `--grade` | second-pass judge scoring of benchmark results (not combined with `--benchmark`) |
-| One-shot agent | `agent` / `--agent` | index refresh + tool loop; read tools and ordinary writes (`write_file`, exact `str_replace`); no TUI/approvals yet |
+| One-shot agent | `agent` / `--agent` | index refresh + tool loop; root AGENTS.md injection; read tools + `edit_file` / `write_file` / exact `str_replace`; no TUI/approvals yet |
 | Security review | `--security-review` | headless read-only whole-project review |
 | Code index | `--index-code` / `--print-index` / `--clear-index` | project-local `.ainiux/index.sqlite` |
 
