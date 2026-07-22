@@ -64,7 +64,8 @@ Error resolve_cwd(const ProcessOptions& options, fs::path& root, fs::path& cwd) 
 
 Error resolve_executable(const std::string& name, std::string& resolved) {
     if (name.find('/') != std::string::npos)
-        return {ErrorCode::BadArgs, "run_command requires an allowlisted command name, not a path"};
+        return {ErrorCode::BadArgs,
+                "run_command requires a bare command name (no path); binaries resolve from a fixed PATH"};
     // Never resolve a workspace-controlled executable through the caller's PATH.
     const std::string path = "/usr/local/bin:/usr/bin:/bin";
     std::size_t start = 0;
@@ -80,7 +81,7 @@ Error resolve_executable(const std::string& name, std::string& resolved) {
         if (colon == std::string::npos) break;
         start = colon + 1;
     }
-    return {ErrorCode::FileRead, "allowlisted inspection command is not available: " + name};
+    return {ErrorCode::FileRead, "command not found on fixed PATH (/usr/local/bin:/usr/bin:/bin): " + name};
 }
 
 bool dangerous_argument(const std::string& argument) {
@@ -285,28 +286,6 @@ Error enforce_inspection_policy(std::vector<std::string>& args) {
                 " (allowed: pwd, ls, rg, grep, find, git status/diff/…)"};
 }
 
-// Agent mode: inspection tools plus common build/test/run interpreters. No shell.
-bool is_agent_allowed_command(const std::string& command) {
-    static const char* kAllowed[] = {
-        // inspection (same as security-review)
-        "pwd", "ls", "rg", "grep", "find", "git",
-        // interpreters / runtimes for verifying edits
-        "python", "python3", "python3.11", "python3.12", "python3.13",
-        "node", "nodejs",
-        // build / test
-        "make", "cmake", "ctest", "ninja",
-        "go", "cargo", "rustc",
-        "g++", "gcc", "clang", "clang++", "c++",
-        "npm", "npx", "yarn", "pnpm",
-        // lightweight helpers
-        "true", "false", "echo", "printf", "wc", "head", "tail", "cat", "diff", "sort", "uniq",
-    };
-    for (const char* name : kAllowed) {
-        if (command == name) return true;
-    }
-    return false;
-}
-
 // Inject git -c pager/external-diff hardening and return subcommand name.
 Error harden_git_argv(std::vector<std::string>& args, std::string& subcommand) {
     if (args.size() < 2) return {ErrorCode::BadArgs, "git requires a subcommand"};
@@ -318,45 +297,12 @@ Error harden_git_argv(std::vector<std::string>& args, std::string& subcommand) {
     return ok_error();
 }
 
-// Agent-mode git: read-only inspection set plus common VCS writes. Destructive
-// forms still require Guard Ask approval (handled before this is called).
+// Agent-mode git: no subcommand allowlist. Harden pagers; Guard covers destructive forms.
+// Block only path/config overrides that escape the workspace runner model.
 Error enforce_agent_git_policy(std::vector<std::string>& args) {
     if (args.size() < 2) return {ErrorCode::BadArgs, "git requires a subcommand"};
-    const std::string sub = args[1];
-    static const char* kReadOnly[] = {"status", "diff", "ls-files", "rev-parse", "log", "show",
-                                      "branch", "tag", "remote", "stash"};
-    for (const char* name : kReadOnly) {
-        if (sub == name) {
-            // status/diff/ls-files/rev-parse keep the strict option filters.
-            if (sub == "status" || sub == "diff" || sub == "ls-files" || sub == "rev-parse")
-                return enforce_inspection_policy(args);
-            // log/show/branch/tag/remote/stash listing: harden only.
-            std::string ignored;
-            return harden_git_argv(args, ignored);
-        }
-    }
-
-    static const char* kWrite[] = {"add",     "commit", "fetch",  "pull",    "push",
-                                   "checkout", "restore", "switch", "reset",  "clean",
-                                   "merge",   "rebase", "stash"};
-    bool write_ok = false;
-    for (const char* name : kWrite) {
-        if (sub == name) {
-            write_ok = true;
-            break;
-        }
-    }
-    // branch/tag already handled as read-only path for listing; create/delete
-    // still uses "branch"/"tag" with -d/-D which guard asked about.
-    if (sub == "branch" || sub == "tag") write_ok = true;
-    if (!write_ok)
-        return {ErrorCode::BadArgs,
-                "git subcommand is not available in agent run_command: " + sub +
-                    " (allowed: status/diff/log/show, add/commit/fetch/pull/push, "
-                    "checkout/restore/switch/reset/clean/merge/rebase/stash/branch/tag)"};
-
-    // Reject config rewrite and filter-branch style history rewrites by name.
-    if (sub == "config" || sub == "filter-branch" || sub == "update-ref")
+    const std::string& sub = args[1];
+    if (sub == "config" || sub == "filter-branch" || sub == "update-ref" || sub == "replace")
         return {ErrorCode::BadArgs, "git " + sub + " is not allowed via run_command"};
 
     for (std::size_t i = 2; i < args.size(); ++i) {
@@ -442,62 +388,31 @@ Error enforce_agent_policy(std::vector<std::string>& args,
     Error error = enforce_common_safety(args);
     if (!error.ok()) return error;
 
-    // Destructive guard first so rm -rf never runs without Ask→Allow.
+    // Denylist / Ask first: shells, privilege escalation, disk destroyers, rm -rf, etc.
+    // Agent mode intentionally does NOT maintain a command/option allowlist — Linux has
+    // thousands of mostly harmless tools; structural safety + Guard scales better.
     error = apply_guard_decision(args, ask_handling, on_guard_ask, cancellation, guard_rule_id,
                                  guard_decision_out);
     if (!error.ok()) return error;
 
     const std::string& command = args.front();
-    // Prefer the strict inspection path for inspection tools (keeps rg hardening).
-    if (command == "pwd" || command == "ls" || command == "rg" || command == "grep" ||
-        command == "find") {
-        return enforce_inspection_policy(args);
-    }
+    // Soft hardening only where the runner must inject safe defaults (git pagers).
+    // Do not option-allowlist ordinary tools (ls, stat, cat, …).
     if (command == "git") return enforce_agent_git_policy(args);
 
-    // After Guard Ask (or DeferAsk preview), allow `rm` past the normal allowlist.
-    // Models should still prefer the remove tool for workspace deletes.
-    if (command == "rm" && !guard_rule_id.empty() &&
-        (guard_decision_out == "allow" || guard_decision_out == "ask")) {
-        return ok_error();
-    }
-
-    if (!is_agent_allowed_command(command))
-        return {ErrorCode::BadArgs,
-                "command is not on the agent run_command allowlist: " + command +
-                    " (examples: python3, make, ctest, node, go, cargo, g++; no shell wrappers)"};
-
-    // Extra limits for package runners (avoid install/publish).
-    if (command == "npm" || command == "npx" || command == "yarn" || command == "pnpm") {
-        if (args.size() >= 2) {
-            const std::string sub = args[1];
-            if (sub == "publish" || sub == "add" || sub == "install" || sub == "i" ||
-                sub == "uninstall" || sub == "update" || sub == "upgrade")
+    // Optional rg line-oriented defaults (same inserts as inspection when model uses rg).
+    if (command == "rg") {
+        for (const std::string& arg : args) {
+            if (arg == "--pre" || arg.rfind("--pre=", 0) == 0 || arg == "--pre-glob" ||
+                arg == "--type-add" || arg == "--type-clear" ||
+                option_or_assignment(arg, "--hostname-bin") || arg == "-z" ||
+                arg == "--search-zip")
                 return {ErrorCode::BadArgs,
-                        command + " " + sub + " is not allowed via run_command "
-                                              "(install/publish changes environment)"};
+                        "run_command rejected an option that can invoke or configure external "
+                        "processing"};
         }
-    }
-    if (command == "cargo" && args.size() >= 2) {
-        const std::string sub = args[1];
-        if (sub == "publish" || sub == "install" || sub == "login")
-            return {ErrorCode::BadArgs, "cargo " + sub + " is not allowed via run_command"};
-    }
-    if (command == "go" && args.size() >= 2) {
-        const std::string sub = args[1];
-        if (sub == "get" || sub == "install")
-            return {ErrorCode::BadArgs, "go " + sub + " is not allowed via run_command"};
-    }
-
-    // cat/head/tail: at most a few relative paths.
-    if (command == "cat" || command == "head" || command == "tail" || command == "wc") {
-        std::size_t operands = 0;
-        for (std::size_t i = 1; i < args.size(); ++i) {
-            if (!args[i].empty() && args[i].front() == '-') continue;
-            ++operands;
-        }
-        if (operands > 8)
-            return {ErrorCode::BadArgs, command + " permits at most 8 path operands"};
+        args.insert(args.begin() + 1,
+                    {"--with-filename", "--line-number", "--no-heading", "--color=never"});
     }
     return ok_error();
 }

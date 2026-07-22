@@ -2017,11 +2017,13 @@ std::vector<provider::FunctionDefinition> ReadToolRegistry::definitions() const 
         {"read_many", "Read multiple bounded line ranges under one aggregate byte cap.", schema("\"items\":{\"type\":\"array\",\"items\":" + schema(range, "\"path\"") + ",\"maxItems\":100},\"max_bytes\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":262144}", "\"items\"")},
         {"run_command",
          allow_mutations_
-             ? "Run an allowlisted workspace command without a shell (python3/make/ctest/node/go/"
-               "cargo/g++ plus read-only ls/rg/find/git). Destructive commands (rm -rf, git "
-               "reset --hard, shells, sudo) are denied. Prefer native tools for file edits."
-             : "Run one allowlisted read-only inspection command without a shell "
-               "(pwd/ls/rg/grep/find/git).",
+             ? "Run a workspace command without a shell (argv exec, fixed PATH). Most commands "
+               "are allowed; shells/sudo/package installs/disk destroyers and destructive forms "
+               "(rm -rf, git reset --hard) are denied or need approval. No pipes/redirection/"
+               "metacharacters. Prefer native tools (read_file, list_directory, edit_file) for "
+               "edits; use stat/ls for metadata."
+             : "Run one read-only inspection command without a shell "
+               "(pwd/ls/rg/grep/find/git allowlist).",
          schema("\"command\":{\"type\":\"string\"},\"cwd\":{\"type\":\"string\"},"
                 "\"timeout_ms\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":" +
                     std::string(allow_mutations_ ? "120000" : "10000") + "}",

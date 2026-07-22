@@ -120,10 +120,10 @@ void test_elapsed_seconds_format() {
         2, "write_file", R"JSON({"path":"~/code/empty.txt","content":""})JSON", outside_err, 120);
     check(line.find("error:") != std::string::npos && line.find("outside project") != std::string::npos,
           "compact line includes outside-project reason: " + line);
-    const std::string allow_err =
-        R"JSON({"ok":false,"error":{"code":"policy_denied","message":"command is not on the agent run_command allowlist: touch (examples: python3, make)"}})JSON";
-    check(agent::compact_tool_error_brief(allow_err).find("allowlist") != std::string::npos,
-          "allowlist brief: " + agent::compact_tool_error_brief(allow_err));
+    const std::string deny_err =
+        R"JSON({"ok":false,"error":{"code":"policy_denied","message":"shell wrappers are not allowed; pass a direct command (no sh -c)"}})JSON";
+    check(agent::compact_tool_error_brief(deny_err).find("shell") != std::string::npos,
+          "shell-deny brief: " + agent::compact_tool_error_brief(deny_err));
 }
 
 void test_prior_session_context_includes_recent_work() {

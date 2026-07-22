@@ -159,17 +159,73 @@ GuardResult evaluate_command_guard(const std::vector<std::string>& arguments) {
 
     // Shell wrappers are high risk (arbitrary composition).
     if (command == "sh" || command == "bash" || command == "zsh" || command == "dash" ||
-        command == "csh" || command == "tcsh" || command == "fish" || command == "ksh") {
+        command == "csh" || command == "tcsh" || command == "fish" || command == "ksh" ||
+        command == "busybox") {
         return deny("forbid_shell_wrapper",
-                    "interactive/shell wrappers are not allowed; pass a direct allowlisted command");
+                    "shell wrappers are not allowed; pass a direct command (no sh -c)");
     }
-    if (command == "sudo" || command == "doas" || command == "su")
+    if (command == "sudo" || command == "doas" || command == "su" || command == "pkexec" ||
+        command == "runuser")
         return deny("forbid_privilege_escalation", "privilege escalation commands are not allowed");
 
     // dd / mkfs / shred
-    if (command == "dd" || command == "mkfs" || command == "mkfs.ext4" || command == "shred" ||
-        command == "wipefs")
+    if (command == "dd" || command == "mkfs" || command == "mkfs.ext4" || command == "mkfs.xfs" ||
+        command == "mkfs.btrfs" || command == "shred" || command == "wipefs" ||
+        command == "fdisk" || command == "parted" || command == "sfdisk")
         return deny("forbid_disk_destroy", "disk/device destructive commands are not allowed");
+
+    // Host power / service control outside the workspace coding model.
+    if (command == "reboot" || command == "poweroff" || command == "halt" ||
+        command == "shutdown" || command == "systemctl" || command == "service" ||
+        command == "init")
+        return deny("forbid_host_control", "host power/service control is not allowed via run_command");
+
+    // System package managers and global environment mutation.
+    if (command == "apt" || command == "apt-get" || command == "aptitude" || command == "dpkg" ||
+        command == "yum" || command == "dnf" || command == "pacman" || command == "zypper" ||
+        command == "apk" || command == "snap" || command == "flatpak")
+        return deny("forbid_system_package_manager",
+                    "system package managers are not allowed via run_command");
+
+    // Network listeners / remote shells (workspace coding should use fetch_url/search_web).
+    if (command == "nc" || command == "ncat" || command == "netcat" || command == "socat" ||
+        command == "ssh" || command == "scp" || command == "sftp" || command == "telnet" ||
+        command == "rsh" || command == "ftp")
+        return deny("forbid_remote_shell",
+                    "remote shell / listener tools are not allowed via run_command");
+
+    // Language package install/publish (environment mutation). Prefer project-local tooling.
+    if (command == "npm" || command == "npx" || command == "yarn" || command == "pnpm") {
+        if (arguments.size() >= 2) {
+            const std::string sub = lowercase(arguments[1]);
+            if (sub == "publish" || sub == "add" || sub == "install" || sub == "i" ||
+                sub == "uninstall" || sub == "update" || sub == "upgrade" || sub == "ci")
+                return deny("forbid_package_env_mutation",
+                            command + " " + sub +
+                                " is not allowed via run_command (install/publish changes "
+                                "environment)");
+        }
+    }
+    if (command == "cargo" && arguments.size() >= 2) {
+        const std::string sub = lowercase(arguments[1]);
+        if (sub == "publish" || sub == "install" || sub == "login")
+            return deny("forbid_package_env_mutation",
+                        "cargo " + sub + " is not allowed via run_command");
+    }
+    if (command == "go" && arguments.size() >= 2) {
+        const std::string sub = lowercase(arguments[1]);
+        if (sub == "get" || sub == "install")
+            return deny("forbid_package_env_mutation",
+                        "go " + sub + " is not allowed via run_command");
+    }
+    if (command == "pip" || command == "pip3" || command == "pipx") {
+        if (arguments.size() >= 2) {
+            const std::string sub = lowercase(arguments[1]);
+            if (sub == "install" || sub == "uninstall" || sub == "download")
+                return deny("forbid_package_env_mutation",
+                            command + " " + sub + " is not allowed via run_command");
+        }
+    }
 
     return {};
 }

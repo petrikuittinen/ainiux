@@ -472,7 +472,8 @@ std::vector<StyledLine> history_lines_for_session(const chat::Session& session,
             if (!already_has_timing) {
                 const long long elapsed_ms = message.created_at_ms - agent_turn_start_ms;
                 if (message.role == "assistant") {
-                    elapsed_suffix = "  " + agent::format_task_complete(elapsed_ms);
+                    // Own line so the completion banner is not glued to the answer text.
+                    elapsed_suffix = "\n" + agent::format_task_complete(elapsed_ms);
                 } else {
                     elapsed_suffix = "  " + agent::format_elapsed_ms(elapsed_ms);
                 }

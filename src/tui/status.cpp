@@ -1,5 +1,6 @@
 #include "tui/tui.hpp"
 
+#include "ainiux/version.hpp"
 #include "context/context.hpp"
 #include "provider/provider.hpp"
 #include "ui/provider_model_display.hpp"
@@ -123,6 +124,53 @@ std::string generation_ready_status(const std::string& provider_name,
         out << " | context: " << context_usage;
     }
     return out.str();
+}
+
+long long effective_agent_context_window(long long context_tokens) {
+    // Display-only fallback when CLI/config and /v1/models have not supplied a window.
+    // Does not mutate Options.context_tokens (auto-compact keeps using the real value).
+    if (context_tokens > 0) {
+        return context_tokens;
+    }
+    return kDefaultAgentContextWindowTokens;
+}
+
+std::string format_agent_context_usage(long long used_tokens, long long window_tokens) {
+    const long long window = effective_agent_context_window(window_tokens);
+    const long long used = used_tokens < 0 ? 0 : used_tokens;
+    std::ostringstream out;
+    out << used << " tok (";
+    // One decimal percent; round half away from zero for positive values.
+    const double percent =
+        window > 0 ? (static_cast<double>(used) * 100.0) / static_cast<double>(window) : 0.0;
+    out << std::fixed << std::setprecision(1) << percent << "%)";
+    return out.str();
+}
+
+std::string agent_provider_model_reasoning_label(const std::string& provider_name,
+                                                 const std::string& model_name,
+                                                 const std::string& reasoning) {
+    const std::string provider = provider_name.empty() ? "no-provider" : provider_name;
+    const std::string model =
+        model_name.empty() ? "no-model" : ui::compact_model_name_for_display(model_name);
+    const std::string reason = reasoning.empty() ? "auto" : reasoning;
+    return "[" + provider + "/" + model + " " + reason + "]";
+}
+
+std::string agent_input_label_text(const std::string& provider_name,
+                                   const std::string& model_name,
+                                   const std::string& reasoning,
+                                   long long used_tokens,
+                                   long long window_tokens) {
+    std::ostringstream out;
+    out << app_version_label() << " "
+        << agent_provider_model_reasoning_label(provider_name, model_name, reasoning) << " "
+        << format_agent_context_usage(used_tokens, window_tokens);
+    return out.str();
+}
+
+std::string agent_ready_status() {
+    return "agent · ready · /mode · /cmd-out";
 }
 
 RegenerationPlan regeneration_plan_for_session(const chat::Session& session) {

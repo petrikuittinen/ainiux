@@ -74,6 +74,24 @@ std::vector<StyledSegment> input_label_segments() {
 }
 
 std::vector<StyledSegment> input_label_segments_for_mode(bool agent_mode) {
+    return input_label_segments_for_mode(agent_mode, AgentChrome{});
+}
+
+std::vector<StyledSegment> input_label_segments_for_mode(bool agent_mode, const AgentChrome& chrome) {
+    if (agent_mode && chrome.enabled) {
+        const std::string& version = app_version_label();
+        const std::string bracket = agent_provider_model_reasoning_label(
+            chrome.provider, chrome.model, chrome.reasoning);
+        const std::string usage =
+            format_agent_context_usage(chrome.used_tokens, chrome.window_tokens);
+        return {
+            {version, StyleRole::PanelTitle},
+            {" ", StyleRole::InputLabel},
+            {bracket, StyleRole::PanelHighlight},
+            {" ", StyleRole::InputLabel},
+            {usage, StyleRole::InputLabel},
+        };
+    }
     const std::string label = input_label_text_for_mode(agent_mode);
     const std::string& version = app_version_label();
     const std::string mode_tag = agent_mode ? kAgentModeTag : kChatModeTag;

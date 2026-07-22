@@ -58,6 +58,7 @@ void render(const chat::Session& session,
             bool syntax_highlight,
             const RenderStyle& style,
             const char* panel_title_override = nullptr,
-            bool agent_mode = false);
+            bool agent_mode = false,
+            const AgentChrome& agent_chrome = AgentChrome{});
 
 }  // namespace ainiux::tui::detail

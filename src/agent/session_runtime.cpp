@@ -71,6 +71,25 @@ bool AgentSessionRuntime::is_interrupted(runtime::CancellationToken cancellation
     return false;
 }
 
+long long AgentSessionRuntime::estimated_request_tokens() const {
+    return cached_request_tokens_.load(std::memory_order_relaxed);
+}
+
+void AgentSessionRuntime::publish_request_token_estimate() {
+    // Must only run on the agent worker (or while no concurrent turn is active).
+    long long total = 0;
+    for (const provider::Message& message : conversation_.messages) {
+        total += estimate_tokens_from_text(message.role);
+        total += estimate_tokens_from_text(message.content);
+        total += 4;
+    }
+    for (const std::string& item : conversation_.continuation_items_json) {
+        total += estimate_tokens_from_text(item);
+        total += 2;
+    }
+    cached_request_tokens_.store(total, std::memory_order_relaxed);
+}
+
 void AgentSessionRuntime::reset() {
     if (session_id_ > 0 && session_store_.is_open()) {
         // Best-effort close of a still-running session when the runtime is torn down.
@@ -95,6 +114,7 @@ void AgentSessionRuntime::reset() {
     conversation_seeded_ = false;
     prepared_ = false;
     options_ = SessionRuntimeOptions{};
+    cached_request_tokens_.store(0, std::memory_order_relaxed);
 }
 
 Error AgentSessionRuntime::prepare(const provider::RequestContext& context,
@@ -112,20 +132,28 @@ Error AgentSessionRuntime::prepare(const provider::RequestContext& context,
     }
     secrets_ = configured_secrets(context);
 
-    auto interrupted_fn = [&]() { return is_interrupted(cancellation, interrupted); };
+    // Capture cancellation/interrupted by value. index_options_ lives inside tools for
+    // the whole session; a [&] lambda here used to dangle after prepare() returned and
+    // segfault during project_overview → check_freshness (stack-use-after-scope).
+    const runtime::CancellationToken cancel_copy = cancellation;
+    const std::function<bool()> interrupted_copy = std::move(interrupted);
+    auto interrupted_fn = [this, cancel_copy, interrupted_copy]() {
+        return is_interrupted(cancel_copy, interrupted_copy);
+    };
 
+    const bool quiet = context.options.quiet;
     if (options_.enable_agent_log) {
         Error log_error;
         logger_ = ReviewLogger::create(
             options_.workspace, options_.security_review_log_keep_runs, secrets_,
-            [&](const std::string& warning) {
-                if (!context.options.quiet) std::cerr << warning << "\n";
+            [quiet](const std::string& warning) {
+                if (!quiet) std::cerr << warning << "\n";
             },
             log_error, "agent");
-        if (!logger_ && !context.options.quiet) {
+        if (!logger_ && !quiet) {
             std::cerr << "AGENT LOGGING DISABLED: " << redact_secrets(log_error.message, secrets_)
                       << "; the agent will continue\n";
-        } else if (logger_ && !context.options.quiet) {
+        } else if (logger_ && !quiet) {
             std::cerr << "Agent diagnostic log (live): " << logger_->partial_path() << "\n"
                       << "  tail -f that path while the agent runs; finalized as "
                       << logger_->final_path() << " on completion\n";
@@ -135,7 +163,7 @@ Error AgentSessionRuntime::prepare(const provider::RequestContext& context,
     index::Options index_options;
     index_options.workspace = options_.workspace;
     index_options.max_source_code_file_size = options_.max_source_code_file_size;
-    index_options.cancellation = cancellation;
+    index_options.cancellation = cancel_copy;
     index_options.interrupted = interrupted_fn;
     index::RefreshStats index_stats;
     Error error = index::refresh(index_options, index_stats);
@@ -261,6 +289,7 @@ Error AgentSessionRuntime::prepare(const provider::RequestContext& context,
     }
 
     prepared_ = true;
+    publish_request_token_estimate();
     return ok_error();
 }
 
@@ -409,6 +438,7 @@ SessionTurnResult AgentSessionRuntime::run_user_turn(
                           << " stored messages) into model context.\n";
         }
         conversation_seeded_ = true;
+        publish_request_token_estimate();
         if (session_store_.is_open() && session_id_ > 0) {
             Error message_error =
                 session_store_.append_message("user", redact_secrets(text, secrets_));
@@ -434,6 +464,7 @@ SessionTurnResult AgentSessionRuntime::run_user_turn(
         // user turns must append there so serialize_tool_request places them
         // after prior tool results (not between the seed goal and tools).
         append_conversation_text(conversation_, "user", text);
+        publish_request_token_estimate();
         if (session_store_.is_open() && session_id_ > 0) {
             Error message_error =
                 session_store_.append_message("user", redact_secrets(text, secrets_));
@@ -526,6 +557,7 @@ SessionTurnResult AgentSessionRuntime::run_user_turn(
     for (;;) {
         if (is_interrupted(cancellation, interrupted)) {
             pair_dangling_tool_calls(context, conversation_, state_);
+            publish_request_token_estimate();
             result.error = {ErrorCode::Cancelled, "agent run cancelled"};
             result.final_text = final_text;
             result.turns = state_.turn - turns_before;
@@ -573,6 +605,7 @@ SessionTurnResult AgentSessionRuntime::run_user_turn(
             });
         if (!error.ok()) {
             pair_dangling_tool_calls(context, conversation_, state_);
+            publish_request_token_estimate();
             result.error = error;
             result.final_text = final_text;
             result.turns = state_.turn - turns_before;
@@ -587,6 +620,8 @@ SessionTurnResult AgentSessionRuntime::run_user_turn(
         AgentRoundOutcome outcome = handle_agent_tool_round(
             state_, limits_, context, conversation_, std::move(round), known_tools_, executor,
             cancellation);
+        // Conversation grew (assistant/tool items); publish for TUI chrome.
+        publish_request_token_estimate();
 
         if (logger_) {
             json::Value fields = log_object();
@@ -713,6 +748,7 @@ SessionTurnResult AgentSessionRuntime::run_user_turn(
                     std::cerr << "Agent warning: could not store assistant message: "
                               << redact_secrets(assistant_error.message, secrets_) << "\n";
             }
+            publish_request_token_estimate();
             return result;
         }
 
@@ -728,10 +764,12 @@ SessionTurnResult AgentSessionRuntime::run_user_turn(
                 (void)session_store_.append_message("notice",
                                                     redact_secrets(result.notice, secrets_));
             }
+            publish_request_token_estimate();
             return result;
         }
 
         pair_dangling_tool_calls(context, conversation_, state_);
+        publish_request_token_estimate();
         result.error = outcome.error.ok()
                            ? Error{ErrorCode::Cancelled,
                                    outcome.notice.empty() ? "agent run aborted" : outcome.notice}

@@ -44,7 +44,7 @@ std::string compact_tool_args_preview(const std::string& arguments_json,
 std::string compact_tool_status(const std::string& result_json);
 
 // Short human reason for a failed tool result (empty when ok / missing).
-// Examples: "outside project", "not allowlisted", "policy denied".
+// Examples: "outside project", "shell not allowed", "policy denied".
 std::string compact_tool_error_brief(const std::string& result_json,
                                      std::size_t max_cells = 56);
 

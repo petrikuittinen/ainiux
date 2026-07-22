@@ -1,5 +1,6 @@
 #pragma once
 
+#include <atomic>
 #include <functional>
 #include <memory>
 #include <string>
@@ -65,8 +66,8 @@ class AgentSessionRuntime {
     AgentSessionRuntime() = default;
     AgentSessionRuntime(const AgentSessionRuntime&) = delete;
     AgentSessionRuntime& operator=(const AgentSessionRuntime&) = delete;
-    AgentSessionRuntime(AgentSessionRuntime&&) noexcept = default;
-    AgentSessionRuntime& operator=(AgentSessionRuntime&&) noexcept = default;
+    AgentSessionRuntime(AgentSessionRuntime&&) = delete;
+    AgentSessionRuntime& operator=(AgentSessionRuntime&&) = delete;
 
     bool prepared() const { return prepared_; }
     long long session_id() const { return session_id_; }
@@ -75,6 +76,10 @@ class AgentSessionRuntime {
     ToolProtocol protocol() const { return state_.protocol; }
     std::size_t session_turns() const { return session_turns_; }
     std::size_t session_tool_calls() const { return session_tool_calls_; }
+
+    // Thread-safe: returns last published estimate (worker updates only).
+    // Never walks conversation_ from the UI thread — that races with run_user_turn.
+    long long estimated_request_tokens() const;
 
     // Refresh index, create tools, open agent.sqlite, load prompts/AGENTS.md.
     // Does not create a session row until the first user turn.
@@ -114,6 +119,8 @@ class AgentSessionRuntime {
    private:
     bool is_interrupted(runtime::CancellationToken cancellation,
                         const std::function<bool()>& interrupted) const;
+    // Worker-only: recompute from conversation_ and publish for UI chrome.
+    void publish_request_token_estimate();
 
     SessionRuntimeOptions options_;
     bool prepared_ = false;
@@ -131,6 +138,8 @@ class AgentSessionRuntime {
     std::vector<std::string> known_tools_;
     std::size_t session_turns_ = 0;
     std::size_t session_tool_calls_ = 0;
+    // Published by the agent worker; read by the TUI render path without locking conversation_.
+    mutable std::atomic<long long> cached_request_tokens_{0};
 };
 
 }  // namespace ainiux::agent

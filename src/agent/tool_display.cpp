@@ -205,8 +205,16 @@ std::string classify_tool_error_message(const std::string& message) {
         return "outside project (use project-relative path)";
     }
     if (lower.find("allowlist") != std::string::npos ||
-        lower.find("not on the agent") != std::string::npos) {
-        // Prefer a short form: "touch not allowlisted"
+        lower.find("not on the agent") != std::string::npos ||
+        lower.find("shell wrappers are not allowed") != std::string::npos ||
+        lower.find("privilege escalation") != std::string::npos ||
+        lower.find("disk/device destructive") != std::string::npos ||
+        lower.find("host power/service") != std::string::npos ||
+        lower.find("package managers are not allowed") != std::string::npos ||
+        lower.find("remote shell") != std::string::npos ||
+        lower.find("install/publish changes") != std::string::npos ||
+        lower.find("is not allowed via run_command") != std::string::npos) {
+        // Prefer a short form from legacy allowlist messages, else "policy denied".
         const std::string marker = "allowlist: ";
         const std::size_t pos = lower.find(marker);
         if (pos != std::string::npos) {
@@ -215,9 +223,12 @@ std::string classify_tool_error_message(const std::string& message) {
             if (cut != std::string::npos) cmd = cmd.substr(0, cut);
             const std::size_t paren = cmd.find('(');
             if (paren != std::string::npos) cmd = cmd.substr(0, paren);
-            if (!cmd.empty()) return cmd + " not allowlisted";
+            if (!cmd.empty()) return cmd + " not allowed";
         }
-        return "command not allowlisted";
+        if (lower.find("shell") != std::string::npos) return "shell not allowed";
+        if (lower.find("sudo") != std::string::npos || lower.find("privilege") != std::string::npos)
+            return "privilege escalation denied";
+        return "command not allowed";
     }
     if (lower.find("approval") != std::string::npos ||
         lower.find("headless agent denies") != std::string::npos) {

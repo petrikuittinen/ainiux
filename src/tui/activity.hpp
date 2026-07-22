@@ -14,6 +14,7 @@ std::string input_label_text();
 std::string input_label_text_for_mode(bool agent_mode);
 std::vector<StyledSegment> input_label_segments();
 std::vector<StyledSegment> input_label_segments_for_mode(bool agent_mode);
+std::vector<StyledSegment> input_label_segments_for_mode(bool agent_mode, const AgentChrome& chrome);
 
 std::string activity_indicator_text(ActivityKind kind, size_t frame);
 size_t activity_indicator_width(ActivityKind kind);

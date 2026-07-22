@@ -50,7 +50,7 @@ Interactive chat, agent TUI, and REPL offer user shell for the human operator vi
 - `/shell` / `!` → display-only `notice` (filtered from provider payloads and chat SQLite).
 - `/shell-stdout` / `!!` → pure redacted stdout replaces the TUI input draft; the user must submit explicitly (Enter/Ctrl+S). Safer than auto-injecting shell output as a user message.
 
-This is intentionally **not** the agent tool path. Agent `run_command` (`src/agent/process.*`) remains allowlisted, shell-free `execve`, with a destructive-command guard.
+This is intentionally **not** the agent tool path. Agent `run_command` (`src/agent/process.*`) is shell-free `execve` with structural argument safety (no metacharacters, relative path operands, fixed PATH resolution) and a **denylist / Guard** for dangerous forms. Security-review keeps a strict inspection allowlist. Agent mode deliberately does **not** grow per-command option allowlists—that does not scale across Linux toolchains.
 
 ## Guard Ask approvals (interactive only)
 

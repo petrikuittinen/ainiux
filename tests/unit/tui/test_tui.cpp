@@ -260,6 +260,52 @@ void test_configured_assist_slash_command_detection() {
           "slash-prefixed assist names remain chat commands");
 }
 
+void test_tui_agent_chrome_formatters() {
+    check(ainiux::tui::effective_agent_context_window(0) ==
+              ainiux::tui::kDefaultAgentContextWindowTokens,
+          "agent chrome defaults unknown window to 256k (262144)");
+    check(ainiux::tui::effective_agent_context_window(131072) == 131072,
+          "agent chrome keeps an explicit context window");
+    check(ainiux::tui::kDefaultAgentContextWindowTokens == 262144LL,
+          "agent chrome 256k default is binary 256*1024");
+
+    const std::string usage =
+        ainiux::tui::format_agent_context_usage(187982, 262144);
+    check(usage == "187982 tok (71.7%)",
+          "agent chrome formats used tokens with one-decimal percent");
+
+    const std::string label = ainiux::tui::agent_provider_model_reasoning_label(
+        "openrouter", "gpt-5.6-luna", "high");
+    check(label == "[openrouter/gpt-5.6-luna high]",
+          "agent chrome uses provider/model reasoning bracket form");
+
+    const std::string line = ainiux::tui::agent_input_label_text(
+        "openrouter", "gpt-5.6-luna", "high", 187982, 0);
+    check(line.find(ainiux::versionNumber) != std::string::npos,
+          "agent chrome line includes version");
+    check(line.find("[openrouter/gpt-5.6-luna high]") != std::string::npos,
+          "agent chrome line includes provider/model/reasoning");
+    check(line.find("187982 tok (71.7%)") != std::string::npos,
+          "agent chrome line uses default 256k window for percent when unset");
+
+    ainiux::tui::AgentChrome chrome;
+    chrome.enabled = true;
+    chrome.provider = "openrouter";
+    chrome.model = "gpt-5.6-luna";
+    chrome.reasoning = "high";
+    chrome.used_tokens = 187982;
+    chrome.window_tokens = 262144;
+    const auto segments = ainiux::tui::input_label_segments_for_mode(true, chrome);
+    std::string joined;
+    for (const auto& seg : segments) joined += seg.text;
+    check(joined.find("tok") != std::string::npos && joined.find("%") != std::string::npos,
+          "agent input-label segments include token usage");
+    check(joined.find("openrouter/gpt-5.6-luna") != std::string::npos,
+          "agent input-label segments include provider/model");
+    check(ainiux::tui::agent_ready_status().find("agent") != std::string::npos,
+          "agent ready status is a short idle hint");
+}
+
 void test_tui_ready_and_generation_status() {
     check(ainiux::tui::ready_status() ==
               "Tab complete | Ctrl+Space continue | Alt+Enter newline",
@@ -704,6 +750,7 @@ void test_tui_agent_history_chrome() {
     bool saw_answer = false;
     bool saw_tool_elapsed = false;
     bool saw_answer_elapsed = false;
+    bool saw_task_complete_alone = false;
     bool saw_full_wall_clock = false;
     for (const auto& line : agent_lines) {
         std::string joined;
@@ -714,9 +761,15 @@ void test_tui_agent_history_chrome() {
         if (joined.find("1: read_file") != std::string::npos) saw_tool_body = true;
         if (joined.find("Updated medium") != std::string::npos) saw_answer = true;
         if (joined.find("6540 ms") != std::string::npos) saw_tool_elapsed = true;
-        if (joined.find("Task complete in 12.00 seconds.") != std::string::npos)
+        if (joined.find("Task complete in 12.00 seconds.") != std::string::npos) {
             saw_answer_elapsed = true;
-        if (joined.find("1970") != std::string::npos || joined.find("T") == 0)
+            // Completion banner must not share a line with answer body text.
+            if (joined.find("Updated medium") == std::string::npos) saw_task_complete_alone = true;
+        }
+        // ISO-like stamps (e.g. 1970-…T…) only — not "Task complete…".
+        if (joined.find("1970") != std::string::npos ||
+            (joined.size() >= 11 && joined[4] == '-' && joined[7] == '-' &&
+             joined.find('T') != std::string::npos && joined.find("Task") == std::string::npos))
             saw_full_wall_clock = true;
     }
     check(saw_prompt_marker, "agent mode shows user prompts as \"> \"");
@@ -725,6 +778,8 @@ void test_tui_agent_history_chrome() {
     check(saw_tool_body && saw_answer, "agent mode still shows tool lines and answers flush-left");
     check(saw_tool_elapsed && saw_answer_elapsed,
           "agent mode shows tool ms timing and Task complete for the final answer");
+    check(saw_task_complete_alone,
+          "Task complete banner is on its own line, not merged with answer text");
     check(!saw_full_wall_clock, "agent mode does not show full wall-clock timestamps by default");
 }
 
@@ -1118,6 +1173,7 @@ void run_all() {
     test_chat_assist_request_text_strips_content_tags();
     test_configured_assist_slash_command_detection();
     test_tui_ready_and_generation_status();
+    test_tui_agent_chrome_formatters();
     test_tui_ctrl_chat_history_scroll_shortcuts();
     test_tui_chat_history_scroll_keys();
     test_tui_read_terminal_input_marks_alt_meta_prefix();

@@ -39,9 +39,10 @@ struct ProcessResult {
     std::string guard_decision;  // allow | deny | ask→resolved
 };
 
-// InspectionOnly: security-review allowlist (read-only ls/rg/find/git/...).
-// Agent: inspection set plus common build/test/run tools (python3, make, …),
-// still without a shell, with destructive-command guard applied.
+// InspectionOnly: security-review read-only allowlist (pwd/ls/rg/find/git/…).
+// Agent: default-allow any basename found on a fixed PATH, shell-free execve,
+// structural argument safety, and a hard denylist / Guard for dangerous forms.
+// Do not grow per-command option allowlists for agent mode.
 enum class CommandPolicy {
     InspectionOnly,
     Agent,

@@ -4,7 +4,7 @@
 - `-k`/`--key` is supported for testing but warns because command-line arguments may be visible to other local users.
 - Authorization-like headers and configured key values are redacted from transport errors.
 - LM Studio authentication is optional by default.
-- Local web mode is not implemented. Two headless tool-using workflows exist: read-only `--security-review`, and one-shot `run` / `--run` (interactive `agent` / `--agent`) with ordinary workspace mutation tools. Agent **tools** remain allowlisted and shell-free; unrestricted shell is only available as an explicit **user** UI command (below).
+- Local web mode is not implemented. Two headless tool-using workflows exist: read-only `--security-review`, and one-shot `run` / `--run` (interactive `agent` / `--agent`) with ordinary workspace mutation tools. Agent **tools** are shell-free (`execve` argv only). Security-review `run_command` stays on a strict read-only allowlist; agent `run_command` **default-allows** bare commands found on a fixed PATH and **denylists** shells/privilege escalation/package installs/disk destroyers (plus Guard Ask for `rm -rf` / destructive git). Unrestricted shell is only available as an explicit **user** UI command (below).
 
 ## User-initiated interactive shell (`/shell` and `!`)
 
@@ -15,7 +15,7 @@ Chat TUI, agent TUI, and REPL accept user-typed shell commands:
 
 Both forms run **`/bin/sh -c`** (or `/usr/bin/sh`) in the process working directory. They are **not** agent tools: the model cannot invoke them. Stdin is closed (`/dev/null`). Output is byte-capped, timed (default 60s, or CLI/config `--timeout`), Esc-cancellable in the TUI, and known configured credentials are redacted before display or draft fill.
 
-This is full local shell power for the person at the keyboard. Do not confuse it with agent `run_command`, which stays on an allowlist without a shell.
+This is full local shell power for the person at the keyboard. Do not confuse it with agent `run_command`, which never invokes a shell and uses denylist + structural safety rather than listing every harmless binary.
 
 ## Headless Security Review
 
@@ -49,7 +49,7 @@ The diagnostic log intentionally preserves source and model payloads without tru
 - In-memory index snapshot hashes are updated after a successful write so later reads in the same run stay consistent; tools can also call `index_update` mid-session.
 - Project `AGENTS.md` cannot disable safety rules, change the workspace root, or override the user's direct request.
 
-Security-review never enables mutation or network tools and never injects project `AGENTS.md` as instructions. Agent **tools** still do not expose unrestricted shell (only allowlisted `run_command` without a shell). Interactive user `/shell` / `!` is a separate UI feature (see above). Final assistant text is written to `stdout`; status, notices, and errors go to `stderr`. Turn/loop limits and transport retries follow the agent-loop reliability rules (identical-call soft/hard caps, consecutive-failure abort, 50-turn scripted cap, no automatic tool re-execution).
+Security-review never enables mutation or network tools and never injects project `AGENTS.md` as instructions. Agent **tools** still do not expose unrestricted shell (`run_command` is argv-only; shells/sudo/etc. denied). Interactive user `/shell` / `!` is a separate UI feature (see above). Final assistant text is written to `stdout`; status, notices, and errors go to `stderr`. Turn/loop limits and transport retries follow the agent-loop reliability rules (identical-call soft/hard caps, consecutive-failure abort, 50-turn scripted cap, no automatic tool re-execution).
 
 ### Guard Ask approvals
 

@@ -39,12 +39,19 @@ void test_guard_patterns() {
     check(deny({"sqlite3", "app.sqlite", "DROP TABLE users;"}), "destructive sql denied");
     check(deny({"bash", "-c", "echo hi"}), "bash wrapper denied");
     check(deny({"sudo", "make"}), "sudo denied");
+    check(deny({"apt-get", "install", "curl"}), "system package manager denied");
+    check(deny({"ssh", "host"}), "remote shell denied");
+    check(deny({"reboot"}), "host control denied");
 
     const agent::GuardResult allow =
         agent::evaluate_command_guard({"python3", "hello.py"});
     check(allow.decision == agent::GuardDecision::Allow, "python3 hello.py allowed by guard");
     check(agent::evaluate_command_guard({"make", "test"}).decision == agent::GuardDecision::Allow,
           "make test allowed by guard");
+    check(agent::evaluate_command_guard({"stat", "file.py"}).decision == agent::GuardDecision::Allow,
+          "stat allowed by guard");
+    check(agent::evaluate_command_guard({"touch", "x"}).decision == agent::GuardDecision::Allow,
+          "touch allowed by guard (not an allowlist)");
 }
 
 void test_parse_policies() {
@@ -62,8 +69,27 @@ void test_parse_policies() {
     error = agent::parse_command("rm -rf build", args, agent::CommandPolicy::Agent, rule);
     check(!error.ok() && !rule.empty(), "agent policy guards rm -rf: " + error.message);
 
-    error = agent::parse_command("ls -1", args, agent::CommandPolicy::Agent, rule);
-    check(error.ok(), "agent policy still allows ls");
+    // Agent default-allow: ordinary tools/options are not option-allowlisted.
+    error = agent::parse_command("ls -laFg tic_tac_toe.py", args, agent::CommandPolicy::Agent, rule);
+    check(error.ok(), "agent default-allow accepts ordinary ls options: " + error.message);
+
+    error = agent::parse_command("stat -c %y tic_tac_toe.py", args, agent::CommandPolicy::Agent,
+                                 rule);
+    check(error.ok(), "agent default-allow accepts stat: " + error.message);
+
+    error = agent::parse_command("touch notes.txt", args, agent::CommandPolicy::Agent, rule);
+    check(error.ok(), "agent default-allow accepts touch (not an allowlist game): " + error.message);
+
+    error = agent::parse_command("bash -c echo", args, agent::CommandPolicy::Agent, rule);
+    check(!error.ok(), "agent still denylists shell wrappers: " + error.message);
+
+    error = agent::parse_command("sudo make", args, agent::CommandPolicy::Agent, rule);
+    check(!error.ok(), "agent still denylists sudo: " + error.message);
+
+    error = agent::parse_command("stat tic_tac_toe.py", args, agent::CommandPolicy::InspectionOnly,
+                                 rule);
+    check(!error.ok() && error.message.find("inspection allowlist") != std::string::npos,
+          "security-review remains a strict allowlist: " + error.message);
 }
 
 std::string temp_workspace(const std::string& name) {

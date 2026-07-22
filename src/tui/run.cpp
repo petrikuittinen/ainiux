@@ -27,6 +27,7 @@
 #include "ainiux/model_setting.hpp"
 #include "chat/sqlite_store.hpp"
 #include "cli/args.hpp"
+#include "config/config.hpp"
 #include "context/context.hpp"
 #include "editor/clipboard.hpp"
 #include "editor/path_completion.hpp"
@@ -101,7 +102,7 @@ app::TuiRunResult run(provider::RequestContext context,
     bool completion_pending = false;
     std::string status = ready_status();
     if (context.options.agent) {
-        status = "agent · project tools · /mode · /chat";
+        status = agent_ready_status();
     }
     std::string theme = "dark";
     context.options.tui_themes.normalize_name(context.options.tui_theme, theme);
@@ -172,6 +173,67 @@ app::TuiRunResult run(provider::RequestContext context,
     size_t pending_assistant = static_cast<size_t>(-1);
     bool pending_user_added_for_job = false;
     int history_scroll = 0;
+
+    auto build_agent_chrome = [&]() -> AgentChrome {
+        AgentChrome chrome;
+        if (!context.options.agent) {
+            return chrome;
+        }
+        chrome.enabled = true;
+        chrome.provider = context.profile.name;
+        chrome.model = context.options.model;
+        chrome.reasoning = config::reasoning_selection_value(context.options.reasoning);
+        // Prefer the worker-published atomic estimate (never walks conversation_ here —
+        // that raced with run_user_turn and segfaulted during streaming). Fall back to
+        // the display transcript on the UI thread.
+        long long used = 0;
+        if (agent_runtime && agent_runtime->prepared()) {
+            used = agent_runtime->estimated_request_tokens();
+        }
+        const long long display_used = context::estimated_text_tokens(session.messages);
+        if (display_used > used) {
+            used = display_used;
+        }
+        chrome.used_tokens = used;
+        chrome.window_tokens = effective_agent_context_window(context.options.context_tokens);
+        return chrome;
+    };
+
+    auto append_agent_history_notice = [&](const std::string& text) {
+        if (!context.options.agent || text.empty()) {
+            return;
+        }
+        if (!session.messages.empty() && session.messages.back().role == "notice" &&
+            session.messages.back().content == text) {
+            return;
+        }
+        provider::Message notice{"notice", text};
+        notice.created_at_ms = agent::now_unix_ms();
+        session.messages.push_back(std::move(notice));
+        history_scroll = history_scroll_for_thread_end();
+        if (agent_runtime && agent_runtime->prepared()) {
+            (void)agent_runtime->append_display_notice(text);
+        }
+    };
+
+    // Agent mode: durable errors go to transcript history; status returns to idle chrome.
+    auto report_agent_error = [&](const std::string& text) {
+        if (!context.options.agent) {
+            status = text;
+            return;
+        }
+        append_agent_history_notice(text);
+        status = agent_ready_status();
+    };
+
+    auto set_status_maybe_agent_error = [&](const std::string& text, bool as_error) {
+        if (as_error && context.options.agent) {
+            report_agent_error(text);
+        } else {
+            status = text;
+        }
+    };
+
     bool regenerate_after_cancel = false;
     std::string queued_regeneration_prompt;
     std::vector<provider::ImageInput> pending_images;
@@ -640,7 +702,7 @@ app::TuiRunResult run(provider::RequestContext context,
             return;
         }
         if (context.options.agent) {
-            status = provider_model_status_message(context, "agent · /mode · /cmd-out");
+            status = agent_ready_status();
             return;
         }
         status = chat_startup_status(context);
@@ -1018,7 +1080,7 @@ app::TuiRunResult run(provider::RequestContext context,
         }
         Error list_error = sqlite_store.list_threads(thread_picker_threads, 200);
         if (!list_error.ok()) {
-            status = detail::error_line(list_error);
+            set_status_maybe_agent_error(detail::error_line(list_error), true);
             return;
         }
         if (thread_picker_threads.empty()) {
@@ -1283,6 +1345,14 @@ app::TuiRunResult run(provider::RequestContext context,
             return;
         }
         handle_tui_command(text, command_context, command_handlers);
+        // Agent mode: durable actionable failures belong in history, not only the status bar.
+        // Leave "Usage:" hints on the status line.
+        if (context.options.agent && !status.empty() && status.rfind("Usage:", 0) != 0 &&
+            detail::status_role_for_text(status) == StyleRole::Error) {
+            const std::string err = status;
+            append_agent_history_notice(err);
+            status = agent_ready_status();
+        }
     };
 
     TuiPickerCallbacks picker_callbacks;
@@ -1356,7 +1426,7 @@ app::TuiRunResult run(provider::RequestContext context,
             start_new_thread_from_cli();
             status = "Removed thread " + std::to_string(removed_thread_id);
         } else {
-            status = detail::error_line(remove_error);
+            set_status_maybe_agent_error(detail::error_line(remove_error), true);
         }
         mode = TuiMode::Chat;
     };
@@ -1406,7 +1476,7 @@ app::TuiRunResult run(provider::RequestContext context,
                                                       thread_picker_threads.size());
                 }
             } else {
-                status = detail::error_line(remove_error);
+                set_status_maybe_agent_error(detail::error_line(remove_error), true);
                 mode = TuiMode::ThreadList;
             }
         } else {
@@ -1438,7 +1508,7 @@ app::TuiRunResult run(provider::RequestContext context,
                      ui::compact_model_name_for_display(context.options.model);
             start_store_save();
         } else {
-            status = detail::error_line(context_error);
+            set_status_maybe_agent_error(detail::error_line(context_error), true);
         }
     };
     picker_callbacks.on_model_confirm_retry = [&](const std::string& message) { status = message; };
@@ -1458,7 +1528,7 @@ app::TuiRunResult run(provider::RequestContext context,
             if (app::parse_user_shell_invocation(text, shell_command, shell_error, shell_dest)) {
                 input = new_input_editor();
                 if (!shell_error.empty()) {
-                    status = shell_error;
+                    set_status_maybe_agent_error(shell_error, true);
                     return;
                 }
                 file_jobs.start_shell(shell_command,
@@ -1540,28 +1610,27 @@ app::TuiRunResult run(provider::RequestContext context,
         detail::render(session, input, status, history_scroll, show_thinking_traces, mode,
                        visible_panel_boot, activity_boot, render_frame_boot, syntax_highlight,
                        detail::RenderStyle{&context.options.tui_themes, theme, use_colors},
-                       panel_title(), true);
+                       panel_title(), true, build_agent_chrome());
 
         provider::RequestContext prep_context = context;
         prep_context.options.quiet = true;  // keep index chatter off the alternate screen
         agent::SessionRuntimeOptions prep_options = make_agent_runtime_options();
         Error prep_error = agent_runtime->prepare(prep_context, {}, {}, prep_options);
         if (!prep_error.ok()) {
-            status = detail::error_line(prep_error);
+            report_agent_error(detail::error_line(prep_error));
         } else {
             std::vector<provider::Message> history;
             Error history_error = agent_runtime->load_display_messages(history);
             if (!history_error.ok()) {
-                status = "Agent ready · history load failed: " + history_error.message;
+                report_agent_error("history load failed: " + history_error.message);
             } else if (!history.empty()) {
                 // Show the durable project transcript (last actions), not an empty chat.
                 session.messages = std::move(history);
                 history_scroll = history_scroll_for_thread_end();
-                status = provider_model_status_message(
-                    context, "agent · resumed · " + std::to_string(session.messages.size()) +
-                                 " message(s) · /mode · /cmd-out");
+                status = "agent · resumed · " + std::to_string(session.messages.size()) +
+                         " message(s)";
             } else {
-                status = provider_model_status_message(context, "agent · ready · /mode · /cmd-out");
+                status = agent_ready_status();
             }
         }
     } else {
@@ -1583,7 +1652,7 @@ app::TuiRunResult run(provider::RequestContext context,
     detail::render(session, input, status, history_scroll, show_thinking_traces, mode, visible_panel,
                    activity_kind, render_frame, syntax_highlight,
                    detail::RenderStyle{&context.options.tui_themes, theme, use_colors}, panel_title(),
-                   context.options.agent);
+                   context.options.agent, build_agent_chrome());
     while (!quit) {
         TuiEvent event;
         while (events.try_pop(event)) {
@@ -1683,14 +1752,19 @@ app::TuiRunResult run(provider::RequestContext context,
                                 !event.chat.model.empty() ? event.chat.model : context.options.model;
                             provider::resolve_context_window(context, selector);
                         }
-                        status = event.compacted
-                                     ? event.compaction.notice
-                                     : generation_ready_status(context.profile.name,
-                                                               context.options.model,
-                                                               event.chat,
-                                                               context.options.stream,
-                                                               session.messages,
-                                                               context.options.context_tokens);
+                        if (event.compacted) {
+                            status = event.compaction.notice;
+                        } else if (context.options.agent) {
+                            // Provider/model/tokens live on the permanent agent chrome line.
+                            status = agent_ready_status();
+                        } else {
+                            status = generation_ready_status(context.profile.name,
+                                                             context.options.model,
+                                                             event.chat,
+                                                             context.options.stream,
+                                                             session.messages,
+                                                             context.options.context_tokens);
+                        }
                         start_save(context.options.save_chat_path, session, true);
                         start_store_save();
                     }
@@ -1768,21 +1842,31 @@ app::TuiRunResult run(provider::RequestContext context,
                                                                    ? event.agent_finished_at_ms
                                                                    : agent::now_unix_ms();
                                     session.messages.push_back(std::move(notice_msg));
+                                    if (agent_runtime && agent_runtime->prepared()) {
+                                        (void)agent_runtime->append_display_notice(fail_text);
+                                    }
                                 }
                                 pending_user = static_cast<size_t>(-1);
                                 pending_assistant = static_cast<size_t>(-1);
                                 pending_user_added_for_job = false;
                             } else {
                                 keep_cancelled_turn();
+                                if (context.options.agent) {
+                                    append_agent_history_notice(failure_status());
+                                }
                             }
-                            status = failure_status();
+                            status = context.options.agent ? agent_ready_status() : failure_status();
                             start_store_save();
                         } else {
                             // Error before/during; the user message is rolled back.
                             // Do not consume attachments; leave them for the user to re-send.
                             attachments_committed_for_turn = 0;
                             rollback_pending_turn();
-                            status = failure_status();
+                            if (context.options.agent) {
+                                report_agent_error(failure_status());
+                            } else {
+                                status = failure_status();
+                            }
                         }
                     }
                     break;
@@ -1795,7 +1879,7 @@ app::TuiRunResult run(provider::RequestContext context,
                             status = "Saved " + event.text;
                         }
                     } else if (!event.quiet_success || event.error.code != ErrorCode::Cancelled) {
-                        status = detail::error_line(event.error);
+                        set_status_maybe_agent_error(detail::error_line(event.error), true);
                     }
                     break;
                 case TuiEventType::LoadDone:
@@ -1806,7 +1890,7 @@ app::TuiRunResult run(provider::RequestContext context,
                         app::apply_system_prompt(session, context.options.system);
                         finish_loaded_session("Loaded " + event.text);
                     } else {
-                        status = detail::error_line(event.error);
+                        set_status_maybe_agent_error(detail::error_line(event.error), true);
                     }
                     break;
                 case TuiEventType::StoreSaveDone:
@@ -1815,7 +1899,7 @@ app::TuiRunResult run(provider::RequestContext context,
                     if (event.error.ok()) {
                         apply_store_save_result(event.session);
                     } else if (event.error.code != ErrorCode::Cancelled) {
-                        status = detail::error_line(event.error);
+                        set_status_maybe_agent_error(detail::error_line(event.error), true);
                     }
                     break;
                 case TuiEventType::StoreLoadDone:
@@ -1827,7 +1911,7 @@ app::TuiRunResult run(provider::RequestContext context,
                         finish_loaded_session("Loaded thread: " +
                                               (session.name.empty() ? event.text : session.name));
                     } else {
-                        status = detail::error_line(event.error);
+                        set_status_maybe_agent_error(detail::error_line(event.error), true);
                     }
                     break;
                 case TuiEventType::MediaCleanupDone:
@@ -1835,7 +1919,7 @@ app::TuiRunResult run(provider::RequestContext context,
                     completed_file_job = true;
                     if (!event.error.ok()) {
                         if (!event.automatic_cleanup || event.error.code != ErrorCode::Cancelled) {
-                            status = detail::error_line(event.error);
+                            set_status_maybe_agent_error(detail::error_line(event.error), true);
                         }
                     } else if (!event.automatic_cleanup || event.media_cleanup.files_removed > 0) {
                         status = "Media cleanup: " +
@@ -1852,10 +1936,13 @@ app::TuiRunResult run(provider::RequestContext context,
                     completed_file_job = true;
                     if (event.error.ok()) {
                         const Error insert_error = input.insert(event.inserted_text);
-                        status = insert_error.ok() ? "Inserted " + event.text + " at cursor"
-                                                   : detail::error_line(insert_error);
+                        if (insert_error.ok()) {
+                            status = "Inserted " + event.text + " at cursor";
+                        } else {
+                            set_status_maybe_agent_error(detail::error_line(insert_error), true);
+                        }
                     } else {
-                        status = detail::error_line(event.error);
+                        set_status_maybe_agent_error(detail::error_line(event.error), true);
                     }
                     break;
                 case TuiEventType::AttachDone:
@@ -1880,7 +1967,7 @@ app::TuiRunResult run(provider::RequestContext context,
                         history_scroll = 0;
                         status = "Attached context from " + event.text;
                     } else {
-                        status = detail::error_line(event.error);
+                        set_status_maybe_agent_error(detail::error_line(event.error), true);
                     }
                     break;
                 case TuiEventType::FetchDone:
@@ -1891,7 +1978,7 @@ app::TuiRunResult run(provider::RequestContext context,
                         history_scroll = 0;
                         status = "Fetched and inserted " + event.text;
                     } else {
-                        status = detail::error_line(event.error);
+                        set_status_maybe_agent_error(detail::error_line(event.error), true);
                     }
                     break;
                 case TuiEventType::SearchDone:
@@ -1902,7 +1989,7 @@ app::TuiRunResult run(provider::RequestContext context,
                         history_scroll = 0;
                         status = "Inserted web search results for " + event.text;
                     } else {
-                        status = detail::error_line(event.error);
+                        set_status_maybe_agent_error(detail::error_line(event.error), true);
                     }
                     break;
                 case TuiEventType::ShellDone: {
@@ -1947,9 +2034,9 @@ app::TuiRunResult run(provider::RequestContext context,
                         } else if (event.error.code == ErrorCode::Cancelled) {
                             status = "Shell cancelled";
                         } else if (event.error.code == ErrorCode::Timeout) {
-                            status = "Shell timed out · " + event.text;
+                            set_status_maybe_agent_error("Shell timed out · " + event.text, true);
                         } else {
-                            status = detail::error_line(event.error);
+                            set_status_maybe_agent_error(detail::error_line(event.error), true);
                         }
                     }
                     break;
@@ -1965,13 +2052,16 @@ app::TuiRunResult run(provider::RequestContext context,
                     if (models_request_purpose == ModelsRequestPurpose::Picker) {
                         models_request_purpose = ModelsRequestPurpose::Preview;
                         if (!event.error.ok()) {
-                            status = detail::error_line(event.error);
+                            set_status_maybe_agent_error(detail::error_line(event.error), true);
                         } else if (event.models.empty()) {
-                            status = "No models returned";
+                            set_status_maybe_agent_error("No models returned", true);
                         } else if (ui::should_auto_select_only_model(event.models)) {
                             const std::string only_model = event.models.front();
                             picker_callbacks.on_model_selected(only_model);
-                            status = provider_model_status_message(context, "only model auto-selected");
+                            status = context.options.agent
+                                         ? agent_ready_status()
+                                         : provider_model_status_message(context,
+                                                                        "only model auto-selected");
                         } else {
                             picker_items = std::move(event.models);
                             picker_selected = 0;
@@ -1983,9 +2073,10 @@ app::TuiRunResult run(provider::RequestContext context,
                             status = ui::text_selector_status("Selected model", picker_selected,
                                                               picker_items.size());
                         }
+                    } else if (event.error.ok()) {
+                        status = join_models_preview(event.models);
                     } else {
-                        status = event.error.ok() ? join_models_preview(event.models)
-                                                  : detail::error_line(event.error);
+                        set_status_maybe_agent_error(detail::error_line(event.error), true);
                     }
                     break;
                 case TuiEventType::CompletionDone:
@@ -2031,7 +2122,8 @@ app::TuiRunResult run(provider::RequestContext context,
         timeout.tv_usec = 50000;
         const int ready = select(STDIN_FILENO + 1, &readfds, nullptr, nullptr, &timeout);
         if (ready < 0 && errno != EINTR) {
-            status = std::string("terminal input error: ") + std::strerror(errno);
+            set_status_maybe_agent_error(std::string("terminal input error: ") + std::strerror(errno),
+                                         true);
         }
         if (ready > 0 && FD_ISSET(STDIN_FILENO, &readfds)) {
             editor::TerminalInputEvent event;
@@ -2324,7 +2416,7 @@ app::TuiRunResult run(provider::RequestContext context,
         detail::render(session, input, status, history_scroll, show_thinking_traces, mode, visible_panel,
                        activity_kind, render_frame, syntax_highlight,
                        detail::RenderStyle{&context.options.tui_themes, theme, use_colors},
-                       panel_title(), context.options.agent);
+                       panel_title(), context.options.agent, build_agent_chrome());
     }
 
     model_job.cancel();
