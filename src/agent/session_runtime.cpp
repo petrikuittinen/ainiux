@@ -177,6 +177,39 @@ Error AgentSessionRuntime::prepare(const provider::RequestContext& context,
     tool_options.history_backup = options_.history_backup;
     tool_options.fetch_options = options_.fetch_options;
     tool_options.search_options = options_.search_options;
+    // Wrap Ask so every resolution is persisted and optionally surfaced.
+    if (options_.on_guard_ask) {
+        tool_options.on_guard_ask =
+            [this](const GuardApprovalRequest& request,
+                   runtime::CancellationToken cancellation) -> GuardApprovalDecision {
+            GuardApprovalDecision decision = GuardApprovalDecision::Deny;
+            if (options_.on_guard_ask) decision = options_.on_guard_ask(request, cancellation);
+            if (session_store_.is_open()) {
+                AgentApprovalRecord row;
+                row.tool_name = request.tool_name;
+                row.command_preview = redact_secrets(request.command_preview, secrets_);
+                row.rule_id = request.rule_id;
+                row.decision = guard_approval_decision_name(decision);
+                row.source = "interactive";
+                row.message = redact_secrets(request.message, secrets_);
+                (void)session_store_.record_approval(row);
+                const std::string notice =
+                    "Guard " + row.decision + ": " + row.command_preview +
+                    (row.rule_id.empty() ? std::string() : " [" + row.rule_id + "]");
+                (void)session_store_.append_message("notice", notice);
+            }
+            if (logger_) {
+                json::Value fields = log_object();
+                fields.object["tool"] = log_string(request.tool_name);
+                fields.object["command"] = log_string(request.command_preview);
+                fields.object["rule_id"] = log_string(request.rule_id);
+                fields.object["decision"] = log_string(guard_approval_decision_name(decision));
+                logger_->event("guard_approval", {"guard"}, std::move(fields),
+                               decision == GuardApprovalDecision::Allow ? "success" : "failure");
+            }
+            return decision;
+        };
+    }
     error = ReadToolRegistry::create(index_options, std::move(snapshot), secrets_, tools_,
                                      tool_options);
     if (!error.ok()) {
@@ -314,7 +347,7 @@ SessionTurnResult AgentSessionRuntime::run_user_turn(
         if (with_elapsed && result.turn_started_ms > 0) {
             const long long elapsed = now_unix_ms() - result.turn_started_ms;
             out += "  ";
-            out += format_elapsed_seconds(elapsed);
+            out += format_elapsed_ms(elapsed);
         }
         if (on_progress) {
             on_progress(out);
@@ -444,9 +477,9 @@ SessionTurnResult AgentSessionRuntime::run_user_turn(
     }
 
     const std::size_t log_width = terminal_column_count();
-    // Leave room for "  N.NN seconds elapsed" on live progress lines.
+    // Leave room for "  NNNN ms" on live progress lines.
     const std::size_t tool_line_width =
-        log_width > 28 ? log_width - 28 : (log_width > 8 ? log_width : 8);
+        log_width > 20 ? log_width - 20 : (log_width > 8 ? log_width : 8);
     std::size_t turn_tool_index = 0;
     auto executor = [&](const std::string& name, const std::string& arguments_json,
                         runtime::CancellationToken token) {
@@ -470,7 +503,7 @@ SessionTurnResult AgentSessionRuntime::run_user_turn(
         progress(line, true);
         if (!options_.interactive && !context.options.quiet) {
             const long long elapsed = completed_ms - result.turn_started_ms;
-            std::cerr << line << "  " << format_elapsed_seconds(elapsed) << "\n";
+            std::cerr << line << "  " << format_elapsed_ms(elapsed) << "\n";
         }
         if (session_store_.is_open()) {
             (void)session_store_.append_message(
@@ -703,9 +736,18 @@ SessionTurnResult AgentSessionRuntime::run_user_turn(
                            ? Error{ErrorCode::Cancelled,
                                    outcome.notice.empty() ? "agent run aborted" : outcome.notice}
                            : outcome.error;
+        if (result.error.message.empty() && !outcome.notice.empty())
+            result.error.message = outcome.notice;
+        // Prefer a concrete failure explanation over an empty final answer.
+        if (final_text.empty() && !result.error.message.empty())
+            final_text = result.error.message;
         result.final_text = final_text;
-        result.notice = outcome.notice;
+        result.notice = outcome.notice.empty() ? result.error.message : outcome.notice;
         result.finished_at_ms = now_unix_ms();
+        if (session_store_.is_open() && session_id_ > 0 && !result.notice.empty()) {
+            (void)session_store_.append_message("notice",
+                                                redact_secrets(result.notice, secrets_));
+        }
         return result;
     }
 }

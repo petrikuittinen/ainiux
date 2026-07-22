@@ -3,7 +3,8 @@
 ## Local agent mode (v1.0)
 
 - Project-centric agent rework landed: singleton `.ainiux-pr/agent.sqlite` v2, one-backup history policy, compact tool lines, window-% auto-compact, Chat/Agent chrome, `/cmd-out`. Agent tools now include git_status/git_diff, index_status/update/rebuild, fetch_url/search_web, find_tests, inspect_code_task.
-- Next: interactive Guard `Ask` approvals, find_callers/find_callees (call-graph refs), load agent transcript as sole TUI source of truth (less chat-session coupling), plan/security agent modes, stronger editor↔agent handoff.
+- Interactive Guard `Ask` approvals landed: agent TUI y/n panel, one-shot decisions, persist to `approvals` in `.ainiux-pr/agent.sqlite`, headless `run` still maps Ask→Deny.
+- Next: find_callers/find_callees (call-graph refs), load agent transcript as sole TUI source of truth (less chat-session coupling), plan/security agent modes, stronger editor↔agent handoff.
 - Keep security-review strictly read-only when expanding agent tools (`run_command` stays index-scoped there; network tools stay agent-only).
 
 ## Web search / fetch

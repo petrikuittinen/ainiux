@@ -4,6 +4,7 @@
 #include <string>
 #include <vector>
 
+#include "agent/approval.hpp"
 #include "common.hpp"
 #include "runtime/runtime.hpp"
 
@@ -16,6 +17,9 @@ struct ProcessOptions {
     std::size_t stdout_limit = 65536;
     std::size_t stderr_limit = 65536;
     runtime::CancellationToken cancellation;
+    // When set, GuardDecision::Ask prompts the user (one-shot). When empty,
+    // Ask is denied (headless). Deny is never elevatable.
+    GuardApprovalCallback on_guard_ask;
 };
 
 struct ProcessResult {
@@ -32,6 +36,7 @@ struct ProcessResult {
     bool cancelled = false;
     std::string policy = "denied";
     std::string guard_rule_id;
+    std::string guard_decision;  // allow | deny | ask→resolved
 };
 
 // InspectionOnly: security-review allowlist (read-only ls/rg/find/git/...).
@@ -42,11 +47,21 @@ enum class CommandPolicy {
     Agent,
 };
 
+// How GuardDecision::Ask is handled during parse/enforce.
+enum class GuardAskHandling {
+    DenyAsk,   // headless default: Ask becomes Deny
+    DeferAsk,  // parse succeeds; caller must re-check on execute (path validation)
+    PromptAsk, // call ProcessOptions.on_guard_ask (or deny if unset)
+};
+
 Error parse_inspection_command(const std::string& command, std::vector<std::string>& arguments);
 Error parse_command(const std::string& command,
                     std::vector<std::string>& arguments,
                     CommandPolicy policy,
-                    std::string& guard_rule_id);
+                    std::string& guard_rule_id,
+                    GuardAskHandling ask_handling = GuardAskHandling::DenyAsk,
+                    const GuardApprovalCallback* on_guard_ask = nullptr,
+                    runtime::CancellationToken cancellation = runtime::CancellationToken());
 Error run_inspection_command(const std::string& command,
                              const ProcessOptions& options,
                              ProcessResult& result);
@@ -56,3 +71,4 @@ Error run_command(const std::string& command,
                   CommandPolicy policy = CommandPolicy::InspectionOnly);
 
 }  // namespace ainiux::agent
+

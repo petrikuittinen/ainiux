@@ -42,6 +42,17 @@ struct AgentMessageRecord {
     std::string args_preview;
 };
 
+struct AgentApprovalRecord {
+    long long id = 0;
+    long long created_at = 0;
+    std::string tool_name;
+    std::string command_preview;
+    std::string rule_id;
+    std::string decision;  // allow | deny | cancelled
+    std::string source;    // interactive | headless
+    std::string message;
+};
+
 // Backward-compatible aliases used by older call sites during transition.
 using AgentSessionRecord = AgentProjectRecord;
 
@@ -113,8 +124,13 @@ class AgentSessionStore {
                        std::vector<AgentMessageRecord>& messages,
                        std::vector<struct AgentToolEventRecord>& tool_events) const;
 
+    // Persist one Guard Ask resolution (interactive y/n or headless Deny).
+    Error record_approval(const AgentApprovalRecord& record);
+    Error load_approvals(std::vector<AgentApprovalRecord>& approvals, int limit = 100) const;
+
    private:
     Error ensure_schema();
+    Error ensure_approvals_table();
     Error next_seq(long long& seq);
     Error touch();
 

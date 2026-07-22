@@ -307,25 +307,159 @@ bool is_agent_allowed_command(const std::string& command) {
     return false;
 }
 
-Error enforce_agent_policy(std::vector<std::string>& args, std::string& guard_rule_id) {
-    guard_rule_id.clear();
-    Error error = enforce_common_safety(args);
-    if (!error.ok()) return error;
+// Inject git -c pager/external-diff hardening and return subcommand name.
+Error harden_git_argv(std::vector<std::string>& args, std::string& subcommand) {
+    if (args.size() < 2) return {ErrorCode::BadArgs, "git requires a subcommand"};
+    subcommand = args[1];
+    args.erase(args.begin() + 1);
+    args.insert(args.begin() + 1,
+                {"-c", "core.pager=cat", "-c", "pager.show=false", "-c", "pager.diff=false",
+                 "-c", "diff.external=", subcommand});
+    return ok_error();
+}
 
-    // Destructive guard first so rm -rf never runs even if allowlisted later.
-    GuardResult guard = finalize_guard_for_headless(evaluate_command_guard(args));
-    if (guard.decision != GuardDecision::Allow) {
+// Agent-mode git: read-only inspection set plus common VCS writes. Destructive
+// forms still require Guard Ask approval (handled before this is called).
+Error enforce_agent_git_policy(std::vector<std::string>& args) {
+    if (args.size() < 2) return {ErrorCode::BadArgs, "git requires a subcommand"};
+    const std::string sub = args[1];
+    static const char* kReadOnly[] = {"status", "diff", "ls-files", "rev-parse", "log", "show",
+                                      "branch", "tag", "remote", "stash"};
+    for (const char* name : kReadOnly) {
+        if (sub == name) {
+            // status/diff/ls-files/rev-parse keep the strict option filters.
+            if (sub == "status" || sub == "diff" || sub == "ls-files" || sub == "rev-parse")
+                return enforce_inspection_policy(args);
+            // log/show/branch/tag/remote/stash listing: harden only.
+            std::string ignored;
+            return harden_git_argv(args, ignored);
+        }
+    }
+
+    static const char* kWrite[] = {"add",     "commit", "fetch",  "pull",    "push",
+                                   "checkout", "restore", "switch", "reset",  "clean",
+                                   "merge",   "rebase", "stash"};
+    bool write_ok = false;
+    for (const char* name : kWrite) {
+        if (sub == name) {
+            write_ok = true;
+            break;
+        }
+    }
+    // branch/tag already handled as read-only path for listing; create/delete
+    // still uses "branch"/"tag" with -d/-D which guard asked about.
+    if (sub == "branch" || sub == "tag") write_ok = true;
+    if (!write_ok)
+        return {ErrorCode::BadArgs,
+                "git subcommand is not available in agent run_command: " + sub +
+                    " (allowed: status/diff/log/show, add/commit/fetch/pull/push, "
+                    "checkout/restore/switch/reset/clean/merge/rebase/stash/branch/tag)"};
+
+    // Reject config rewrite and filter-branch style history rewrites by name.
+    if (sub == "config" || sub == "filter-branch" || sub == "update-ref")
+        return {ErrorCode::BadArgs, "git " + sub + " is not allowed via run_command"};
+
+    for (std::size_t i = 2; i < args.size(); ++i) {
+        const std::string& arg = args[i];
+        if (arg == "--exec-path" || arg.rfind("--exec-path=", 0) == 0 ||
+            arg == "--git-dir" || arg.rfind("--git-dir=", 0) == 0 ||
+            arg == "--work-tree" || arg.rfind("--work-tree=", 0) == 0)
+            return {ErrorCode::BadArgs, "git rejected a path-override option"};
+    }
+    std::string ignored;
+    return harden_git_argv(args, ignored);
+}
+
+Error apply_guard_decision(const std::vector<std::string>& args,
+                           GuardAskHandling ask_handling,
+                           const GuardApprovalCallback* on_guard_ask,
+                           runtime::CancellationToken cancellation,
+                           std::string& guard_rule_id,
+                           std::string& guard_decision_out) {
+    guard_rule_id.clear();
+    guard_decision_out = "allow";
+    GuardResult guard = evaluate_command_guard(args);
+    if (guard.decision == GuardDecision::Allow) {
+        guard_decision_out = "allow";
+        return ok_error();
+    }
+    if (guard.decision == GuardDecision::Deny) {
         guard_rule_id = guard.rule_id;
+        guard_decision_out = "deny";
         return {ErrorCode::BadArgs, guard.message.empty()
                                         ? "command blocked by destructive-command guard"
                                         : guard.message};
     }
 
+    // Ask
+    guard_rule_id = guard.rule_id;
+    if (ask_handling == GuardAskHandling::DeferAsk) {
+        // Path-validation pass only; execute will re-check and prompt.
+        guard_decision_out = "ask";
+        return ok_error();
+    }
+    if (ask_handling == GuardAskHandling::PromptAsk && on_guard_ask && *on_guard_ask) {
+        GuardApprovalRequest request;
+        request.tool_name = "run_command";
+        request.command_preview = format_command_preview(args);
+        request.rule_id = guard.rule_id;
+        request.message = guard.message;
+        request.arguments = args;
+        const GuardApprovalDecision decision = (*on_guard_ask)(request, cancellation);
+        if (decision == GuardApprovalDecision::Allow) {
+            guard_decision_out = "allow";
+            return ok_error();
+        }
+        guard_decision_out = decision == GuardApprovalDecision::Cancelled ? "cancelled" : "deny";
+        std::string message = guard.message.empty()
+                                  ? "command requires approval"
+                                  : guard.message;
+        if (decision == GuardApprovalDecision::Cancelled)
+            message += " (approval cancelled)";
+        else
+            message += " (user denied approval)";
+        return {decision == GuardApprovalDecision::Cancelled ? ErrorCode::Cancelled
+                                                             : ErrorCode::BadArgs,
+                message};
+    }
+
+    // DenyAsk or missing callback: headless Deny.
+    GuardResult denied = finalize_guard_for_headless(guard);
+    guard_decision_out = "deny";
+    return {ErrorCode::BadArgs, denied.message.empty()
+                                    ? "command blocked by destructive-command guard"
+                                    : denied.message};
+}
+
+Error enforce_agent_policy(std::vector<std::string>& args,
+                           std::string& guard_rule_id,
+                           GuardAskHandling ask_handling,
+                           const GuardApprovalCallback* on_guard_ask,
+                           runtime::CancellationToken cancellation,
+                           std::string& guard_decision_out) {
+    guard_rule_id.clear();
+    guard_decision_out = "allow";
+    Error error = enforce_common_safety(args);
+    if (!error.ok()) return error;
+
+    // Destructive guard first so rm -rf never runs without Ask→Allow.
+    error = apply_guard_decision(args, ask_handling, on_guard_ask, cancellation, guard_rule_id,
+                                 guard_decision_out);
+    if (!error.ok()) return error;
+
     const std::string& command = args.front();
-    // Prefer the strict inspection path for inspection tools (keeps rg/git hardening).
+    // Prefer the strict inspection path for inspection tools (keeps rg hardening).
     if (command == "pwd" || command == "ls" || command == "rg" || command == "grep" ||
-        command == "find" || command == "git") {
+        command == "find") {
         return enforce_inspection_policy(args);
+    }
+    if (command == "git") return enforce_agent_git_policy(args);
+
+    // After Guard Ask (or DeferAsk preview), allow `rm` past the normal allowlist.
+    // Models should still prefer the remove tool for workspace deletes.
+    if (command == "rm" && !guard_rule_id.empty() &&
+        (guard_decision_out == "allow" || guard_decision_out == "ask")) {
+        return ok_error();
     }
 
     if (!is_agent_allowed_command(command))
@@ -445,11 +579,18 @@ Error parse_inspection_command(const std::string& command, std::vector<std::stri
 Error parse_command(const std::string& command,
                     std::vector<std::string>& arguments,
                     CommandPolicy policy,
-                    std::string& guard_rule_id) {
+                    std::string& guard_rule_id,
+                    GuardAskHandling ask_handling,
+                    const GuardApprovalCallback* on_guard_ask,
+                    runtime::CancellationToken cancellation) {
     guard_rule_id.clear();
     Error error = tokenize_command(command, arguments);
     if (!error.ok()) return error;
-    if (policy == CommandPolicy::Agent) return enforce_agent_policy(arguments, guard_rule_id);
+    if (policy == CommandPolicy::Agent) {
+        std::string unused_decision;
+        return enforce_agent_policy(arguments, guard_rule_id, ask_handling, on_guard_ask,
+                                    cancellation, unused_decision);
+    }
     return enforce_inspection_policy(arguments);
 }
 
@@ -464,7 +605,22 @@ Error run_command(const std::string& command,
                   ProcessResult& result,
                   CommandPolicy policy) {
     ProcessResult output;
-    Error error = parse_command(command, output.arguments, policy, output.guard_rule_id);
+    const GuardAskHandling ask_handling =
+        policy == CommandPolicy::Agent
+            ? (options.on_guard_ask ? GuardAskHandling::PromptAsk : GuardAskHandling::DenyAsk)
+            : GuardAskHandling::DenyAsk;
+    const GuardApprovalCallback* ask_ptr =
+        options.on_guard_ask ? &options.on_guard_ask : nullptr;
+    Error error = parse_command(command, output.arguments, policy, output.guard_rule_id,
+                                ask_handling, ask_ptr, options.cancellation);
+    // Re-run with decision capture for agent policy (parse_command dropped it).
+    if (policy == CommandPolicy::Agent && error.ok()) {
+        // parse already applied guard; leave decision as allow when ok.
+        output.guard_decision = "allow";
+    } else if (policy == CommandPolicy::Agent && !error.ok()) {
+        output.guard_decision =
+            error.code == ErrorCode::Cancelled ? "cancelled" : "deny";
+    }
     if (!error.ok()) {
         result = std::move(output);
         return error;
@@ -554,6 +710,7 @@ Error run_command(const std::string& command,
     if (WIFSIGNALED(wait_status)) output.signal = WTERMSIG(wait_status);
     output.policy =
         policy == CommandPolicy::Agent ? "allowed-agent" : "allowed-read-only";
+    if (output.guard_decision.empty()) output.guard_decision = "allow";
     result = std::move(output);
     if (result.cancelled) return {ErrorCode::Cancelled, "run_command cancelled"};
     if (result.timed_out) return {ErrorCode::Timeout, "run_command exceeded its timeout"};

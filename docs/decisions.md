@@ -52,6 +52,18 @@ Interactive chat, agent TUI, and REPL offer user shell for the human operator vi
 
 This is intentionally **not** the agent tool path. Agent `run_command` (`src/agent/process.*`) remains allowlisted, shell-free `execve`, with a destructive-command guard.
 
+## Guard Ask approvals (interactive only)
+
+Destructive-command Guard returns Allow, Deny, or Ask. Hard Deny (shell wrappers, sudo, disk destroyers, `find -delete`) is never elevatable. Ask is for high-risk-but-sometimes-legitimate actions (`git reset --hard`, force push, recursive `rm`, database-file `remove`, **creating missing parent directories** via `create_dirs`).
+
+- Headless `run` maps Ask → Deny (no self-approval).
+- Interactive agent blocks the tool worker on an `ApprovalGate`; the TUI shows a **y/n** panel (not Enter). Decisions are one-shot. Outcomes are written to `.ainiux-pr/agent.sqlite` `approvals` and a short transcript `notice`.
+- Agent git policy is broader than security-review so a user-approved Ask can actually run (still no shell, still common path/safety checks).
+
+## Workspace path containment for agent writes
+
+Agent file tools only accept **project-relative** paths. On POSIX, `~/…` is *not* absolute—it is a relative component—so rejecting only `fs::path::is_absolute()` is insufficient: `~/code/x` would otherwise create `$workspace/~/code/x`. Paths with `~`, `~user`, `$…`, `..`, protected metadata dirs, or absolutes are rejected. After string checks, every write destination is re-validated with `weakly_canonical` so the resolved path must stay under the workspace root. `create_directories` never replaces existing non-directories and never deletes trees.
+
 ## Chat vs interactive agent (shared shell, separate modes)
 
 `--chat` / `-c` and `--agent` / `-a` are **separate product modes**. Ordinary chat must never silently gain workspace tools, shell, or agent system prompts. Interactive agent must never be entered merely by opening chat.

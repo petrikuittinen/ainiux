@@ -198,12 +198,85 @@ AgentRoundOutcome execute_prepared_calls(AgentLoopState& state,
         // changing calls (identical_repeat_count stays below the soft threshold).
         if (state.consecutive_all_failed_turns >= limits.consecutive_failure_turns &&
             state.identical_repeat_count < limits.soft_identical_repeats) {
-            std::string summary = "aborting after " +
-                                  std::to_string(limits.consecutive_failure_turns) +
-                                  " consecutive turns where every tool call failed";
+            // Collect failures; lead with the most user-actionable policy reason
+            // (e.g. outside-project path) rather than a less helpful follow-up
+            // like "touch is not on the allowlist".
+            struct FailureNote {
+                std::string tool;
+                std::string message;
+                int priority = 0;  // higher = surface first
+            };
+            std::vector<FailureNote> notes;
+            notes.reserve(prepared.size());
+            auto priority_for = [](const std::string& message) -> int {
+                const std::string lower = lower_ascii(message);
+                if (lower.find("outside the project") != std::string::npos ||
+                    lower.find("escapes workspace") != std::string::npos ||
+                    (lower.find("~") != std::string::npos &&
+                     lower.find("forbidden") != std::string::npos))
+                    return 100;
+                if (lower.find("approval") != std::string::npos ||
+                    lower.find("headless") != std::string::npos)
+                    return 80;
+                if (lower.find("refusing") != std::string::npos ||
+                    lower.find("policy") != std::string::npos)
+                    return 60;
+                if (lower.find("allowlist") != std::string::npos) return 20;
+                return 40;
+            };
             for (std::size_t i = 0; i < prepared.size(); ++i) {
-                summary += "; ";
-                summary += prepared[i].name;
+                FailureNote note;
+                note.tool = prepared[i].name;
+                if (i < results.size()) {
+                    const json::ParseResult parsed = json::parse(results[i]);
+                    if (parsed.error.ok() && parsed.value.is_object()) {
+                        const json::Value* err = parsed.value.get("error");
+                        if (err != nullptr && err->is_object()) {
+                            const json::Value* msg = err->get("message");
+                            if (msg != nullptr && msg->is_string()) note.message = msg->string;
+                        }
+                    }
+                }
+                note.priority = priority_for(note.message);
+                notes.push_back(std::move(note));
+            }
+            std::stable_sort(notes.begin(), notes.end(),
+                             [](const FailureNote& a, const FailureNote& b) {
+                                 return a.priority > b.priority;
+                             });
+
+            std::string summary;
+            if (!notes.empty() && notes.front().priority >= 100) {
+                // Primary user-facing explanation for path escapes.
+                summary =
+                    "Agent stopped: tools cannot create or access paths outside the project "
+                    "directory. Use a path relative to the project root only "
+                    "(not ~/…, $HOME, or absolute paths).";
+                if (!notes.front().message.empty()) {
+                    summary += " Detail: ";
+                    const std::string& m = notes.front().message;
+                    summary += m.size() > 140 ? m.substr(0, 137) + "..." : m;
+                }
+            } else {
+                summary = "Agent stopped after " +
+                          std::to_string(limits.consecutive_failure_turns) +
+                          " consecutive turns where every tool call failed.";
+                if (!notes.empty() && !notes.front().message.empty()) {
+                    summary += " ";
+                    summary += notes.front().tool;
+                    summary += ": ";
+                    const std::string& m = notes.front().message;
+                    summary += m.size() > 160 ? m.substr(0, 157) + "..." : m;
+                }
+            }
+            // Compact secondary list (other tools this turn).
+            if (notes.size() > 1) {
+                summary += " Also failed:";
+                for (std::size_t i = 1; i < notes.size() && i < 4; ++i) {
+                    summary += " ";
+                    summary += notes[i].tool;
+                    if (i + 1 < notes.size() && i + 1 < 4) summary += ",";
+                }
             }
             return abort_outcome(state, summary);
         }

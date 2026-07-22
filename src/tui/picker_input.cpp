@@ -166,6 +166,25 @@ bool handle_tui_picker_input(unsigned char ch,
                 return true;
         }
     }
+    if (state.mode == TuiMode::GuardApprovalConfirm) {
+        if (ch == 17) {
+            state.quit = true;
+            return true;
+        }
+        switch (ui::parse_confirmation_key(ch)) {
+            case ui::ConfirmationKeyResult::Accepted:
+                if (callbacks.on_guard_approval_accepted) callbacks.on_guard_approval_accepted();
+                return true;
+            case ui::ConfirmationKeyResult::Rejected:
+                if (callbacks.on_guard_approval_rejected) callbacks.on_guard_approval_rejected();
+                return true;
+            case ui::ConfirmationKeyResult::Pending:
+                if (callbacks.on_guard_approval_retry)
+                    callbacks.on_guard_approval_retry(
+                        "Press y to allow this command, n or Esc to deny");
+                return true;
+        }
+    }
     return false;
 }
 

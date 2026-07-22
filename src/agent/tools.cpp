@@ -105,16 +105,97 @@ std::string schema(const std::string& properties, const std::string& required = 
            "],\"additionalProperties\":false}";
 }
 
+// Path components that must never appear in agent tool paths.
+// Note: on POSIX, "~" is a *relative* component (not absolute), so tools must
+// reject it explicitly — otherwise "~/code/x" becomes "$workspace/~/code/x".
+bool is_forbidden_path_component(const std::string& value) {
+    if (value.empty()) return false;  // skip empty parts from duplicate slashes
+    if (value == "..") return true;
+    if (value == "~" || (!value.empty() && value[0] == '~')) return true;  // ~ or ~user
+    if (!value.empty() && value[0] == '$') return true;  // $HOME-style injection
+    if (is_protected_state_dir_name(value)) return true;
+    return false;
+}
+
+bool path_has_home_or_env_prefix(const std::string& path) {
+    if (path.empty()) return false;
+    if (path[0] == '~' || path[0] == '$') return true;
+    return false;
+}
+
 bool safe_relative_path(const std::string& path) {
     if (path.empty() || path == ".") return true;
+    if (path_has_home_or_env_prefix(path)) return false;
     const fs::path candidate(path);
     if (candidate.is_absolute()) return false;
     for (const fs::path& component : candidate) {
-        const std::string value = component.string();
-        if (value == ".." || is_protected_state_dir_name(value))
-            return false;
+        if (is_forbidden_path_component(component.string())) return false;
     }
     return true;
+}
+
+// Clear, user-facing reason when a path is refused for workspace tools.
+std::string unsafe_path_message(const std::string& path, const char* action = "manipulate") {
+    if (path.empty())
+        return std::string("Forbidden to ") + action + " files: path is empty.";
+    const fs::path candidate(path);
+    if (candidate.is_absolute() || path_has_home_or_env_prefix(path)) {
+        return std::string("Forbidden to ") + action +
+               " files outside the project directory. Use a path relative to the "
+               "project root only (not absolute, ~/…, or $ENV paths). Refused: " +
+               path;
+    }
+    for (const fs::path& component : candidate) {
+        const std::string value = component.string();
+        if (value == "..") {
+            return std::string("Forbidden to ") + action +
+                   " files outside the project directory (path escapes with '..': " + path +
+                   ").";
+        }
+        if (value == "~" || (!value.empty() && value[0] == '~')) {
+            return std::string("Forbidden to ") + action +
+                   " files outside the project directory. \"~\" is not expanded and is not "
+                   "allowed as a path component (refused: " +
+                   path + "). Use a project-relative path only.";
+        }
+        if (!value.empty() && value[0] == '$') {
+            return std::string("Forbidden to ") + action +
+                   " files via environment-style path components (refused: " + path + ").";
+        }
+        if (is_protected_state_dir_name(value)) {
+            return std::string("Forbidden to ") + action +
+                   " protected project metadata (" + value + " in " + path + ").";
+        }
+    }
+    return std::string("Forbidden to ") + action +
+           " files outside the project directory: " + path;
+}
+
+// Defense in depth: resolved absolute path must stay under the workspace root.
+Error ensure_under_workspace(const fs::path& workspace,
+                             const fs::path& candidate,
+                             const std::string& display_path) {
+    std::error_code ec;
+    const fs::path root = fs::weakly_canonical(fs::absolute(workspace, ec), ec);
+    if (ec || root.empty())
+        return {ErrorCode::FileWrite, "could not resolve project workspace root: " + ec.message()};
+    const fs::path resolved = fs::weakly_canonical(fs::absolute(candidate, ec), ec);
+    if (ec)
+        return {ErrorCode::FileWrite,
+                "could not resolve path inside project: " + display_path + " (" + ec.message() +
+                    ")"};
+    const std::string root_s = root.generic_string();
+    const std::string path_s = resolved.generic_string();
+    if (path_s == root_s)
+        return {ErrorCode::BadArgs, "path must name a file inside the project, not the project root"};
+    if (path_s.size() < root_s.size() + 1 || path_s.compare(0, root_s.size(), root_s) != 0 ||
+        path_s[root_s.size()] != '/') {
+        return {ErrorCode::BadArgs,
+                "Forbidden to manipulate files outside the project directory (resolved path "
+                "escapes workspace). Refused: " +
+                    display_path};
+    }
+    return ok_error();
 }
 
 std::size_t utf8_prefix(const std::string& text, std::size_t limit) {
@@ -329,7 +410,7 @@ Error validate_command_workspace_paths(const index::Snapshot& snapshot,
         if (argument.empty() || argument.front() == '-') continue;
         const std::string relative = normalized_workspace_path(normalized_cwd, argument);
         if (!safe_relative_path(relative))
-            return {ErrorCode::BadArgs, "run_command path escapes or targets protected metadata"};
+            return {ErrorCode::BadArgs, unsafe_path_message(relative, "access via run_command")};
         std::error_code ec;
         const fs::file_status status = fs::symlink_status(fs::path(snapshot.workspace) / relative, ec);
         if (!ec && status.type() != fs::file_type::not_found &&
@@ -410,6 +491,7 @@ Error ReadToolRegistry::create(index::Options index_options,
     loaded.history_backup_ = options.history_backup;
     loaded.fetch_options_ = options.fetch_options;
     loaded.search_options_ = options.search_options;
+    loaded.on_guard_ask_ = std::move(options.on_guard_ask);
     registry = std::move(loaded);
     registry.rebuild_file_map();
     (void)registry.purge_expired_history_backups();
@@ -421,10 +503,17 @@ void ReadToolRegistry::rebuild_file_map() const {
     for (const index::IndexedFile& file : snapshot_.files) files_[file.path] = &file;
 }
 
+GuardApprovalDecision ReadToolRegistry::request_guard_approval(
+    const GuardApprovalRequest& request,
+    runtime::CancellationToken cancellation) const {
+    if (!on_guard_ask_) return GuardApprovalDecision::Deny;
+    return on_guard_ask_(request, cancellation);
+}
+
 Error ReadToolRegistry::resolve_writable_path(const std::string& relative_path,
                                               fs::path& absolute) const {
     if (relative_path.empty() || !safe_relative_path(relative_path))
-        return {ErrorCode::BadArgs, "path must be a safe workspace-relative file path"};
+        return {ErrorCode::BadArgs, unsafe_path_message(relative_path, "create or modify")};
     const std::string generic = fs::path(relative_path).generic_string();
     if (generic.empty() || generic == ".")
         return {ErrorCode::BadArgs, "path must name a file, not the workspace root"};
@@ -441,6 +530,9 @@ Error ReadToolRegistry::resolve_writable_path(const std::string& relative_path,
             return {ErrorCode::FileWrite, "refusing symlink path in workspace write: " + generic};
     }
     absolute = fs::path(snapshot_.workspace) / remaining;
+    // Final containment: never trust string join alone (symlink races, odd components).
+    Error contained = ensure_under_workspace(snapshot_.workspace, absolute, generic);
+    if (!contained.ok()) return contained;
     return ok_error();
 }
 
@@ -692,15 +784,71 @@ Error ReadToolRegistry::write_workspace_file(const std::string& relative_path,
     const fs::path parent = absolute.parent_path();
     if (!parent.empty()) {
         const bool parent_exists = fs::exists(parent, ec) && !ec;
-        if (!parent_exists) {
+        if (ec) return {ErrorCode::FileWrite, "could not inspect parent directory: " + ec.message()};
+        if (parent_exists) {
+            // Never replace a file with a directory tree.
+            if (fs::is_regular_file(parent, ec) || fs::is_symlink(fs::symlink_status(parent, ec)))
+                return {ErrorCode::FileWrite,
+                        "parent path exists and is not a directory: " +
+                            fs::path(relative_path).parent_path().generic_string()};
+            if (!fs::is_directory(parent, ec))
+                return {ErrorCode::FileWrite,
+                        "parent path is not a usable directory: " +
+                            fs::path(relative_path).parent_path().generic_string()};
+        } else {
             if (!create_dirs)
                 return {ErrorCode::FileWrite,
-                        "parent directory does not exist; pass create_dirs=true"};
+                        "parent directory does not exist; pass create_dirs=true and obtain user "
+                        "approval (interactive agent y/n)"};
+            // Creating new directories is high-impact: require Guard Ask (y/n). Never
+            // silently mkdir -p, and never treat missing parents as free license to wipe.
+            {
+                const std::string parent_rel =
+                    fs::path(relative_path).parent_path().generic_string();
+                GuardApprovalRequest ask;
+                ask.tool_name = "write_file";
+                ask.command_preview = "create_directories " + parent_rel;
+                ask.rule_id = "ask_on_create_dirs";
+                ask.message =
+                    "Create missing project directories for write: " + parent_rel +
+                    " (will not touch paths outside the project; press y to allow, n to deny)";
+                ask.arguments = {parent_rel, relative_path};
+                const GuardApprovalDecision decision = request_guard_approval(ask, {});
+                if (decision != GuardApprovalDecision::Allow) {
+                    std::string message =
+                        "refusing to create directories without approval: " + parent_rel;
+                    if (decision == GuardApprovalDecision::Cancelled)
+                        message += " (approval cancelled)";
+                    else if (!on_guard_ask_)
+                        message +=
+                            " (headless agent denies create_dirs; create the directory first or "
+                            "use interactive agent and approve y/n)";
+                    else
+                        message += " (user denied approval)";
+                    return {decision == GuardApprovalDecision::Cancelled ? ErrorCode::Cancelled
+                                                                         : ErrorCode::FileWrite,
+                            message};
+                }
+            }
+            // Re-check containment of parent before mkdir.
+            error = ensure_under_workspace(snapshot_.workspace, parent,
+                                           fs::path(relative_path).parent_path().generic_string());
+            if (!error.ok()) return error;
             fs::create_directories(parent, ec);
             if (ec)
                 return {ErrorCode::FileWrite, "could not create parent directories: " + ec.message()};
+            // create_directories never deletes existing trees; refuse if parent still missing.
+            if (!fs::is_directory(parent, ec))
+                return {ErrorCode::FileWrite,
+                        "parent directory was not created as a directory: " +
+                            fs::path(relative_path).parent_path().generic_string()};
         }
     }
+
+    // Containment again immediately before write (TOCTOU hardening).
+    error = ensure_under_workspace(snapshot_.workspace, absolute,
+                                   fs::path(relative_path).generic_string());
+    if (!error.ok()) return error;
 
     error = write_bytes_atomic(absolute, content);
     if (!error.ok()) return error;
@@ -999,11 +1147,30 @@ Error ReadToolRegistry::remove_workspace_path(const std::string& relative_path,
     }
 
     if (is_database_path(generic)) {
-        // No interactive approval UI in one-shot agent yet — deny high-risk DB deletes.
         guard_rule_id = "ask_on_database_delete";
-        return {ErrorCode::FileWrite,
-                "refusing to delete database file without interactive approval: " + generic +
-                    " (remove is blocked for *.sqlite/*.db/*.duckdb in headless agent mode)"};
+        GuardApprovalRequest ask;
+        ask.tool_name = "remove";
+        ask.command_preview = "remove " + generic;
+        ask.rule_id = guard_rule_id;
+        ask.message = "delete database file: " + generic;
+        ask.arguments = {generic};
+        const GuardApprovalDecision decision = request_guard_approval(ask, {});
+        if (decision != GuardApprovalDecision::Allow) {
+            guard_decision = decision == GuardApprovalDecision::Cancelled ? "cancelled" : "deny";
+            std::string message =
+                "refusing to delete database file without approval: " + generic +
+                " (*.sqlite/*.db/*.duckdb)";
+            if (decision == GuardApprovalDecision::Cancelled)
+                message += " (approval cancelled)";
+            else if (!on_guard_ask_)
+                message += " (headless agent denies Ask; use interactive agent)";
+            else
+                message += " (user denied approval)";
+            return {decision == GuardApprovalDecision::Cancelled ? ErrorCode::Cancelled
+                                                                 : ErrorCode::FileWrite,
+                    message};
+        }
+        // User approved one-shot; continue.
     }
 
     // Models often strip Markdown-like # from "#file#" and delete the plain file instead.
@@ -1050,7 +1217,8 @@ Error ReadToolRegistry::remove_workspace_path(const std::string& relative_path,
                 return {ErrorCode::FileWrite, message};
             }
         } else {
-            // Recursive: still refuse if any nested path looks like a database file.
+            // Recursive: Ask once if any nested path looks like a database file.
+            bool db_delete_approved = false;
             for (fs::recursive_directory_iterator it(absolute, ec), end; !ec && it != end;
                  it.increment(ec)) {
                 const std::string name = it->path().filename().string();
@@ -1058,11 +1226,34 @@ Error ReadToolRegistry::remove_workspace_path(const std::string& relative_path,
                 const fs::path nested = it->path().lexically_relative(absolute);
                 if (!nested.empty() && nested != ".")
                     rel = (fs::path(generic) / nested).generic_string();
-                if (is_database_path(name) || is_database_path(rel)) {
+                if (!db_delete_approved &&
+                    (is_database_path(name) || is_database_path(rel))) {
                     guard_rule_id = "ask_on_database_delete";
-                    return {ErrorCode::FileWrite,
+                    GuardApprovalRequest ask;
+                    ask.tool_name = "remove";
+                    ask.command_preview = "remove -r " + generic + " (includes " + rel + ")";
+                    ask.rule_id = guard_rule_id;
+                    ask.message = "recursive remove would delete database file: " + rel;
+                    ask.arguments = {generic, rel};
+                    const GuardApprovalDecision decision = request_guard_approval(ask, {});
+                    if (decision != GuardApprovalDecision::Allow) {
+                        guard_decision =
+                            decision == GuardApprovalDecision::Cancelled ? "cancelled" : "deny";
+                        std::string message =
                             "refusing recursive remove because it would delete database file: " +
-                                rel};
+                            rel;
+                        if (decision == GuardApprovalDecision::Cancelled)
+                            message += " (approval cancelled)";
+                        else if (!on_guard_ask_)
+                            message += " (headless agent denies Ask; use interactive agent)";
+                        else
+                            message += " (user denied approval)";
+                        return {decision == GuardApprovalDecision::Cancelled
+                                    ? ErrorCode::Cancelled
+                                    : ErrorCode::FileWrite,
+                                message};
+                    }
+                    db_delete_approved = true;
                 }
                 if (fs::is_symlink(it->symlink_status(ec)) || ec) {
                     guard_rule_id = "refuse_symlink";
@@ -1145,8 +1336,8 @@ Error ReadToolRegistry::apply_workspace_patch(const std::string& patch_text,
         item.kind = op.kind;
         item.path = fs::path(op.path).generic_string();
         if (item.path.empty() || !safe_relative_path(item.path))
-            return {ErrorCode::BadArgs, "apply_patch path must be a safe workspace-relative path: " +
-                                            op.path};
+            return {ErrorCode::BadArgs, unsafe_path_message(item.path.empty() ? op.path : item.path,
+                                                            "patch")};
         if (is_database_path(item.path))
             return {ErrorCode::FileWrite,
                     "refusing apply_patch delete/write on database file: " + item.path};
@@ -1971,7 +2162,8 @@ Error ReadToolRegistry::read_source(const std::string& path,
                                     std::size_t end_line,
                                     std::size_t max_bytes,
                                     SourceRange& range) const {
-    if (!safe_relative_path(path) || path.empty()) return {ErrorCode::BadArgs, "path must be a safe workspace-relative indexed file"};
+    if (!safe_relative_path(path) || path.empty())
+        return {ErrorCode::BadArgs, unsafe_path_message(path, "read")};
     const auto found = files_.find(fs::path(path).generic_string());
     if (found == files_.end() || found->second->status != "indexed")
         return {ErrorCode::FileRead, "path is not an eligible indexed file: " + path};
@@ -2137,8 +2329,7 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
             !get_size(args, "max_entries", 200, 500, maximum, validation_error))
             return tool_error_result("invalid_arguments", validation_error);
         if (!safe_relative_path(path))
-            return tool_error_result("policy_denied",
-                                    "directory path escapes or targets protected metadata");
+            return tool_error_result("policy_denied", unsafe_path_message(path, "list"));
         path = path == "." ? "" : fs::path(path).generic_string();
         if (!path.empty() && path.back() == '/') path.pop_back();
 
@@ -2251,7 +2442,8 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
         if (!get_string(args, "pattern", pattern, true, validation_error) ||
             !get_size(args, "max_results", 200, 1000, maximum, validation_error))
             return tool_error_result("invalid_arguments", validation_error);
-        if (!safe_relative_path(pattern)) return tool_error_result("policy_denied", "glob targets protected metadata or traversal");
+        if (!safe_relative_path(pattern))
+            return tool_error_result("policy_denied", unsafe_path_message(pattern, "search"));
         json::Value data = array_value(); bool truncated = false;
         try {
             for (const index::IndexedFile& file : snapshot_.files) if (glob_matches(file.path, pattern)) {
@@ -2440,7 +2632,11 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
         std::string guard_rule_id;
         const CommandPolicy policy =
             allow_mutations_ ? CommandPolicy::Agent : CommandPolicy::InspectionOnly;
-        Error policy_error = parse_command(command, parsed_arguments, policy, guard_rule_id);
+        // Defer Ask so path validation runs before the interactive prompt.
+        const GuardAskHandling preview_ask =
+            policy == CommandPolicy::Agent ? GuardAskHandling::DeferAsk : GuardAskHandling::DenyAsk;
+        Error policy_error =
+            parse_command(command, parsed_arguments, policy, guard_rule_id, preview_ask);
         if (!policy_error.ok()) {
             const std::string code =
                 policy_error.message.find("refusing") != std::string::npos ||
@@ -2461,6 +2657,7 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
         options.cwd = cwd;
         options.timeout_ms = static_cast<long>(timeout);
         options.cancellation = cancellation;
+        if (on_guard_ask_) options.on_guard_ask = on_guard_ask_;
         ProcessResult process;
         const Error error = run_command(command, options, process, policy);
         bool output_filtered = false;
@@ -2489,7 +2686,11 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
         data.object["stderr_truncated"] = bool_value(process.stderr_truncated);
         data.object["policy"] = string_value(process.policy);
         json::Value guard = object_value();
-        guard.object["decision"] = string_value(error.ok() ? "allow" : "deny");
+        const std::string guard_decision =
+            !process.guard_decision.empty()
+                ? process.guard_decision
+                : (error.ok() ? std::string("allow") : std::string("deny"));
+        guard.object["decision"] = string_value(guard_decision);
         if (!process.guard_rule_id.empty())
             guard.object["rule_id"] = string_value(process.guard_rule_id);
         else if (!guard_rule_id.empty())
@@ -2877,8 +3078,7 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
                                     validation_error.empty() ? "max_bytes must be positive"
                                                              : validation_error);
         if (!path.empty() && !safe_relative_path(path))
-            return tool_error_result("policy_denied",
-                                    "git_diff path escapes or targets protected metadata");
+            return tool_error_result("policy_denied", unsafe_path_message(path, "diff"));
         std::string command = "git diff --no-color --no-ext-diff";
         if (cached) command += " --cached";
         if (stat_only) command += " --stat";
@@ -2989,9 +3189,7 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
                                             "paths entries must be non-empty strings");
                 if (!safe_relative_path(item.string))
                     return tool_error_result("policy_denied",
-                                            "index_update path escapes or targets protected "
-                                            "metadata: " +
-                                                item.string);
+                                            unsafe_path_message(item.string, "index"));
                 paths.push_back(fs::path(item.string).generic_string());
             }
         }
@@ -3083,8 +3281,7 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
             return tool_error_result("invalid_arguments",
                                     "find_tests requires path and/or symbol_id");
         if (!path.empty() && !safe_relative_path(path))
-            return tool_error_result("policy_denied",
-                                    "find_tests path escapes or targets protected metadata");
+            return tool_error_result("policy_denied", unsafe_path_message(path, "inspect"));
 
         std::string focus_name;
         std::string focus_path = path.empty() ? std::string() : fs::path(path).generic_string();

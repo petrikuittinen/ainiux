@@ -20,8 +20,14 @@ std::size_t terminal_column_count(std::size_t fallback = 80);
 // Appends "..." when truncated. Empty max_cells yields empty string.
 std::string clip_to_cells(const std::string& text, std::size_t max_cells);
 
-// Format elapsed wall time for agent UI: "6.54 seconds elapsed" (2 decimal places).
-// Negative or zero still formats as "0.00 seconds elapsed".
+// Tool / intermediate timing: "2270 ms" (whole milliseconds, clamps negative to 0).
+std::string format_elapsed_ms(long long elapsed_ms);
+
+// Final turn completion: "Task complete in 21.34 seconds." (2 decimal places).
+std::string format_task_complete(long long elapsed_ms);
+
+// Legacy alias for callers that still want a seconds-style suffix; prefer the
+// two functions above. Formats as "6.54 seconds elapsed".
 std::string format_elapsed_seconds(long long elapsed_ms);
 
 // Normalize stored timestamps: values below 1e12 are treated as Unix seconds.
@@ -37,7 +43,12 @@ std::string compact_tool_args_preview(const std::string& arguments_json,
 // Map tool result JSON body to "ok" / "error".
 std::string compact_tool_status(const std::string& result_json);
 
-// Format: N: name(args_preview) → ok|error
+// Short human reason for a failed tool result (empty when ok / missing).
+// Examples: "outside project", "not allowlisted", "policy denied".
+std::string compact_tool_error_brief(const std::string& result_json,
+                                     std::size_t max_cells = 56);
+
+// Format: N: name(args_preview) → ok|error: brief
 // When max_line_cells is 0, uses terminal_column_count(). The final line is
 // always clipped to that width so agent logs stay on one screen row.
 std::string format_compact_tool_line(std::size_t index,

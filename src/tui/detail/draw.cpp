@@ -458,16 +458,24 @@ std::vector<StyledLine> history_lines_for_session(const chat::Session& session,
                 content_segments = std::move(prefixed);
             }
         }
-        // Agent UI: append relative elapsed time (not a full wall-clock stamp).
-        // User prompts mark turn origin (no elapsed). Tool/assistant/notice show
-        // "N.NN seconds elapsed" from that user message.
+        // Agent UI: relative elapsed time (not a full wall-clock stamp).
+        // User prompts mark turn origin. Tools/notices: "N ms". Final assistant:
+        // "Task complete in X.XX seconds."
         std::string elapsed_suffix;
         if (agent_mode && message.created_at_ms > 0 && agent_turn_start_ms > 0 &&
             message.role != "user" && !show_thinking_placeholder && !show_streaming_placeholder) {
             // Skip if content already carries a live progress elapsed suffix.
-            if (content.find("seconds elapsed") == std::string::npos) {
+            const bool already_has_timing =
+                content.find(" ms") != std::string::npos ||
+                content.find("seconds elapsed") != std::string::npos ||
+                content.find("Task complete in ") != std::string::npos;
+            if (!already_has_timing) {
                 const long long elapsed_ms = message.created_at_ms - agent_turn_start_ms;
-                elapsed_suffix = "  " + agent::format_elapsed_seconds(elapsed_ms);
+                if (message.role == "assistant") {
+                    elapsed_suffix = "  " + agent::format_task_complete(elapsed_ms);
+                } else {
+                    elapsed_suffix = "  " + agent::format_elapsed_ms(elapsed_ms);
+                }
             }
         }
         if (!elapsed_suffix.empty()) {
@@ -521,6 +529,8 @@ const char* panel_title_for_mode(TuiMode mode) {
             return "Delete Thread";
         case TuiMode::RemoveConfirm:
             return "Remove Thread";
+        case TuiMode::GuardApprovalConfirm:
+            return "Guard approval";
         case TuiMode::ModelConfirm:
             return "Model";
         case TuiMode::SystemEdit:

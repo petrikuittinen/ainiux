@@ -88,6 +88,19 @@ long long normalize_timestamp_ms(long long stored_created_at) {
     return stored_created_at;
 }
 
+std::string format_elapsed_ms(long long elapsed_ms) {
+    if (elapsed_ms < 0) elapsed_ms = 0;
+    return std::to_string(elapsed_ms) + " ms";
+}
+
+std::string format_task_complete(long long elapsed_ms) {
+    if (elapsed_ms < 0) elapsed_ms = 0;
+    const double seconds = static_cast<double>(elapsed_ms) / 1000.0;
+    std::ostringstream out;
+    out << "Task complete in " << std::fixed << std::setprecision(2) << seconds << " seconds.";
+    return out.str();
+}
+
 std::string format_elapsed_seconds(long long elapsed_ms) {
     if (elapsed_ms < 0) elapsed_ms = 0;
     const double seconds = static_cast<double>(elapsed_ms) / 1000.0;
@@ -171,6 +184,83 @@ std::string compact_tool_status(const std::string& result_json) {
     return "error";
 }
 
+namespace {
+
+std::string lower_ascii_copy(std::string text) {
+    for (char& ch : text) {
+        if (ch >= 'A' && ch <= 'Z') ch = static_cast<char>(ch - 'A' + 'a');
+    }
+    return text;
+}
+
+// Collapse long policy messages into a short status token for one-line tool logs.
+std::string classify_tool_error_message(const std::string& message) {
+    const std::string lower = lower_ascii_copy(message);
+    if (lower.find("outside the project") != std::string::npos ||
+        lower.find("escapes workspace") != std::string::npos ||
+        lower.find("home path") != std::string::npos ||
+        (lower.find("~/") != std::string::npos && lower.find("forbidden") != std::string::npos) ||
+        lower.find("not absolute, ~/") != std::string::npos ||
+        lower.find("\"~\" is not expanded") != std::string::npos) {
+        return "outside project (use project-relative path)";
+    }
+    if (lower.find("allowlist") != std::string::npos ||
+        lower.find("not on the agent") != std::string::npos) {
+        // Prefer a short form: "touch not allowlisted"
+        const std::string marker = "allowlist: ";
+        const std::size_t pos = lower.find(marker);
+        if (pos != std::string::npos) {
+            std::string cmd = message.substr(pos + marker.size());
+            const std::size_t cut = cmd.find(' ');
+            if (cut != std::string::npos) cmd = cmd.substr(0, cut);
+            const std::size_t paren = cmd.find('(');
+            if (paren != std::string::npos) cmd = cmd.substr(0, paren);
+            if (!cmd.empty()) return cmd + " not allowlisted";
+        }
+        return "command not allowlisted";
+    }
+    if (lower.find("approval") != std::string::npos ||
+        lower.find("headless agent denies") != std::string::npos) {
+        return "needs user approval (y/n)";
+    }
+    if (lower.find("policy") != std::string::npos || lower.find("refusing") != std::string::npos)
+        return "policy denied";
+    if (lower.find("stale_file") != std::string::npos || lower.find("stale") != std::string::npos)
+        return "stale file";
+    if (lower.find("not found") != std::string::npos) return "not found";
+    if (lower.find("cancelled") != std::string::npos) return "cancelled";
+    // Fallback: first clause, clipped.
+    std::string brief = message;
+    const std::size_t semi = brief.find(';');
+    if (semi != std::string::npos) brief = brief.substr(0, semi);
+    const std::size_t period = brief.find(". ");
+    if (period != std::string::npos && period + 2 < brief.size()) brief = brief.substr(0, period);
+    return brief;
+}
+
+}  // namespace
+
+std::string compact_tool_error_brief(const std::string& result_json, std::size_t max_cells) {
+    if (compact_tool_status(result_json) == "ok") return {};
+    json::ParseResult parsed = json::parse(result_json);
+    std::string message;
+    if (parsed.error.ok() && parsed.value.is_object()) {
+        const json::Value* err = parsed.value.get("error");
+        if (err != nullptr && err->is_object()) {
+            const json::Value* msg = err->get("message");
+            if (msg != nullptr && msg->is_string()) message = msg->string;
+            if (message.empty()) {
+                const json::Value* code = err->get("code");
+                if (code != nullptr && code->is_string()) message = code->string;
+            }
+        }
+    }
+    if (message.empty()) return "failed";
+    std::string brief = classify_tool_error_message(message);
+    if (brief.empty()) brief = "failed";
+    return truncate_cells(escape_preview(brief), max_cells == 0 ? 56 : max_cells);
+}
+
 std::string format_compact_tool_line(std::size_t index,
                                      const std::string& tool_name,
                                      const std::string& arguments_json,
@@ -181,10 +271,16 @@ std::string format_compact_tool_line(std::size_t index,
 
     const std::string name = tool_name.empty() ? "tool" : tool_name;
     const std::string status = compact_tool_status(result_json);
+    std::string status_text = status;
+    if (status == "error") {
+        const std::string brief = compact_tool_error_brief(result_json, 48);
+        if (!brief.empty()) status_text = "error: " + brief;
+    }
     // Fixed framing: "N: name() → status"
     const std::string prefix = std::to_string(index) + ": " + name + "(";
-    const std::string suffix = ") → " + status;
+    const std::string suffix = ") → " + status_text;
     const std::size_t framing = prefix.size() + suffix.size();
+    // Prefer a readable error reason over long args when space is tight.
     const std::size_t arg_budget =
         max_line_cells > framing ? max_line_cells - framing : 0;
 

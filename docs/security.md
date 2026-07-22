@@ -42,13 +42,24 @@ The diagnostic log intentionally preserves source and model payloads without tru
 - `index_status` / `index_update` refresh project `.ainiux-pr/index.sqlite`; `index_rebuild` requires `confirm=true` and is agent-only.
 - `fetch_url` and `search_web` reuse `src/fetch/` and `src/search/` safety (timeouts, size caps, private/loopback blocking unless explicitly allowed).
 - Agent `fetch_url` **always** returns UTF-8 **Markdown or plain text** (HTML→MD via `src/html/`, scripts/styles stripped). It never returns raw HTML/CSS/JS to the model: full pages are a prompt-injection and token-cost hazard. CLI `--fetch-url` may still export HTML for local use.
-- Path escape, `.ainiux-pr` / `.ainiux` / `.git` components, and symlink components are refused for writes.
+- Path escape, absolute paths, `~/…` / `~user/…` / `$ENV` components, `.ainiux-pr` / `.ainiux` / `.git` components, and symlink components are refused for writes. On POSIX `~` is a relative path component: without this check `~/code/x` would incorrectly create `$workspace/~/code/x`. After resolve, every write path is re-checked to stay under the project workspace root.
+- `create_dirs=true` never silently `mkdir -p`: creating missing parent directories requires interactive Guard **y/n** approval (`ask_on_create_dirs`). Headless `run` denies directory creation (create parents first, or use interactive agent). `create_directories` never deletes existing trees; if a parent path exists as a non-directory, the write fails.
 - Optional `expected_file_hash` / per-op `expected_hash` rejects stale concurrent edits.
 - Pre-overwrite copies are stored under `.ainiux-pr/history/` (project-local; mode depends on umask/filesystem defaults).
 - In-memory index snapshot hashes are updated after a successful write so later reads in the same run stay consistent; tools can also call `index_update` mid-session.
 - Project `AGENTS.md` cannot disable safety rules, change the workspace root, or override the user's direct request.
 
 Security-review never enables mutation or network tools and never injects project `AGENTS.md` as instructions. Agent **tools** still do not expose unrestricted shell (only allowlisted `run_command` without a shell). Interactive user `/shell` / `!` is a separate UI feature (see above). Final assistant text is written to `stdout`; status, notices, and errors go to `stderr`. Turn/loop limits and transport retries follow the agent-loop reliability rules (identical-call soft/hard caps, consecutive-failure abort, 50-turn scripted cap, no automatic tool re-execution).
+
+### Guard Ask approvals
+
+High-risk tool actions can return Guard decision **Ask** (for example `git reset --hard`, force push, recursive `rm`, deleting `*.sqlite`/`*.db` via `remove`). Behavior:
+
+- **Headless** `ainiux run` / `--run`: Ask is always **Deny**. The tool result explains that interactive agent is required for approval. The model must replan; it cannot self-approve.
+- **Interactive** `ainiux agent` / `--agent`: the tool worker blocks and the TUI shows a Guard approval panel. The user presses **y** (allow once) or **n**/Esc (deny). Job cancel also cancels a pending Ask. Approvals are **one-shot** (not sticky across later tools).
+- Every interactive resolution is stored in project-local `.ainiux-pr/agent.sqlite` table `approvals` (tool name, command preview, rule id, decision, source, message) and mirrored as a short `notice` line in the agent transcript. Hard **Deny** rules (shell wrappers, sudo, `find -delete`, disk destroyers) are never elevatable by y/n.
+
+The agent never approves its own request, never disables guard rules, and never treats user `/shell` as a substitute for Guard Ask.
 
 ## Editor Advisory Locks
 

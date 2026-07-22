@@ -30,6 +30,7 @@ enum class TuiEventType {
     ShellDone,
     ModelsDone,
     CompletionDone,
+    GuardApproval,  // agent Guard Ask pending (worker blocked)
 };
 
 enum class ActiveJob { None, Chat, Models };
@@ -47,6 +48,7 @@ enum class TuiMode {
     AttachmentList,
     AttachmentDeleteConfirm,
     ThreadDeleteConfirm,
+    GuardApprovalConfirm,
 };
 
 enum class ModelsRequestPurpose { Preview, Picker };
@@ -88,6 +90,11 @@ struct TuiEvent {
     std::string agent_final_text;
     long long agent_turn_started_ms = 0;
     long long agent_finished_at_ms = 0;
+    // Guard Ask prompt (paired with ApprovalGate on the agent worker).
+    std::string guard_tool_name;
+    std::string guard_command_preview;
+    std::string guard_rule_id;
+    std::string guard_message;
 };
 
 enum class EscapeResult {

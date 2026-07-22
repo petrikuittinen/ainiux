@@ -2284,6 +2284,8 @@ This is the v1.0 plan for ainiux local agent mode (merged from the former standa
 
 **Agent git/index/web/task tools slice (2026-07-22):** registry gains `git_status`, `git_diff` (read-only git CLI with hardening; `git diff` allowlisted in process policy), `index_status`, `index_update` (optional path filter / force rescan), agent-only `index_rebuild` (`confirm=true`), heuristic `find_tests` and `inspect_code_task`, and agent-only network tools `fetch_url` / `search_web` reusing `src/fetch` and `src/search` (private URL policy from CLI/config). Security-review stays mutation- and network-free. Still missing from the §12 catalog: `find_callers`, `find_callees` (need refs/call-graph). Guard Ask UI and plan/security agent modes remain later work.
 
+**Guard Ask UI + DB persistence slice (2026-07-22):** interactive agent TUI prompts y/n for Guard `Ask` decisions via `ApprovalGate` (worker blocks; UI resolves). Outcomes persist in `.ainiux-pr/agent.sqlite` `approvals` plus transcript `notice` lines. Headless `run` still maps Ask→Deny. Hard Deny rules remain non-elevatable. Agent git policy expands (add/commit/push/reset/clean/…) so user-approved Ask forms can actually execute; `remove` database deletes also go through Ask. Plan/security agent modes and call-graph tools remain later work.
+
 ---
 
 ## 1. Scope

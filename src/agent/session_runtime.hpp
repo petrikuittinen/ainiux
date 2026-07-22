@@ -7,6 +7,7 @@
 
 #include "agent/agent_loop.hpp"
 #include "agent/agents_md.hpp"
+#include "agent/approval.hpp"
 #include "agent/prompts.hpp"
 #include "agent/review_log.hpp"
 #include "agent/session_store.hpp"
@@ -32,7 +33,7 @@ struct SessionTurnResult {
     std::string notice;
     std::vector<std::string> compact_tool_lines;  // this turn (no elapsed suffix)
     // Wall-clock ms for each compact_tool_lines entry / final answer / turn start.
-    // Used by the agent TUI to show "N.NN seconds elapsed" without full timestamps.
+    // Used by the agent TUI to show tool timing ("N ms") and final "Task complete…".
     std::vector<long long> compact_tool_line_ms;
     long long turn_started_ms = 0;
     long long finished_at_ms = 0;
@@ -55,6 +56,8 @@ struct SessionRuntimeOptions {
     fetch::Options fetch_options;
     search::Options search_options;
     std::function<void(const std::string& status_line)> on_progress;
+    // Interactive Guard Ask (blocks tool worker until resolved). Empty ⇒ headless Deny.
+    GuardApprovalCallback on_guard_ask;
 };
 
 class AgentSessionRuntime {

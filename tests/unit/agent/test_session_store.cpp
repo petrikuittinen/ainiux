@@ -95,8 +95,64 @@ void test_open_singleton_append_compact_load() {
     fs::remove_all(workspace, ec);
 }
 
+void test_record_and_load_approvals() {
+    const std::string workspace = temp_workspace("approvals");
+    agent::AgentSessionStore store;
+    Error error = store.open(workspace);
+    check(error.ok(), "open for approvals: " + error.message);
+
+    agent::AgentProjectRecord project;
+    project.workspace = workspace;
+    project.status = "running";
+    error = store.open_project(project);
+    check(error.ok(), "open project for approvals");
+
+    agent::AgentApprovalRecord row;
+    row.tool_name = "run_command";
+    row.command_preview = "git reset --hard";
+    row.rule_id = "ask_on_destructive_git";
+    row.decision = "allow";
+    row.source = "interactive";
+    row.message = "user allowed once";
+    error = store.record_approval(row);
+    check(error.ok(), "record approval: " + error.message);
+
+    row.decision = "deny";
+    row.command_preview = "rm -rf build";
+    row.rule_id = "ask_on_recursive_force_delete";
+    row.message = "user denied";
+    error = store.record_approval(row);
+    check(error.ok(), "record second approval");
+
+    std::vector<agent::AgentApprovalRecord> loaded;
+    error = store.load_approvals(loaded, 0);
+    check(error.ok() && loaded.size() == 2, "load two approvals: " + error.message);
+    check(loaded[0].decision == "allow" && loaded[0].rule_id == "ask_on_destructive_git",
+          "first approval content");
+    check(loaded[1].decision == "deny" && loaded[1].tool_name == "run_command",
+          "second approval content");
+
+    // Soft-add path: reopen and record again.
+    store.close();
+    agent::AgentSessionStore again;
+    check(again.open(workspace).ok(), "reopen approvals db");
+    row.decision = "cancelled";
+    row.command_preview = "remove data.sqlite";
+    row.rule_id = "ask_on_database_delete";
+    row.tool_name = "remove";
+    check(again.record_approval(row).ok(), "record after reopen");
+    loaded.clear();
+    check(again.load_approvals(loaded).ok() && loaded.size() == 3, "three approvals total");
+
+    std::error_code ec;
+    fs::remove_all(workspace, ec);
+}
+
 }  // namespace
 
-void run_all() { test_open_singleton_append_compact_load(); }
+void run_all() {
+    test_open_singleton_append_compact_load();
+    test_record_and_load_approvals();
+}
 
 }  // namespace ainiux::test::agent_session_store

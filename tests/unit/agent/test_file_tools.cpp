@@ -67,7 +67,9 @@ std::string json_data_string(const std::string& result, const std::string& key) 
     return value != nullptr && value->is_string() ? value->string : std::string{};
 }
 
-agent::ReadToolRegistry make_registry(const std::string& workspace, bool allow_mutations) {
+agent::ReadToolRegistry make_registry(const std::string& workspace,
+                                      bool allow_mutations,
+                                      bool auto_approve_create_dirs = false) {
     agent::index::Options options;
     options.workspace = workspace;
     options.max_source_code_file_size = 1024 * 1024;
@@ -80,6 +82,16 @@ agent::ReadToolRegistry make_registry(const std::string& workspace, bool allow_m
     agent::ReadToolRegistry tools;
     agent::ToolRegistryOptions tool_options;
     tool_options.allow_mutations = allow_mutations;
+    if (auto_approve_create_dirs) {
+        tool_options.on_guard_ask =
+            [](const agent::GuardApprovalRequest& request,
+               runtime::CancellationToken) -> agent::GuardApprovalDecision {
+            // Tests only auto-approve directory creation; other Ask still denies.
+            if (request.rule_id == "ask_on_create_dirs")
+                return agent::GuardApprovalDecision::Allow;
+            return agent::GuardApprovalDecision::Deny;
+        };
+    }
     const Error create_error =
         agent::ReadToolRegistry::create(std::move(options), std::move(snapshot), {}, tools,
                                         tool_options);
@@ -233,7 +245,8 @@ void test_read_only_registry_hides_writes() {
 
 void test_write_file_create_and_readback() {
     const std::string workspace = write_temp_workspace("write");
-    agent::ReadToolRegistry tools = make_registry(workspace, true);
+    // Headless registry: create_dirs Ask is denied without interactive approval.
+    agent::ReadToolRegistry tools = make_registry(workspace, true, false);
     bool has_write = false;
     for (const provider::FunctionDefinition& definition : tools.definitions())
         if (definition.name == "write_file") has_write = true;
@@ -277,16 +290,50 @@ void test_write_file_create_and_readback() {
     check(fs::exists(fs::path(workspace) / json_data_string(overwrite, "history_path")),
           "history backup file exists");
 
-    const std::string nested = tools.execute(
+    // Headless create_dirs without approval must fail (no silent mkdir -p).
+    const std::string nested_denied = tools.execute(
         "write_file",
         R"({"path":"src/deep/nested/file.txt","content":"nested\n","create_dirs":true,"mode":"create_new"})");
-    check(json_ok(nested), "create_dirs creates parents: " + nested);
+    check(!json_ok(nested_denied), "headless create_dirs denied without Ask: " + nested_denied);
+    check(nested_denied.find("create directories") != std::string::npos ||
+              nested_denied.find("approval") != std::string::npos ||
+              nested_denied.find("headless") != std::string::npos,
+          "create_dirs deny message: " + nested_denied);
+    check(!fs::exists(fs::path(workspace) / "src" / "deep" / "nested" / "file.txt"),
+          "denied create_dirs did not write nested file");
+
+    // With interactive-style approval of ask_on_create_dirs only.
+    agent::ReadToolRegistry approved = make_registry(workspace, true, true);
+    const std::string nested = approved.execute(
+        "write_file",
+        R"({"path":"src/deep/nested/file.txt","content":"nested\n","create_dirs":true,"mode":"create_new"})");
+    check(json_ok(nested), "create_dirs after approval creates parents: " + nested);
     check(read_text(fs::path(workspace) / "src" / "deep" / "nested" / "file.txt") == "nested\n",
           "nested create wrote content");
 
     const std::string escape =
         tools.execute("write_file", R"({"path":"../outside.txt","content":"x\n"})");
     check(!json_ok(escape), "path escape is denied");
+    check(escape.find("outside the project directory") != std::string::npos,
+          "escape error is user-facing: " + escape);
+    const std::string absolute =
+        tools.execute("write_file", R"({"path":"/tmp/evil.txt","content":"x\n"})");
+    check(!json_ok(absolute), "absolute path is denied");
+    check(absolute.find("outside the project directory") != std::string::npos,
+          "absolute path error is user-facing: " + absolute);
+    // Critical regression: "~/…" must not create "$workspace/~/…"
+    const std::string tilde =
+        tools.execute("write_file",
+                      R"({"path":"~/code/empty.txt","content":"","create_dirs":true})");
+    check(!json_ok(tilde), "tilde home path is denied: " + tilde);
+    check(tilde.find("outside the project") != std::string::npos ||
+              tilde.find("~") != std::string::npos,
+          "tilde path error mentions home/outside: " + tilde);
+    check(!fs::exists(fs::path(workspace) / "~" / "code" / "empty.txt"),
+          "tilde path must not create literal ~/ under workspace");
+    const std::string tilde_mid =
+        tools.execute("write_file", R"({"path":"src/~/evil.txt","content":"x"})");
+    check(!json_ok(tilde_mid), "tilde as path component is denied");
     const std::string protected_path =
         tools.execute("write_file", R"({"path":".ainiux-pr/evil.txt","content":"x\n"})");
     check(!json_ok(protected_path), "protected metadata path is denied");

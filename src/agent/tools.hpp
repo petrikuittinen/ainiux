@@ -6,6 +6,7 @@
 #include <string>
 #include <vector>
 
+#include "agent/approval.hpp"
 #include "agent/index/index.hpp"
 #include "common.hpp"
 #include "fetch/fetch.hpp"
@@ -45,6 +46,8 @@ struct ToolRegistryOptions {
     HistoryBackupPolicy history_backup;
     fetch::Options fetch_options;
     search::Options search_options = search::default_options();
+    // Interactive Guard Ask. Empty ⇒ headless Deny for Ask decisions.
+    GuardApprovalCallback on_guard_ask;
 };
 
 class ReadToolRegistry {
@@ -135,6 +138,10 @@ class ReadToolRegistry {
                             std::string& history_path) const;
     Error purge_expired_history_backups() const;
 
+    // Shared by run_command / remove when Guard returns Ask.
+    GuardApprovalDecision request_guard_approval(const GuardApprovalRequest& request,
+                                                 runtime::CancellationToken cancellation) const;
+
     index::Options index_options_;
     // Mutable so const execute() can refresh hashes after agent writes without
     // forcing security-review call sites off const references.
@@ -146,6 +153,7 @@ class ReadToolRegistry {
     HistoryBackupPolicy history_backup_{};
     fetch::Options fetch_options_{};
     search::Options search_options_{};
+    GuardApprovalCallback on_guard_ask_;
 };
 
 std::string tool_error_result(const std::string& code, const std::string& message);

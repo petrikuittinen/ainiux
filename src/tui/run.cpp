@@ -19,6 +19,7 @@
 #include "app/interactive_mode.hpp"
 #include "app/detail.hpp"
 #include "app/user_shell.hpp"
+#include "agent/approval.hpp"
 #include "agent/session_runtime.hpp"
 #include "agent/tool_display.hpp"
 #include "chat/settings.hpp"
@@ -113,6 +114,23 @@ app::TuiRunResult run(provider::RequestContext context,
     std::shared_ptr<agent::AgentSessionRuntime> agent_runtime =
         context.options.agent ? std::make_shared<agent::AgentSessionRuntime>()
                               : std::shared_ptr<agent::AgentSessionRuntime>{};
+    // Shared with the agent worker: blocks tool execution until the user answers y/n.
+    std::shared_ptr<agent::ApprovalGate> agent_approval_gate =
+        context.options.agent ? std::make_shared<agent::ApprovalGate>()
+                              : std::shared_ptr<agent::ApprovalGate>{};
+    agent::GuardApprovalRequest pending_guard_request;
+    bool have_pending_guard_request = false;
+    if (agent_approval_gate) {
+        agent_approval_gate->set_notify([&events](const agent::GuardApprovalRequest& request) {
+            TuiEvent event;
+            event.type = TuiEventType::GuardApproval;
+            event.guard_tool_name = request.tool_name;
+            event.guard_command_preview = request.command_preview;
+            event.guard_rule_id = request.rule_id;
+            event.guard_message = request.message;
+            events.push(std::move(event));
+        });
+    }
     auto make_agent_runtime_options = [&]() {
         agent::SessionRuntimeOptions options;
         options.workspace = ".";
@@ -139,6 +157,14 @@ app::TuiRunResult run(provider::RequestContext context,
         options.fetch_options.trace_http = context.options.trace_http;
         options.fetch_options.allow_private = context.options.allow_private_url_fetch;
         options.search_options = search::options_for(context.options);
+        if (agent_approval_gate) {
+            std::shared_ptr<agent::ApprovalGate> gate = agent_approval_gate;
+            options.on_guard_ask =
+                [gate](const agent::GuardApprovalRequest& request,
+                       runtime::CancellationToken cancellation) -> agent::GuardApprovalDecision {
+                return gate->request(request, cancellation);
+            };
+        }
         return options;
     };
     bool show_thinking_traces = context.options.show_thinking_traces;
@@ -298,6 +324,22 @@ app::TuiRunResult run(provider::RequestContext context,
         }
         if (mode == TuiMode::ModelConfirm) {
             return model_confirm_text(context, session);
+        }
+        if (mode == TuiMode::GuardApprovalConfirm) {
+            std::string text = "Guard approval required";
+            if (have_pending_guard_request) {
+                text = "Allow this agent action?\n\n";
+                if (!pending_guard_request.tool_name.empty())
+                    text += "Tool: " + pending_guard_request.tool_name + "\n";
+                if (!pending_guard_request.command_preview.empty())
+                    text += "Command: " + pending_guard_request.command_preview + "\n";
+                if (!pending_guard_request.rule_id.empty())
+                    text += "Rule: " + pending_guard_request.rule_id + "\n";
+                if (!pending_guard_request.message.empty())
+                    text += "\n" + pending_guard_request.message + "\n";
+            }
+            text += "\nPress y to allow · n or Esc to deny";
+            return text;
         }
         if (mode == TuiMode::SystemEdit) {
             return system_edit_text();
@@ -711,7 +753,7 @@ app::TuiRunResult run(provider::RequestContext context,
                     }
                     if (send_error.ok()) {
                         // Stream tool activity into the chat panel as each call runs.
-                        // Progress lines already include "N.NN seconds elapsed".
+                        // Progress lines already include "N ms" timing.
                         auto agent_progress = [&events](const std::string& line) {
                             if (line.empty()) return;
                             if (line.rfind("Agent turn ", 0) == 0) return;
@@ -733,7 +775,7 @@ app::TuiRunResult run(provider::RequestContext context,
                             if (i < agent_turn.compact_tool_line_ms.size() &&
                                 agent_turn.turn_started_ms > 0) {
                                 display += "  ";
-                                display += agent::format_elapsed_seconds(
+                                display += agent::format_elapsed_ms(
                                     agent_turn.compact_tool_line_ms[i] -
                                     agent_turn.turn_started_ms);
                             }
@@ -741,6 +783,10 @@ app::TuiRunResult run(provider::RequestContext context,
                         if (!agent_turn.final_text.empty()) {
                             if (!display.empty()) display.push_back('\n');
                             display += agent_turn.final_text;
+                        } else if (!send_error.ok() && !send_error.message.empty()) {
+                            // Surface abort/policy reasons instead of a blank failure.
+                            if (!display.empty()) display.push_back('\n');
+                            display += send_error.message;
                         }
                         chat_result.content = display;
                         chat_result.model = model_name;
@@ -797,6 +843,22 @@ app::TuiRunResult run(provider::RequestContext context,
             } else {
                 event.type = TuiEventType::Error;
                 event.error = send_error;
+                event.chat = std::move(chat_result);
+                // Keep agent tool lines / failure text for the transcript even on error.
+                if (have_agent_turn) {
+                    event.agent_turn = true;
+                    event.agent_tool_lines = std::move(agent_turn.compact_tool_lines);
+                    event.agent_tool_line_ms = std::move(agent_turn.compact_tool_line_ms);
+                    event.agent_final_text = !agent_turn.final_text.empty()
+                                                ? std::move(agent_turn.final_text)
+                                                : send_error.message;
+                    if (event.agent_final_text.empty() && !agent_turn.notice.empty())
+                        event.agent_final_text = agent_turn.notice;
+                    event.agent_turn_started_ms = agent_turn.turn_started_ms;
+                    event.agent_finished_at_ms = agent_turn.finished_at_ms > 0
+                                                    ? agent_turn.finished_at_ms
+                                                    : agent::now_unix_ms();
+                }
             }
             events.push(std::move(event));
         });
@@ -890,6 +952,11 @@ app::TuiRunResult run(provider::RequestContext context,
             return;
         }
         clear_queued_regeneration();
+        if (agent_approval_gate) agent_approval_gate->cancel_pending();
+        if (mode == TuiMode::GuardApprovalConfirm) {
+            mode = TuiMode::Chat;
+            have_pending_guard_request = false;
+        }
         model_job.cancel();
         status = "Cancelling...";
     };
@@ -1298,6 +1365,21 @@ app::TuiRunResult run(provider::RequestContext context,
         status = "Remove cancelled";
     };
     picker_callbacks.on_remove_retry = [&](const std::string& message) { status = message; };
+    picker_callbacks.on_guard_approval_accepted = [&]() {
+        if (agent_approval_gate) agent_approval_gate->resolve(agent::GuardApprovalDecision::Allow);
+        have_pending_guard_request = false;
+        mode = TuiMode::Chat;
+        status = "Guard: allowed";
+    };
+    picker_callbacks.on_guard_approval_rejected = [&]() {
+        if (agent_approval_gate)
+            agent_approval_gate->resolve(agent::GuardApprovalDecision::Deny);
+        have_pending_guard_request = false;
+        mode = TuiMode::Chat;
+        status = "Guard: denied";
+    };
+    picker_callbacks.on_guard_approval_retry =
+        [&](const std::string& message) { status = message; };
     picker_callbacks.on_thread_delete_accepted = [&]() {
         if (pending_thread_delete < thread_picker_threads.size()) {
             const long long tid = thread_picker_threads[pending_thread_delete].id;
@@ -1514,11 +1596,15 @@ app::TuiRunResult run(provider::RequestContext context,
                     break;
                 case TuiEventType::Done: {
                     model_job.join();
+                    if (mode == TuiMode::GuardApprovalConfirm) {
+                        mode = TuiMode::Chat;
+                        have_pending_guard_request = false;
+                    }
                     const bool should_regenerate = regenerate_after_cancel;
                     const size_t regenerate_erase_from = pending_user;
                     if (event.agent_turn) {
-                        // Expand into tool/assistant rows with wall-clock ms so the
-                        // history renderer can show "N.NN seconds elapsed".
+                        // Expand into tool/assistant rows; renderer adds "N ms" /
+                        // "Task complete in …" from timestamps.
                         if (pending_user != static_cast<size_t>(-1) &&
                             pending_user < session.messages.size() &&
                             session.messages[pending_user].created_at_ms <= 0 &&
@@ -1611,6 +1697,10 @@ app::TuiRunResult run(provider::RequestContext context,
                     break;
                 }
                 case TuiEventType::Error: {
+                    if (mode == TuiMode::GuardApprovalConfirm) {
+                        mode = TuiMode::Chat;
+                        have_pending_guard_request = false;
+                    }
                     model_job.join();
                     const bool should_regenerate = regenerate_after_cancel && event.error.code == ErrorCode::Cancelled;
                     const size_t regenerate_erase_from = pending_user_added_for_job ? static_cast<size_t>(-1) : pending_user;
@@ -1624,9 +1714,16 @@ app::TuiRunResult run(provider::RequestContext context,
                         start_queued_regeneration(regenerate_erase_from);
                     } else {
                         clear_queued_regeneration();
-                        if (event.error.code == ErrorCode::Cancelled) {
-                            // Prompt was sent and (partially) processed; consume the attachments
-                            // that were used for it.
+                        const bool user_or_agent_stop = event.error.code == ErrorCode::Cancelled;
+                        // Agent aborts (policy/tool failures) and user cancel both use Cancelled;
+                        // always prefer the concrete message over a bare "Cancelled" status.
+                        auto failure_status = [&]() -> std::string {
+                            if (!event.error.message.empty()) return event.error.message;
+                            if (user_or_agent_stop) return "Cancelled";
+                            return detail::error_line(event.error);
+                        };
+                        if (user_or_agent_stop || (context.options.agent && event.agent_turn)) {
+                            // Keep the prompt + any tool activity; explain the stop.
                             if (attachments_committed_for_turn > 0) {
                                 const size_t n = attachments_committed_for_turn;
                                 if (n >= chat_attachments.size()) {
@@ -1640,15 +1737,52 @@ app::TuiRunResult run(provider::RequestContext context,
                                 attachment_picker_selected = chat_attachments.empty() ? 0
                                     : std::min(attachment_picker_selected, chat_attachments.size() - 1);
                             }
-                            keep_cancelled_turn();
-                            status = "Cancelled";
+                            if (event.agent_turn) {
+                                // Expand structured agent rows (same as Done).
+                                if (pending_user != static_cast<size_t>(-1) &&
+                                    pending_user < session.messages.size() &&
+                                    session.messages[pending_user].created_at_ms <= 0 &&
+                                    event.agent_turn_started_ms > 0) {
+                                    session.messages[pending_user].created_at_ms =
+                                        event.agent_turn_started_ms;
+                                }
+                                if (pending_assistant != static_cast<size_t>(-1) &&
+                                    pending_assistant < session.messages.size()) {
+                                    session.messages.erase(session.messages.begin() +
+                                                           static_cast<long>(pending_assistant));
+                                }
+                                for (std::size_t i = 0; i < event.agent_tool_lines.size(); ++i) {
+                                    provider::Message tool_msg{"tool", event.agent_tool_lines[i]};
+                                    if (i < event.agent_tool_line_ms.size()) {
+                                        tool_msg.created_at_ms = event.agent_tool_line_ms[i];
+                                    }
+                                    session.messages.push_back(std::move(tool_msg));
+                                }
+                                const std::string fail_text =
+                                    !event.agent_final_text.empty()
+                                        ? event.agent_final_text
+                                        : failure_status();
+                                if (!fail_text.empty()) {
+                                    provider::Message notice_msg{"notice", fail_text};
+                                    notice_msg.created_at_ms = event.agent_finished_at_ms > 0
+                                                                   ? event.agent_finished_at_ms
+                                                                   : agent::now_unix_ms();
+                                    session.messages.push_back(std::move(notice_msg));
+                                }
+                                pending_user = static_cast<size_t>(-1);
+                                pending_assistant = static_cast<size_t>(-1);
+                                pending_user_added_for_job = false;
+                            } else {
+                                keep_cancelled_turn();
+                            }
+                            status = failure_status();
                             start_store_save();
                         } else {
                             // Error before/during; the user message is rolled back.
                             // Do not consume attachments; leave them for the user to re-send.
                             attachments_committed_for_turn = 0;
                             rollback_pending_turn();
-                            status = detail::error_line(event.error);
+                            status = failure_status();
                         }
                     }
                     break;
@@ -1863,6 +1997,25 @@ app::TuiRunResult run(provider::RequestContext context,
                         path_completer = std::move(event.path_completer);
                         path_completer.set_assist_config(&ai_continue.assist_config);
                         status = editor::path_completion_status(event.completion);
+                    }
+                    break;
+                case TuiEventType::GuardApproval:
+                    pending_guard_request = {};
+                    pending_guard_request.tool_name = event.guard_tool_name;
+                    pending_guard_request.command_preview = event.guard_command_preview;
+                    pending_guard_request.rule_id = event.guard_rule_id;
+                    pending_guard_request.message = event.guard_message;
+                    have_pending_guard_request = true;
+                    mode = TuiMode::GuardApprovalConfirm;
+                    status = "Guard approval required · y allow · n deny";
+                    // Surface a transcript line so the request is visible in history.
+                    if (pending_assistant != static_cast<size_t>(-1) &&
+                        pending_assistant < session.messages.size()) {
+                        session.messages[pending_assistant].content +=
+                            "\n[guard] " + event.guard_command_preview +
+                            (event.guard_rule_id.empty() ? std::string()
+                                                         : " [" + event.guard_rule_id + "]") +
+                            " — press y/n\n";
                     }
                     break;
             }

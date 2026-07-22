@@ -101,13 +101,29 @@ void test_tool_display_clips_to_width() {
 }
 
 void test_elapsed_seconds_format() {
-    check(agent::format_elapsed_seconds(6540) == "6.54 seconds elapsed", "6.54s format");
-    check(agent::format_elapsed_seconds(0) == "0.00 seconds elapsed", "zero elapsed");
-    check(agent::format_elapsed_seconds(-5) == "0.00 seconds elapsed", "negative clamps");
-    check(agent::format_elapsed_seconds(100) == "0.10 seconds elapsed", "tenths");
+    check(agent::format_elapsed_ms(2270) == "2270 ms", "tool elapsed ms");
+    check(agent::format_elapsed_ms(0) == "0 ms", "zero ms");
+    check(agent::format_elapsed_ms(-5) == "0 ms", "negative ms clamps");
+    check(agent::format_task_complete(21340) == "Task complete in 21.34 seconds.",
+          "task complete 21.34s");
+    check(agent::format_task_complete(0) == "Task complete in 0.00 seconds.", "task complete zero");
+    check(agent::format_elapsed_seconds(6540) == "6.54 seconds elapsed", "legacy seconds format");
     check(agent::normalize_timestamp_ms(1700000000) == 1700000000000LL, "seconds promote to ms");
     check(agent::normalize_timestamp_ms(1700000000123LL) == 1700000000123LL, "ms unchanged");
     check(agent::now_unix_ms() > 1000000000000LL, "now is millisecond scale");
+
+    const std::string outside_err =
+        R"JSON({"ok":false,"error":{"code":"invalid_arguments","message":"Forbidden to create or modify files outside the project directory. Use a path relative to the project root only (not absolute, ~/..., or $ENV paths). Refused: ~/code/empty.txt"}})JSON";
+    check(agent::compact_tool_error_brief(outside_err).find("outside project") != std::string::npos,
+          "outside-project brief: " + agent::compact_tool_error_brief(outside_err));
+    const std::string line = agent::format_compact_tool_line(
+        2, "write_file", R"JSON({"path":"~/code/empty.txt","content":""})JSON", outside_err, 120);
+    check(line.find("error:") != std::string::npos && line.find("outside project") != std::string::npos,
+          "compact line includes outside-project reason: " + line);
+    const std::string allow_err =
+        R"JSON({"ok":false,"error":{"code":"policy_denied","message":"command is not on the agent run_command allowlist: touch (examples: python3, make)"}})JSON";
+    check(agent::compact_tool_error_brief(allow_err).find("allowlist") != std::string::npos,
+          "allowlist brief: " + agent::compact_tool_error_brief(allow_err));
 }
 
 void test_prior_session_context_includes_recent_work() {

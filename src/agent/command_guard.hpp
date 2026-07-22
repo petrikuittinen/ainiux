@@ -6,12 +6,12 @@
 namespace ainiux::agent {
 
 // Cheap destructive-command guard (PLANS.md §14 / Milestone 6).
-// Headless agent mode treats Ask as Deny until interactive approval exists.
+// Headless agent maps Ask → Deny. Interactive agent may prompt via ApprovalGate.
 
 enum class GuardDecision {
     Allow,
     Deny,
-    Ask,  // would prompt interactively; headless maps to Deny
+    Ask,  // requires one-shot user approval in interactive agent
 };
 
 struct GuardResult {
@@ -27,7 +27,7 @@ GuardResult evaluate_command_guard(const std::vector<std::string>& arguments);
 // prefer the argv form when available).
 GuardResult evaluate_command_guard_line(const std::string& command_line);
 
-// Map Ask → Deny for headless one-shot agent.
+// Map Ask → Deny for headless one-shot agent (no approval UI).
 GuardResult finalize_guard_for_headless(GuardResult result);
 
 }  // namespace ainiux::agent

@@ -92,6 +92,16 @@ agent::ReadToolRegistry make_registry(const std::string& workspace, bool mutatio
     agent::ReadToolRegistry tools;
     agent::ToolRegistryOptions tool_options;
     tool_options.allow_mutations = mutations;
+    // Adversarial write tests may nest dirs; auto-approve only create_dirs Ask.
+    if (mutations) {
+        tool_options.on_guard_ask =
+            [](const agent::GuardApprovalRequest& request,
+               runtime::CancellationToken) -> agent::GuardApprovalDecision {
+            if (request.rule_id == "ask_on_create_dirs")
+                return agent::GuardApprovalDecision::Allow;
+            return agent::GuardApprovalDecision::Deny;
+        };
+    }
     check(agent::ReadToolRegistry::create(std::move(options), std::move(snapshot), {}, tools,
                                           tool_options)
               .ok(),
@@ -217,6 +227,11 @@ void test_file_tools_unicode_and_path_attacks() {
     // Path escape attacks.
     check(!json_ok(tools.execute("write_file", R"({"path":"../escape.txt","content":"x"})")),
           "deny ../ escape");
+    check(!json_ok(tools.execute(
+              "write_file", R"({"path":"~/code/empty.txt","content":"","create_dirs":true})")),
+          "deny ~/ home path (must not create workspace/~/…)");
+    check(!fs::exists(fs::path(workspace) / "~" / "code" / "empty.txt"),
+          "tilde path must not create literal tilde directory");
     check(!json_ok(tools.execute("write_file", R"({"path":"/etc/passwd","content":"x"})")),
           "deny absolute path");
     check(!json_ok(tools.execute("write_file", R"({"path":".ainiux-pr/evil.txt","content":"x"})")),

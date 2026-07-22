@@ -212,7 +212,10 @@ Error AgentSessionStore::ensure_schema() {
         applied = 0;
     }
 
-    if (applied == kAgentSessionSchemaVersion) return ok_error();
+    if (applied == kAgentSessionSchemaVersion) {
+        // Existing v2 DBs may predate the approvals table.
+        return ensure_approvals_table();
+    }
 
     error = exec(
         "CREATE TABLE IF NOT EXISTS project("
@@ -250,8 +253,19 @@ Error AgentSessionStore::ensure_schema() {
         "  result TEXT NOT NULL,"
         "  ok INTEGER NOT NULL DEFAULT 1"
         ");"
+        "CREATE TABLE IF NOT EXISTS approvals("
+        "  id INTEGER PRIMARY KEY AUTOINCREMENT,"
+        "  created_at INTEGER NOT NULL,"
+        "  tool_name TEXT NOT NULL,"
+        "  command_preview TEXT NOT NULL,"
+        "  rule_id TEXT,"
+        "  decision TEXT NOT NULL,"
+        "  source TEXT NOT NULL,"
+        "  message TEXT"
+        ");"
         "CREATE INDEX IF NOT EXISTS idx_agent_messages_seq ON messages(seq);"
-        "CREATE INDEX IF NOT EXISTS idx_agent_tools_seq ON tool_events(seq);");
+        "CREATE INDEX IF NOT EXISTS idx_agent_tools_seq ON tool_events(seq);"
+        "CREATE INDEX IF NOT EXISTS idx_agent_approvals_created ON approvals(created_at);");
     if (!error.ok()) return error;
 
     Statement insert;
@@ -264,6 +278,29 @@ Error AgentSessionStore::ensure_schema() {
     if (!error.ok()) return error;
     if (insert.step() != SQLITE_DONE) return sqlite_error(db_, "could not record schema version", path_);
     return ok_error();
+}
+
+Error AgentSessionStore::ensure_approvals_table() {
+    // Soft-add for DBs created before the approvals slice (schema version still 2).
+    char* message = nullptr;
+    const int rc = sqlite3_exec(
+        db_,
+        "CREATE TABLE IF NOT EXISTS approvals("
+        "  id INTEGER PRIMARY KEY AUTOINCREMENT,"
+        "  created_at INTEGER NOT NULL,"
+        "  tool_name TEXT NOT NULL,"
+        "  command_preview TEXT NOT NULL,"
+        "  rule_id TEXT,"
+        "  decision TEXT NOT NULL,"
+        "  source TEXT NOT NULL,"
+        "  message TEXT"
+        ");"
+        "CREATE INDEX IF NOT EXISTS idx_agent_approvals_created ON approvals(created_at);",
+        nullptr, nullptr, &message);
+    if (rc == SQLITE_OK) return ok_error();
+    const std::string detail = message == nullptr ? sqlite3_errmsg(db_) : message;
+    sqlite3_free(message);
+    return {ErrorCode::FileWrite, "agent approvals schema: " + detail};
 }
 
 Error AgentSessionStore::next_seq(long long& seq) {
@@ -656,6 +693,68 @@ Error AgentSessionStore::load_session(long long /*session_id*/,
         row.result = tools.column_text(7);
         row.ok = tools.column_int(8) != 0;
         tool_events.push_back(std::move(row));
+    }
+    return ok_error();
+}
+
+Error AgentSessionStore::record_approval(const AgentApprovalRecord& record) {
+    if (!is_open()) return {ErrorCode::Internal, "agent session DB is not open"};
+    Error error = ensure_approvals_table();
+    if (!error.ok()) return error;
+    Statement statement;
+    error = statement.prepare(
+        db_, path_,
+        "INSERT INTO approvals(created_at, tool_name, command_preview, rule_id, decision, "
+        "source, message) VALUES(?, ?, ?, ?, ?, ?, ?)");
+    if (!error.ok()) return error;
+    const long long created =
+        record.created_at > 0 ? record.created_at : now_unix_ms();
+    error = statement.bind_int64(db_, path_, 1, created);
+    if (!error.ok()) return error;
+    error = statement.bind_text(db_, path_, 2, record.tool_name);
+    if (!error.ok()) return error;
+    error = statement.bind_text(db_, path_, 3, record.command_preview);
+    if (!error.ok()) return error;
+    error = statement.bind_text(db_, path_, 4, record.rule_id);
+    if (!error.ok()) return error;
+    error = statement.bind_text(db_, path_, 5, record.decision);
+    if (!error.ok()) return error;
+    error = statement.bind_text(db_, path_, 6, record.source);
+    if (!error.ok()) return error;
+    error = statement.bind_text(db_, path_, 7, record.message);
+    if (!error.ok()) return error;
+    if (statement.step() != SQLITE_DONE)
+        return sqlite_error(db_, "could not record approval", path_);
+    return touch();
+}
+
+Error AgentSessionStore::load_approvals(std::vector<AgentApprovalRecord>& approvals,
+                                        int limit) const {
+    approvals.clear();
+    if (!is_open()) return {ErrorCode::Internal, "agent session DB is not open"};
+    // Best-effort if table missing on very old handles.
+    std::string sql =
+        "SELECT id, created_at, tool_name, command_preview, rule_id, decision, source, message "
+        "FROM approvals ORDER BY id ASC";
+    if (limit > 0) sql += " LIMIT " + std::to_string(limit);
+    Statement statement;
+    Error error = statement.prepare(db_, path_, sql.c_str());
+    if (!error.ok()) {
+        // Table may not exist yet on a concurrent race; treat as empty.
+        if (error.message.find("no such table") != std::string::npos) return ok_error();
+        return error;
+    }
+    while (statement.step() == SQLITE_ROW) {
+        AgentApprovalRecord row;
+        row.id = statement.column_int64(0);
+        row.created_at = statement.column_int64(1);
+        row.tool_name = statement.column_text(2);
+        row.command_preview = statement.column_text(3);
+        row.rule_id = statement.column_text(4);
+        row.decision = statement.column_text(5);
+        row.source = statement.column_text(6);
+        row.message = statement.column_text(7);
+        approvals.push_back(std::move(row));
     }
     return ok_error();
 }

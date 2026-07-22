@@ -198,7 +198,11 @@ GuardResult finalize_guard_for_headless(GuardResult result) {
     if (result.decision == GuardDecision::Ask) {
         result.decision = GuardDecision::Deny;
         if (!result.message.empty())
-            result.message += " (headless agent denies Ask decisions; no approval UI yet)";
+            result.message +=
+                " (headless agent denies Ask decisions; use interactive agent for approval)";
+        else
+            result.message =
+                "headless agent denies Ask decisions; use interactive agent for approval";
     }
     return result;
 }

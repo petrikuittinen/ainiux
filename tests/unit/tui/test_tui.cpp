@@ -713,8 +713,9 @@ void test_tui_agent_history_chrome() {
         if (joined.find("Tool:") != std::string::npos) saw_tool_label = true;
         if (joined.find("1: read_file") != std::string::npos) saw_tool_body = true;
         if (joined.find("Updated medium") != std::string::npos) saw_answer = true;
-        if (joined.find("6.54 seconds elapsed") != std::string::npos) saw_tool_elapsed = true;
-        if (joined.find("12.00 seconds elapsed") != std::string::npos) saw_answer_elapsed = true;
+        if (joined.find("6540 ms") != std::string::npos) saw_tool_elapsed = true;
+        if (joined.find("Task complete in 12.00 seconds.") != std::string::npos)
+            saw_answer_elapsed = true;
         if (joined.find("1970") != std::string::npos || joined.find("T") == 0)
             saw_full_wall_clock = true;
     }
@@ -723,7 +724,7 @@ void test_tui_agent_history_chrome() {
     check(!saw_tool_label, "agent mode omits Tool: label");
     check(saw_tool_body && saw_answer, "agent mode still shows tool lines and answers flush-left");
     check(saw_tool_elapsed && saw_answer_elapsed,
-          "agent mode shows elapsed seconds at 2 decimal places");
+          "agent mode shows tool ms timing and Task complete for the final answer");
     check(!saw_full_wall_clock, "agent mode does not show full wall-clock timestamps by default");
 }
 
