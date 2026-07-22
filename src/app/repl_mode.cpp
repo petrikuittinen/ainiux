@@ -1,5 +1,6 @@
 #include "app/app.hpp"
 #include "app/detail.hpp"
+#include "app/user_shell.hpp"
 
 #include <iostream>
 #include <utility>
@@ -9,6 +10,7 @@
 #include "fetch/fetch.hpp"
 #include "input/input.hpp"
 #include "search/search.hpp"
+#include "security/redact.hpp"
 
 namespace ainiux::app {
 
@@ -18,13 +20,63 @@ using InputKind = input::Kind;
 
 void print_repl_help() {
     std::cerr << "Commands: /help, /quit, /exit, /save [PATH], /load PATH, /insert FILE_OR_URL, /attach PATH, "
-                 "/fetch URL, /search QUERY, /clear, /system TEXT, /model MODEL, "
-                 "/reasoning auto|VALUE|TOKENS\n";
+                 "/fetch URL, /search QUERY, /shell COMMAND, !COMMAND, /shell-stdout COMMAND, !!COMMAND, "
+                 "/clear, /system TEXT, /model MODEL, /reasoning auto|VALUE|TOKENS\n"
+                 "  /shell and ! show a full notice; /shell-stdout and !! print pure stdout "
+                 "(TUI places that stdout in the input draft).\n";
 }
 
 bool allowed_for_read_only_session(const std::string& text) {
     return text == "/help" || text == "/quit" || text == "/exit" ||
-           text.rfind("/save", 0) == 0 || text.rfind("/load", 0) == 0;
+           text.rfind("/save", 0) == 0 || text.rfind("/load", 0) == 0 ||
+           text == "/shell" || text.rfind("/shell ", 0) == 0 ||
+           text == "/shell-stdout" || text.rfind("/shell-stdout ", 0) == 0;
+}
+
+std::vector<std::string> repl_secrets(const provider::RequestContext& context) {
+    std::vector<std::string> secrets;
+    if (!context.api_key.empty()) secrets.push_back(context.api_key);
+    if (!context.options.key.empty()) secrets.push_back(context.options.key);
+    for (const std::string& header : context.headers) {
+        const std::size_t colon = header.find(':');
+        if (colon == std::string::npos) continue;
+        if (is_sensitive_header_name(ascii_trim(header.substr(0, colon)))) {
+            const std::string value = ascii_trim(header.substr(colon + 1));
+            if (!value.empty()) secrets.push_back(value);
+        }
+    }
+    return secrets;
+}
+
+void run_repl_shell(const std::string& command,
+                    const provider::RequestContext& context,
+                    UserShellDestination destination) {
+    UserShellOptions options;
+    if (context.options.timeout_seconds > 0) {
+        options.timeout_ms = static_cast<long>(context.options.timeout_seconds) * 1000L;
+    }
+    UserShellResult result;
+    Error err = run_user_shell(command, options, result);
+    const std::vector<std::string> secrets = repl_secrets(context);
+    if (destination == UserShellDestination::Draft) {
+        // No editable draft in line-oriented REPL: print pure stdout for copy/paste.
+        const std::string draft = format_user_shell_draft_stdout(result, secrets);
+        if (!draft.empty()) {
+            std::cerr << draft;
+            if (draft.back() != '\n') std::cerr << "\n";
+        }
+        if (user_shell_failed(err, result)) {
+            std::cerr << format_user_shell_failure_notice(err, result, secrets);
+            std::cerr << format_user_shell_draft_status(err, result, secrets) << "\n";
+        } else {
+            std::cerr << format_user_shell_draft_status(err, result, secrets) << "\n";
+        }
+    } else {
+        std::cerr << format_user_shell_notice(result, secrets);
+        if (!err.ok() && err.code != ErrorCode::Cancelled && err.code != ErrorCode::Timeout) {
+            print_error(err);
+        }
+    }
 }
 
 }  // namespace
@@ -73,6 +125,19 @@ int run_repl(provider::RequestContext context, chat::Session session, std::ostre
         const std::string text = detail::trim_ascii(line);
         if (text.empty()) {
             continue;
+        }
+        {
+            std::string shell_command;
+            std::string shell_error;
+            UserShellDestination shell_dest = UserShellDestination::Notice;
+            if (parse_user_shell_invocation(text, shell_command, shell_error, shell_dest)) {
+                if (!shell_error.empty()) {
+                    std::cerr << shell_error << "\n";
+                    continue;
+                }
+                run_repl_shell(shell_command, context, shell_dest);
+                continue;
+            }
         }
         if (text[0] == '/') {
             if (session.read_only && !allowed_for_read_only_session(text)) {

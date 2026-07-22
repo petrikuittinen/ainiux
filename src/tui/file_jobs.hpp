@@ -34,6 +34,7 @@ struct TuiFileJobs {
     void start_attach(const std::string& path);
     void start_fetch(const std::string& url);
     void start_search(const std::string& query);
+    void start_shell(const std::string& command, bool to_draft = false);
 };
 
 }  // namespace ainiux::tui

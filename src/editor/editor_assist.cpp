@@ -927,6 +927,10 @@ std::vector<std::string> assist_command_completions(const EditorAssistConfig& co
     commands.push_back("/linebreak cr");
     commands.push_back("/linebreak crlf");
     commands.push_back("/insert ");
+    commands.push_back("/shell ");
+    commands.push_back("shell ");
+    commands.push_back("/shell-stdout ");
+    commands.push_back("shell-stdout ");
     commands.push_back("/auto-convert-html-to-md ");
     commands.push_back("/auto-convert-html-to-md yes");
     commands.push_back("/auto-convert-html-to-md no");

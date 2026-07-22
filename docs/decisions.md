@@ -43,6 +43,15 @@ The first agent-like runtime is deliberately a single explicit non-interactive m
 
 `src/agent/agent_loop.*` is the reusable v1.0 agent turn engine. `src/agent/session_runtime.*` owns a prepared multi-turn workspace session (index refresh, mutation tools, `agent.sqlite`, AGENTS.md, tool conversation). Headless one-shot entry is `ainiux run` / `--run` / `-r` via `src/app/agent_mode.cpp` (`run_agent_goal` → one prepared turn); interactive entry is `ainiux agent` / `--agent` / `-a` via `InteractiveMode::Agent` reusing the same runtime across user messages. It owns history hygiene (invalid tool `arguments` are stored locally for error results but rewritten to `"{}"` in provider continuation items; dangling call ids get synthetic `cancelled` results), separate transport retry budgets (3 attempts with 1s/2s/4s backoff; immediate fail on 400/401/403/404 and deterministic schema/auth errors; never auto re-run tools), loop limits (identical-call soft notice at 3 / hard abort at 5; consecutive all-failed abort at 3 for non-identical thrashing; 50-turn scripted cap with interactive continue), and native→XML protocol downgrade after two consecutive leaked `<tool_call>` markup turns on the native channel. Mid-session protocol downgrade injects a user notice and does not rewrite the system prompt, so provider-side prompt caching stays valid.
 
+## User-initiated shell vs agent `run_command`
+
+Interactive chat, agent TUI, and REPL offer user shell for the human operator via `src/app/user_shell.*` (`/bin/sh -c`, closed stdin, bounded pipes, timeout, cancel):
+
+- `/shell` / `!` → display-only `notice` (filtered from provider payloads and chat SQLite).
+- `/shell-stdout` / `!!` → pure redacted stdout replaces the TUI input draft; the user must submit explicitly (Enter/Ctrl+S). Safer than auto-injecting shell output as a user message.
+
+This is intentionally **not** the agent tool path. Agent `run_command` (`src/agent/process.*`) remains allowlisted, shell-free `execve`, with a destructive-command guard.
+
 ## Chat vs interactive agent (shared shell, separate modes)
 
 `--chat` / `-c` and `--agent` / `-a` are **separate product modes**. Ordinary chat must never silently gain workspace tools, shell, or agent system prompts. Interactive agent must never be entered merely by opening chat.

@@ -27,6 +27,7 @@ enum class TuiEventType {
     AttachDone,
     FetchDone,
     SearchDone,
+    ShellDone,
     ModelsDone,
     CompletionDone,
 };
@@ -69,6 +70,11 @@ struct TuiEvent {
     editor::PathCompletionResult completion;
     size_t completion_generation = 0;
     bool quiet_success = false;
+    // User shell (/shell vs /shell-stdout): draft mode fills the input buffer.
+    bool shell_to_draft = false;
+    bool shell_failed = false;
+    int shell_exit_status = -1;
+    bool shell_stdout_truncated = false;
     chat::MediaCleanupResult media_cleanup;
     bool automatic_cleanup = false;
     // Canonical Markdown prepared by chat /attach.

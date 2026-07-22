@@ -33,6 +33,8 @@ const std::vector<std::string>& chat_command_completions() {
         "/exit",
         "/fetch ",
         "/search ",
+        "/shell ",
+        "/shell-stdout ",
         "/help",
         "/highlight ",
         "/insert ",

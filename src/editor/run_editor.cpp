@@ -1,7 +1,9 @@
 #include "app/interactive_mode.hpp"
+#include "app/user_shell.hpp"
 #include "chat/settings.hpp"
 #include "chat/sqlite_store.hpp"
 #include "common.hpp"
+#include "security/redact.hpp"
 #include "editor/autosave.hpp"
 #include "editor/editor.hpp"
 #include "editor/ai_continue.hpp"
@@ -66,6 +68,23 @@ struct InsertSession {
     std::string source;
     runtime::EventQueue<InsertEvent> events;
     // Join the worker before destroying the event queue it references.
+    runtime::JobHandle job;
+};
+
+struct ShellEvent {
+    Error error;
+    std::string status_line;
+    std::string buffer_text;
+    long long duration_ms = 0;
+    int exit_status = -1;
+    bool failed = false;
+};
+
+struct ShellSession {
+    bool active = false;
+    bool cancel_requested = false;
+    std::string command;
+    runtime::EventQueue<ShellEvent> events;
     runtime::JobHandle job;
 };
 
@@ -233,6 +252,7 @@ app::EditorRunResult run_editor(const std::string& path,
     AssistSession assist_session;
     ReformatSession reformat_session;
     InsertSession insert_session;
+    ShellSession shell_session;
     StoredAssistCommand last_assist_command;
     AssistCompleterState assist_completer;
     PathCompleter minibuffer_path_completer;
@@ -322,7 +342,8 @@ app::EditorRunResult run_editor(const std::string& path,
         }
         return !help_view.active && !picker.active && !buffer_list_active && !pending_close_confirm &&
                !minibuffer.active && !replace.active && !assist_session.active &&
-               !reformat_session.active && !insert_session.active && !window_prefix_active;
+               !reformat_session.active && !insert_session.active && !shell_session.active &&
+               !window_prefix_active;
     };
 
     auto leave_editor_for = [&](app::InteractiveUiTarget target) {
@@ -1605,6 +1626,157 @@ app::EditorRunResult run_editor(const std::string& path,
                                " for insertion... Esc to cancel");
     };
 
+    auto collect_shell_secrets = [&]() {
+        std::vector<std::string> secrets;
+        auto take_context = [&](const provider::RequestContext* ctx) {
+            if (ctx == nullptr) return;
+            if (!ctx->api_key.empty()) secrets.push_back(ctx->api_key);
+            if (!ctx->options.key.empty()) secrets.push_back(ctx->options.key);
+            for (const std::string& header : ctx->headers) {
+                const std::size_t colon = header.find(':');
+                if (colon == std::string::npos) continue;
+                if (is_sensitive_header_name(ascii_trim(header.substr(0, colon)))) {
+                    const std::string value = ascii_trim(header.substr(colon + 1));
+                    if (!value.empty()) secrets.push_back(value);
+                }
+            }
+        };
+        if (interactive != nullptr) take_context(&interactive->context);
+        if (ai_continue.has_value()) take_context(&ai_continue->request);
+        std::sort(secrets.begin(), secrets.end());
+        secrets.erase(std::unique(secrets.begin(), secrets.end()), secrets.end());
+        return secrets;
+    };
+
+    auto shell_timeout_ms = [&]() -> long {
+        long seconds = 0;
+        if (interactive != nullptr && interactive->context.options.timeout_seconds > 0) {
+            seconds = interactive->context.options.timeout_seconds;
+        } else if (ai_continue.has_value() &&
+                   ai_continue->request.options.timeout_seconds > 0) {
+            seconds = ai_continue->request.options.timeout_seconds;
+        }
+        return seconds > 0 ? seconds * 1000L : 60000L;
+    };
+
+    auto open_shell_output_buffer = [&](const std::string& content) {
+        if (assist_session.active) {
+            return false;
+        }
+        if (help_view.active) {
+            exit_help_view();
+        }
+        sync_active_buffer();
+        EditorState next;
+        next.set_undo_limit(settings.undo_limit);
+        next.tab_width = settings.tab_width;
+        next.tab_style = settings.tab_style;
+        next.linebreak = settings.linebreak;
+        next.text = PieceTable::from_string(content);
+        next.invalidate_word_index();
+        next.path.clear();
+        next.redetect_language();
+        next.highlight_enabled = highlight_enabled;
+        next.dirty = !content.empty();
+        next.clear_selection();
+        next.clear_undo_history();
+        next.cursor = 0;
+        buffers.push_back(next);
+        active_buffer = buffers.size() - 1;
+        state = next;
+        split_layout.set_focused_buffer(active_buffer);
+        buffer_list_active = false;
+        buffer_list_selected = active_buffer;
+        pending_close_confirm = false;
+        pending_close_index = static_cast<size_t>(-1);
+        return true;
+    };
+
+    auto start_editor_shell = [&](const std::string& command) {
+        if (shell_session.active) {
+            minibuffer_message(minibuffer, "A shell command is already running");
+            return;
+        }
+        if (insert_session.active) {
+            minibuffer_message(minibuffer, "Wait for insertion or press Esc to cancel it");
+            return;
+        }
+        if (reformat_session.active) {
+            minibuffer_message(minibuffer, "Wait for reformatting or press Esc to cancel it");
+            return;
+        }
+        if (assist_session.active) {
+            minibuffer_message(minibuffer, "Finish or cancel AI assist before running shell");
+            return;
+        }
+        if (command.empty()) {
+            minibuffer_message(minibuffer,
+                               "Usage: shell COMMAND  or  !COMMAND  "
+                               "(optional / prefix; shell-stdout / !! also ok)");
+            return;
+        }
+        shell_session.active = true;
+        shell_session.cancel_requested = false;
+        shell_session.command = command;
+        app::UserShellOptions options;
+        options.timeout_ms = shell_timeout_ms();
+        const std::vector<std::string> secrets = collect_shell_secrets();
+        runtime::EventQueue<ShellEvent>& event_queue = shell_session.events;
+        shell_session.job.start([command, options, secrets, &event_queue](
+                                    runtime::CancellationToken token) mutable {
+            ShellEvent event;
+            options.cancellation = token;
+            app::UserShellResult result;
+            event.error = app::run_user_shell(command, options, result);
+            event.duration_ms = result.duration_ms;
+            event.exit_status = result.exit_status;
+            event.failed = app::user_shell_failed(event.error, result);
+            event.buffer_text = app::format_user_shell_draft_stdout(result, secrets);
+            if (event.failed) {
+                event.status_line = app::format_user_shell_draft_status(event.error, result, secrets);
+                if (result.duration_ms > 0 &&
+                    event.status_line.find("ms") == std::string::npos) {
+                    event.status_line += " · " + std::to_string(result.duration_ms) + "ms";
+                }
+            } else {
+                event.status_line = "Shell ok · exit 0 · " + std::to_string(result.duration_ms) +
+                                    "ms · " + std::to_string(event.buffer_text.size()) + " bytes";
+                if (result.stdout_truncated) event.status_line += " · truncated";
+                if (event.buffer_text.empty()) event.status_line += " · empty stdout";
+            }
+            event_queue.push(std::move(event));
+        });
+        minibuffer_message(minibuffer, "Running shell: " + command + " · Esc to cancel");
+    };
+
+    auto process_shell_events = [&]() -> bool {
+        ShellEvent event;
+        if (!shell_session.events.try_pop(event)) {
+            return false;
+        }
+        shell_session.job.join();
+        const bool was_cancelled = shell_session.cancel_requested;
+        shell_session.active = false;
+        if (was_cancelled || event.error.code == ErrorCode::Cancelled) {
+            if (!event.buffer_text.empty()) {
+                (void)open_shell_output_buffer(event.buffer_text);
+            }
+            minibuffer_message(minibuffer,
+                               event.status_line.empty() ? "Shell cancelled" : event.status_line);
+            return true;
+        }
+        if (!open_shell_output_buffer(event.buffer_text)) {
+            minibuffer_message(minibuffer,
+                               event.status_line.empty() ? "Shell finished" : event.status_line);
+            return true;
+        }
+        minibuffer_message(minibuffer,
+                           event.status_line.empty()
+                               ? (event.failed ? "Shell failed" : "Shell ok")
+                               : event.status_line);
+        return true;
+    };
+
     auto process_insert_events = [&]() -> bool {
         InsertEvent event;
         if (!insert_session.events.try_pop(event)) {
@@ -1697,6 +1869,36 @@ app::EditorRunResult run_editor(const std::string& path,
             exit_assist_command_mode(minibuffer, assist_completer);
             enter_help_view();
             return;
+        }
+        // Shell: parse raw input so !cmd is not rewritten to /!cmd.
+        // Editor also accepts slashless shell / shell-stdout (like other commands).
+        {
+            std::string shell_line = trim_ascii_copy(minibuffer.input);
+            if (!shell_line.empty() && shell_line.front() != '/' && shell_line.front() != '!') {
+                // Longer token first so "shell-stdout" is not treated as "shell".
+                if (shell_line == "shell-stdout" || shell_line.rfind("shell-stdout ", 0) == 0 ||
+                    shell_line == "shell" || shell_line.rfind("shell ", 0) == 0) {
+                    shell_line.insert(shell_line.begin(), '/');
+                }
+            }
+            std::string shell_command;
+            std::string shell_error;
+            app::UserShellDestination shell_dest = app::UserShellDestination::Notice;
+            if (app::parse_user_shell_invocation(shell_line, shell_command, shell_error,
+                                                 shell_dest)) {
+                pending_assist = PendingAssist{};
+                exit_assist_command_mode(minibuffer, assist_completer);
+                if (!shell_error.empty()) {
+                    minibuffer_message(minibuffer,
+                                       "Usage: shell COMMAND  or  !COMMAND  "
+                                       "(optional / prefix; shell-stdout / !! also ok)");
+                    return;
+                }
+                // Notice and Draft are identical in the editor: new buffer + minibuffer status.
+                (void)shell_dest;
+                start_editor_shell(shell_command);
+                return;
+            }
         }
         const ParsedEditorSlashCommand slash = parse_editor_slash_command(minibuffer.input);
         switch (slash.command) {
@@ -2220,6 +2422,12 @@ app::EditorRunResult run_editor(const std::string& path,
             minibuffer_message(minibuffer, "Cancelling insertion...");
             return;
         }
+        if (shell_session.active && ch == 27) {
+            shell_session.cancel_requested = true;
+            shell_session.job.cancel();
+            minibuffer_message(minibuffer, "Cancelling shell...");
+            return;
+        }
         if (picker.active) {
             if (ch == 17) {
                 quit = true;
@@ -2457,7 +2665,8 @@ app::EditorRunResult run_editor(const std::string& path,
         }
         if (ch == 7) {
             if (help_view.active || picker.active || buffer_list_active || pending_close_confirm ||
-                assist_session.active || reformat_session.active || insert_session.active) {
+                assist_session.active || reformat_session.active || insert_session.active ||
+                shell_session.active) {
                 minibuffer_message(minibuffer, "Finish the current action before window commands");
                 return;
             }
@@ -2764,6 +2973,7 @@ app::EditorRunResult run_editor(const std::string& path,
         const bool assist_updated = process_assist_events();
         const bool reformat_updated = process_reformat_events();
         const bool insert_updated = process_insert_events();
+        const bool shell_updated = process_shell_events();
         if (pending_regenerate_restart) {
             pending_regenerate_restart = false;
             if (last_assist_command.valid) {
@@ -2794,8 +3004,8 @@ app::EditorRunResult run_editor(const std::string& path,
             if (current_size.rows != last_size.rows || current_size.cols != last_size.cols ||
                 assist_session.job.running() || model_list.job.running() || assist_updated ||
                 reformat_session.job.running() || reformat_updated || insert_session.job.running() ||
-                insert_updated || model_updated || selection_updated ||
-                assist_animating) {
+                insert_updated || shell_session.job.running() || shell_updated || model_updated ||
+                selection_updated || assist_animating) {
                 last_size = current_size;
                 render_editor();
             }
@@ -2829,6 +3039,10 @@ app::EditorRunResult run_editor(const std::string& path,
 
         last_size = terminal_size();
         render_editor();
+    }
+    if (shell_session.job.joinable()) {
+        shell_session.job.cancel();
+        shell_session.job.join();
     }
     selection_save_job.join();
     EditorSelectionSaveEvent selection_event;

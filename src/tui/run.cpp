@@ -18,6 +18,7 @@
 #include "app/app.hpp"
 #include "app/interactive_mode.hpp"
 #include "app/detail.hpp"
+#include "app/user_shell.hpp"
 #include "agent/session_runtime.hpp"
 #include "agent/tool_display.hpp"
 #include "chat/settings.hpp"
@@ -427,7 +428,21 @@ app::TuiRunResult run(provider::RequestContext context,
         pending_user_added_for_job = false;
     };
 
+    auto strip_non_chat_roles = [](chat::Session& snapshot) {
+        // Chat SQLite / JSON chat files only persist system/user/assistant.
+        // Notices (e.g. /shell) are display-only in the open TUI session.
+        std::vector<provider::Message> kept;
+        kept.reserve(snapshot.messages.size());
+        for (provider::Message& message : snapshot.messages) {
+            if (app::is_provider_chat_role(message.role)) {
+                kept.push_back(std::move(message));
+            }
+        }
+        snapshot.messages = std::move(kept);
+    };
+
     auto start_save = [&](const std::string& path, chat::Session snapshot, bool quiet_success = false) {
+        strip_non_chat_roles(snapshot);
         file_jobs.start_save(path, std::move(snapshot), quiet_success);
     };
 
@@ -442,6 +457,7 @@ app::TuiRunResult run(provider::RequestContext context,
             return;
         }
         chat::Session snapshot = session;
+        strip_non_chat_roles(snapshot);
         app::refresh_session_metadata(snapshot, context);
         if (file_job.joinable()) {
             deferred_store_save = std::move(snapshot);
@@ -629,8 +645,13 @@ app::TuiRunResult run(provider::RequestContext context,
         pending_assistant = session.messages.size();
         session.messages.push_back({"assistant", ""});
 
-        std::vector<provider::Message> request_messages = session.messages;
-        request_messages.pop_back();
+        // Exclude display-only notice/tool/summary lines from the provider payload.
+        std::vector<provider::Message> request_messages =
+            app::provider_chat_messages(session.messages);
+        if (!request_messages.empty() && request_messages.back().role == "assistant" &&
+            request_messages.back().content.empty()) {
+            request_messages.pop_back();
+        }
 
         provider::RequestContext job_context = context;
         const std::string media_database_path = sqlite_available ? sqlite_path : std::string();
@@ -1102,6 +1123,9 @@ app::TuiRunResult run(provider::RequestContext context,
     };
     command_handlers.start_fetch = [&](const std::string& url) { file_jobs.start_fetch(url); };
     command_handlers.start_search = [&](const std::string& query) { file_jobs.start_search(query); };
+    command_handlers.start_shell = [&](const std::string& command, bool to_draft) {
+        file_jobs.start_shell(command, to_draft);
+    };
     command_handlers.start_media_cleanup = [&]() {
         file_jobs.start_media_cleanup(context.options.media_expiration_days,
                                       session.thread_id, false);
@@ -1333,6 +1357,22 @@ app::TuiRunResult run(provider::RequestContext context,
         if (text.empty() && chat_attachments.empty()) {
             input = new_input_editor();
             return;
+        }
+        // User shell: !cmd /shell (notice) or !!cmd /shell-stdout (draft).
+        if (raw.find('\n') == std::string::npos && !text.empty()) {
+            std::string shell_command;
+            std::string shell_error;
+            app::UserShellDestination shell_dest = app::UserShellDestination::Notice;
+            if (app::parse_user_shell_invocation(text, shell_command, shell_error, shell_dest)) {
+                input = new_input_editor();
+                if (!shell_error.empty()) {
+                    status = shell_error;
+                    return;
+                }
+                file_jobs.start_shell(shell_command,
+                                     shell_dest == app::UserShellDestination::Draft);
+                return;
+            }
         }
         if (raw.find('\n') == std::string::npos && !text.empty() && text[0] == '/') {
             if (session.read_only) {
@@ -1721,6 +1761,55 @@ app::TuiRunResult run(provider::RequestContext context,
                         status = detail::error_line(event.error);
                     }
                     break;
+                case TuiEventType::ShellDone: {
+                    file_job.join();
+                    completed_file_job = true;
+                    if (event.shell_to_draft) {
+                        // Replace input draft with pure stdout; user edits before send.
+                        input = editor::EditorState::from_text(event.inserted_text);
+                        input.set_undo_limit(input_undo_limit);
+                        input.set_language(highlight::Language::Markdown, false);
+                        input.highlight_enabled = syntax_highlight;
+                        // On failure: display-only diagnostic notice (stderr/reason).
+                        if (event.shell_failed && !event.inserted_message.content.empty()) {
+                            session.messages.push_back(event.inserted_message);
+                            history_scroll = 0;
+                            if (context.options.agent && agent_runtime &&
+                                agent_runtime->prepared()) {
+                                (void)agent_runtime->append_display_notice(
+                                    event.inserted_message.content);
+                            }
+                        }
+                        // event.text is preformatted draft status (success or clear failure).
+                        status = event.text.empty()
+                                     ? (event.shell_failed ? "Shell-stdout failed"
+                                                           : "Shell → draft")
+                                     : event.text;
+                    } else {
+                        // Notice mode: show captured output in history (not model context).
+                        if (!event.inserted_message.content.empty()) {
+                            session.messages.push_back(event.inserted_message);
+                            history_scroll = 0;
+                            if (context.options.agent && agent_runtime &&
+                                agent_runtime->prepared()) {
+                                (void)agent_runtime->append_display_notice(
+                                    event.inserted_message.content);
+                            }
+                        }
+                        if (event.error.ok()) {
+                            status = event.quiet_success
+                                         ? ("Shell ok · " + event.text)
+                                         : ("Shell finished · " + event.text);
+                        } else if (event.error.code == ErrorCode::Cancelled) {
+                            status = "Shell cancelled";
+                        } else if (event.error.code == ErrorCode::Timeout) {
+                            status = "Shell timed out · " + event.text;
+                        } else {
+                            status = detail::error_line(event.error);
+                        }
+                    }
+                    break;
+                }
                 case TuiEventType::ModelsDone:
                     model_job.join();
                     active_job = ActiveJob::None;

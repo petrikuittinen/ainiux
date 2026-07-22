@@ -36,6 +36,8 @@ struct TuiCommandHandlers {
     std::function<void(const std::string&)> start_attach;
     std::function<void(const std::string&)> start_fetch;
     std::function<void(const std::string&)> start_search;
+    // command body only; second arg is true for /shell-stdout / !! (draft fill).
+    std::function<void(const std::string&, bool)> start_shell;
     std::function<void()> start_media_cleanup;
     std::function<void(bool)> set_thinking_trace_mode;
     std::function<void()> switch_to_editor;

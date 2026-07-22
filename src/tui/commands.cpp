@@ -20,7 +20,9 @@ bool allowed_for_read_only_thread(const std::string& text) {
            text == "/save" || text.rfind("/save ", 0) == 0 ||
            text.rfind("/load ", 0) == 0 || text == "/theme" ||
            text.rfind("/theme ", 0) == 0 || text == "/highlight" ||
-           text.rfind("/highlight ", 0) == 0;
+           text.rfind("/highlight ", 0) == 0 ||
+           text == "/shell" || text.rfind("/shell ", 0) == 0 ||
+           text == "/shell-stdout" || text.rfind("/shell-stdout ", 0) == 0;
 }
 
 bool reasoning_change_needs_confirmation(const std::string& requested,
@@ -82,6 +84,8 @@ void handle_tui_command(const std::string& text, TuiCommandContext& ctx, TuiComm
                 "/attach [PATH|URL] (queue text attachment; bare shows list, DEL deletes)\n"
                 "/fetch URL\n"
                 "/search QUERY\n"
+                "/shell COMMAND  or  !COMMAND (user shell; display-only notice)\n"
+                "/shell-stdout COMMAND  or  !!COMMAND (stdout → editable input draft)\n"
                 "/theme [THEME]\n"
                 "/highlight [on|off]\n"
                 "/thinking [trace|notrace]\n"
@@ -551,6 +555,24 @@ void handle_tui_command(const std::string& text, TuiCommandContext& ctx, TuiComm
     }
     if (text == "/search" || text.rfind("/search ", 0) == 0) {
         handlers.start_search(app::detail::trim_ascii(text.substr(7)));
+        return;
+    }
+    if (text == "/shell-stdout" || text.rfind("/shell-stdout ", 0) == 0) {
+        if (handlers.start_shell) {
+            handlers.start_shell(
+                app::detail::trim_ascii(text.size() > 13 ? text.substr(13) : ""), true);
+        } else {
+            ctx.status = "Shell command is unavailable";
+        }
+        return;
+    }
+    if (text == "/shell" || text.rfind("/shell ", 0) == 0) {
+        if (handlers.start_shell) {
+            handlers.start_shell(
+                app::detail::trim_ascii(text.size() > 6 ? text.substr(6) : ""), false);
+        } else {
+            ctx.status = "Shell command is unavailable";
+        }
         return;
     }
     ctx.status = "Unknown command: " + text;

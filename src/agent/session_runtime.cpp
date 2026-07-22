@@ -256,6 +256,12 @@ Error AgentSessionRuntime::load_display_messages(std::vector<provider::Message>&
     return ok_error();
 }
 
+Error AgentSessionRuntime::append_display_notice(const std::string& content) {
+    if (!session_store_.is_open()) return ok_error();
+    if (content.empty()) return ok_error();
+    return session_store_.append_message("notice", redact_secrets(content, secrets_));
+}
+
 Error AgentSessionRuntime::finish_session(const std::string& status,
                                           const std::string& final_text,
                                           const std::string& error_code,

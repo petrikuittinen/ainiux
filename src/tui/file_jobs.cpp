@@ -1,14 +1,18 @@
 #include "tui/file_jobs.hpp"
 
+#include "app/user_shell.hpp"
 #include "fetch/fetch.hpp"
 #include "html/html.hpp"
 #include "input/input.hpp"
 #include "provider/provider.hpp"
 #include "search/search.hpp"
+#include "security/redact.hpp"
 #include "tui/detail/render.hpp"
 #include "tui/tui.hpp"
 
+#include <algorithm>
 #include <stdexcept>
+#include <vector>
 
 namespace ainiux::tui {
 
@@ -439,6 +443,68 @@ void TuiFileJobs::start_search(const std::string& query) {
         event_queue.push(std::move(event));
     });
     status = "Searching " + query + "...";
+}
+
+void TuiFileJobs::start_shell(const std::string& command, bool to_draft) {
+    if (busy()) {
+        return;
+    }
+    if (command.empty()) {
+        status = to_draft ? "Usage: /shell-stdout COMMAND  or  !!COMMAND"
+                          : "Usage: /shell COMMAND  or  !COMMAND";
+        return;
+    }
+
+    std::vector<std::string> secrets;
+    if (!context.api_key.empty()) secrets.push_back(context.api_key);
+    if (!context.options.key.empty()) secrets.push_back(context.options.key);
+    for (const std::string& header : context.headers) {
+        const std::size_t colon = header.find(':');
+        if (colon == std::string::npos) continue;
+        if (is_sensitive_header_name(ascii_trim(header.substr(0, colon)))) {
+            const std::string value = ascii_trim(header.substr(colon + 1));
+            if (!value.empty()) secrets.push_back(value);
+        }
+    }
+    std::sort(secrets.begin(), secrets.end());
+    secrets.erase(std::unique(secrets.begin(), secrets.end()), secrets.end());
+
+    app::UserShellOptions options;
+    if (context.options.timeout_seconds > 0) {
+        options.timeout_ms = static_cast<long>(context.options.timeout_seconds) * 1000L;
+    }
+    runtime::EventQueue<TuiEvent>& event_queue = events;
+    file_job.start([command, options, secrets = std::move(secrets), to_draft, &event_queue](
+                       runtime::CancellationToken token) mutable {
+        TuiEvent event;
+        event.type = TuiEventType::ShellDone;
+        event.text = command;
+        event.shell_to_draft = to_draft;
+        options.cancellation = token;
+        app::UserShellResult result;
+        event.error = app::run_user_shell(command, options, result);
+        event.shell_exit_status = result.exit_status;
+        event.shell_stdout_truncated = result.stdout_truncated;
+        event.shell_failed = app::user_shell_failed(event.error, result);
+        if (to_draft) {
+            // Pure stdout for the editable input draft (may be partial on cancel/timeout).
+            event.inserted_text = app::format_user_shell_draft_stdout(result, secrets);
+            // Ready status line (success or failure). Command remains in failure notice body.
+            event.text = app::format_user_shell_draft_status(event.error, result, secrets);
+            event.quiet_success = !event.shell_failed;
+            if (event.shell_failed) {
+                event.inserted_message = {
+                    "notice", app::format_user_shell_failure_notice(event.error, result, secrets)};
+            }
+        } else {
+            event.inserted_message = {"notice", app::format_user_shell_notice(result, secrets)};
+            if (event.error.ok()) {
+                event.quiet_success = result.exit_status == 0;
+            }
+        }
+        event_queue.push(std::move(event));
+    });
+    status = to_draft ? ("Shell → draft: " + command) : ("Running shell: " + command);
 }
 
 }  // namespace ainiux::tui

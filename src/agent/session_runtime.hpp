@@ -81,6 +81,10 @@ class AgentSessionRuntime {
     // user/assistant/tool/notice/summary). Empty when the DB has no messages.
     Error load_display_messages(std::vector<provider::Message>& out) const;
 
+    // Append a display-only notice to the project agent transcript (e.g. user /shell).
+    // No-op when the session DB is not open.
+    Error append_display_notice(const std::string& content);
+
     // Run one user goal/follow-up until FinalText, NeedsUserContinue, abort, or error.
     // First turn seeds the tool conversation; later turns append a user message.
     // Optional on_progress receives compact tool lines (and brief notices) as they

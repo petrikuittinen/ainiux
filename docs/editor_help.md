@@ -225,6 +225,8 @@ Press **`Esc`** to open the command minibuffer (`Command:`). Type a command with
 | `/tab-style [spaces|tab]` | Show or set this buffer's indentation style |
 | `/linebreak [lf|cr|crlf]` | Show or set this buffer's save line endings |
 | `/insert FILE_OR_URL` | Insert bounded UTF-8 file text or fetched HTML at the cursor |
+| `shell COMMAND` or `!COMMAND` (optional `/`) | Run a user shell command; open a **new buffer** with pure stdout; status/errors/time in the minibuffer |
+| `shell-stdout COMMAND` or `!!COMMAND` (optional `/`) | Same as `shell` in the editor (new buffer + minibuffer status) |
 | `/auto-convert-html-to-md [yes|no]` | Show or set URL HTML-to-Markdown conversion for this process |
 | `/provider [NAME]` | Change provider (picker when omitted) |
 | `/model [MODEL]` | Change model (picker when omitted) |
@@ -289,6 +291,8 @@ The status line shows the current language and line-ending mode compactly in par
 - `linebreak` — default `lf`, `cr`, or `crlf` for new, empty, no-ending, and mixed-ending files (default `lf`)
 
 `[input] auto-convert-html-to-md` controls `/insert URL` and defaults to `yes`. URL insertion accepts only HTTP(S), retains the existing private-address, proxy, timeout, TLS, content-type, and response-size protections, and requires UTF-8 HTML. Set it to `no` to insert raw HTML. Local `/insert` accepts every file ending, but rejects NUL-containing, invalid UTF-8, unreadable, and oversized content. CR and CRLF are normalized to the editor's internal LF representation and use the buffer's chosen linebreak mode when saved.
+
+User shell (`shell` / `/shell` / `!` / `shell-stdout` / `/shell-stdout` / `!!`) runs `/bin/sh -c` in the process working directory. In the editor the leading `/` is optional (as with other commands). Every form opens a **new buffer** containing pure stdout only; the minibuffer shows success (exit, elapsed ms, byte count) or a clear failure (exit/stderr snippet). Esc cancels an in-flight shell job. Unlike chat/agent, `shell-stdout` is not draft-fill here—both forms use the new-buffer path.
 
 When you open a file whose auto-save backup (for example `notes.txt~`) is newer than the saved file, ainiux asks whether to recover the backup instead. At startup this prompt appears on stderr before the editor UI; when opening another file in the editor, the minibuffer asks `y` to recover or `n` to load the saved file.
 

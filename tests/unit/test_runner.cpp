@@ -1,6 +1,7 @@
 #include <iostream>
 
 #include "benchmark/test_benchmark.hpp"
+#include "app/test_user_shell.hpp"
 #include "agent/test_agent_adversarial.hpp"
 #include "agent/test_agent_loop.hpp"
 #include "agent/test_agents_md.hpp"
@@ -34,6 +35,7 @@
 #include "ui/test_text_selector.hpp"
 
 int main() {
+    ainiux::test::app_user_shell::run_all();
     ainiux::test::agent_index::run_all();
     ainiux::test::agent_loop::run_all();
     ainiux::test::agent_agents_md::run_all();
