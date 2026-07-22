@@ -35,16 +35,20 @@ The diagnostic log intentionally preserves source and model payloads without tru
 
 ## Headless one-shot agent
 
-`ainiux run` / `--run` / `-r` / `--run-file` is a non-interactive coding agent for a single user goal. Interactive `ainiux agent` / `--agent` / `-a` uses the same tools from a chat-like TUI. It refreshes `.ainiux/index.sqlite`, loads the trusted master prompt plus a static native or XML protocol appendix, optionally injects workspace-root `AGENTS.md` as a separate untrusted user-context message (capped; never system prompt), and runs the shared agent loop with the same snapshot-backed read tools and inspection command allowlist as security review, plus ordinary workspace mutations when the agent registry is created with writes enabled:
+`ainiux run` / `--run` / `-r` / `--run-file` is a non-interactive coding agent for a single user goal. Interactive `ainiux agent` / `--agent` / `-a` uses the same tools from a chat-like TUI. It refreshes `.ainiux-pr/index.sqlite`, loads the trusted master prompt plus a static native or XML protocol appendix, optionally injects workspace-root `AGENTS.md` as a separate untrusted user-context message (capped; never system prompt), and runs the shared agent loop with the same snapshot-backed read tools and inspection command allowlist as security review, plus ordinary workspace mutations and network tools when the agent registry is created with writes/network enabled:
 
-- `edit_file` (preferred), `write_file`, and exact `str_replace` may create/overwrite workspace-relative UTF-8 files only.
-- Path escape, `.ainiux-pr` / `.ainiux` / `.git` components, and symlink components are refused.
+- `edit_file` (preferred), `write_file`, `str_replace`, `remove`, and `apply_patch` may mutate workspace-relative UTF-8 files only.
+- `git_status` / `git_diff` use the git CLI with pager/external-diff disabled; only read-only options are allowed (no `--output`, no force push, etc.).
+- `index_status` / `index_update` refresh project `.ainiux-pr/index.sqlite`; `index_rebuild` requires `confirm=true` and is agent-only.
+- `fetch_url` and `search_web` reuse `src/fetch/` and `src/search/` safety (timeouts, size caps, private/loopback blocking unless explicitly allowed).
+- Agent `fetch_url` **always** returns UTF-8 **Markdown or plain text** (HTML→MD via `src/html/`, scripts/styles stripped). It never returns raw HTML/CSS/JS to the model: full pages are a prompt-injection and token-cost hazard. CLI `--fetch-url` may still export HTML for local use.
+- Path escape, `.ainiux-pr` / `.ainiux` / `.git` components, and symlink components are refused for writes.
 - Optional `expected_file_hash` / per-op `expected_hash` rejects stale concurrent edits.
 - Pre-overwrite copies are stored under `.ainiux-pr/history/` (project-local; mode depends on umask/filesystem defaults).
-- In-memory index snapshot hashes are updated after a successful write so later reads in the same run stay consistent. Full on-disk reindex of symbols still happens on the next agent/index refresh.
+- In-memory index snapshot hashes are updated after a successful write so later reads in the same run stay consistent; tools can also call `index_update` mid-session.
 - Project `AGENTS.md` cannot disable safety rules, change the workspace root, or override the user's direct request.
 
-Security-review never enables these mutation tools and never injects project `AGENTS.md` as instructions. Agent **tools** still do not expose unrestricted shell (only allowlisted `run_command` without a shell). Interactive user `/shell` / `!` is a separate UI feature (see above). Final assistant text is written to `stdout`; status, notices, and errors go to `stderr`. Turn/loop limits and transport retries follow the agent-loop reliability rules (identical-call soft/hard caps, consecutive-failure abort, 50-turn scripted cap, no automatic tool re-execution).
+Security-review never enables mutation or network tools and never injects project `AGENTS.md` as instructions. Agent **tools** still do not expose unrestricted shell (only allowlisted `run_command` without a shell). Interactive user `/shell` / `!` is a separate UI feature (see above). Final assistant text is written to `stdout`; status, notices, and errors go to `stderr`. Turn/loop limits and transport retries follow the agent-loop reliability rules (identical-call soft/hard caps, consecutive-failure abort, 50-turn scripted cap, no automatic tool re-execution).
 
 ## Editor Advisory Locks
 
@@ -97,12 +101,15 @@ Web search is explicit through `--search QUERY`, REPL `/search QUERY`, TUI `/sea
 Defaults:
 
 - result cap: 3 unless `web_search.max_results`, `--max-web-search-results`, or `MAXIMUM_WEB_SEARCH_RESULTS` overrides it
-- provider order: configured API providers when keys/base URLs exist, then DuckDuckGo Instant Answer, then Google HTML parsing
+- provider order: configured API providers when keys/base URLs exist, then free DuckDuckGo HTML SERP (Instant Answer secondary)
 - credentials: API keys come from environment variables or config `*_key_env` names; do not store secrets in config files
 - network: uses the same libcurl transport, timeouts, and proxy settings as other HTTP features
 - local installs: Searxng/Exa on loopback require `--allow-private-url-fetch`, matching URL-fetch private-address policy
+- agent `search_web` returns at most 3 results so models do not fan out into many fetches; overlong result URLs are truncated
+- URL fetch uses a desktop Firefox-like User-Agent and browser-style Accept / Sec-Fetch headers (still not a full browser)
+- Fetched HTML/text is normalized to **UTF-8** (ISO-8859-1 / Windows-1252 via Content-Type or meta charset). Raw legacy bytes are never put into tool-result JSON (that broke local llama.cpp with “ill-formed UTF-8”)
 
-Search results are untrusted third-party text. They are inserted as user-context messages and should be treated as external input by both users and models. Google HTML fallback parsing may break when result markup changes.
+Search results are untrusted third-party text. They are inserted as user-context messages and should be treated as external input by both users and models. DuckDuckGo HTML markup may change over time; parser failures surface a clear error rather than inventing results.
 
 ## Local Image Input
 

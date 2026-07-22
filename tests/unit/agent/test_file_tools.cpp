@@ -1,5 +1,6 @@
 #include "agent/test_file_tools.hpp"
 
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <string>
@@ -9,6 +10,7 @@
 #include "agent/index/index.hpp"
 #include "agent/tools.hpp"
 #include "json/json.hpp"
+#include "provider/provider.hpp"
 #include "support/test_support.hpp"
 
 namespace ainiux::test::agent_file_tools {
@@ -701,6 +703,156 @@ void test_replace_symbol() {
     fs::remove_all(workspace, ec);
 }
 
+void test_index_status_and_update() {
+    const std::string workspace = write_temp_workspace("index-tools");
+    agent::ReadToolRegistry tools = make_registry(workspace, true);
+
+    const std::string status = tools.execute("index_status", R"JSON({"check_filesystem":true})JSON");
+    check(json_ok(status), "index_status succeeds: " + status);
+    check(json_data_string(status, "path").find("index.sqlite") != std::string::npos,
+          "index_status reports index path");
+
+    write_text(fs::path(workspace) / "src" / "hello.cpp", "int main() { return 1; }\n");
+    const std::string update =
+        tools.execute("index_update", R"JSON({"paths":["src/hello.cpp"],"force":true})JSON");
+    check(json_ok(update), "index_update force path succeeds: " + update);
+
+    const std::string rebuild_denied =
+        tools.execute("index_rebuild", R"JSON({"confirm":false})JSON");
+    check(!json_ok(rebuild_denied), "index_rebuild requires confirm");
+
+    const std::string rebuild = tools.execute("index_rebuild", R"JSON({"confirm":true})JSON");
+    check(json_ok(rebuild), "index_rebuild confirm succeeds: " + rebuild);
+
+    agent::ReadToolRegistry review = make_registry(workspace, false);
+    const std::string review_rebuild =
+        review.execute("index_rebuild", R"JSON({"confirm":true})JSON");
+    check(!json_ok(review_rebuild), "read-only registry hides index_rebuild");
+    check(json_error_code(review_rebuild) == "unknown_tool" ||
+              json_error_code(review_rebuild) == "policy_denied",
+          "index_rebuild denied in review: " + review_rebuild);
+
+    std::error_code ec;
+    fs::remove_all(workspace, ec);
+}
+
+void test_inspect_and_find_tests() {
+    const std::string workspace = write_temp_workspace("inspect");
+    write_text(fs::path(workspace) / "src" / "agent_loop.cpp", "void run_agent_loop() {}\n");
+    std::error_code mkdir_ec;
+    fs::create_directories(fs::path(workspace) / "tests", mkdir_ec);
+    write_text(fs::path(workspace) / "tests" / "test_agent_loop.cpp",
+               "void test_agent_loop_runs() {}\n");
+    agent::ReadToolRegistry tools = make_registry(workspace, true);
+
+    const std::string inspect =
+        tools.execute("inspect_code_task", R"JSON({"query":"agent loop","max_files":5})JSON");
+    check(json_ok(inspect), "inspect_code_task succeeds: " + inspect);
+
+    const std::string tests =
+        tools.execute("find_tests", R"JSON({"path":"src/agent_loop.cpp"})JSON");
+    check(json_ok(tests), "find_tests succeeds: " + tests);
+
+    std::error_code ec;
+    fs::remove_all(workspace, ec);
+}
+
+void test_git_and_network_tools_policy() {
+    const std::string workspace = write_temp_workspace("git-net");
+    // Initialize a tiny git repo so git_status has a chance to succeed when git exists.
+    {
+        const std::string cmd =
+            "cd " + workspace +
+            " && git init -q && git config user.email t@example.com && "
+            "git config user.name test && git add src/hello.cpp && "
+            "git commit -q -m init";
+        (void)std::system(cmd.c_str());
+    }
+    agent::ReadToolRegistry tools = make_registry(workspace, true);
+    agent::ToolRegistryOptions net_options;
+    net_options.allow_mutations = true;
+    net_options.allow_network = true;
+    {
+        agent::index::Options options;
+        options.workspace = workspace;
+        options.max_source_code_file_size = 1024 * 1024;
+        agent::index::RefreshStats stats;
+        check(agent::index::refresh(options, stats).ok(), "refresh for network tools");
+        agent::index::Snapshot snapshot;
+        check(agent::index::load_snapshot(options, snapshot).ok(), "snapshot for network tools");
+        agent::ReadToolRegistry net_tools;
+        check(agent::ReadToolRegistry::create(std::move(options), std::move(snapshot), {},
+                                              net_tools, net_options)
+                  .ok(),
+              "create network-enabled registry");
+
+        const std::string status = net_tools.execute("git_status", R"JSON({})JSON");
+        // git may be missing in some environments; accept ok or unavailable.
+        check(json_ok(status) || json_error_code(status) == "unavailable" ||
+                  json_error_code(status) == "FileRead" ||
+                  json_error_code(status) == "file_read",
+              "git_status runs or reports missing git: " + status);
+
+        const std::string diff =
+            net_tools.execute("git_diff", R"JSON({"stat":true})JSON");
+        check(json_ok(diff) || json_error_code(diff) == "unavailable" ||
+                  json_error_code(diff) == "FileRead" ||
+                  json_error_code(diff) == "file_read",
+              "git_diff runs or reports missing git: " + diff);
+
+        // Private URL should be blocked by default fetch policy.
+        const std::string fetch =
+            net_tools.execute("fetch_url", R"JSON({"url":"http://127.0.0.1/"})JSON");
+        check(!json_ok(fetch), "fetch_url blocks loopback by default: " + fetch);
+
+        // Schema must not invite raw HTML; extract_text is not a declared parameter.
+        bool fetch_schema_ok = false;
+        for (const provider::FunctionDefinition& def : net_tools.definitions()) {
+            if (def.name != "fetch_url") continue;
+            check(def.parameters_json.find("extract_text") == std::string::npos,
+                  "fetch_url schema omits extract_text (Markdown-only tool)");
+            check(def.description.find("Markdown") != std::string::npos ||
+                      def.description.find("markdown") != std::string::npos,
+                  "fetch_url description mentions Markdown");
+            fetch_schema_ok = true;
+        }
+        check(fetch_schema_ok, "fetch_url is in network-enabled registry");
+
+        // Legacy extract_text=false must not open a raw-HTML path (still blocks loopback).
+        const std::string fetch_legacy = net_tools.execute(
+            "fetch_url", R"JSON({"url":"http://127.0.0.1/","extract_text":false})JSON");
+        check(!json_ok(fetch_legacy), "fetch_url with extract_text=false still policy-safe");
+
+        const std::string search =
+            net_tools.execute("search_web", R"JSON({"term":"ainiux agent"})JSON");
+        // May succeed via keyless providers or fail unavailable — must not crash.
+        check(json_ok(search) || !json_error_code(search).empty(),
+              "search_web returns structured result: " + search);
+    }
+
+    agent::ReadToolRegistry review = make_registry(workspace, false);
+    const std::string no_fetch =
+        review.execute("fetch_url", R"JSON({"url":"https://example.com/"})JSON");
+    check(!json_ok(no_fetch), "review registry does not expose fetch_url");
+    const std::string no_search =
+        review.execute("search_web", R"JSON({"term":"x"})JSON");
+    check(!json_ok(no_search), "review registry does not expose search_web");
+
+    // Schema list includes new tools in agent mode.
+    bool saw_git = false;
+    bool saw_index = false;
+    bool saw_inspect = false;
+    for (const provider::FunctionDefinition& def : tools.definitions()) {
+        if (def.name == "git_status" || def.name == "git_diff") saw_git = true;
+        if (def.name == "index_status" || def.name == "index_update") saw_index = true;
+        if (def.name == "inspect_code_task" || def.name == "find_tests") saw_inspect = true;
+    }
+    check(saw_git && saw_index && saw_inspect, "agent definitions include new tools");
+
+    std::error_code ec;
+    fs::remove_all(workspace, ec);
+}
+
 }  // namespace
 
 void run_all() {
@@ -714,6 +866,9 @@ void run_all() {
     test_remove_tool();
     test_list_directory_filesystem();
     test_replace_symbol();
+    test_index_status_and_update();
+    test_inspect_and_find_tests();
+    test_git_and_network_tools_policy();
 }
 
 }  // namespace ainiux::test::agent_file_tools

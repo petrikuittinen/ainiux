@@ -397,38 +397,117 @@ std::string stringify(const Value& value) {
 }
 
 std::string escape_string(const std::string& input) {
+    // Emit only well-formed UTF-8 (or \u escapes). Ill-formed bytes must not
+    // appear raw in JSON strings — local model servers (e.g. llama.cpp) reject
+    // them with parse errors when tool results embed legacy-charset HTML.
+    auto is_cont = [&](size_t i) {
+        if (i >= input.size()) return false;
+        const unsigned char c = static_cast<unsigned char>(input[i]);
+        return c >= 0x80 && c <= 0xBF;
+    };
+    auto write_u00 = [&](std::ostringstream& out, unsigned char ch) {
+        out << "\\u" << std::hex << std::setw(4) << std::setfill('0') << std::nouppercase
+            << static_cast<int>(ch) << std::dec;
+    };
+
     std::ostringstream out;
-    for (unsigned char ch : input) {
-        switch (ch) {
-            case '"':
-                out << "\\\"";
-                break;
-            case '\\':
-                out << "\\\\";
-                break;
-            case '\b':
-                out << "\\b";
-                break;
-            case '\f':
-                out << "\\f";
-                break;
-            case '\n':
-                out << "\\n";
-                break;
-            case '\r':
-                out << "\\r";
-                break;
-            case '\t':
-                out << "\\t";
-                break;
-            default:
-                if (ch < 0x20) {
-                    out << "\\u" << std::hex << std::setw(4) << std::setfill('0') << static_cast<int>(ch);
-                } else {
-                    out << static_cast<char>(ch);
-                }
-                break;
+    size_t i = 0;
+    while (i < input.size()) {
+        const unsigned char ch = static_cast<unsigned char>(input[i]);
+        if (ch < 0x80) {
+            switch (ch) {
+                case '"':
+                    out << "\\\"";
+                    break;
+                case '\\':
+                    out << "\\\\";
+                    break;
+                case '\b':
+                    out << "\\b";
+                    break;
+                case '\f':
+                    out << "\\f";
+                    break;
+                case '\n':
+                    out << "\\n";
+                    break;
+                case '\r':
+                    out << "\\r";
+                    break;
+                case '\t':
+                    out << "\\t";
+                    break;
+                default:
+                    if (ch < 0x20) {
+                        write_u00(out, ch);
+                    } else {
+                        out << static_cast<char>(ch);
+                    }
+                    break;
+            }
+            ++i;
+            continue;
         }
+        // Multi-byte UTF-8 sequences; fall back to \u00XX for each bad byte.
+        size_t need = 0;
+        if (ch >= 0xC2 && ch <= 0xDF)
+            need = 2;
+        else if (ch == 0xE0)
+            need = (i + 2 < input.size() &&
+                    static_cast<unsigned char>(input[i + 1]) >= 0xA0 &&
+                    static_cast<unsigned char>(input[i + 1]) <= 0xBF && is_cont(i + 2))
+                       ? 3
+                       : 0;
+        else if ((ch >= 0xE1 && ch <= 0xEC) || ch == 0xEE || ch == 0xEF)
+            need = 3;
+        else if (ch == 0xED)
+            need = (i + 2 < input.size() &&
+                    static_cast<unsigned char>(input[i + 1]) >= 0x80 &&
+                    static_cast<unsigned char>(input[i + 1]) <= 0x9F && is_cont(i + 2))
+                       ? 3
+                       : 0;
+        else if (ch == 0xF0)
+            need = (i + 3 < input.size() &&
+                    static_cast<unsigned char>(input[i + 1]) >= 0x90 &&
+                    static_cast<unsigned char>(input[i + 1]) <= 0xBF && is_cont(i + 2) &&
+                    is_cont(i + 3))
+                       ? 4
+                       : 0;
+        else if (ch >= 0xF1 && ch <= 0xF3)
+            need = 4;
+        else if (ch == 0xF4)
+            need = (i + 3 < input.size() &&
+                    static_cast<unsigned char>(input[i + 1]) >= 0x80 &&
+                    static_cast<unsigned char>(input[i + 1]) <= 0x8F && is_cont(i + 2) &&
+                    is_cont(i + 3))
+                       ? 4
+                       : 0;
+        else
+            need = 0;
+
+        if (need == 2 && is_cont(i + 1)) {
+            out << input[i] << input[i + 1];
+            i += 2;
+            continue;
+        }
+        if (need == 3 && is_cont(i + 1) && is_cont(i + 2)) {
+            // E0/ED already validated above when need was set non-zero; for E1-EC/EE/EF cont is enough.
+            if (ch == 0xE0 || ch == 0xED) {
+                out << input[i] << input[i + 1] << input[i + 2];
+                i += 3;
+                continue;
+            }
+            out << input[i] << input[i + 1] << input[i + 2];
+            i += 3;
+            continue;
+        }
+        if (need == 4 && is_cont(i + 1) && is_cont(i + 2) && is_cont(i + 3)) {
+            out << input[i] << input[i + 1] << input[i + 2] << input[i + 3];
+            i += 4;
+            continue;
+        }
+        write_u00(out, ch);
+        ++i;
     }
     return out.str();
 }

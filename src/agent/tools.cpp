@@ -1,6 +1,7 @@
 #include "agent/tools.hpp"
 
 #include <algorithm>
+#include <cctype>
 #include <chrono>
 #include <cstdio>
 #include <ctime>
@@ -20,8 +21,10 @@
 #include "agent/project_paths.hpp"
 #include "agent/text_match.hpp"
 #include "agent/tool_args.hpp"
+#include "fetch/fetch.hpp"
 #include "html/html.hpp"
 #include "json/json.hpp"
+#include "search/search.hpp"
 #include "security/redact.hpp"
 
 namespace ainiux::agent {
@@ -403,7 +406,10 @@ Error ReadToolRegistry::create(index::Options index_options,
     loaded.snapshot_ = std::move(snapshot);
     loaded.secrets_ = std::move(secrets);
     loaded.allow_mutations_ = options.allow_mutations;
+    loaded.allow_network_ = options.allow_network;
     loaded.history_backup_ = options.history_backup;
+    loaded.fetch_options_ = options.fetch_options;
+    loaded.search_options_ = options.search_options;
     registry = std::move(loaded);
     registry.rebuild_file_map();
     (void)registry.purge_expired_history_backups();
@@ -1829,7 +1835,69 @@ std::vector<provider::FunctionDefinition> ReadToolRegistry::definitions() const 
                 "\"timeout_ms\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":" +
                     std::string(allow_mutations_ ? "120000" : "10000") + "}",
                 "\"command\"")},
+        {"git_status",
+         "Compact git status for the workspace (short form with branch by default). "
+         "Uses the git CLI; not libgit2. Prefer this over run_command for status.",
+         schema("\"short\":{\"type\":\"boolean\"},\"include_branch\":{\"type\":\"boolean\"}")},
+        {"git_diff",
+         "Bounded git diff for the workspace (optional path, --cached, --stat). "
+         "Uses the git CLI with pager/external-diff disabled.",
+         schema("\"path\":{\"type\":\"string\"},\"cached\":{\"type\":\"boolean\"},"
+                "\"stat\":{\"type\":\"boolean\"},"
+                "\"max_bytes\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":524288}")},
+        {"index_status",
+         "Report .ainiux-pr/index.sqlite state (file/symbol counts, freshness, optional "
+         "changed-path sample).",
+         schema("\"check_filesystem\":{\"type\":\"boolean\"},"
+                "\"max_changed_files\":{\"type\":\"integer\",\"minimum\":0,\"maximum\":500}")},
+        {"index_update",
+         "Incrementally refresh the code index for changed files (or only listed paths). "
+         "force=true rescans even when size/mtime look unchanged.",
+         schema("\"paths\":{\"type\":\"array\",\"items\":{\"type\":\"string\"},\"maxItems\":200},"
+                "\"force\":{\"type\":\"boolean\"}")},
+        {"find_tests",
+         "Heuristically find likely tests for a path or symbol (naming/path conventions).",
+         schema("\"path\":{\"type\":\"string\"},\"symbol_id\":{\"type\":\"integer\",\"minimum\":1},"
+                "\"max_results\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":100}")},
+        {"inspect_code_task",
+         "Macro-tool: rank likely files/symbols/tests for a natural-language coding task "
+         "from the index (no network).",
+         schema("\"query\":{\"type\":\"string\"},"
+                "\"max_symbols\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":100},"
+                "\"max_files\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":100},"
+                "\"include_skeletons\":{\"type\":\"boolean\"},"
+                "\"include_tests\":{\"type\":\"boolean\"},"
+                "\"max_bytes\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":262144}",
+                "\"query\"")},
     };
+    if (allow_mutations_) {
+        tools.push_back(
+            {"index_rebuild",
+             "Full rebuild of .ainiux-pr/index.sqlite (recovery/debugging). Requires confirm=true.",
+             schema("\"confirm\":{\"type\":\"boolean\"}", "\"confirm\"")});
+    }
+    if (allow_network_) {
+        tools.push_back(
+            {"fetch_url",
+             "Fetch one http(s) URL and return UTF-8 Markdown (or plain text). Never returns raw "
+             "HTML/CSS/JS—scripts, styles, and comments are stripped to reduce tokens and "
+             "prompt-injection risk. Prefer the top 1–3 search hits only. "
+             "Private/loopback blocked unless configured.",
+             schema("\"url\":{\"type\":\"string\"},"
+                    "\"max_bytes\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":8388608},"
+                    "\"timeout_ms\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":120000}",
+                    "\"url\"")});
+        tools.push_back(
+            {"search_web",
+             "Web search (API providers when configured, else free DuckDuckGo HTML). Returns "
+             "title/URL/snippet for at most 3 results by default—use those top hits only; do not "
+             "fetch every URL. Returns web_search_unavailable when no provider can run.",
+             schema("\"term\":{\"type\":\"string\"},"
+                    "\"max_results\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":3},"
+                    "\"timeout_ms\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":120000},"
+                    "\"site\":{\"type\":\"string\"}",
+                    "\"term\"")});
+    }
     if (allow_mutations_) {
         tools.push_back(
             {"edit_file",
@@ -2755,7 +2823,717 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
         return envelope(true, std::move(data), "", "", warnings, false);
     }
 
+    if (name == "git_status") {
+        bool short_form = true;
+        bool include_branch = true;
+        if (!get_bool(args, "short", true, short_form, validation_error) ||
+            !get_bool(args, "include_branch", true, include_branch, validation_error))
+            return tool_error_result("invalid_arguments", validation_error);
+        std::string command = "git status";
+        if (short_form) command += " --short";
+        if (include_branch) command += " --branch";
+        ProcessOptions options;
+        options.workspace = snapshot_.workspace;
+        options.timeout_ms = allow_mutations_ ? 30000 : 10000;
+        options.cancellation = cancellation;
+        options.stdout_limit = 65536;
+        options.stderr_limit = 16384;
+        ProcessResult process;
+        const CommandPolicy policy =
+            allow_mutations_ ? CommandPolicy::Agent : CommandPolicy::InspectionOnly;
+        const Error error = run_command(command, options, process, policy);
+        json::Value data = object_value();
+        data.object["command"] = string_value(command);
+        data.object["cwd"] = string_value(process.cwd.empty() ? snapshot_.workspace : process.cwd);
+        data.object["exit_status"] = number_value(process.exit_status);
+        data.object["stdout"] = string_value(redact_secrets(process.stdout_text, secrets_));
+        data.object["stderr"] = string_value(redact_secrets(process.stderr_text, secrets_));
+        data.object["stdout_truncated"] = bool_value(process.stdout_truncated);
+        data.object["stderr_truncated"] = bool_value(process.stderr_truncated);
+        data.object["duration_ms"] = number_value(static_cast<double>(process.duration_ms));
+        if (!error.ok()) {
+            const std::string code =
+                error.message.find("not available") != std::string::npos ? "unavailable"
+                : error.code == ErrorCode::BadArgs                       ? "policy_denied"
+                                                                         : error_code_string(error.code);
+            return envelope(false, std::move(data), code, error.message, {},
+                            process.stdout_truncated || process.stderr_truncated);
+        }
+        return envelope(true, std::move(data), "", "", {},
+                        process.stdout_truncated || process.stderr_truncated);
+    }
+
+    if (name == "git_diff") {
+        std::string path;
+        bool cached = false;
+        bool stat_only = false;
+        std::size_t max_bytes = 65536;
+        if (!get_string(args, "path", path, false, validation_error) ||
+            !get_bool(args, "cached", false, cached, validation_error) ||
+            !get_bool(args, "stat", false, stat_only, validation_error) ||
+            !get_size(args, "max_bytes", 65536, 524288, max_bytes, validation_error) ||
+            max_bytes == 0)
+            return tool_error_result("invalid_arguments",
+                                    validation_error.empty() ? "max_bytes must be positive"
+                                                             : validation_error);
+        if (!path.empty() && !safe_relative_path(path))
+            return tool_error_result("policy_denied",
+                                    "git_diff path escapes or targets protected metadata");
+        std::string command = "git diff --no-color --no-ext-diff";
+        if (cached) command += " --cached";
+        if (stat_only) command += " --stat";
+        if (!path.empty()) command += " -- " + path;
+        ProcessOptions options;
+        options.workspace = snapshot_.workspace;
+        options.timeout_ms = allow_mutations_ ? 30000 : 10000;
+        options.cancellation = cancellation;
+        options.stdout_limit = max_bytes;
+        options.stderr_limit = 16384;
+        ProcessResult process;
+        const CommandPolicy policy =
+            allow_mutations_ ? CommandPolicy::Agent : CommandPolicy::InspectionOnly;
+        const Error error = run_command(command, options, process, policy);
+        json::Value data = object_value();
+        data.object["command"] = string_value(command);
+        data.object["cwd"] = string_value(process.cwd.empty() ? snapshot_.workspace : process.cwd);
+        data.object["exit_status"] = number_value(process.exit_status);
+        data.object["stdout"] = string_value(redact_secrets(process.stdout_text, secrets_));
+        data.object["stderr"] = string_value(redact_secrets(process.stderr_text, secrets_));
+        data.object["stdout_truncated"] = bool_value(process.stdout_truncated);
+        data.object["stderr_truncated"] = bool_value(process.stderr_truncated);
+        data.object["duration_ms"] = number_value(static_cast<double>(process.duration_ms));
+        data.object["path"] = string_value(path);
+        data.object["cached"] = bool_value(cached);
+        data.object["stat"] = bool_value(stat_only);
+        if (!error.ok()) {
+            const std::string code =
+                error.message.find("not available") != std::string::npos ? "unavailable"
+                : error.code == ErrorCode::BadArgs                       ? "policy_denied"
+                                                                         : error_code_string(error.code);
+            return envelope(false, std::move(data), code, error.message, {},
+                            process.stdout_truncated || process.stderr_truncated);
+        }
+        return envelope(true, std::move(data), "", "", {},
+                        process.stdout_truncated || process.stderr_truncated);
+    }
+
+    if (name == "index_status") {
+        bool check_fs = true;
+        std::size_t max_changed = 50;
+        if (!get_bool(args, "check_filesystem", true, check_fs, validation_error) ||
+            !get_size(args, "max_changed_files", 50, 500, max_changed, validation_error))
+            return tool_error_result("invalid_arguments", validation_error);
+        json::Value data = object_value();
+        const std::string db_path = index::database_path(snapshot_.workspace);
+        std::error_code ec;
+        const bool exists = fs::exists(db_path, ec) && !ec;
+        data.object["index_exists"] = bool_value(exists);
+        data.object["path"] = string_value(db_path);
+        data.object["files_indexed"] = number_value(static_cast<double>(snapshot_.files.size()));
+        data.object["symbols_indexed"] =
+            number_value(static_cast<double>(snapshot_.symbols.size()));
+        data.object["refs_indexed"] = number_value(0);  // call-graph refs not stored yet
+        data.object["last_updated"] = number_value(static_cast<double>(snapshot_.updated_at));
+        data.object["workspace"] = string_value(snapshot_.workspace);
+        bool fresh = true;
+        json::Value changed = array_value();
+        std::vector<std::string> warnings;
+        if (check_fs) {
+            index::Freshness freshness;
+            index::Options opts = index_options_;
+            opts.cancellation = cancellation;
+            const Error fresh_error = index::check_freshness(opts, freshness);
+            if (!fresh_error.ok()) {
+                warnings.push_back(fresh_error.message);
+                fresh = false;
+            } else {
+                fresh = freshness.fresh;
+                std::size_t count = 0;
+                auto append_paths = [&](const std::vector<std::string>& paths,
+                                        const char* kind) {
+                    for (const std::string& path : paths) {
+                        if (count >= max_changed) return;
+                        json::Value item = object_value();
+                        item.object["path"] = string_value(path);
+                        item.object["change"] = string_value(kind);
+                        changed.array.push_back(std::move(item));
+                        ++count;
+                    }
+                };
+                append_paths(freshness.added, "added");
+                append_paths(freshness.changed, "changed");
+                append_paths(freshness.removed, "removed");
+                if (!freshness.reason.empty() && !fresh)
+                    warnings.push_back(freshness.reason);
+            }
+        }
+        data.object["fresh"] = bool_value(fresh);
+        data.object["changed_files"] = std::move(changed);
+        return envelope(true, std::move(data), "", "", warnings, false);
+    }
+
+    if (name == "index_update") {
+        bool force = false;
+        if (!get_bool(args, "force", false, force, validation_error))
+            return tool_error_result("invalid_arguments", validation_error);
+        std::vector<std::string> paths;
+        const json::Value* paths_value = args.get("paths");
+        if (paths_value != nullptr) {
+            if (!paths_value->is_array())
+                return tool_error_result("invalid_arguments", "paths must be an array of strings");
+            if (paths_value->array.size() > 200)
+                return tool_error_result("invalid_arguments", "paths accepts at most 200 entries");
+            for (const json::Value& item : paths_value->array) {
+                if (!item.is_string() || item.string.empty())
+                    return tool_error_result("invalid_arguments",
+                                            "paths entries must be non-empty strings");
+                if (!safe_relative_path(item.string))
+                    return tool_error_result("policy_denied",
+                                            "index_update path escapes or targets protected "
+                                            "metadata: " +
+                                                item.string);
+                paths.push_back(fs::path(item.string).generic_string());
+            }
+        }
+        index::Options opts = index_options_;
+        opts.cancellation = cancellation;
+        opts.force_rescan = force;
+        opts.update_paths = paths;
+        index::RefreshStats stats;
+        const Error error = index::refresh(opts, stats);
+        if (!error.ok())
+            return tool_error_result(error_code_string(error.code), error.message);
+        index::Snapshot next;
+        const Error load_error = index::load_snapshot(opts, next);
+        if (!load_error.ok())
+            return tool_error_result(error_code_string(load_error.code), load_error.message);
+        snapshot_ = std::move(next);
+        rebuild_file_map();
+        json::Value data = object_value();
+        data.object["discovered"] = number_value(static_cast<double>(stats.discovered));
+        data.object["indexed"] = number_value(static_cast<double>(stats.indexed));
+        data.object["unchanged"] = number_value(static_cast<double>(stats.unchanged));
+        data.object["skipped"] = number_value(static_cast<double>(stats.skipped));
+        data.object["removed"] = number_value(static_cast<double>(stats.removed));
+        data.object["symbols"] = number_value(static_cast<double>(stats.symbols));
+        data.object["elapsed_ms"] = number_value(static_cast<double>(stats.elapsed_ms));
+        data.object["files_indexed"] = number_value(static_cast<double>(snapshot_.files.size()));
+        data.object["symbols_indexed"] =
+            number_value(static_cast<double>(snapshot_.symbols.size()));
+        data.object["last_updated"] = number_value(static_cast<double>(snapshot_.updated_at));
+        data.object["force"] = bool_value(force);
+        json::Value path_array = array_value();
+        for (const std::string& path : paths) path_array.array.push_back(string_value(path));
+        data.object["paths"] = std::move(path_array);
+        std::vector<std::string> warnings = stats.diagnostics;
+        return envelope(true, std::move(data), "", "", warnings, false);
+    }
+
+    if (name == "index_rebuild") {
+        if (!allow_mutations_)
+            return tool_error_result("policy_denied", "index_rebuild is not enabled in this session");
+        bool confirm = false;
+        if (!get_bool(args, "confirm", false, confirm, validation_error))
+            return tool_error_result("invalid_arguments", validation_error);
+        if (!confirm)
+            return tool_error_result("invalid_arguments",
+                                    "index_rebuild requires confirm=true (full index rebuild)");
+        index::Options opts = index_options_;
+        opts.cancellation = cancellation;
+        index::ClearStats clear_stats;
+        Error error = index::clear_database(opts, clear_stats);
+        if (!error.ok())
+            return tool_error_result(error_code_string(error.code), error.message);
+        opts.force_rescan = true;
+        index::RefreshStats stats;
+        error = index::refresh(opts, stats);
+        if (!error.ok())
+            return tool_error_result(error_code_string(error.code), error.message);
+        index::Snapshot next;
+        error = index::load_snapshot(opts, next);
+        if (!error.ok())
+            return tool_error_result(error_code_string(error.code), error.message);
+        snapshot_ = std::move(next);
+        rebuild_file_map();
+        json::Value data = object_value();
+        data.object["cleared_files"] = number_value(static_cast<double>(clear_stats.removed_files));
+        data.object["discovered"] = number_value(static_cast<double>(stats.discovered));
+        data.object["indexed"] = number_value(static_cast<double>(stats.indexed));
+        data.object["symbols"] = number_value(static_cast<double>(stats.symbols));
+        data.object["elapsed_ms"] = number_value(static_cast<double>(stats.elapsed_ms));
+        data.object["files_indexed"] = number_value(static_cast<double>(snapshot_.files.size()));
+        data.object["symbols_indexed"] =
+            number_value(static_cast<double>(snapshot_.symbols.size()));
+        data.object["last_updated"] = number_value(static_cast<double>(snapshot_.updated_at));
+        return envelope(true, std::move(data), "", "", stats.diagnostics, false);
+    }
+
+    if (name == "find_tests") {
+        std::string path;
+        std::size_t symbol_id = 0;
+        std::size_t max_results = 20;
+        if (!get_string(args, "path", path, false, validation_error) ||
+            !get_size(args, "symbol_id", 0, 1000000000, symbol_id, validation_error) ||
+            !get_size(args, "max_results", 20, 100, max_results, validation_error) ||
+            max_results == 0)
+            return tool_error_result("invalid_arguments",
+                                    validation_error.empty() ? "max_results must be positive"
+                                                             : validation_error);
+        if (path.empty() && symbol_id == 0)
+            return tool_error_result("invalid_arguments",
+                                    "find_tests requires path and/or symbol_id");
+        if (!path.empty() && !safe_relative_path(path))
+            return tool_error_result("policy_denied",
+                                    "find_tests path escapes or targets protected metadata");
+
+        std::string focus_name;
+        std::string focus_path = path.empty() ? std::string() : fs::path(path).generic_string();
+        if (symbol_id != 0) {
+            bool found = false;
+            for (const index::IndexedSymbol& symbol : snapshot_.symbols) {
+                if (static_cast<std::size_t>(symbol.id) != symbol_id) continue;
+                focus_name = symbol.symbol.name;
+                if (focus_path.empty()) focus_path = symbol.path;
+                found = true;
+                break;
+            }
+            if (!found)
+                return tool_error_result("not_found",
+                                        "symbol_id not in index: " + std::to_string(symbol_id));
+        }
+
+        auto basename_stem = [](const std::string& file_path) {
+            const fs::path p(file_path);
+            std::string stem = p.stem().string();
+            // Strip common source suffixes like .test already handled by stem.
+            return stem;
+        };
+        const std::string stem = focus_path.empty() ? std::string() : basename_stem(focus_path);
+        const std::string stem_lower = lowercase(stem);
+        const std::string name_lower = lowercase(focus_name);
+
+        struct Ranked {
+            double score = 0;
+            std::string path;
+            long long symbol_id = 0;
+            std::string qualified_name;
+        };
+        std::vector<Ranked> ranked;
+
+        auto consider_file = [&](const std::string& candidate_path, double base) {
+            if (candidate_path == focus_path) return;
+            const std::string lower = lowercase(candidate_path);
+            double score = base;
+            if (!stem_lower.empty()) {
+                if (lower.find("/test_") != std::string::npos ||
+                    lower.find("/tests/") != std::string::npos ||
+                    lower.find("/test/") != std::string::npos ||
+                    lower.find("_test.") != std::string::npos ||
+                    lower.find(".test.") != std::string::npos ||
+                    lower.find("_spec.") != std::string::npos ||
+                    lower.rfind("test_", 0) == 0)
+                    score += 0.2;
+                if (lower.find(stem_lower) != std::string::npos) score += 0.5;
+            }
+            if (score < 0.3) return;
+            ranked.push_back({score, candidate_path, 0, {}});
+        };
+
+        for (const index::IndexedFile& file : snapshot_.files) {
+            if (file.status != "indexed") continue;
+            const std::string lower = lowercase(file.path);
+            const bool looks_test =
+                lower.find("/test") != std::string::npos ||
+                lower.find("_test.") != std::string::npos ||
+                lower.find(".test.") != std::string::npos ||
+                lower.find("_spec.") != std::string::npos ||
+                lower.find("/spec/") != std::string::npos ||
+                lower.rfind("test_", 0) == 0 ||
+                fs::path(file.path).filename().string().rfind("test_", 0) == 0;
+            if (!looks_test && focus_path.empty()) continue;
+            if (looks_test) consider_file(file.path, 0.4);
+            else if (!stem_lower.empty() && lower.find(stem_lower) != std::string::npos)
+                consider_file(file.path, 0.25);
+        }
+
+        for (const index::IndexedSymbol& symbol : snapshot_.symbols) {
+            const std::string q = lowercase(symbol.symbol.qualified_name);
+            const std::string n = lowercase(symbol.symbol.name);
+            double score = 0;
+            if (!name_lower.empty() &&
+                (n.find(name_lower) != std::string::npos ||
+                 q.find(name_lower) != std::string::npos))
+                score += 0.6;
+            if (!stem_lower.empty() &&
+                (lowercase(symbol.path).find(stem_lower) != std::string::npos))
+                score += 0.3;
+            const bool looks_test =
+                n.rfind("test_", 0) == 0 || n.rfind("test", 0) == 0 ||
+                q.find("test") != std::string::npos ||
+                lowercase(symbol.path).find("/test") != std::string::npos;
+            if (!looks_test) continue;
+            if (score < 0.3 && name_lower.empty()) score = 0.35;
+            if (score < 0.3) continue;
+            ranked.push_back({score, symbol.path, symbol.id, symbol.symbol.qualified_name});
+        }
+
+        std::sort(ranked.begin(), ranked.end(),
+                  [](const Ranked& a, const Ranked& b) {
+                      if (a.score != b.score) return a.score > b.score;
+                      return a.path < b.path;
+                  });
+        // De-dupe by path+symbol.
+        std::set<std::string> seen;
+        json::Value tests = array_value();
+        bool truncated = false;
+        for (const Ranked& item : ranked) {
+            const std::string key =
+                item.path + "#" + std::to_string(item.symbol_id) + "#" + item.qualified_name;
+            if (!seen.insert(key).second) continue;
+            if (tests.array.size() >= max_results) {
+                truncated = true;
+                break;
+            }
+            json::Value entry = object_value();
+            entry.object["path"] = string_value(item.path);
+            if (item.symbol_id > 0)
+                entry.object["symbol_id"] = number_value(static_cast<double>(item.symbol_id));
+            if (!item.qualified_name.empty())
+                entry.object["qualified_name"] = string_value(item.qualified_name);
+            entry.object["confidence"] = number_value(item.score > 1.0 ? 1.0 : item.score);
+            tests.array.push_back(std::move(entry));
+        }
+
+        json::Value commands = array_value();
+        if (files_.find("Makefile") != files_.end()) {
+            commands.array.push_back(string_value("make test"));
+            commands.array.push_back(string_value("make test-unit"));
+        }
+        if (files_.find("CMakeLists.txt") != files_.end())
+            commands.array.push_back(string_value("ctest --output-on-failure"));
+        if (files_.find("package.json") != files_.end())
+            commands.array.push_back(string_value("npm test"));
+        if (files_.find("Cargo.toml") != files_.end())
+            commands.array.push_back(string_value("cargo test"));
+        if (files_.find("go.mod") != files_.end())
+            commands.array.push_back(string_value("go test ./..."));
+        if (files_.find("pyproject.toml") != files_.end() ||
+            files_.find("pytest.ini") != files_.end())
+            commands.array.push_back(string_value("python3 -m pytest"));
+
+        json::Value data = object_value();
+        data.object["tests"] = std::move(tests);
+        data.object["commands"] = std::move(commands);
+        if (!focus_path.empty()) data.object["path"] = string_value(focus_path);
+        if (symbol_id != 0) data.object["symbol_id"] = number_value(static_cast<double>(symbol_id));
+        return envelope(true, std::move(data), "", "", {}, truncated);
+    }
+
+    if (name == "inspect_code_task") {
+        std::string query;
+        std::size_t max_symbols = 20;
+        std::size_t max_files = 20;
+        bool include_skeletons = false;
+        bool include_tests = true;
+        std::size_t max_bytes = 32768;
+        if (!get_string(args, "query", query, true, validation_error) ||
+            !get_size(args, "max_symbols", 20, 100, max_symbols, validation_error) ||
+            !get_size(args, "max_files", 20, 100, max_files, validation_error) ||
+            !get_bool(args, "include_skeletons", false, include_skeletons, validation_error) ||
+            !get_bool(args, "include_tests", true, include_tests, validation_error) ||
+            !get_size(args, "max_bytes", 32768, 262144, max_bytes, validation_error) ||
+            max_symbols == 0 || max_files == 0 || max_bytes == 0)
+            return tool_error_result("invalid_arguments",
+                                    validation_error.empty() ? "limits must be positive"
+                                                             : validation_error);
+        const std::string query_lower = lowercase(query);
+        // Tokenize on non-alnum for lightweight ranking.
+        std::vector<std::string> tokens;
+        std::string token;
+        for (unsigned char ch : query_lower) {
+            if (std::isalnum(ch) || ch == '_' || ch == '-') {
+                token.push_back(static_cast<char>(ch));
+            } else if (!token.empty()) {
+                if (token.size() >= 2) tokens.push_back(token);
+                token.clear();
+            }
+        }
+        if (token.size() >= 2) tokens.push_back(token);
+        if (tokens.empty() && !query_lower.empty()) tokens.push_back(query_lower);
+
+        auto token_score = [&](const std::string& text_lower) {
+            double score = 0;
+            for (const std::string& t : tokens) {
+                if (text_lower == t)
+                    score += 1.0;
+                else if (text_lower.rfind(t, 0) == 0)
+                    score += 0.7;
+                else if (text_lower.find(t) != std::string::npos)
+                    score += 0.4;
+            }
+            return score;
+        };
+
+        struct RankedSymbol {
+            double score = 0;
+            const index::IndexedSymbol* symbol = nullptr;
+        };
+        std::vector<RankedSymbol> symbol_hits;
+        for (const index::IndexedSymbol& symbol : snapshot_.symbols) {
+            const std::string n = lowercase(symbol.symbol.name);
+            const std::string qn = lowercase(symbol.symbol.qualified_name);
+            const std::string path_l = lowercase(symbol.path);
+            double score = token_score(n) * 1.2 + token_score(qn) + token_score(path_l) * 0.5;
+            if (score <= 0) continue;
+            symbol_hits.push_back({score, &symbol});
+        }
+        std::sort(symbol_hits.begin(), symbol_hits.end(),
+                  [](const RankedSymbol& a, const RankedSymbol& b) {
+                      if (a.score != b.score) return a.score > b.score;
+                      return a.symbol->id < b.symbol->id;
+                  });
+
+        struct RankedFile {
+            double score = 0;
+            std::string path;
+        };
+        std::map<std::string, double> file_scores;
+        for (const RankedSymbol& hit : symbol_hits) {
+            file_scores[hit.symbol->path] += hit.score;
+        }
+        for (const index::IndexedFile& file : snapshot_.files) {
+            if (file.status != "indexed") continue;
+            const double score = token_score(lowercase(file.path));
+            if (score > 0) file_scores[file.path] += score * 0.8;
+        }
+        // Boost important root files lightly when query mentions them.
+        static const char* kImportant[] = {"README.md", "AGENTS.md", "Makefile", "CMakeLists.txt",
+                                           "package.json", "pyproject.toml", "Cargo.toml", "go.mod"};
+        for (const char* name : kImportant) {
+            if (files_.find(name) == files_.end()) continue;
+            if (query_lower.find(lowercase(name)) != std::string::npos)
+                file_scores[name] += 2.0;
+        }
+        std::vector<RankedFile> file_hits;
+        for (const auto& entry : file_scores)
+            file_hits.push_back({entry.second, entry.first});
+        std::sort(file_hits.begin(), file_hits.end(),
+                  [](const RankedFile& a, const RankedFile& b) {
+                      if (a.score != b.score) return a.score > b.score;
+                      return a.path < b.path;
+                  });
+
+        json::Value likely_symbols = array_value();
+        json::Value suggested_reads = array_value();
+        bool truncated = false;
+        for (std::size_t i = 0; i < symbol_hits.size(); ++i) {
+            if (i >= max_symbols) {
+                truncated = true;
+                break;
+            }
+            const index::IndexedSymbol& symbol = *symbol_hits[i].symbol;
+            json::Value item = object_value();
+            item.object["symbol_id"] = number_value(static_cast<double>(symbol.id));
+            item.object["qualified_name"] = string_value(symbol.symbol.qualified_name);
+            item.object["path"] = string_value(symbol.path);
+            item.object["start_line"] = number_value(symbol.symbol.line_start);
+            item.object["end_line"] = number_value(symbol.symbol.line_end);
+            item.object["score"] = number_value(symbol_hits[i].score);
+            item.object["reason"] = string_value("name/path token match");
+            likely_symbols.array.push_back(std::move(item));
+            if (suggested_reads.array.size() < max_files) {
+                json::Value read = object_value();
+                read.object["path"] = string_value(symbol.path);
+                read.object["start_line"] = number_value(symbol.symbol.line_start);
+                read.object["end_line"] = number_value(symbol.symbol.line_end);
+                suggested_reads.array.push_back(std::move(read));
+            }
+        }
+
+        json::Value likely_files = array_value();
+        for (std::size_t i = 0; i < file_hits.size(); ++i) {
+            if (i >= max_files) {
+                truncated = true;
+                break;
+            }
+            likely_files.array.push_back(string_value(file_hits[i].path));
+        }
+
+        json::Value skeletons = array_value();
+        if (include_skeletons) {
+            std::size_t budget = max_bytes;
+            for (std::size_t i = 0; i < file_hits.size() && i < max_files && budget > 0; ++i) {
+                const std::string& file_path = file_hits[i].path;
+                json::Value skeleton = object_value();
+                skeleton.object["path"] = string_value(file_path);
+                json::Value decls = array_value();
+                for (const index::IndexedSymbol& symbol : snapshot_.symbols) {
+                    if (symbol.path != file_path) continue;
+                    json::Value d = object_value();
+                    d.object["symbol_id"] = number_value(static_cast<double>(symbol.id));
+                    d.object["name"] = string_value(symbol.symbol.qualified_name);
+                    d.object["kind"] = string_value(symbol.symbol.kind);
+                    d.object["start_line"] = number_value(symbol.symbol.line_start);
+                    d.object["end_line"] = number_value(symbol.symbol.line_end);
+                    const std::string piece = symbol.symbol.qualified_name + symbol.symbol.kind;
+                    if (piece.size() > budget) {
+                        truncated = true;
+                        break;
+                    }
+                    budget -= piece.size();
+                    decls.array.push_back(std::move(d));
+                }
+                skeleton.object["symbols"] = std::move(decls);
+                skeletons.array.push_back(std::move(skeleton));
+            }
+        }
+
+        json::Value likely_tests = array_value();
+        if (include_tests && !file_hits.empty()) {
+            // Reuse find_tests heuristics for the top file.
+            const std::string top = file_hits.front().path;
+            const std::string stem = lowercase(fs::path(top).stem().string());
+            for (const index::IndexedFile& file : snapshot_.files) {
+                if (file.status != "indexed") continue;
+                const std::string lower = lowercase(file.path);
+                const bool looks_test =
+                    lower.find("/test") != std::string::npos ||
+                    lower.find("_test.") != std::string::npos ||
+                    lower.find(".test.") != std::string::npos;
+                if (!looks_test) continue;
+                if (!stem.empty() && lower.find(stem) == std::string::npos) continue;
+                if (likely_tests.array.size() >= 10) {
+                    truncated = true;
+                    break;
+                }
+                likely_tests.array.push_back(string_value(file.path));
+            }
+        }
+
+        json::Value data = object_value();
+        data.object["query"] = string_value(query);
+        data.object["likely_symbols"] = std::move(likely_symbols);
+        data.object["likely_files"] = std::move(likely_files);
+        data.object["suggested_reads"] = std::move(suggested_reads);
+        data.object["skeletons"] = std::move(skeletons);
+        data.object["likely_tests"] = std::move(likely_tests);
+        return envelope(true, std::move(data), "", "", {}, truncated);
+    }
+
+    if (name == "fetch_url") {
+        if (!allow_network_)
+            return tool_error_result("policy_denied", "fetch_url is not enabled in this session");
+        std::string url;
+        std::size_t max_bytes = static_cast<std::size_t>(
+            fetch_options_.max_bytes > 0 ? fetch_options_.max_bytes : 1048576);
+        std::size_t timeout_ms =
+            static_cast<std::size_t>(fetch_options_.timeout_seconds > 0
+                                         ? fetch_options_.timeout_seconds * 1000
+                                         : 30000);
+        // extract_text is intentionally not accepted: agent fetch always returns
+        // Markdown/plain text, never raw HTML (prompt-injection + token cost).
+        if (!get_string(args, "url", url, true, validation_error) ||
+            !get_size(args, "max_bytes", max_bytes, 8388608, max_bytes, validation_error) ||
+            !get_size(args, "timeout_ms", timeout_ms, 120000, timeout_ms, validation_error) ||
+            max_bytes == 0 || timeout_ms == 0)
+            return tool_error_result("invalid_arguments",
+                                    validation_error.empty() ? "limits must be positive"
+                                                             : validation_error);
+        fetch::Options opts = fetch_options_;
+        opts.max_bytes = static_cast<long>(max_bytes);
+        opts.timeout_seconds = static_cast<long>((timeout_ms + 999) / 1000);
+        if (opts.timeout_seconds < 1) opts.timeout_seconds = 1;
+        std::string body;
+        // Always convert HTML→Markdown (or keep text/plain). Never fetch_html for agent tools.
+        const Error error = fetch::fetch_text(url, opts, body, cancellation);
+        json::Value data = object_value();
+        data.object["url"] = string_value(url);
+        // Heuristic: Markdown converter emits links as (url) or headings; plain text stays as-is.
+        // Callers only need a stable label for the model.
+        data.object["format"] = string_value("markdown_or_text");
+        data.object["bytes_read"] = number_value(static_cast<double>(body.size()));
+        const bool truncated = body.size() >= max_bytes;
+        std::vector<std::string> warnings;
+        if (args.get("extract_text") != nullptr)
+            warnings.push_back(
+                "extract_text is ignored; fetch_url always returns Markdown or plain text");
+        if (!error.ok()) {
+            data.object["text"] = string_value(redact_secrets(body, secrets_));
+            return envelope(false, std::move(data), error_code_string(error.code), error.message,
+                            warnings, truncated);
+        }
+        data.object["text"] = string_value(redact_secrets(body, secrets_));
+        return envelope(true, std::move(data), "", "", warnings, truncated);
+    }
+
+    if (name == "search_web") {
+        if (!allow_network_)
+            return tool_error_result("policy_denied", "search_web is not enabled in this session");
+        std::string term;
+        std::string site;
+        // Hard cap at 3 so agents do not pull large SERPs and then fetch every hit.
+        constexpr std::size_t kAgentSearchMaxResults = 3;
+        std::size_t max_results = kAgentSearchMaxResults;
+        if (search_options_.max_results > 0 &&
+            static_cast<std::size_t>(search_options_.max_results) < max_results) {
+            max_results = static_cast<std::size_t>(search_options_.max_results);
+        }
+        std::size_t timeout_ms =
+            static_cast<std::size_t>(search_options_.timeout_seconds > 0
+                                         ? search_options_.timeout_seconds * 1000
+                                         : 30000);
+        if (!get_string(args, "term", term, true, validation_error) ||
+            !get_string(args, "site", site, false, validation_error) ||
+            !get_size(args, "max_results", max_results, kAgentSearchMaxResults, max_results,
+                      validation_error) ||
+            !get_size(args, "timeout_ms", timeout_ms, 120000, timeout_ms, validation_error) ||
+            max_results == 0 || timeout_ms == 0)
+            return tool_error_result("invalid_arguments",
+                                    validation_error.empty() ? "limits must be positive"
+                                                             : validation_error);
+        std::string query = term;
+        if (!site.empty()) query = "site:" + site + " " + term;
+        search::Options opts = search_options_;
+        opts.max_results = static_cast<int>(max_results);
+        opts.timeout_seconds = static_cast<long>((timeout_ms + 999) / 1000);
+        if (opts.timeout_seconds < 1) opts.timeout_seconds = 1;
+        search::SearchResponse response;
+        const Error error = search::search(query, opts, response, cancellation);
+        if (!error.ok()) {
+            // Map configuration/auth gaps to the planned web_search_unavailable code.
+            const bool unavailable =
+                error.code == ErrorCode::Auth || error.code == ErrorCode::BadArgs ||
+                error.code == ErrorCode::UnsupportedFeature ||
+                error.message.find("requires") != std::string::npos ||
+                error.message.find("no search") != std::string::npos;
+            json::Value data = object_value();
+            data.object["term"] = string_value(term);
+            data.object["query"] = string_value(query);
+            if (!site.empty()) data.object["site"] = string_value(site);
+            return envelope(false, std::move(data),
+                            unavailable ? "web_search_unavailable" : error_code_string(error.code),
+                            error.message, {}, false);
+        }
+        json::Value data = object_value();
+        data.object["term"] = string_value(term);
+        data.object["query"] = string_value(query);
+        if (!site.empty()) data.object["site"] = string_value(site);
+        data.object["provider"] = string_value(response.provider_used);
+        json::Value results = array_value();
+        for (const search::SearchResult& item : response.results) {
+            json::Value entry = object_value();
+            entry.object["title"] = string_value(redact_secrets(item.title, secrets_));
+            entry.object["url"] = string_value(item.url);
+            entry.object["snippet"] = string_value(redact_secrets(item.snippet, secrets_));
+            results.array.push_back(std::move(entry));
+        }
+        data.object["results"] = std::move(results);
+        data.object["result_count"] = number_value(static_cast<double>(response.results.size()));
+        return envelope(true, std::move(data), "", "", {}, false);
+    }
+
     return tool_error_result("unknown_tool", "unknown native tool: " + requested_name);
 }
 
 }  // namespace ainiux::agent
+

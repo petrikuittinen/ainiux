@@ -67,6 +67,11 @@ struct Options {
     std::size_t max_source_code_file_size = 10U * 1024U * 1024U;
     runtime::CancellationToken cancellation;
     std::function<bool()> interrupted;
+    // When true, re-scan every discovered file even if size/mtime match the DB.
+    bool force_rescan = false;
+    // When non-empty, only re-scan these workspace-relative paths (others stay
+    // unchanged; removal detection still runs for the whole tree).
+    std::vector<std::string> update_paths;
 };
 
 struct RefreshStats {

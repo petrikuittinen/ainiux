@@ -11,8 +11,12 @@
 namespace ainiux::search {
 namespace {
 
+// Same browser profile family as src/fetch/ so keyless search looks like a normal client.
 constexpr const char* kUserAgent =
     "Mozilla/5.0 (X11; Linux x86_64; rv:128.0) Gecko/20100101 Firefox/128.0";
+
+// Cap stored result URLs so tracking-heavy links do not bloat tool results / context.
+constexpr std::size_t kMaxResultUrlBytes = 512;
 
 std::string getenv_string(const char* name) {
     const char* value = std::getenv(name);
@@ -101,6 +105,19 @@ std::string decode_html_entities(const std::string& input) {
             out.push_back('\'');
         } else if (entity == "nbsp") {
             out.push_back(' ');
+        } else if (!entity.empty() && (entity[0] == '#')) {
+            // Numeric character references: &#39; or &#x27;
+            unsigned long code = 0;
+            if (entity.size() > 1 && (entity[1] == 'x' || entity[1] == 'X')) {
+                code = std::strtoul(entity.c_str() + 2, nullptr, 16);
+            } else {
+                code = std::strtoul(entity.c_str() + 1, nullptr, 10);
+            }
+            if (code > 0 && code < 128) {
+                out.push_back(static_cast<char>(code));
+            } else {
+                out.append(input, i, semi - i + 1);
+            }
         } else {
             out.append(input, i, semi - i + 1);
         }
@@ -109,12 +126,31 @@ std::string decode_html_entities(const std::string& input) {
     return out;
 }
 
+std::string truncate_result_url(std::string url) {
+    url = ascii_trim(std::move(url));
+    if (url.size() <= kMaxResultUrlBytes) {
+        return url;
+    }
+    // Prefer keeping scheme+host+path start; drop overlong query/fragment tails.
+    const size_t scheme = url.find("://");
+    size_t path_start = scheme == std::string::npos ? 0 : scheme + 3;
+    const size_t slash = url.find('/', path_start);
+    const size_t q = url.find_first_of("?#", slash == std::string::npos ? path_start : slash);
+    if (q != std::string::npos && q < kMaxResultUrlBytes) {
+        url.resize(q);
+        return url;
+    }
+    url.resize(kMaxResultUrlBytes - 3);
+    url += "...";
+    return url;
+}
+
 void append_unique_result(std::vector<SearchResult>& results, SearchResult item, int max_results) {
     if (results.size() >= static_cast<size_t>(max_results)) {
         return;
     }
     item.title = ascii_trim(item.title);
-    item.url = ascii_trim(item.url);
+    item.url = truncate_result_url(std::move(item.url));
     item.snippet = ascii_trim(item.snippet);
     if (item.title.empty() && item.snippet.empty()) {
         return;
@@ -466,244 +502,128 @@ std::string extract_attribute(const std::string& tag, const char* name) {
     return tag.substr(start, end - start);
 }
 
-std::string normalize_google_href(std::string href) {
+// Decode DuckDuckGo redirect links and absolute/relative result URLs.
+std::string normalize_duckduckgo_href(std::string href) {
     href = decode_html_entities(std::move(href));
-    if (href.rfind("/url?", 0) == 0 || href.find("q=") != std::string::npos) {
-        const size_t q_pos = href.find("q=");
-        if (q_pos != std::string::npos) {
-            const size_t start = q_pos + 2;
-            const size_t amp = href.find('&', start);
-            href = href.substr(start, amp == std::string::npos ? std::string::npos : amp - start);
+    href = ascii_trim(href);
+    if (href.empty()) {
+        return {};
+    }
+    // Protocol-relative: //duckduckgo.com/l/?uddg=...
+    if (href.rfind("//", 0) == 0) {
+        href = "https:" + href;
+    }
+    // Extract uddg= target from DDG redirector.
+    const size_t uddg = href.find("uddg=");
+    if (uddg != std::string::npos) {
+        size_t start = uddg + 5;
+        size_t end = href.find_first_of("&?#", start);
+        if (end == std::string::npos) {
+            end = href.size();
+        }
+        href = percent_decode(href.substr(start, end - start));
+    }
+    href = ascii_trim(href);
+    if (href.rfind("http://", 0) != 0 && href.rfind("https://", 0) != 0) {
+        return {};
+    }
+    // Drop DDG-owned navigation noise.
+    if (href.find("duckduckgo.com/") != std::string::npos &&
+        href.find("uddg=") == std::string::npos) {
+        // Direct duckduckgo.com pages (not redirect targets) are usually not SERP hits.
+        if (href.find("duckduckgo.com/l/") != std::string::npos) {
+            return {};
         }
     }
-    return percent_decode(href);
+    return href;
 }
 
-bool is_valid_google_result_url(const std::string& url) {
+bool is_valid_result_url(const std::string& url) {
     if (url.empty() || url[0] == '#') {
         return false;
     }
-    if (url.rfind("javascript:", 0) == 0 || url.rfind("/search", 0) == 0) {
-        return false;
-    }
-    if (url.find("google.com/search") != std::string::npos ||
-        url.find("webcache.googleusercontent") != std::string::npos ||
-        url.find("accounts.google") != std::string::npos ||
-        url.find("support.google") != std::string::npos ||
-        url.find("policies.google") != std::string::npos ||
-        url.find("maps.google") != std::string::npos) {
+    if (url.rfind("javascript:", 0) == 0) {
         return false;
     }
     return url.rfind("http://", 0) == 0 || url.rfind("https://", 0) == 0;
 }
 
-bool google_html_looks_blocked(const std::string& html) {
-    if (html.find("enablejs") != std::string::npos) {
-        return true;
-    }
-    if (html.find("consent.google.com") != std::string::npos) {
-        return true;
-    }
-    if (html.find("sorry.google.com") != std::string::npos) {
-        return true;
-    }
-    if (html.find("unusual traffic") != std::string::npos) {
-        return true;
-    }
-    if (html.find("SG_REL") != std::string::npos) {
-        return true;
-    }
-    if (html.find("Please enable JavaScript") != std::string::npos) {
-        return true;
-    }
-    if (html.find("Our systems have detected") != std::string::npos) {
-        return true;
-    }
-    if (html.find("<noscript>") != std::string::npos && html.find("/url?q=") == std::string::npos &&
-        html.find("<h3") == std::string::npos) {
-        return true;
-    }
-    return false;
-}
-
-std::string extract_snippet_near(const std::string& html, size_t anchor_pos) {
-    const size_t window_end = std::min(html.size(), anchor_pos + 1600);
-    const std::string window = html.substr(anchor_pos, window_end - anchor_pos);
-    const std::string markers[] = {"VwiC3b", "yXK7lf", "MUxGbd", "IsZvec", "st", "aCOpRe"};
-    for (const std::string& marker : markers) {
-        const std::string class_needle = "class=\"" + marker;
-        size_t marker_pos = window.find(class_needle);
-        if (marker_pos == std::string::npos) {
-            marker_pos = window.find(marker + " ");
-            if (marker_pos == std::string::npos) {
-                continue;
-            }
+// Find class="… result__a …" (or single-quoted) and return start of the <a tag.
+size_t find_result_a_anchor(const std::string& html, size_t from) {
+    size_t pos = from;
+    while (pos < html.size()) {
+        const size_t class_pos = html.find("result__a", pos);
+        if (class_pos == std::string::npos) {
+            return std::string::npos;
         }
-        const size_t search_from = marker_pos;
-        const size_t gt = window.find('>', search_from);
-        const size_t close = window.find("</", gt == std::string::npos ? search_from : gt);
-        if (gt != std::string::npos && close != std::string::npos && close > gt) {
-            return decode_html_entities(strip_tags(window.substr(gt + 1, close - gt - 1)));
-        }
-    }
-    return {};
-}
-
-std::string href_from_anchor_at(const std::string& html, size_t anchor_open) {
-    const size_t tag_end = html.find('>', anchor_open);
-    if (tag_end == std::string::npos) {
-        return {};
-    }
-    const std::string tag = html.substr(anchor_open, tag_end - anchor_open + 1);
-    return extract_attribute(tag, "href");
-}
-
-std::string aria_label_from_anchor_at(const std::string& html, size_t anchor_open) {
-    const size_t tag_end = html.find('>', anchor_open);
-    if (tag_end == std::string::npos) {
-        return {};
-    }
-    const std::string tag = html.substr(anchor_open, tag_end - anchor_open + 1);
-    return extract_attribute(tag, "aria-label");
-}
-
-std::string nearest_anchor_href(const std::string& html, size_t center, size_t backward, size_t forward) {
-    const size_t start = center > backward ? center - backward : 0;
-    const size_t end = std::min(html.size(), center + forward);
-    std::string best;
-    size_t best_distance = static_cast<size_t>(-1);
-
-    size_t pos = start;
-    while (pos < end) {
-        const size_t anchor_open = html.find("<a ", pos);
-        if (anchor_open == std::string::npos || anchor_open >= end) {
-            break;
-        }
-        const std::string href = href_from_anchor_at(html, anchor_open);
-        if (!href.empty()) {
-            const size_t distance = anchor_open > center ? anchor_open - center : center - anchor_open;
-            if (distance < best_distance) {
-                best_distance = distance;
-                best = href;
-            }
-        }
-        const size_t tag_end = html.find('>', anchor_open);
-        pos = tag_end == std::string::npos ? anchor_open + 3 : tag_end + 1;
-    }
-    return best;
-}
-
-void append_google_result(std::vector<SearchResult>& results,
-                          int max_results,
-                          std::string url,
-                          std::string title,
-                          std::string snippet) {
-    url = normalize_google_href(std::move(url));
-    if (!is_valid_google_result_url(url)) {
-        return;
-    }
-    SearchResult item;
-    item.url = url;
-    item.title = decode_html_entities(ascii_trim(std::move(title)));
-    item.snippet = decode_html_entities(ascii_trim(std::move(snippet)));
-    append_unique_result(results, std::move(item), max_results);
-}
-
-void parse_google_h3_results(const std::string& html, int max_results, std::vector<SearchResult>& results) {
-    size_t pos = 0;
-    while (pos < html.size() && results.size() < static_cast<size_t>(max_results)) {
-        const size_t h3_open = html.find("<h3", pos);
-        if (h3_open == std::string::npos) {
-            break;
-        }
-        const size_t h3_close = html.find("</h3>", h3_open);
-        if (h3_close == std::string::npos) {
-            break;
-        }
-        std::string title = strip_tags(html.substr(h3_open, h3_close + 5 - h3_open));
-        if (title.empty()) {
-            pos = h3_close + 5;
+        // Walk back to the nearest '<' for this tag.
+        const size_t tag_open = html.rfind('<', class_pos);
+        if (tag_open == std::string::npos || class_pos - tag_open > 200) {
+            pos = class_pos + 9;
             continue;
         }
-
-        std::string href;
-        std::string aria_label;
-        const size_t anchor_open = html.rfind("<a ", h3_open);
-        if (anchor_open != std::string::npos && h3_open - anchor_open <= 4096) {
-            const size_t anchor_close = html.find("</a>", h3_close);
-            if (anchor_close != std::string::npos) {
-                href = href_from_anchor_at(html, anchor_open);
-                aria_label = aria_label_from_anchor_at(html, anchor_open);
-            }
-        }
-        if (href.empty()) {
-            href = nearest_anchor_href(html, h3_close, 4096, 2048);
-        }
-        if (href.empty()) {
-            pos = h3_close + 5;
+        // Must be an <a …> whose class list contains result__a (not result__a something else only).
+        if (html.compare(tag_open, 2, "<a") != 0 && html.compare(tag_open, 2, "<A") != 0) {
+            pos = class_pos + 9;
             continue;
         }
-        if (!aria_label.empty()) {
-            title = aria_label;
+        // Avoid matching result__a inside result__a__something if any; require word boundary-ish.
+        const char before = class_pos > 0 ? html[class_pos - 1] : ' ';
+        const char after =
+            class_pos + 9 < html.size() ? html[class_pos + 9] : ' ';
+        const bool before_ok = before == '"' || before == '\'' || before == ' ' || before == '=';
+        const bool after_ok = after == '"' || after == '\'' || after == ' ' || after == '>';
+        if (!before_ok || !after_ok) {
+            pos = class_pos + 9;
+            continue;
         }
-
-        const std::string snippet = extract_snippet_near(html, h3_close);
-        append_google_result(results, max_results, href, title, snippet);
-        pos = h3_close + 5;
+        return tag_open;
     }
+    return std::string::npos;
 }
 
-void parse_google_url_redirects(const std::string& html, int max_results, std::vector<SearchResult>& results) {
-    size_t pos = 0;
-    while (pos < html.size() && results.size() < static_cast<size_t>(max_results)) {
-        const size_t url_pos = html.find("/url?q=", pos);
-        if (url_pos == std::string::npos) {
-            break;
-        }
-        const size_t href_start = url_pos;
-        size_t href_end = html.find('"', href_start);
-        if (href_end == std::string::npos) {
-            const size_t amp = html.find('&', href_start);
-            href_end = amp == std::string::npos ? html.size() : amp;
-        }
-        std::string href = html.substr(href_start, href_end - href_start);
-
-        std::string title;
-        const size_t window_start = url_pos > 2048 ? url_pos - 2048 : 0;
-        const size_t window_end = std::min(html.size(), url_pos + 2048);
-        const size_t h3_before = html.rfind("<h3", url_pos);
-        if (h3_before != std::string::npos && h3_before >= window_start) {
-            const size_t h3_close = html.find("</h3>", h3_before);
-            if (h3_close != std::string::npos && h3_close < window_end) {
-                title = strip_tags(html.substr(h3_before, h3_close + 5 - h3_before));
-            }
-        }
-        if (title.empty()) {
-            const size_t h3_after = html.find("<h3", url_pos);
-            if (h3_after != std::string::npos && h3_after < window_end) {
-                const size_t h3_close = html.find("</h3>", h3_after);
-                if (h3_close != std::string::npos) {
-                    title = strip_tags(html.substr(h3_after, h3_close + 5 - h3_after));
-                }
-            }
-        }
-        if (title.empty()) {
-            const size_t anchor_open = html.rfind("<a ", url_pos);
-            if (anchor_open != std::string::npos && anchor_open >= window_start) {
-                title = aria_label_from_anchor_at(html, anchor_open);
-            }
-        }
-
-        const std::string snippet = extract_snippet_near(html, url_pos);
-        append_google_result(results, max_results, href, title, snippet);
-        pos = url_pos + 7;
+std::string extract_ddg_snippet_after(const std::string& html, size_t from, size_t until) {
+    const size_t end = until < html.size() ? until : html.size();
+    if (from >= end) {
+        return {};
     }
+    const size_t marker = html.find("result__snippet", from);
+    if (marker == std::string::npos || marker >= end) {
+        return {};
+    }
+    const size_t tag_open = html.rfind('<', marker);
+    if (tag_open == std::string::npos || marker - tag_open > 200) {
+        return {};
+    }
+    const size_t gt = html.find('>', marker);
+    if (gt == std::string::npos || gt >= end) {
+        return {};
+    }
+    // Snippet content until matching close of <a> or <div>.
+    size_t close = html.find("</a>", gt);
+    const size_t close_div = html.find("</div>", gt);
+    if (close == std::string::npos || (close_div != std::string::npos && close_div < close)) {
+        close = close_div;
+    }
+    if (close == std::string::npos || close > end) {
+        close = end;
+    }
+    return decode_html_entities(strip_tags(html.substr(gt + 1, close - gt - 1)));
 }
 
-void parse_google_anchor_results(const std::string& html, int max_results, std::vector<SearchResult>& results) {
+}  // namespace
+
+Error parse_duckduckgo_html(const std::string& html,
+                            int max_results,
+                            std::vector<SearchResult>& results) {
+    results.clear();
+    if (max_results <= 0) {
+        return {ErrorCode::BadArgs, "max web search results must be greater than zero"};
+    }
+
     size_t pos = 0;
-    while (pos < html.size() && results.size() < static_cast<size_t>(max_results)) {
-        const size_t anchor_open = html.find("<a ", pos);
+    while (results.size() < static_cast<size_t>(max_results)) {
+        const size_t anchor_open = find_result_a_anchor(html, pos);
         if (anchor_open == std::string::npos) {
             break;
         }
@@ -711,52 +631,36 @@ void parse_google_anchor_results(const std::string& html, int max_results, std::
         if (tag_end == std::string::npos) {
             break;
         }
-        const std::string href = href_from_anchor_at(html, anchor_open);
-        const std::string normalized = normalize_google_href(href);
-        if (!is_valid_google_result_url(normalized)) {
-            pos = tag_end + 1;
-            continue;
-        }
-
-        std::string title = aria_label_from_anchor_at(html, anchor_open);
+        const std::string tag = html.substr(anchor_open, tag_end - anchor_open + 1);
+        const std::string raw_href = extract_attribute(tag, "href");
+        const std::string url = normalize_duckduckgo_href(raw_href);
         const size_t anchor_close = html.find("</a>", tag_end);
-        if (title.empty() && anchor_close != std::string::npos) {
-            title = strip_tags(html.substr(tag_end + 1, anchor_close - tag_end - 1));
-        }
-        if (title.empty()) {
+        if (anchor_close == std::string::npos) {
             pos = tag_end + 1;
             continue;
         }
+        std::string title =
+            decode_html_entities(strip_tags(html.substr(tag_end + 1, anchor_close - tag_end - 1)));
+        // Next result__a bounds the snippet search window.
+        const size_t next_anchor = find_result_a_anchor(html, anchor_close + 4);
+        const size_t window_end =
+            next_anchor == std::string::npos ? html.size() : next_anchor;
+        std::string snippet = extract_ddg_snippet_after(html, anchor_close, window_end);
 
-        const std::string snippet = extract_snippet_near(html, tag_end);
-        append_google_result(results, max_results, href, title, snippet);
-        pos = tag_end + 1;
-    }
-}
-
-}  // namespace
-
-Error parse_google_search_html(const std::string& html, int max_results, std::vector<SearchResult>& results) {
-    results.clear();
-    if (max_results <= 0) {
-        return {ErrorCode::BadArgs, "max web search results must be greater than zero"};
-    }
-
-    parse_google_h3_results(html, max_results, results);
-    if (results.size() < static_cast<size_t>(max_results)) {
-        parse_google_url_redirects(html, max_results, results);
-    }
-    if (results.size() < static_cast<size_t>(max_results)) {
-        parse_google_anchor_results(html, max_results, results);
+        if (!url.empty() && is_valid_result_url(url) &&
+            (!title.empty() || !snippet.empty())) {
+            SearchResult item;
+            item.url = url;
+            item.title = ascii_trim(std::move(title));
+            item.snippet = ascii_trim(std::move(snippet));
+            append_unique_result(results, std::move(item), max_results);
+        }
+        pos = anchor_close + 4;
     }
 
     if (results.empty()) {
-        if (google_html_looks_blocked(html)) {
-            return {ErrorCode::ProviderSchema,
-                    "Google returned a JavaScript-only or consent page; try --web-search-provider duckduckgo "
-                    "or an API-based provider"};
-        }
-        return {ErrorCode::ProviderSchema, "could not parse Google search results from HTML"};
+        return {ErrorCode::ProviderSchema,
+                "DuckDuckGo HTML search returned no parseable results"};
     }
     return ok_error();
 }
@@ -863,13 +767,14 @@ Error search_searxng(const std::string& query,
     return parse_searxng_response(response.body, options.max_results, results);
 }
 
-Error search_duckduckgo(const std::string& query,
-                        const Options& options,
-                        std::vector<SearchResult>& results,
-                        runtime::CancellationToken cancellation) {
+Error search_duckduckgo_instant(const std::string& query,
+                                const Options& options,
+                                std::vector<SearchResult>& results,
+                                runtime::CancellationToken cancellation) {
     http::Request request = base_request(options);
     request.method = "GET";
-    request.url = "https://api.duckduckgo.com/?q=" + url_encode(query) + "&format=json&no_html=1&skip_disambig=1";
+    request.url = "https://api.duckduckgo.com/?q=" + url_encode(query) +
+                  "&format=json&no_html=1&skip_disambig=1";
     request.headers.push_back("Accept: application/json");
     request.cancellation = cancellation;
     http::Response response;
@@ -880,16 +785,17 @@ Error search_duckduckgo(const std::string& query,
     return parse_duckduckgo_instant_answer(response.body, options.max_results, results);
 }
 
-Error search_google_html(const std::string& query,
-                         const Options& options,
-                         std::vector<SearchResult>& results,
-                         runtime::CancellationToken cancellation) {
+Error search_duckduckgo_html(const std::string& query,
+                             const Options& options,
+                             std::vector<SearchResult>& results,
+                             runtime::CancellationToken cancellation) {
     http::Request request = base_request(options);
     request.method = "GET";
-    request.url = "https://www.google.com/search?q=" + url_encode(query) + "&hl=en&gbv=1";
-    request.headers.push_back("Accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8");
+    // Non-JS SERP designed for HTML clients (no paid API key).
+    request.url = "https://html.duckduckgo.com/html/?q=" + url_encode(query);
+    request.headers.push_back(
+        "Accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8");
     request.headers.push_back("Accept-Language: en-US,en;q=0.9");
-    request.headers.push_back("Cookie: CONSENT=YES+; SOCS=CAI");
     request.follow_redirects = true;
     request.cancellation = cancellation;
     http::Response response;
@@ -897,7 +803,34 @@ Error search_google_html(const std::string& query,
     if (!err.ok()) {
         return err;
     }
-    return parse_google_search_html(response.body, options.max_results, results);
+    return parse_duckduckgo_html(response.body, options.max_results, results);
+}
+
+// Primary keyless provider: HTML SERP first (real top results), Instant Answer as
+// a lightweight fallback for encyclopedia-style entity queries when HTML fails.
+Error search_duckduckgo(const std::string& query,
+                        const Options& options,
+                        std::vector<SearchResult>& results,
+                        runtime::CancellationToken cancellation) {
+    Error html_error = search_duckduckgo_html(query, options, results, cancellation);
+    if (html_error.ok() && !results.empty()) {
+        return ok_error();
+    }
+    std::vector<SearchResult> instant;
+    Error instant_error = search_duckduckgo_instant(query, options, instant, cancellation);
+    if (instant_error.ok() && !instant.empty()) {
+        results = std::move(instant);
+        return ok_error();
+    }
+    // Prefer the HTML error message when both failed; Instant Answer is often empty
+    // for ordinary web queries and is not a good standalone explanation.
+    if (!html_error.ok()) {
+        return html_error;
+    }
+    if (!instant_error.ok()) {
+        return instant_error;
+    }
+    return {ErrorCode::ProviderSchema, "DuckDuckGo returned no search results"};
 }
 
 using ProviderFn = Error (*)(const std::string&, const Options&, std::vector<SearchResult>&,
@@ -915,7 +848,6 @@ bool firecrawl_available(const Options& options) { return !options.firecrawl_api
 bool exa_available(const Options& options) { return !options.exa_api_key.empty(); }
 bool searxng_available(const Options& options) { return !options.searxng_base_url.empty(); }
 bool duckduckgo_available(const Options&) { return true; }
-bool google_available(const Options&) { return true; }
 
 const std::vector<ProviderEntry>& provider_catalog() {
     static const std::vector<ProviderEntry> entries = {
@@ -923,8 +855,8 @@ const std::vector<ProviderEntry>& provider_catalog() {
         {"firecrawl", search_firecrawl, true, firecrawl_available},
         {"exa", search_exa, true, exa_available},
         {"searxng", search_searxng, true, searxng_available},
+        // Keyless primary: DuckDuckGo HTML SERP (+ Instant Answer fallback).
         {"duckduckgo", search_duckduckgo, false, duckduckgo_available},
-        {"google", search_google_html, false, google_available},
     };
     return entries;
 }
@@ -936,7 +868,8 @@ const ProviderEntry* find_provider(const std::string& name) {
             return &entry;
         }
     }
-    if (normalized == "ddg" || normalized == "duckduckgo_instant") {
+    if (normalized == "ddg" || normalized == "duckduckgo_html" ||
+        normalized == "duckduckgo_instant") {
         return find_provider("duckduckgo");
     }
     return nullptr;
@@ -1001,16 +934,17 @@ Error search(const std::string& query,
         if (entry == nullptr) {
             return {ErrorCode::BadArgs,
                     "unknown web search provider: " + options.provider +
-                        " (expected auto, tavily, firecrawl, exa, searxng, duckduckgo, or google)"};
+                        " (expected auto, tavily, firecrawl, exa, searxng, or duckduckgo)"};
         }
         if (try_provider(*entry)) {
             return ok_error();
         }
-        if (entry->needs_credentials || provider_name == "google") {
-            for (const ProviderEntry* fallback : {find_provider("duckduckgo"), find_provider("google")}) {
-                if (fallback != nullptr && fallback != entry && try_provider(*fallback)) {
-                    return ok_error();
-                }
+        // API providers fall back to free DuckDuckGo when credentials fail or
+        // the remote returns no usable results.
+        if (entry->needs_credentials) {
+            const ProviderEntry* fallback = find_provider("duckduckgo");
+            if (fallback != nullptr && try_provider(*fallback)) {
+                return ok_error();
             }
         }
     } else {
@@ -1019,11 +953,9 @@ Error search(const std::string& query,
                 return ok_error();
             }
         }
-        for (const char* fallback_name : {"duckduckgo", "google"}) {
-            const ProviderEntry* entry = find_provider(fallback_name);
-            if (entry != nullptr && try_provider(*entry)) {
-                return ok_error();
-            }
+        const ProviderEntry* ddg = find_provider("duckduckgo");
+        if (ddg != nullptr && try_provider(*ddg)) {
+            return ok_error();
         }
     }
 

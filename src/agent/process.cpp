@@ -105,11 +105,60 @@ Error enforce_git_policy(const std::vector<std::string>& args) {
             if (argument == "-s" || argument == "--short" ||
                 argument == "-b" || argument == "--branch" ||
                 argument == "--porcelain" || argument == "--porcelain=v1" ||
-                argument == "--porcelain=v2") {
+                argument == "--porcelain=v2" ||
+                argument == "--untracked-files=no" || argument == "-uno" ||
+                argument == "--untracked-files=normal" || argument == "-unormal") {
                 continue;
             }
             return {ErrorCode::BadArgs,
                     "git status only permits short/porcelain metadata options and paths after --"};
+        }
+        return ok_error();
+    }
+    if (subcommand == "diff") {
+        // Read-only workspace/index diffs only. Reject options that write files,
+        // run external diffs, open pagers, or rewrite the index.
+        bool paths = false;
+        for (std::size_t index = 2; index < args.size(); ++index) {
+            const std::string& argument = args[index];
+            if (argument == "--") {
+                paths = true;
+                continue;
+            }
+            if (paths) continue;  // pathspecs after --
+            if (argument.empty())
+                return {ErrorCode::BadArgs, "git diff rejected an empty argument"};
+            if (argument.front() != '-') {
+                // Revision or pathspec token (no shell metacharacters).
+                if (dangerous_argument(argument))
+                    return {ErrorCode::BadArgs, "git diff rejected shell metacharacters"};
+                continue;
+            }
+            // Allowed read-only options.
+            if (argument == "--cached" || argument == "--staged" || argument == "--stat" ||
+                argument == "--numstat" || argument == "--shortstat" ||
+                argument == "--name-only" || argument == "--name-status" ||
+                argument == "--raw" || argument == "--no-color" ||
+                argument == "--color=never" || argument == "--no-ext-diff" ||
+                argument == "--no-prefix" || argument == "--quiet" ||
+                argument == "-U" || argument.rfind("-U", 0) == 0 ||
+                argument == "--unified" || argument.rfind("--unified=", 0) == 0 ||
+                argument == "-w" || argument == "--ignore-all-space" ||
+                argument == "-b" || argument == "--ignore-space-change") {
+                continue;
+            }
+            // Explicitly reject known write/exec forms for clearer errors.
+            if (argument == "-O" || argument.rfind("-O", 0) == 0 || argument == "--output" ||
+                argument.rfind("--output=", 0) == 0 || argument == "--ext-diff" ||
+                argument == "--textconv" || argument == "--no-index" ||
+                argument == "--binary") {
+                return {ErrorCode::BadArgs,
+                        "git diff rejected an option that can write files or invoke external "
+                        "tooling"};
+            }
+            return {ErrorCode::BadArgs,
+                    "git diff only permits bounded read-only options "
+                    "(--stat/--cached/--name-only and pathspecs)"};
         }
         return ok_error();
     }

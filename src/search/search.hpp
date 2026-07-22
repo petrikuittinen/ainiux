@@ -53,9 +53,10 @@ Error search(const std::string& query,
 Error parse_duckduckgo_instant_answer(const std::string& body,
                                       int max_results,
                                       std::vector<SearchResult>& results);
-Error parse_google_search_html(const std::string& html,
-                               int max_results,
-                               std::vector<SearchResult>& results);
+// Keyless SERP: html.duckduckgo.com result blocks (title, URL, snippet).
+Error parse_duckduckgo_html(const std::string& html,
+                            int max_results,
+                            std::vector<SearchResult>& results);
 Error parse_tavily_response(const std::string& body,
                             int max_results,
                             std::vector<SearchResult>& results);

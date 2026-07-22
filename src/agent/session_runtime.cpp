@@ -173,7 +173,10 @@ Error AgentSessionRuntime::prepare(const provider::RequestContext& context,
 
     ToolRegistryOptions tool_options;
     tool_options.allow_mutations = options_.allow_mutations;
+    tool_options.allow_network = options_.allow_network && options_.allow_mutations;
     tool_options.history_backup = options_.history_backup;
+    tool_options.fetch_options = options_.fetch_options;
+    tool_options.search_options = options_.search_options;
     error = ReadToolRegistry::create(index_options, std::move(snapshot), secrets_, tools_,
                                      tool_options);
     if (!error.ok()) {

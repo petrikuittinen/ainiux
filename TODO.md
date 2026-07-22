@@ -2,8 +2,17 @@
 
 ## Local agent mode (v1.0)
 
-- Project-centric agent rework landed: singleton `.ainiux-pr/agent.sqlite` v2, one-backup history policy, compact tool lines, window-% auto-compact, Chat/Agent chrome, `/cmd-out`. Next: interactive Guard `Ask` approvals, stream tool lines live mid-turn, load agent transcript as sole TUI source of truth (less chat-session coupling), plan/security agent modes, stronger editor↔agent handoff.
-- Keep security-review strictly read-only when expanding agent tools (`run_command` stays index-scoped there).
+- Project-centric agent rework landed: singleton `.ainiux-pr/agent.sqlite` v2, one-backup history policy, compact tool lines, window-% auto-compact, Chat/Agent chrome, `/cmd-out`. Agent tools now include git_status/git_diff, index_status/update/rebuild, fetch_url/search_web, find_tests, inspect_code_task.
+- Next: interactive Guard `Ask` approvals, find_callers/find_callees (call-graph refs), load agent transcript as sole TUI source of truth (less chat-session coupling), plan/security agent modes, stronger editor↔agent handoff.
+- Keep security-review strictly read-only when expanding agent tools (`run_command` stays index-scoped there; network tools stay agent-only).
+
+## Web search / fetch
+
+- Keyless search uses DuckDuckGo HTML (Instant Answer secondary). DDG may rate-limit or show bot challenges after rapid queries; Google HTML scrape was removed (JS-only shells).
+- **Later:** evaluate a more reliable free/casual web search provider (or optional lightweight local proxy) without requiring paid APIs for everyday use. Keep optional Tavily/Exa/Firecrawl/Searxng for power users.
+- Agent `search_web` returns at most **3** results; tool text steers the model to fetch only the top few URLs. Search result URLs are truncated when extremely long.
+- Fetch converts ISO-8859-1 / Windows-1252 pages to UTF-8 so tool results stay valid JSON for local model servers; JSON string escape also refuses raw ill-formed UTF-8 bytes.
+- Agent `fetch_url` is Markdown/plain-text only (no raw HTML to the model); HTML→MD strips scripts/styles.
 
 ## Syntax Highlighting
 

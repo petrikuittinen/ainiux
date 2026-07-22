@@ -30,4 +30,8 @@ Error fetch_text(const std::string& url,
                  std::string& text,
                  runtime::CancellationToken cancellation = runtime::CancellationToken());
 
+// Decode a downloaded body to valid UTF-8 using Content-Type / HTML meta charset.
+// ISO-8859-1 and Windows-1252 are converted; already-valid UTF-8 is unchanged.
+std::string convert_fetched_body_to_utf8(std::string body, const std::string& content_type);
+
 }  // namespace ainiux::fetch

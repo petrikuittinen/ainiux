@@ -41,6 +41,7 @@ struct SessionTurnResult {
 struct SessionRuntimeOptions {
     std::string workspace = ".";
     bool allow_mutations = true;
+    bool allow_network = true;  // fetch_url / search_web in agent mode
     bool interactive = false;  // turn-cap can return needs_user_continue
     bool enable_session_db = true;
     bool enable_agent_log = true;
@@ -51,6 +52,8 @@ struct SessionRuntimeOptions {
     bool auto_compact = true;
     int compact_limit = 0;  // 0 = derive from window
     bool show_command_output = false;
+    fetch::Options fetch_options;
+    search::Options search_options;
     std::function<void(const std::string& status_line)> on_progress;
 };
 

@@ -78,7 +78,7 @@ Runtime defaults live in `cli::Options`, provider defaults live in `src/provider
 
 Implementation note (2026-06-30, v0.86): TUI panels for thread picker, help, and confirmations use dedicated colors and box-drawing separators; provider labels use registry aliases in status lines; thinking and streaming show single-character indicators. Editor mode embeds `docs/editor_help.md`, installable to `share/ainiux/`, and toggles read-only help via `Esc /help`.
 
-Implementation note (2026-07-05, v0.88): Web search is available through `--search QUERY`, REPL/TUI `/search QUERY`, and editor `Esc /search QUERY`. Providers include Tavily, Firecrawl, Exa, Searxng, with DuckDuckGo Instant Answer and Google HTML fallbacks when API keys are absent. `MAXIMUM_WEB_SEARCH_RESULTS` defaults to 3 via config, CLI, or environment.
+Implementation note (2026-07-05, v0.88; keyless path updated 2026-07-22): Web search is available through `--search QUERY`, REPL/TUI `/search QUERY`, and editor `Esc /search QUERY`. Providers include Tavily, Firecrawl, Exa, Searxng; keyless default is DuckDuckGo HTML SERP (Instant Answer secondary). Google HTML scraping was removed (JS-only shells to non-browser clients). `MAXIMUM_WEB_SEARCH_RESULTS` defaults to 3 via config, CLI, or environment.
 
 Implementation note (2026-07-06, v0.89, superseded in part): provider-specific reasoning translation was introduced for OpenAI-compatible surfaces. v0.98 replaced the split public controls with canonical `--reasoning` and catalog-selected protocols. The editor-buffer portion remains current: multiple buffers, `/new`, `/list`, `/close`, and matching `Ctrl+N`, `Ctrl+L`, and `Ctrl+W` shortcuts.
 
@@ -2281,6 +2281,8 @@ This is the v1.0 plan for ainiux local agent mode (merged from the former standa
 **Interactive agent TUI shell + mode cycle slice (2026-07-21):** `AgentSessionRuntime` prepares index/tools/`agent.sqlite` once and runs multi-turn goals without re-seeding the system prompt each message. One-shot `--run` and interactive `--agent` share that runtime. Interactive agent keeps a warm project session; `/chat`, `/agent`, `/editor`, `/mode`, and `/cycle` switch among chat ↔ editor ↔ agent without process restart while keeping tools disarmed outside agent mode. Interactive approval UI for Guard Ask decisions remains later work.
 
 **Agent project rework slice (2026-07-21):** project-centric agent only (ambiguous parent/nested project markers refused). Project state dir is **`.ainiux-pr/`** (index, agent.sqlite, history, logs); user profile remains **`~/.ainiux/`** (chat DB/media) and is never a project marker. Single project transcript in `agent.sqlite` schema v2. History backups: one slot per path, max 1M, 7-day TTL. Compact tool lines; window-% auto-compact; Chat/Agent chrome; `/cmd-out`. Plan/security agent modes still deferred.
+
+**Agent git/index/web/task tools slice (2026-07-22):** registry gains `git_status`, `git_diff` (read-only git CLI with hardening; `git diff` allowlisted in process policy), `index_status`, `index_update` (optional path filter / force rescan), agent-only `index_rebuild` (`confirm=true`), heuristic `find_tests` and `inspect_code_task`, and agent-only network tools `fetch_url` / `search_web` reusing `src/fetch` and `src/search` (private URL policy from CLI/config). Security-review stays mutation- and network-free. Still missing from the §12 catalog: `find_callers`, `find_callees` (need refs/call-graph). Guard Ask UI and plan/security agent modes remain later work.
 
 ---
 

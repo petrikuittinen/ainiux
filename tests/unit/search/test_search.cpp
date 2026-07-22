@@ -37,44 +37,54 @@ void test_duckduckgo_empty_abstract_uses_related_topics() {
     check(results[0].title == "Alpha", "DuckDuckGo related topic title is split from text");
 }
 
-void test_google_html_parser_fixture() {
-    const std::string html = read_fixture("tests/fixtures/google_search_sample.html");
+void test_duckduckgo_html_parser_fixture() {
+    const std::string html = read_fixture("tests/fixtures/duckduckgo_html_sample.html");
     std::vector<ainiux::search::SearchResult> results;
-    ainiux::Error err = ainiux::search::parse_google_search_html(html, 3, results);
-    check(err.ok(), "Google HTML fixture parses successfully");
-    check(results.size() == 2, "Google HTML fixture returns two results");
-    check(results[0].title == "Ainiux Example Result", "Google HTML title is extracted");
-    check(results[0].url == "https://example.com/ainiux", "Google HTML URL is extracted");
-    check(results[0].snippet.find("ainiux") != std::string::npos,
-          "Google HTML snippet is extracted");
-    check(results[1].url == "https://docs.example.com/guide",
-          "Google /url?q= links are decoded");
+    ainiux::Error err = ainiux::search::parse_duckduckgo_html(html, 10, results);
+    check(err.ok(), "DuckDuckGo HTML fixture parses successfully");
+    check(results.size() == 3, "DuckDuckGo HTML fixture returns three results");
+    check(results[0].title == "Nocturne by Eino Leino | Poemist",
+          "DuckDuckGo HTML title is extracted");
+    check(results[0].url == "https://www.poemist.com/eino-leino/nocturne",
+          "DuckDuckGo uddg= redirect is decoded");
+    check(results[0].snippet.find("corncrake") != std::string::npos,
+          "DuckDuckGo HTML snippet is extracted");
+    check(results[0].snippet.find('\'') != std::string::npos,
+          "DuckDuckGo HTML numeric entity in snippet is decoded");
+    check(results[1].title.find("Nocturne") != std::string::npos,
+          "DuckDuckGo HTML second title is extracted");
+    check(results[1].url == "https://fi.wikipedia.org/wiki/Nocturne_(runo)",
+          "DuckDuckGo HTML second URL is decoded");
+    check(results[2].url == "https://example.com/direct-link",
+          "DuckDuckGo HTML preserves direct https links");
+    check(results[2].title == "Direct HTTPS Result",
+          "DuckDuckGo HTML direct-link title is extracted");
+
+    std::vector<ainiux::search::SearchResult> capped;
+    err = ainiux::search::parse_duckduckgo_html(html, 1, capped);
+    check(err.ok() && capped.size() == 1, "DuckDuckGo HTML respects max_results");
 }
 
-void test_google_modern_html_parser_fixture() {
-    const std::string html = read_fixture("tests/fixtures/google_search_modern.html");
+void test_duckduckgo_html_empty_rejected() {
     std::vector<ainiux::search::SearchResult> results;
-    ainiux::Error err = ainiux::search::parse_google_search_html(html, 5, results);
-    check(err.ok(), "Google modern HTML fixture parses successfully");
-    check(results.size() == 3, "Google modern HTML fixture returns three results");
-    check(results[0].title == "Modern Google Result Title", "Google modern nested h3 title is extracted");
-    check(results[0].url == "https://example.com/article", "Google modern /url?q= link is decoded");
-    check(results[0].snippet.find("modern layout") != std::string::npos,
-          "Google modern snippet is extracted");
-    check(results[1].title == "Direct Link Result", "Google aria-label title is used when present");
-    check(results[1].url == "https://direct.example.com/page", "Google direct https link is preserved");
-    check(results[2].title == "Sibling Title Before Link", "Google sibling h3 title is extracted");
-    check(results[2].url == "https://sibling.example.com/path", "Google sibling /url?q= link is decoded");
-}
-
-void test_google_blocked_html_parser() {
-    const std::string html = read_fixture("tests/fixtures/google_search_blocked.html");
-    std::vector<ainiux::search::SearchResult> results;
-    ainiux::Error err = ainiux::search::parse_google_search_html(html, 3, results);
+    ainiux::Error err =
+        ainiux::search::parse_duckduckgo_html("<html><body>no results</body></html>", 3, results);
     check(!err.ok() && err.code == ainiux::ErrorCode::ProviderSchema,
-          "Google blocked HTML is rejected");
-    check(err.message.find("JavaScript-only") != std::string::npos,
-          "Google blocked HTML error mentions JavaScript-only page");
+          "DuckDuckGo HTML with no results is rejected");
+}
+
+void test_result_url_truncation_via_tavily_shape() {
+    // Overlong query strings should not bloat search results.
+    std::string long_query(600, 'a');
+    const std::string body =
+        "{\"results\":[{\"title\":\"Long\",\"url\":\"https://example.com/path?q=" + long_query +
+        "\",\"content\":\"snippet here\"}]}";
+    std::vector<ainiux::search::SearchResult> results;
+    ainiux::Error err = ainiux::search::parse_tavily_response(body, 3, results);
+    check(err.ok() && results.size() == 1, "tavily parse with long URL succeeds");
+    check(results[0].url.size() <= 512, "result URL is truncated to a bounded length");
+    check(results[0].url.find("https://example.com/path") == 0,
+          "truncated URL keeps scheme host and path prefix");
 }
 
 void test_tavily_parser_fixture() {
@@ -113,9 +123,9 @@ void test_format_context_message() {
 void run_all() {
     test_duckduckgo_parser_fixture();
     test_duckduckgo_empty_abstract_uses_related_topics();
-    test_google_html_parser_fixture();
-    test_google_modern_html_parser_fixture();
-    test_google_blocked_html_parser();
+    test_duckduckgo_html_parser_fixture();
+    test_duckduckgo_html_empty_rejected();
+    test_result_url_truncation_via_tavily_shape();
     test_tavily_parser_fixture();
     test_search_rejects_empty_query();
     test_format_context_message();

@@ -185,6 +185,11 @@ void test_process_runner() {
     error = ainiux::agent::parse_inspection_command("git ls-files", arguments);
     check(error.ok() && arguments.size() > 9 && arguments[9] == "ls-files",
           "process runner preserves the validated Git file-listing subcommand after hardening");
+    error = ainiux::agent::parse_inspection_command("git diff --stat", arguments);
+    check(error.ok() && arguments.size() > 9 && arguments[9] == "diff",
+          "process runner permits bounded git diff --stat");
+    error = ainiux::agent::parse_inspection_command("git diff --cached -- src/main.cpp", arguments);
+    check(error.ok(), "process runner permits git diff --cached with pathspec");
     error = ainiux::agent::parse_inspection_command("git diff --output=owned", arguments);
     check(!error.ok(), "process runner rejects Git forms that can write output files");
     error = ainiux::agent::parse_inspection_command("git grep --open-files-in-pager=sh token", arguments);

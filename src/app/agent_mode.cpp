@@ -7,6 +7,8 @@
 #include <thread>
 
 #include "agent/session_runtime.hpp"
+#include "fetch/fetch.hpp"
+#include "search/search.hpp"
 #include "security/redact.hpp"
 
 namespace ainiux::app {
@@ -48,6 +50,7 @@ AgentGoalResult run_agent_goal(provider::RequestContext context,
     agent::SessionRuntimeOptions options;
     options.workspace = ".";
     options.allow_mutations = true;
+    options.allow_network = true;
     options.interactive = !write_final_to_stdout;
     options.enable_session_db = true;
     options.enable_agent_log = context.options.agent_log_enabled;
@@ -60,6 +63,15 @@ AgentGoalResult run_agent_goal(provider::RequestContext context,
     options.auto_compact = context.options.agent_auto_compact;
     options.compact_limit = context.options.agent_compact_limit;
     options.show_command_output = context.options.agent_show_command_output;
+    options.fetch_options.connect_timeout_seconds = context.options.connect_timeout_seconds;
+    options.fetch_options.timeout_seconds =
+        context.options.timeout_seconds > 0 ? context.options.timeout_seconds : 30;
+    options.fetch_options.max_bytes = context.options.max_fetch_bytes;
+    options.fetch_options.proxy = context.options.proxy;
+    options.fetch_options.insecure_tls = context.options.insecure_tls;
+    options.fetch_options.trace_http = context.options.trace_http;
+    options.fetch_options.allow_private = context.options.allow_private_url_fetch;
+    options.search_options = search::options_for(context.options);
     options.on_progress = std::move(on_progress);
 
     agent::AgentSessionRuntime runtime;

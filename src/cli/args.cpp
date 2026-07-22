@@ -1003,7 +1003,7 @@ Options:
       --fetch-url URL           Fetch HTML for extraction, or as prompt context with -p.
       --search QUERY            Run a web search and use results as prompt context with -p.
       --web-search-provider NAME
-                                auto, tavily, firecrawl, exa, searxng, duckduckgo, or google.
+                                auto, tavily, firecrawl, exa, searxng, or duckduckgo.
       --max-web-search-results N
                                 Maximum ranked web search hits to include; default 3.
                                 Override with config web_search.max_results or

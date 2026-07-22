@@ -8,9 +8,11 @@
 
 #include "agent/index/index.hpp"
 #include "common.hpp"
+#include "fetch/fetch.hpp"
 #include "json/json.hpp"
 #include "provider/provider.hpp"
 #include "runtime/runtime.hpp"
+#include "search/search.hpp"
 
 namespace ainiux::agent {
 
@@ -28,7 +30,8 @@ struct SourceRange {
 
 // Snapshot-backed workspace tools. Security-review keeps allow_mutations=false
 // (read/search/inspect only). Agent mode sets allow_mutations=true to expose
-// write_file, edit_file, str_replace (with fuzzy fallback), remove, and apply_patch.
+// write_file, edit_file, str_replace (with fuzzy fallback), remove, apply_patch,
+// and network tools (fetch_url / search_web) when allow_network is also true.
 struct HistoryBackupPolicy {
     bool enabled = true;
     std::size_t max_bytes = 1024U * 1024U;  // 1 MiB
@@ -37,7 +40,11 @@ struct HistoryBackupPolicy {
 
 struct ToolRegistryOptions {
     bool allow_mutations = false;
+    // Network tools reuse src/fetch and src/search. Disabled for security-review.
+    bool allow_network = false;
     HistoryBackupPolicy history_backup;
+    fetch::Options fetch_options;
+    search::Options search_options = search::default_options();
 };
 
 class ReadToolRegistry {
@@ -135,7 +142,10 @@ class ReadToolRegistry {
     std::vector<std::string> secrets_;
     mutable std::map<std::string, const index::IndexedFile*> files_;
     bool allow_mutations_ = false;
+    bool allow_network_ = false;
     HistoryBackupPolicy history_backup_{};
+    fetch::Options fetch_options_{};
+    search::Options search_options_{};
 };
 
 std::string tool_error_result(const std::string& code, const std::string& message);

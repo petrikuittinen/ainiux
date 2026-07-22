@@ -846,12 +846,23 @@ Error refresh(const Options& options, RefreshStats& stats) {
     if (!(error = metadata(db, "max_source_code_file_size", stored_limit, found)).ok()) return error;
     const bool limit_changed = !found || stored_limit != std::to_string(options.max_source_code_file_size);
 
+    std::set<std::string> force_only;
+    for (const std::string& path : options.update_paths) {
+        if (!path.empty() && path != ".") force_only.insert(fs::path(path).generic_string());
+    }
+    const bool path_filter = !force_only.empty();
+
     std::set<std::string> current_paths;
     std::vector<Candidate> changed;
     for (const Candidate& candidate : candidates) {
         current_paths.insert(candidate.path);
+        if (path_filter && force_only.find(candidate.path) == force_only.end()) {
+            // Outside the requested path set: leave the existing record as-is.
+            ++stats.unchanged;
+            continue;
+        }
         const auto old = existing.find(candidate.path);
-        if (!scanner_changed && !limit_changed && old != existing.end() &&
+        if (!options.force_rescan && !scanner_changed && !limit_changed && old != existing.end() &&
             old->second.size == candidate.size && old->second.mtime_ns == candidate.mtime_ns) {
             ++stats.unchanged;
         } else {
