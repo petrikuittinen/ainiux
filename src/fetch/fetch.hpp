@@ -10,11 +10,14 @@ namespace ainiux::fetch {
 struct Options {
     long connect_timeout_seconds = 10;
     long timeout_seconds = 30;
+    // Cap on downloaded response body (raw HTML/bytes before conversion).
     long max_bytes = 1048576;
     std::string proxy;
     bool insecure_tls = false;
     bool trace_http = false;
     bool allow_private = false;
+    // Follow HTTP redirects (each hop still uses private-address socket checks).
+    bool follow_redirects = true;
 };
 
 Error fetch_html(const std::string& url,

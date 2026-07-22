@@ -363,6 +363,9 @@ Error fetch_body(const std::string& url,
     request.trace = options.trace_http;
     request.block_private_addresses = !options.allow_private;
     request.max_body_bytes = options.max_bytes;
+    // Default on: bare trailing-slash 301s (WordPress etc.) are common. Private
+    // destinations remain blocked via CURLOPT_OPENSOCKETFUNCTION on each hop.
+    request.follow_redirects = options.follow_redirects;
     request.cancellation = cancellation;
 
     http::Result result = http::perform(request, {});

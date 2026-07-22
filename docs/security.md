@@ -86,11 +86,12 @@ Defaults:
 - response body cap: 1 MiB unless `--max-fetch-bytes N` is set
 - connect timeout: existing `--connect-timeout` default
 - total timeout for fetch mode: 30 seconds unless `--timeout N` is set
-- redirects: not followed in this slice
-- request headers: sends browser-style `User-Agent`, `Accept`, `Accept-Language`, and `Upgrade-Insecure-Requests` headers
-- content type: accepts empty content type, `text/html`, and `application/xhtml+xml`
-- body encoding: validates UTF-8 and rejects invalid legacy-charset bytes with a clear unsupported-feature error
+- redirects: followed by default (max 5); each hop still blocks private/loopback/metadata addresses via the socket-open check
+- request headers: sends browser-style `User-Agent`, `Accept`, `Accept-Language`, `Sec-Fetch-*`, and `Upgrade-Insecure-Requests` headers
+- content type: accepts empty content type, `text/html`, `application/xhtml+xml`, and (for text fetch) `text/plain`
+- body encoding: non-UTF-8 bodies are converted when possible (ISO-8859-1 / Windows-1252 via Content-Type or meta); tool results are always valid UTF-8
 - private/loopback/link-local/multicast/common metadata literal hosts and resolved socket addresses are refused unless `--allow-private-url-fetch` is set
+- agent `fetch_url` `max_bytes` limits the **returned Markdown/text** size; raw HTML may download under a larger safety ceiling before conversion
 
 Resolved IPv4 and IPv6 addresses are checked in libcurl's socket-open callback before a connection is created, so a public-looking hostname cannot connect to a private result. URL fetching through `--proxy` is refused without `--allow-private-url-fetch`, because the client cannot verify target DNS performed by a proxy. The override deliberately disables both literal and resolved-address blocking.
 

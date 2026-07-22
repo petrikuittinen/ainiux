@@ -1881,8 +1881,8 @@ std::vector<provider::FunctionDefinition> ReadToolRegistry::definitions() const 
             {"fetch_url",
              "Fetch one http(s) URL and return UTF-8 Markdown (or plain text). Never returns raw "
              "HTML/CSS/JS—scripts, styles, and comments are stripped to reduce tokens and "
-             "prompt-injection risk. Prefer the top 1–3 search hits only. "
-             "Private/loopback blocked unless configured.",
+             "prompt-injection risk. max_bytes caps the returned Markdown size (not raw HTML). "
+             "Prefer the top 1–3 search hits only. Private/loopback blocked unless configured.",
              schema("\"url\":{\"type\":\"string\"},"
                     "\"max_bytes\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":8388608},"
                     "\"timeout_ms\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":120000}",
@@ -3424,8 +3424,11 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
         if (!allow_network_)
             return tool_error_result("policy_denied", "fetch_url is not enabled in this session");
         std::string url;
-        std::size_t max_bytes = static_cast<std::size_t>(
+        // max_bytes limits the returned Markdown/text size (what the model sees), not the
+        // raw HTML download. Download uses a larger safety ceiling so typical pages convert.
+        const std::size_t default_output = static_cast<std::size_t>(
             fetch_options_.max_bytes > 0 ? fetch_options_.max_bytes : 1048576);
+        std::size_t max_output_bytes = default_output;
         std::size_t timeout_ms =
             static_cast<std::size_t>(fetch_options_.timeout_seconds > 0
                                          ? fetch_options_.timeout_seconds * 1000
@@ -3433,30 +3436,49 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
         // extract_text is intentionally not accepted: agent fetch always returns
         // Markdown/plain text, never raw HTML (prompt-injection + token cost).
         if (!get_string(args, "url", url, true, validation_error) ||
-            !get_size(args, "max_bytes", max_bytes, 8388608, max_bytes, validation_error) ||
+            !get_size(args, "max_bytes", max_output_bytes, 8388608, max_output_bytes,
+                      validation_error) ||
             !get_size(args, "timeout_ms", timeout_ms, 120000, timeout_ms, validation_error) ||
-            max_bytes == 0 || timeout_ms == 0)
+            max_output_bytes == 0 || timeout_ms == 0)
             return tool_error_result("invalid_arguments",
                                     validation_error.empty() ? "limits must be positive"
                                                              : validation_error);
         fetch::Options opts = fetch_options_;
-        opts.max_bytes = static_cast<long>(max_bytes);
+        // Raw download budget: config default (1 MiB) or enough headroom over the
+        // output cap for HTML→MD (HTML is often much larger than the extracted text).
+        std::size_t download_cap = default_output;
+        if (download_cap < max_output_bytes) download_cap = max_output_bytes;
+        const std::size_t headroom = max_output_bytes > (8388608 / 16) ? 8388608 : max_output_bytes * 16;
+        if (download_cap < headroom) download_cap = headroom;
+        if (download_cap > 8388608) download_cap = 8388608;
+        opts.max_bytes = static_cast<long>(download_cap);
         opts.timeout_seconds = static_cast<long>((timeout_ms + 999) / 1000);
         if (opts.timeout_seconds < 1) opts.timeout_seconds = 1;
+        opts.follow_redirects = true;
         std::string body;
         // Always convert HTML→Markdown (or keep text/plain). Never fetch_html for agent tools.
         const Error error = fetch::fetch_text(url, opts, body, cancellation);
         json::Value data = object_value();
         data.object["url"] = string_value(url);
-        // Heuristic: Markdown converter emits links as (url) or headings; plain text stays as-is.
-        // Callers only need a stable label for the model.
         data.object["format"] = string_value("markdown_or_text");
-        data.object["bytes_read"] = number_value(static_cast<double>(body.size()));
-        const bool truncated = body.size() >= max_bytes;
         std::vector<std::string> warnings;
         if (args.get("extract_text") != nullptr)
             warnings.push_back(
                 "extract_text is ignored; fetch_url always returns Markdown or plain text");
+        bool truncated = false;
+        if (error.ok() && body.size() > max_output_bytes) {
+            // Truncate at a UTF-8 code-unit boundary so JSON stays well-formed.
+            std::size_t cut = max_output_bytes;
+            while (cut > 0 &&
+                   (static_cast<unsigned char>(body[cut]) & 0xC0) == 0x80)
+                --cut;
+            body.resize(cut);
+            truncated = true;
+            warnings.push_back("returned Markdown/text truncated to max_bytes=" +
+                               std::to_string(max_output_bytes));
+        }
+        data.object["bytes_read"] = number_value(static_cast<double>(body.size()));
+        data.object["max_output_bytes"] = number_value(static_cast<double>(max_output_bytes));
         if (!error.ok()) {
             data.object["text"] = string_value(redact_secrets(body, secrets_));
             return envelope(false, std::move(data), error_code_string(error.code), error.message,
