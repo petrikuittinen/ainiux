@@ -813,7 +813,8 @@ void test_git_and_network_tools_policy() {
             " && git init -q && git config user.email t@example.com && "
             "git config user.name test && git add src/hello.cpp && "
             "git commit -q -m init";
-        (void)std::system(cmd.c_str());
+        const int git_setup_status = std::system(cmd.c_str());
+        (void)git_setup_status;
     }
     agent::ReadToolRegistry tools = make_registry(workspace, true);
     agent::ToolRegistryOptions net_options;

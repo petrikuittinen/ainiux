@@ -46,15 +46,24 @@ static int (*real_open)(const char*, int, ...) = NULL;
 static int (*real_openat)(int, const char*, int, ...) = NULL;
 static ssize_t (*real_write)(int, const void*, size_t) = NULL;
 
+static void load_symbol(void* target, size_t target_size, const char* name) {
+    void* symbol = dlsym(RTLD_NEXT, name);
+    if (target_size == sizeof(symbol)) {
+        memcpy(target, &symbol, target_size);
+    } else {
+        memset(target, 0, target_size);
+    }
+}
+
 static void init_symbols(void) {
     if (real_open == NULL) {
-        real_open = dlsym(RTLD_NEXT, "open");
+        load_symbol(&real_open, sizeof(real_open), "open");
     }
     if (real_openat == NULL) {
-        real_openat = dlsym(RTLD_NEXT, "openat");
+        load_symbol(&real_openat, sizeof(real_openat), "openat");
     }
     if (real_write == NULL) {
-        real_write = dlsym(RTLD_NEXT, "write");
+        load_symbol(&real_write, sizeof(real_write), "write");
     }
 }
 

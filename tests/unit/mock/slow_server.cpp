@@ -8,9 +8,7 @@
 
 #include <cerrno>
 #include <cstring>
-#include <sstream>
 #include <string>
-#include <vector>
 
 namespace ainiux::test::mock {
 
@@ -64,6 +62,13 @@ bool SlowHttpServer::start(double response_delay_seconds,
         return false;
     }
 
+    const std::string script = repo_root() + "/tests/mock_server/slow_http_mock.py";
+    const std::string port = std::to_string(port_);
+    const std::string response_delay = std::to_string(response_delay_seconds);
+    const std::string chunk_delay = std::to_string(chunk_delay_seconds);
+    const std::string chunks = std::to_string(chunk_count);
+    const std::string ready_fd = std::to_string(ready_pipe_[1]);
+
     const pid_t child = fork();
     if (child < 0) {
         close(ready_pipe_[0]);
@@ -75,15 +80,10 @@ bool SlowHttpServer::start(double response_delay_seconds,
 
     if (child == 0) {
         close(ready_pipe_[0]);
-        std::ostringstream command;
-        command << "python3 " << repo_root() << "/tests/mock_server/slow_http_mock.py"
-                << " --host 127.0.0.1"
-                << " --port " << port_
-                << " --response-delay " << response_delay_seconds
-                << " --chunk-delay " << chunk_delay_seconds
-                << " --chunk-count " << chunk_count
-                << " --ready-fd " << ready_pipe_[1];
-        execl("/bin/sh", "sh", "-c", command.str().c_str(), static_cast<char*>(nullptr));
+        execlp("python3", "python3", script.c_str(), "--host", "127.0.0.1", "--port",
+               port.c_str(), "--response-delay", response_delay.c_str(), "--chunk-delay",
+               chunk_delay.c_str(), "--chunk-count", chunks.c_str(), "--ready-fd",
+               ready_fd.c_str(), static_cast<char*>(nullptr));
         _exit(127);
     }
 
@@ -95,7 +95,11 @@ bool SlowHttpServer::start(double response_delay_seconds,
     const ssize_t read_bytes = read(ready_pipe_[0], &ready_byte, 1);
     close(ready_pipe_[0]);
     ready_pipe_[0] = -1;
-    return read_bytes == 1 && ready_byte == '1';
+    if (read_bytes != 1 || ready_byte != '1') {
+        stop();
+        return false;
+    }
+    return true;
 }
 
 void SlowHttpServer::stop() {
@@ -110,15 +114,24 @@ void SlowHttpServer::stop() {
     if (pid_ > 0) {
         kill(pid_, SIGTERM);
         int status = 0;
+        bool reaped = false;
         for (int attempt = 0; attempt < 50; ++attempt) {
             const pid_t waited = waitpid(pid_, &status, WNOHANG);
             if (waited == pid_) {
+                reaped = true;
+                break;
+            }
+            if (waited < 0 && errno == ECHILD) {
+                reaped = true;
                 break;
             }
             usleep(10000);
         }
-        kill(pid_, SIGKILL);
-        waitpid(pid_, nullptr, 0);
+        if (!reaped) {
+            kill(pid_, SIGKILL);
+            while (waitpid(pid_, nullptr, 0) < 0 && errno == EINTR) {
+            }
+        }
         pid_ = -1;
     }
     port_ = 0;
