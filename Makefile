@@ -48,6 +48,7 @@ EDITOR_HELP_HEADER := $(GENERATED_DIR)/embedded_editor_help.hpp
 EDITOR_HELP_INSTALL := $(DESTDIR)$(PREFIX)/share/ainiux/editor_help.md
 MASTER_PROMPT_SRC := resources/prompts/master_prompt.md
 SECURITY_PROMPT_SRC := resources/prompts/security_prompt.md
+CODING_PROMPT_SRC := resources/prompts/coding_prompt.md
 AGENT_PROMPTS_HEADER := $(GENERATED_DIR)/embedded_agent_prompts.hpp
 AGENT_PROMPTS_INSTALL_DIR := $(DESTDIR)$(PREFIX)/share/ainiux/prompts
 BUILTIN_DATASET_PARTS := benchmarks/builtin/safety.jsonl \
@@ -119,7 +120,7 @@ $(EDITOR_HELP_HEADER): $(EDITOR_HELP_SRC)
 
 $(OBJ_DIR)/src/editor/editor_help.o: $(EDITOR_HELP_HEADER)
 
-$(AGENT_PROMPTS_HEADER): $(MASTER_PROMPT_SRC) $(SECURITY_PROMPT_SRC)
+$(AGENT_PROMPTS_HEADER): $(MASTER_PROMPT_SRC) $(SECURITY_PROMPT_SRC) $(CODING_PROMPT_SRC)
 	@mkdir -p $(dir $@)
 	@{ \
 		printf '%s\n' '#pragma once' 'namespace ainiux::agent {' \
@@ -128,7 +129,10 @@ $(AGENT_PROMPTS_HEADER): $(MASTER_PROMPT_SRC) $(SECURITY_PROMPT_SRC)
 		printf '%s\n' ')AINIUX_MASTER";' \
 			'inline constexpr char kEmbeddedSecurityPrompt[] = R"AINIUX_SECURITY('; \
 		cat $(SECURITY_PROMPT_SRC); \
-		printf '%s\n' ')AINIUX_SECURITY";' '}  // namespace ainiux::agent'; \
+		printf '%s\n' ')AINIUX_SECURITY";' \
+			'inline constexpr char kEmbeddedCodingPrompt[] = R"AINIUX_CODING('; \
+		cat $(CODING_PROMPT_SRC); \
+		printf '%s\n' ')AINIUX_CODING";' '}  // namespace ainiux::agent'; \
 	} >$@.tmp
 	@mv $@.tmp $@
 
@@ -219,7 +223,8 @@ install: $(BIN) $(COMMON_CONFIG) $(EDITOR_COMMANDS_CONFIG) $(THEMES_CONFIG) $(BE
 	install -m 0644 "$(BENCHMARKS_CONFIG)" "$(BENCHMARKS_INSTALL)"
 	install -m 0644 "$(MODELS_CONFIG)" "$(MODELS_INSTALL)"
 	install -d "$(AGENT_PROMPTS_INSTALL_DIR)"
-	install -m 0644 "$(MASTER_PROMPT_SRC)" "$(SECURITY_PROMPT_SRC)" "$(AGENT_PROMPTS_INSTALL_DIR)"
+	install -m 0644 "$(MASTER_PROMPT_SRC)" "$(SECURITY_PROMPT_SRC)" "$(CODING_PROMPT_SRC)" \
+		"$(AGENT_PROMPTS_INSTALL_DIR)"
 
 clean:
 	rm -rf $(BUILD_DIR) $(BIN) $(IO_FAULT_BIN)

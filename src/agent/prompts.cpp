@@ -23,12 +23,13 @@ Error read_prompt(const fs::path& path, std::string& output) {
 Error load_directory(const fs::path& directory, TrustedPrompts& prompts) {
     Error error = read_prompt(directory / "master_prompt.md", prompts.master);
     if (!error.ok()) return error;
-    return read_prompt(directory / "security_prompt.md", prompts.security);
+    error = read_prompt(directory / "security_prompt.md", prompts.security);
+    if (!error.ok()) return error;
+    return read_prompt(directory / "coding_prompt.md", prompts.coding);
 }
 
 // Always insert exactly one separating newline between non-empty parts so
-// security_system_prompt() remains master + "\n" + security even when the
-// master file already ends with a newline (common for Markdown sources).
+// joined prompts stay stable when source Markdown files end with a newline.
 std::string join_prompt_parts(const std::string& left, const std::string& right) {
     if (left.empty()) return right;
     if (right.empty()) return left;
@@ -37,6 +38,15 @@ std::string join_prompt_parts(const std::string& left, const std::string& right)
     std::string tail = right;
     while (!tail.empty() && (tail.front() == '\n' || tail.front() == '\r')) tail.erase(tail.begin());
     return head + "\n" + tail;
+}
+
+std::string protocol_block(ToolProtocol protocol) {
+    const char* appendix =
+        protocol == ToolProtocol::Xml ? xml_protocol_appendix() : native_protocol_appendix();
+    std::string block = appendix;
+    if (!block.empty() && block.front() == '\n') block.erase(block.begin());
+    while (!block.empty() && (block.back() == '\n' || block.back() == ' ')) block.pop_back();
+    return block;
 }
 
 }  // namespace
@@ -70,13 +80,8 @@ std::string TrustedPrompts::security_system_prompt() const {
 }
 
 std::string TrustedPrompts::agent_system_prompt(ToolProtocol protocol) const {
-    const char* appendix =
-        protocol == ToolProtocol::Xml ? xml_protocol_appendix() : native_protocol_appendix();
-    // Trim a single leading newline from the raw-string appendix for stable joins.
-    std::string block = appendix;
-    if (!block.empty() && block.front() == '\n') block.erase(block.begin());
-    while (!block.empty() && (block.back() == '\n' || block.back() == ' ')) block.pop_back();
-    return join_prompt_parts(master, block);
+    // Default agent: master + coding task layer + static protocol appendix.
+    return join_prompt_parts(join_prompt_parts(master, coding), protocol_block(protocol));
 }
 
 Error load_trusted_prompts(const std::string& override_directory, TrustedPrompts& prompts) {
@@ -98,6 +103,7 @@ Error load_trusted_prompts(const std::string& override_directory, TrustedPrompts
     }
     prompts.master = kEmbeddedMasterPrompt;
     prompts.security = kEmbeddedSecurityPrompt;
+    prompts.coding = kEmbeddedCodingPrompt;
     return ok_error();
 }
 

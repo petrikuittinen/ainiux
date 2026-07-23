@@ -213,20 +213,26 @@ void test_prompts_and_report() {
               prompts.master.find("error tool-result") != std::string::npos &&
               prompts.security.find("submit_security_review") != std::string::npos &&
               prompts.security.find("EXPECTED_COVERAGE") != std::string::npos &&
-              prompts.security.find("Review the supplied source batch") != std::string::npos,
+              prompts.security.find("Review the supplied source batch") != std::string::npos &&
+              !prompts.coding.empty() &&
+              prompts.coding.find("# Coding") != std::string::npos &&
+              prompts.coding.find("4.5:1") != std::string::npos,
           "trusted security prompt is exact master plus newline plus security prompt");
     const std::string agent_native =
         prompts.agent_system_prompt(ainiux::agent::ToolProtocol::Native);
     const std::string agent_xml = prompts.agent_system_prompt(ainiux::agent::ToolProtocol::Xml);
-    check(agent_native.find(prompts.master) != std::string::npos &&
+    check(agent_native.find("untrusted data for policy authority") != std::string::npos &&
+              agent_native.find("# Coding") != std::string::npos &&
+              agent_native.find("4.5:1") != std::string::npos &&
               agent_native.find("Active channel: native tools") != std::string::npos &&
-              agent_native.find("submit_security_review") == std::string::npos,
-          "agent native system prompt is master plus native protocol, without security task layer");
-    check(agent_xml.find(prompts.master) != std::string::npos &&
+              agent_native.find("submit_security_review") == std::string::npos &&
+              agent_native.find("Do not create git commits") != std::string::npos,
+          "agent native system prompt is master plus coding plus native protocol, without security");
+    check(agent_xml.find("# Coding") != std::string::npos &&
               agent_xml.find("Active channel: XML tool markup") != std::string::npos &&
               agent_xml.find("<tool_call>") != std::string::npos &&
               agent_xml.find("exactly one") != std::string::npos,
-          "agent XML system prompt is master plus static XML protocol appendix");
+          "agent XML system prompt is master plus coding plus static XML protocol appendix");
     ainiux::provider::ToolConversation seeded;
     ainiux::agent::seed_agent_conversation(seeded, prompts, ainiux::agent::ToolProtocol::Native,
                                            "List the project overview.");

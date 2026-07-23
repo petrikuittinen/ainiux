@@ -325,7 +325,7 @@ Run a single agent goal against the current project (refreshes the code index, u
 ./ainiux --provider openai -m MODEL -r "Create src/scratch/hello.txt with one short greeting"
 ```
 
-Agent mode uses the trusted master prompt plus a static protocol appendix (native tools when the provider supports function calling, otherwise the XML `<tool_call>` channel). When present, workspace-root `AGENTS.md` is loaded (capped, UTF-8 only) and injected as a separate **untrusted** user-context message—never as system policy. It reuses the security-review read/search/inspect tools and, unlike security review, also enables ordinary workspace mutations and network tools:
+Agent mode uses the trusted master + coding prompts plus a static protocol appendix (native tools when the provider supports function calling, otherwise the XML `<tool_call>` channel). When present, workspace-root `AGENTS.md` is loaded (capped, UTF-8 only) and injected as a separate **untrusted** user-context message—never as system policy. It reuses the security-review read/search/inspect tools and, unlike security review, also enables ordinary workspace mutations and network tools:
 
 **Read / search / index (agent and security-review where noted):** `project_overview`, `list_directory`, `glob`, `search_text`/`grep`/`find`, `search_symbol`, `get_skeleton`, `read_symbol`, `read_file`, `read_many`, `run_command` (allowlisted; no shell), `git_status`, `git_diff` (bounded read-only git CLI), `index_status`, `index_update`, `find_tests`, `inspect_code_task`.
 

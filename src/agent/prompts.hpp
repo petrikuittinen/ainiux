@@ -8,18 +8,23 @@
 namespace ainiux::agent {
 
 // Trusted prompts are never loaded from the reviewed/agent workspace.
-// master_prompt.md is the shared foundation; security_prompt.md is the
-// security-review task layer only (keep it task-specific).
+// master_prompt.md is the shared foundation (soft trust boundary + tools).
+// coding_prompt.md is the default agent task layer (master + coding + protocol).
+// security_prompt.md is the security-review task layer plus a stricter
+// adversarial trust posture (master + security).
+// plan_prompt.md / refactor_prompt.md may exist for future task-mode selection.
 struct TrustedPrompts {
     std::string master;
     std::string security;
+    std::string coding;
 
     // security-review system prompt: master + security task layer.
     std::string security_system_prompt() const;
 
-    // Agent session system prompt: master + a static per-session protocol
-    // appendix. Keep this text stable for the whole session so provider-side
-    // prompt caching works; inject per-turn notices as separate messages.
+    // Default agent session system prompt: master + coding + a static
+    // per-session protocol appendix. Keep this text stable for the whole
+    // session so provider-side prompt caching works; inject per-turn notices
+    // as separate messages.
     std::string agent_system_prompt(ToolProtocol protocol) const;
 };
 
