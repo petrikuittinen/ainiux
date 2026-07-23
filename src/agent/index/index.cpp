@@ -430,10 +430,13 @@ Error load_ignore_rules(const fs::path& root, IgnoreRules& rules) {
 }
 
 bool excluded_directory(const std::string& name) {
+    // POSIX convention: a leading dot marks a hidden directory. Hidden trees
+    // contain editor state, VCS metadata, caches, credentials, and Ainiux's own
+    // project artifacts; none are code-index candidates by default.
+    if (!name.empty() && name.front() == '.') return true;
     static const std::set<std::string> excluded = {
-        kProjectStateDirName, ".ainiux", ".git", ".hg", ".svn", "build", "node_modules", "vendor",
-        "target",
-        "dist", "out", ".cache", ".venv", "venv", "env", "__pycache__"};
+        "build", "node_modules", "vendor", "target", "dist", "out", "venv", "env",
+        "__pycache__"};
     return excluded.find(name) != excluded.end();
 }
 

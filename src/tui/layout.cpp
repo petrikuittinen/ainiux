@@ -21,4 +21,17 @@ Layout layout_for_terminal(int terminal_rows, int terminal_cols) {
     return layout;
 }
 
+void apply_agent_project_history_handoff(
+    chat::Session& session,
+    std::vector<provider::Message>& previous_history,
+    std::vector<provider::Message> replacement_history,
+    bool replacement_succeeded) {
+    if (replacement_succeeded || !replacement_history.empty()) {
+        session.messages = std::move(replacement_history);
+    } else {
+        session.messages = std::move(previous_history);
+    }
+    previous_history.clear();
+}
+
 }  // namespace ainiux::tui

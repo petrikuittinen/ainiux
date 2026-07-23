@@ -67,7 +67,8 @@ void test_open_singleton_append_compact_load() {
     check(messages.size() >= 3, "messages stored");
     check(tools.size() == 1 && tools[0].tool_name == "read_file" && tools[0].ok, "one tool event");
 
-    // Compact keeps recent tail.
+    const std::size_t transcript_size_before_compact = messages.size();
+    // Compaction records a summary but preserves the complete transcript.
     error = store.compact_with_summary("summary of earlier work", 2);
     check(error.ok(), "compact: " + error.message);
     messages.clear();
@@ -81,6 +82,8 @@ void test_open_singleton_append_compact_load() {
         }
     }
     check(saw_summary, "summary present after compact");
+    check(messages.size() == transcript_size_before_compact + 1,
+          "compaction preserves every original transcript row");
 
     // Re-open existing DB — still singleton.
     store.close();

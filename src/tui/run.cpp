@@ -20,6 +20,7 @@
 #include "app/detail.hpp"
 #include "app/user_shell.hpp"
 #include "agent/approval.hpp"
+#include "agent/project_root.hpp"
 #include "agent/session_runtime.hpp"
 #include "agent/tool_display.hpp"
 #include "chat/settings.hpp"
@@ -132,9 +133,13 @@ app::TuiRunResult run(provider::RequestContext context,
             events.push(std::move(event));
         });
     }
-    auto make_agent_runtime_options = [&]() {
+    auto make_agent_runtime_options = [&](const std::string& workspace = std::string()) {
         agent::SessionRuntimeOptions options;
-        options.workspace = ".";
+        options.workspace = !workspace.empty()
+                                ? workspace
+                                : (agent_runtime && agent_runtime->prepared()
+                                       ? agent_runtime->workspace()
+                                       : std::string("."));
         options.allow_mutations = true;
         options.allow_network = true;
         options.interactive = true;
@@ -242,6 +247,9 @@ app::TuiRunResult run(provider::RequestContext context,
     std::string settings_text;
     std::string pending_reasoning;
     std::string pending_reasoning_warning;
+    agent::NewProjectTarget pending_new_project;
+    bool have_pending_new_project = false;
+    std::vector<provider::Message> project_switch_previous_history;
     TuiMode mode = TuiMode::Chat;
     size_t history_edit_index = static_cast<size_t>(-1);
     std::vector<chat::ThreadSummary> thread_picker_threads;
@@ -402,6 +410,14 @@ app::TuiRunResult run(provider::RequestContext context,
             }
             text += "\nPress y to allow · n or Esc to deny";
             return text;
+        }
+        if (mode == TuiMode::AgentNewConfirm) {
+            if (!have_pending_new_project) return std::string("No agent project selected");
+            return "Permanently remove agent project state:\n  " +
+                   pending_new_project.state_dir +
+                   "\n\nThis removes project history, index, approvals, and logs. "
+                   "Other files in the project directory are preserved.\n\n"
+                   "Press y to reset · n or Esc to cancel";
         }
         if (mode == TuiMode::SystemEdit) {
             return system_edit_text();
@@ -1207,11 +1223,126 @@ app::TuiRunResult run(provider::RequestContext context,
         refresh_settings_panel_if_visible();
     };
 
+    auto launch_agent_project_new = [&](agent::NewProjectTarget target) {
+        if (!context.options.agent || !agent_runtime || !agent_runtime->prepared()) {
+            report_agent_error("Agent project runtime is unavailable");
+            return;
+        }
+        if (active_job != ActiveJob::None) {
+            status = "Cannot create a project while an agent job is running; wait or cancel it first";
+            return;
+        }
+        if (file_job.joinable()) {
+            status = "Cannot create a project while an agent file job is running; wait or cancel it first";
+            return;
+        }
+
+        provider::RequestContext job_context = context;
+        job_context.options.quiet = true;
+        // Clear the old project immediately. Keep a UI-only snapshot so a failed
+        // initialization can restore it even if reopening the old DB also fails.
+        project_switch_previous_history = std::move(session.messages);
+        session.messages.clear();
+        pending_user = static_cast<size_t>(-1);
+        pending_assistant = static_cast<size_t>(-1);
+        pending_user_added_for_job = false;
+        history_edit_index = static_cast<size_t>(-1);
+        history_scroll = history_scroll_for_thread_end();
+        help_text.clear();
+        settings_text.clear();
+        active_job = ActiveJob::Chat;
+        model_job.start(
+            [runtime = agent_runtime, target = std::move(target),
+             job_context = std::move(job_context),
+             &events](runtime::CancellationToken token) mutable {
+                TuiEvent event;
+                event.type = TuiEventType::AgentProjectNewDone;
+                event.agent_workspace = target.root;
+                const agent::SessionProjectReplaceResult replaced =
+                    runtime->replace_project(job_context, target, token);
+                event.error = replaced.error;
+                event.text = replaced.warning;
+                if (!replaced.workspace.empty())
+                    event.agent_workspace = replaced.workspace;
+                if (replaced.error.ok()) {
+                    event.error = runtime->load_display_messages(event.agent_history);
+                    if (!event.error.ok())
+                        event.error.message =
+                            "fresh project initialized at " + event.agent_workspace +
+                            ", but its transcript could not be loaded: " +
+                            event.error.message;
+                }
+                events.push(std::move(event));
+            });
+        status = "Initializing fresh agent project...";
+    };
+
+    auto start_new_agent_project = [&](const std::string& requested_path) {
+        if (!context.options.agent || !agent_runtime || !agent_runtime->prepared()) {
+            report_agent_error("Agent project runtime is unavailable");
+            return;
+        }
+        agent::NewProjectTarget target;
+        Error target_error = agent::resolve_new_project_target(
+            agent_runtime->workspace(), requested_path, target);
+        if (!target_error.ok()) {
+            report_agent_error(target_error.message);
+            return;
+        }
+        if (target.state_dir_exists) {
+            pending_new_project = std::move(target);
+            have_pending_new_project = true;
+            help_text.clear();
+            settings_text.clear();
+            history_scroll = 0;
+            mode = TuiMode::AgentNewConfirm;
+            status = "Reset agent project? Default is No · y/n";
+            return;
+        }
+        launch_agent_project_new(std::move(target));
+    };
+
+    auto start_agent_compaction = [&]() {
+        if (!context.options.agent || !agent_runtime || !agent_runtime->prepared()) {
+            report_agent_error("Agent project runtime is unavailable");
+            return;
+        }
+        if (active_job != ActiveJob::None) {
+            status = "Cannot compact while an agent job is running; wait or cancel it first";
+            return;
+        }
+        if (file_job.joinable()) {
+            status = "Cannot compact while an agent file job is running; wait or cancel it first";
+            return;
+        }
+        provider::RequestContext job_context = context;
+        job_context.options.quiet = true;
+        active_job = ActiveJob::Chat;
+        model_job.start(
+            [runtime = agent_runtime, job_context = std::move(job_context),
+             &events](runtime::CancellationToken token) mutable {
+                TuiEvent event;
+                event.type = TuiEventType::AgentCompactDone;
+                const agent::SessionCompactionResult compacted =
+                    runtime->compact(job_context, agent::CompactionReason::Manual, token);
+                event.error = compacted.error;
+                event.agent_compacted = compacted.compacted;
+                event.agent_compact_no_op = compacted.no_op;
+                event.text = compacted.notice;
+                if (event.error.ok() && compacted.compacted)
+                    event.error = runtime->load_display_messages(event.agent_history);
+                events.push(std::move(event));
+            });
+        status = "Compacting agent context...";
+    };
+
     TuiCommandHandlers command_handlers;
     command_handlers.quit = [&]() { quit = true; };
     command_handlers.start_history_edit = start_history_edit;
     command_handlers.start_thread_list = start_thread_list;
     command_handlers.start_new_chat_thread = [&](const std::string& name) { start_new_chat_thread(name); };
+    command_handlers.start_new_agent_project = start_new_agent_project;
+    command_handlers.start_agent_compaction = start_agent_compaction;
     command_handlers.open_provider_picker = open_provider_picker;
     command_handlers.apply_selected_provider = [&](const std::string& provider_target) {
         const bool applied =
@@ -1445,6 +1576,26 @@ app::TuiRunResult run(provider::RequestContext context,
         status = "Guard: denied";
     };
     picker_callbacks.on_guard_approval_retry =
+        [&](const std::string& message) { status = message; };
+    picker_callbacks.on_agent_new_accepted = [&]() {
+        if (!have_pending_new_project) {
+            mode = TuiMode::Chat;
+            status = "No agent project selected";
+            return;
+        }
+        agent::NewProjectTarget target = std::move(pending_new_project);
+        pending_new_project = {};
+        have_pending_new_project = false;
+        mode = TuiMode::Chat;
+        launch_agent_project_new(std::move(target));
+    };
+    picker_callbacks.on_agent_new_rejected = [&]() {
+        pending_new_project = {};
+        have_pending_new_project = false;
+        mode = TuiMode::Chat;
+        status = "New agent project cancelled; current project unchanged";
+    };
+    picker_callbacks.on_agent_new_retry =
         [&](const std::string& message) { status = message; };
     picker_callbacks.on_thread_delete_accepted = [&]() {
         if (pending_thread_delete < thread_picker_threads.size()) {
@@ -2084,6 +2235,51 @@ app::TuiRunResult run(provider::RequestContext context,
                         path_completer = std::move(event.path_completer);
                         path_completer.set_assist_config(&ai_continue.assist_config);
                         status = editor::path_completion_status(event.completion);
+                    }
+                    break;
+                case TuiEventType::AgentProjectNewDone: {
+                    model_job.join();
+                    active_job = ActiveJob::None;
+                    mode = TuiMode::Chat;
+                    pending_new_project = {};
+                    have_pending_new_project = false;
+                    if (!event.error.ok()) {
+                        std::vector<provider::Message> restored;
+                        if (agent_runtime && agent_runtime->prepared() &&
+                            !agent_runtime->load_display_messages(restored).ok())
+                            restored.clear();
+                        apply_agent_project_history_handoff(
+                            session, project_switch_previous_history,
+                            std::move(restored), false);
+                        report_agent_error(event.error.message);
+                        break;
+                    }
+                    apply_agent_project_history_handoff(
+                        session, project_switch_previous_history,
+                        std::move(event.agent_history), true);
+                    pending_images.clear();
+                    inflight_image_count = 0;
+                    chat_attachments.clear();
+                    attachments_committed_for_turn = 0;
+                    history_scroll = history_scroll_for_thread_end();
+                    status = event.text.empty()
+                                 ? "Fresh agent project · " + event.agent_workspace
+                                 : event.text;
+                    break;
+                }
+                case TuiEventType::AgentCompactDone:
+                    model_job.join();
+                    active_job = ActiveJob::None;
+                    if (!event.error.ok()) {
+                        report_agent_error(event.error.message);
+                    } else if (event.agent_compacted) {
+                        session.messages = std::move(event.agent_history);
+                        history_scroll = history_scroll_for_thread_end();
+                        status = event.text.empty()
+                                     ? "Agent context compacted"
+                                     : event.text;
+                    } else {
+                        status = event.text.empty() ? "Nothing new to compact" : event.text;
                     }
                     break;
                 case TuiEventType::GuardApproval:

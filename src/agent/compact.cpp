@@ -48,7 +48,11 @@ std::string build_local_compact_summary(const std::vector<AgentMessageRecord>& m
     std::size_t tool_n = 0;
     std::size_t assistant_n = 0;
     for (std::size_t i = 0; i < drop_count && i < messages.size(); ++i) {
-        if (messages[i].role == "user") {
+        if (messages[i].role == "summary") {
+            std::string prior = messages[i].content;
+            if (prior.size() > 1200) prior = prior.substr(0, 1197) + "...";
+            out << "Prior compacted context:\n" << prior << "\n";
+        } else if (messages[i].role == "user") {
             ++user_n;
             if (user_n <= 3) {
                 std::string snippet = messages[i].content;

@@ -37,6 +37,14 @@ struct Layout {
 
 Layout layout_for_terminal(int rows, int cols);
 
+// Complete the visible-history side of an interactive /new handoff. A successful
+// fresh project may legitimately provide an empty replacement transcript.
+void apply_agent_project_history_handoff(
+    chat::Session& session,
+    std::vector<provider::Message>& previous_history,
+    std::vector<provider::Message> replacement_history,
+    bool replacement_succeeded);
+
 struct StyledSegment {
     std::string text;
     StyleRole role = StyleRole::Text;

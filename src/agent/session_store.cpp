@@ -524,18 +524,9 @@ Error AgentSessionStore::load_messages(std::vector<AgentMessageRecord>& messages
 }
 
 Error AgentSessionStore::compact_with_summary(const std::string& summary_text, int keep_recent) {
-    if (keep_recent < 0) keep_recent = 0;
-    std::vector<AgentMessageRecord> all;
-    Error error = load_messages(all, 0);
-    if (!error.ok()) return error;
-    if (static_cast<int>(all.size()) <= keep_recent) {
-        // Nothing to drop; only store summary metadata.
-        AgentProjectRecord project;
-        error = open_project(project);
-        if (!error.ok()) return error;
-        project.summary_text = summary_text;
-        return update_project_meta(project);
-    }
+    (void)keep_recent;
+    if (summary_text.empty())
+        return {ErrorCode::BadArgs, "agent compaction summary must not be empty"};
 
     char* message = nullptr;
     if (sqlite3_exec(db_, "BEGIN IMMEDIATE", nullptr, nullptr, &message) != SQLITE_OK) {
@@ -548,29 +539,10 @@ Error AgentSessionStore::compact_with_summary(const std::string& summary_text, i
         sqlite3_exec(db_, "ROLLBACK", nullptr, nullptr, nullptr);
     };
 
-    const std::size_t keep_from =
-        all.size() > static_cast<std::size_t>(keep_recent)
-            ? all.size() - static_cast<std::size_t>(keep_recent)
-            : 0;
-    if (sqlite3_exec(db_, "DELETE FROM messages", nullptr, nullptr, &message) != SQLITE_OK) {
-        const std::string detail = message == nullptr ? sqlite3_errmsg(db_) : message;
-        sqlite3_free(message);
-        rollback();
-        return {ErrorCode::FileWrite, "could not clear messages for compact: " + detail};
-    }
-
-    error = append_message("summary", summary_text);
+    Error error = append_message("summary", summary_text);
     if (!error.ok()) {
         rollback();
         return error;
-    }
-    for (std::size_t i = keep_from; i < all.size(); ++i) {
-        error = append_message(all[i].role, all[i].content, all[i].tool_name, all[i].tool_ok,
-                               all[i].args_preview);
-        if (!error.ok()) {
-            rollback();
-            return error;
-        }
     }
 
     AgentProjectRecord project;

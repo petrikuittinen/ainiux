@@ -31,6 +31,8 @@ enum class TuiEventType {
     ModelsDone,
     CompletionDone,
     GuardApproval,  // agent Guard Ask pending (worker blocked)
+    AgentProjectNewDone,
+    AgentCompactDone,
 };
 
 enum class ActiveJob { None, Chat, Models };
@@ -49,6 +51,7 @@ enum class TuiMode {
     AttachmentDeleteConfirm,
     ThreadDeleteConfirm,
     GuardApprovalConfirm,
+    AgentNewConfirm,
 };
 
 enum class ModelsRequestPurpose { Preview, Picker };
@@ -95,6 +98,10 @@ struct TuiEvent {
     std::string guard_command_preview;
     std::string guard_rule_id;
     std::string guard_message;
+    std::string agent_workspace;
+    std::vector<provider::Message> agent_history;
+    bool agent_compacted = false;
+    bool agent_compact_no_op = false;
 };
 
 enum class EscapeResult {

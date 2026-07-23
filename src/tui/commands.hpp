@@ -15,11 +15,23 @@
 
 namespace ainiux::tui {
 
+enum class AgentSlashAction { None, NewProject, Compact, Invalid };
+
+struct AgentSlashCommand {
+    AgentSlashAction action = AgentSlashAction::None;
+    std::string argument;
+    std::string error;
+};
+
+AgentSlashCommand parse_agent_slash_command(const std::string& text);
+
 struct TuiCommandHandlers {
     std::function<void()> quit;
     std::function<void()> start_history_edit;
     std::function<void()> start_thread_list;
     std::function<void(const std::string&)> start_new_chat_thread;
+    std::function<void(const std::string&)> start_new_agent_project;
+    std::function<void()> start_agent_compaction;
     std::function<void(bool)> open_provider_picker;
     std::function<bool(const std::string&)> apply_selected_provider;
     std::function<void()> start_store_save;

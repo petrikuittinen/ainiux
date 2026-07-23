@@ -10,6 +10,7 @@
 #include "agent/agents_md.hpp"
 #include "agent/approval.hpp"
 #include "agent/prompts.hpp"
+#include "agent/project_root.hpp"
 #include "agent/review_log.hpp"
 #include "agent/session_store.hpp"
 #include "agent/tools.hpp"
@@ -38,6 +39,21 @@ struct SessionTurnResult {
     std::vector<long long> compact_tool_line_ms;
     long long turn_started_ms = 0;
     long long finished_at_ms = 0;
+};
+
+enum class CompactionReason { Automatic, Manual };
+
+struct SessionCompactionResult {
+    Error error;
+    bool compacted = false;
+    bool no_op = false;
+    std::string notice;
+};
+
+struct SessionProjectReplaceResult {
+    Error error;
+    std::string workspace;
+    std::string warning;
 };
 
 struct SessionRuntimeOptions {
@@ -107,6 +123,21 @@ class AgentSessionRuntime {
         std::function<bool()> interrupted = {},
         std::function<void(const std::string& status_line)> on_progress = {});
 
+    // Compact only the model-visible request projection. The durable transcript
+    // remains complete. Manual compaction bypasses the configured threshold.
+    SessionCompactionResult compact(
+        const provider::RequestContext& context,
+        CompactionReason reason,
+        runtime::CancellationToken cancellation = runtime::CancellationToken());
+
+    // Close the current project, initialize a fresh target, and restore the old
+    // project on failure. target.state_dir_exists means the caller already
+    // obtained explicit deletion confirmation.
+    SessionProjectReplaceResult replace_project(
+        const provider::RequestContext& context,
+        const NewProjectTarget& target,
+        runtime::CancellationToken cancellation = runtime::CancellationToken());
+
     // Mark session finished in agent.sqlite (success/error/cancelled/aborted).
     Error finish_session(const std::string& status,
                          const std::string& final_text = {},
@@ -121,6 +152,9 @@ class AgentSessionRuntime {
                         const std::function<bool()>& interrupted) const;
     // Worker-only: recompute from conversation_ and publish for UI chrome.
     void publish_request_token_estimate();
+    void rebuild_compacted_conversation(const std::vector<AgentMessageRecord>& stored,
+                                        const std::string& summary,
+                                        std::size_t keep_recent);
 
     SessionRuntimeOptions options_;
     bool prepared_ = false;

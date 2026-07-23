@@ -147,12 +147,155 @@ void test_prepare_loads_existing_display_history() {
     fs::remove_all(workspace, ec);
 }
 
+void test_manual_compaction_preserves_transcript_and_noops_until_new_history() {
+    const std::string workspace = temp_workspace("manual-compact");
+    {
+        agent::AgentSessionStore store;
+        check(store.open(workspace).ok(), "compact seed open");
+        agent::AgentProjectRecord project;
+        project.workspace = workspace;
+        project.status = "idle";
+        check(store.open_project(project).ok(), "compact seed project");
+        for (int index = 0; index < 15; ++index) {
+            check(store.append_message(index % 2 == 0 ? "user" : "assistant",
+                                       "stored message " + std::to_string(index))
+                      .ok(),
+                  "compact seed message");
+        }
+    }
+
+    agent::AgentSessionRuntime runtime;
+    agent::SessionRuntimeOptions options;
+    options.workspace = workspace;
+    options.enable_session_db = true;
+    options.enable_agent_log = false;
+    options.auto_compact = true;
+    provider::RequestContext context = offline_context(workspace);
+    check(runtime.prepare(context, {}, {}, options).ok(), "prepare manual compact runtime");
+
+    const agent::SessionCompactionResult compacted =
+        runtime.compact(context, agent::CompactionReason::Manual);
+    check(compacted.error.ok() && compacted.compacted && !compacted.no_op,
+          "manual compact runs below automatic threshold");
+
+    std::vector<provider::Message> display;
+    check(runtime.load_display_messages(display).ok(), "load transcript after manual compact");
+    check(display.size() == 16, "manual compact preserves 15 rows and appends one summary event");
+    check(display.back().role == "summary", "manual compact persists summary event");
+
+    const agent::SessionCompactionResult repeated =
+        runtime.compact(context, agent::CompactionReason::Manual);
+    check(repeated.error.ok() && repeated.no_op && !repeated.compacted,
+          "manual compact without new compactable history is a no-op");
+
+    runtime::CancellationSource cancelled;
+    cancelled.cancel();
+    const agent::SessionCompactionResult cancelled_result =
+        runtime.compact(context, agent::CompactionReason::Manual, cancelled.token());
+    check(cancelled_result.error.code == ErrorCode::Cancelled,
+          "manual compaction observes cancellation");
+
+    runtime.reset();
+    std::error_code ec;
+    fs::remove_all(workspace, ec);
+}
+
+void test_project_replacement_resets_exact_state_and_switches_workspace() {
+    const std::string workspace = temp_workspace("replace-source");
+    const fs::path keep_file = fs::path(workspace) / "keep.txt";
+    {
+        std::ofstream out(keep_file);
+        out << "preserve me";
+    }
+    {
+        agent::AgentSessionStore store;
+        check(store.open(workspace).ok(), "replace seed open");
+        agent::AgentProjectRecord project;
+        project.workspace = workspace;
+        check(store.open_project(project).ok(), "replace seed project");
+        check(store.append_message("user", "old project history").ok(),
+              "replace seed history");
+    }
+
+    agent::AgentSessionRuntime runtime;
+    agent::SessionRuntimeOptions options;
+    options.workspace = workspace;
+    options.enable_session_db = true;
+    options.enable_agent_log = false;
+    provider::RequestContext context = offline_context(workspace);
+    check(runtime.prepare(context, {}, {}, options).ok(), "prepare replace source");
+
+    agent::NewProjectTarget same;
+    check(agent::resolve_new_project_target(workspace, "", same).ok() &&
+              same.state_dir_exists,
+          "same-root replacement target requires confirmed state removal");
+    const agent::SessionProjectReplaceResult reset =
+        runtime.replace_project(context, same);
+    check(reset.error.ok() && runtime.prepared() && runtime.workspace() == same.root,
+          "same-root /new reinitializes and keeps runtime prepared");
+    check(fs::exists(keep_file), "same-root /new preserves non-agent project files");
+    std::vector<provider::Message> display;
+    check(runtime.load_display_messages(display).ok() && display.empty(),
+          "same-root /new clears project transcript");
+
+    const fs::path sibling = fs::path(workspace).parent_path() /
+                             (fs::path(workspace).filename().string() + "-switched");
+    std::error_code ec;
+    fs::remove_all(sibling, ec);
+    agent::NewProjectTarget switched;
+    check(agent::resolve_new_project_target(runtime.workspace(), sibling.string(), switched).ok() &&
+              !switched.root_exists,
+          "switch target permits missing final component");
+    const agent::SessionProjectReplaceResult switch_result =
+        runtime.replace_project(context, switched);
+    check(switch_result.error.ok() && runtime.workspace() == switched.root &&
+              fs::is_directory(sibling / ".ainiux-pr"),
+          "/new creates and switches to a sibling project");
+    check(context.options.model == "test", "/new retains selected model settings");
+    check(fs::exists(keep_file), "switching projects leaves prior workspace contents untouched");
+
+    runtime.reset();
+    fs::remove_all(workspace, ec);
+    fs::remove_all(sibling, ec);
+}
+
+void test_project_replacement_failure_reopens_prior_project() {
+    const std::string workspace = temp_workspace("replace-rollback");
+    agent::AgentSessionRuntime runtime;
+    agent::SessionRuntimeOptions options;
+    options.workspace = workspace;
+    options.enable_session_db = true;
+    options.enable_agent_log = false;
+    provider::RequestContext context = offline_context(workspace);
+    check(runtime.prepare(context, {}, {}, options).ok(), "prepare rollback source");
+
+    const fs::path nested = fs::path(workspace) / "nested";
+    fs::create_directories(nested);
+    agent::NewProjectTarget target;
+    check(agent::resolve_new_project_target(workspace, "nested", target).ok(),
+          "resolve nested rollback target");
+    const agent::SessionProjectReplaceResult replaced =
+        runtime.replace_project(context, target);
+    check(!replaced.error.ok(), "nested target initialization fails under parent project");
+    check(runtime.prepared() && runtime.workspace() == fs::canonical(workspace).generic_string(),
+          "failed /new reopens the prior project");
+    check(!fs::exists(nested / ".ainiux-pr"),
+          "failed initialization rolls back target agent state");
+
+    runtime.reset();
+    std::error_code ec;
+    fs::remove_all(workspace, ec);
+}
+
 }  // namespace
 
 void run_all() {
     test_prepare_opens_session_db_and_tools();
     test_empty_turn_rejected_when_unprepared();
     test_prepare_loads_existing_display_history();
+    test_manual_compaction_preserves_transcript_and_noops_until_new_history();
+    test_project_replacement_resets_exact_state_and_switches_workspace();
+    test_project_replacement_failure_reopens_prior_project();
 }
 
 }  // namespace ainiux::test::agent_session_runtime

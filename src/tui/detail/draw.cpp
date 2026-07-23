@@ -557,6 +557,8 @@ const char* panel_title_for_mode(TuiMode mode) {
             return "Remove Thread";
         case TuiMode::GuardApprovalConfirm:
             return "Guard approval";
+        case TuiMode::AgentNewConfirm:
+            return "Reset agent project";
         case TuiMode::ModelConfirm:
             return "Model";
         case TuiMode::SystemEdit:

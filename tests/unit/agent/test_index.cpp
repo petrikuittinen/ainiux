@@ -628,6 +628,10 @@ void test_refresh_incremental_report_and_skips() {
     write_file(root / "ignored.py", "def ignored():\n    pass\n");
     write_file(root / "src" / "main.c", "int main(void) { return 0; }\n");
     write_file(root / "build" / "generated.cpp", "int generated();\n");
+    write_file(root / ".hidden" / "private.jsonl",
+               "{\"secret_symbol\":\"must_not_be_indexed\"}\n");
+    write_file(root / ".ainiux-pr" / "logs" / "agent.jsonl",
+               "{\"agent_log_symbol\":\"must_not_be_indexed\"}\n");
     write_file(root / "bad.c", std::string("int ok;\0binary", 14));
     write_file(root / "invalid.c", std::string("value = ") + static_cast<char>(0xff));
     write_file(root / "oversized.cpp", std::string(1100, ' '));
@@ -664,8 +668,16 @@ void test_refresh_incremental_report_and_skips() {
               markdown.str().find("| **All languages** | **5** | **4** | **2** | **3** |") !=
                   std::string::npos &&
               markdown.str().find("Language: Python; lines: 3; status: indexed.") !=
-                  std::string::npos,
+                  std::string::npos &&
+              markdown.str().find("private.jsonl") == std::string::npos &&
+              markdown.str().find("agent.jsonl") == std::string::npos,
           "Markdown report includes symbols, skips, per-language lines, and combined totals");
+
+    write_file(root / ".hidden" / "later.cpp", "int hidden_later(void);\n");
+    freshness = {};
+    error = ainiux::agent::index::check_freshness(options, freshness);
+    check(error.ok() && freshness.fresh,
+          "freshness ignores changes inside dot-prefixed directories");
 
     write_file(root / "src" / "new.cpp", "namespace n { int value; }\n");
     freshness = {};

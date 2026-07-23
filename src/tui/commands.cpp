@@ -49,6 +49,25 @@ bool reasoning_change_needs_confirmation(const std::string& requested,
 
 }  // namespace
 
+AgentSlashCommand parse_agent_slash_command(const std::string& text) {
+    AgentSlashCommand command;
+    if (text == "/new" || text.rfind("/new ", 0) == 0) {
+        command.action = AgentSlashAction::NewProject;
+        command.argument =
+            text.size() <= 4 ? std::string() : app::detail::trim_ascii(text.substr(4));
+        return command;
+    }
+    if (text == "/compact") {
+        command.action = AgentSlashAction::Compact;
+        return command;
+    }
+    if (text.rfind("/compact ", 0) == 0) {
+        command.action = AgentSlashAction::Invalid;
+        command.error = "Usage: /compact";
+    }
+    return command;
+}
+
 void handle_tui_command(const std::string& text, TuiCommandContext& ctx, TuiCommandHandlers& handlers) {
     if (text == "/quit" || text == "/exit") {
         handlers.quit();
@@ -63,7 +82,10 @@ void handle_tui_command(const std::string& text, TuiCommandContext& ctx, TuiComm
                 "/clear\n"
                 "/edit\n"
                 "/list (Ctrl+L; N new thread)\n"
-                "/new [NAME]\n"
+                + std::string(ctx.context.options.agent
+                                  ? "/new [PATH] (fresh agent project)\n"
+                                    "/compact (compact model context; preserve transcript)\n"
+                                  : "/new [NAME]\n") +
                 "/provider [PROVIDER]\n"
                 "/models\n"
                 "/model [MODEL]\n"
@@ -301,6 +323,32 @@ void handle_tui_command(const std::string& text, TuiCommandContext& ctx, TuiComm
     }
     if (text == "/list") {
         handlers.start_thread_list();
+        return;
+    }
+    const AgentSlashCommand agent_command =
+        ctx.context.options.agent ? parse_agent_slash_command(text) : AgentSlashCommand{};
+    if (agent_command.action == AgentSlashAction::NewProject) {
+        if (ctx.active_job != ActiveJob::None) {
+            ctx.status = "Cannot create a project while an agent job is running; wait or cancel it first";
+            return;
+        }
+        handlers.start_new_agent_project(agent_command.argument);
+        return;
+    }
+    if (agent_command.action == AgentSlashAction::Invalid) {
+        ctx.status = agent_command.error;
+        return;
+    }
+    if (agent_command.action == AgentSlashAction::Compact) {
+        if (ctx.active_job != ActiveJob::None) {
+            ctx.status = "Cannot compact while an agent job is running; wait or cancel it first";
+            return;
+        }
+        handlers.start_agent_compaction();
+        return;
+    }
+    if (text == "/compact" || text.rfind("/compact ", 0) == 0) {
+        ctx.status = "/compact is for interactive agent mode only";
         return;
     }
     if (text == "/new" || text.rfind("/new ", 0) == 0) {

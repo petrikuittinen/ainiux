@@ -2,6 +2,7 @@
 
 #include <filesystem>
 #include <fstream>
+#include <cstdlib>
 #include <string>
 #include <unistd.h>
 
@@ -66,6 +67,76 @@ void test_reject_nested_child_ainiux() {
     std::string abs;
     Error error = agent::resolve_agent_project_root(root, abs);
     check(!error.ok(), "nested child .ainiux-pr rejected");
+    std::error_code ec;
+    fs::remove_all(root, ec);
+}
+
+void test_new_project_target_resolution_and_validation() {
+    const std::string root = temp_dir("new-target");
+    const fs::path spaced = fs::path(root) / "project with spaces";
+    fs::create_directories(spaced);
+
+    agent::NewProjectTarget target;
+    Error error =
+        agent::resolve_new_project_target(root, "project with spaces", target);
+    check(error.ok() && target.root == fs::canonical(spaced).generic_string() &&
+              target.root_exists,
+          "relative /new path with spaces resolves from active root: " + error.message);
+
+    error = agent::resolve_new_project_target(root, "fresh", target);
+    check(error.ok() && !target.root_exists &&
+              target.root == (fs::canonical(root) / "fresh").generic_string(),
+          "/new permits exactly final-component creation");
+
+    error = agent::resolve_new_project_target(root, "missing/child", target);
+    check(!error.ok() && error.message.find("parent directory") != std::string::npos,
+          "/new rejects missing intermediate directories");
+
+    {
+        std::ofstream file(fs::path(root) / "regular-file");
+        file << "not a directory";
+    }
+    error = agent::resolve_new_project_target(root, "regular-file", target);
+    check(!error.ok() && error.message.find("not a directory") != std::string::npos,
+          "/new rejects file targets");
+
+    fs::create_directories(spaced / ".ainiux-pr-real");
+    std::error_code link_ec;
+    fs::create_directory_symlink(spaced / ".ainiux-pr-real", spaced / ".ainiux-pr", link_ec);
+    if (!link_ec) {
+        error = agent::resolve_new_project_target(root, spaced.string(), target);
+        check(!error.ok() && error.message.find("symlink") != std::string::npos,
+              "/new rejects .ainiux-pr symlinks");
+    }
+
+    const char* old_home_value = std::getenv("HOME");
+    const std::string old_home = old_home_value == nullptr ? "" : old_home_value;
+    const fs::path home_project = fs::path(root) / "home project";
+    fs::create_directories(home_project);
+    ::setenv("HOME", root.c_str(), 1);
+    error = agent::resolve_new_project_target(root, "~/home project", target);
+    check(error.ok() && target.root == fs::canonical(home_project).generic_string(),
+          "/new expands ~/ from HOME");
+    error = agent::resolve_new_project_target(root, "~someone/project", target);
+    check(!error.ok(), "/new rejects ~user expansion");
+    if (old_home_value == nullptr)
+        ::unsetenv("HOME");
+    else
+        ::setenv("HOME", old_home.c_str(), 1);
+
+    const fs::path locked = fs::path(root) / "locked";
+    fs::create_directories(locked);
+    std::error_code permission_ec;
+    fs::permissions(locked, fs::perms::owner_read, fs::perm_options::replace,
+                    permission_ec);
+    if (!permission_ec && ::geteuid() != 0) {
+        error = agent::resolve_new_project_target(root, locked.string(), target);
+        check(!error.ok() && error.code == ErrorCode::FileWrite,
+              "/new rejects inaccessible target directories");
+    }
+    fs::permissions(locked, fs::perms::owner_all, fs::perm_options::replace,
+                    permission_ec);
+
     std::error_code ec;
     fs::remove_all(root, ec);
 }
@@ -151,6 +222,7 @@ void run_all() {
     test_reject_parent_ainiux();
     test_home_ainiux_profile_is_not_a_project();
     test_reject_nested_child_ainiux();
+    test_new_project_target_resolution_and_validation();
     test_compact_threshold_defaults();
     test_tool_display_format();
     test_tool_display_clips_to_width();

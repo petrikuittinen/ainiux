@@ -185,6 +185,25 @@ bool handle_tui_picker_input(unsigned char ch,
                 return true;
         }
     }
+    if (state.mode == TuiMode::AgentNewConfirm) {
+        if (ch == 17) {
+            state.quit = true;
+            return true;
+        }
+        switch (ui::parse_confirmation_key(ch)) {
+            case ui::ConfirmationKeyResult::Accepted:
+                if (callbacks.on_agent_new_accepted) callbacks.on_agent_new_accepted();
+                return true;
+            case ui::ConfirmationKeyResult::Rejected:
+                if (callbacks.on_agent_new_rejected) callbacks.on_agent_new_rejected();
+                return true;
+            case ui::ConfirmationKeyResult::Pending:
+                if (callbacks.on_agent_new_retry)
+                    callbacks.on_agent_new_retry(
+                        "Press y to permanently reset this agent project, n or Esc to cancel");
+                return true;
+        }
+    }
     return false;
 }
 

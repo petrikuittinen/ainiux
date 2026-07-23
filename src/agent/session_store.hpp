@@ -103,7 +103,9 @@ class AgentSessionStore {
 
     Error load_messages(std::vector<AgentMessageRecord>& messages, int limit = 0) const;
 
-    // Replace older messages with a summary + tail. Keeps last keep_recent messages.
+    // Atomically persist a compaction summary event and project summary metadata.
+    // Original transcript rows are retained. keep_recent describes the request
+    // projection rebuilt by AgentSessionRuntime and is kept for API compatibility.
     Error compact_with_summary(const std::string& summary_text, int keep_recent = 12);
 
     Error set_status(const std::string& status);

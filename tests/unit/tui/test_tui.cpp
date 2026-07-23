@@ -15,6 +15,7 @@
 #include "editor/editor_assist.hpp"
 #include "editor/path_completion.hpp"
 #include "tui/chat_assist.hpp"
+#include "tui/commands.hpp"
 #include "tui/tui.hpp"
 #include "tui/detail/render.hpp"
 #include <algorithm>
@@ -125,6 +126,23 @@ void test_tui_reasoning_picker_input() {
     confirmed = false;
     check(ainiux::tui::handle_tui_picker_input(27, state, callbacks) && rejected && !confirmed,
           "TUI unlisted reasoning confirmation treats Esc as cancellation");
+
+    bool project_reset = false;
+    bool project_declined = false;
+    callbacks.on_agent_new_accepted = [&]() { project_reset = true; };
+    callbacks.on_agent_new_rejected = [&]() { project_declined = true; };
+    callbacks.on_agent_new_retry = [&](const std::string& message) { status = message; };
+    mode = ainiux::tui::TuiMode::AgentNewConfirm;
+    check(ainiux::tui::handle_tui_picker_input('x', state, callbacks) &&
+              status.find("Press y") == 0 && !project_reset && !project_declined,
+          "agent project reset confirmation rejects ambiguous input");
+    check(ainiux::tui::handle_tui_picker_input(27, state, callbacks) &&
+              project_declined && !project_reset,
+          "agent project reset defaults to No on Esc");
+    project_declined = false;
+    check(ainiux::tui::handle_tui_picker_input('y', state, callbacks) &&
+              project_reset && !project_declined,
+          "agent project reset accepts explicit y");
 }
 
 void test_tui_layout_reserves_editor_input_panel() {
@@ -1302,6 +1320,47 @@ void test_tui_unicode_and_empty_status() {
           "TUI thinking display handles empty assistant text");
 }
 
+void test_agent_project_slash_command_parsing() {
+    const auto bare_new = ainiux::tui::parse_agent_slash_command("/new");
+    check(bare_new.action == ainiux::tui::AgentSlashAction::NewProject &&
+              bare_new.argument.empty(),
+          "agent /new parses without a path");
+    const auto spaced =
+        ainiux::tui::parse_agent_slash_command("/new   project path with spaces  ");
+    check(spaced.action == ainiux::tui::AgentSlashAction::NewProject &&
+              spaced.argument == "project path with spaces",
+          "agent /new keeps the trimmed remainder as one path");
+    const auto compact = ainiux::tui::parse_agent_slash_command("/compact");
+    check(compact.action == ainiux::tui::AgentSlashAction::Compact,
+          "agent /compact parses");
+    const auto invalid =
+        ainiux::tui::parse_agent_slash_command("/compact now");
+    check(invalid.action == ainiux::tui::AgentSlashAction::Invalid &&
+              invalid.error == "Usage: /compact",
+          "agent /compact rejects arguments");
+}
+
+void test_agent_project_history_handoff_clears_successful_empty_project() {
+    ainiux::chat::Session session;
+    session.messages.push_back({"user", "old project question"});
+    session.messages.push_back({"assistant", "old project answer"});
+    std::vector<ainiux::provider::Message> previous = std::move(session.messages);
+    session.messages.clear();
+
+    ainiux::tui::apply_agent_project_history_handoff(
+        session, previous, {}, true);
+    check(session.messages.empty() && previous.empty(),
+          "successful /new with empty history clears the old visible transcript");
+
+    previous.push_back({"user", "restore on failure"});
+    ainiux::tui::apply_agent_project_history_handoff(
+        session, previous, {}, false);
+    check(session.messages.size() == 1 &&
+              session.messages[0].content == "restore on failure" &&
+              previous.empty(),
+          "failed /new restores the prior visible transcript");
+}
+
 }  // namespace
 
 void run_all() {
@@ -1340,6 +1399,8 @@ void run_all() {
     test_tui_thinking_trace_display();
     test_tui_markdown_history_highlighting();
     test_tui_agent_history_chrome();
+    test_agent_project_slash_command_parsing();
+    test_agent_project_history_handoff_clears_successful_empty_project();
 }
 
 }  // namespace ainiux::test::tui

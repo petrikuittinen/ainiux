@@ -1,9 +1,11 @@
 #include "agent/session_runtime.hpp"
 
 #include <algorithm>
+#include <filesystem>
 #include <iostream>
 #include <sstream>
 #include <utility>
+#include <unistd.h>
 
 #include "agent/agent_loop.hpp"
 #include "agent/compact.hpp"
@@ -88,6 +90,247 @@ void AgentSessionRuntime::publish_request_token_estimate() {
         total += 2;
     }
     cached_request_tokens_.store(total, std::memory_order_relaxed);
+}
+
+void AgentSessionRuntime::rebuild_compacted_conversation(
+    const std::vector<AgentMessageRecord>& stored,
+    const std::string& summary,
+    std::size_t keep_recent) {
+    seed_agent_conversation(conversation_, prompts_, state_.protocol, "",
+                            agents_md_.injection_text);
+    conversation_.messages.push_back(
+        {"user", "[Compacted earlier agent context]\n" + summary});
+    const std::size_t begin = stored.size() > keep_recent ? stored.size() - keep_recent : 0;
+    for (std::size_t index = begin; index < stored.size(); ++index) {
+        const AgentMessageRecord& row = stored[index];
+        if (row.role == "user" || row.role == "assistant")
+            conversation_.messages.push_back({row.role, row.content});
+        else if (row.role == "tool")
+            conversation_.messages.push_back(
+                {"user", "[Recent agent tool activity]\n" + row.content});
+    }
+    conversation_seeded_ = true;
+    publish_request_token_estimate();
+}
+
+SessionCompactionResult AgentSessionRuntime::compact(
+    const provider::RequestContext& context,
+    CompactionReason reason,
+    runtime::CancellationToken cancellation) {
+    SessionCompactionResult result;
+    if (!prepared_) {
+        result.error = {ErrorCode::Internal, "agent session runtime is not prepared"};
+        return result;
+    }
+    if (!session_store_.is_open()) {
+        result.error = {ErrorCode::Internal,
+                        "agent compaction requires an open project session DB"};
+        return result;
+    }
+    if (cancellation.cancelled()) {
+        result.error = {ErrorCode::Cancelled, "agent compaction cancelled"};
+        return result;
+    }
+
+    std::vector<AgentMessageRecord> stored;
+    result.error = session_store_.load_messages(stored);
+    if (!result.error.ok()) return result;
+
+    constexpr std::size_t keep_recent = 12;
+    std::size_t projection_begin = 0;
+    for (std::size_t index = 0; index < stored.size(); ++index) {
+        if (stored[index].role == "summary") projection_begin = index;
+    }
+    const std::size_t projection_size = stored.size() - projection_begin;
+    if (projection_size <= keep_recent) {
+        result.error = ok_error();
+        result.no_op = true;
+        result.notice = "Nothing new to compact";
+        return result;
+    }
+
+    if (reason == CompactionReason::Automatic) {
+        const long long window = context.options.context_tokens > 0
+                                     ? static_cast<long long>(context.options.context_tokens)
+                                     : 0LL;
+        if (!should_auto_compact(options_.auto_compact, options_.compact_limit, window,
+                                 estimated_request_tokens())) {
+            result.error = ok_error();
+            result.no_op = true;
+            return result;
+        }
+    }
+
+    std::vector<AgentMessageRecord> projection(stored.begin() +
+                                                   static_cast<std::ptrdiff_t>(projection_begin),
+                                               stored.end());
+    const std::size_t drop = projection.size() - keep_recent;
+    const std::string summary = build_local_compact_summary(projection, drop);
+    if (summary.empty()) {
+        result.error = {ErrorCode::ProviderSchema,
+                        "agent compaction produced an empty summary"};
+        return result;
+    }
+    if (cancellation.cancelled()) {
+        result.error = {ErrorCode::Cancelled, "agent compaction cancelled"};
+        return result;
+    }
+
+    // Commit durable state first. Only after this succeeds may request context change.
+    result.error =
+        session_store_.compact_with_summary(summary, static_cast<int>(keep_recent));
+    if (!result.error.ok()) return result;
+
+    rebuild_compacted_conversation(stored, summary, keep_recent);
+    result.error = ok_error();
+    result.compacted = true;
+    if (reason == CompactionReason::Manual) {
+        result.notice = "Agent context compacted; full project transcript preserved";
+    } else {
+        const long long window = context.options.context_tokens > 0
+                                     ? static_cast<long long>(context.options.context_tokens)
+                                     : 0LL;
+        result.notice =
+            "auto-compact at ~" +
+            std::to_string(effective_compact_limit_percent(options_.compact_limit, window)) +
+            "% of context window";
+    }
+    return result;
+}
+
+SessionProjectReplaceResult AgentSessionRuntime::replace_project(
+    const provider::RequestContext& context,
+    const NewProjectTarget& requested_target,
+    runtime::CancellationToken cancellation) {
+    namespace fs = std::filesystem;
+    SessionProjectReplaceResult result;
+    if (!prepared_) {
+        result.error = {ErrorCode::Internal, "agent session runtime is not prepared"};
+        return result;
+    }
+
+    const std::string old_workspace = options_.workspace;
+    const SessionRuntimeOptions old_options = options_;
+    NewProjectTarget target;
+    result.error =
+        resolve_new_project_target(old_workspace, requested_target.root, target);
+    if (!result.error.ok()) return result;
+    if (target.state_dir_exists && !requested_target.state_dir_exists) {
+        result.error = {
+            ErrorCode::BadArgs,
+            "agent state appeared before initialization; run /new again to confirm removal: " +
+                target.state_dir};
+        return result;
+    }
+
+    SessionRuntimeOptions new_options = old_options;
+    new_options.workspace = target.root;
+    provider::RequestContext quiet_context = context;
+    quiet_context.options.quiet = true;
+
+    (void)finish_session("cancelled", "", "Cancelled", "project replaced with /new");
+    reset();  // release DB/index/tool handles before state moves
+
+    std::error_code ec;
+    bool created_root = false;
+    bool state_moved = false;
+    bool initialization_started = false;
+    fs::path backup;
+    auto reopen_old = [&](const Error& original) {
+        reset();
+        std::error_code cleanup_ec;
+        std::string rollback_detail;
+        if (initialization_started) {
+            fs::remove_all(fs::path(target.state_dir), cleanup_ec);
+            if (cleanup_ec)
+                rollback_detail = "could not remove failed state " + target.state_dir + ": " +
+                                  cleanup_ec.message();
+        }
+        bool restored_state = !state_moved;
+        cleanup_ec.clear();
+        if (state_moved && !backup.empty()) {
+            const bool backup_exists = fs::exists(backup, cleanup_ec);
+            if (backup_exists && !cleanup_ec) {
+                cleanup_ec.clear();
+                fs::rename(backup, fs::path(target.state_dir), cleanup_ec);
+                restored_state = !cleanup_ec;
+            }
+            if (!restored_state) {
+                if (!rollback_detail.empty()) rollback_detail += "; ";
+                rollback_detail +=
+                    "could not restore prior state from " + backup.string() + " to " +
+                    target.state_dir +
+                    (cleanup_ec ? ": " + cleanup_ec.message()
+                                : std::string(": backup is unavailable"));
+            }
+        }
+        if (created_root) {
+            cleanup_ec.clear();
+            if (fs::is_empty(fs::path(target.root), cleanup_ec) && !cleanup_ec)
+                fs::remove(fs::path(target.root), cleanup_ec);
+        }
+        result.error = original;
+        if (!rollback_detail.empty()) result.error.message += "; rollback: " + rollback_detail;
+        if (old_workspace == target.root && !restored_state) {
+            result.error.message += "; prior project could not be reopened safely";
+            return;
+        }
+        Error reopen_error = prepare(quiet_context, {}, {}, old_options);
+        if (!reopen_error.ok()) {
+            result.error.message += "; additionally could not reopen prior project " +
+                                    old_workspace + ": " + reopen_error.message;
+        }
+    };
+
+    if (!target.root_exists) {
+        created_root = fs::create_directory(fs::path(target.root), ec);
+        if (ec || !created_root) {
+            reopen_old({ErrorCode::FileWrite,
+                        "could not create /new project directory " + target.root + ": " +
+                            (ec ? ec.message() : std::string("creation failed"))});
+            return result;
+        }
+    }
+
+    if (target.state_dir_exists) {
+        const fs::path root(target.root);
+        for (unsigned attempt = 0; attempt < 100; ++attempt) {
+            backup = root / (std::string(".ainiux-pr.ainiux-new-backup-") +
+                             std::to_string(static_cast<long long>(::getpid())) + "-" +
+                             std::to_string(attempt));
+            if (!fs::exists(backup, ec)) break;
+            ec.clear();
+        }
+        fs::rename(fs::path(target.state_dir), backup, ec);
+        if (ec) {
+            reopen_old({ErrorCode::FileWrite,
+                        "could not release existing agent state " + target.state_dir + ": " +
+                            ec.message()});
+            return result;
+        }
+        state_moved = true;
+    }
+
+    initialization_started = true;
+    result.error = prepare(quiet_context, cancellation, {}, new_options);
+    if (!result.error.ok()) {
+        const Error initialization_error = result.error;
+        reopen_old({initialization_error.code,
+                    "could not initialize fresh agent project " + target.root + ": " +
+                        initialization_error.message});
+        return result;
+    }
+
+    if (!backup.empty()) {
+        ec.clear();
+        fs::remove_all(backup, ec);
+        if (ec)
+            result.warning = "Fresh project initialized, but old state cleanup failed at " +
+                             backup.string() + ": " + ec.message();
+    }
+    result.workspace = target.root;
+    result.error = ok_error();
+    return result;
 }
 
 void AgentSessionRuntime::reset() {
@@ -474,36 +717,19 @@ SessionTurnResult AgentSessionRuntime::run_user_turn(
         }
     }
 
-    // Auto-compact request transcript when near the context window.
+    // Auto and manual commands share one atomic transcript-preserving pipeline.
     if (options_.auto_compact && session_store_.is_open()) {
-        std::vector<AgentMessageRecord> stored;
-        if (session_store_.load_messages(stored).ok()) {
-            const long long window = context.options.context_tokens > 0
-                                         ? static_cast<long long>(context.options.context_tokens)
-                                         : 0LL;
-            const long long estimate = estimate_transcript_tokens(stored);
-            if (should_auto_compact(options_.auto_compact, options_.compact_limit, window,
-                                    estimate)) {
-                const std::size_t keep = 12;
-                const std::size_t drop =
-                    stored.size() > keep ? stored.size() - keep : 0;
-                if (drop > 0) {
-                    const std::string summary = build_local_compact_summary(stored, drop);
-                    Error compact_error = session_store_.compact_with_summary(summary, static_cast<int>(keep));
-                    if (compact_error.ok()) {
-                        const std::string notice = "auto-compact at ~" +
-                            std::to_string(effective_compact_limit_percent(options_.compact_limit, window)) +
-                            "% of context window";
-                        progress(notice);
-                        if (!context.options.quiet) std::cerr << "Agent notice: " << notice << "\n";
-                        result.notice = notice;
-                        // Rebuild request conversation from summary + recent messages roughly:
-                        // keep system + agents_md + latest user for safety.
-                        seed_agent_conversation(conversation_, prompts_, state_.protocol, text,
-                                                agents_md_.injection_text);
-                    }
-                }
-            }
+        SessionCompactionResult compact_result =
+            compact(context, CompactionReason::Automatic, cancellation);
+        if (!compact_result.error.ok()) {
+            result.error = compact_result.error;
+            return result;
+        }
+        if (compact_result.compacted) {
+            progress(compact_result.notice);
+            if (!context.options.quiet)
+                std::cerr << "Agent notice: " << compact_result.notice << "\n";
+            result.notice = compact_result.notice;
         }
     }
 
