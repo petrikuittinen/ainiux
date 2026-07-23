@@ -451,22 +451,37 @@ void test_markdown_inline_and_structure() {
               has_exact_span(link_lines[0].spans,
                              url_start,
                              url_start + std::string("http://example.com").size(),
-                             TokenRole::Attribute),
+                             TokenRole::LinkDestination),
           "Markdown gives an inline link URL its own semantic color span");
+
+    const std::string bare_url = "Open https://example.test/docs now";
+    const auto bare_url_lines =
+        ainiux::highlight::highlight_document(Language::Markdown, bare_url);
+    const size_t bare_url_start = bare_url.find("https://");
+    check(bare_url_lines.size() == 1 &&
+              has_exact_span(bare_url_lines[0].spans,
+                             bare_url_start,
+                             bare_url_start + std::string("https://example.test/docs").size(),
+                             TokenRole::LinkDestination),
+          "Markdown gives bare URLs a link-destination role");
 }
 
 void test_markdown_emphasis_delimiters_are_complete() {
-    for (const std::string text : {"*emphasis*",
-                                   "**bold text**",
-                                   "***bold text***",
-                                   "**bold *text***",
-                                   "_emphasis_",
-                                   "__bold text__",
-                                   "~~strikethrough~~"}) {
+    const std::vector<std::pair<std::string, TokenRole>> cases = {
+        {"*emphasis*", TokenRole::Emphasis},
+        {"**bold text**", TokenRole::Strong},
+        {"***bold text***", TokenRole::StrongEmphasis},
+        {"**bold *text***", TokenRole::Strong},
+        {"_emphasis_", TokenRole::Emphasis},
+        {"__bold text__", TokenRole::Strong},
+        {"~~strikethrough~~", TokenRole::Strikethrough},
+    };
+    for (const auto& item : cases) {
+        const std::string& text = item.first;
         const std::vector<ainiux::highlight::HighlightedLine> lines =
             ainiux::highlight::highlight_document(Language::Markdown, text);
         check(lines.size() == 1 &&
-                  has_exact_span(lines[0].spans, 0, text.size(), TokenRole::Emphasis),
+                  has_exact_span(lines[0].spans, 0, text.size(), item.second),
               "Markdown highlights every opening and closing emphasis delimiter byte: " + text);
     }
 
@@ -478,7 +493,7 @@ void test_markdown_emphasis_delimiters_are_complete() {
     cache.update({"**bold text**"}, Language::Markdown);
     budget = ainiux::highlight::kDefaultFrameBudgetBytes;
     check(cache.highlight_through(0, budget) && cache.line(0) != nullptr &&
-              has_exact_span(cache.line(0)->spans, 0, 13, TokenRole::Emphasis),
+              has_exact_span(cache.line(0)->spans, 0, 13, TokenRole::Strong),
           "Markdown cache includes the final asterisk after incremental typing");
 }
 

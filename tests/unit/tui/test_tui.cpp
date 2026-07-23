@@ -579,6 +579,28 @@ void test_tui_theme_parsing_and_contrast() {
     const ainiux::tui::ThemeCommandResult switched =
         ainiux::tui::handle_theme_command(options.tui_themes, "dark", "light", true);
     check(switched.ok && switched.selected_theme == "light", "theme command switches themes");
+
+    const ainiux::tui::TextAttributes heading_attributes =
+        ainiux::tui::text_attributes_for_token(ainiux::highlight::TokenRole::Heading);
+    const ainiux::tui::TextAttributes emphasis_attributes =
+        ainiux::tui::text_attributes_for_token(ainiux::highlight::TokenRole::Emphasis);
+    const ainiux::tui::TextAttributes combined_attributes =
+        ainiux::tui::text_attributes_for_token(
+            ainiux::highlight::TokenRole::StrongEmphasis);
+    const ainiux::tui::TextAttributes link_attributes =
+        ainiux::tui::text_attributes_for_token(
+            ainiux::highlight::TokenRole::LinkDestination);
+    check(heading_attributes.bold && !heading_attributes.italic,
+          "Markdown headings map to terminal bold");
+    check(emphasis_attributes.italic && !emphasis_attributes.bold,
+          "Markdown emphasis maps to terminal italic");
+    check(combined_attributes.bold && combined_attributes.italic,
+          "Markdown strong emphasis maps to terminal bold and italic");
+    check(link_attributes.underline,
+          "Markdown link destinations map to terminal underline");
+    check(ainiux::tui::ansi_text_attributes_sequence(combined_attributes) ==
+              std::string("\x1b[1m\x1b[3m"),
+          "terminal text attributes emit standard bold and italic ANSI sequences");
 }
 
 void test_tui_buffer_list_uses_colored_panel_widget() {
@@ -646,7 +668,10 @@ void test_tui_thinking_trace_display() {
 
 void test_tui_markdown_history_highlighting() {
     ainiux::chat::Session session;
-    session.messages.push_back({"user", "# Heading\nPlain *emphasis* and [link](https://example.test)"});
+    session.messages.push_back(
+        {"user",
+         "# Heading\nPlain *emphasis*, **strong**, [link](https://example.test), and "
+         "https://bare.example"});
     std::vector<ainiux::tui::StyledLine> lines =
         ainiux::tui::detail::history_lines_for_session(
             session, 100, false, ainiux::tui::ActivityKind::None, 0, true);
@@ -654,6 +679,11 @@ void test_tui_markdown_history_highlighting() {
     bool saw_emphasis = false;
     bool saw_link = false;
     bool saw_link_url = false;
+    bool saw_bold_heading = false;
+    bool saw_bold_strong = false;
+    bool saw_italic_emphasis = false;
+    bool saw_underlined_link = false;
+    bool saw_underlined_url = false;
     for (const ainiux::tui::StyledLine& line : lines) {
         for (const ainiux::tui::StyledSegment& segment : line.segments) {
             saw_heading = saw_heading || segment.role == ainiux::tui::StyleRole::SyntaxHeading;
@@ -661,10 +691,28 @@ void test_tui_markdown_history_highlighting() {
             saw_link = saw_link || segment.role == ainiux::tui::StyleRole::SyntaxLink;
             saw_link_url = saw_link_url ||
                            segment.role == ainiux::tui::StyleRole::SyntaxAttribute;
+            saw_bold_heading = saw_bold_heading ||
+                               (segment.role == ainiux::tui::StyleRole::SyntaxHeading &&
+                                segment.attributes.bold);
+            saw_bold_strong = saw_bold_strong ||
+                              (segment.text.find("**strong**") != std::string::npos &&
+                               segment.attributes.bold);
+            saw_italic_emphasis = saw_italic_emphasis ||
+                                  (segment.text.find("*emphasis*") != std::string::npos &&
+                                   segment.attributes.italic);
+            saw_underlined_link = saw_underlined_link ||
+                                  (segment.role == ainiux::tui::StyleRole::SyntaxLink &&
+                                   segment.attributes.underline);
+            saw_underlined_url = saw_underlined_url ||
+                                 (segment.role == ainiux::tui::StyleRole::SyntaxAttribute &&
+                                  segment.attributes.underline);
         }
     }
     check(saw_heading && saw_emphasis && saw_link && saw_link_url,
           "TUI chat history gives Markdown link text and URLs distinct semantic colors");
+    check(saw_bold_heading && saw_bold_strong && saw_italic_emphasis &&
+              saw_underlined_link && saw_underlined_url,
+          "TUI chat history applies Markdown bold, italic, and underline attributes");
 
     lines = ainiux::tui::detail::history_lines_for_session(
         session, 100, false, ainiux::tui::ActivityKind::None, 0, false);

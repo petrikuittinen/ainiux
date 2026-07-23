@@ -96,14 +96,23 @@ std::string take_cells_before_newline(const std::string& text, size_t& pos, int 
     return out;
 }
 
-void append_styled_piece(std::vector<StyledSegment>& line, std::string text, StyleRole role) {
+bool same_attributes(const TextAttributes& left, const TextAttributes& right) {
+    return left.bold == right.bold && left.italic == right.italic &&
+           left.underline == right.underline;
+}
+
+void append_styled_piece(std::vector<StyledSegment>& line,
+                         std::string text,
+                         StyleRole role,
+                         const TextAttributes& attributes = {}) {
     if (text.empty()) {
         return;
     }
-    if (!line.empty() && line.back().role == role) {
+    if (!line.empty() && line.back().role == role && !line.back().reverse &&
+        same_attributes(line.back().attributes, attributes)) {
         line.back().text += text;
     } else {
-        line.push_back({std::move(text), role});
+        line.push_back({std::move(text), role, false, attributes});
     }
 }
 
@@ -139,15 +148,19 @@ std::size_t find_tag_case_insensitive(const std::string& text, const std::string
     return std::string::npos;
 }
 
-void append_segment(std::vector<StyledSegment>& segments, std::string text, StyleRole role) {
+void append_segment(std::vector<StyledSegment>& segments,
+                    std::string text,
+                    StyleRole role,
+                    const TextAttributes& attributes = {}) {
     if (text.empty()) {
         return;
     }
-    if (!segments.empty() && segments.back().role == role) {
+    if (!segments.empty() && segments.back().role == role && !segments.back().reverse &&
+        same_attributes(segments.back().attributes, attributes)) {
         segments.back().text += text;
         return;
     }
-    segments.push_back({std::move(text), role});
+    segments.push_back({std::move(text), role, false, attributes});
 }
 
 std::string message_label(const std::string& role) {
@@ -210,11 +223,16 @@ void draw_line(int row, int cols, const std::vector<StyledSegment>& segments, St
             continue;
         }
         write_style(style, segment.role);
+        if (style.colors) {
+            std::cout << ansi_text_attributes_sequence(segment.attributes);
+        }
         if (segment.reverse) {
             std::cout << "\x1b[7m";
         }
         std::cout << clipped;
-        if (segment.reverse) {
+        if (segment.reverse || (style.colors &&
+                                (segment.attributes.bold || segment.attributes.italic ||
+                                 segment.attributes.underline))) {
             std::cout << "\x1b[0m";
         }
         used += displayed_cells(clipped);
@@ -268,7 +286,7 @@ void append_wrapped_segments(std::vector<std::vector<StyledSegment>>& lines,
                 }
                 continue;
             }
-            append_styled_piece(current, piece, segment.role);
+            append_styled_piece(current, piece, segment.role, segment.attributes);
             cells += displayed_cells(piece);
             last_was_newline = false;
         }
@@ -328,7 +346,8 @@ std::vector<StyledSegment> markdown_segments(const std::string& content) {
                 if (end > start) {
                     append_segment(segments,
                                    line.substr(start, end - start),
-                                   style_role_for_token(span.role));
+                                   style_role_for_token(span.role),
+                                   text_attributes_for_token(span.role));
                 }
                 pos = std::max(pos, end);
             }
@@ -351,12 +370,12 @@ std::vector<StyledSegment> markdown_outside_thinking_segments(
     std::vector<StyledSegment> output;
     for (const StyledSegment& segment : input) {
         if (segment.role != StyleRole::Text) {
-            append_segment(output, segment.text, segment.role);
+            append_segment(output, segment.text, segment.role, segment.attributes);
             continue;
         }
         const std::vector<StyledSegment> highlighted = markdown_segments(segment.text);
         for (const StyledSegment& item : highlighted) {
-            append_segment(output, item.text, item.role);
+            append_segment(output, item.text, item.role, item.attributes);
         }
     }
     return output;

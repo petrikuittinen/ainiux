@@ -250,11 +250,42 @@ StyleRole style_role_for_token(highlight::TokenRole role) {
         case highlight::TokenRole::Heading:
             return StyleRole::SyntaxHeading;
         case highlight::TokenRole::Emphasis:
+        case highlight::TokenRole::Strong:
+        case highlight::TokenRole::StrongEmphasis:
+        case highlight::TokenRole::Strikethrough:
             return StyleRole::SyntaxEmphasis;
         case highlight::TokenRole::Link:
             return StyleRole::SyntaxLink;
+        case highlight::TokenRole::LinkDestination:
+            return StyleRole::SyntaxAttribute;
     }
     return StyleRole::Text;
+}
+
+TextAttributes text_attributes_for_token(highlight::TokenRole role) {
+    TextAttributes attributes;
+    attributes.bold = role == highlight::TokenRole::Heading ||
+                      role == highlight::TokenRole::Strong ||
+                      role == highlight::TokenRole::StrongEmphasis;
+    attributes.italic = role == highlight::TokenRole::Emphasis ||
+                        role == highlight::TokenRole::StrongEmphasis;
+    attributes.underline = role == highlight::TokenRole::Link ||
+                           role == highlight::TokenRole::LinkDestination;
+    return attributes;
+}
+
+std::string ansi_text_attributes_sequence(const TextAttributes& attributes) {
+    std::string sequence;
+    if (attributes.bold) {
+        sequence += "\x1b[1m";
+    }
+    if (attributes.italic) {
+        sequence += "\x1b[3m";
+    }
+    if (attributes.underline) {
+        sequence += "\x1b[4m";
+    }
+    return sequence;
 }
 
 bool set_syntax_theme_color(ThemePalette& palette, const std::string& key, const Rgb& color) {

@@ -47,4 +47,10 @@ struct StylePair {
     Rgb background;
 };
 
+struct TextAttributes {
+    bool bold = false;
+    bool italic = false;
+    bool underline = false;
+};
+
 }  // namespace ainiux::tui

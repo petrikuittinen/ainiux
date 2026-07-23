@@ -65,6 +65,8 @@ std::string ansi_style_sequence(const StylePair& pair);
 std::string ansi_foreground_sequence(const Rgb& color);
 double contrast_ratio(Rgb foreground, Rgb background);
 StyleRole style_role_for_token(highlight::TokenRole role);
+TextAttributes text_attributes_for_token(highlight::TokenRole role);
+std::string ansi_text_attributes_sequence(const TextAttributes& attributes);
 bool set_syntax_theme_color(ThemePalette& palette, const std::string& key, const Rgb& color);
 void derive_syntax_theme_colors(ThemePalette& palette);
 

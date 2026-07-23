@@ -126,7 +126,9 @@ void render(const chat::Session& session,
                 if (end > start) {
                     segments.push_back({line.substr(start, end - start),
                                         span.syntax ? style_role_for_token(span.role) : StyleRole::Text,
-                                        span.selected});
+                                        span.selected,
+                                        span.syntax ? text_attributes_for_token(span.role)
+                                                    : TextAttributes{}});
                 }
                 pos = std::max(pos, end);
             }

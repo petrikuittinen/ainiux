@@ -844,6 +844,8 @@ make test
 
 v0.95 expands the shared editor/chat highlighter from Markdown to Python, C, C++, C#, Java, JavaScript/JSX, TypeScript/TSX, HTML, HTML-only, CSS, XML, JSON/JSONL, and Bash. The editor detects common filename endings, supports manual per-buffer `/mode` overrides and automatic re-detection, and highlights recognized languages inside Markdown fences. The default `html` mode delegates script/style elements and inline event/style attributes to JavaScript and CSS; `htmlonly` retains markup-only highlighting. Multiline comments, strings, Bash heredocs, XML CDATA, HTML tags, and embedded script/style blocks retain state across lines.
 
+Markdown rendering uses terminal font attributes in both chat history and the editor: headings and strong text are bold, emphasis is italic, and links and URLs are underlined. `--nocolors` or `/highlight off` keeps the corresponding plain rendering behavior.
+
 ### v0.94 editor and chat mode switching
 
 v0.94 lets you switch between standalone editor mode and chat TUI without restarting: `Ctrl+P`, editor `Esc /chat`, or chat `/editor`. Provider, model, editor buffers, and the active chat thread are preserved across switches.

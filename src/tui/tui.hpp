@@ -2,6 +2,7 @@
 
 #include <cstddef>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "chat/session.hpp"
@@ -40,6 +41,17 @@ struct StyledSegment {
     std::string text;
     StyleRole role = StyleRole::Text;
     bool reverse = false;
+    TextAttributes attributes;
+
+    StyledSegment() = default;
+    StyledSegment(std::string value,
+                  StyleRole value_role,
+                  bool value_reverse = false,
+                  TextAttributes value_attributes = {})
+        : text(std::move(value)),
+          role(value_role),
+          reverse(value_reverse),
+          attributes(value_attributes) {}
 };
 
 struct StyledLine {

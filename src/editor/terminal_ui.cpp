@@ -169,6 +169,8 @@ void write_editor_rendered_line(const std::string& line,
             std::cout << tui::style_sequence_for(*theme_style.themes,
                                                  theme_style.theme_name,
                                                  tui::style_role_for_token(span.role));
+            std::cout << tui::ansi_text_attributes_sequence(
+                tui::text_attributes_for_token(span.role));
         } else {
             write_base_style();
         }

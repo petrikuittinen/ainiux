@@ -51,7 +51,11 @@ enum class TokenRole {
     Property,
     Heading,
     Emphasis,
+    Strong,
+    StrongEmphasis,
+    Strikethrough,
     Link,
+    LinkDestination,
 };
 
 struct Span {

@@ -124,7 +124,15 @@ void add_emphasis(const std::string& line, std::vector<Candidate>& inline_tokens
             while (close_end < line.size() && line[close_end] == marker) {
                 ++close_end;
             }
-            append_candidate(inline_tokens, pos, close_end, TokenRole::Emphasis);
+            TokenRole role = TokenRole::Emphasis;
+            if (marker == '~') {
+                role = TokenRole::Strikethrough;
+            } else if (delimiter_length == 2) {
+                role = TokenRole::Strong;
+            } else if (delimiter_length == 3) {
+                role = TokenRole::StrongEmphasis;
+            }
+            append_candidate(inline_tokens, pos, close_end, role);
             pos = close_end;
             matched = true;
             break;
@@ -151,7 +159,7 @@ void append_destination_candidate(const std::string& line,
     if (line[start] == '<') {
         const size_t close = line.find('>', start + 1);
         if (close != std::string::npos && close < end) {
-            append_candidate(inline_tokens, start + 1, close, TokenRole::Attribute);
+            append_candidate(inline_tokens, start + 1, close, TokenRole::LinkDestination);
             return;
         }
     }
@@ -159,7 +167,7 @@ void append_destination_candidate(const std::string& line,
     while (url_end < end && line[url_end] != ' ' && line[url_end] != '\t') {
         ++url_end;
     }
-    append_candidate(inline_tokens, start, url_end, TokenRole::Attribute);
+    append_candidate(inline_tokens, start, url_end, TokenRole::LinkDestination);
 }
 
 void add_markdown_links(const std::string& line, std::vector<Candidate>& inline_tokens) {
@@ -174,6 +182,9 @@ void add_markdown_links(const std::string& line, std::vector<Candidate>& inline_
         std::regex::ECMAScript | std::regex::optimize);
     static const std::regex autolink(
         R"(<(?:https?://|mailto:)[^<>\n]+>)",
+        std::regex::ECMAScript | std::regex::icase | std::regex::optimize);
+    static const std::regex bare_url(
+        R"((?:https?://|mailto:)[^<>\s\]\)]+)",
         std::regex::ECMAScript | std::regex::icase | std::regex::optimize);
 
     for (std::sregex_iterator match(line.begin(), line.end(), inline_link), end;
@@ -205,9 +216,13 @@ void add_markdown_links(const std::string& line, std::vector<Candidate>& inline_
          ++match) {
         const size_t full_start = static_cast<size_t>(match->position());
         const size_t full_end = full_start + static_cast<size_t>(match->length());
-        append_candidate(inline_tokens, full_start + 1, full_end - 1, TokenRole::Attribute);
+        append_candidate(inline_tokens,
+                         full_start + 1,
+                         full_end - 1,
+                         TokenRole::LinkDestination);
         append_candidate(inline_tokens, full_start, full_end, TokenRole::Link);
     }
+    append_regex_candidates(line, bare_url, TokenRole::LinkDestination, inline_tokens);
     append_regex_candidates(line, reference_link, TokenRole::Link, inline_tokens);
 }
 
