@@ -421,13 +421,18 @@ def scenario_media_restart(binary, base, model, home_dir):
         conn.commit()
     finally:
         conn.close()
-    run_tui(
-        binary,
-        base,
-        model,
-        media_home,
-        [("/cleanup\r", 1.0), ("/quit\r", 0.5)],
-    )
+    master, process, _ = start_tui(binary, base, model, media_home)
+    try:
+        send(master, "/cleanup\r", 0.05)
+        wait_for_thread_field(path, thread_id, "read_only", 1)
+        send(master, "/quit\r", 0.1)
+        stop_tui(master, process)
+        master = -1
+    finally:
+        if master >= 0:
+            if process.poll() is None:
+                os.write(master, b"\x11")
+            stop_tui(master, process)
     conn = query_db(path)
     try:
         thread = conn.execute(

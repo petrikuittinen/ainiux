@@ -1,4 +1,14 @@
 CXX ?= g++
+DEFAULT_JOBS ?= 10
+# Use a conservative parallel default on this 20-core development machine.
+# A command-line -j/--jobs remains authoritative, and recursive $(MAKE)
+# invocations inherit the same GNU make jobserver.
+ifeq ($(MAKELEVEL),0)
+ifeq ($(filter -j% --jobs=%,$(MAKEFLAGS)),)
+MAKEFLAGS += -j$(DEFAULT_JOBS)
+endif
+endif
+
 CXXFLAGS ?= -std=c++17 -Wall -Wextra -Wpedantic -Iinclude -Isrc -Itests/unit
 LDFLAGS ?=
 LIBCURL_CFLAGS ?= $(shell pkg-config --cflags libcurl 2>/dev/null || curl-config --cflags 2>/dev/null)
@@ -71,7 +81,7 @@ DEP := $(sort $(APP_OBJ:.o=.d) $(TEST_OBJ:.o=.d) $(IO_FAULT_DEP))
 
 VALGRIND ?= valgrind --error-exitcode=1 --leak-check=full --show-leak-kinds=definite,indirect --quiet
 
-.PHONY: all clean optimized test test-unit test-unit-faults test-integration test-integration-sqlite sanitize test-sanitize leak-check test-leak install
+.PHONY: all clean optimized test test-full test-unit test-unit-faults test-integration-smoke test-integration test-integration-sqlite sanitize test-sanitize leak-check test-leak install
 
 all: $(BIN)
 
@@ -140,22 +150,28 @@ $(OBJ_DIR)/src/agent/prompts.o: $(AGENT_PROMPTS_HEADER)
 
 -include $(DEP)
 
-test: test-unit
+test:
+	$(MAKE) test-unit
+	$(MAKE) test-integration-smoke
+
+test-full:
+	$(MAKE) test-unit
+	$(MAKE) test-unit-faults
 	$(MAKE) test-integration
 
-test-unit: $(TEST_BIN) $(IO_FAULT_BIN) $(POSIX_IO_MOCK)
+test-unit: $(TEST_BIN)
 	$(TEST_BIN)
-	$(IO_FAULT_BIN)
-	tools/run_enospc_test.sh "$(CXX)" "$(abspath $(POSIX_IO_MOCK))" "$(abspath $(IO_FAULT_BIN))"
 
 test-unit-faults: $(IO_FAULT_BIN) $(POSIX_IO_MOCK)
 	$(IO_FAULT_BIN)
 	tools/run_enospc_test.sh "$(CXX)" "$(abspath $(POSIX_IO_MOCK))" "$(abspath $(IO_FAULT_BIN))"
 
+test-integration-smoke: $(BIN)
+	tests/integration/test_mock_smoke.sh
+
 test-integration: $(BIN)
 	tests/integration/test_code_index.sh
 	tests/integration/test_mock_server.sh
-	tests/integration/test_sqlite_persistence.sh
 	sh tests/integration/test_llama_server.sh
 
 test-integration-sqlite: $(BIN)
@@ -171,7 +187,7 @@ sanitize:
 
 test-sanitize:
 	$(MAKE) clean
-	$(MAKE) CXXFLAGS="$(CXXFLAGS) -O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer" LDFLAGS="$(LDFLAGS) -fsanitize=address,undefined" test
+	$(MAKE) CXXFLAGS="$(CXXFLAGS) -O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer" LDFLAGS="$(LDFLAGS) -fsanitize=address,undefined" test-full
 
 leak-check: $(BIN) $(TEST_BIN) $(IO_FAULT_BIN)
 	@if command -v valgrind >/dev/null 2>&1; then \

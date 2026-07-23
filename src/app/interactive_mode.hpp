@@ -25,7 +25,7 @@ enum class InteractiveUiTarget {
     Quit,
     Editor,
     Chat,
-    Agent,  // reserved for future mode-cycle chat ↔ editor ↔ agent
+    Agent,
 };
 
 struct PendingEditorAssistFromChat {

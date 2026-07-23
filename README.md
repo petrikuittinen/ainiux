@@ -100,7 +100,7 @@ export OPENROUTER_API_KEY=...
 
 ## Current status
 
-**v1.05** — active development. Core surfaces are usable daily: scriptable CLI, REPL, full-screen chat TUI, AI editor, multi-provider chat, durable image and canonical-Markdown attachments, safe URL fetch, web search hooks, document conversion, concurrent benchmarks, judge grading, headless whole-project security review, a one-shot local agent (`ainiux run` / `--run` / `-r` / `--run-file`) and an interactive agent TUI (`ainiux agent` / `--agent` / `-a`) with project-local `.ainiux-pr/` state (index, agent session, history, logs), live compact tool lines with elapsed-time display, chat/agent transcript isolation, and ordinary workspace edits. User chat library remains `~/.ainiux/ainiux.db`. Interactive Guard approvals and plan/security agent modes remain later roadmap work.
+**v1.05** — active development. Core surfaces are usable daily: scriptable CLI, REPL, full-screen chat TUI, AI editor, multi-provider chat, durable image and canonical-Markdown attachments, safe URL fetch, web search hooks, document conversion, concurrent benchmarks, judge grading, headless whole-project security review, a one-shot local agent (`ainiux run` / `--run` / `-r` / `--run-file`) and an interactive agent TUI (`ainiux agent` / `--agent` / `-a`) with project-local `.ainiux-pr/` state (index, agent session, history, logs), live compact tool lines with elapsed-time display, chat/agent transcript isolation, ordinary workspace edits, and interactive Guard Ask approvals. User chat library remains `~/.ainiux/ainiux.db`. Dedicated plan/security/refactor agent modes remain later roadmap work.
 
 Under the hood: libcurl HTTP/SSE, cancellable runtime jobs, Chat Completions plus text-only Responses API support, a layered model capability catalog with unified reasoning controls, SQLite-backed TUI threads, JSON chat import/export, multi-language syntax highlighting, grapheme-aware editing, and layered TOML-alike configuration.
 
@@ -109,13 +109,18 @@ Under the hood: libcurl HTTP/SSE, cancellable runtime jobs, Chat Completions plu
 ```sh
 make              # debug-friendly build → ./ainiux
 make optimized    # -O3 -DNDEBUG, stripped
-make test
+make test         # fast development gate: units + small mock smoke
+make test-full    # units + faults + comprehensive integration
 make sanitize
 make test-sanitize
 make leak-check
 make clean
 make install PREFIX=/usr/local
 ```
+
+Plain Make invocations default to 10 parallel jobs. An explicit setting such
+as `make -j4` overrides that default; packagers can also set
+`DEFAULT_JOBS=N`.
 
 The main template source is `config/ainiux.conf`. Model capabilities and purpose presets live separately in `config/models.conf`. Both are installed below `/etc/xdg/ainiux/` by default; set `SYSCONFDIR` when packaging for a different system configuration root.
 
@@ -837,15 +842,18 @@ v0.94 lets you switch between standalone editor mode and chat TUI without restar
 
 ### v0.91 cutoff benchmark updates
 
-v0.91 refreshes two late-2026 cutoff benchmark cases (March and April 2026), adds `find_cutoff.sh` to grade cutoff JSONL results with a judge provider/model, and documents the workflow in the Benchmarks section.
+v0.91 refreshes two late-2026 cutoff benchmark cases (March and April 2026), adds `tools/find_cutoff.sh` to grade cutoff JSONL results with a judge provider/model, and documents the workflow in the Benchmarks section.
 
 ```sh
-./find_cutoff.sh deepseek deepseek-v4-flash results/benchmark-<timestamp>.jsonl
+tools/find_cutoff.sh deepseek deepseek-v4-flash results/benchmark-<timestamp>.jsonl
 ```
 
 ### v0.90 keyboard shortcuts and roadmap
 
 v0.90 unifies chat and editor keyboard shortcuts: `Ctrl+Z`/`Ctrl+U` undo, `Ctrl+Y` redo, `Ctrl+Home`/`Ctrl+End` buffer bounds, and `PageUp`/`PageDown` for in-input paging. Chat mode adds `Ctrl+R` regenerate, `Ctrl+B`/`Ctrl+D` chat-history scroll (for terminals that block `Alt+PageUp`/`Alt+PageDown`), and `Alt+Home`/`Alt+End` jump to thread top/bottom. `PLANS.md` now targets v0.9 work (benchmark cutoff mode, codebase refactor, TUI/CLI polish) before local OpenAI-compatible server mode.
+
+The current chat, editor, and agent binding reference is
+`docs/keyboard-shortcuts.md`.
 
 ### v0.99 read-only security-review slice
 

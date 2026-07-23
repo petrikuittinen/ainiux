@@ -1,6 +1,6 @@
 # ainiux keyboard shortcuts
 
-Current bindings as implemented in `src/tui/run.cpp`, `src/tui/input_handlers.cpp`, `src/editor/run_editor.cpp`, `src/editor/terminal_input.cpp`, and `docs/editor_help.md`.
+Current bindings for chat, agent, and editor modes.
 
 ---
 
@@ -142,7 +142,7 @@ Use `/pop` to remove the last user or assistant message.
 | `Backspace` | Delete before cursor |
 | `Delete` | Delete at cursor |
 | `Enter` | Insert newline |
-| `Tab` | Disabled (“Tab completion is disabled in editor mode”) |
+| `Tab` | Complete a word/path/command where applicable; otherwise insert indentation |
 
 Bracketed terminal paste is undoable with `Ctrl+Z` / `Ctrl+U`.
 
@@ -177,7 +177,28 @@ Also: `/provider`, `/model`, `/search QUERY`
 
 ---
 
-## Shared movement and editing (both modes)
+## `--agent` mode
+
+Agent mode shares the terminal input editor, scrolling, provider/model/reasoning
+pickers, and cancellation keys with chat. Its transcript and tools are
+project-local under `.ainiux-pr/`; ordinary chat thread commands are not agent
+session management.
+
+| Shortcut | Action |
+|----------|--------|
+| `Enter` / `Ctrl+S` | Submit the next agent goal or follow-up |
+| `Esc` | Cancel the active model/tool job |
+| `Ctrl+P` | Cycle agent → chat |
+| `Ctrl+Q` | Finish the project session and quit |
+| `y` / `n` | Allow or deny an active Guard Ask confirmation |
+
+Use `/chat`, `/editor`, `/agent`, `/mode`, or `/cycle` for explicit mode
+handoffs. Manual `/compact`, plan mode, and refactor mode are not implemented
+yet.
+
+---
+
+## Shared movement and editing
 
 | Shortcut | Action |
 |----------|--------|
@@ -202,5 +223,5 @@ Also: `/provider`, `/model`, `/search QUERY`
 | `Esc` (idle) | Cancel in-flight job | Open slash-command minibuffer |
 | `Ctrl+B` / `Ctrl+D` | Scroll chat history back / forward | Page up / down in the other split pane |
 | `Alt+PageUp` / `Alt+PageDown` | Scroll chat history (if terminal allows) | **Unused** |
-| `Tab` | Command/path completion | Disabled |
+| `Tab` | Command/path completion | Word/path/command completion or indentation |
 | `↑` / `↓` | Visual-row movement (soft wrap) | Logical-line movement |

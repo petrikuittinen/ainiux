@@ -8,33 +8,49 @@ This document describes how to run the automated test suite, what it covers, and
 make test
 ```
 
-This runs unit tests, fault-injection tests, and both integration scripts.
+This is the fast development gate: the in-process unit runner plus a small
+OpenAI-mock smoke covering streamed Chat Completions, Responses, and a native
+tool-calling one-shot agent round.
+
+Run the comprehensive path explicitly:
+
+```sh
+make test-full
+```
 
 Useful targets:
 
 | Target | What it runs |
 |--------|----------------|
-| `make test-unit` | `test_runner` plus `test_io_faults` (network/read-only/ENOSPC) |
+| `make test` | In-process units plus the small mock smoke |
+| `make test-full` | Units, fault injection, and comprehensive integration |
+| `make test-unit` | In-process `test_runner` only |
 | `make test-unit-faults` | Fault tests only |
+| `make test-integration-smoke` | Small Chat/Responses/agent mock smoke |
 | `make test-integration` | Code-index, mock-server, and SQLite TUI end-to-end scripts |
 | `make test-integration-sqlite` | SQLite TUI persistence only |
 | `make test-sanitize` | AddressSanitizer/UBSan build of the full `make test` path |
 | `make test-leak` | Valgrind on `test_runner`, `test_io_faults`, and `ainiux --version` |
 
-CI (`.github/workflows/ci.yml`) runs `make test` and `make test-leak` on Ubuntu with libcurl, libsqlite3, Python 3, and Valgrind installed.
+Manual CI (`.github/workflows/ci.yml`) runs `make test-full` and
+`make test-leak` on Ubuntu with libcurl, libsqlite3, Python 3, and Valgrind
+installed.
 
 ## Layout
 
 - `tests/unit/` — module-oriented C++ unit tests. `test_runner` dispatches `run_all()` from each module directory.
 - `build/test_io_faults` — separate binary for slower or environment-dependent checks.
-- `tests/integration/test_mock_server.sh` — CLI, REPL, benchmark/grade, fetch, config, attachments, TUI insert, and native-tool security-review coverage against a local mock API.
+- `tests/integration/test_mock_smoke.sh` — fast Chat, Responses, and one-shot-agent transport smoke.
+- `tests/integration/test_mock_server.sh` — comprehensive CLI, REPL, benchmark/grade, fetch, config, attachments, TUI, SQLite, and native-tool security-review coverage against one shared local mock API.
 - `tests/integration/test_code_index.sh` — project-local refresh, ignore/skip behavior, Markdown output, stale snapshots, and CLI isolation.
 - `tests/integration/test_sqlite_persistence.sh` — SQLite-backed TUI persistence via `tui_sqlite_driver.py`.
 - `tests/integration/tui_startup_selection_driver.py` — isolated PTY coverage for bare-offline chat and one-/multiple-model startup discovery.
 - `tests/mock_server/` — Python HTTP mocks for OpenAI-compatible APIs and slow responses.
 - `tests/mock/` — POSIX `LD_PRELOAD` shim for disk-full simulation.
 
-Approximate size today: **900+** unit assertions, **170+** integration checks in the main mock-server script, plus SQLite integration scenarios and fault tests.
+The comprehensive mock path intentionally retains end-to-end surface coverage,
+but detailed format/error matrices belong in unit tests whenever no process,
+transport, filesystem, or PTY boundary is involved.
 
 ## Coverage overview
 
@@ -76,7 +92,11 @@ Approximate size today: **900+** unit assertions, **170+** integration checks in
 
 ### `tests/mock_server/openai_mock.py`
 
-Local OpenAI-compatible server used by `test_mock_server.sh`. Supports one- and multiple-result model-list endpoints, chat completions, responses API, streaming, exact named/numeric reasoning fields without approximate conversion, attachments, images, HTML fetch fixtures, strict configurable benchmark grading, and the security-review native tool/coordinator loop.
+Local OpenAI-compatible server used by both mock scripts. Supports one-,
+multiple-, and empty-result model-list endpoints, chat completions, Responses,
+streaming, request-local delayed streams, exact reasoning fields, attachments,
+images, HTML fetch fixtures, strict benchmark grading, one-shot agent tools,
+and the security-review native tool/coordinator loop.
 
 ### `tests/mock_server/slow_http_mock.py`
 

@@ -26,9 +26,11 @@ Create the best practical command-line, terminal, local server, and future local
 
 ## Deferred product work
 
-The CLI, streaming, persistence, provider architecture, runtime/job layer, TUI foundation, and first attachment layer now exist. Keep the following work outside the v0.6 configuration milestone unless it is required to integrate configuration safely:
+This historical pre-v0.6 list is retained only as milestone context. The local
+agent has since landed through v1.05; reconcile every item with the current
+baseline below before treating it as open work:
 
-- Autonomous local agent mode.
+- Dedicated agent plan/security/refactor modes and a purpose-built agent UI.
 - Full rich Markdown rendering in the TUI.
 - PDF and DOCX input/output conversion.
 - Clipboard integration.
@@ -36,7 +38,10 @@ The CLI, streaming, persistence, provider architecture, runtime/job layer, TUI f
 - Browser automation.
 - Plugin system.
 
-The browser-based local web UI is postponed. A local OpenAI-compatible server mode may come first, because it can expose `ainiux` conversions and later chained chat workflows to other OpenAI-compatible clients while reusing the same transport/runtime/security code. Autonomous local agent mode remains separate and must still have its own sandbox/approval design before any tool execution is added.
+The browser-based local web UI is postponed. A local OpenAI-compatible server
+mode may come first. General agent mode now has a sandbox/Guard approval
+foundation; later agent modes must reuse and tighten it rather than adding
+unreviewed tool execution.
 
 ## High-level milestones
 

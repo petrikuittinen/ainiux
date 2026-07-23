@@ -27,7 +27,7 @@ jobs:
         run: make
 
       - name: Run tests
-        run: make test
+        run: make test-full
 
       - name: Valgrind leak check
         run: make test-leak

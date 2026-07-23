@@ -29,7 +29,7 @@ stderr="$WORK/index.stderr"
 test ! -s "$stdout"
 grep -q 'Code index updated' "$stderr"
 grep -q 'binary.c' "$stderr"
-test -f "$WORK/.ainiux/index.sqlite"
+test -f "$WORK/.ainiux-pr/index.sqlite"
 
 (cd "$WORK" && "$BIN" --print-index >"$WORK/report.md" 2>"$WORK/print.stderr")
 grep -q '# ainiux Code Index' "$WORK/report.md"
@@ -75,7 +75,7 @@ grep -q 'cannot be combined' "$WORK/bad.stderr"
 (cd "$WORK" && "$BIN" --clear-index >"$WORK/clear.stdout" 2>"$WORK/clear.stderr")
 test ! -s "$WORK/clear.stdout"
 grep -q 'Code index cleared' "$WORK/clear.stderr"
-test ! -e "$WORK/.ainiux/index.sqlite"
+test ! -e "$WORK/.ainiux-pr/index.sqlite"
 if (cd "$WORK" && "$BIN" --print-index >/dev/null 2>"$WORK/missing.stderr"); then
     echo 'print-index succeeded after the index was cleared' >&2
     exit 1

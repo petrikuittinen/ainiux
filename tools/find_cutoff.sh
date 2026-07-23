@@ -3,14 +3,14 @@ set -eu
 
 usage() {
     cat <<'EOF'
-Usage: ./find_cutoff.sh PROVIDER MODEL BENCHMARK_JSONL
+Usage: tools/find_cutoff.sh PROVIDER MODEL BENCHMARK_JSONL
 
 Grade a cutoff benchmark JSONL file with a judge provider/model and write a
 Markdown report next to the input file.
 
 Example:
-  ./find_cutoff.sh deepseek deepseek-v4-flash results/benchmark-1783537583.jsonl
-  ./find_cutoff.sh openrouter "nvidia/nemotron-3-ultra-550b-a55b:free" results/benchmark-1783537583.jsonl
+  tools/find_cutoff.sh deepseek deepseek-v4-flash results/benchmark.jsonl
+  tools/find_cutoff.sh openrouter "nvidia/nemotron-3-ultra-550b-a55b:free" results/benchmark.jsonl
 EOF
 }
 
@@ -23,17 +23,17 @@ JUDGE_PROVIDER=$1
 JUDGE_MODEL=$2
 BENCHMARK_JSONL=$3
 
-ROOT=$(CDPATH= cd -- "$(dirname "$0")" && pwd)
+ROOT=$(CDPATH= cd -- "$(dirname "$0")/.." && pwd)
 AINIUX=$ROOT/ainiux
 
 if [ ! -x "$AINIUX" ]; then
-    echo "find_cutoff.sh: ainiux binary not found or not executable: $AINIUX" >&2
+    echo "tools/find_cutoff.sh: ainiux binary not found or not executable: $AINIUX" >&2
     echo "Build it first with: make" >&2
     exit 1
 fi
 
 if [ ! -f "$BENCHMARK_JSONL" ]; then
-    echo "find_cutoff.sh: benchmark JSONL not found: $BENCHMARK_JSONL" >&2
+    echo "tools/find_cutoff.sh: benchmark JSONL not found: $BENCHMARK_JSONL" >&2
     exit 1
 fi
 

@@ -21,6 +21,17 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(data)))
         self.end_headers()
         self.wfile.write(data)
+
+    def _stream_delay(self):
+        """Allow one request to be slow without launching another mock process."""
+        value = self.headers.get("X-Ainiux-Test-Stream-Delay", "")
+        if value:
+            try:
+                return max(0.0, min(float(value), 5.0))
+            except ValueError:
+                return 0.0
+        return self.stream_delay
+
     def do_GET(self):
         if self.path == "/plain":
             accept = self.headers.get("Accept", "")
@@ -51,8 +62,8 @@ class Handler(BaseHTTPRequestHandler):
                 "text/html; charset=utf-8",
             )
             return
-        if self.path in ("/v1/models", "/v1/models-multiple"):
-            if self.empty_models:
+        if self.path in ("/v1/models", "/v1/models-multiple", "/v1/models-empty"):
+            if self.empty_models or self.path == "/v1/models-empty":
                 self._send(200, json.dumps({"object": "list", "data": []}))
                 return
             model_ids = [self.model]
@@ -367,9 +378,10 @@ class Handler(BaseHTTPRequestHandler):
                     "data: " + json.dumps({"type": "response.output_text.delta", "delta": reply[midpoint:]}) + "\n\n",
                     "data: " + json.dumps({"type": "response.completed", "response": {"model": self.model, "usage": {"input_tokens": 1, "output_tokens": 1, "total_tokens": 2}}}) + "\n\n",
                 ]
+            stream_delay = self._stream_delay()
             for chunk in chunks:
-                if self.stream_delay:
-                    time.sleep(self.stream_delay)
+                if stream_delay:
+                    time.sleep(stream_delay)
                 self.wfile.write(chunk.encode("utf-8"))
                 self.wfile.flush()
             return
@@ -418,6 +430,67 @@ class Handler(BaseHTTPRequestHandler):
             and message.get("role") == "system"
             and isinstance(message.get("content"), str)
         )
+        all_text = self._chat_text(request)
+        if request.get("tools") and "AINIUX_AGENT_SMOKE" in all_text:
+            tool_result_seen = any(
+                isinstance(message, dict) and message.get("role") == "tool"
+                for message in messages
+            )
+            if not tool_result_seen:
+                self._send(
+                    200,
+                    json.dumps(
+                        {
+                            "model": self.model,
+                            "choices": [
+                                {
+                                    "index": 0,
+                                    "finish_reason": "tool_calls",
+                                    "message": {
+                                        "role": "assistant",
+                                        "content": None,
+                                        "tool_calls": [
+                                            {
+                                                "id": "agent_smoke_read_1",
+                                                "type": "function",
+                                                "function": {
+                                                    "name": "read_file",
+                                                    "arguments": json.dumps(
+                                                        {
+                                                            "path": "agent-smoke.txt",
+                                                            "start_line": 1,
+                                                            "end_line": 10,
+                                                        }
+                                                    ),
+                                                },
+                                            }
+                                        ],
+                                    },
+                                }
+                            ],
+                        }
+                    ),
+                )
+            else:
+                self._send(
+                    200,
+                    json.dumps(
+                        {
+                            "model": self.model,
+                            "choices": [
+                                {
+                                    "index": 0,
+                                    "finish_reason": "stop",
+                                    "message": {
+                                        "role": "assistant",
+                                        "content": "agent-smoke-ok",
+                                    },
+                                }
+                            ],
+                        }
+                    ),
+                )
+            return
         # Detect security-review from the task-layer prompt / tool schema, not
         # the shared master foundation wording (which may change).
         if request.get("tools") and (
@@ -717,9 +790,10 @@ class Handler(BaseHTTPRequestHandler):
                     "data: " + json.dumps({"model": self.model, "choices": [], "usage": {"prompt_tokens": len(messages), "completion_tokens": 1, "total_tokens": len(messages) + 1}}) + "\n\n",
                     "data: [DONE]\n\n",
                 ]
+            stream_delay = self._stream_delay()
             for chunk in chunks:
-                if self.stream_delay:
-                    time.sleep(self.stream_delay)
+                if stream_delay:
+                    time.sleep(stream_delay)
                 self.wfile.write(chunk.encode("utf-8"))
                 self.wfile.flush()
             return

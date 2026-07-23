@@ -440,9 +440,9 @@ Add tests with every behavior change. Do not rely only on manual testing. See `T
 Keep the edit-test loop proportional to the change. Do not automatically run every available suite after a minor or localized change.
 
 - For documentation-only changes, inspect the diff and run only relevant formatting, generation, or link checks when available. Do not build or run test suites merely because a document changed.
-- For localized C++ changes, build the affected target and run the nearest relevant unit coverage. `make build/test_runner && build/test_runner` is the ordinary broad in-process unit check when a narrower executable is unavailable; it avoids the slower fault and integration paths included by `make test-unit` and `make test`.
-- Run `make test-unit-faults` only for relevant file-I/O, HTTP timeout, cancellation, permission, or failure-path changes. Note that `make test-unit` includes these slower fault and ENOSPC checks in addition to the ordinary unit runner.
-- Treat `make test`, `make test-integration`, `make test-integration-sqlite`, `tests/integration/test_mock_server.sh`, `make test-sanitize`, `make leak-check`, and `make test-leak` as slow suites. Do not run them by default. Run them only when the user explicitly requests full testing, the task is specifically release/CI/full-validation work, or the user explicitly asks for the directly relevant slow suite.
+- For localized C++ changes, build the affected target and run the nearest relevant unit coverage. `make test-unit` is the ordinary broad in-process unit check; `make test` adds only a small high-value mock smoke.
+- Run `make test-unit-faults` only for relevant file-I/O, HTTP timeout, cancellation, permission, or failure-path changes.
+- Treat `make test-full`, `make test-integration`, `make test-integration-sqlite`, `tests/integration/test_mock_server.sh`, `make test-sanitize`, `make leak-check`, and `make test-leak` as slow suites. Do not run them by default. Run them only when the user explicitly requests full testing, the task is specifically release/CI/full-validation work, or the user explicitly asks for the directly relevant slow suite.
 - `make test-sanitize` is especially expensive because it performs a clean ASan/UBSan rebuild and then the full test path. Valgrind is also intentionally opt-in. Mock-server and SQLite/TUI integration scripts start subprocesses and PTY scenarios and are not part of the routine minor-change loop.
 - Before starting an opt-in slow suite, tell the user which suite will run and why. In the final response, list exactly what was run and identify relevant suites that were intentionally not run.
 
@@ -468,8 +468,10 @@ Useful targets:
 ```sh
 make
 make test
+make test-full
 make test-unit
 make test-unit-faults
+make test-integration-smoke
 make test-integration
 make test-integration-sqlite
 make sanitize

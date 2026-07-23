@@ -10,24 +10,31 @@ HOME_DIR="$ROOT/build/sqlite-integration-home"
 rm -rf "$HOME_DIR"
 mkdir -p "$HOME_DIR"
 export HOME="$HOME_DIR"
+unset XDG_CONFIG_HOME
+export XDG_CONFIG_DIRS="$ROOT/build/sqlite-empty-system-config"
+mkdir -p "$XDG_CONFIG_DIRS"
 export OPENAI_API_KEY="${OPENAI_API_KEY:-integration-test-key}"
 export AINIUX_SQLITE_TEST_IMAGE="$ROOT/tests/image_files/temperature_meter.jpg"
 
-python3 "$ROOT/tests/mock_server/openai_mock.py" --port "$PORT" --model "$MODEL" >"$SERVER_LOG" 2>&1 &
-SERVER_PID=$!
-trap 'kill "$SERVER_PID" >/dev/null 2>&1 || true; wait "$SERVER_PID" >/dev/null 2>&1 || true' EXIT INT TERM
+if [ -n "${AINIUX_MOCK_BASE:-}" ]; then
+    BASE=$AINIUX_MOCK_BASE
+else
+    python3 "$ROOT/tests/mock_server/openai_mock.py" --port "$PORT" --model "$MODEL" \
+        >"$SERVER_LOG" 2>&1 &
+    SERVER_PID=$!
+    trap 'kill "$SERVER_PID" >/dev/null 2>&1 || true; wait "$SERVER_PID" >/dev/null 2>&1 || true' EXIT INT TERM
 
-i=0
-while [ "$i" -lt 50 ]; do
-    if curl -sS "http://127.0.0.1:$PORT/v1/models" >/dev/null 2>&1; then
-        break
-    fi
-    i=$((i + 1))
-    sleep 0.1
-done
-
-BASE="http://127.0.0.1:$PORT"
+    i=0
+    while [ "$i" -lt 50 ]; do
+        if curl -sS "http://127.0.0.1:$PORT/v1/models" >/dev/null 2>&1; then
+            break
+        fi
+        i=$((i + 1))
+        sleep 0.1
+    done
+    BASE="http://127.0.0.1:$PORT"
+fi
 python3 "$ROOT/tests/integration/tui_sqlite_driver.py" \
-    "$ROOT/ainiux" "$BASE" "$MODEL" "$HOME_DIR" all
+    "$ROOT/ainiux" "$BASE" "$MODEL" "$HOME_DIR" "${AINIUX_SQLITE_SCENARIO:-all}"
 
 echo "sqlite persistence integration tests passed"

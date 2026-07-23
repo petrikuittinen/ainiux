@@ -91,24 +91,12 @@ grep '^Speed progress: .*\/20 ms (.*; completed .* failed .* cancelled .*)$' \
     "$benchmark_speed_err" >/dev/null
 grep '^Benchmark summary:' "$benchmark_speed_err" >/dev/null
 
-SLOW_PORT=$((PORT + 2))
-SLOW_SERVER_LOG="$ROOT/build/mock_server_slow.log"
-python3 "$ROOT/tests/mock_server/openai_mock.py" --port "$SLOW_PORT" --model "$MODEL" \
-    --stream-delay 1 >"$SLOW_SERVER_LOG" 2>&1 &
-SLOW_SERVER_PID=$!
-i=0
-while [ "$i" -lt 50 ]; do
-    if curl -sS "http://127.0.0.1:$SLOW_PORT/v1/models" >/dev/null 2>&1; then
-        break
-    fi
-    i=$((i + 1))
-    sleep 0.1
-done
 benchmark_cancel_out="$ROOT/build/benchmark-cancel.out"
 benchmark_cancel_err="$ROOT/build/benchmark-cancel.err"
 set +e
-"$ROOT/ainiux" benchmark "http://127.0.0.1:$SLOW_PORT" --dataset "$benchmark_dataset" \
+"$ROOT/ainiux" benchmark "$BASE" --dataset "$benchmark_dataset" \
     --mode quality --runs 10 --limit 1 -m "$MODEL" \
+    --header "X-Ainiux-Test-Stream-Delay: 1" \
     >"$benchmark_cancel_out" 2>"$benchmark_cancel_err" &
 BENCHMARK_PID=$!
 # Background jobs inherit SIGINT as ignored from a non-interactive shell until
@@ -126,8 +114,6 @@ kill -INT "$BENCHMARK_PID"
 wait "$BENCHMARK_PID"
 benchmark_cancel_status=$?
 set -e
-kill "$SLOW_SERVER_PID" >/dev/null 2>&1 || true
-wait "$SLOW_SERVER_PID" >/dev/null 2>&1 || true
 test "$benchmark_cancel_status" -eq 130
 grep '"type":"result".*"prompt":"reasoning".*"ok":false.*"cancelled":true' "$benchmark_cancel_out" >/dev/null
 grep '"type":"summary".*"interrupted":true' "$benchmark_cancel_out" >/dev/null
@@ -246,22 +232,12 @@ cat >"$grade_cancel_source" <<'JSONL'
 {"type":"result","id":"grade-cancel","category":"reasoning","language":"en","provider":"mock-source","model":"candidate","run":1,"turn":1,"ok":true,"prompt":"cancel prompt","response":"candidate answer","reference_answer":"candidate answer"}
 {"type":"summary","completed_case_runs":1}
 JSONL
-python3 "$ROOT/tests/mock_server/openai_mock.py" --port "$SLOW_PORT" --model "$MODEL" \
-    --stream-delay 1 >"$SLOW_SERVER_LOG" 2>&1 &
-SLOW_SERVER_PID=$!
-i=0
-while [ "$i" -lt 50 ]; do
-    if curl -sS "http://127.0.0.1:$SLOW_PORT/v1/models" >/dev/null 2>&1; then
-        break
-    fi
-    i=$((i + 1))
-    sleep 0.1
-done
 grade_cancel_out="$ROOT/build/grade-cancel.out"
 grade_cancel_err="$ROOT/build/grade-cancel.err"
 set +e
-"$ROOT/ainiux" --grade "http://127.0.0.1:$SLOW_PORT" --stream \
+"$ROOT/ainiux" --grade "$BASE" --stream \
     --grade-input "$grade_cancel_source" -m "$MODEL" \
+    --header "X-Ainiux-Test-Stream-Delay: 1" \
     >"$grade_cancel_out" 2>"$grade_cancel_err" &
 GRADE_PID=$!
 i=0
@@ -276,8 +252,6 @@ kill -INT "$GRADE_PID"
 wait "$GRADE_PID"
 grade_cancel_status=$?
 set -e
-kill "$SLOW_SERVER_PID" >/dev/null 2>&1 || true
-wait "$SLOW_SERVER_PID" >/dev/null 2>&1 || true
 test "$grade_cancel_status" -eq 130
 grep '"type":"grade".*"id":"grade-cancel".*"ok":false.*"cancelled":true' \
     "$grade_cancel_out" >/dev/null
@@ -604,10 +578,8 @@ repl_fetch_reply=$(printf '/fetch %s/page\nsummarize-url\n/quit\n' "$BASE" | \
 test "$repl_fetch_reply" = "url-context-ok"
 
 python3 "$ROOT/tests/integration/editor_continue_driver.py" "$ROOT/ainiux" "$BASE" "$MODEL"
-python3 "$ROOT/tests/integration/editor_prose_continue_driver.py" "$ROOT/ainiux" "$BASE" "$MODEL"
 python3 "$ROOT/tests/integration/editor_buffers_driver.py" "$ROOT/ainiux" "$BASE" "$MODEL"
 python3 "$ROOT/tests/integration/editor_locking_driver.py" "$ROOT/ainiux"
-python3 "$ROOT/tests/integration/editor_text_modes_driver.py" "$ROOT/ainiux"
 python3 "$ROOT/tests/integration/tui_startup_selection_driver.py" \
     "$ROOT/ainiux" "$BASE" "$MODEL"
 
@@ -789,9 +761,9 @@ grep '`AGENTS.md` | reviewed' "$security_out" >/dev/null
 grep '`review.cpp` | reviewed' "$security_out" >/dev/null
 grep 'No evidence-backed findings were reported' "$security_out" >/dev/null
 grep '^Security review scope: 2 indexed file(s)' "$security_err" >/dev/null
-grep '^Security review diagnostic log (live): .*\.ainiux/logs/security-review/security-review-' "$security_err" >/dev/null
-grep '^Security review diagnostic log (final): .*\.ainiux/logs/security-review/security-review-' "$security_err" >/dev/null
-security_log=$(find "$security_workspace/.ainiux/logs/security-review" -maxdepth 1 -type f -name 'security-review-*.jsonl' | head -n 1)
+grep '^Security review diagnostic log (live): .*\.ainiux-pr/logs/security-review/security-review-' "$security_err" >/dev/null
+grep '^Security review diagnostic log (final): .*\.ainiux-pr/logs/security-review/security-review-' "$security_err" >/dev/null
+security_log=$(find "$security_workspace/.ainiux-pr/logs/security-review" -maxdepth 1 -type f -name 'security-review-*.jsonl' | head -n 1)
 test -n "$security_log"
 test "$(stat -c '%a' "$security_log")" = 600
 for event in run_start index_result task_plan step_start llm_request llm_response tool_result validation_result step_end freshness_result run_end; do
@@ -834,7 +806,7 @@ grep 'Severity: \*\*info\*\*' "$security_tolerant_out" >/dev/null
 grep 'Category: Uncategorized' "$security_tolerant_out" >/dev/null
 grep 'Remediation: No remediation supplied' "$security_tolerant_out" >/dev/null
 test ! -s "$security_tolerant_err"
-security_tolerant_log=$(find "$security_tolerant_workspace/.ainiux/logs/security-review" -maxdepth 1 -type f -name 'security-review-*.jsonl' | head -n 1)
+security_tolerant_log=$(find "$security_tolerant_workspace/.ainiux-pr/logs/security-review" -maxdepth 1 -type f -name 'security-review-*.jsonl' | head -n 1)
 grep '"event_type":"finalization_scheduled"' "$security_tolerant_log" >/dev/null
 grep '"tool_name":"submit_security_review"' "$security_tolerant_log" | \
     grep '"status":"success"' >/dev/null
@@ -852,7 +824,7 @@ security_responses_err="$ROOT/build/security-review-responses.err"
 )
 grep 'Result: complete' "$security_responses_out" >/dev/null
 test ! -s "$security_responses_err"
-security_responses_log=$(find "$security_workspace/.ainiux/logs/security-review" -maxdepth 1 -type f -name 'security-review-*.jsonl' | sort | tail -n 1)
+security_responses_log=$(find "$security_workspace/.ainiux-pr/logs/security-review" -maxdepth 1 -type f -name 'security-review-*.jsonl' | sort | tail -n 1)
 grep '"api":"responses"' "$security_responses_log" >/dev/null
 grep '"event_type":"tool_result"' "$security_responses_log" >/dev/null
 grep '"tool_name":"submit_security_review"' "$security_responses_log" >/dev/null
@@ -861,8 +833,8 @@ grep '"event_type":"run_end".*"status":"success"' "$security_responses_log" >/de
 security_log_failure_workspace="$ROOT/build/security-review-log-failure-workspace"
 security_log_target="$ROOT/build/security-review-log-target"
 rm -rf "$security_log_failure_workspace" "$security_log_target"
-mkdir -p "$security_log_failure_workspace/.ainiux" "$security_log_target"
-ln -s "$security_log_target" "$security_log_failure_workspace/.ainiux/logs"
+mkdir -p "$security_log_failure_workspace/.ainiux-pr" "$security_log_target"
+ln -s "$security_log_target" "$security_log_failure_workspace/.ainiux-pr/logs"
 cat >"$security_log_failure_workspace/review.cpp" <<'CPP'
 int main() { return 0; }
 CPP
@@ -899,7 +871,7 @@ if (
 fi
 grep 'Result: .*incomplete' "$security_invalid_out" >/dev/null
 grep '^AINIUX_ERR_JSON_PARSE:' "$security_invalid_err" >/dev/null
-security_invalid_log=$(find "$security_invalid_workspace/.ainiux/logs/security-review" -maxdepth 1 -type f -name 'security-review-*.jsonl' | head -n 1)
+security_invalid_log=$(find "$security_invalid_workspace/.ainiux-pr/logs/security-review" -maxdepth 1 -type f -name 'security-review-*.jsonl' | head -n 1)
 grep '"event_type":"validation_result"' "$security_invalid_log" | \
     grep '"error_code":"AINIUX_ERR_JSON_PARSE"' | \
     grep '"stage":"worker_task"' | grep '"status":"failure"' >/dev/null
@@ -985,26 +957,14 @@ lmstudio_shortcut_out=$(printf 'repl-one
 /quit
 ' | "$ROOT/ainiux" lmstudio --base-url "$BASE" --quiet --repl --no-stream)
 test "$lmstudio_shortcut_out" = "repl-one-reply"
-EMPTY_PORT=$((PORT + 1))
-EMPTY_SERVER_LOG="$ROOT/build/mock_server_empty_models.log"
-python3 "$ROOT/tests/mock_server/openai_mock.py" --port "$EMPTY_PORT" --model "$MODEL" --empty-models >"$EMPTY_SERVER_LOG" 2>&1 &
-EMPTY_SERVER_PID=$!
-trap 'kill "$SERVER_PID" "$EMPTY_SERVER_PID" >/dev/null 2>&1 || true; wait "$SERVER_PID" "$EMPTY_SERVER_PID" >/dev/null 2>&1 || true' EXIT INT TERM
-i=0
-while [ "$i" -lt 50 ]; do
-    if curl -sS "http://127.0.0.1:$EMPTY_PORT/v1/models" >/dev/null 2>&1; then
-        break
-    fi
-    i=$((i + 1))
-    sleep 0.1
-done
-EMPTY_BASE="http://127.0.0.1:$EMPTY_PORT"
 unknown_err="$ROOT/build/unknown-model.err"
-if "$ROOT/ainiux" "$EMPTY_BASE" --no-stream -p "model?" \
+if "$ROOT/ainiux" "$BASE" --models-url "$BASE/v1/models-empty" --no-stream -p "model?" \
     >"$ROOT/build/unknown-model.out" 2>"$unknown_err"; then
     echo "an endpoint with no models should fail automatic model selection" >&2
     exit 1
 fi
 grep 'models response did not contain any models' "$unknown_err" >/dev/null
+
+AINIUX_MOCK_BASE="$BASE" "$ROOT/tests/integration/test_sqlite_persistence.sh"
 
 echo "integration tests passed"

@@ -5,6 +5,7 @@
 - Project-centric agent rework landed: singleton `.ainiux-pr/agent.sqlite` v2, one-backup history policy, compact tool lines, window-% auto-compact, Chat/Agent chrome, `/cmd-out`. Agent tools now include git_status/git_diff, index_status/update/rebuild, fetch_url/search_web, find_tests, inspect_code_task.
 - Agent TUI chrome: permanent input-label line `Ainiux vX [provider/model reasoning] N tok (P.P%)` (window from `--context` → `/v1/models` → default 256k); agent-mode errors go to history notices, not status-bar-only.
 - Interactive Guard `Ask` approvals landed: agent TUI y/n panel, one-shot decisions, persist to `approvals` in `.ainiux-pr/agent.sqlite`, headless `run` still maps Ask→Deny.
+- Audit finding: split the agent controller from chat-only SQLite/media/thread commands before adding more agent UI. Correct auto-compact so summary + recent transcript rebuild provider context; add manual `/compact`.
 - Next: **read-only tool parallelism** in multi-call agent rounds (bounded pool for reads/searches; limited parallel `fetch_url`/`search_web`; keep mutations, index writes, Guard Ask, and `run_command` serial for now)—see PLANS.md §14 and “Next agent slices”.
 - Also next: find_callers/find_callees (call-graph refs), load agent transcript as sole TUI source of truth (less chat-session coupling), plan/security/refactor agent modes, stronger editor↔agent handoff.
 - Keep security-review strictly read-only when expanding agent tools (`run_command` stays index-scoped there; network tools stay agent-only).
@@ -19,7 +20,6 @@
 
 ## Syntax Highlighting
 
-- Let the Markdown-only editor/chat preview settle before adding Python, C/C++, C#, Java, JavaScript/TypeScript, HTML/CSS/XML, JSON, and Bash modes.
 - Add startup and `/theme` warnings for explicit low-contrast user syntax colors while preserving those overrides.
 
 ## Editor AI Commands
@@ -36,11 +36,8 @@
 
 ## Chat Persistence
 
-- Add focused integration coverage for SQLite-backed TUI chat storage in `~/.ainiux/ainiux.db`, including automatic save/load, `/new`, `/remove`, `/provider`, and `/list` picker behavior.
-- Harden SQLite autosave scheduling so an explicit JSON `/save` or slow file job can be followed by a deferred SQLite save instead of skipping that autosave.
-- Add recovery behavior when `app_state.last_thread_id` points at a deleted or missing thread.
 - Keep explicit JSON save/load as import/export compatibility, not the primary local chat library.
-- Add SQLite schema migrations, corruption handling, permission-denied tests, and leak checks for open/save/load/list/remove paths.
+- Add focused leak and permission-failure coverage when persistence ownership changes.
 
 ## Provider And API Hardening
 

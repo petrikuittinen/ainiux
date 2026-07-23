@@ -1,3 +1,8 @@
 /build/
 /ainiux
 /.ainiux/
+/.ainiux-pr/
+/results/
+*~
+__pycache__/
+*.py[cod]
