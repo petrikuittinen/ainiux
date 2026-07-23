@@ -17,6 +17,8 @@ enum class EditorSlashCommand {
     List,
     Close,
     Chat,
+    Agent,
+    Editor,
     VSplit,
     HSplit,
     CloseSplit,

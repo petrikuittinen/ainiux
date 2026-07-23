@@ -1303,15 +1303,11 @@ app::TuiRunResult run(provider::RequestContext context,
         }
         leave_for(app::InteractiveUiTarget::Agent);
     };
-    // Ring: chat → editor → agent → chat (Ctrl+P / /cycle).
     command_handlers.cycle_mode = [&]() {
-        if (context.options.agent) {
-            leave_for(app::InteractiveUiTarget::Chat);
-        } else if (interactive != nullptr) {
+        if (interactive != nullptr) {
             leave_for(app::InteractiveUiTarget::Editor);
         } else {
-            // Standalone chat TUI without interactive shell: chat ↔ agent only.
-            leave_for(app::InteractiveUiTarget::Agent);
+            status = "Editor mode is unavailable";
         }
     };
 

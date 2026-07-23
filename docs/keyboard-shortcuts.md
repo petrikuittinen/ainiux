@@ -42,6 +42,7 @@ Bracketed terminal paste (middle-click or Shift+Insert in many terminals) is als
 | `Ctrl+R` | Regenerate last answer (resend last user prompt) |
 | `Ctrl+T` | Toggle thinking-trace display (`/thinking trace` / `notrace`) |
 | `Ctrl+L` | Open saved-thread picker (`/list`) |
+| `Ctrl+P` | Toggle chat → editor; the next Ctrl+P returns editor → chat |
 
 Use `/pop` to remove the last user or assistant message.
 
@@ -156,6 +157,15 @@ Bracketed terminal paste is undoable with `Ctrl+Z` / `Ctrl+U`.
 | `Esc` `/help` | Toggle read-only help view |
 | `Esc` | Cancel minibuffer / command entry |
 
+### Mode switching
+
+| Shortcut | Action |
+|----------|--------|
+| `Ctrl+P` | Return to the mode that opened the editor (chat or agent); standalone editor defaults to chat |
+
+Editor mode accepts `chat`, `agent`, and `editor` with or without a leading
+slash. Chat and agent modes use `/chat`, `/agent`, and `/editor`.
+
 ### Cursor and selection
 
 | Shortcut | Action |
@@ -171,7 +181,7 @@ Bracketed terminal paste is undoable with `Ctrl+Z` / `Ctrl+U`.
 
 Built-in AI: `/spell`, `/grammar`, `/continue`, `/fact`, `/comment`, `/rewrite`, `/English`, `/Chinese`, `/Finnish`, `/German`, `/French`, `/Italian`, `/Spanish`, `/Portuguese`, `/Arabic`, `/Hindi`, `/Japanese`, `/Korean`, `/Swedish`, `/Polish`, `/Russian`, `/prompt`, `/regenerate`
 
-File/editor: `/save`, `/saveas`, `/find`, `/replace`, `/open`, `/new`, `/list`, `/close`, `/vsplit`, `/hsplit`, `/closesplit`, `/maximize` (`/nosplit`), `/help`, `/quit`
+File/editor: `/save`, `/saveas`, `/find`, `/replace`, `/open`, `/new`, `/list`, `/close`, `/vsplit`, `/hsplit`, `/closesplit`, `/maximize` (`/nosplit`), `/chat`, `/agent`, `/editor`, `/help`, `/quit`
 
 Also: `/provider`, `/model`, `/search QUERY`
 
@@ -188,13 +198,13 @@ session management.
 |----------|--------|
 | `Enter` / `Ctrl+S` | Submit the next agent goal or follow-up |
 | `Esc` | Cancel the active model/tool job |
-| `Ctrl+P` | Cycle agent → chat |
+| `Ctrl+P` | Toggle agent → editor; the next Ctrl+P returns editor → agent |
 | `Ctrl+Q` | Finish the project session and quit |
 | `y` / `n` | Allow or deny an active Guard Ask confirmation |
 
-Use `/chat`, `/editor`, `/agent`, `/mode`, or `/cycle` for explicit mode
-handoffs. Manual `/compact`, plan mode, and refactor mode are not implemented
-yet.
+Use `/chat`, `/editor`, `/agent`, or `/mode` for explicit mode handoffs.
+`/cycle` follows Ctrl+P and enters the editor from chat or agent. Manual
+`/compact`, plan mode, and refactor mode are not implemented yet.
 
 ---
 

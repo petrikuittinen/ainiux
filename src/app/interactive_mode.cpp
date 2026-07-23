@@ -38,6 +38,12 @@ void ensure_chat_session_initialized(InteractiveSession& session) {
     session.chat_session_initialized = true;
 }
 
+InteractiveUiTarget editor_toggle_target(const InteractiveSession& session) {
+    return session.editor_return_mode == InteractiveMode::Agent
+               ? InteractiveUiTarget::Agent
+               : InteractiveUiTarget::Chat;
+}
+
 int run_interactive(InteractiveSession session) {
     InteractiveMode mode = session.start_mode;
     // Keep options.agent aligned with the active product mode.
@@ -92,6 +98,7 @@ int run_interactive(InteractiveSession session) {
         }
 
         if (result.next == InteractiveUiTarget::Editor) {
+            session.editor_return_mode = mode;
             sync_shared_provider_to_editor(session);
             session.context.options.agent = false;
             session.context.options.tui = false;

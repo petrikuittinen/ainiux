@@ -93,7 +93,7 @@ void handle_tui_command(const std::string& text, TuiCommandContext& ctx, TuiComm
                 "/chat (switch to ordinary chat mode)\n"
                 "/agent (switch to interactive agent mode)\n"
                 "/mode [chat|editor|agent] (show or jump modes)\n"
-                "/cycle or Ctrl+P (chat → editor → agent → chat)\n"
+                "/cycle or Ctrl+P (toggle current chat/agent mode ↔ editor)\n"
                 "/cmd-out [on|off] (agent: show run_command stdout)\n"
                 "AI commands from editor-commands.conf (/spell, /grammar, /continue,\n"
                 "/Chinese, /German, /Japanese, /prompt, /regenerate, and custom commands)";

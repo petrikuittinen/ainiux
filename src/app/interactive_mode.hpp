@@ -36,6 +36,9 @@ struct PendingEditorAssistFromChat {
 
 struct InteractiveSession {
     InteractiveMode start_mode = InteractiveMode::Editor;
+    // Ctrl+P toggles Editor with the conversational mode that opened it.
+    // A standalone editor defaults to Chat.
+    InteractiveMode editor_return_mode = InteractiveMode::Chat;
 
     provider::RequestContext context;
     std::optional<editor::AiContinueContext> ai_continue;
@@ -69,6 +72,7 @@ void sync_editor_provider_to_shared(InteractiveSession& session,
                                   const std::optional<editor::AiContinueContext>& ai_continue);
 void sync_shared_provider_to_editor(InteractiveSession& session);
 void ensure_chat_session_initialized(InteractiveSession& session);
+InteractiveUiTarget editor_toggle_target(const InteractiveSession& session);
 
 int run_interactive(InteractiveSession session);
 

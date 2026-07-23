@@ -138,6 +138,10 @@ StyleRole activity_indicator_role(ActivityKind kind) {
     return StyleRole::Muted;
 }
 
+bool show_activity_on_status_row(ActivityKind kind, bool agent_mode) {
+    return kind != ActivityKind::None && !agent_mode;
+}
+
 std::vector<StyledSegment> activity_status_segments(const std::string& label,
                                                             ActivityKind kind,
                                                             size_t frame,

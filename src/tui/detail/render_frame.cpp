@@ -93,7 +93,8 @@ void render(const chat::Session& session,
         ++printed;
     }
 
-    if (activity_kind != ActivityKind::None && mode == TuiMode::Chat && !panel_active) {
+    if (show_activity_on_status_row(activity_kind, agent_mode) &&
+        mode == TuiMode::Chat && !panel_active) {
         const std::string label = session_status_label(session);
         const std::string suffix =
             activity_kind == ActivityKind::Thinking ? "thinking..." : "streaming response ...";

@@ -956,6 +956,8 @@ std::vector<std::string> assist_command_completions(const EditorAssistConfig& co
     commands.push_back("/regenerate");
     commands.push_back("/search ");
     commands.push_back("/chat");
+    commands.push_back("/agent");
+    commands.push_back("/editor");
     commands.push_back("/quit");
     return commands;
 }

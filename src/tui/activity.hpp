@@ -19,6 +19,7 @@ std::vector<StyledSegment> input_label_segments_for_mode(bool agent_mode, const 
 std::string activity_indicator_text(ActivityKind kind, size_t frame);
 size_t activity_indicator_width(ActivityKind kind);
 StyleRole activity_indicator_role(ActivityKind kind);
+bool show_activity_on_status_row(ActivityKind kind, bool agent_mode);
 
 std::vector<StyledSegment> activity_status_segments(const std::string& label,
                                                     ActivityKind kind,

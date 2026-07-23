@@ -448,6 +448,18 @@ void test_editor_reasoning_picker() {
 
 void test_chat_editor_reasoning_context_sync() {
     ainiux::app::InteractiveSession session;
+    check(ainiux::app::editor_toggle_target(session) ==
+              ainiux::app::InteractiveUiTarget::Chat,
+          "standalone editor Ctrl+P defaults to chat");
+    session.editor_return_mode = ainiux::app::InteractiveMode::Agent;
+    check(ainiux::app::editor_toggle_target(session) ==
+              ainiux::app::InteractiveUiTarget::Agent,
+          "editor Ctrl+P returns to the agent mode that opened it");
+    session.editor_return_mode = ainiux::app::InteractiveMode::Chat;
+    check(ainiux::app::editor_toggle_target(session) ==
+              ainiux::app::InteractiveUiTarget::Chat,
+          "editor Ctrl+P returns to the chat mode that opened it");
+
     session.context.options.reasoning =
         ainiux::ReasoningSelection::named("high");
     session.context.options.reasoning_explicit = true;
@@ -3837,8 +3849,19 @@ void test_editor_help_document_and_command() {
     slash = ainiux::editor::parse_editor_slash_command("/chat");
     check(slash.command == ainiux::editor::EditorSlashCommand::Chat && slash.path.empty(),
           "editor /chat slash command is recognized");
-    check(std::find(completions.begin(), completions.end(), "/chat") != completions.end(),
-          "assist command completions include /chat");
+    slash = ainiux::editor::parse_editor_slash_command("chat");
+    check(slash.command == ainiux::editor::EditorSlashCommand::Chat && slash.path.empty(),
+          "editor chat command works without a slash");
+    slash = ainiux::editor::parse_editor_slash_command("agent");
+    check(slash.command == ainiux::editor::EditorSlashCommand::Agent && slash.path.empty(),
+          "editor agent command works without a slash");
+    slash = ainiux::editor::parse_editor_slash_command("/editor");
+    check(slash.command == ainiux::editor::EditorSlashCommand::Editor && slash.path.empty(),
+          "editor /editor command is recognized");
+    check(std::find(completions.begin(), completions.end(), "/chat") != completions.end() &&
+              std::find(completions.begin(), completions.end(), "/agent") != completions.end() &&
+              std::find(completions.begin(), completions.end(), "/editor") != completions.end(),
+          "assist command completions include all explicit mode commands");
     slash = ainiux::editor::parse_editor_slash_command("/save extra words");
     check(slash.command == ainiux::editor::EditorSlashCommand::None,
           "editor file slash commands reject multi-token path arguments");

@@ -512,6 +512,38 @@ void test_tui_theme_parsing_and_contrast() {
     check(ainiux::tui::contrast_ratio(light_thinking.foreground, light_thinking.background) <
               ainiux::tui::contrast_ratio(light_text.foreground, light_text.background),
           "TUI light thinking trace text is less stark than normal text");
+    auto same_rgb = [](const ainiux::tui::Rgb& left, const ainiux::tui::Rgb& right) {
+        return left.r == right.r && left.g == right.g && left.b == right.b;
+    };
+    check(same_rgb(light_text.foreground, {0x00, 0x00, 0x00}) &&
+              same_rgb(light_text.background, {0xFF, 0xFF, 0xFF}),
+          "TUI light theme uses VS Code Light+ black text on white");
+    struct ExpectedSyntaxColor {
+        ainiux::tui::StyleRole role;
+        ainiux::tui::Rgb color;
+    };
+    const std::vector<ExpectedSyntaxColor> light_plus_syntax = {
+        {ainiux::tui::StyleRole::SyntaxComment, {0x00, 0x80, 0x00}},
+        {ainiux::tui::StyleRole::SyntaxKeyword, {0x00, 0x00, 0xFF}},
+        {ainiux::tui::StyleRole::SyntaxType, {0x26, 0x7F, 0x99}},
+        {ainiux::tui::StyleRole::SyntaxString, {0xA3, 0x15, 0x15}},
+        {ainiux::tui::StyleRole::SyntaxNumber, {0x09, 0x86, 0x58}},
+        {ainiux::tui::StyleRole::SyntaxFunction, {0x79, 0x5E, 0x26}},
+        {ainiux::tui::StyleRole::SyntaxVariable, {0x00, 0x10, 0x80}},
+        {ainiux::tui::StyleRole::SyntaxOperator, {0x00, 0x00, 0x00}},
+        {ainiux::tui::StyleRole::SyntaxTag, {0x80, 0x00, 0x00}},
+        {ainiux::tui::StyleRole::SyntaxAttribute, {0xE5, 0x00, 0x00}},
+        {ainiux::tui::StyleRole::SyntaxProperty, {0x04, 0x51, 0xA5}},
+        {ainiux::tui::StyleRole::SyntaxHeading, {0x80, 0x00, 0x00}},
+        {ainiux::tui::StyleRole::SyntaxEmphasis, {0x80, 0x00, 0x80}},
+        {ainiux::tui::StyleRole::SyntaxLink, {0x04, 0x51, 0xA5}},
+    };
+    for (const ExpectedSyntaxColor& expected : light_plus_syntax) {
+        const ainiux::tui::Rgb actual =
+            ainiux::tui::style_pair_for(registry, "light", expected.role).foreground;
+        check(same_rgb(actual, expected.color),
+              "built-in light theme keeps the VS Code Light+ syntax palette");
+    }
 
     ainiux::config::ParseResult parsed = ainiux::config::read_file("config/themes.conf");
     check(parsed.error.ok(), "themes.conf parses");
@@ -521,6 +553,12 @@ void test_tui_theme_parsing_and_contrast() {
     check(options.tui_themes.has("dark") && options.tui_themes.has("light") &&
               options.tui_themes.has("sepia"),
           "themes.conf defines built-in dark, light, and sepia themes");
+    for (const ExpectedSyntaxColor& expected : light_plus_syntax) {
+        const ainiux::tui::Rgb actual =
+            ainiux::tui::style_pair_for(options.tui_themes, "light", expected.role).foreground;
+        check(same_rgb(actual, expected.color),
+              "configured light theme matches the built-in Light+ syntax palette");
+    }
     for (const std::string& item : options.tui_themes.names()) {
         for (ainiux::tui::StyleRole role : roles) {
             if (role < ainiux::tui::StyleRole::SyntaxComment) {
@@ -781,6 +819,25 @@ void test_tui_agent_history_chrome() {
     check(saw_task_complete_alone,
           "Task complete banner is on its own line, not merged with answer text");
     check(!saw_full_wall_clock, "agent mode does not show full wall-clock timestamps by default");
+
+    session.provider = "custom_openai_chat";
+    session.model = "qwen3.6-35b-a3b-mtp";
+    session.messages.back().content.clear();
+    agent_lines = ainiux::tui::detail::history_lines_for_session(
+        session, 100, false, ainiux::tui::ActivityKind::Streaming, 0, false, true);
+    bool saw_history_animation = false;
+    bool repeated_model = false;
+    for (const auto& line : agent_lines) {
+        for (const auto& segment : line.segments) {
+            saw_history_animation =
+                saw_history_animation ||
+                segment.role == ainiux::tui::StyleRole::StreamingActivity;
+            repeated_model =
+                repeated_model || segment.text.find("qwen3.6-35b-a3b-mtp") != std::string::npos;
+        }
+    }
+    check(saw_history_animation, "agent mode shows streaming animation in history");
+    check(!repeated_model, "agent history animation does not repeat the model from agent chrome");
 }
 
 void test_tui_input_label_and_activity_indicators() {
@@ -819,17 +876,64 @@ void test_tui_input_label_and_activity_indicators() {
     check(ainiux::tui::activity_indicator_width(ainiux::tui::ActivityKind::Streaming) == 3,
           "TUI streaming activity indicator uses three cells");
     check(streaming_a != thinking_a, "TUI streaming and thinking indicators differ");
+    check(ainiux::tui::show_activity_on_status_row(
+              ainiux::tui::ActivityKind::Streaming, false),
+          "chat mode keeps streaming activity on the status row");
+    check(!ainiux::tui::show_activity_on_status_row(
+              ainiux::tui::ActivityKind::Streaming, true),
+          "agent mode keeps streaming activity out of the status row");
+    check(!ainiux::tui::show_activity_on_status_row(
+              ainiux::tui::ActivityKind::None, false),
+          "idle mode does not render status-row activity");
 
     ainiux::chat::Session session;
+    session.provider = "custom_openai_chat";
+    session.model = "qwen3.6-35b-a3b-mtp";
     session.messages.push_back({"user", "hello"});
     session.messages.push_back({"assistant", "<think>hidden</think>"});
     check(ainiux::tui::activity_kind_for_pending_assistant(session, 1, false) ==
               ainiux::tui::ActivityKind::Thinking,
           "TUI activity helper reports thinking for hidden trace-only output");
+    std::vector<ainiux::tui::StyledLine> chat_history =
+        ainiux::tui::detail::history_lines_for_session(
+            session, 100, false, ainiux::tui::ActivityKind::Thinking, 0, false, false);
+    bool chat_history_has_activity = false;
+    bool chat_history_repeats_model = false;
+    for (const auto& line : chat_history) {
+        for (const auto& segment : line.segments) {
+            chat_history_has_activity =
+                chat_history_has_activity ||
+                segment.role == ainiux::tui::StyleRole::ThinkingActivity ||
+                segment.role == ainiux::tui::StyleRole::StreamingActivity;
+            chat_history_repeats_model =
+                chat_history_repeats_model ||
+                segment.text.find("qwen3.6-35b-a3b-mtp") != std::string::npos;
+        }
+    }
+    check(!chat_history_has_activity,
+          "chat history omits the thinking animation owned by the status row");
+    check(!chat_history_repeats_model,
+          "chat history does not repeat the model from the activity status row");
     session.messages.back().content = "Visible answer";
     check(ainiux::tui::activity_kind_for_pending_assistant(session, 1, false) ==
               ainiux::tui::ActivityKind::Streaming,
           "TUI activity helper reports streaming once visible answer text arrives");
+    chat_history = ainiux::tui::detail::history_lines_for_session(
+        session, 100, false, ainiux::tui::ActivityKind::Streaming, 0, false, false);
+    chat_history_has_activity = false;
+    bool chat_history_has_answer = false;
+    for (const auto& line : chat_history) {
+        for (const auto& segment : line.segments) {
+            chat_history_has_activity =
+                chat_history_has_activity ||
+                segment.role == ainiux::tui::StyleRole::StreamingActivity;
+            chat_history_has_answer =
+                chat_history_has_answer ||
+                segment.text.find("Visible answer") != std::string::npos;
+        }
+    }
+    check(!chat_history_has_activity && chat_history_has_answer,
+          "streaming chat history shows answer text without a second animation");
 
     const auto thinking_segments = ainiux::tui::activity_status_segments(
         "[custom / Qwen3.6-35B]", ainiux::tui::ActivityKind::Thinking, 0, "thinking...");

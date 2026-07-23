@@ -231,8 +231,16 @@ Press **`Esc`** to open the command minibuffer (`Command:`). Type a command with
 | `/provider [NAME]` | Change provider (picker when omitted) |
 | `/model [MODEL]` | Change model (picker when omitted) |
 | `/reasoning [auto|VALUE|TOKENS]` | Show the model-aware selector or set reasoning directly |
+| `/chat` | Switch directly to ordinary chat mode |
+| `/agent` | Switch directly to interactive agent mode |
+| `/editor` | Stay in editor mode (reports that it is already active) |
 | `/help` | Toggle this help view |
 | `/quit` | Quit the editor |
+
+The leading slash is optional for these mode commands, as for other editor
+commands. `Ctrl+P` toggles back to the conversational mode that opened the
+editor: chat ↔ editor or agent ↔ editor. A standalone editor defaults to
+editor ↔ chat.
 
 Most commands accept a **mode** (prompted if omitted):
 

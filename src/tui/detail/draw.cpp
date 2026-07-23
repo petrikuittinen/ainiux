@@ -421,25 +421,31 @@ std::vector<StyledLine> history_lines_for_session(const chat::Session& session,
                 }
             }
         }
+        if (!agent_mode && message.role == "assistant" && content.empty() &&
+            activity_kind != ActivityKind::None && is_last_message) {
+            // Chat mode owns activity chrome on the fixed status row. Do not add
+            // a second thinking/streaming placeholder to transcript history.
+            continue;
+        }
         const bool show_thinking_placeholder =
-            message.role == "assistant" && content.empty() && activity_kind == ActivityKind::Thinking &&
-            is_last_message;
+            agent_mode && message.role == "assistant" && content.empty() &&
+            activity_kind == ActivityKind::Thinking && is_last_message;
         const bool show_streaming_placeholder =
-            message.role == "assistant" && content.empty() && activity_kind == ActivityKind::Streaming &&
-            is_last_message;
+            agent_mode && message.role == "assistant" && content.empty() &&
+            activity_kind == ActivityKind::Streaming && is_last_message;
         const bool show_streaming_indicator =
-            message.role == "assistant" && !content.empty() && activity_kind == ActivityKind::Streaming &&
-            is_last_message;
+            agent_mode && message.role == "assistant" && !content.empty() &&
+            activity_kind == ActivityKind::Streaming && is_last_message;
         std::vector<StyledSegment> content_segments;
         if (show_thinking_placeholder) {
             content_segments =
-                activity_placeholder_segments(session_status_label(session), ActivityKind::Thinking,
+                activity_placeholder_segments("", ActivityKind::Thinking,
                                               activity_frame, "thinking...");
         } else if (show_streaming_placeholder) {
             content_segments =
-                activity_placeholder_segments(session_status_label(session), ActivityKind::Streaming,
+                activity_placeholder_segments("", ActivityKind::Streaming,
                                               activity_frame,
-                                              agent_mode ? "working..." : "streaming response ...");
+                                              "working...");
         } else {
             content_segments = markdown_highlight ? markdown_segments(content) : plain_text_segments(content);
             if (message.role == "assistant" && show_thinking_traces) {

@@ -53,6 +53,12 @@ EditorSlashCommand command_from_token(const std::string& command_token) {
     if (command_token == "chat") {
         return EditorSlashCommand::Chat;
     }
+    if (command_token == "agent") {
+        return EditorSlashCommand::Agent;
+    }
+    if (command_token == "editor") {
+        return EditorSlashCommand::Editor;
+    }
     if (command_token == "vsplit") {
         return EditorSlashCommand::VSplit;
     }
@@ -157,6 +163,8 @@ ParsedEditorSlashCommand parse_editor_slash_command(const std::string& line) {
         const std::string path = trim_ascii_copy(trimmed.substr(path_start));
         if (parsed.command == EditorSlashCommand::New || parsed.command == EditorSlashCommand::List ||
             parsed.command == EditorSlashCommand::Close || parsed.command == EditorSlashCommand::Chat ||
+            parsed.command == EditorSlashCommand::Agent ||
+            parsed.command == EditorSlashCommand::Editor ||
             parsed.command == EditorSlashCommand::VSplit || parsed.command == EditorSlashCommand::HSplit ||
             parsed.command == EditorSlashCommand::CloseSplit ||
             parsed.command == EditorSlashCommand::Maximize) {

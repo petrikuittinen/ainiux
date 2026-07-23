@@ -376,8 +376,15 @@ app::EditorRunResult run_editor(const std::string& path,
     };
 
     auto request_switch_to_chat = [&]() { leave_editor_for(app::InteractiveUiTarget::Chat); };
-    // Ctrl+P cycle next from editor is Agent (chat → editor → agent → chat).
     auto request_switch_to_agent = [&]() { leave_editor_for(app::InteractiveUiTarget::Agent); };
+    auto request_editor_toggle = [&]() {
+        if (interactive != nullptr &&
+            app::editor_toggle_target(*interactive) == app::InteractiveUiTarget::Agent) {
+            request_switch_to_agent();
+        } else {
+            request_switch_to_chat();
+        }
+    };
 
     auto selected_buffer_status = [&]() {
         return ui::text_selector_status("Selected buffer", buffer_list_selected, buffers.size());
@@ -1964,6 +1971,16 @@ app::EditorRunResult run_editor(const std::string& path,
                 exit_assist_command_mode(minibuffer, assist_completer);
                 request_switch_to_chat();
                 return;
+            case EditorSlashCommand::Agent:
+                pending_assist = PendingAssist{};
+                exit_assist_command_mode(minibuffer, assist_completer);
+                request_switch_to_agent();
+                return;
+            case EditorSlashCommand::Editor:
+                pending_assist = PendingAssist{};
+                exit_assist_command_mode(minibuffer, assist_completer);
+                minibuffer_message(minibuffer, "Already in editor mode");
+                return;
             case EditorSlashCommand::VSplit:
                 pending_assist = PendingAssist{};
                 exit_assist_command_mode(minibuffer, assist_completer);
@@ -2717,8 +2734,8 @@ app::EditorRunResult run_editor(const std::string& path,
         }
 
         if (ch == 16) {
-            // Ctrl+P: advance mode ring editor → agent (then agent → chat → editor).
-            request_switch_to_agent();
+            // Return to the chat/agent mode that opened the editor.
+            request_editor_toggle();
             return;
         }
         if (ch == 18) {

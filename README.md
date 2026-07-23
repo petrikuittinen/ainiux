@@ -188,7 +188,9 @@ Each `[theme]` block needs `name` plus every color key below. Colors use `#RRGGB
 | `syntax_function`, `syntax_variable`, `syntax_operator`, `syntax_preprocessor` | Syntax identifiers and punctuation (optional) |
 | `syntax_tag`, `syntax_attribute`, `syntax_property`, `syntax_heading`, `syntax_emphasis`, `syntax_link` | Markup and Markdown tokens (optional) |
 
-Built-in themes are `dark`, `light`, and `sepia`. Set the default in `config.conf`:
+Built-in themes are `dark`, `light`, and `sepia`. The `light` theme uses the
+high-contrast Visual Studio Code Light+ syntax palette on a white background.
+Set the default in `config.conf`:
 
 ```conf
 [tui]
@@ -354,6 +356,12 @@ Loop limits, transport retries, history hygiene, and identical-call guards come 
 ```
 
 A provider shortcut or base URL may precede `--editor` without changing the file argument. If the startup path does not exist, ainiux creates an empty file before editing. The `[editor]` config section controls undo depth (`undo_limit`, default `5`), a huge-file confirmation threshold (`huge_file_size_warning`, default 1 GiB), an optional hard load limit (`file_size_limit`, default unlimited), auto-save backup behavior, and the initial indentation and line-ending settings.
+
+`Ctrl+P` toggles the editor with the conversational mode that opened it:
+chat ↔ editor or agent ↔ editor. Starting directly in the editor defaults to
+editor ↔ chat. Explicit `chat`, `agent`, and `editor` commands work in the
+editor with or without a leading slash; chat and agent use `/chat`, `/agent`,
+and `/editor`.
 
 Every writable file buffer owns an advisory directory lock named `FILE.LOCK` beside the canonical target. Relative paths and symlink aliases therefore identify the same open file. A second ainiux process opens an already-locked existing file as `[RO]`; editing retries the lock automatically. If the first process changed the file before releasing it, ainiux asks whether to reload before making the buffer writable. Save checks the loaded/saved file fingerprint and asks before overwriting a file changed, replaced, or deleted by another program. Save As locks its destination before confirmation or writing and transfers the buffer lock only after a successful save. Read-only buffers may Save As to a different path, and their auto-save backups are disabled.
 
