@@ -92,6 +92,20 @@ struct EditorSelectionSaveEvent {
     Error error;
 };
 
+struct PendingClipboardPaste {
+    bool active = false;
+    bool minibuffer = false;
+    bool terminal_query = false;
+    std::uint64_t generation = 0;
+    std::uint64_t buffer_id = 0;
+    std::uint64_t revision = 0;
+    size_t cursor = 0;
+    Selection selection;
+    MinibufferAction minibuffer_action = MinibufferAction::None;
+    std::string minibuffer_input;
+    std::chrono::steady_clock::time_point query_deadline;
+};
+
 std::string canonical_editor_command_line(const std::string& line) {
     std::string normalized = trim_ascii_copy(line);
     if (normalized.empty()) {
@@ -2321,6 +2335,146 @@ app::EditorRunResult run_editor(const std::string& path,
                      std::nullopt);
     };
 
+    ClipboardRuntime clipboard_runtime;
+    const ClipboardEnvironment clipboard_environment = current_clipboard_environment();
+    PendingClipboardPaste pending_clipboard;
+    auto cancel_pending_clipboard = [&]() {
+        clipboard_runtime.cancel_read();
+        cancel_terminal_clipboard_request();
+        pending_clipboard = PendingClipboardPaste{};
+    };
+    auto publish_internal_clipboard = [&]() {
+        const std::string text = shared_clipboard().text();
+        if (text.empty()) return;
+        publish_terminal_clipboard(text);
+        (void)clipboard_runtime.start_write(clipboard_environment, text);
+    };
+    auto clipboard_target_unchanged = [&]() {
+        if (!pending_clipboard.active) return false;
+        if (pending_clipboard.minibuffer) {
+            return minibuffer.active &&
+                   minibuffer.action == pending_clipboard.minibuffer_action &&
+                   minibuffer.input == pending_clipboard.minibuffer_input;
+        }
+        return !minibuffer.active && !help_view.active && !picker.active &&
+               !buffer_list_active && state.buffer_id() == pending_clipboard.buffer_id &&
+               state.revision() == pending_clipboard.revision &&
+               state.cursor == pending_clipboard.cursor &&
+               state.selection.anchor == pending_clipboard.selection.anchor &&
+               state.selection.active == pending_clipboard.selection.active;
+    };
+    auto apply_external_clipboard = [&](const std::string& text, const std::string& backend) {
+        if (!clipboard_target_unchanged()) {
+            if (pending_clipboard.minibuffer && minibuffer.active)
+                minibuffer.message =
+                    "Clipboard target changed; press Ctrl+V to paste again";
+            else
+                minibuffer_message(
+                    minibuffer,
+                    "Clipboard target changed; press Ctrl+V to paste again");
+            pending_clipboard = PendingClipboardPaste{};
+            return;
+        }
+        Error paste_error;
+        if (pending_clipboard.minibuffer) {
+            paste_error = paste_into_minibuffer(minibuffer, text);
+        } else {
+            Clipboard external;
+            external.set(text);
+            paste_error = state.paste(external);
+        }
+        const std::string message =
+            paste_error.ok() ? "Pasted from " + backend : paste_error.message;
+        if (pending_clipboard.minibuffer && minibuffer.active)
+            minibuffer.message = message;
+        else
+            minibuffer_message(minibuffer, message);
+        pending_clipboard = PendingClipboardPaste{};
+    };
+    auto begin_external_clipboard_paste = [&]() {
+        cancel_pending_clipboard();
+        if (minibuffer.active) {
+            const Error accepted = paste_into_minibuffer(minibuffer, "");
+            if (!accepted.ok()) {
+                minibuffer.message = accepted.message;
+                return;
+            }
+        }
+        pending_clipboard.active = true;
+        pending_clipboard.minibuffer = minibuffer.active;
+        pending_clipboard.buffer_id = state.buffer_id();
+        pending_clipboard.revision = state.revision();
+        pending_clipboard.cursor = state.cursor;
+        pending_clipboard.selection = state.selection;
+        pending_clipboard.minibuffer_action = minibuffer.action;
+        pending_clipboard.minibuffer_input = minibuffer.input;
+        ClipboardCommand native_command;
+        const bool native_available =
+            resolve_clipboard_command(clipboard_environment, false, native_command);
+        if (prefer_terminal_clipboard_query(clipboard_environment) || !native_available) {
+            pending_clipboard.terminal_query = true;
+            pending_clipboard.query_deadline =
+                std::chrono::steady_clock::now() + std::chrono::seconds(2);
+            request_terminal_clipboard();
+        } else {
+            pending_clipboard.generation =
+                clipboard_runtime.start_read(clipboard_environment);
+        }
+        if (pending_clipboard.minibuffer)
+            minibuffer.message = "Reading system clipboard...";
+        else
+            minibuffer_message(minibuffer, "Reading system clipboard...");
+    };
+    auto process_clipboard_events = [&]() {
+        bool updated = false;
+        ClipboardRuntimeEvent clipboard_event;
+        while (clipboard_runtime.try_pop(clipboard_event)) {
+            updated = true;
+            if (clipboard_event.type == ClipboardRuntimeEventType::WriteFinished) {
+                continue;
+            }
+            if (!pending_clipboard.active ||
+                clipboard_event.generation != pending_clipboard.generation) {
+                continue;
+            }
+            if (clipboard_event.result.ok()) {
+                apply_external_clipboard(clipboard_event.result.text,
+                                         clipboard_event.result.backend);
+            } else {
+                const std::string message =
+                    clipboard_failure_help(clipboard_environment,
+                                           clipboard_event.result,
+                                           true);
+                if (pending_clipboard.minibuffer && minibuffer.active)
+                    minibuffer.message = message;
+                else
+                    minibuffer_message(minibuffer, message);
+                pending_clipboard = PendingClipboardPaste{};
+            }
+        }
+        if (pending_clipboard.active && pending_clipboard.terminal_query &&
+            std::chrono::steady_clock::now() >= pending_clipboard.query_deadline) {
+            cancel_terminal_clipboard_request();
+            ClipboardCommand native_command;
+            if (resolve_clipboard_command(clipboard_environment, false, native_command)) {
+                pending_clipboard.terminal_query = false;
+                pending_clipboard.generation =
+                    clipboard_runtime.start_read(clipboard_environment);
+            } else {
+                if (pending_clipboard.minibuffer && minibuffer.active)
+                    minibuffer.message =
+                        "Terminal did not provide clipboard text; use the terminal paste shortcut";
+                else
+                    minibuffer_message(
+                        minibuffer,
+                        "Terminal did not provide clipboard text; use the terminal paste shortcut");
+                pending_clipboard = PendingClipboardPaste{};
+            }
+            updated = true;
+        }
+        return updated;
+    };
+
     std::function<void(unsigned char)> handle_key;
     handle_key = [&](unsigned char ch) {
         if (ch != '\t') {
@@ -2328,16 +2482,18 @@ app::EditorRunResult run_editor(const std::string& path,
         }
         if (minibuffer.active && ch == 22) {
             if (shared_clipboard().empty()) {
-                minibuffer.message = "Clipboard is empty";
-                return;
-            }
-            const Error paste_error = paste_into_minibuffer(minibuffer, shared_clipboard().text());
-            if (paste_error.ok()) {
-                assist_completer = AssistCompleterState{};
-                minibuffer_path_completer.reset();
-                minibuffer.message = "Pasted into minibuffer";
+                begin_external_clipboard_paste();
             } else {
-                minibuffer.message = paste_error.message;
+                cancel_pending_clipboard();
+                const Error paste_error =
+                    paste_into_minibuffer(minibuffer, shared_clipboard().text());
+                if (paste_error.ok()) {
+                    assist_completer = AssistCompleterState{};
+                    minibuffer_path_completer.reset();
+                    minibuffer.message = "Pasted into minibuffer";
+                } else {
+                    minibuffer.message = paste_error.message;
+                }
             }
             return;
         }
@@ -2771,13 +2927,22 @@ app::EditorRunResult run_editor(const std::string& path,
             }
         } else if (ch == 3) {
             Error copy_error = state.copy_selection(shared_clipboard());
+            if (copy_error.ok()) publish_internal_clipboard();
             minibuffer_message(minibuffer, copy_error.ok() ? "Copied selection" : copy_error.message);
         } else if (ch == 24) {
             Error cut_error = state.cut_selection(shared_clipboard());
+            if (cut_error.ok()) publish_internal_clipboard();
             minibuffer_message(minibuffer, cut_error.ok() ? "Cut selection" : cut_error.message);
         } else if (ch == 22) {
-            Error paste_error = paste_with_clipboard_preference(state, shared_clipboard(), "");
-            minibuffer_message(minibuffer, paste_error.ok() ? "Pasted" : paste_error.message);
+            if (shared_clipboard().empty()) {
+                begin_external_clipboard_paste();
+            } else {
+                cancel_pending_clipboard();
+                Error paste_error =
+                    paste_with_clipboard_preference(state, shared_clipboard(), "");
+                minibuffer_message(minibuffer,
+                                   paste_error.ok() ? "Pasted" : paste_error.message);
+            }
         } else if (ch == 6) {
             start_minibuffer(minibuffer, MinibufferAction::Search, "Search: ", last_search);
         } else if (ch == 8) {
@@ -2789,7 +2954,10 @@ app::EditorRunResult run_editor(const std::string& path,
         } else if (ch == 1) {
             state.select_all();
         } else if (ch == 11) {
+            const std::uint64_t before = state.revision();
             Error kill_error = state.kill_to_line_end(shared_clipboard());
+            if (kill_error.ok() && state.revision() != before)
+                publish_internal_clipboard();
             if (!kill_error.ok()) {
                 minibuffer_message(minibuffer, kill_error.message);
             }
@@ -2892,6 +3060,7 @@ app::EditorRunResult run_editor(const std::string& path,
     };
 
     auto handle_paste = [&](const std::string& terminal_text) {
+        cancel_pending_clipboard();
         if (picker.active) {
             minibuffer_message(minibuffer, "Choose an item or press Esc to cancel");
             return;
@@ -2915,7 +3084,12 @@ app::EditorRunResult run_editor(const std::string& path,
             }
             return;
         }
-        Error paste_error = paste_with_clipboard_preference(state, shared_clipboard(), terminal_text);
+        Clipboard external;
+        external.set(terminal_text);
+        Error paste_error =
+            terminal_text.empty()
+                ? Error{ErrorCode::BadArgs, "terminal paste is empty"}
+                : state.paste(external);
         minibuffer_message(minibuffer, paste_error.ok() ? "Pasted" : paste_error.message);
     };
 
@@ -3004,6 +3178,7 @@ app::EditorRunResult run_editor(const std::string& path,
         }
         const bool model_updated = process_model_events();
         const bool selection_updated = process_selection_save_events();
+        const bool clipboard_updated = process_clipboard_events();
         const bool assist_animating =
             assist_session.active && assist_session.activity_kind != tui::ActivityKind::None;
         if (assist_animating) {
@@ -3022,7 +3197,8 @@ app::EditorRunResult run_editor(const std::string& path,
                 assist_session.job.running() || model_list.job.running() || assist_updated ||
                 reformat_session.job.running() || reformat_updated || insert_session.job.running() ||
                 insert_updated || shell_session.job.running() || shell_updated || model_updated ||
-                selection_updated || assist_animating) {
+                selection_updated || clipboard_updated || assist_animating ||
+                clipboard_runtime.read_running()) {
                 last_size = current_size;
                 render_editor();
             }
@@ -3033,6 +3209,30 @@ app::EditorRunResult run_editor(const std::string& path,
         if (event.type == TerminalInputType::BracketedPaste) {
             handle_paste(event.text);
             prompt_for_changed_read_only_file();
+        } else if (event.type == TerminalInputType::Osc52ClipboardResponse) {
+            if (pending_clipboard.active && pending_clipboard.terminal_query) {
+                if (event.text.empty()) {
+                    ClipboardCommand native_command;
+                    if (resolve_clipboard_command(clipboard_environment, false, native_command)) {
+                        pending_clipboard.terminal_query = false;
+                        pending_clipboard.generation =
+                            clipboard_runtime.start_read(clipboard_environment);
+                    } else {
+                        const std::string message =
+                            event.message.empty()
+                                ? "Terminal clipboard query failed; use the terminal paste shortcut"
+                                : event.message +
+                                      "; use the terminal paste shortcut";
+                        if (pending_clipboard.minibuffer && minibuffer.active)
+                            minibuffer.message = message;
+                        else
+                            minibuffer_message(minibuffer, message);
+                        pending_clipboard = PendingClipboardPaste{};
+                    }
+                } else {
+                    apply_external_clipboard(event.text, "terminal clipboard");
+                }
+            }
         } else if (event.type == TerminalInputType::Byte) {
             handle_key(event.byte);
             prompt_for_changed_read_only_file();
@@ -3044,6 +3244,11 @@ app::EditorRunResult run_editor(const std::string& path,
                 if (event.type == TerminalInputType::BracketedPaste) {
                     handle_paste(event.text);
                     prompt_for_changed_read_only_file();
+                } else if (event.type == TerminalInputType::Osc52ClipboardResponse) {
+                    if (pending_clipboard.active && pending_clipboard.terminal_query &&
+                        !event.text.empty()) {
+                        apply_external_clipboard(event.text, "terminal clipboard");
+                    }
                 } else if (event.type == TerminalInputType::Byte) {
                     handle_key(event.byte);
                     prompt_for_changed_read_only_file();
@@ -3061,6 +3266,7 @@ app::EditorRunResult run_editor(const std::string& path,
         shell_session.job.cancel();
         shell_session.job.join();
     }
+    clipboard_runtime.cancel_all();
     selection_save_job.join();
     EditorSelectionSaveEvent selection_event;
     while (selection_save_events.try_pop(selection_event)) {

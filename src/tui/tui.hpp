@@ -36,6 +36,7 @@ struct Layout {
 };
 
 Layout layout_for_terminal(int rows, int cols);
+Layout layout_for_agent_terminal(int rows, int cols, int framed_input_height);
 
 // Complete the visible-history side of an interactive /new handoff. A successful
 // fresh project may legitimately provide an empty replacement transcript.
@@ -117,6 +118,10 @@ struct AgentChrome {
     std::string reasoning;
     long long used_tokens = 0;
     long long window_tokens = 0;
+    std::string workspace;
+    std::string mode_label = "act";
+    int input_max_height_percent = 25;
+    bool cancellable = false;
 };
 
 struct RegenerationPlan {

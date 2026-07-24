@@ -47,6 +47,7 @@ struct TuiPickerInputState {
     size_t& thread_picker_selected;
     bool input_empty = true;
     size_t& pending_thread_delete;
+    bool agent_mode = false;
 };
 
 bool handle_tui_picker_input(unsigned char ch,

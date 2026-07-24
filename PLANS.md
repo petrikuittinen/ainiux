@@ -27,13 +27,12 @@ Create the best practical command-line, terminal, local server, and future local
 ## Deferred product work
 
 This historical pre-v0.6 list is retained only as milestone context. The local
-agent has since landed through v1.05; reconcile every item with the current
+agent has since landed through v1.06; reconcile every item with the current
 baseline below before treating it as open work:
 
 - Dedicated agent plan/security/refactor modes and a purpose-built agent UI.
 - Full rich Markdown rendering in the TUI.
 - PDF and DOCX input/output conversion.
-- Clipboard integration.
 - Complex terminal key protocols.
 - Browser automation.
 - Plugin system.
@@ -65,7 +64,7 @@ Each milestone should leave the program usable. Do not create a long-lived pile 
 
 ## Current baseline
 
-Implementation status (2026-07-23): `ainiux` is at v1.05. Active development continues the v1.0 local agent track (project `.ainiux-pr/` state, one-shot `--run` and interactive `--agent`, multi-turn session, compact tool lines, live tool streaming, elapsed-time display, chat/agent isolation, transcript-preserving automatic/manual compaction, failure-safe interactive `/new [PATH]`, Guard Ask approvals, trusted master+coding prompts landed; **next agent slices include read-only multi-tool parallelism** while keeping mutations serial; plan/security/refactor agent modes and call-graph tools later) alongside remaining v0.9 polish before local OpenAI-compatible server mode. The repository has the scriptable CLI, built-in provider registry and aliases, Chat Completions, text-only Responses API support, streaming SSE, a layered model capability catalog and unified reasoning selection, credential lookup, JSON chat import/export, SQLite-backed TUI chat persistence with durable image and canonical-Markdown attachments, cancellable runtime jobs, REPL, full-screen TUI foundation, editor with multiple file buffers, selection, copy/cut/paste across buffers, grapheme-aware Unicode navigation and terminal cell-width rendering, and cursor-aware AI continue/auto-write (`Ctrl+Space`), request-only context policies, context-use estimates, bounded text/HTML/Markdown input, JPEG/PNG/GIF image input for Chat Completions, safe URL fetching, Markdown output conversion, automatic system/user TOML-alike configuration loading, and concurrent JSONL benchmark execution. `--provider none` supports local conversion and editor workflows without a model endpoint. Standalone `--editor` accepts an optional startup path after a provider shortcut or base URL, creates a missing file before editing, prompts to save scratch buffers on quit, and asks for overwrite confirmation when saving to an existing path. Chat and editor discover models when an online provider is given without `--model`, auto-select a sole result, and open the shared selector for multiple results; bare offline startup performs neither action.
+Implementation status (2026-07-24): `ainiux` is at v1.06. Active development continues the v1.0 local agent track (project `.ainiux-pr/` state, one-shot `--run` and interactive `--agent`, multi-turn session, compact tool lines, live tool streaming, elapsed-time display, chat/agent isolation, transcript-preserving automatic/manual compaction, failure-safe interactive `/new [PATH]`, Guard Ask approvals, trusted master+coding prompts landed; **next agent slices include read-only multi-tool parallelism** while keeping mutations serial; plan/security/refactor agent modes and call-graph tools later) alongside remaining v0.9 polish before local OpenAI-compatible server mode. The repository has the scriptable CLI, built-in provider registry and aliases, Chat Completions, text-only Responses API support, streaming SSE, a layered model capability catalog and unified reasoning selection, credential lookup, JSON chat import/export, SQLite-backed TUI chat persistence with durable image and canonical-Markdown attachments, cancellable runtime jobs, REPL, full-screen TUI foundation, editor with multiple file buffers, selection, copy/cut/paste across buffers, grapheme-aware Unicode navigation and terminal cell-width rendering, and cursor-aware AI continue/auto-write (`Ctrl+Space`), request-only context policies, context-use estimates, bounded text/HTML/Markdown input, JPEG/PNG/GIF image input for Chat Completions, safe URL fetching, Markdown output conversion, automatic system/user TOML-alike configuration loading, and concurrent JSONL benchmark execution. `--provider none` supports local conversion and editor workflows without a model endpoint. Standalone `--editor` accepts an optional startup path after a provider shortcut or base URL, creates a missing file before editing, prompts to save scratch buffers on quit, and asks for overwrite confirmation when saving to an existing path. Chat and editor discover models when an online provider is given without `--model`, auto-select a sole result, and open the shared selector for multiple results; bare offline startup performs neither action.
 
 Implementation note (2026-07-18, corrected 2026-07-19): public reasoning control is now `--reasoning auto|VALUE|TOKENS` plus shared chat/editor `/reasoning`. Layered `models.conf` files provide validated family regexes, compact pipe-separated selector values, closed request protocols, documented defaults, advisory temperature capabilities, and optional-field purpose presets. Matching is case-insensitive and uses only the final slash-separated model component, with bundled families kept transport-neutral; Llama 3.x sizes/variants and both 20B/120B gpt-oss now share their family rules. Direct values remain forward-compatible and exact, but a matched family warns on an unlisted value and interactive commands require confirmation; approximate label↔token conversions remain removed. Chat persists reasoning per thread, editor asynchronously remembers its complete provider/model/API/reasoning selection in SQLite app state, and model changes reset reasoning to Auto. Shared model-selection validation/serialization is reusable by future surfaces, but no agent functionality was added.
 
@@ -1050,7 +1049,6 @@ Defer until the base TUI is stable:
 ```text
 insert/overwrite mode
 prompt history navigation
-read OS clipboard when internal clipboard is empty (e.g. Ctrl+Shift+V style)
 mouse support
 advanced key protocols
 theme persistence/config
@@ -5688,7 +5686,6 @@ Good later ideas, not current priorities:
 
 - Full CommonMark renderer.
 - Syntax highlighting in code blocks.
-- Clipboard integration through OSC 52 and platform tools.
 - Mouse support in TUI.
 - Import/export formats beyond JSON.
 - Plugin system.

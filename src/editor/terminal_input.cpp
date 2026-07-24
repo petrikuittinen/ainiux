@@ -1,6 +1,7 @@
 #include "editor/terminal_input.hpp"
 
 #include "editor/editor.hpp"
+#include "html/html.hpp"
 
 #include <cctype>
 #include <deque>
@@ -13,6 +14,8 @@ namespace {
 
 std::deque<unsigned char> g_input_queue;
 bool g_pending_escape_alt_meta = false;
+bool g_terminal_clipboard_query_pending = false;
+constexpr size_t kMaxOsc52EncodedSize = ((kExternalClipboardReadLimit + 2U) / 3U) * 4U;
 
 bool is_bracketed_paste_prefix(const std::string& text) {
     static constexpr char kStart[] = "[200~";
@@ -41,6 +44,15 @@ std::string base64_encode(const std::string& data) {
         i += 3;
     }
     return out;
+}
+
+int base64_value(unsigned char ch) {
+    if (ch >= 'A' && ch <= 'Z') return ch - 'A';
+    if (ch >= 'a' && ch <= 'z') return ch - 'a' + 26;
+    if (ch >= '0' && ch <= '9') return ch - '0' + 52;
+    if (ch == '+') return 62;
+    if (ch == '/') return 63;
+    return -1;
 }
 
 void push_bytes_front(const std::string& bytes) {
@@ -98,6 +110,25 @@ bool read_bracketed_paste_body(std::string& out) {
             out.erase(out.size() - end_len);
             return true;
         }
+    }
+    return false;
+}
+
+bool read_osc_body(std::string& out) {
+    out.clear();
+    unsigned char ch = 0;
+    while (out.size() <= kMaxOsc52EncodedSize + 16U && read_terminal_byte(ch, 100)) {
+        if (ch == 7) return true;
+        if (ch == 27) {
+            unsigned char next = 0;
+            if (read_terminal_byte(next, 25)) {
+                if (next == '\\') return true;
+                out.push_back(static_cast<char>(ch));
+                out.push_back(static_cast<char>(next));
+                continue;
+            }
+        }
+        out.push_back(static_cast<char>(ch));
     }
     return false;
 }
@@ -164,6 +195,59 @@ bool decode_control_key_sequence(const std::string& sequence, unsigned char& out
     return false;
 }
 
+bool decode_osc52_clipboard_payload(const std::string& encoded,
+                                    std::string& text,
+                                    std::string& error) {
+    text.clear();
+    error.clear();
+    if (encoded.empty()) {
+        error = "terminal clipboard contains no text";
+        return false;
+    }
+    if (encoded.size() > kMaxOsc52EncodedSize) {
+        error = "terminal clipboard exceeds the 16 MiB text limit";
+        return false;
+    }
+    if (encoded.size() % 4 != 0) {
+        error = "terminal returned malformed OSC 52 base64";
+        return false;
+    }
+    text.reserve((encoded.size() / 4) * 3);
+    for (size_t i = 0; i < encoded.size(); i += 4) {
+        const bool last = i + 4 == encoded.size();
+        const int a = base64_value(static_cast<unsigned char>(encoded[i]));
+        const int b = base64_value(static_cast<unsigned char>(encoded[i + 1]));
+        const bool pad2 = encoded[i + 2] == '=';
+        const bool pad3 = encoded[i + 3] == '=';
+        const int c = pad2 ? 0 : base64_value(static_cast<unsigned char>(encoded[i + 2]));
+        const int d = pad3 ? 0 : base64_value(static_cast<unsigned char>(encoded[i + 3]));
+        if (a < 0 || b < 0 || c < 0 || d < 0 || (pad2 && !pad3) ||
+            (!last && (pad2 || pad3)) || (pad2 && (b & 0x0F) != 0) ||
+            (pad3 && !pad2 && (c & 0x03) != 0)) {
+            error = "terminal returned malformed OSC 52 base64";
+            text.clear();
+            return false;
+        }
+        const unsigned int value = (static_cast<unsigned int>(a) << 18) |
+                                   (static_cast<unsigned int>(b) << 12) |
+                                   (static_cast<unsigned int>(c) << 6) |
+                                   static_cast<unsigned int>(d);
+        text.push_back(static_cast<char>((value >> 16) & 0xFF));
+        if (!pad2) text.push_back(static_cast<char>((value >> 8) & 0xFF));
+        if (!pad3) text.push_back(static_cast<char>(value & 0xFF));
+    }
+    if (text.empty()) {
+        error = "terminal clipboard contains no text";
+        return false;
+    }
+    if (text.find('\0') != std::string::npos || !html::is_valid_utf8(text)) {
+        error = "terminal clipboard is not valid UTF-8 text";
+        text.clear();
+        return false;
+    }
+    return true;
+}
+
 void clear_terminal_input_queue() {
     g_input_queue.clear();
     g_pending_escape_alt_meta = false;
@@ -215,6 +299,35 @@ bool read_terminal_input(TerminalInputEvent& out, int timeout_ms) {
     }
 
     std::string after_esc;
+    const bool have_after_esc = read_terminal_byte(ch, 25);
+    if (have_after_esc && ch == ']' && g_terminal_clipboard_query_pending) {
+        std::string osc;
+        const bool terminated = read_osc_body(osc);
+        if (terminated) {
+            g_terminal_clipboard_query_pending = false;
+            static constexpr char kPrefix[] = "52;c;";
+            if (osc.rfind(kPrefix, 0) == 0) {
+                out.type = TerminalInputType::Osc52ClipboardResponse;
+                std::string error;
+                if (!decode_osc52_clipboard_payload(osc.substr(sizeof(kPrefix) - 1), out.text, error))
+                    out.text.clear(), out.message = std::move(error);
+                return true;
+            }
+        } else if (osc.rfind("52;c;", 0) == 0 &&
+                   osc.size() > kMaxOsc52EncodedSize) {
+            g_terminal_clipboard_query_pending = false;
+            out.type = TerminalInputType::Osc52ClipboardResponse;
+            out.message = "terminal clipboard exceeds the 16 MiB text limit";
+            return true;
+        }
+        push_bytes_front(osc);
+        push_bytes_front("]");
+        out.type = TerminalInputType::Byte;
+        out.byte = 27;
+        return true;
+    } else if (have_after_esc) {
+        after_esc.push_back(static_cast<char>(ch));
+    }
     while (read_terminal_byte(ch, 25)) {
         after_esc.push_back(static_cast<char>(ch));
         if (after_esc == "[200~") {
@@ -277,17 +390,30 @@ Error paste_with_clipboard_preference(EditorState& state,
         return state.paste(clipboard);
     }
     if (!terminal_paste_text.empty()) {
-        return state.insert(terminal_paste_text);
+        Clipboard external;
+        external.set(terminal_paste_text);
+        return state.paste(external);
     }
     return {ErrorCode::BadArgs, "clipboard is empty"};
 }
 
 void publish_terminal_clipboard(const std::string& text) {
-    if (text.empty() || !isatty(STDOUT_FILENO)) {
+    if (text.empty() || text.size() > kExternalClipboardReadLimit || !isatty(STDOUT_FILENO)) {
         return;
     }
     std::cout << "\x1b]52;c;" << base64_encode(text) << "\x07";
     std::cout.flush();
+}
+
+void request_terminal_clipboard() {
+    g_terminal_clipboard_query_pending = true;
+    if (!isatty(STDOUT_FILENO)) return;
+    std::cout << "\x1b]52;c;?\x07";
+    std::cout.flush();
+}
+
+void cancel_terminal_clipboard_request() {
+    g_terminal_clipboard_query_pending = false;
 }
 
 }  // namespace ainiux::editor

@@ -273,6 +273,9 @@ struct EditorState {
     Error kill_to_line_end(Clipboard& clipboard);
     void ensure_cursor_visible(const Rect& rect);
     RenderedPanel render(const Rect& rect) const;
+    // Counts visual rows only until limit is reached. This is intended for
+    // responsive UI sizing and avoids scanning the rest of a large draft.
+    size_t visual_row_count_bounded(size_t width, size_t limit) const;
     size_t autosave_pending_bytes() const;
     void record_autosave_change(size_t bytes);
     void reset_autosave_pending();

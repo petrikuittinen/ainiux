@@ -27,7 +27,9 @@
 #include <iterator>
 #include <map>
 #include <string>
+#include <thread>
 #include <vector>
+#include <sys/stat.h>
 #include <sys/wait.h>
 #include <unistd.h>
 
@@ -296,6 +298,217 @@ void test_editor_ai_continue_helpers() {
         unsetenv("MAX_AI_CONTINUE_TOKENS");
     }
 #endif
+}
+
+std::string make_clipboard_helper_directory() {
+    char pattern[] = "/tmp/ainiux-clipboard-unit-XXXXXX";
+    char* directory = mkdtemp(pattern);
+    return directory == nullptr ? std::string() : std::string(directory);
+}
+
+void write_clipboard_helper(const std::string& directory,
+                            const std::string& name,
+                            const std::string& body) {
+    const std::string path = directory + "/" + name;
+    {
+        std::ofstream output(path, std::ios::binary | std::ios::trunc);
+        output << "#!/bin/sh\n" << body << "\n";
+    }
+    (void)chmod(path.c_str(), 0700);
+}
+
+void test_system_clipboard_helpers() {
+    namespace ed = ainiux::editor;
+    const std::string directory = make_clipboard_helper_directory();
+    check(!directory.empty(), "clipboard helper test creates a temporary directory");
+    if (directory.empty()) return;
+
+    write_clipboard_helper(directory, "wl-paste", "printf 'first\\nsecond \316\251'");
+    write_clipboard_helper(directory, "wl-copy", "/bin/cat > '" + directory + "/copied'");
+    write_clipboard_helper(directory, "xclip", "exit 9");
+    write_clipboard_helper(directory, "xsel", "exit 0");
+    write_clipboard_helper(directory, "pbpaste", "exit 0");
+    write_clipboard_helper(directory, "pbcopy", "exit 0");
+    write_clipboard_helper(directory, "termux-clipboard-get", "exit 0");
+    write_clipboard_helper(directory, "termux-clipboard-set", "exit 0");
+    write_clipboard_helper(directory, "powershell.exe", "exit 0");
+    write_clipboard_helper(directory, "clip.exe", "exit 0");
+    ed::ClipboardEnvironment environment;
+    environment.path = directory + ":relative:/does/not/exist";
+    environment.wayland = true;
+    environment.x11 = true;
+
+    ed::ClipboardCommand command;
+    check(ed::resolve_clipboard_command(environment, false, command) &&
+              command.backend == "Wayland" && command.arguments.empty(),
+          "clipboard backend prefers Wayland and constructs fixed read arguments");
+    check(ed::resolve_clipboard_command(environment, true, command) &&
+              command.arguments ==
+                  std::vector<std::string>({"--type", "text/plain;charset=utf-8"}),
+          "clipboard backend constructs fixed Wayland write arguments");
+
+    ainiux::runtime::CancellationSource source;
+    ed::SystemClipboardResult read =
+        ed::read_system_clipboard(environment, source.token());
+    check(read.ok() && read.text == std::string("first\nsecond \316\251"),
+          "clipboard helper preserves exact multiline Unicode text");
+    {
+        ed::ClipboardRuntime runtime;
+        const std::uint64_t generation = runtime.start_read(environment);
+        ed::ClipboardRuntimeEvent event;
+        const auto deadline =
+            std::chrono::steady_clock::now() + std::chrono::seconds(1);
+        while (!runtime.try_pop(event) &&
+               std::chrono::steady_clock::now() < deadline)
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        check(event.generation == generation && event.result.ok() &&
+                  event.result.text == std::string("first\nsecond \316\251"),
+              "clipboard runtime delivers a helper read result");
+    }
+    const std::string copied = "line one\nline two \360\237\230\200\n";
+    ed::SystemClipboardResult written =
+        ed::write_system_clipboard(environment, copied, source.token());
+    check(written.ok(), "clipboard helper write succeeds");
+    std::ifstream copied_input(directory + "/copied", std::ios::binary);
+    const std::string copied_actual((std::istreambuf_iterator<char>(copied_input)),
+                                    std::istreambuf_iterator<char>());
+    check(copied_actual == copied,
+          "clipboard helper receives clipboard text only through stdin without newline changes");
+    write_clipboard_helper(directory, "wl-copy", "exit 0");
+    const ed::SystemClipboardResult closed_input =
+        ed::write_system_clipboard(environment, std::string(1024 * 1024, 'x'),
+                                   source.token());
+    check(closed_input.error == ed::SystemClipboardError::Failed,
+          "clipboard write handles a helper that closes stdin without SIGPIPE termination");
+
+    write_clipboard_helper(directory, "wl-paste", "exit 0");
+    read = ed::read_system_clipboard(environment, source.token());
+    check(read.error == ed::SystemClipboardError::Empty,
+          "clipboard helper rejects an empty read");
+    write_clipboard_helper(directory, "wl-paste", "printf '\\000x'");
+    read = ed::read_system_clipboard(environment, source.token());
+    check(read.error == ed::SystemClipboardError::NonText,
+          "clipboard helper rejects non-text NUL bytes");
+    write_clipboard_helper(directory, "wl-paste", "printf '\\377'");
+    read = ed::read_system_clipboard(environment, source.token());
+    check(read.error == ed::SystemClipboardError::Malformed,
+          "clipboard helper rejects malformed UTF-8");
+
+    environment.wayland = false;
+    check(ed::resolve_clipboard_command(environment, false, command) &&
+              command.backend == "X11 xclip" &&
+              command.arguments ==
+                  std::vector<std::string>({"-selection", "clipboard", "-out"}),
+          "clipboard backend prefers xclip over xsel with fixed clipboard-selection arguments");
+    read = ed::read_system_clipboard(environment, source.token());
+    check(read.error == ed::SystemClipboardError::Failed,
+          "clipboard helper reports a nonzero exit");
+
+    environment = {};
+    environment.path = directory;
+    environment.macos = true;
+    check(ed::resolve_clipboard_command(environment, false, command) &&
+              command.backend == "macOS" && command.executable == directory + "/pbpaste",
+          "clipboard backend selects pbpaste on macOS");
+    environment = {};
+    environment.path = directory;
+    environment.wsl = true;
+    check(ed::resolve_clipboard_command(environment, false, command) &&
+              command.backend == "WSL" &&
+              command.arguments ==
+                  std::vector<std::string>({"-NoProfile", "-NonInteractive",
+                                            "-Command", "Get-Clipboard -Raw"}),
+          "clipboard backend constructs fixed PowerShell arguments on WSL");
+    environment.termux = true;
+    check(ed::resolve_clipboard_command(environment, true, command) &&
+              command.backend == "Termux" &&
+              command.executable == directory + "/termux-clipboard-set",
+          "clipboard backend prefers the Termux clipboard helper when detected");
+
+    environment = {};
+    environment.path = "relative:" + directory + "/missing";
+    check(!ed::resolve_clipboard_command(environment, false, command),
+          "clipboard executable lookup ignores relative PATH entries");
+    read = ed::read_system_clipboard(environment, source.token());
+    check(read.error == ed::SystemClipboardError::Unavailable,
+          "clipboard read reports missing helpers");
+
+    std::filesystem::remove_all(directory);
+}
+
+void test_system_clipboard_cancellation_and_limits() {
+    namespace ed = ainiux::editor;
+    const std::string directory = make_clipboard_helper_directory();
+    if (directory.empty()) {
+        check(false, "clipboard failure tests create a temporary directory");
+        return;
+    }
+    write_clipboard_helper(directory, "wl-paste", "/bin/sleep 5");
+    ed::ClipboardEnvironment environment;
+    environment.path = directory;
+    environment.wayland = true;
+    ainiux::runtime::CancellationSource source;
+    ed::SystemClipboardResult cancelled;
+    const auto started = std::chrono::steady_clock::now();
+    std::thread worker([&]() {
+        cancelled = ed::read_system_clipboard(environment, source.token());
+    });
+    std::this_thread::sleep_for(std::chrono::milliseconds(40));
+    source.cancel();
+    worker.join();
+    check(cancelled.error == ed::SystemClipboardError::Cancelled &&
+              std::chrono::steady_clock::now() - started < std::chrono::seconds(1),
+          "clipboard cancellation terminates and reaps a blocked helper promptly");
+
+    ainiux::runtime::CancellationSource timeout_source;
+    const ed::SystemClipboardResult timed_out =
+        ed::read_system_clipboard(environment, timeout_source.token());
+    check(timed_out.error == ed::SystemClipboardError::Timeout,
+          "clipboard helper is terminated after the two-second timeout");
+
+    write_clipboard_helper(directory, "wl-paste",
+                           "/usr/bin/head -c 16777217 /dev/zero");
+    ainiux::runtime::CancellationSource size_source;
+    const ed::SystemClipboardResult oversized =
+        ed::read_system_clipboard(environment, size_source.token());
+    check(oversized.error == ed::SystemClipboardError::TooLarge,
+          "clipboard helper rejects output above 16 MiB");
+    std::filesystem::remove_all(directory);
+}
+
+void test_osc52_clipboard_decode() {
+    namespace ed = ainiux::editor;
+    std::string text;
+    std::string error;
+    check(ed::decode_osc52_clipboard_payload("bGluZSAxCuKYoSBsaW5lIDI=", text, error) &&
+              text == std::string("line 1\n\342\230\241 line 2"),
+          "OSC 52 decoder preserves multiline Unicode text");
+    check(!ed::decode_osc52_clipboard_payload("%%==", text, error) &&
+              error.find("malformed") != std::string::npos,
+          "OSC 52 decoder rejects malformed base64");
+    check(!ed::decode_osc52_clipboard_payload("", text, error),
+          "OSC 52 decoder rejects an empty reply");
+
+    ed::clear_terminal_input_queue();
+    ed::request_terminal_clipboard();
+    ed::push_terminal_input_bytes("\x1b]52;c;b25lCnR3bw==\x1b\\Z");
+    ed::TerminalInputEvent event;
+    check(ed::read_terminal_input(event, 0) &&
+              event.type == ed::TerminalInputType::Osc52ClipboardResponse &&
+              event.text == "one\ntwo",
+          "terminal input recognizes an ST-terminated OSC 52 reply");
+    check(ed::read_terminal_input(event, 0) &&
+              event.type == ed::TerminalInputType::Byte && event.byte == 'Z',
+          "OSC 52 reply decoding preserves adjacent keyboard input");
+
+    ed::clear_terminal_input_queue();
+    ed::request_terminal_clipboard();
+    ed::push_terminal_input_bytes("\x1b]52;c;eA==\x07");
+    check(ed::read_terminal_input(event, 0) &&
+              event.type == ed::TerminalInputType::Osc52ClipboardResponse &&
+              event.text == "x",
+          "terminal input recognizes a BEL-terminated OSC 52 reply");
+    ed::cancel_terminal_clipboard_request();
 }
 
 void test_editor_ai_setup_helpers() {
@@ -2401,6 +2614,17 @@ void test_editor_paste_prefers_local_clipboard() {
     err = ainiux::editor::paste_with_clipboard_preference(state, clipboard, "external");
     check(err.ok(), "paste falls back to terminal payload when local clipboard is empty");
     check(state.text.str() == "hellolocalexternal", "terminal paste payload is inserted");
+    check(clipboard.empty(),
+          "external paste does not populate the authoritative internal clipboard");
+
+    state.selection.anchor = 0;
+    state.selection.active = 4;
+    state.cursor = 4;
+    err = ainiux::editor::paste_with_clipboard_preference(state, clipboard, "replaced");
+    check(err.ok() && state.text.str() == "replacedlocalexternal",
+          "external paste replaces the active selection as one edit");
+    check(state.undo() && state.text.str() == "hellolocalexternal",
+          "external selection replacement is one undoable edit");
 }
 
 void test_editor_path_completion() {
@@ -4114,6 +4338,9 @@ void test_editor_markdown_mode_and_structured_highlighting() {
 }
 
 void run_all() {
+    test_system_clipboard_helpers();
+    test_system_clipboard_cancellation_and_limits();
+    test_osc52_clipboard_decode();
     test_editor_file_locking_and_read_only_sessions();
     test_editor_control_key_sequence_decode();
     test_editor_save_as_overwrite_helpers();

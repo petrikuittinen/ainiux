@@ -78,7 +78,7 @@ Dead same-host lock owners are recovered automatically. Remote, live, malformed,
 |-----|--------|
 | `Ctrl+C` | Copy selection |
 | `Ctrl+X` | Cut selection |
-| `Ctrl+V` | Paste (internal clipboard, then terminal paste) |
+| `Ctrl+V` | Paste (internal clipboard first, then desktop/OSC 52 clipboard) |
 | `Ctrl+K` | Kill to end of line |
 | `Ctrl+Z` or `Ctrl+U` | Undo |
 | `Ctrl+Y` | Redo |
@@ -92,6 +92,14 @@ Dead same-host lock owners are recovered automatically. Remote, live, malformed,
 | `Enter` | New line |
 | `Tab` | Complete a word/symbol from open buffers; if none matches, insert indentation; with a selection, indent every touched line |
 | `Shift+Tab` | Outdent the current line, or every touched line in a selection |
+
+Copy, cut, and line kill retain text in Ainiux's process-wide clipboard and
+also publish it through a native desktop helper and OSC 52 when available.
+With an empty internal clipboard, `Ctrl+V` reads text asynchronously from
+`pbpaste`, `wl-paste`, `xclip`, `xsel`, Termux, or WSL. SSH sessions query the
+terminal first. Reads are limited to 16 MiB and are applied only if the buffer,
+cursor, selection, and input mode have not changed. Terminal bracketed paste
+remains the fallback when clipboard access is unavailable or denied.
 
 ## Selection
 

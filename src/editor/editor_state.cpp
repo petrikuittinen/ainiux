@@ -1109,5 +1109,37 @@ RenderedPanel EditorState::render(const Rect& rect) const {
                         tab_width);
 }
 
+size_t EditorState::visual_row_count_bounded(size_t width, size_t limit) const {
+    if (limit == 0) return 0;
+    width = std::max<size_t>(1, width);
+    // A conservative byte budget keeps this sizing pass independent of total
+    // draft size and avoids building the PieceTable line cache. Eight bytes per
+    // cell covers ordinary UTF-8 plus combining marks; an unusually dense
+    // grapheme prefix simply reports the cap, which is safe for frame sizing.
+    const size_t scaled_budget =
+        width > static_cast<size_t>(-1) / limit / 8
+            ? static_cast<size_t>(-1)
+            : width * limit * 8;
+    const size_t byte_budget =
+        std::min(text.size(), std::max<size_t>(4096, scaled_budget));
+    const std::string prefix = text.range_text(0, byte_budget);
+    size_t rows = 0;
+    size_t line_start = 0;
+    while (line_start <= prefix.size() && rows < limit) {
+        const size_t newline = prefix.find('\n', line_start);
+        const size_t line_end =
+            newline == std::string::npos ? prefix.size() : newline;
+        rows += detail::wrapped_row_count_bounded(
+            prefix.substr(line_start, line_end - line_start),
+            width,
+            limit - rows,
+            tab_width);
+        if (newline == std::string::npos) break;
+        line_start = newline + 1;
+    }
+    if (byte_budget < text.size() && rows < limit) return limit;
+    return std::min(rows, limit);
+}
+
 
 }  // namespace ainiux::editor

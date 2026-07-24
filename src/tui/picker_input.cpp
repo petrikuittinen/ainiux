@@ -1,5 +1,6 @@
 #include "tui/picker_input.hpp"
 
+#include "tui/agent_widgets.hpp"
 #include "tui/input_handlers.hpp"
 #include "ui/confirmation.hpp"
 
@@ -113,6 +114,14 @@ bool handle_tui_picker_input(unsigned char ch,
             state.quit = true;
             return true;
         }
+        if (state.agent_mode) {
+            const InlineChoiceResult choice =
+                parse_inline_choice_key(agent_inline_choices_for_mode(state.mode), ch);
+            if (!choice.matched) return true;
+            if (choice.index == 0) callbacks.on_reasoning_confirm_accepted();
+            else callbacks.on_reasoning_confirm_rejected();
+            return true;
+        }
         switch (ui::parse_confirmation_key(ch)) {
             case ui::ConfirmationKeyResult::Accepted:
                 callbacks.on_reasoning_confirm_accepted();
@@ -129,6 +138,14 @@ bool handle_tui_picker_input(unsigned char ch,
     if (state.mode == TuiMode::RemoveConfirm) {
         if (ch == 17) {
             state.quit = true;
+            return true;
+        }
+        if (state.agent_mode) {
+            const InlineChoiceResult choice =
+                parse_inline_choice_key(agent_inline_choices_for_mode(state.mode), ch);
+            if (!choice.matched) return true;
+            if (choice.index == 0) callbacks.on_remove_accepted();
+            else callbacks.on_remove_rejected();
             return true;
         }
         switch (ui::parse_confirmation_key(ch)) {
@@ -151,6 +168,14 @@ bool handle_tui_picker_input(unsigned char ch,
         if (!state.input_empty) {
             return false;
         }
+        if (state.agent_mode) {
+            const InlineChoiceResult choice =
+                parse_inline_choice_key(agent_inline_choices_for_mode(state.mode), ch);
+            if (!choice.matched) return true;
+            if (choice.index == 0) callbacks.on_model_confirm_accepted();
+            else callbacks.on_model_confirm_rejected();
+            return true;
+        }
         switch (ui::parse_confirmation_key(ch)) {
             case ui::ConfirmationKeyResult::Accepted:
                 callbacks.on_model_confirm_accepted();
@@ -171,17 +196,17 @@ bool handle_tui_picker_input(unsigned char ch,
             state.quit = true;
             return true;
         }
-        switch (ui::parse_confirmation_key(ch)) {
-            case ui::ConfirmationKeyResult::Accepted:
+        const InlineChoiceResult choice =
+            parse_inline_choice_key(agent_inline_choices_for_mode(state.mode), ch);
+        if (!choice.matched) return true;
+        switch (choice.index) {
+            case 0:
                 if (callbacks.on_guard_approval_accepted) callbacks.on_guard_approval_accepted();
                 return true;
-            case ui::ConfirmationKeyResult::Rejected:
+            case 1:
                 if (callbacks.on_guard_approval_rejected) callbacks.on_guard_approval_rejected();
                 return true;
-            case ui::ConfirmationKeyResult::Pending:
-                if (callbacks.on_guard_approval_retry)
-                    callbacks.on_guard_approval_retry(
-                        "Press y to allow this command, n or Esc to deny");
+            default:
                 return true;
         }
     }
@@ -190,17 +215,17 @@ bool handle_tui_picker_input(unsigned char ch,
             state.quit = true;
             return true;
         }
-        switch (ui::parse_confirmation_key(ch)) {
-            case ui::ConfirmationKeyResult::Accepted:
+        const InlineChoiceResult choice =
+            parse_inline_choice_key(agent_inline_choices_for_mode(state.mode), ch);
+        if (!choice.matched) return true;
+        switch (choice.index) {
+            case 0:
                 if (callbacks.on_agent_new_accepted) callbacks.on_agent_new_accepted();
                 return true;
-            case ui::ConfirmationKeyResult::Rejected:
+            case 1:
                 if (callbacks.on_agent_new_rejected) callbacks.on_agent_new_rejected();
                 return true;
-            case ui::ConfirmationKeyResult::Pending:
-                if (callbacks.on_agent_new_retry)
-                    callbacks.on_agent_new_retry(
-                        "Press y to permanently reset this agent project, n or Esc to cancel");
+            default:
                 return true;
         }
     }

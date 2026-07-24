@@ -308,6 +308,46 @@ size_t wrapped_row_count(const std::string& text, size_t width, size_t tab_width
     return wrap_line_segments(text, width, tab_width).size();
 }
 
+size_t wrapped_row_count_bounded(const std::string& text,
+                                 size_t width,
+                                 size_t limit,
+                                 size_t tab_width) {
+    if (limit == 0) return 0;
+    width = std::max<size_t>(1, width);
+    if (text.empty()) return 1;
+
+    size_t rows = 0;
+    size_t start = 0;
+    while (start < text.size() && rows < limit) {
+        size_t pos = start;
+        size_t column = 0;
+        size_t last_break = std::string::npos;
+        size_t hard_break = start;
+        while (pos < text.size()) {
+            const size_t grapheme_start = pos;
+            const size_t grapheme_end = next_grapheme_offset(text, pos);
+            const size_t char_width = display_width_at(text, pos, column, tab_width);
+            if (column + char_width > width) break;
+            column += char_width;
+            pos = grapheme_end;
+            hard_break = pos;
+            const DecodedChar decoded = decode_utf8_at(text, grapheme_start);
+            if (decoded.valid && (decoded.codepoint == ' ' || decoded.codepoint == '\t')) {
+                last_break = pos;
+            }
+            if (column >= width) break;
+        }
+        size_t end = hard_break;
+        if (pos < text.size() && last_break != std::string::npos && last_break > start) {
+            end = last_break;
+        }
+        if (end <= start) end = next_grapheme_offset(text, start);
+        start = end;
+        ++rows;
+    }
+    return rows;
+}
+
 WrappedCursor cursor_in_wrapped_line(const std::string& text,
                                      size_t byte_offset,
                                      size_t width,

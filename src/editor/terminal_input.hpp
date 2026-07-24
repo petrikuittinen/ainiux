@@ -10,12 +10,13 @@ namespace ainiux::editor {
 
 struct EditorState;
 
-enum class TerminalInputType { Timeout, Byte, BracketedPaste };
+enum class TerminalInputType { Timeout, Byte, BracketedPaste, Osc52ClipboardResponse };
 
 struct TerminalInputEvent {
     TerminalInputType type = TerminalInputType::Timeout;
     unsigned char byte = 0;
     std::string text;
+    std::string message;
 };
 
 constexpr const char* bracketed_paste_enable_sequence() { return "\x1b[?2004h"; }
@@ -35,6 +36,9 @@ constexpr unsigned char editor_key_backtab() { return static_cast<unsigned char>
 
 // Decode kitty/xterm control-key escape sequences such as "[19;5u" (Ctrl+S).
 bool decode_control_key_sequence(const std::string& sequence, unsigned char& out);
+bool decode_osc52_clipboard_payload(const std::string& encoded,
+                                    std::string& text,
+                                    std::string& error);
 
 Error paste_with_clipboard_preference(EditorState& state,
                                       Clipboard& clipboard,
@@ -44,5 +48,7 @@ bool is_editor_undo_key(unsigned char ch);
 bool is_editor_redo_key(unsigned char ch);
 
 void publish_terminal_clipboard(const std::string& text);
+void request_terminal_clipboard();
+void cancel_terminal_clipboard_request();
 
 }  // namespace ainiux::editor

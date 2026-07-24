@@ -108,6 +108,7 @@ struct Options {
     std::string image_capability = "auto";
     std::string tui_theme = "dark";
     tui::ThemeRegistry tui_themes = tui::default_theme_registry();
+    int agent_input_max_height_percent = 25;
     std::string benchmark_dataset = "builtin";
     std::string grade_input;
     std::string benchmark_category;

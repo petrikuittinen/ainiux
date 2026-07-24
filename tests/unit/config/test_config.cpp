@@ -731,7 +731,7 @@ void test_config_reads_models_template() {
 void test_config_reads_common_template() {
     ainiux::config::ParseResult parsed = ainiux::config::read_file("config/ainiux.conf");
     check(parsed.error.ok(), "common config file parses");
-    check(parsed.document.entries.size() == 66, "common config has every expected setting");
+    check(parsed.document.entries.size() == 67, "common config has every expected setting");
     ainiux::cli::Options highlight_options;
     ainiux::Error apply_error = ainiux::config::apply_document(parsed.document, highlight_options);
     check(apply_error.ok() && highlight_options.tui_highlight,
@@ -1119,6 +1119,29 @@ void test_config_security_review_settings() {
     check(!error.ok(), "security review log retention rejects values above 1000");
 }
 
+void test_agent_input_height_config() {
+    ainiux::cli::Options options;
+    check(options.agent_input_max_height_percent == 25,
+          "agent input height defaults to 25 percent");
+    for (int value : {10, 80}) {
+        ainiux::config::ParseResult parsed = ainiux::config::parse(
+            "[tui]\nagent_input_max_height_percent = " + std::to_string(value) + "\n",
+            "agent-input.conf");
+        ainiux::Error error = ainiux::config::apply_document(parsed.document, options);
+        check(parsed.error.ok() && error.ok() &&
+                  options.agent_input_max_height_percent == value,
+              "agent input height accepts its inclusive boundary");
+    }
+    for (int value : {9, 81}) {
+        ainiux::config::ParseResult parsed = ainiux::config::parse(
+            "[tui]\nagent_input_max_height_percent = " + std::to_string(value) + "\n",
+            "agent-input-invalid.conf");
+        ainiux::Error error = ainiux::config::apply_document(parsed.document, options);
+        check(!error.ok() && error.message.find("10 through 80") != std::string::npos,
+              "agent input height rejects values outside 10 through 80 actionably");
+    }
+}
+
 }  // namespace
 
 void run_all() {
@@ -1129,6 +1152,7 @@ void run_all() {
     test_config_empty_and_numeric_edge_cases();
     test_config_code_index_size();
     test_config_security_review_settings();
+    test_agent_input_height_config();
     test_config_file_read_errors();
     test_config_parses_supported_values();
     test_config_parses_multiline_strings();

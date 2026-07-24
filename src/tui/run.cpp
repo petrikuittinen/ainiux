@@ -1,4 +1,5 @@
 #include "tui/activity.hpp"
+#include "tui/agent_widgets.hpp"
 #include "tui/tui.hpp"
 #include "tui/events.hpp"
 #include "tui/chat_assist.hpp"
@@ -53,6 +54,18 @@
 namespace ainiux::tui {
 
 using detail::RenderStyle;
+
+struct PendingTuiClipboardPaste {
+    bool active = false;
+    bool terminal_query = false;
+    std::uint64_t generation = 0;
+    std::uint64_t buffer_id = 0;
+    std::uint64_t revision = 0;
+    size_t cursor = 0;
+    editor::Selection selection;
+    TuiMode mode = TuiMode::Chat;
+    std::chrono::steady_clock::time_point query_deadline;
+};
 
 app::TuiRunResult run(provider::RequestContext context,
                       chat::Session session,
@@ -116,6 +129,13 @@ app::TuiRunResult run(provider::RequestContext context,
     std::shared_ptr<agent::AgentSessionRuntime> agent_runtime =
         context.options.agent ? std::make_shared<agent::AgentSessionRuntime>()
                               : std::shared_ptr<agent::AgentSessionRuntime>{};
+    std::string initial_agent_workspace = ".";
+    if (context.options.agent) {
+        std::string resolved_workspace;
+        if (agent::resolve_agent_project_root(".", resolved_workspace).ok()) {
+            initial_agent_workspace = std::move(resolved_workspace);
+        }
+    }
     // Shared with the agent worker: blocks tool execution until the user answers y/n.
     std::shared_ptr<agent::ApprovalGate> agent_approval_gate =
         context.options.agent ? std::make_shared<agent::ApprovalGate>()
@@ -201,7 +221,31 @@ app::TuiRunResult run(provider::RequestContext context,
         }
         chrome.used_tokens = used;
         chrome.window_tokens = effective_agent_context_window(context.options.context_tokens);
+        chrome.workspace =
+            agent_runtime && agent_runtime->prepared()
+                ? agent_runtime->workspace()
+                : initial_agent_workspace;
+        chrome.mode_label = "act";
+        chrome.input_max_height_percent =
+            context.options.agent_input_max_height_percent;
+        chrome.cancellable = active_job != ActiveJob::None || file_job.joinable() ||
+                             completion_job.joinable();
         return chrome;
+    };
+
+    auto current_layout = [&](int rows, int cols) {
+        if (!context.options.agent) return layout_for_terminal(rows, cols);
+        const int percentage_cap =
+            std::max(3, (std::max(5, rows) *
+                         context.options.agent_input_max_height_percent) /
+                            100);
+        const size_t measured = input.visual_row_count_bounded(
+            static_cast<size_t>(std::max(1, cols - 2)),
+            static_cast<size_t>(std::max(1, percentage_cap - 2)));
+        const AgentInputGeometry geometry =
+            agent_input_geometry(rows, cols, measured,
+                                 context.options.agent_input_max_height_percent);
+        return layout_for_agent_terminal(rows, cols, geometry.box_height);
     };
 
     auto append_agent_history_notice = [&](const std::string& text) {
@@ -251,6 +295,110 @@ app::TuiRunResult run(provider::RequestContext context,
     bool have_pending_new_project = false;
     std::vector<provider::Message> project_switch_previous_history;
     TuiMode mode = TuiMode::Chat;
+    editor::ClipboardRuntime clipboard_runtime;
+    const editor::ClipboardEnvironment clipboard_environment =
+        editor::current_clipboard_environment();
+    PendingTuiClipboardPaste pending_clipboard;
+    auto clipboard_mode_editable = [](TuiMode value) {
+        return value == TuiMode::Chat || value == TuiMode::SystemEdit ||
+               value == TuiMode::HistoryEdit;
+    };
+    auto cancel_pending_clipboard = [&]() {
+        clipboard_runtime.cancel_read();
+        editor::cancel_terminal_clipboard_request();
+        pending_clipboard = PendingTuiClipboardPaste{};
+    };
+    auto publish_internal_clipboard = [&]() {
+        const std::string text = editor::shared_clipboard().text();
+        if (text.empty()) return;
+        editor::publish_terminal_clipboard(text);
+        (void)clipboard_runtime.start_write(clipboard_environment, text);
+    };
+    auto clipboard_target_unchanged = [&]() {
+        return pending_clipboard.active && mode == pending_clipboard.mode &&
+               input.buffer_id() == pending_clipboard.buffer_id &&
+               input.revision() == pending_clipboard.revision &&
+               input.cursor == pending_clipboard.cursor &&
+               input.selection.anchor == pending_clipboard.selection.anchor &&
+               input.selection.active == pending_clipboard.selection.active;
+    };
+    auto apply_external_clipboard = [&](const std::string& text,
+                                        const std::string& backend) {
+        if (!clipboard_target_unchanged()) {
+            status = "Clipboard target changed; press Ctrl+V to paste again";
+            pending_clipboard = PendingTuiClipboardPaste{};
+            return;
+        }
+        editor::Clipboard external;
+        external.set(text);
+        const Error paste_error = input.paste(external);
+        status = paste_error.ok() ? "Pasted from " + backend : paste_error.message;
+        pending_clipboard = PendingTuiClipboardPaste{};
+    };
+    auto begin_external_clipboard_paste = [&]() {
+        cancel_pending_clipboard();
+        if (!clipboard_mode_editable(mode)) {
+            status = "Paste is not accepted in this confirmation or picker";
+            return;
+        }
+        pending_clipboard.active = true;
+        pending_clipboard.buffer_id = input.buffer_id();
+        pending_clipboard.revision = input.revision();
+        pending_clipboard.cursor = input.cursor;
+        pending_clipboard.selection = input.selection;
+        pending_clipboard.mode = mode;
+        editor::ClipboardCommand native_command;
+        const bool native_available =
+            editor::resolve_clipboard_command(clipboard_environment, false, native_command);
+        if (editor::prefer_terminal_clipboard_query(clipboard_environment) ||
+            !native_available) {
+            pending_clipboard.terminal_query = true;
+            pending_clipboard.query_deadline =
+                std::chrono::steady_clock::now() + std::chrono::seconds(2);
+            editor::request_terminal_clipboard();
+        } else {
+            pending_clipboard.generation =
+                clipboard_runtime.start_read(clipboard_environment);
+        }
+        status = "Reading system clipboard...";
+    };
+    auto process_clipboard_events = [&]() {
+        editor::ClipboardRuntimeEvent clipboard_event;
+        while (clipboard_runtime.try_pop(clipboard_event)) {
+            if (clipboard_event.type ==
+                editor::ClipboardRuntimeEventType::WriteFinished) {
+                continue;
+            }
+            if (!pending_clipboard.active ||
+                clipboard_event.generation != pending_clipboard.generation) {
+                continue;
+            }
+            if (clipboard_event.result.ok()) {
+                apply_external_clipboard(clipboard_event.result.text,
+                                         clipboard_event.result.backend);
+            } else {
+                status = editor::clipboard_failure_help(clipboard_environment,
+                                                        clipboard_event.result,
+                                                        true);
+                pending_clipboard = PendingTuiClipboardPaste{};
+            }
+        }
+        if (pending_clipboard.active && pending_clipboard.terminal_query &&
+            std::chrono::steady_clock::now() >= pending_clipboard.query_deadline) {
+            editor::cancel_terminal_clipboard_request();
+            editor::ClipboardCommand native_command;
+            if (editor::resolve_clipboard_command(clipboard_environment, false,
+                                                  native_command)) {
+                pending_clipboard.terminal_query = false;
+                pending_clipboard.generation =
+                    clipboard_runtime.start_read(clipboard_environment);
+            } else {
+                status =
+                    "Terminal did not provide clipboard text; use the terminal paste shortcut";
+                pending_clipboard = PendingTuiClipboardPaste{};
+            }
+        }
+    };
     size_t history_edit_index = static_cast<size_t>(-1);
     std::vector<chat::ThreadSummary> thread_picker_threads;
     size_t thread_picker_selected = 0;
@@ -365,8 +513,11 @@ app::TuiRunResult run(provider::RequestContext context,
                                                    picker_selected);
         }
         if (mode == TuiMode::ReasoningConfirm) {
-            return pending_reasoning_warning + "\n\nUse '" + pending_reasoning +
-                   "' anyway? Press y to proceed · n or Esc to cancel";
+            const std::string detail =
+                pending_reasoning_warning + "\n\nUse '" + pending_reasoning + "' anyway?";
+            return context.options.agent
+                       ? detail
+                       : detail + " Press y to proceed · n or Esc to cancel";
         }
         if (mode == TuiMode::AttachmentList) {
             return attachment_picker_text(chat_attachments, attachment_picker_selected);
@@ -408,7 +559,8 @@ app::TuiRunResult run(provider::RequestContext context,
                 if (!pending_guard_request.message.empty())
                     text += "\n" + pending_guard_request.message + "\n";
             }
-            text += "\nPress y to allow · n or Esc to deny";
+            if (!context.options.agent)
+                text += "\nPress y to allow · n or Esc to deny";
             return text;
         }
         if (mode == TuiMode::AgentNewConfirm) {
@@ -416,8 +568,7 @@ app::TuiRunResult run(provider::RequestContext context,
             return "Permanently remove agent project state:\n  " +
                    pending_new_project.state_dir +
                    "\n\nThis removes project history, index, approvals, and logs. "
-                   "Other files in the project directory are preserved.\n\n"
-                   "Press y to reset · n or Esc to cancel";
+                   "Other files in the project directory are preserved.";
         }
         if (mode == TuiMode::SystemEdit) {
             return system_edit_text();
@@ -1801,6 +1952,7 @@ app::TuiRunResult run(provider::RequestContext context,
                    detail::RenderStyle{&context.options.tui_themes, theme, use_colors}, panel_title(),
                    context.options.agent, build_agent_chrome());
     while (!quit) {
+        process_clipboard_events();
         TuiEvent event;
         while (events.try_pop(event)) {
             bool completed_file_job = false;
@@ -2290,16 +2442,7 @@ app::TuiRunResult run(provider::RequestContext context,
                     pending_guard_request.message = event.guard_message;
                     have_pending_guard_request = true;
                     mode = TuiMode::GuardApprovalConfirm;
-                    status = "Guard approval required · y allow · n deny";
-                    // Surface a transcript line so the request is visible in history.
-                    if (pending_assistant != static_cast<size_t>(-1) &&
-                        pending_assistant < session.messages.size()) {
-                        session.messages[pending_assistant].content +=
-                            "\n[guard] " + event.guard_command_preview +
-                            (event.guard_rule_id.empty() ? std::string()
-                                                         : " [" + event.guard_rule_id + "]") +
-                            " — press y/n\n";
-                    }
+                    status = "Guard approval required";
                     break;
             }
             if (completed_file_job) {
@@ -2321,18 +2464,51 @@ app::TuiRunResult run(provider::RequestContext context,
             editor::TerminalInputEvent event;
             while (editor::read_terminal_input(event, 0)) {
                 if (event.type == editor::TerminalInputType::BracketedPaste) {
-                    if (mode == TuiMode::ReasoningConfirm) {
-                        status = "Paste is not accepted by the reasoning confirmation; press y or n";
+                    cancel_pending_clipboard();
+                    if (!clipboard_mode_editable(mode)) {
+                        status = "Paste is not accepted in this confirmation or picker";
                         continue;
                     }
                     path_completer.reset();
                     ++completion_generation;
                     completion_job.cancel();
+                    editor::Clipboard external;
+                    external.set(event.text);
                     Error paste_error =
-                        editor::paste_with_clipboard_preference(input,
-                                                                editor::shared_clipboard(),
-                                                                event.text);
+                        event.text.empty()
+                            ? Error{ErrorCode::BadArgs,
+                                    "terminal paste is empty"}
+                            : input.paste(external);
                     status = paste_error.ok() ? "Pasted" : paste_error.message;
+                    continue;
+                }
+                if (event.type ==
+                    editor::TerminalInputType::Osc52ClipboardResponse) {
+                    if (pending_clipboard.active &&
+                        pending_clipboard.terminal_query) {
+                        if (!event.text.empty()) {
+                            apply_external_clipboard(event.text,
+                                                     "terminal clipboard");
+                        } else {
+                            editor::ClipboardCommand native_command;
+                            if (editor::resolve_clipboard_command(
+                                    clipboard_environment, false,
+                                    native_command)) {
+                                pending_clipboard.terminal_query = false;
+                                pending_clipboard.generation =
+                                    clipboard_runtime.start_read(
+                                        clipboard_environment);
+                            } else {
+                                status = (event.message.empty()
+                                              ? "Terminal clipboard query failed"
+                                              : event.message) +
+                                         std::string(
+                                             "; use the terminal paste shortcut");
+                                pending_clipboard =
+                                    PendingTuiClipboardPaste{};
+                            }
+                        }
+                    }
                     continue;
                 }
                 if (event.type != editor::TerminalInputType::Byte) {
@@ -2348,7 +2524,8 @@ app::TuiRunResult run(provider::RequestContext context,
                                                  thread_picker_threads,
                                                  thread_picker_selected,
                                                  input.text.empty(),
-                                                 pending_thread_delete};
+                                                 pending_thread_delete,
+                                                 context.options.agent};
                 if (handle_tui_picker_input(ch, picker_state, picker_callbacks)) {
                     if (loaded_thread_requires_provider_selection && mode == TuiMode::Chat) {
                         status = chat_provider_model_required_status(context, true);
@@ -2440,7 +2617,7 @@ app::TuiRunResult run(provider::RequestContext context,
                     if (ch == 27) {
                         const detail::TuiSize screen = detail::terminal_size();
                         const EscapeResult escape_result = handle_escape(
-                            input, layout_for_terminal(screen.rows, screen.cols), history_scroll, status, true);
+                            input, current_layout(screen.rows, screen.cols), history_scroll, status, true);
                         if (escape_result == EscapeResult::Unhandled) {
                             mode = TuiMode::Chat;
                             input = new_input_editor();
@@ -2462,7 +2639,7 @@ app::TuiRunResult run(provider::RequestContext context,
                     if (ch == 27) {
                         const detail::TuiSize screen = detail::terminal_size();
                         const EscapeResult escape_result = handle_escape(
-                            input, layout_for_terminal(screen.rows, screen.cols), history_scroll, status, true);
+                            input, current_layout(screen.rows, screen.cols), history_scroll, status, true);
                         if (escape_result == EscapeResult::Unhandled) {
                             mode = TuiMode::Chat;
                             history_edit_index = static_cast<size_t>(-1);
@@ -2503,7 +2680,7 @@ app::TuiRunResult run(provider::RequestContext context,
                 if (ch == 27) {
                     const detail::TuiSize screen = detail::terminal_size();
                     const EscapeResult escape_result =
-                        handle_escape(input, layout_for_terminal(screen.rows, screen.cols), history_scroll, status);
+                        handle_escape(input, current_layout(screen.rows, screen.cols), history_scroll, status);
                     if (escape_result == EscapeResult::Unhandled) {
                         if (active_job != ActiveJob::None) {
                             cancel_active_request();
@@ -2516,18 +2693,27 @@ app::TuiRunResult run(provider::RequestContext context,
                 }
                 if (ch == 3) {
                     Error copy_error = input.copy_selection(editor::shared_clipboard());
+                    if (copy_error.ok()) publish_internal_clipboard();
                     status = copy_error.ok() ? "Copied selection" : copy_error.message;
                     continue;
                 }
                 if (ch == 24) {
                     Error cut_error = input.cut_selection(editor::shared_clipboard());
+                    if (cut_error.ok()) publish_internal_clipboard();
                     status = cut_error.ok() ? "Cut selection" : cut_error.message;
                     continue;
                 }
                 if (ch == 22) {
-                    Error paste_error =
-                        editor::paste_with_clipboard_preference(input, editor::shared_clipboard(), "");
-                    status = paste_error.ok() ? "Pasted" : paste_error.message;
+                    if (editor::shared_clipboard().empty()) {
+                        begin_external_clipboard_paste();
+                    } else {
+                        cancel_pending_clipboard();
+                        Error paste_error =
+                            editor::paste_with_clipboard_preference(
+                                input, editor::shared_clipboard(), "");
+                        status =
+                            paste_error.ok() ? "Pasted" : paste_error.message;
+                    }
                     continue;
                 }
                 if (editor::is_editor_undo_key(ch)) {
@@ -2540,12 +2726,12 @@ app::TuiRunResult run(provider::RequestContext context,
                 }
                 if (mode == TuiMode::Chat && ch == 2) {
                     const detail::TuiSize screen = detail::terminal_size();
-                    scroll_chat_history_page_up(layout_for_terminal(screen.rows, screen.cols), history_scroll);
+                    scroll_chat_history_page_up(current_layout(screen.rows, screen.cols), history_scroll);
                     continue;
                 }
                 if (mode == TuiMode::Chat && ch == 4) {
                     const detail::TuiSize screen = detail::terminal_size();
-                    scroll_chat_history_page_down(layout_for_terminal(screen.rows, screen.cols), history_scroll);
+                    scroll_chat_history_page_down(current_layout(screen.rows, screen.cols), history_scroll);
                     continue;
                 }
                 if (ch == 18 && mode == TuiMode::Chat) {
@@ -2583,7 +2769,12 @@ app::TuiRunResult run(provider::RequestContext context,
                     continue;
                 }
                 if (ch == 11) {
-                    detail::set_status_from_error(input.kill_to_line_end(editor::shared_clipboard()), status);
+                    const std::uint64_t before = input.revision();
+                    const Error kill_error =
+                        input.kill_to_line_end(editor::shared_clipboard());
+                    detail::set_status_from_error(kill_error, status);
+                    if (kill_error.ok() && input.revision() != before)
+                        publish_internal_clipboard();
                     continue;
                 }
                 if (ch == 127 || ch == 8) {
@@ -2612,6 +2803,7 @@ app::TuiRunResult run(provider::RequestContext context,
     }
 
     model_job.cancel();
+    clipboard_runtime.cancel_all();
     completion_job.cancel();
     model_job.join();
     completion_job.join();

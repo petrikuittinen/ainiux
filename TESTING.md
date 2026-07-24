@@ -45,6 +45,7 @@ installed.
 - `tests/integration/test_code_index.sh` — project-local refresh, ignore/skip behavior, Markdown output, stale snapshots, and CLI isolation.
 - `tests/integration/test_sqlite_persistence.sh` — SQLite-backed TUI persistence via `tui_sqlite_driver.py`.
 - `tests/integration/tui_startup_selection_driver.py` — isolated PTY coverage for bare-offline chat and one-/multiple-model startup discovery.
+- `tests/integration/clipboard_driver.py` — focused fake-helper/OSC 52 PTY coverage for editor and shared chat/agent input clipboard behavior.
 - `tests/mock_server/` — Python HTTP mocks for OpenAI-compatible APIs and slow responses.
 - `tests/mock/` — POSIX `LD_PRELOAD` shim for disk-full simulation.
 

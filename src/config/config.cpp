@@ -2201,6 +2201,14 @@ Error apply_document(const Document& document, cli::Options& options) {
         } else if (name == "tui.thinking_traces") {
             err = require_type(entry, Value::Type::Boolean);
             if (err.ok()) candidate.show_thinking_traces = entry.value.boolean;
+        } else if (name == "tui.agent_input_max_height_percent") {
+            err = nonnegative_int(entry, candidate.agent_input_max_height_percent);
+            if (err.ok() && (candidate.agent_input_max_height_percent < 10 ||
+                             candidate.agent_input_max_height_percent > 80)) {
+                err = schema_error(
+                    entry,
+                    "tui.agent_input_max_height_percent expects an integer from 10 through 80");
+            }
         } else {
             err = schema_error(entry, "unknown section or key");
         }

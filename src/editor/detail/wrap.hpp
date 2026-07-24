@@ -27,6 +27,10 @@ std::vector<WrapSegment> wrap_line_segments(const std::string& text,
                                             size_t width,
                                             size_t tab_width = 4);
 size_t wrapped_row_count(const std::string& text, size_t width, size_t tab_width = 4);
+size_t wrapped_row_count_bounded(const std::string& text,
+                                 size_t width,
+                                 size_t limit,
+                                 size_t tab_width = 4);
 WrappedCursor cursor_in_wrapped_line(const std::string& text,
                                      size_t byte_offset,
                                      size_t width,

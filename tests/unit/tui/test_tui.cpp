@@ -4,7 +4,9 @@
 #include "ainiux/version.hpp"
 #include "provider/provider.hpp"
 #include "tui/activity.hpp"
+#include "tui/agent_widgets.hpp"
 #include "editor/terminal_input.hpp"
+#include "editor/detail/wrap.hpp"
 #include "tui/input_handlers.hpp"
 #include "tui/picker_input.hpp"
 #include "tui/provider_actions.hpp"
@@ -133,16 +135,17 @@ void test_tui_reasoning_picker_input() {
     callbacks.on_agent_new_rejected = [&]() { project_declined = true; };
     callbacks.on_agent_new_retry = [&](const std::string& message) { status = message; };
     mode = ainiux::tui::TuiMode::AgentNewConfirm;
+    const std::string previous_status = status;
     check(ainiux::tui::handle_tui_picker_input('x', state, callbacks) &&
-              status.find("Press y") == 0 && !project_reset && !project_declined,
-          "agent project reset confirmation rejects ambiguous input");
+              status == previous_status && !project_reset && !project_declined,
+          "agent project reset confirmation ignores invalid input");
     check(ainiux::tui::handle_tui_picker_input(27, state, callbacks) &&
               project_declined && !project_reset,
           "agent project reset defaults to No on Esc");
     project_declined = false;
-    check(ainiux::tui::handle_tui_picker_input('y', state, callbacks) &&
+    check(ainiux::tui::handle_tui_picker_input('r', state, callbacks) &&
               project_reset && !project_declined,
-          "agent project reset accepts explicit y");
+          "agent project reset accepts its semantic mnemonic");
 }
 
 void test_tui_layout_reserves_editor_input_panel() {
@@ -322,6 +325,84 @@ void test_tui_agent_chrome_formatters() {
           "agent input-label segments include provider/model");
     check(ainiux::tui::agent_ready_status().find("agent") != std::string::npos,
           "agent ready status is a short idle hint");
+}
+
+void test_agent_widgets_and_dynamic_geometry() {
+    using namespace ainiux::tui;
+    const std::string status = agent_status_bar(
+        "custom_openai_chat", "custom/qwen3.6-35b-a3b-mtp", "auto",
+        1562, 131072, 80, false);
+    check(status == std::string(ainiux::app_version_label()) +
+                        " [custom/qwen3.6-35b-a3b-mtp auto] 1562 tok (1.2%)",
+          "agent 80-column status uses compact provider alias and exact usage");
+    const std::string abort_status = agent_status_bar(
+        "custom_openai_chat", "very-long-model-name-that-needs-shortening", "high",
+        1562, 131072, 48, true, "streaming");
+    check(ainiux::editor::detail::display_width_for_range(
+                  abort_status, 0, abort_status.size()) <= 48 &&
+              abort_status.find("ESC to abort") != std::string::npos &&
+              abort_status.find("streaming") == std::string::npos,
+          "narrow agent status shortens optional content while preserving abort");
+    const std::string percentage_status = agent_status_bar(
+        "custom_openai_chat", "very-long-model-name-that-needs-shortening", "high",
+        1562, 131072, 44, false);
+    check(percentage_status.find("1.2%") != std::string::npos &&
+              percentage_status.find("1562 tok") == std::string::npos,
+          "narrow agent status falls back to percentage-only usage");
+
+    AgentInputGeometry one_line = agent_input_geometry(40, 80, 1, 25);
+    AgentInputGeometry multiline = agent_input_geometry(40, 80, 6, 25);
+    AgentInputGeometry capped = agent_input_geometry(40, 80, 100, 25);
+    check(one_line.box_height == 3 && multiline.box_height == 8 &&
+              capped.box_height == 10,
+          "agent frame grows with visual rows and caps the entire box at 25 percent");
+    AgentInputGeometry tiny = agent_input_geometry(5, 20, 20, 10);
+    check(tiny.box_height == 3 && tiny.content_rect.height == 1,
+          "tiny terminals retain history, status, and a three-row prompt box");
+    Layout agent_layout = layout_for_agent_terminal(40, 80, multiline.box_height);
+    Layout chat_layout = layout_for_terminal(40, 80);
+    check(agent_layout.input_rect.height == 6 && chat_layout.input_rect.height == 8,
+          "dynamic agent input geometry does not change the fixed chat layout");
+
+    AgentInputFrame frame{"/home/eye/my_code_project", "act"};
+    check(abbreviate_agent_workspace(frame.workspace) == "~/my_code_project",
+          "agent frame abbreviates the home directory");
+    check(agent_input_title(frame, 40) == "~/my_code_project act",
+          "agent frame title includes workspace and mode");
+    check(agent_input_title({"/a/very/long/leading/path/project", "plan"}, 18).find("project plan") !=
+              std::string::npos,
+          "agent frame elision preserves the final project directory and future mode");
+    check(agent_input_top_border(frame, 40).find(u8"┌─~/my_code_project act ") == 0 &&
+              agent_input_bottom_border(40).find(u8"└") == 0,
+          "agent frame constructs titled top and full bottom borders");
+
+    ainiux::editor::EditorState draft =
+        ainiux::editor::EditorState::from_text(u8"ab界d\nsecond\nthird");
+    check(draft.visual_row_count_bounded(4, 2) == 2 &&
+              draft.visual_row_count_bounded(20, 10) == 3,
+          "bounded editor measurement handles Unicode wrapping and explicit newlines");
+}
+
+void test_agent_inline_choices() {
+    using namespace ainiux::tui;
+    InlineChoiceModel approval = agent_inline_choices_for_mode(
+        TuiMode::GuardApprovalConfirm);
+    check(render_inline_choices(approval) == "(1) [A]pprove  (2) [C]ancel",
+          "agent confirmation renders numbered semantic choices");
+    check(parse_inline_choice_key(approval, '1').matched &&
+              parse_inline_choice_key(approval, 'a').index == 0 &&
+              parse_inline_choice_key(approval, 'C').index == 1 &&
+              parse_inline_choice_key(approval, 27).index == 1 &&
+              !parse_inline_choice_key(approval, 'x').matched,
+          "agent confirmation accepts numbers, case-insensitive mnemonics, and Esc default");
+    InlineChoiceModel four{{{"Alpha", 'a'}, {"Beta", 'b'}, {"Gamma", 'g'}, {"Delta", 'd'}}, 3};
+    check(valid_inline_choices(four) && parse_inline_choice_key(four, '4').index == 3,
+          "inline choice widget supports four choices");
+    InlineChoiceModel duplicate{{{"Approve", 'a'}, {"Again", 'a'}}, 1};
+    std::string reason;
+    check(!valid_inline_choices(duplicate, &reason) &&
+              reason.find("unique") != std::string::npos,
+          "inline choice widget rejects duplicate mnemonics");
 }
 
 void test_tui_ready_and_generation_status() {
@@ -1385,6 +1466,8 @@ void run_all() {
     test_configured_assist_slash_command_detection();
     test_tui_ready_and_generation_status();
     test_tui_agent_chrome_formatters();
+    test_agent_widgets_and_dynamic_geometry();
+    test_agent_inline_choices();
     test_tui_ctrl_chat_history_scroll_shortcuts();
     test_tui_chat_history_scroll_keys();
     test_tui_read_terminal_input_marks_alt_meta_prefix();

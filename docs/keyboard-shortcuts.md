@@ -24,7 +24,7 @@ Current bindings for chat, agent, and editor modes.
 | `Ctrl+A` | Select entire input buffer |
 | `Ctrl+C` | Copy selection |
 | `Ctrl+X` | Cut selection |
-| `Ctrl+V` | Paste (internal clipboard, then bracketed terminal paste) |
+| `Ctrl+V` | Paste (internal clipboard first, then desktop/OSC 52 clipboard) |
 | `Ctrl+K` | Kill from cursor to end of line |
 | `Ctrl+Z` or `Ctrl+U` | Undo last edit (typing, delete, cut, paste) |
 | `Ctrl+Y` | Redo |
@@ -32,7 +32,7 @@ Current bindings for chat, agent, and editor modes.
 | `Delete` | Delete at cursor |
 | `Tab` | Slash-command completion (start of first line) or path completion after `/insert`, `/attach`, `/save`, `/load` |
 
-Bracketed terminal paste (middle-click or Shift+Insert in many terminals) is also undoable with `Ctrl+Z` / `Ctrl+U`.
+Copy/cut publishes to native desktop helpers and OSC 52 when available. With an empty internal clipboard, `Ctrl+V` reads external text asynchronously; SSH prefers a terminal OSC 52 query. Bracketed terminal paste (middle-click or Shift+Insert in many terminals) remains the fallback and is also undoable with `Ctrl+Z` / `Ctrl+U`.
 
 ### Chat-specific actions
 
