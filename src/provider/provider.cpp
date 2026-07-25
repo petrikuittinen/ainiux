@@ -3386,15 +3386,18 @@ Error send_tool_round(const RequestContext& context,
 }
 
 std::string display_name_for_profile(const std::string& profile_name) {
-    for (const Profile& profile : built_in_profiles()) {
-        if (profile.name == profile_name) {
-            if (!profile.aliases.empty()) {
-                return profile.aliases.front();
-            }
-            return profile.name;
-        }
+    if (profile_name.empty()) return {};
+    if (looks_like_api_url(profile_name)) return names::kCustom;
+    Profile profile;
+    if (!find_profile(profile_name, profile)) {
+        return names::kCustom;
     }
-    return profile_name;
+    if (profile.name == names::kCustomOpenAiChat) return names::kCustom;
+    std::string preferred = profile.name;
+    for (const std::string& alias : profile.aliases) {
+        if (alias.size() < preferred.size()) preferred = alias;
+    }
+    return preferred;
 }
 
 }  // namespace ainiux::provider

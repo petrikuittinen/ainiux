@@ -46,11 +46,11 @@ void test_editor_ai_continue_helpers() {
     check(text.range_text(0, 100) == "abcdefghij", "range_text clamps to buffer size");
 
     check(ainiux::editor::continue_status_message("custom_openai_chat", "gpt-test", "thinking... ESC to abort") ==
-              "[custom / gpt-test] thinking... ESC to abort",
+              "[custom/gpt-test] thinking... ESC to abort",
           "continue status message uses compact provider display names");
     check(ainiux::editor::continue_status_message(
               "gemini", "models/gemini-3.1-flash-lite-preview", "thinking...") ==
-              u8"[gemini / gemini-3.1-flash-lite-pre…] thinking...",
+              u8"[gemini/gemini-3.1-flash-lite-pre…] thinking...",
           "editor status strips and truncates provider-prefixed model names");
 
     ainiux::provider::ChatResult continue_result;
@@ -62,7 +62,7 @@ void test_editor_ai_continue_helpers() {
                                                              "gpt-test",
                                                              continue_result,
                                                              true) ==
-              "[custom / gpt-test] | TTFT: 100 ms | ~20.0 token/s",
+              "[custom/gpt-test] | TTFT: 100 ms | ~20.0 token/s",
           "continue completion status reuses TUI generation metrics formatting");
 
     ainiux::editor::EditorState state = ainiux::editor::EditorState::from_text("Once upon a ");
@@ -548,7 +548,7 @@ void test_editor_ai_setup_helpers() {
     ready_continue.request.options.model = "mock-model";
     check(ainiux::editor::editor_ai_ready(ready_continue), "provider with model is AI-ready");
     const std::string ready_startup_status = ainiux::editor::editor_startup_status(ready_continue);
-    check(ready_startup_status.find("[lmstudio / mock-model]") == 0,
+    check(ready_startup_status.find("[lmstudio/mock-model]") == 0,
           "ready startup status shows provider and model like chat mode");
     check(ready_startup_status.find("ready") != std::string::npos,
           "ready startup status mentions ready");

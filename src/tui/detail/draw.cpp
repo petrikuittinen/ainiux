@@ -400,7 +400,7 @@ std::vector<StyledLine> history_lines_for_session(const chat::Session& session,
                                                   bool agent_mode) {
     std::vector<StyledLine> history;
     const int min_content_width = 8;
-    // Agent elapsed times are relative to the most recent user message timestamp.
+    // Agent total task time is relative to the most recent user message timestamp.
     long long agent_turn_start_ms = 0;
     for (size_t message_index = 0; message_index < session.messages.size(); ++message_index) {
         const provider::Message& message = session.messages[message_index];
@@ -483,25 +483,18 @@ std::vector<StyledLine> history_lines_for_session(const chat::Session& session,
                 content_segments = std::move(prefixed);
             }
         }
-        // Agent UI: relative elapsed time (not a full wall-clock stamp).
-        // User prompts mark turn origin. Tools/notices: "N ms". Final assistant:
-        // "Task complete in X.XX seconds."
+        // Compact tool rows already contain their own execution-only duration.
+        // Only the final assistant uses the whole-turn wall clock.
         std::string elapsed_suffix;
         if (agent_mode && message.created_at_ms > 0 && agent_turn_start_ms > 0 &&
-            message.role != "user" && !show_thinking_placeholder && !show_streaming_placeholder) {
-            // Skip if content already carries a live progress elapsed suffix.
+            message.role == "assistant" && !show_thinking_placeholder &&
+            !show_streaming_placeholder) {
             const bool already_has_timing =
-                content.find(" ms") != std::string::npos ||
-                content.find("seconds elapsed") != std::string::npos ||
                 content.find("Task complete in ") != std::string::npos;
             if (!already_has_timing) {
                 const long long elapsed_ms = message.created_at_ms - agent_turn_start_ms;
-                if (message.role == "assistant") {
-                    // Own line so the completion banner is not glued to the answer text.
-                    elapsed_suffix = "\n" + agent::format_task_complete(elapsed_ms);
-                } else {
-                    elapsed_suffix = "  " + agent::format_elapsed_ms(elapsed_ms);
-                }
+                // Own line so the completion banner is not glued to the answer text.
+                elapsed_suffix = "\n" + agent::format_task_complete(elapsed_ms);
             }
         }
         if (!elapsed_suffix.empty()) {

@@ -153,17 +153,18 @@ void test_compact_threshold_defaults() {
 
 void test_tool_display_format() {
     const std::string line = agent::format_compact_tool_line(
-        1, "read_file", R"({"path":"example.txt"})", R"({"ok":true})", 80);
+        1, "read_file", R"({"path":"example.txt"})", R"({"ok":true})", 150, 80);
     check(line.find("1: read_file(") != std::string::npos, "index and name");
     check(line.find("example.txt") != std::string::npos, "path preview");
     check(line.find("→ ok") != std::string::npos || line.find("ok") != std::string::npos, "ok status");
+    check(line.find("in 150 ms") != std::string::npos, "independent tool duration");
 }
 
 void test_tool_display_clips_to_width() {
     const std::string long_path(200, 'x');
     const std::string args = std::string(R"({"path":")") + long_path + R"("})";
     const std::string line =
-        agent::format_compact_tool_line(12, "read_file", args, R"({"ok":true})", 40);
+        agent::format_compact_tool_line(12, "read_file", args, R"({"ok":true})", 7, 40);
     check(line.size() <= 40, "tool line clipped to 40 cells");
     check(line.find("...") != std::string::npos, "ellipsis when clipped");
     check(agent::clip_to_cells("hello world", 5) == "he...", "clip_to_cells short");
@@ -175,6 +176,10 @@ void test_elapsed_seconds_format() {
     check(agent::format_elapsed_ms(2270) == "2270 ms", "tool elapsed ms");
     check(agent::format_elapsed_ms(0) == "0 ms", "zero ms");
     check(agent::format_elapsed_ms(-5) == "0 ms", "negative ms clamps");
+    check(agent::execution_only_elapsed_ms(175, 20, 145) == 50,
+          "tool timing subtracts Guard approval wait");
+    check(agent::execution_only_elapsed_ms(10, 100, 130) == 0,
+          "approval subtraction clamps execution time at zero");
     check(agent::format_task_complete(21340) == "Task complete in 21.34 seconds.",
           "task complete 21.34s");
     check(agent::format_task_complete(0) == "Task complete in 0.00 seconds.", "task complete zero");
@@ -188,9 +193,12 @@ void test_elapsed_seconds_format() {
     check(agent::compact_tool_error_brief(outside_err).find("outside project") != std::string::npos,
           "outside-project brief: " + agent::compact_tool_error_brief(outside_err));
     const std::string line = agent::format_compact_tool_line(
-        2, "write_file", R"JSON({"path":"~/code/empty.txt","content":""})JSON", outside_err, 120);
+        2, "write_file", R"JSON({"path":"~/code/empty.txt","content":""})JSON",
+        outside_err, 23, 120);
     check(line.find("error:") != std::string::npos && line.find("outside project") != std::string::npos,
           "compact line includes outside-project reason: " + line);
+    check(line.find("in 23 ms") != std::string::npos,
+          "failed compact line includes its own duration: " + line);
     const std::string deny_err =
         R"JSON({"ok":false,"error":{"code":"policy_denied","message":"shell wrappers are not allowed; pass a direct command (no sh -c)"}})JSON";
     check(agent::compact_tool_error_brief(deny_err).find("shell") != std::string::npos,

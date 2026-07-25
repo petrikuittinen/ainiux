@@ -44,6 +44,7 @@
 #include "ui/provider_model_display.hpp"
 
 #include <cerrno>
+#include <chrono>
 #include <cstring>
 #include <iostream>
 #include <memory>
@@ -115,6 +116,10 @@ app::TuiRunResult run(provider::RequestContext context,
     size_t completion_generation = 0;
     bool completion_pending = false;
     std::string status = ready_status();
+    AgentActivityState agent_activity_state = AgentActivityState::Ready;
+    std::chrono::steady_clock::time_point agent_task_started;
+    bool agent_task_active = false;
+    long long agent_completed_task_ms = -1;
     if (context.options.agent) {
         status = agent_ready_status();
     }
@@ -183,6 +188,12 @@ app::TuiRunResult run(provider::RequestContext context,
         options.fetch_options.trace_http = context.options.trace_http;
         options.fetch_options.allow_private = context.options.allow_private_url_fetch;
         options.search_options = search::options_for(context.options);
+        options.on_phase = [&events](agent::AgentActivityPhase phase) {
+            TuiEvent event;
+            event.type = TuiEventType::AgentPhase;
+            event.agent_phase = phase;
+            events.push(std::move(event));
+        };
         if (agent_approval_gate) {
             std::shared_ptr<agent::ApprovalGate> gate = agent_approval_gate;
             options.on_guard_ask =
@@ -230,13 +241,21 @@ app::TuiRunResult run(provider::RequestContext context,
             context.options.agent_input_max_height_percent;
         chrome.cancellable = active_job != ActiveJob::None || file_job.joinable() ||
                              completion_job.joinable();
+        chrome.activity_state = agent_activity_state;
+        chrome.completed_task_ms = agent_completed_task_ms;
+        if (agent_task_active) {
+            chrome.task_elapsed_seconds = std::chrono::duration_cast<std::chrono::seconds>(
+                                              std::chrono::steady_clock::now() -
+                                              agent_task_started)
+                                              .count();
+        }
         return chrome;
     };
 
     auto current_layout = [&](int rows, int cols) {
         if (!context.options.agent) return layout_for_terminal(rows, cols);
         const int percentage_cap =
-            std::max(3, (std::max(5, rows) *
+            std::max(3, (std::max(6, rows) *
                          context.options.agent_input_max_height_percent) /
                             100);
         const size_t measured = input.visual_row_count_bounded(
@@ -533,8 +552,9 @@ app::TuiRunResult run(provider::RequestContext context,
             if (pending_thread_delete < thread_picker_threads.size()) {
                 const auto& th = thread_picker_threads[pending_thread_delete];
                 std::string label = th.name.empty() ? ("thread " + std::to_string(th.id)) : th.name;
-                if (!th.last_model.empty()) {
-                    label += " [" + ui::compact_model_name_for_display(th.last_model) + "]";
+                if (!th.last_provider.empty() || !th.last_model.empty()) {
+                    label += " " + ui::provider_model_display_label(
+                                       th.last_provider, th.last_model);
                 }
                 return "Delete thread:\n  " + label + "\nPress y to delete · n or Esc to cancel";
             }
@@ -956,6 +976,12 @@ app::TuiRunResult run(provider::RequestContext context,
         }
         // Fallback options if startup prepare failed; normally the runtime is already prepared.
         agent::SessionRuntimeOptions agent_prep_options = make_agent_runtime_options();
+        if (agent_mode) {
+            agent_activity_state = AgentActivityState::Thinking;
+            agent_task_started = std::chrono::steady_clock::now();
+            agent_task_active = true;
+            agent_completed_task_ms = -1;
+        }
         model_job.start([job_context, request_messages = std::move(request_messages),
                          media_database_path, max_image_bytes, max_attachment_bytes, agent_mode,
                          agent_goal = std::move(agent_goal), agent_runtime,
@@ -982,7 +1008,6 @@ app::TuiRunResult run(provider::RequestContext context,
                     }
                     if (send_error.ok()) {
                         // Stream tool activity into the chat panel as each call runs.
-                        // Progress lines already include "N ms" timing.
                         auto agent_progress = [&events](const std::string& line) {
                             if (line.empty()) return;
                             if (line.rfind("Agent turn ", 0) == 0) return;
@@ -1001,13 +1026,6 @@ app::TuiRunResult run(provider::RequestContext context,
                         for (std::size_t i = 0; i < agent_turn.compact_tool_lines.size(); ++i) {
                             if (!display.empty()) display.push_back('\n');
                             display += agent_turn.compact_tool_lines[i];
-                            if (i < agent_turn.compact_tool_line_ms.size() &&
-                                agent_turn.turn_started_ms > 0) {
-                                display += "  ";
-                                display += agent::format_elapsed_ms(
-                                    agent_turn.compact_tool_line_ms[i] -
-                                    agent_turn.turn_started_ms);
-                            }
                         }
                         if (!agent_turn.final_text.empty()) {
                             if (!display.empty()) display.push_back('\n');
@@ -1091,7 +1109,7 @@ app::TuiRunResult run(provider::RequestContext context,
             }
             events.push(std::move(event));
         });
-        status = agent_mode ? "Agent working (tools enabled)..." : "Waiting for response...";
+        status = agent_mode ? agent_ready_status() : "Waiting for response...";
     };
 
     auto start_turn_with_payload = [&](const std::string& history_content,
@@ -1623,7 +1641,7 @@ app::TuiRunResult run(provider::RequestContext context,
             return;
         }
         handle_tui_command(text, command_context, command_handlers);
-        // Agent mode: durable actionable failures belong in history, not only the status bar.
+        // Agent mode: durable actionable failures belong in history, not only the status line.
         // Leave "Usage:" hints on the status line.
         if (context.options.agent && !status.empty() && status.rfind("Usage:", 0) != 0 &&
             detail::status_role_for_text(status) == StyleRole::Error) {
@@ -1792,10 +1810,9 @@ app::TuiRunResult run(provider::RequestContext context,
     picker_callbacks.on_model_confirm_accepted = [&]() {
         app::refresh_session_metadata(session, context);
         mode = TuiMode::Chat;
-        status = context.options.model.empty()
-                     ? "Using current provider: " + provider::display_name_for_profile(context.profile.name)
-                     : "Using current model: " +
-                           ui::compact_model_name_for_display(context.options.model);
+        status = "Using current model: " +
+                 ui::provider_model_display_label(context.profile.name,
+                                                  context.options.model);
         start_store_save();
     };
     picker_callbacks.on_model_confirm_rejected = [&]() {
@@ -1803,7 +1820,8 @@ app::TuiRunResult run(provider::RequestContext context,
         mode = TuiMode::Chat;
         if (context_error.ok()) {
             status = "Using thread model: " +
-                     ui::compact_model_name_for_display(context.options.model);
+                     ui::provider_model_display_label(context.profile.name,
+                                                      context.options.model);
             start_store_save();
         } else {
             set_status_maybe_agent_error(detail::error_line(context_error), true);
@@ -1971,8 +1989,8 @@ app::TuiRunResult run(provider::RequestContext context,
                     const bool should_regenerate = regenerate_after_cancel;
                     const size_t regenerate_erase_from = pending_user;
                     if (event.agent_turn) {
-                        // Expand into tool/assistant rows; renderer adds "N ms" /
-                        // "Task complete in …" from timestamps.
+                        // Expand timed tool rows; renderer adds only the final
+                        // "Task complete in …" from wall-clock timestamps.
                         if (pending_user != static_cast<size_t>(-1) &&
                             pending_user < session.messages.size() &&
                             session.messages[pending_user].created_at_ms <= 0 &&
@@ -2043,6 +2061,26 @@ app::TuiRunResult run(provider::RequestContext context,
                     pending_assistant = static_cast<size_t>(-1);
                     pending_user_added_for_job = false;
                     active_job = ActiveJob::None;
+                    if (context.options.agent) {
+                        agent_activity_state = AgentActivityState::Ready;
+                        agent_task_active = false;
+                        if (event.agent_turn) {
+                            const bool valid_wall_times =
+                                event.agent_turn_started_ms > 0 &&
+                                event.agent_finished_at_ms >= event.agent_turn_started_ms;
+                            const long long wall_ms = valid_wall_times
+                                                          ? event.agent_finished_at_ms -
+                                                                event.agent_turn_started_ms
+                                                          : -1;
+                            agent_completed_task_ms =
+                                wall_ms >= 0
+                                    ? wall_ms
+                                    : std::chrono::duration_cast<std::chrono::milliseconds>(
+                                          std::chrono::steady_clock::now() -
+                                          agent_task_started)
+                                          .count();
+                        }
+                    }
                     if (should_regenerate) {
                         start_queued_regeneration(regenerate_erase_from);
                     } else {
@@ -2078,6 +2116,11 @@ app::TuiRunResult run(provider::RequestContext context,
                     const bool should_regenerate = regenerate_after_cancel && event.error.code == ErrorCode::Cancelled;
                     const size_t regenerate_erase_from = pending_user_added_for_job ? static_cast<size_t>(-1) : pending_user;
                     active_job = ActiveJob::None;
+                    if (context.options.agent) {
+                        agent_activity_state = AgentActivityState::Ready;
+                        agent_task_active = false;
+                        agent_completed_task_ms = -1;
+                    }
                     inflight_image_count = 0;
                     if (should_regenerate) {
                         // Regeneration will reuse the prior prompt content (which already included
@@ -2435,6 +2478,7 @@ app::TuiRunResult run(provider::RequestContext context,
                     }
                     break;
                 case TuiEventType::GuardApproval:
+                    agent_activity_state = AgentActivityState::Working;
                     pending_guard_request = {};
                     pending_guard_request.tool_name = event.guard_tool_name;
                     pending_guard_request.command_preview = event.guard_command_preview;
@@ -2443,6 +2487,12 @@ app::TuiRunResult run(provider::RequestContext context,
                     have_pending_guard_request = true;
                     mode = TuiMode::GuardApprovalConfirm;
                     status = "Guard approval required";
+                    break;
+                case TuiEventType::AgentPhase:
+                    agent_activity_state =
+                        event.agent_phase == agent::AgentActivityPhase::Thinking
+                            ? AgentActivityState::Thinking
+                            : AgentActivityState::Working;
                     break;
             }
             if (completed_file_job) {

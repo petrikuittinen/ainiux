@@ -93,6 +93,14 @@ std::string format_elapsed_ms(long long elapsed_ms) {
     return std::to_string(elapsed_ms) + " ms";
 }
 
+long long execution_only_elapsed_ms(long long wall_elapsed_ms,
+                                    long long approval_wait_before_ms,
+                                    long long approval_wait_after_ms) {
+    const long long approval_delta =
+        std::max(0LL, approval_wait_after_ms - approval_wait_before_ms);
+    return std::max(0LL, wall_elapsed_ms - approval_delta);
+}
+
 std::string format_task_complete(long long elapsed_ms) {
     if (elapsed_ms < 0) elapsed_ms = 0;
     const double seconds = static_cast<double>(elapsed_ms) / 1000.0;
@@ -276,29 +284,42 @@ std::string format_compact_tool_line(std::size_t index,
                                      const std::string& tool_name,
                                      const std::string& arguments_json,
                                      const std::string& result_json,
+                                     long long execution_ms,
                                      std::size_t max_line_cells) {
     if (max_line_cells == 0) max_line_cells = terminal_column_count();
     if (max_line_cells < 20) max_line_cells = 20;
 
     const std::string name = tool_name.empty() ? "tool" : tool_name;
     const std::string status = compact_tool_status(result_json);
-    std::string status_text = status;
+    std::string error_text;
     if (status == "error") {
         const std::string brief = compact_tool_error_brief(result_json, 48);
-        if (!brief.empty()) status_text = "error: " + brief;
+        if (!brief.empty()) error_text = ": " + brief;
     }
-    // Fixed framing: "N: name() → status"
-    const std::string prefix = std::to_string(index) + ": " + name + "(";
-    const std::string suffix = ") → " + status_text;
-    const std::size_t framing = prefix.size() + suffix.size();
-    // Prefer a readable error reason over long args when space is tight.
-    const std::size_t arg_budget =
-        max_line_cells > framing ? max_line_cells - framing : 0;
+    // Fixed framing and timing are never sacrificed. Error detail is preferred
+    // over arguments when the terminal is narrow.
+    const std::string status_suffix = ") → " + status;
+    const std::string timing_suffix = " in " + format_elapsed_ms(execution_ms);
+    const std::string index_prefix = std::to_string(index) + ": ";
+    const std::size_t fixed_without_name =
+        index_prefix.size() + 1 + status_suffix.size() + timing_suffix.size();
+    const std::size_t name_budget =
+        max_line_cells > fixed_without_name ? max_line_cells - fixed_without_name : 0;
+    const std::string prefix =
+        index_prefix + truncate_cells(name, name_budget) + "(";
+    const std::size_t fixed =
+        prefix.size() + status_suffix.size() + timing_suffix.size();
+    std::size_t variable_budget =
+        max_line_cells > fixed ? max_line_cells - fixed : 0;
+    if (error_text.size() > variable_budget)
+        error_text = clip_to_cells(error_text, variable_budget);
+    variable_budget -= std::min(variable_budget, error_text.size());
 
     std::ostringstream out;
     out << prefix;
-    if (arg_budget > 0) out << compact_tool_args_preview(arguments_json, arg_budget);
-    out << suffix;
+    if (variable_budget > 0)
+        out << compact_tool_args_preview(arguments_json, variable_budget);
+    out << status_suffix << error_text << timing_suffix;
     return clip_to_cells(out.str(), max_line_cells);
 }
 

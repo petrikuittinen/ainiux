@@ -5,6 +5,7 @@
 #include <vector>
 
 #include "chat/session.hpp"
+#include "agent/activity.hpp"
 #include "chat/sqlite_store.hpp"
 #include "common.hpp"
 #include "context/context.hpp"
@@ -33,6 +34,7 @@ enum class TuiEventType {
     GuardApproval,  // agent Guard Ask pending (worker blocked)
     AgentProjectNewDone,
     AgentCompactDone,
+    AgentPhase,
 };
 
 enum class ActiveJob { None, Chat, Models };
@@ -86,7 +88,7 @@ struct TuiEvent {
     std::string attached_source;
     provider::TextAttachment text_attachment;
     bool text_attachment_ready = false;
-    // Agent turn completion: structured tool lines + timestamps for elapsed UI.
+    // Agent turn completion: already-timed tool rows + wall-clock ordering stamps.
     bool agent_turn = false;
     std::vector<std::string> agent_tool_lines;
     std::vector<long long> agent_tool_line_ms;
@@ -102,6 +104,7 @@ struct TuiEvent {
     std::vector<provider::Message> agent_history;
     bool agent_compacted = false;
     bool agent_compact_no_op = false;
+    agent::AgentActivityPhase agent_phase = agent::AgentActivityPhase::Thinking;
 };
 
 enum class EscapeResult {

@@ -1608,7 +1608,19 @@ Error ReadToolRegistry::edit_workspace_file(const std::string& relative_path,
     normalized_ops.reserve(ops.array.size());
     for (const json::Value& raw_op : ops.array) {
         if (!raw_op.is_object()) return {ErrorCode::BadArgs, "each edit_file op must be an object"};
-        normalized_ops.push_back(normalize_edit_op_shape(raw_op));
+        json::Value normalized = normalize_edit_op_shape(raw_op);
+        const json::Value* type = normalized.get("type");
+        if (type == nullptr) type = normalized.get("op");
+        if (type != nullptr && type->is_string() && type->string == "insert_at" &&
+            normalized.get("line") == nullptr) {
+            // Several OpenAI-compatible local models select start_line because
+            // the permissive multi-op schema exposes both fields. For insert_at
+            // they are unambiguously equivalent.
+            const json::Value* start_line = normalized.get("start_line");
+            if (start_line != nullptr && start_line->type == json::Value::Type::Number)
+                normalized.object["line"] = *start_line;
+        }
+        normalized_ops.push_back(std::move(normalized));
     }
 
     // create_file may stand alone (or with only create_file ops) to make a new file.
@@ -1693,7 +1705,9 @@ Error ReadToolRegistry::edit_workspace_file(const std::string& relative_path,
             if (!get_size(op, "line", 0, 100000000, item.start_line, validation_error) ||
                 item.start_line == 0)
                 return {ErrorCode::BadArgs,
-                        validation_error.empty() ? "insert_at requires line" : validation_error};
+                        validation_error.empty()
+                            ? "insert_at requires line (1-based; start_line is also accepted)"
+                            : validation_error};
             const json::Value* text = op.get("new_text");
             if (text == nullptr) text = op.get("replacement");
             if (text == nullptr) text = op.get("text");
@@ -2095,7 +2109,9 @@ std::vector<provider::FunctionDefinition> ReadToolRegistry::definitions() const 
         tools.push_back(
             {"edit_file",
              "Preferred in-file edit (not for deleting whole files—use remove). Ops: "
-             "insert_at (add lines), replace_range (rewrite line spans; include full old text in "
+             "insert_at (add before a 1-based line; e.g. "
+             "{\"type\":\"insert_at\",\"line\":2,\"new_text\":\"...\"}), "
+             "replace_range (rewrite line spans; include full old text in "
              "replacement when substituting), delete_range, replace_text (exact then fuzzy), "
              "replace_symbol, create_file (alone). Line ops apply bottom-to-top.",
              schema(path + ",\"expected_file_hash\":{\"type\":\"string\"},"
@@ -3757,4 +3773,3 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
 }
 
 }  // namespace ainiux::agent
-

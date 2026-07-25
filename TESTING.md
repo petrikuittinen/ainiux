@@ -78,7 +78,8 @@ transport, filesystem, or PTY boundary is involved.
 - Headless security review with an incremental project index, native multi-round `read_file`, schema-defined `submit_security_review`, explicit expected coverage, opaque reasoning continuation, untrusted `AGENTS.md` data, coordinator output, per-run request/response/tool/validation logs, and clean stdout/stderr separation
 - Streaming, JSON/NDJSON output, thinking-trace redaction
 - REPL, benchmark modes, action-balanced safety ratings, configurable judge grading, URL fetch safety, attachments, images
-- Editor/chat shared provider/model selectors, colored selector panels, explicit-provider startup discovery, one-model auto-selection, multiple-model selection, and non-modal bare-offline startup
+- Editor/chat shared compact provider/model labels plus agent's model-only 80-column status line (aliases, custom URLs, model paths, Unicode truncation, reasoning, exact whitespace), separate ready/thinking/working activity text with live elapsed and completed-task timing, colored selector panels, explicit-provider startup discovery, one-model auto-selection, multiple-model selection, and non-modal bare-offline startup
+- Agent compact tool rows with independent execution durations, Guard-wait subtraction, failed-tool timing, persisted timed-row replay, and unchanged whole-task completion timing
 - TUI insert/attach/fetch driver
 - SQLite TUI workflows: `/new`, autosave/reload, `/list`, `/provider`, `/remove`, stale `last_thread_id`, corrupt database, image persistence across restart, `/cleanup`, and read-only expired-media threads
 

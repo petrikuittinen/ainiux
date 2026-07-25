@@ -82,7 +82,7 @@ std::string chat_startup_status(const provider::RequestContext& context) {
         return "Choose a model with /model · Change provider with /provider";
     }
     // Keep this short enough that "/list" remains visible on an 80-column status line
-    // after the "[provider / model] " prefix (integration tests assert on that hint).
+    // after the "[provider/model] " prefix (integration tests assert on that hint).
     return provider_model_status_message(context, "ready · /provider · /list");
 }
 
@@ -150,11 +150,8 @@ std::string format_agent_context_usage(long long used_tokens, long long window_t
 std::string agent_provider_model_reasoning_label(const std::string& provider_name,
                                                  const std::string& model_name,
                                                  const std::string& reasoning) {
-    const std::string provider = provider_name.empty() ? "no-provider" : provider_name;
-    const std::string model =
-        model_name.empty() ? "no-model" : ui::compact_model_name_for_display(model_name);
     const std::string reason = reasoning.empty() ? "auto" : reasoning;
-    return "[" + provider + "/" + model + " " + reason + "]";
+    return ui::provider_model_display_label(provider_name, model_name, reason);
 }
 
 std::string agent_input_label_text(const std::string& provider_name,
@@ -170,7 +167,7 @@ std::string agent_input_label_text(const std::string& provider_name,
 }
 
 std::string agent_ready_status() {
-    return "agent · ready · /mode · /cmd-out";
+    return "agent ready";
 }
 
 RegenerationPlan regeneration_plan_for_session(const chat::Session& session) {

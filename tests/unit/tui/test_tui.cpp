@@ -329,26 +329,39 @@ void test_tui_agent_chrome_formatters() {
 
 void test_agent_widgets_and_dynamic_geometry() {
     using namespace ainiux::tui;
-    const std::string status = agent_status_bar(
-        "custom_openai_chat", "custom/qwen3.6-35b-a3b-mtp", "auto",
-        1562, 131072, 80, false);
+    const std::string status = agent_status_line(
+        "custom/qwen3.6-35b-a3b-mtp", "auto", 1562, 131072, 80);
     check(status == std::string(ainiux::app_version_label()) +
-                        " [custom/qwen3.6-35b-a3b-mtp auto] 1562 tok (1.2%)",
-          "agent 80-column status uses compact provider alias and exact usage");
-    const std::string abort_status = agent_status_bar(
-        "custom_openai_chat", "very-long-model-name-that-needs-shortening", "high",
-        1562, 131072, 48, true, "streaming");
+                        " [qwen3.6-35b-a3b-mtp auto] 1562 tok (1.2%)",
+          "agent status line omits the provider and retains model, reasoning, and usage");
+    check(status.find("custom/") == std::string::npos &&
+              ainiux::editor::detail::display_width_for_range(
+                  status, 0, status.size()) <= 80,
+          "agent status line fits 80 columns without a provider");
+
+    const std::string ready =
+        agent_activity_line(AgentActivityState::Ready, false, 0, -1, 80);
+    check(ready == "Agent ready. /help /quit",
+          "initial agent activity line includes idle commands");
+    const std::string thinking =
+        agent_activity_line(AgentActivityState::Thinking, true, 131, -1, 80);
+    check(thinking == "Agent thinking (ESC to abort) 2:11",
+          "thinking activity includes cancellation and live minute-second timing");
+    const std::string working =
+        agent_activity_line(AgentActivityState::Working, true, 7, -1, 80);
+    check(working == "Agent working (ESC to abort) 0:07",
+          "working activity includes zero-padded elapsed seconds");
+    const std::string completed =
+        agent_activity_line(AgentActivityState::Ready, false, 0, 4960, 80);
+    check(completed == "Agent ready. Task completed in 4.96 seconds.",
+          "completed activity reports the real task duration");
+
+    const std::string narrow_status = agent_status_line(
+        "very-long-model-name-that-needs-shortening", "high",
+        1562, 131072, 48);
     check(ainiux::editor::detail::display_width_for_range(
-                  abort_status, 0, abort_status.size()) <= 48 &&
-              abort_status.find("ESC to abort") != std::string::npos &&
-              abort_status.find("streaming") == std::string::npos,
-          "narrow agent status shortens optional content while preserving abort");
-    const std::string percentage_status = agent_status_bar(
-        "custom_openai_chat", "very-long-model-name-that-needs-shortening", "high",
-        1562, 131072, 44, false);
-    check(percentage_status.find("1.2%") != std::string::npos &&
-              percentage_status.find("1562 tok") == std::string::npos,
-          "narrow agent status falls back to percentage-only usage");
+                  narrow_status, 0, narrow_status.size()) <= 48,
+          "narrow agent status is clipped to terminal width");
 
     AgentInputGeometry one_line = agent_input_geometry(40, 80, 1, 25);
     AgentInputGeometry multiline = agent_input_geometry(40, 80, 6, 25);
@@ -356,12 +369,14 @@ void test_agent_widgets_and_dynamic_geometry() {
     check(one_line.box_height == 3 && multiline.box_height == 8 &&
               capped.box_height == 10,
           "agent frame grows with visual rows and caps the entire box at 25 percent");
-    AgentInputGeometry tiny = agent_input_geometry(5, 20, 20, 10);
+    AgentInputGeometry tiny = agent_input_geometry(6, 20, 20, 10);
     check(tiny.box_height == 3 && tiny.content_rect.height == 1,
-          "tiny terminals retain history, status, and a three-row prompt box");
+          "tiny terminals retain history, activity, status, and a three-row prompt box");
     Layout agent_layout = layout_for_agent_terminal(40, 80, multiline.box_height);
     Layout chat_layout = layout_for_terminal(40, 80);
-    check(agent_layout.input_rect.height == 6 && chat_layout.input_rect.height == 8,
+    check(agent_layout.activity_row + 1 == agent_layout.status_row &&
+              agent_layout.status_row + 1 == agent_layout.input_label_row &&
+              agent_layout.input_rect.height == 6 && chat_layout.input_rect.height == 8,
           "dynamic agent input geometry does not change the fixed chat layout");
 
     AgentInputFrame frame{"/home/eye/my_code_project", "act"};
@@ -420,7 +435,7 @@ void test_tui_ready_and_generation_status() {
 
     const std::string streaming =
         ainiux::tui::generation_ready_status("lm_studio", "gpt-test", result, true, {}, 0);
-    check(streaming.find("[lmstudio / gpt-test]") == 0,
+    check(streaming.find("[lmstudio/gpt-test]") == 0,
           "TUI streaming completion status starts with compact provider and model names");
     check(streaming.find("TTFT: 100 ms") != std::string::npos,
           "TUI streaming completion status displays time to first token");
@@ -902,7 +917,8 @@ void test_tui_agent_history_chrome() {
     ainiux::chat::Session session;
     ainiux::provider::Message user{"user", "fix the attempts"};
     user.created_at_ms = 1'000'000;
-    ainiux::provider::Message tool{"tool", "1: read_file(\"game.py\") → ok"};
+    ainiux::provider::Message tool{
+        "tool", "1: read_file(\"game.py\") → ok in 150 ms"};
     tool.created_at_ms = 1'006'540;  // +6.54s
     ainiux::provider::Message assistant{"assistant", "Updated medium and hard to 8 attempts."};
     assistant.created_at_ms = 1'012'000;  // +12.00s
@@ -945,7 +961,7 @@ void test_tui_agent_history_chrome() {
         if (joined.find("Tool:") != std::string::npos) saw_tool_label = true;
         if (joined.find("1: read_file") != std::string::npos) saw_tool_body = true;
         if (joined.find("Updated medium") != std::string::npos) saw_answer = true;
-        if (joined.find("6540 ms") != std::string::npos) saw_tool_elapsed = true;
+        if (joined.find("in 150 ms") != std::string::npos) saw_tool_elapsed = true;
         if (joined.find("Task complete in 12.00 seconds.") != std::string::npos) {
             saw_answer_elapsed = true;
             // Completion banner must not share a line with answer body text.
@@ -1083,7 +1099,7 @@ void test_tui_input_label_and_activity_indicators() {
           "streaming chat history shows answer text without a second animation");
 
     const auto thinking_segments = ainiux::tui::activity_status_segments(
-        "[custom / Qwen3.6-35B]", ainiux::tui::ActivityKind::Thinking, 0, "thinking...");
+        "[custom/Qwen3.6-35B]", ainiux::tui::ActivityKind::Thinking, 0, "thinking...");
     check(thinking_segments.size() >= 3, "TUI thinking activity status uses styled segments");
     check(thinking_segments[0].text.find("custom") != std::string::npos,
           "TUI thinking activity status keeps provider label");
@@ -1102,7 +1118,7 @@ void test_tui_provider_display_and_activity_status() {
     session.provider = "gemini";
     session.model = "models/gemini-3.1-flash-lite-preview";
     check(ainiux::tui::session_status_label(session) ==
-              u8"[gemini / gemini-3.1-flash-lite-pre…]",
+              u8"[gemini/gemini-3.1-flash-lite-pre…]",
           "TUI activity status strips and truncates provider-prefixed model names");
 }
 
@@ -1124,7 +1140,7 @@ void test_tui_chat_startup_status() {
     ready.profile.name = "lm_studio";
     ready.options.model = "qwen-local";
     const std::string ready_status = ainiux::tui::chat_startup_status(ready);
-    check(ready_status.find("[lmstudio / qwen-local]") == 0,
+    check(ready_status.find("[lmstudio/qwen-local]") == 0,
           "TUI startup status shows provider and model when ready");
     check(ready_status.find("/provider") != std::string::npos &&
               ready_status.find("/list") != std::string::npos,
@@ -1390,10 +1406,10 @@ void test_tui_unicode_and_empty_status() {
     const std::string unicode_model = u8"模型-مرحبا-👨‍👩‍👧‍👦";
     ainiux::provider::ChatResult result;
     const std::string status = ainiux::tui::generation_ready_status(
-        u8"提供商", unicode_model, result, false, {}, 0);
+        "https://example.test/v1", unicode_model, result, false, {}, 0);
     check(status.find(unicode_model) != std::string::npos &&
-              status.find(u8"提供商") != std::string::npos,
-          "TUI generation status preserves Unicode provider and model names");
+              status.find("[custom/") == 0,
+          "TUI generation status preserves Unicode models and labels custom URLs");
 
     ainiux::tui::ThinkingDisplay hidden =
         ainiux::tui::thinking_display_text("", false);

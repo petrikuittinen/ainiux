@@ -392,9 +392,16 @@ void test_edit_file_ops() {
     agent::ReadToolRegistry tools = make_registry(workspace, true);
 
     bool has_edit = false;
-    for (const provider::FunctionDefinition& definition : tools.definitions())
-        if (definition.name == "edit_file") has_edit = true;
+    bool edit_documents_line = false;
+    for (const provider::FunctionDefinition& definition : tools.definitions()) {
+        if (definition.name == "edit_file") {
+            has_edit = true;
+            edit_documents_line =
+                definition.description.find("\"line\":2") != std::string::npos;
+        }
+    }
     check(has_edit, "mutation registry exposes edit_file");
+    check(edit_documents_line, "edit_file description shows the canonical insert_at line field");
 
     const std::string replaced = tools.execute(
         "edit_file",
@@ -411,28 +418,38 @@ void test_edit_file_ops() {
               "line1\ninserted\nLINE2\nLINE3\nline4\n",
           "insert_at inserted before line 2");
 
+    const std::string inserted_with_start_line = tools.execute(
+        "edit_file",
+        R"JSON({"path":"src/hello.cpp","ops":[{"op":"insert_at","start_line":3,"new_text":"aliased\n"}]})JSON");
+    check(json_ok(inserted_with_start_line),
+          "insert_at accepts local-model start_line alias: " + inserted_with_start_line);
+    check(read_text(fs::path(workspace) / "src" / "hello.cpp") ==
+              "line1\ninserted\naliased\nLINE2\nLINE3\nline4\n",
+          "insert_at start_line alias inserts before the requested line");
+
     const std::string deleted = tools.execute(
         "edit_file",
-        R"JSON({"path":"src/hello.cpp","ops":[{"type":"delete_range","start_line":3,"end_line":4}]})JSON");
+        R"JSON({"path":"src/hello.cpp","ops":[{"type":"delete_range","start_line":4,"end_line":5}]})JSON");
     check(json_ok(deleted), "delete_range succeeds: " + deleted);
-    check(read_text(fs::path(workspace) / "src" / "hello.cpp") == "line1\ninserted\nline4\n",
+    check(read_text(fs::path(workspace) / "src" / "hello.cpp") ==
+              "line1\ninserted\naliased\nline4\n",
           "delete_range removed lines");
 
     const std::string multi = tools.execute(
         "edit_file",
         R"JSON({"path":"src/hello.cpp","ops":[
           {"type":"replace_range","start_line":1,"end_line":1,"replacement":"A\n"},
-          {"type":"replace_range","start_line":3,"end_line":3,"replacement":"C\n"}
+          {"type":"replace_range","start_line":4,"end_line":4,"replacement":"C\n"}
         ]})JSON");
     check(json_ok(multi), "multi line ops bottom-to-top succeed: " + multi);
-    check(read_text(fs::path(workspace) / "src" / "hello.cpp") == "A\ninserted\nC\n",
+    check(read_text(fs::path(workspace) / "src" / "hello.cpp") == "A\ninserted\naliased\nC\n",
           "multi replace_range applied correctly");
 
     const std::string text_op = tools.execute(
         "edit_file",
         R"JSON({"path":"src/hello.cpp","ops":[{"type":"replace_text","old_text":"inserted","new_text":"B"}]})JSON");
     check(json_ok(text_op), "replace_text succeeds: " + text_op);
-    check(read_text(fs::path(workspace) / "src" / "hello.cpp") == "A\nB\nC\n",
+    check(read_text(fs::path(workspace) / "src" / "hello.cpp") == "A\nB\naliased\nC\n",
           "replace_text updated content");
 
     const std::string created = tools.execute(

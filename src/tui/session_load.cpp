@@ -1,32 +1,12 @@
 #include "tui/session_load.hpp"
 
 #include "chat/settings.hpp"
-#include "provider/provider.hpp"
 #include "ui/provider_model_display.hpp"
 
 #include <cctype>
 #include <sstream>
 
 namespace ainiux::tui {
-
-namespace {
-
-std::string format_provider_model_line(const std::string& provider_name, const std::string& model_name) {
-    std::ostringstream out;
-    if (!provider_name.empty()) {
-        out << provider::display_name_for_profile(provider_name);
-    } else {
-        out << "unknown provider";
-    }
-    if (!model_name.empty()) {
-        out << " / " << ui::compact_model_name_for_display(model_name);
-    } else {
-        out << " / unknown model";
-    }
-    return out.str();
-}
-
-}  // namespace
 
 bool active_context_has_provider_selection(const provider::RequestContext& active) {
     return !active.profile.offline;
@@ -81,8 +61,10 @@ bool loaded_session_differs_from_cli(const provider::RequestContext& cli_context
 std::string model_confirm_text(const provider::RequestContext& active,
                                const chat::Session& loaded) {
     std::ostringstream out;
-    out << "Thread model: " << format_provider_model_line(loaded.provider, loaded.model) << "\n";
-    out << "Current: " << format_provider_model_line(active.profile.name, active.options.model) << "\n";
+    out << "Thread model: "
+        << ui::provider_model_display_label(loaded.provider, loaded.model) << "\n";
+    out << "Current: "
+        << ui::provider_model_display_label(active.profile.name, active.options.model) << "\n";
     out << "Keep current provider and model?\n";
     out << "Press y to keep current · n or Esc to use thread model";
     return out.str();

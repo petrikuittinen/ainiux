@@ -23,14 +23,15 @@ Layout layout_for_terminal(int terminal_rows, int terminal_cols) {
 
 Layout layout_for_agent_terminal(int terminal_rows, int terminal_cols, int framed_input_height) {
     Layout layout;
-    layout.rows = std::max(5, terminal_rows);
+    layout.rows = std::max(6, terminal_rows);
     layout.cols = std::max(4, terminal_cols);
     layout.header_rows = 0;
     const int box_height =
-        std::max(3, std::min(framed_input_height, layout.rows - 2));
+        std::max(3, std::min(framed_input_height, layout.rows - 3));
     layout.history_row = 1;
-    layout.history_rows = std::max(1, layout.rows - box_height - 1);
-    layout.status_row = layout.history_row + layout.history_rows;
+    layout.history_rows = std::max(1, layout.rows - box_height - 2);
+    layout.activity_row = layout.history_row + layout.history_rows;
+    layout.status_row = layout.activity_row + 1;
     layout.input_label_row = layout.status_row + 1;  // framed top border
     layout.input_rect = {
         layout.input_label_row + 1, 2, box_height - 2, std::max(1, layout.cols - 2)};

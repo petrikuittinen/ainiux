@@ -103,17 +103,8 @@ std::string thread_summary_label(const chat::ThreadSummary& thread) {
     }
     out << thread.name;
     if (!thread.last_provider.empty() || !thread.last_model.empty()) {
-        out << " [";
-        if (!thread.last_provider.empty()) {
-            out << provider::display_name_for_profile(thread.last_provider);
-        }
-        if (!thread.last_model.empty()) {
-            if (!thread.last_provider.empty()) {
-                out << " / ";
-            }
-            out << ui::compact_model_name_for_display(thread.last_model);
-        }
-        out << "]";
+        out << " "
+            << ui::provider_model_display_label(thread.last_provider, thread.last_model);
     }
     out << " · " << thread.modified_at;
     out << " · " << thread.message_count << " msgs";

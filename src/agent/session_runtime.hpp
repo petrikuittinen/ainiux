@@ -7,6 +7,7 @@
 #include <vector>
 
 #include "agent/agent_loop.hpp"
+#include "agent/activity.hpp"
 #include "agent/agents_md.hpp"
 #include "agent/approval.hpp"
 #include "agent/prompts.hpp"
@@ -33,16 +34,14 @@ struct SessionTurnResult {
     std::size_t session_tool_calls = 0;
     bool needs_user_continue = false;
     std::string notice;
-    std::vector<std::string> compact_tool_lines;  // this turn (no elapsed suffix)
-    // Wall-clock ms for each compact_tool_lines entry / final answer / turn start.
-    // Used by the agent TUI to show tool timing ("N ms") and final "Task complete…".
+    std::vector<std::string> compact_tool_lines;  // timed rows, ready to persist/render
+    // Wall-clock completion ms for transcript ordering only.
     std::vector<long long> compact_tool_line_ms;
     long long turn_started_ms = 0;
     long long finished_at_ms = 0;
 };
 
 enum class CompactionReason { Automatic, Manual };
-
 struct SessionCompactionResult {
     Error error;
     bool compacted = false;
@@ -73,6 +72,7 @@ struct SessionRuntimeOptions {
     fetch::Options fetch_options;
     search::Options search_options;
     std::function<void(const std::string& status_line)> on_progress;
+    std::function<void(AgentActivityPhase)> on_phase;
     // Interactive Guard Ask (blocks tool worker until resolved). Empty ⇒ headless Deny.
     GuardApprovalCallback on_guard_ask;
 };
@@ -174,6 +174,9 @@ class AgentSessionRuntime {
     std::size_t session_tool_calls_ = 0;
     // Published by the agent worker; read by the TUI render path without locking conversation_.
     mutable std::atomic<long long> cached_request_tokens_{0};
+    // Total steady-clock time spent waiting for interactive Guard decisions.
+    // The tool executor snapshots this counter to exclude approval waits.
+    std::atomic<long long> guard_approval_wait_ms_{0};
 };
 
 }  // namespace ainiux::agent

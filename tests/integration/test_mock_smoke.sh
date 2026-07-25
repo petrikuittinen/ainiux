@@ -59,7 +59,10 @@ agent_err="$WORK/agent.err"
         --no-stream --no-agent-log >"$agent_out" 2>"$agent_err"
 )
 test "$(cat "$agent_out")" = "agent-smoke-ok"
-grep 'read_file' "$agent_err" >/dev/null
+grep -E 'read_file.* in [0-9]+ ms' "$agent_err" >/dev/null || {
+    cat "$agent_err" >&2
+    exit 1
+}
 test -f "$agent_workspace/.ainiux-pr/agent.sqlite"
 if grep -F 'agent-smoke-ok' "$agent_err" >/dev/null; then
     echo "agent final answer leaked to stderr" >&2

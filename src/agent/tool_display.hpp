@@ -20,8 +20,13 @@ std::size_t terminal_column_count(std::size_t fallback = 80);
 // Appends "..." when truncated. Empty max_cells yields empty string.
 std::string clip_to_cells(const std::string& text, std::size_t max_cells);
 
-// Tool / intermediate timing: "2270 ms" (whole milliseconds, clamps negative to 0).
+// Tool execution timing: "2270 ms" (whole milliseconds, clamps negative to 0).
 std::string format_elapsed_ms(long long elapsed_ms);
+
+// Subtract the Guard-wait counter delta from a tool's steady-clock wall time.
+long long execution_only_elapsed_ms(long long wall_elapsed_ms,
+                                    long long approval_wait_before_ms,
+                                    long long approval_wait_after_ms);
 
 // Final turn completion: "Task complete in 21.34 seconds." (2 decimal places).
 std::string format_task_complete(long long elapsed_ms);
@@ -48,13 +53,14 @@ std::string compact_tool_status(const std::string& result_json);
 std::string compact_tool_error_brief(const std::string& result_json,
                                      std::size_t max_cells = 56);
 
-// Format: N: name(args_preview) → ok|error: brief
+// Format: N: name(args_preview) → ok|error: brief in N ms
 // When max_line_cells is 0, uses terminal_column_count(). The final line is
 // always clipped to that width so agent logs stay on one screen row.
 std::string format_compact_tool_line(std::size_t index,
                                      const std::string& tool_name,
                                      const std::string& arguments_json,
                                      const std::string& result_json,
+                                     long long execution_ms,
                                      std::size_t max_line_cells = 0);
 
 }  // namespace ainiux::agent

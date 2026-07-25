@@ -6,6 +6,7 @@
 
 #include "editor/editor.hpp"
 #include "tui/events.hpp"
+#include "tui/tui.hpp"
 
 namespace ainiux::tui {
 
@@ -48,13 +49,15 @@ std::string agent_input_title(const AgentInputFrame& frame, int available_cells)
 std::string agent_input_top_border(const AgentInputFrame& frame, int cols);
 std::string agent_input_bottom_border(int cols);
 
-std::string agent_status_bar(const std::string& provider_name,
-                             const std::string& model_name,
-                             const std::string& reasoning,
-                             long long used_tokens,
-                             long long window_tokens,
-                             int cols,
-                             bool cancellable,
-                             const std::string& transient_status = {});
+std::string agent_status_line(const std::string& model_name,
+                              const std::string& reasoning,
+                              long long used_tokens,
+                              long long window_tokens,
+                              int cols);
+std::string agent_activity_line(AgentActivityState state,
+                                bool cancellable,
+                                long long elapsed_seconds,
+                                long long completed_task_ms,
+                                int cols);
 
 }  // namespace ainiux::tui

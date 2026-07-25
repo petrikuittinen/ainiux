@@ -121,19 +121,23 @@ void render(const chat::Session& session,
     }
 
     if (agent_mode) {
+        draw_line(layout.activity_row, cols,
+                  agent_activity_line(agent_chrome.activity_state,
+                                      agent_chrome.cancellable,
+                                      agent_chrome.task_elapsed_seconds,
+                                      agent_chrome.completed_task_ms,
+                                      cols),
+                  StyleRole::Status, style);
         if (agent_choice_active) {
             draw_line(layout.status_row, cols, render_inline_choices(inline_choices),
                       StyleRole::Status, style);
         } else {
             draw_line(layout.status_row, cols,
-                      agent_status_bar(agent_chrome.provider,
-                                       agent_chrome.model,
-                                       agent_chrome.reasoning,
-                                       agent_chrome.used_tokens,
-                                       agent_chrome.window_tokens,
-                                       cols,
-                                       agent_chrome.cancellable,
-                                       status),
+                      agent_status_line(agent_chrome.model,
+                                        agent_chrome.reasoning,
+                                        agent_chrome.used_tokens,
+                                        agent_chrome.window_tokens,
+                                        cols),
                       status_role_for_text(status), style);
         }
     } else if (show_activity_on_status_row(activity_kind, agent_mode) &&

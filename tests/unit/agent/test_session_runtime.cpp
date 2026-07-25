@@ -104,7 +104,9 @@ void test_prepare_loads_existing_display_history() {
         project.model = "test";
         check(store.open_project(project).ok(), "seed project");
         check(store.append_message("user", "earlier goal").ok(), "seed user");
-        check(store.append_message("tool", "1: read_file(\"src/hello.cpp\") → ok", "read_file",
+        check(store.append_message("tool",
+                                   "1: read_file(\"src/hello.cpp\") → ok in 15 ms",
+                                   "read_file",
                                    true, "\"src/hello.cpp\"")
                   .ok(),
               "seed tool");
@@ -134,11 +136,13 @@ void test_prepare_loads_existing_display_history() {
     bool saw_tool = false;
     bool saw_assistant = false;
     for (const auto& message : display) {
-        if (message.role == "tool") saw_tool = true;
+        if (message.role == "tool" &&
+            message.content.find("in 15 ms") != std::string::npos)
+            saw_tool = true;
         if (message.role == "assistant" && message.content.find("all done") != std::string::npos)
             saw_assistant = true;
     }
-    check(saw_tool, "tool activity restored for UI");
+    check(saw_tool, "persisted timed tool activity restored for UI");
     check(saw_assistant, "assistant reply restored for UI");
 
     runtime.reset();

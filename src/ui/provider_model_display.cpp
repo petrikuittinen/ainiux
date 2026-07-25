@@ -35,7 +35,8 @@ std::string compact_model_name_for_display(const std::string& model_name) {
 }
 
 std::string provider_model_display_label(const std::string& provider_name,
-                                         const std::string& model_name) {
+                                         const std::string& model_name,
+                                         const std::string& qualifier) {
     const std::string display_provider =
         provider_name.empty() ? "" : provider::display_name_for_profile(provider_name);
     const std::string display_model = compact_model_name_for_display(model_name);
@@ -43,12 +44,14 @@ std::string provider_model_display_label(const std::string& provider_name,
         return "";
     }
     if (display_provider.empty()) {
-        return "[" + display_model + "]";
+        return "[" + display_model + (qualifier.empty() ? "" : " " + qualifier) + "]";
     }
     if (display_model.empty()) {
-        return "[" + display_provider + " / model unknown]";
+        return "[" + display_provider + "/model unknown" +
+               (qualifier.empty() ? "" : " " + qualifier) + "]";
     }
-    return "[" + display_provider + " / " + display_model + "]";
+    return "[" + display_provider + "/" + display_model +
+           (qualifier.empty() ? "" : " " + qualifier) + "]";
 }
 
 }  // namespace ainiux::ui

@@ -132,8 +132,29 @@ void test_provider_model_display() {
           "model display truncation does not split a Unicode grapheme");
     check(ainiux::ui::provider_model_display_label(
               "gemini", "models/gemini-3.1-flash-lite-preview") ==
-              u8"[gemini / gemini-3.1-flash-lite-pre…]",
+              u8"[gemini/gemini-3.1-flash-lite-pre…]",
           "shared provider/model label uses the compact model display name");
+    check(ainiux::ui::provider_model_display_label(
+              "lm_studio", "publisher/family/qwen-local") ==
+              "[lmstudio/qwen-local]",
+          "shared label resolves canonical providers to the preferred alias");
+    check(ainiux::ui::provider_model_display_label(
+              "lmstudio", "qwen-local") == "[lmstudio/qwen-local]",
+          "shared label resolves registered aliases identically");
+    check(ainiux::ui::provider_model_display_label(
+              "https://localhost:1234/v1", "qwen-local") == "[custom/qwen-local]" &&
+              ainiux::ui::provider_model_display_label(
+                  "custom_openai_chat", "qwen-local") == "[custom/qwen-local]",
+          "shared label maps URL and custom profiles to custom");
+    check(ainiux::ui::provider_model_display_label(
+              "openrouter", "google/gemini-3.1-pro", "auto") ==
+              "[openrouter/gemini-3.1-pro auto]",
+          "shared label includes reasoning without slash whitespace");
+    check(ainiux::ui::provider_model_display_label("", "model") == "[model]" &&
+              ainiux::ui::provider_model_display_label("openai", "") ==
+                  "[openai/model unknown]" &&
+              ainiux::ui::provider_model_display_label("", "").empty(),
+          "shared label preserves missing-value fallbacks");
 }
 
 }  // namespace

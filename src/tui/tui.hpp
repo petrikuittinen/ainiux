@@ -18,6 +18,7 @@ struct InteractiveSession;
 namespace ainiux::tui {
 
 enum class ActivityKind { None, Thinking, Streaming };
+enum class AgentActivityState { Ready, Thinking, Working };
 
 struct ChatAttachment {
     std::string source;  // original path or URL string for display in ---marker---
@@ -30,6 +31,7 @@ struct Layout {
     int header_rows = 0;
     int history_row = 1;
     int history_rows = 18;
+    int activity_row = 0;
     int status_row = 19;
     int input_label_row = 20;
     editor::Rect input_rect{21, 1, 4, 80};
@@ -122,6 +124,9 @@ struct AgentChrome {
     std::string mode_label = "act";
     int input_max_height_percent = 25;
     bool cancellable = false;
+    AgentActivityState activity_state = AgentActivityState::Ready;
+    long long task_elapsed_seconds = 0;
+    long long completed_task_ms = -1;
 };
 
 struct RegenerationPlan {

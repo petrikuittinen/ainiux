@@ -1,6 +1,7 @@
 #include "agent/session_runtime.hpp"
 
 #include <algorithm>
+#include <chrono>
 #include <filesystem>
 #include <iostream>
 #include <sstream>
@@ -358,6 +359,7 @@ void AgentSessionRuntime::reset() {
     prepared_ = false;
     options_ = SessionRuntimeOptions{};
     cached_request_tokens_.store(0, std::memory_order_relaxed);
+    guard_approval_wait_ms_.store(0, std::memory_order_relaxed);
 }
 
 Error AgentSessionRuntime::prepare(const provider::RequestContext& context,
@@ -453,8 +455,14 @@ Error AgentSessionRuntime::prepare(const provider::RequestContext& context,
         tool_options.on_guard_ask =
             [this](const GuardApprovalRequest& request,
                    runtime::CancellationToken cancellation) -> GuardApprovalDecision {
+            const auto approval_started = std::chrono::steady_clock::now();
             GuardApprovalDecision decision = GuardApprovalDecision::Deny;
             if (options_.on_guard_ask) decision = options_.on_guard_ask(request, cancellation);
+            const long long approval_ms =
+                std::chrono::duration_cast<std::chrono::milliseconds>(
+                    std::chrono::steady_clock::now() - approval_started)
+                    .count();
+            guard_approval_wait_ms_.fetch_add(approval_ms, std::memory_order_relaxed);
             if (session_store_.is_open()) {
                 AgentApprovalRecord row;
                 row.tool_name = request.tool_name;
@@ -613,19 +621,15 @@ SessionTurnResult AgentSessionRuntime::run_user_turn(
 
     result.turn_started_ms = now_unix_ms();
     // Prefer the per-turn callback (TUI streaming); fall back to prepare-time options.
-    // Tool progress lines include elapsed-since-turn for live UI; DB stores raw lines.
-    auto progress = [&](const std::string& line, bool with_elapsed = false) {
-        std::string out = line;
-        if (with_elapsed && result.turn_started_ms > 0) {
-            const long long elapsed = now_unix_ms() - result.turn_started_ms;
-            out += "  ";
-            out += format_elapsed_ms(elapsed);
-        }
+    auto progress = [&](const std::string& line) {
         if (on_progress) {
-            on_progress(out);
+            on_progress(line);
             return;
         }
-        if (options_.on_progress) options_.on_progress(out);
+        if (options_.on_progress) options_.on_progress(line);
+    };
+    auto publish_phase = [&](AgentActivityPhase phase) {
+        if (options_.on_phase) options_.on_phase(phase);
     };
 
     // First turn: open singleton project row and seed provider conversation.
@@ -734,13 +738,14 @@ SessionTurnResult AgentSessionRuntime::run_user_turn(
     }
 
     const std::size_t log_width = terminal_column_count();
-    // Leave room for "  NNNN ms" on live progress lines.
-    const std::size_t tool_line_width =
-        log_width > 20 ? log_width - 20 : (log_width > 8 ? log_width : 8);
+    const std::size_t tool_line_width = log_width > 8 ? log_width : 8;
     std::size_t turn_tool_index = 0;
     auto executor = [&](const std::string& name, const std::string& arguments_json,
                         runtime::CancellationToken token) {
         ++turn_tool_index;
+        const auto execution_started = std::chrono::steady_clock::now();
+        const long long approval_before =
+            guard_approval_wait_ms_.load(std::memory_order_relaxed);
         // Surface the call immediately so interactive UIs are not stuck on a blank
         // "streaming..." placeholder while the tool (or the next model round) runs.
         {
@@ -749,18 +754,25 @@ SessionTurnResult AgentSessionRuntime::run_user_turn(
                     << compact_tool_args_preview(arguments_json,
                                                  tool_line_width > 24 ? tool_line_width - 24 : 8)
                     << ") …";
-            progress(clip_to_cells(running.str(), tool_line_width), true);
+            progress(clip_to_cells(running.str(), tool_line_width));
         }
         std::string body = tools_.execute(name, arguments_json, token);
+        const long long approval_after =
+            guard_approval_wait_ms_.load(std::memory_order_relaxed);
+        const long long execution_ms = execution_only_elapsed_ms(
+            std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::steady_clock::now() - execution_started)
+                .count(),
+            approval_before, approval_after);
         const long long completed_ms = now_unix_ms();
         const std::string line =
-            format_compact_tool_line(turn_tool_index, name, arguments_json, body, tool_line_width);
+            format_compact_tool_line(turn_tool_index, name, arguments_json, body,
+                                     execution_ms, tool_line_width);
         result.compact_tool_lines.push_back(line);
         result.compact_tool_line_ms.push_back(completed_ms);
-        progress(line, true);
+        progress(line);
         if (!options_.interactive && !context.options.quiet) {
-            const long long elapsed = completed_ms - result.turn_started_ms;
-            std::cerr << line << "  " << format_elapsed_ms(elapsed) << "\n";
+            std::cerr << line << "\n";
         }
         if (session_store_.is_open()) {
             (void)session_store_.append_message(
@@ -800,6 +812,7 @@ SessionTurnResult AgentSessionRuntime::run_user_turn(
                                                  : tools_.definitions();
 
         provider::ToolRoundResult round;
+        publish_phase(AgentActivityPhase::Thinking);
         ReviewLogContext log_context("agent");
         log_context.round = state_.turn + 1;
         log_context.cumulative_tool_calls = session_tool_calls_ + turn_tool_calls;
@@ -843,6 +856,7 @@ SessionTurnResult AgentSessionRuntime::run_user_turn(
         }
 
         turn_tool_calls += round.tool_calls.size();
+        if (!round.tool_calls.empty()) publish_phase(AgentActivityPhase::Working);
         AgentRoundOutcome outcome = handle_agent_tool_round(
             state_, limits_, context, conversation_, std::move(round), known_tools_, executor,
             cancellation);
