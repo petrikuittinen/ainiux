@@ -58,12 +58,14 @@ void test_editor_ai_continue_helpers() {
     continue_result.total_ms = 1100;
     continue_result.completion_tokens = 20;
     continue_result.completion_tokens_estimated = true;
-    check(ainiux::editor::continue_completion_status_message("custom_openai_chat",
-                                                             "gpt-test",
-                                                             continue_result,
-                                                             true) ==
-              "[custom/gpt-test] | TTFT: 100 ms | ~20.0 token/s",
-          "continue completion status reuses TUI generation metrics formatting");
+    const std::string continue_complete =
+        ainiux::editor::continue_completion_status_message(
+            "custom_openai_chat", "gpt-test", continue_result, true);
+    check(continue_complete.find(
+              "[custom/gpt-test] | TTFT: 100 ms | ~20.0 token/s") == 0 &&
+              continue_complete.find("| context: 23 tok") != std::string::npos,
+          "continue completion status reuses TUI generation metrics formatting: " +
+              continue_complete);
 
     ainiux::editor::EditorState state = ainiux::editor::EditorState::from_text("Once upon a ");
     state.cursor = state.text.size();
@@ -569,6 +571,7 @@ void test_editor_ai_setup_helpers() {
     check(ainiux::editor::apply_editor_model(created, "gpt-test").ok(),
           "apply_editor_model succeeds after provider is chosen");
     check(created->request.options.model == "gpt-test", "apply_editor_model stores model name");
+    created->request.options.context_tokens = 131072;
     created->request.options.reasoning = ainiux::ReasoningSelection::named("high");
     check(ainiux::editor::apply_editor_model(created, "gpt-test").ok() &&
               created->request.options.reasoning ==
@@ -577,9 +580,16 @@ void test_editor_ai_setup_helpers() {
     check(ainiux::editor::apply_editor_model(created, "gpt-other").ok() &&
               created->request.options.reasoning.is_auto(),
           "changing the editor model resets reasoning to Auto");
+    check(created->request.options.context_tokens == 0,
+          "changing the editor model clears its previous automatic context window");
+    created->request.options.has_context_tokens = true;
+    created->request.options.context_tokens = 1000000;
+    check(ainiux::editor::apply_editor_model(created, "gpt-explicit").ok() &&
+              created->request.options.context_tokens == 1000000,
+          "changing the editor model preserves an explicit context override");
     created->request.options.reasoning = ainiux::ReasoningSelection::named("high");
     check(ainiux::editor::apply_editor_provider_target(created, assist_config, "openai").ok() &&
-              created->request.options.model == "gpt-other" &&
+              created->request.options.model == "gpt-explicit" &&
               created->request.options.reasoning ==
                   ainiux::ReasoningSelection::named("high"),
           "reselecting the actual editor provider preserves model and reasoning");
@@ -3999,6 +4009,8 @@ void test_editor_help_document_and_command() {
           "assist command completions include /provider");
     check(std::find(completions.begin(), completions.end(), "/model ") != completions.end(),
           "assist command completions include /model");
+    check(std::find(completions.begin(), completions.end(), "/context ") != completions.end(),
+          "assist command completions include /context");
     check(std::find(completions.begin(), completions.end(), "/mode python") != completions.end() &&
               std::find(completions.begin(), completions.end(), "/mode typescript") != completions.end() &&
               std::find(completions.begin(), completions.end(), "/mode htmlonly") != completions.end() &&

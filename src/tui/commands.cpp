@@ -4,6 +4,7 @@
 #include "app/detail.hpp"
 #include "chat/generation_settings.hpp"
 #include "chat/settings.hpp"
+#include "cli/args.hpp"
 #include "ainiux/model_setting.hpp"
 #include "tui/detail/render.hpp"
 #include "tui/theme_registry.hpp"
@@ -89,6 +90,7 @@ void handle_tui_command(const std::string& text, TuiCommandContext& ctx, TuiComm
                 "/provider [PROVIDER]\n"
                 "/models\n"
                 "/model [MODEL]\n"
+                "/context [auto|TOKENS]\n"
                 "/reasoning [auto|VALUE|TOKENS]\n"
                 "/system [TEXT]\n"
                 "/setting (hide/show current settings)\n"
@@ -382,11 +384,57 @@ void handle_tui_command(const std::string& text, TuiCommandContext& ctx, TuiComm
         ctx.context.options.model = model;
         ctx.session.model = model;
         if (changed) {
+            if (!ctx.context.options.has_context_tokens) {
+                ctx.context.options.context_tokens = 0;
+            }
             ctx.context.options.reasoning = ReasoningSelection::automatic();
             ctx.context.options.reasoning_explicit = true;
         }
         ctx.status = provider_model_status_message(ctx.context, "ready");
         handlers.start_store_save();
+        if (changed && !ctx.context.options.has_context_tokens) {
+            if (!ctx.context.profile.offline && !ctx.context.options.model.empty()) {
+                handlers.refresh_model_context();
+            }
+        }
+        return;
+    }
+    if (text == "/context" || text.rfind("/context ", 0) == 0) {
+        const std::string requested = app::detail::trim_ascii(text.substr(8));
+        if (requested.empty()) {
+            if (ctx.context.options.context_tokens > 0) {
+                ctx.status =
+                    "Context window: " +
+                    std::to_string(ctx.context.options.context_tokens) + " tokens (" +
+                    (ctx.context.options.has_context_tokens ? "override" : "from /v1/models") +
+                    ")";
+            } else {
+                ctx.status =
+                    "Context window: unknown; usage will show tokens without a percentage";
+            }
+            return;
+        }
+        if (ascii_lower(requested) == "auto") {
+            ctx.context.options.has_context_tokens = false;
+            ctx.context.options.context_tokens = 0;
+            handlers.persist_settings_change("Context window set to automatic");
+            if (!ctx.context.profile.offline && !ctx.context.options.model.empty()) {
+                handlers.refresh_model_context();
+            }
+            handlers.refresh_settings_panel_if_visible();
+            return;
+        }
+        long long tokens = 0;
+        const Error parse_error = cli::parse_context_tokens(requested, tokens);
+        if (!parse_error.ok()) {
+            ctx.status = "Usage: /context [auto|TOKENS] (examples: 64k, 131072, 1M)";
+            return;
+        }
+        ctx.context.options.context_tokens = tokens;
+        ctx.context.options.has_context_tokens = true;
+        handlers.persist_settings_change(
+            "Context window set to " + std::to_string(tokens) + " tokens");
+        handlers.refresh_settings_panel_if_visible();
         return;
     }
     if (text == "/system" || text.rfind("/system ", 0) == 0) {

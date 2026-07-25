@@ -299,7 +299,8 @@ bool read_terminal_input(TerminalInputEvent& out, int timeout_ms) {
     }
 
     std::string after_esc;
-    const bool have_after_esc = read_terminal_byte(ch, 25);
+    const bool have_after_esc =
+        read_terminal_byte(ch, terminal_escape_inter_byte_timeout_ms());
     if (have_after_esc && ch == ']' && g_terminal_clipboard_query_pending) {
         std::string osc;
         const bool terminated = read_osc_body(osc);
@@ -328,7 +329,7 @@ bool read_terminal_input(TerminalInputEvent& out, int timeout_ms) {
     } else if (have_after_esc) {
         after_esc.push_back(static_cast<char>(ch));
     }
-    while (read_terminal_byte(ch, 25)) {
+    while (read_terminal_byte(ch, terminal_escape_inter_byte_timeout_ms())) {
         after_esc.push_back(static_cast<char>(ch));
         if (after_esc == "[200~") {
             std::string pasted;

@@ -23,6 +23,7 @@ constexpr const char* bracketed_paste_enable_sequence() { return "\x1b[?2004h"; 
 constexpr const char* bracketed_paste_disable_sequence() { return "\x1b[?2004l"; }
 constexpr const char* keyboard_modifier_enable_sequence() { return "\x1b[>4;2m\x1b[>1u"; }
 constexpr const char* keyboard_modifier_disable_sequence() { return "\x1b[<1u\x1b[>4;0m"; }
+constexpr int terminal_escape_inter_byte_timeout_ms() { return 100; }
 
 bool read_terminal_byte(unsigned char& out, int timeout_ms);
 bool read_terminal_input(TerminalInputEvent& out, int timeout_ms);

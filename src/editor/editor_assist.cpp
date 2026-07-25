@@ -938,6 +938,7 @@ std::vector<std::string> assist_command_completions(const EditorAssistConfig& co
     commands.push_back("/reformat-all");
     commands.push_back("/provider ");
     commands.push_back("/model ");
+    commands.push_back("/context ");
     commands.push_back("/reasoning ");
     commands.push_back("/save");
     commands.push_back("/saveas ");

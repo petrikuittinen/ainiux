@@ -71,6 +71,9 @@ Error apply_editor_provider_target(std::optional<AiContinueContext>& context,
         // A model id belongs to the provider that supplied it. Never carry it
         // across an actual provider change; the shared flow discovers a new one.
         rebuilt.context.options.model.clear();
+        if (!rebuilt.context.options.has_context_tokens) {
+            rebuilt.context.options.context_tokens = 0;
+        }
         rebuilt.context.options.reasoning = ReasoningSelection::automatic();
         rebuilt.context.options.reasoning_explicit = true;
     }
@@ -85,12 +88,11 @@ Error apply_editor_model(std::optional<AiContinueContext>& context, const std::s
     const bool changed = context->request.options.model != model;
     context->request.options.model = model;
     if (changed) {
+        if (!context->request.options.has_context_tokens) {
+            context->request.options.context_tokens = 0;
+        }
         context->request.options.reasoning = ReasoningSelection::automatic();
         context->request.options.reasoning_explicit = true;
-    }
-    const Error context_err = provider::resolve_context_window(context->request, model);
-    if (!context_err.ok()) {
-        return context_err;
     }
     return ok_error();
 }

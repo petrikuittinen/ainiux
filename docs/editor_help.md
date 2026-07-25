@@ -118,7 +118,7 @@ ainiux lmstudio --editor draft.md
 
 When a provider is set but no model is chosen yet, ainiux loads `/v1/models`. A sole result is selected automatically; multiple results open the colored model selector. File editing still works while discovery runs, and AI commands stay disabled until a model is selected.
 
-Use `Esc` then `/provider` or `/model` to change provider or model. `/provider` with no argument opens the same colored selector widget used by chat and the editor buffer list. Choosing a provider clears the previous provider's model and immediately loads `/v1/models`; multiple results open the model selector, while one result is selected automatically. `/model` with no argument loads the same endpoint and selector directly.
+Use `Esc` then `/provider` or `/model` to change provider or model. `/provider` with no argument opens the same colored selector widget used by chat and the editor buffer list. Choosing a provider clears the previous provider's model and immediately loads `/v1/models`; multiple results open the model selector, while one result is selected automatically. `/model` with no argument loads the same endpoint and selector directly. Each model change also refreshes its context window from `/v1/models` unless `--context` or `/context TOKENS` set an override. `/context auto` clears the override. When model metadata has no context window, usage shows only the estimated token count without a percentage.
 
 `/reasoning` with no argument opens a model-aware selector from `models.conf`, with Auto first and the documented provider default shown when known. `/reasoning auto` clears the override; `/reasoning VALUE` accepts a bounded ASCII value; and `/reasoning TOKENS` accepts an exact non-negative token budget. If the current model family matches but the direct value is not listed, the editor warns and asks for y/n confirmation. Confirming permits a future provider value; declining keeps the current setting. Changing the actual provider or model resets reasoning to Auto. The editor remembers its last provider, model, API, and reasoning selection globally in SQLite, loads it after configuration defaults, and still gives explicit CLI options final precedence. It does not store endpoint URLs or credentials in app state; a custom provider is restored only if its endpoint is still configured.
 
@@ -238,6 +238,7 @@ Press **`Esc`** to open the command minibuffer (`Command:`). Type a command with
 | `/auto-convert-html-to-md [yes|no]` | Show or set URL HTML-to-Markdown conversion for this process |
 | `/provider [NAME]` | Change provider (picker when omitted) |
 | `/model [MODEL]` | Change model (picker when omitted) |
+| `/context [auto\|TOKENS]` | Show, override, or resume automatic model context-window discovery |
 | `/reasoning [auto|VALUE|TOKENS]` | Show the model-aware selector or set reasoning directly |
 | `/chat` | Switch directly to ordinary chat mode |
 | `/agent` | Switch directly to interactive agent mode |

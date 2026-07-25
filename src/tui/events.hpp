@@ -56,7 +56,7 @@ enum class TuiMode {
     AgentNewConfirm,
 };
 
-enum class ModelsRequestPurpose { Preview, Picker };
+enum class ModelsRequestPurpose { Preview, Picker, ContextRefresh };
 
 struct TuiEvent {
     TuiEventType type = TuiEventType::Delta;

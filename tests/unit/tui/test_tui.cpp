@@ -21,8 +21,11 @@
 #include "tui/tui.hpp"
 #include "tui/detail/render.hpp"
 #include <algorithm>
+#include <chrono>
 #include <string>
+#include <thread>
 #include <vector>
+#include <unistd.h>
 
 namespace ainiux::test::tui {
 
@@ -282,18 +285,16 @@ void test_configured_assist_slash_command_detection() {
 }
 
 void test_tui_agent_chrome_formatters() {
-    check(ainiux::tui::effective_agent_context_window(0) ==
-              ainiux::tui::kDefaultAgentContextWindowTokens,
-          "agent chrome defaults unknown window to 256k (262144)");
+    check(ainiux::tui::effective_agent_context_window(0) == 0,
+          "agent chrome does not invent a context window");
     check(ainiux::tui::effective_agent_context_window(131072) == 131072,
           "agent chrome keeps an explicit context window");
-    check(ainiux::tui::kDefaultAgentContextWindowTokens == 262144LL,
-          "agent chrome 256k default is binary 256*1024");
-
     const std::string usage =
         ainiux::tui::format_agent_context_usage(187982, 262144);
     check(usage == "187982 tok (71.7%)",
           "agent chrome formats used tokens with one-decimal percent");
+    check(ainiux::tui::format_agent_context_usage(87575, 0) == "87575 tok",
+          "agent chrome shows token-only usage when model metadata has no context window");
 
     const std::string label = ainiux::tui::agent_provider_model_reasoning_label(
         "openrouter", "gpt-5.6-luna", "high");
@@ -306,8 +307,9 @@ void test_tui_agent_chrome_formatters() {
           "agent chrome line includes version");
     check(line.find("[openrouter/gpt-5.6-luna high]") != std::string::npos,
           "agent chrome line includes provider/model/reasoning");
-    check(line.find("187982 tok (71.7%)") != std::string::npos,
-          "agent chrome line uses default 256k window for percent when unset");
+    check(line.find("187982 tok") != std::string::npos &&
+              line.find('%') == std::string::npos,
+          "agent chrome omits percentage when model context metadata is unknown");
 
     ainiux::tui::AgentChrome chrome;
     chrome.enabled = true;
@@ -464,13 +466,13 @@ void test_tui_ready_and_generation_status() {
         ainiux::tui::generation_ready_status("lm_studio", "gpt-test", result, true, messages, 100);
     check(context_status.find("TTFT 100ms | ~20.0 token/s") != std::string::npos,
           "TUI context status uses compact timing and estimated-throughput notation");
-    check(context_status.find("context: 25 (25%)") != std::string::npos,
+    check(context_status.find("context: 25 tok (25%)") != std::string::npos,
           "TUI completion status displays estimated context usage");
 
     result.usage_json = "null";
     const std::string exhausted =
         ainiux::tui::generation_ready_status("lm_studio", "gpt-test", result, true, messages, 10);
-    check(exhausted.find("context: 17 (170%)") != std::string::npos,
+    check(exhausted.find("context: 17 tok (170%)") != std::string::npos,
           "TUI context estimate reports usage beyond the configured window");
 }
 
@@ -1366,6 +1368,62 @@ void test_tui_read_terminal_input_marks_alt_meta_prefix() {
     check(input.cursor == 0, "pending Alt/meta prefix does not move the input cursor");
 }
 
+void test_tui_thread_picker_accepts_delayed_arrow_sequence() {
+    ainiux::editor::clear_terminal_input_queue();
+
+    int input_pipe[2] = {-1, -1};
+    if (pipe(input_pipe) != 0) {
+        check(false, "thread picker delayed-arrow test creates an input pipe");
+        return;
+    }
+    const int saved_stdin = dup(STDIN_FILENO);
+    if (saved_stdin < 0 || dup2(input_pipe[0], STDIN_FILENO) < 0) {
+        check(false, "thread picker delayed-arrow test redirects stdin");
+        close(input_pipe[0]);
+        close(input_pipe[1]);
+        if (saved_stdin >= 0) close(saved_stdin);
+        return;
+    }
+    close(input_pipe[0]);
+
+    const unsigned char escape = 27;
+    const bool wrote_escape = write(input_pipe[1], &escape, 1) == 1;
+    std::thread suffix_writer([write_fd = input_pipe[1]] {
+        std::this_thread::sleep_for(std::chrono::milliseconds(60));
+        static constexpr char kArrowDown[] = "[B";
+        (void)write(write_fd, kArrowDown, sizeof(kArrowDown) - 1);
+        close(write_fd);
+    });
+
+    ainiux::editor::TerminalInputEvent event;
+    const bool read_escape = ainiux::editor::read_terminal_input(event, 0);
+    std::vector<ainiux::chat::ThreadSummary> threads(2);
+    size_t selected = 0;
+    size_t pending_delete = static_cast<size_t>(-1);
+    std::string status;
+    ainiux::tui::TuiMode mode = ainiux::tui::TuiMode::ThreadList;
+    const ainiux::tui::PickerEscapeResult picker_result =
+        read_escape
+            ? ainiux::tui::handle_thread_list_escape(
+                  threads, selected, status, pending_delete, mode)
+            : ainiux::tui::PickerEscapeResult::Cancelled;
+
+    suffix_writer.join();
+    const bool restored_stdin = dup2(saved_stdin, STDIN_FILENO) >= 0;
+    close(saved_stdin);
+    ainiux::editor::clear_terminal_input_queue();
+
+    check(wrote_escape && restored_stdin,
+          "thread picker delayed-arrow test writes input and restores stdin");
+    check(read_escape &&
+              event.type == ainiux::editor::TerminalInputType::Byte &&
+              event.byte == 27,
+          "terminal input keeps a delayed arrow sequence attached to ESC");
+    check(picker_result == ainiux::tui::PickerEscapeResult::Navigated &&
+              mode == ainiux::tui::TuiMode::ThreadList && selected == 1,
+          "thread picker moves down instead of cancelling on a delayed arrow sequence");
+}
+
 void test_tui_handle_escape_alt_pageup_scrolls_history() {
     ainiux::editor::clear_terminal_input_queue();
     ainiux::editor::push_terminal_input_bytes("\x1b[5~");
@@ -1487,6 +1545,7 @@ void run_all() {
     test_tui_ctrl_chat_history_scroll_shortcuts();
     test_tui_chat_history_scroll_keys();
     test_tui_read_terminal_input_marks_alt_meta_prefix();
+    test_tui_thread_picker_accepts_delayed_arrow_sequence();
     test_tui_handle_escape_alt_pageup_scrolls_history();
     test_tui_handle_escape_plain_pageup_moves_input();
     test_tui_last_unanswered_user_message_requires_final_user();

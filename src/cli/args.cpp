@@ -72,7 +72,7 @@ Error parse_int(const std::string& name, const std::string& text, int& out) {
     return ok_error();
 }
 
-Error parse_context_tokens(const std::string& text, long long& out) {
+Error parse_context_tokens_impl(const std::string& text, long long& out) {
     if (text.empty()) {
         return {ErrorCode::BadArgs,
                 "--context expects a positive token count such as 65536, 64k, or 1M"};
@@ -191,6 +191,10 @@ bool valid_benchmark_mode_list(const std::string& text) {
 }
 
 }  // namespace
+
+Error parse_context_tokens(const std::string& text, long long& out) {
+    return parse_context_tokens_impl(text, out);
+}
 
 const char* format_name(OutputFormat format) {
     switch (format) {

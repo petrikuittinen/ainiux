@@ -721,6 +721,11 @@ void test_model_context_window_tokens() {
     ollama.attributes = {{"context_length", "8192"}};
     models.models.push_back(ollama);
     models.model_ids.push_back("llama3");
+    ainiux::provider::ModelInfo deepseek;
+    deepseek.id = "deepseek/deepseek-v4-flash";
+    deepseek.attributes = {{"context_length", "1000000"}};
+    models.models.push_back(deepseek);
+    models.model_ids.push_back(deepseek.id);
     check(ainiux::provider::context_window_for_model(models, "llama3") == 8192,
           "model context window lookup matches model id");
 
@@ -730,11 +735,26 @@ void test_model_context_window_tokens() {
     check(context.options.context_tokens == 8192,
           "context window is applied from model metadata when not configured explicitly");
 
-    context.options.has_context_tokens = true;
-    context.options.context_tokens = 0;
+    context.options.model = "missing-model";
     ainiux::provider::apply_context_window_from_models(context, models);
     check(context.options.context_tokens == 0,
-          "explicit context window configuration blocks model metadata fallback");
+          "changing to an unknown model clears the prior automatic context window");
+
+    context.options.model = "llama3";
+    ainiux::provider::apply_context_window_from_models(context, models);
+    check(context.options.context_tokens == 8192,
+          "changing back refreshes the selected model context window");
+
+    context.options.model = "deepseek/deepseek-v4-flash";
+    ainiux::provider::apply_context_window_from_models(context, models);
+    check(context.options.context_tokens == 1000000,
+          "model changes replace the prior automatic window with the selected model's metadata");
+
+    context.options.has_context_tokens = true;
+    context.options.context_tokens = 1000000;
+    ainiux::provider::apply_context_window_from_models(context, models);
+    check(context.options.context_tokens == 1000000,
+          "explicit context window override survives model metadata refresh");
 
     ainiux::provider::ModelInfo aliased;
     aliased.id = "Gemma-4-26B-A4B";

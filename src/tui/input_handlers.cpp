@@ -24,7 +24,8 @@ bool consume_alt_meta_prefix(unsigned char& ch) {
         return false;
     }
     unsigned char next = 0;
-    if (!editor::read_terminal_byte(next, 25)) {
+    if (!editor::read_terminal_byte(
+            next, editor::terminal_escape_inter_byte_timeout_ms())) {
         return false;
     }
     ch = next;
@@ -38,7 +39,9 @@ bool read_csi_sequence(unsigned char first_byte, std::string& sequence) {
     sequence.clear();
     sequence.push_back(static_cast<char>(first_byte));
     unsigned char ch = 0;
-    while (sequence.size() < 16 && editor::read_terminal_byte(ch, 25)) {
+    while (sequence.size() < 16 &&
+           editor::read_terminal_byte(
+               ch, editor::terminal_escape_inter_byte_timeout_ms())) {
         sequence.push_back(static_cast<char>(ch));
         if (is_escape_final(ch)) {
             break;
@@ -169,7 +172,8 @@ EscapeResult handle_escape(editor::EditorState& input,
                            std::string& status,
                            bool input_only_movement) {
     unsigned char ch = 0;
-    if (!editor::read_terminal_byte(ch, 25)) {
+    if (!editor::read_terminal_byte(
+            ch, editor::terminal_escape_inter_byte_timeout_ms())) {
         return EscapeResult::Unhandled;
     }
     bool alt_meta_prefix = consume_alt_meta_prefix(ch);
@@ -216,13 +220,16 @@ PickerEscapeResult handle_list_picker_escape(size_t item_count,
                                              std::string& status,
                                              const std::string& selection_label) {
     unsigned char ch = 0;
-    if (!editor::read_terminal_byte(ch, 25)) {
+    if (!editor::read_terminal_byte(
+            ch, editor::terminal_escape_inter_byte_timeout_ms())) {
         return PickerEscapeResult::Cancelled;
     }
     std::string sequence;
     if (ch == '[' || ch == 'O') {
         sequence.push_back(static_cast<char>(ch));
-        while (sequence.size() < 16 && editor::read_terminal_byte(ch, 25)) {
+        while (sequence.size() < 16 &&
+               editor::read_terminal_byte(
+                   ch, editor::terminal_escape_inter_byte_timeout_ms())) {
             sequence.push_back(static_cast<char>(ch));
             if (is_escape_final(ch)) {
                 break;
@@ -247,7 +254,8 @@ PickerEscapeResult handle_thread_list_escape(std::vector<chat::ThreadSummary>& t
                                                 size_t& pending_delete,
                                                 TuiMode& mode) {
     unsigned char ch = 0;
-    if (!editor::read_terminal_byte(ch, 25)) {
+    if (!editor::read_terminal_byte(
+            ch, editor::terminal_escape_inter_byte_timeout_ms())) {
         mode = TuiMode::Chat;
         return PickerEscapeResult::Cancelled;
     }
@@ -255,7 +263,9 @@ PickerEscapeResult handle_thread_list_escape(std::vector<chat::ThreadSummary>& t
         std::string seq;
         seq.push_back('[');
         unsigned char next = 0;
-        while (seq.size() < 8 && editor::read_terminal_byte(next, 25)) {
+        while (seq.size() < 8 &&
+               editor::read_terminal_byte(
+                   next, editor::terminal_escape_inter_byte_timeout_ms())) {
             seq.push_back(static_cast<char>(next));
             if ((next >= 'A' && next <= 'Z') || next == '~') {
                 break;
@@ -289,7 +299,8 @@ PickerEscapeResult handle_attachment_list_escape(size_t item_count,
                                                  size_t& pending_delete,
                                                  TuiMode& mode) {
     unsigned char ch = 0;
-    if (!editor::read_terminal_byte(ch, 25)) {
+    if (!editor::read_terminal_byte(
+            ch, editor::terminal_escape_inter_byte_timeout_ms())) {
         mode = TuiMode::Chat;
         return PickerEscapeResult::Cancelled;
     }
@@ -297,7 +308,9 @@ PickerEscapeResult handle_attachment_list_escape(size_t item_count,
         std::string seq;
         seq.push_back('[');
         unsigned char next = 0;
-        while (seq.size() < 8 && editor::read_terminal_byte(next, 25)) {
+        while (seq.size() < 8 &&
+               editor::read_terminal_byte(
+                   next, editor::terminal_escape_inter_byte_timeout_ms())) {
             seq.push_back(static_cast<char>(next));
             if ((next >= 'A' && next <= 'Z') || next == '~') {
                 break;

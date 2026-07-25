@@ -12,7 +12,7 @@ namespace ainiux::editor {
 
 struct EditorModelsEvent {
     Error error;
-    std::vector<std::string> models;
+    provider::ModelsResult models;
 };
 
 struct EditorModelListRuntime {
@@ -20,7 +20,7 @@ struct EditorModelListRuntime {
     runtime::EventQueue<EditorModelsEvent> events;
 
     void start(const provider::RequestContext& context);
-    bool process(const std::function<void(std::vector<std::string>)>& on_success,
+    bool process(const std::function<void(provider::ModelsResult)>& on_success,
                  const std::function<void(const std::string&)>& on_error);
 };
 

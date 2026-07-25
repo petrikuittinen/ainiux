@@ -279,6 +279,9 @@ app::EditorRunResult run_editor(const std::string& path,
     EditorState buffer_list_view;
     EditorProviderModelPicker picker;
     EditorModelListRuntime model_list;
+    provider::ModelsResult cached_editor_models;
+    bool have_cached_editor_models = false;
+    bool model_list_context_only = false;
     runtime::EventQueue<EditorSelectionSaveEvent> selection_save_events;
     runtime::JobHandle selection_save_job;
     std::string pending_selection_save;
@@ -856,7 +859,7 @@ app::EditorRunResult run_editor(const std::string& path,
         minibuffer_message(minibuffer, picker.status_message());
     };
 
-    auto start_model_list = [&]() {
+    auto start_model_list = [&](bool context_only = false) {
         if (!editor_ai_has_provider(ai_continue)) {
             minibuffer_message(minibuffer, editor_no_provider_message());
             return;
@@ -865,8 +868,10 @@ app::EditorRunResult run_editor(const std::string& path,
             minibuffer_message(minibuffer, "Model list is already loading");
             return;
         }
+        model_list_context_only = context_only;
         model_list.start(ai_continue->request);
-        minibuffer_message(minibuffer, "Loading models...");
+        minibuffer_message(minibuffer,
+                           context_only ? "Loading model context..." : "Loading models...");
     };
 
     auto open_model_picker = [&](std::vector<std::string> models) {
@@ -1008,6 +1013,58 @@ app::EditorRunResult run_editor(const std::string& path,
         }
         refresh_ai_status();
         schedule_selection_save();
+        if (!ai_continue->request.options.has_context_tokens) {
+            start_model_list(true);
+        }
+    };
+
+    auto handle_context_command = [&](const std::string& requested) {
+        if (requested.empty()) {
+            if (ai_continue.has_value() &&
+                ai_continue->request.options.context_tokens > 0) {
+                const cli::Options& options = ai_continue->request.options;
+                minibuffer_message(
+                    minibuffer,
+                    "Context window: " + std::to_string(options.context_tokens) +
+                        " tokens (" +
+                        (options.has_context_tokens ? "override" : "from /v1/models") +
+                        ")");
+            } else {
+                minibuffer_message(
+                    minibuffer,
+                    "Context window: unknown; usage will show tokens without a percentage");
+            }
+            return;
+        }
+        Error ensure_error = ensure_editor_ai_context(ai_continue, assist_config);
+        if (!ensure_error.ok()) {
+            minibuffer_message(minibuffer, ensure_error.message);
+            return;
+        }
+        if (ascii_lower(requested) == "auto") {
+            ai_continue->request.options.has_context_tokens = false;
+            ai_continue->request.options.context_tokens = 0;
+            schedule_selection_save();
+            if (editor_ai_ready(ai_continue)) {
+                start_model_list(true);
+            } else {
+                minibuffer_message(minibuffer, "Context window set to automatic");
+            }
+            return;
+        }
+        long long tokens = 0;
+        const Error parse_error = cli::parse_context_tokens(requested, tokens);
+        if (!parse_error.ok()) {
+            minibuffer_message(
+                minibuffer,
+                "Usage: /context [auto|TOKENS] (examples: 64k, 131072, 1M)");
+            return;
+        }
+        ai_continue->request.options.context_tokens = tokens;
+        ai_continue->request.options.has_context_tokens = true;
+        schedule_selection_save();
+        minibuffer_message(
+            minibuffer, "Context window set to " + std::to_string(tokens) + " tokens");
     };
 
     auto handle_picker_list_escape = [&]() {
@@ -1041,6 +1098,11 @@ app::EditorRunResult run_editor(const std::string& path,
             return;
         }
         schedule_selection_save();
+        if (have_cached_editor_models &&
+            !ai_continue->request.options.has_context_tokens) {
+            provider::apply_context_window_from_models(
+                ai_continue->request, cached_editor_models, model_name);
+        }
         refresh_ai_status();
     };
 
@@ -1054,7 +1116,25 @@ app::EditorRunResult run_editor(const std::string& path,
 
     auto process_model_events = [&]() -> bool {
         return model_list.process(
-            [&](std::vector<std::string> models) {
+            [&](provider::ModelsResult models_result) {
+                cached_editor_models = models_result;
+                have_cached_editor_models = true;
+                if (model_list_context_only) {
+                    model_list_context_only = false;
+                    provider::apply_context_window_from_models(
+                        ai_continue->request, cached_editor_models,
+                        ai_continue->request.options.model);
+                    minibuffer_message(
+                        minibuffer,
+                        ai_continue->request.options.context_tokens > 0
+                            ? "Model context: " +
+                                  std::to_string(
+                                      ai_continue->request.options.context_tokens) +
+                                  " tokens"
+                            : "Context window unavailable; showing tokens only");
+                    return;
+                }
+                std::vector<std::string> models = models_result.model_ids;
                 if (!ui::should_auto_select_only_model(models)) {
                     open_model_picker(std::move(models));
                     return;
@@ -1064,13 +1144,20 @@ app::EditorRunResult run_editor(const std::string& path,
                     minibuffer_message(minibuffer, apply_error.message);
                     return;
                 }
+                if (!ai_continue->request.options.has_context_tokens) {
+                    provider::apply_context_window_from_models(
+                        ai_continue->request, cached_editor_models, models.front());
+                }
                 schedule_selection_save();
                 minibuffer_message(
                     minibuffer,
                     tui::provider_model_status_message(ai_continue->request,
                                                        "only model auto-selected"));
             },
-            [&](const std::string& message) { minibuffer_message(minibuffer, message); });
+            [&](const std::string& message) {
+                model_list_context_only = false;
+                minibuffer_message(minibuffer, message);
+            });
     };
 
     auto handle_open_minibuffer_key = [&](unsigned char ch) -> bool {
@@ -1307,7 +1394,6 @@ app::EditorRunResult run_editor(const std::string& path,
         }
         long long context_tokens = 0;
         if (ai_continue.has_value()) {
-            provider::resolve_context_window(ai_continue->request, session_state.model_name);
             context_tokens = ai_continue->request.options.context_tokens;
         }
         const std::vector<provider::Message>& usage_messages =
@@ -2250,6 +2336,13 @@ app::EditorRunResult run_editor(const std::string& path,
             handle_model_command(command_line.size() <= 6 ? "" : trim_ascii_copy(command_line.substr(6)));
             return;
         }
+        if (command_line == "/context" || command_line.rfind("/context ", 0) == 0) {
+            pending_assist = PendingAssist{};
+            exit_assist_command_mode(minibuffer, assist_completer);
+            handle_context_command(
+                command_line.size() <= 8 ? "" : trim_ascii_copy(command_line.substr(8)));
+            return;
+        }
         const ParsedAssistCommand parsed = parse_assist_command(
             minibuffer.input, ai_continue.has_value() ? ai_continue->assist_config : assist_config);
         if (!parsed.ok) {
@@ -3131,10 +3224,15 @@ app::EditorRunResult run_editor(const std::string& path,
         }
     };
 
-    if (ai_continue.has_value() &&
-        provider::needs_interactive_model_selection(ai_continue->request)) {
-        start_model_list();
-        render_editor();
+    if (ai_continue.has_value()) {
+        if (provider::needs_interactive_model_selection(ai_continue->request)) {
+            start_model_list();
+            render_editor();
+        } else if (editor_ai_ready(ai_continue) &&
+                   !ai_continue->request.options.has_context_tokens) {
+            start_model_list(true);
+            render_editor();
+        }
     }
     schedule_selection_save();
 

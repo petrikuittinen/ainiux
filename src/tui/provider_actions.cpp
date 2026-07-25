@@ -23,6 +23,9 @@ bool apply_selected_provider(provider::RequestContext& context,
                          rebuilt.context.base_url != context.base_url;
     if (changed) {
         rebuilt.context.options.model.clear();
+        if (!rebuilt.context.options.has_context_tokens) {
+            rebuilt.context.options.context_tokens = 0;
+        }
         rebuilt.context.options.reasoning = ReasoningSelection::automatic();
         rebuilt.context.options.reasoning_explicit = true;
     }

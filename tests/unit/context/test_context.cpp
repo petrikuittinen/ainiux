@@ -157,12 +157,12 @@ void test_context_usage_formatting() {
           "context usage uses provider prompt tokens when totals are missing");
 
     result.usage_json = "null";
-    check(ainiux::context::format_context_usage(1000, 10000) == "1000 (10%)",
+    check(ainiux::context::format_context_usage(1000, 10000) == "1000 tok (10%)",
           "context usage formats token count and percentage");
-    check(ainiux::context::format_context_usage(20, 131072) == "20 (<1%)",
+    check(ainiux::context::format_context_usage(20, 131072) == "20 tok (<1%)",
           "context usage shows sub-one-percent usage without rounding to zero");
-    check(ainiux::context::format_context_usage(1000, 0).empty(),
-          "context usage is omitted without a configured window");
+    check(ainiux::context::format_context_usage(1000, 0) == "1000 tok",
+          "unknown context window retains tokens without inventing a percentage");
 }
 
 void test_truncate_middle_preserves_beginning() {

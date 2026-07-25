@@ -231,7 +231,7 @@ app::TuiRunResult run(provider::RequestContext context,
             used = display_used;
         }
         chrome.used_tokens = used;
-        chrome.window_tokens = effective_agent_context_window(context.options.context_tokens);
+        chrome.window_tokens = context.options.context_tokens;
         chrome.workspace =
             agent_runtime && agent_runtime->prepared()
                 ? agent_runtime->workspace()
@@ -1523,6 +1523,8 @@ app::TuiRunResult run(provider::RequestContext context,
     };
     command_handlers.start_store_save = start_store_save;
     command_handlers.start_models = start_models;
+    command_handlers.refresh_model_context =
+        [&]() { start_models(ModelsRequestPurpose::ContextRefresh); };
     command_handlers.open_reasoning_picker = open_reasoning_picker;
     command_handlers.request_reasoning_confirmation =
         [&](const std::string& reasoning, const std::string& warning) {
@@ -1668,12 +1670,15 @@ app::TuiRunResult run(provider::RequestContext context,
         context.options.model = model_name;
         session.model = model_name;
         if (changed) {
+            if (!context.options.has_context_tokens) {
+                context.options.context_tokens = 0;
+            }
             context.options.reasoning = ReasoningSelection::automatic();
             context.options.reasoning_explicit = true;
         }
         loaded_thread_requires_provider_selection = false;
-        if (have_cached_models) {
-            provider::apply_context_window_from_models(context, cached_models);
+        if (have_cached_models && !context.options.has_context_tokens) {
+            provider::apply_context_window_from_models(context, cached_models, model_name);
         }
         picker_items.clear();
         picker_selected = 0;
@@ -1823,6 +1828,11 @@ app::TuiRunResult run(provider::RequestContext context,
                      ui::provider_model_display_label(context.profile.name,
                                                       context.options.model);
             start_store_save();
+            if (!context.profile.offline && !context.options.model.empty() &&
+                !context.options.has_context_tokens) {
+                context.options.context_tokens = 0;
+                start_models(ModelsRequestPurpose::ContextRefresh);
+            }
         } else {
             set_status_maybe_agent_error(detail::error_line(context_error), true);
         }
@@ -1907,13 +1917,10 @@ app::TuiRunResult run(provider::RequestContext context,
         start_turn_with_pending_attachments(display_content);
     };
 
-    if (!context.profile.offline && !context.options.has_context_tokens &&
-        context.options.context_tokens <= 0) {
-        provider::resolve_context_window(context);
-    }
-    if (!context.profile.offline && !context.options.model.empty() && !context.options.has_context_tokens &&
-        context.options.context_tokens <= 0 && active_job == ActiveJob::None) {
-        start_models(ModelsRequestPurpose::Preview);
+    if (!context.profile.offline && !context.options.model.empty() &&
+        !context.options.has_context_tokens && active_job == ActiveJob::None) {
+        context.options.context_tokens = 0;
+        start_models(ModelsRequestPurpose::ContextRefresh);
     }
 
     // Agent mode: refresh the code index and restore project history before the
@@ -2084,11 +2091,6 @@ app::TuiRunResult run(provider::RequestContext context,
                     if (should_regenerate) {
                         start_queued_regeneration(regenerate_erase_from);
                     } else {
-                        if (!context.options.has_context_tokens && context.options.context_tokens <= 0) {
-                            const std::string selector =
-                                !event.chat.model.empty() ? event.chat.model : context.options.model;
-                            provider::resolve_context_window(context, selector);
-                        }
                         if (event.compacted) {
                             status = event.compaction.notice;
                         } else if (context.options.agent) {
@@ -2231,6 +2233,13 @@ app::TuiRunResult run(provider::RequestContext context,
                         session = std::move(event.session);
                         app::apply_system_prompt(session, context.options.system);
                         finish_loaded_session("Loaded " + event.text);
+                        if (mode == TuiMode::Chat && !context.profile.offline &&
+                            !context.options.model.empty() &&
+                            !context.options.has_context_tokens &&
+                            active_job == ActiveJob::None) {
+                            context.options.context_tokens = 0;
+                            start_models(ModelsRequestPurpose::ContextRefresh);
+                        }
                     } else {
                         set_status_maybe_agent_error(detail::error_line(event.error), true);
                     }
@@ -2252,6 +2261,13 @@ app::TuiRunResult run(provider::RequestContext context,
                         app::apply_system_prompt(session, context.options.system);
                         finish_loaded_session("Loaded thread: " +
                                               (session.name.empty() ? event.text : session.name));
+                        if (mode == TuiMode::Chat && !context.profile.offline &&
+                            !context.options.model.empty() &&
+                            !context.options.has_context_tokens &&
+                            active_job == ActiveJob::None) {
+                            context.options.context_tokens = 0;
+                            start_models(ModelsRequestPurpose::ContextRefresh);
+                        }
                     } else {
                         set_status_maybe_agent_error(detail::error_line(event.error), true);
                     }
@@ -2383,16 +2399,18 @@ app::TuiRunResult run(provider::RequestContext context,
                     }
                     break;
                 }
-                case TuiEventType::ModelsDone:
+                case TuiEventType::ModelsDone: {
                     model_job.join();
                     active_job = ActiveJob::None;
+                    const ModelsRequestPurpose completed_purpose = models_request_purpose;
+                    models_request_purpose = ModelsRequestPurpose::Preview;
                     if (event.error.ok()) {
                         cached_models = std::move(event.models_result);
                         have_cached_models = true;
-                        provider::apply_context_window_from_models(context, cached_models);
+                        provider::apply_context_window_from_models(
+                            context, cached_models, context.options.model);
                     }
-                    if (models_request_purpose == ModelsRequestPurpose::Picker) {
-                        models_request_purpose = ModelsRequestPurpose::Preview;
+                    if (completed_purpose == ModelsRequestPurpose::Picker) {
                         if (!event.error.ok()) {
                             set_status_maybe_agent_error(detail::error_line(event.error), true);
                         } else if (event.models.empty()) {
@@ -2415,12 +2433,27 @@ app::TuiRunResult run(provider::RequestContext context,
                             status = ui::text_selector_status("Selected model", picker_selected,
                                                               picker_items.size());
                         }
+                    } else if (completed_purpose == ModelsRequestPurpose::ContextRefresh) {
+                        if (!event.error.ok()) {
+                            set_status_maybe_agent_error(
+                                "Model selected; context window unavailable: " +
+                                    event.error.message,
+                                true);
+                        } else if (context.options.context_tokens > 0) {
+                            status = "Model context: " +
+                                     std::to_string(context.options.context_tokens) +
+                                     " tokens";
+                        } else {
+                            status =
+                                "Model selected; context window unavailable (showing tokens only)";
+                        }
                     } else if (event.error.ok()) {
                         status = join_models_preview(event.models);
                     } else {
                         set_status_maybe_agent_error(detail::error_line(event.error), true);
                     }
                     break;
+                }
                 case TuiEventType::CompletionDone:
                     completion_job.join();
                     completion_pending = false;

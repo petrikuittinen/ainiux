@@ -2768,9 +2768,13 @@ long long context_window_for_model(const ModelsResult& models, const std::string
 void apply_context_window_from_models(RequestContext& context,
                                       const ModelsResult& models,
                                       const std::string& model_selector) {
-    if (context.options.has_context_tokens || context.options.context_tokens > 0) {
+    if (context.options.has_context_tokens) {
         return;
     }
+    // An automatically discovered value belongs only to the model for which it
+    // was discovered. Clear it before every lookup so a missing model/attribute
+    // never inherits the previous model's window.
+    context.options.context_tokens = 0;
     std::vector<std::string> selectors;
     if (!model_selector.empty()) {
         selectors.push_back(model_selector);
@@ -2786,19 +2790,13 @@ void apply_context_window_from_models(RequestContext& context,
             return;
         }
     }
-    if (!models.model_ids.empty()) {
-        const long long window = context_window_for_model(models, models.model_ids.front());
-        if (window > 0) {
-            context.options.context_tokens = window;
-        }
-    }
 }
 
 Error resolve_context_window(RequestContext& context, const std::string& model_selector) {
-    if (context.profile.offline || context.options.has_context_tokens ||
-        context.options.context_tokens > 0) {
+    if (context.profile.offline || context.options.has_context_tokens) {
         return ok_error();
     }
+    context.options.context_tokens = 0;
     if (model_selector.empty() && context.options.model.empty()) {
         return ok_error();
     }

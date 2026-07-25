@@ -127,19 +127,16 @@ std::string generation_ready_status(const std::string& provider_name,
 }
 
 long long effective_agent_context_window(long long context_tokens) {
-    // Display-only fallback when CLI/config and /v1/models have not supplied a window.
-    // Does not mutate Options.context_tokens (auto-compact keeps using the real value).
-    if (context_tokens > 0) {
-        return context_tokens;
-    }
-    return kDefaultAgentContextWindowTokens;
+    return context_tokens > 0 ? context_tokens : 0;
 }
 
 std::string format_agent_context_usage(long long used_tokens, long long window_tokens) {
     const long long window = effective_agent_context_window(window_tokens);
     const long long used = used_tokens < 0 ? 0 : used_tokens;
     std::ostringstream out;
-    out << used << " tok (";
+    out << used << " tok";
+    if (window <= 0) return out.str();
+    out << " (";
     // One decimal percent; round half away from zero for positive values.
     const double percent =
         window > 0 ? (static_cast<double>(used) * 100.0) / static_cast<double>(window) : 0.0;

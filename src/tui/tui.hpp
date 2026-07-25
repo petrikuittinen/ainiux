@@ -97,10 +97,6 @@ std::string generation_ready_status(const std::string& provider_name,
                                     const std::vector<provider::Message>& messages,
                                     long long context_tokens);
 
-// Agent-mode permanent chrome (input label). Display-only window default is 256k
-// (262144); does not write into Options.context_tokens.
-inline constexpr long long kDefaultAgentContextWindowTokens = 262144LL;
-
 long long effective_agent_context_window(long long context_tokens);
 std::string format_agent_context_usage(long long used_tokens, long long window_tokens);
 std::string agent_provider_model_reasoning_label(const std::string& provider_name,

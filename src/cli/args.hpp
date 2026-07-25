@@ -199,6 +199,10 @@ struct Options {
     ModelCatalog model_catalog;
 };
 
+// Parse a context-window token count accepted by both --context and interactive
+// /context commands (plain integer, binary k suffix, or decimal M suffix).
+Error parse_context_tokens(const std::string& text, long long& out);
+
 struct ParseResult {
     Options options;
     Error error;

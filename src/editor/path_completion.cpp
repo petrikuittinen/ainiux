@@ -30,6 +30,7 @@ const std::vector<std::string>& chat_command_completions() {
         "/attach ",
         "/clear",
         "/cleanup",
+        "/context ",
         "/exit",
         "/fetch ",
         "/search ",

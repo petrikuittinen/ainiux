@@ -79,6 +79,7 @@ transport, filesystem, or PTY boundary is involved.
 - Streaming, JSON/NDJSON output, thinking-trace redaction
 - REPL, benchmark modes, action-balanced safety ratings, configurable judge grading, URL fetch safety, attachments, images
 - Editor/chat shared compact provider/model labels plus agent's model-only 80-column status line (aliases, custom URLs, model paths, Unicode truncation, reasoning, exact whitespace), separate ready/thinking/working activity text with live elapsed and completed-task timing, colored selector panels, explicit-provider startup discovery, one-model auto-selection, multiple-model selection, and non-modal bare-offline startup
+- Per-model `/v1/models` context-window refresh across chat, editor, and agent; sticky CLI/`/context` overrides; and token-only usage when model metadata has no window
 - Agent compact tool rows with independent execution durations, Guard-wait subtraction, failed-tool timing, persisted timed-row replay, and unchanged whole-task completion timing
 - TUI insert/attach/fetch driver
 - SQLite TUI workflows: `/new`, autosave/reload, `/list`, `/provider`, `/remove`, stale `last_thread_id`, corrupt database, image persistence across restart, `/cleanup`, and read-only expired-media threads

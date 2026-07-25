@@ -36,6 +36,7 @@ struct TuiCommandHandlers {
     std::function<bool(const std::string&)> apply_selected_provider;
     std::function<void()> start_store_save;
     std::function<void(ModelsRequestPurpose)> start_models;
+    std::function<void()> refresh_model_context;
     std::function<void()> open_reasoning_picker;
     std::function<void(const std::string&, const std::string&)> request_reasoning_confirmation;
     std::function<void(const std::string&)> persist_settings_change;
