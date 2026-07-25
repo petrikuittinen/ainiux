@@ -63,6 +63,8 @@ struct Options {
     bool agent = false;
     // One-shot headless agent goal: -r / --run / --run-file / ainiux run
     bool agent_run = false;
+    // One-shot agent task uses the planning prompt and planning-document policy.
+    bool agent_plan = false;
     bool agent_log_enabled = true;
     bool agent_log_cli_explicit = false;
 

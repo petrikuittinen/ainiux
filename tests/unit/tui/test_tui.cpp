@@ -1493,6 +1493,15 @@ void test_agent_project_slash_command_parsing() {
     check(invalid.action == ainiux::tui::AgentSlashAction::Invalid &&
               invalid.error == "Usage: /compact",
           "agent /compact rejects arguments");
+    check(ainiux::tui::parse_agent_slash_command("/plan").action ==
+              ainiux::tui::AgentSlashAction::Plan,
+          "agent /plan parses as a task-mode switch");
+    check(ainiux::tui::parse_agent_slash_command("/act").action ==
+              ainiux::tui::AgentSlashAction::Act,
+          "agent /act parses as a task-mode switch");
+    check(ainiux::tui::parse_agent_slash_command("/plan later").action ==
+              ainiux::tui::AgentSlashAction::None,
+          "agent task-mode commands require an exact match");
 }
 
 void test_agent_project_history_handoff_clears_successful_empty_project() {

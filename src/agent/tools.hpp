@@ -29,10 +29,10 @@ struct SourceRange {
     bool redacted = false;
 };
 
-// Snapshot-backed workspace tools. Security-review keeps allow_mutations=false
-// (read/search/inspect only). Agent mode sets allow_mutations=true to expose
-// write_file, edit_file, str_replace (with fuzzy fallback), remove, apply_patch,
-// and network tools (fetch_url / search_web) when allow_network is also true.
+enum class MutationPolicy { Disabled, PlanningDocuments, Full };
+
+// Snapshot-backed workspace tools. Security review disables mutation, Plan
+// limits writes to approved planning Markdown, and Act enables full mutation.
 struct HistoryBackupPolicy {
     bool enabled = true;
     std::size_t max_bytes = 1024U * 1024U;  // 1 MiB
@@ -40,7 +40,7 @@ struct HistoryBackupPolicy {
 };
 
 struct ToolRegistryOptions {
-    bool allow_mutations = false;
+    MutationPolicy mutation_policy = MutationPolicy::Disabled;
     // Network tools reuse src/fetch and src/search. Disabled for security-review.
     bool allow_network = false;
     HistoryBackupPolicy history_backup;
@@ -61,7 +61,9 @@ class ReadToolRegistry {
                         ToolRegistryOptions options = {});
 
     const index::Snapshot& snapshot() const { return snapshot_; }
-    bool allow_mutations() const { return allow_mutations_; }
+    bool allow_mutations() const { return mutation_policy_ != MutationPolicy::Disabled; }
+    MutationPolicy mutation_policy() const { return mutation_policy_; }
+    void set_mutation_policy(MutationPolicy policy) { mutation_policy_ = policy; }
     std::vector<provider::FunctionDefinition> definitions() const;
     // Mutating tools update the in-memory snapshot so later reads in the same
     // run see the new file hashes. Security-review never enables mutations.
@@ -133,6 +135,10 @@ class ReadToolRegistry {
     void note_removed_path(const std::string& relative_path) const;
     void rebuild_file_map() const;
     Error resolve_writable_path(const std::string& relative_path, std::filesystem::path& absolute) const;
+    Error normalize_mutation_path(const std::string& input, std::string& relative) const;
+    Error validate_mutation_path(const std::string& relative_path,
+                                 bool create_dirs,
+                                 bool deleting) const;
     Error save_history_copy(const std::string& relative_path,
                             const std::string& previous_content,
                             std::string& history_path) const;
@@ -148,7 +154,7 @@ class ReadToolRegistry {
     mutable index::Snapshot snapshot_;
     std::vector<std::string> secrets_;
     mutable std::map<std::string, const index::IndexedFile*> files_;
-    bool allow_mutations_ = false;
+    MutationPolicy mutation_policy_ = MutationPolicy::Disabled;
     bool allow_network_ = false;
     HistoryBackupPolicy history_backup_{};
     fetch::Options fetch_options_{};

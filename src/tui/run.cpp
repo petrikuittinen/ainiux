@@ -165,7 +165,7 @@ app::TuiRunResult run(provider::RequestContext context,
                                 : (agent_runtime && agent_runtime->prepared()
                                        ? agent_runtime->workspace()
                                        : std::string("."));
-        options.allow_mutations = true;
+        options.task_mode = agent::AgentTaskMode::Act;
         options.allow_network = true;
         options.interactive = true;
         options.enable_session_db = true;
@@ -236,7 +236,10 @@ app::TuiRunResult run(provider::RequestContext context,
             agent_runtime && agent_runtime->prepared()
                 ? agent_runtime->workspace()
                 : initial_agent_workspace;
-        chrome.mode_label = "act";
+        chrome.mode_label =
+            agent_runtime && agent_runtime->prepared()
+                ? agent::agent_task_mode_name(agent_runtime->task_mode())
+                : "act";
         chrome.input_max_height_percent =
             context.options.agent_input_max_height_percent;
         chrome.cancellable = active_job != ActiveJob::None || file_job.joinable() ||
@@ -1512,6 +1515,27 @@ app::TuiRunResult run(provider::RequestContext context,
     command_handlers.start_new_chat_thread = [&](const std::string& name) { start_new_chat_thread(name); };
     command_handlers.start_new_agent_project = start_new_agent_project;
     command_handlers.start_agent_compaction = start_agent_compaction;
+    command_handlers.switch_agent_task_mode = [&](agent::AgentTaskMode mode) {
+        if (!agent_runtime || !agent_runtime->prepared()) {
+            status = "Agent session runtime is not ready";
+            return;
+        }
+        if (file_job.joinable()) {
+            status =
+                "Cannot switch task mode while an agent file job is running; wait or cancel it first";
+            return;
+        }
+        const agent::AgentTaskMode before = agent_runtime->task_mode();
+        const Error error = agent_runtime->switch_task_mode(mode);
+        if (!error.ok()) {
+            status = error.message;
+            return;
+        }
+        status = before == mode
+                     ? std::string("Already in ") + agent::agent_task_mode_name(mode) + " mode"
+                     : std::string("Switched agent task mode to ") +
+                           agent::agent_task_mode_name(mode);
+    };
     command_handlers.open_provider_picker = open_provider_picker;
     command_handlers.apply_selected_provider = [&](const std::string& provider_target) {
         const bool applied =
@@ -1864,6 +1888,11 @@ app::TuiRunResult run(provider::RequestContext context,
         }
         if (raw.find('\n') == std::string::npos && !text.empty() && text[0] == '/') {
             if (session.read_only) {
+                input = new_input_editor();
+                handle_command(text);
+                return;
+            }
+            if (context.options.agent && (text == "/plan" || text == "/act")) {
                 input = new_input_editor();
                 handle_command(text);
                 return;

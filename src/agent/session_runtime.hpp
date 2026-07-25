@@ -57,7 +57,7 @@ struct SessionProjectReplaceResult {
 
 struct SessionRuntimeOptions {
     std::string workspace = ".";
-    bool allow_mutations = true;
+    AgentTaskMode task_mode = AgentTaskMode::Act;
     bool allow_network = true;  // fetch_url / search_web in agent mode
     bool interactive = false;  // turn-cap can return needs_user_continue
     bool enable_session_db = true;
@@ -90,6 +90,8 @@ class AgentSessionRuntime {
     const std::string& workspace() const { return options_.workspace; }
     const std::string& session_db_path() const { return session_store_.path(); }
     ToolProtocol protocol() const { return state_.protocol; }
+    AgentTaskMode task_mode() const { return task_mode_; }
+    MutationPolicy mutation_policy() const { return tools_.mutation_policy(); }
     std::size_t session_turns() const { return session_turns_; }
     std::size_t session_tool_calls() const { return session_tool_calls_; }
 
@@ -111,6 +113,10 @@ class AgentSessionRuntime {
     // Append a display-only notice to the project agent transcript (e.g. user /shell).
     // No-op when the session DB is not open.
     Error append_display_notice(const std::string& content);
+
+    // Switch the trusted task prompt and tool policy without resetting session
+    // history. Only valid while no turn/compaction operation is active.
+    Error switch_task_mode(AgentTaskMode mode);
 
     // Run one user goal/follow-up until FinalText, NeedsUserContinue, abort, or error.
     // First turn seeds the tool conversation; later turns append a user message.
@@ -155,8 +161,13 @@ class AgentSessionRuntime {
     void rebuild_compacted_conversation(const std::vector<AgentMessageRecord>& stored,
                                         const std::string& summary,
                                         std::size_t keep_recent);
+    SessionCompactionResult compact_impl(
+        const provider::RequestContext& context,
+        CompactionReason reason,
+        runtime::CancellationToken cancellation);
 
     SessionRuntimeOptions options_;
+    AgentTaskMode task_mode_ = AgentTaskMode::Act;
     bool prepared_ = false;
     bool conversation_seeded_ = false;
     std::vector<std::string> secrets_;
@@ -177,6 +188,7 @@ class AgentSessionRuntime {
     // Total steady-clock time spent waiting for interactive Guard decisions.
     // The tool executor snapshots this counter to exclude approval waits.
     std::atomic<long long> guard_approval_wait_ms_{0};
+    std::atomic<bool> operation_active_{false};
 };
 
 }  // namespace ainiux::agent

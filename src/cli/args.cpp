@@ -32,7 +32,7 @@ bool needs_value(const std::string& opt) {
         "--save-chat", "--load-chat", "--dataset", "--grade-input", "--category", "--case",
         "--runs", "--warmup", "--limit", "--mode", "--concurrency", "--duration",
         "--summary-format",
-        "-r", "--run", "--run-file"};
+        "-r", "--run", "--run-file", "--plan", "--plan-file"};
     for (const char* item : with_values) {
         if (opt == item) {
             return true;
@@ -240,6 +240,9 @@ ParseResult parse_args(int argc, char** argv, const Options& base_options) {
             opts.agent = true;
         } else if ((arg == "run" && i == 1)) {
             opts.agent_run = true;
+        } else if ((arg == "plan" && i == 1)) {
+            opts.agent_run = true;
+            opts.agent_plan = true;
         } else if ((arg == "grade" && i == 1) || arg == "--grade") {
             opts.grade = true;
             opts.format = OutputFormat::Ndjson;
@@ -333,6 +336,14 @@ ParseResult parse_args(int argc, char** argv, const Options& base_options) {
                 opts.prompt = value;
             } else if (opt == "--run-file") {
                 opts.agent_run = true;
+                opts.prompt_file = value;
+            } else if (opt == "--plan") {
+                opts.agent_run = true;
+                opts.agent_plan = true;
+                opts.prompt = value;
+            } else if (opt == "--plan-file") {
+                opts.agent_run = true;
+                opts.agent_plan = true;
                 opts.prompt_file = value;
             } else if (opt == "-s" || opt == "--system") {
                 opts.system = value;
@@ -621,6 +632,17 @@ ParseResult parse_args(int argc, char** argv, const Options& base_options) {
         } else if (!arg.empty() && arg[0] == '-') {
             return {opts, {ErrorCode::BadArgs, "unknown option: " + arg}};
         } else {
+            if (opts.agent_plan && argc > 1 && std::string(argv[1]) == "plan" &&
+                opts.prompt.empty() && opts.prompt_file.empty()) {
+                opts.prompt = arg;
+                continue;
+            }
+            if (opts.agent_plan && argc > 1 && std::string(argv[1]) == "plan") {
+                return {opts,
+                        {ErrorCode::BadArgs,
+                         "ainiux plan accepts one positional goal; select providers with "
+                         "--provider or another named option"}};
+            }
             if (!opts.positional_url.empty()) {
                 return {opts, {ErrorCode::BadArgs, "unexpected extra positional argument: " + arg}};
             }
@@ -748,8 +770,29 @@ Error validate_agent_run_arguments(int argc, char** argv, const Options& options
     }
     if (options.prompt.empty() && options.prompt_file.empty()) {
         return {ErrorCode::BadArgs,
-                "one-shot agent requires a goal via -r/--run TEXT or --run-file PATH"};
+                "one-shot agent requires a goal via --run/--run-file or --plan/--plan-file"};
     }
+    if (!options.prompt.empty() && !options.prompt_file.empty()) {
+        return {ErrorCode::BadArgs,
+                "one-shot agent accepts exactly one goal source, not both text and a file"};
+    }
+    bool saw_act_entry = false;
+    bool saw_plan_entry = false;
+    for (int i = 1; i < argc; ++i) {
+        const std::string argument = argv[i];
+        const std::size_t equals = argument.find('=');
+        const std::string option =
+            equals == std::string::npos ? argument : argument.substr(0, equals);
+        if ((i == 1 && option == "run") || option == "-r" || option == "--run" ||
+            option == "--run-file")
+            saw_act_entry = true;
+        if ((i == 1 && option == "plan") || option == "--plan" ||
+            option == "--plan-file")
+            saw_plan_entry = true;
+    }
+    if (saw_act_entry && saw_plan_entry)
+        return {ErrorCode::BadArgs,
+                "Act run and Plan entry forms cannot be combined; choose one task mode"};
     if (!options.system.empty() || !options.system_file.empty()) {
         return {ErrorCode::BadArgs,
                 "one-shot agent uses the trusted master/agent system prompt; omit -s/--system-file"};
@@ -761,6 +804,10 @@ Error validate_agent_run_arguments(int argc, char** argv, const Options& options
         const std::string option = equals == std::string::npos ? argument : argument.substr(0, equals);
         if (!option.empty() && option.front() != '-') {
             if (option == "run" && i == 1) continue;
+            if (option == "plan" && i == 1) continue;
+            if (options.agent_plan && argc > 1 && std::string(argv[1]) == "plan" &&
+                option == options.prompt)
+                continue;
             if (positional_seen) {
                 return {ErrorCode::BadArgs,
                         "unexpected extra positional argument in --run mode: " + option};
@@ -789,7 +836,7 @@ Error validate_agent_run_arguments(int argc, char** argv, const Options& options
             option == "--reasoning" || option == "--connect-timeout" || option == "--timeout" ||
             option == "--proxy" || option == "--trusted-prompt-dir" ||
             option == "--max-source-code-file-size" || option == "-r" || option == "--run" ||
-            option == "--run-file";
+            option == "--run-file" || option == "--plan" || option == "--plan-file";
         if (takes_value) {
             if (equals == std::string::npos) ++i;
             continue;
@@ -903,6 +950,9 @@ Usage:
   ainiux [BASE_URL|PROFILE] -m MODEL -r, --run "goal"
   ainiux run [BASE_URL|PROFILE] -m MODEL -r "goal"
   ainiux [BASE_URL|PROFILE] -m MODEL --run-file PATH
+  ainiux plan "goal" --provider PROFILE -m MODEL
+  ainiux [BASE_URL|PROFILE] -m MODEL --plan "goal"
+  ainiux [BASE_URL|PROFILE] -m MODEL --plan-file PATH
 
 Examples:
   ainiux http://localhost:8000 -p "What is the capital of Norway?"
@@ -938,6 +988,7 @@ Examples:
   ainiux http://localhost:30000 -m MODEL -r "remove all empty files and folders"
   ainiux run openrouter -m MODEL --run "add unit tests to compute.py"
   ainiux run lmstudio -m MODEL --run-file goal.txt
+  ainiux plan "design server mode" --provider openai -m MODEL
   ainiux benchmark --validate-dataset
   ainiux benchmark --category reasoning --limit 2 --provider lm_studio -m MODEL
   ainiux --benchmark --dataset prompts.jsonl --mode speed --concurrency 4 --duration 60s
@@ -960,6 +1011,8 @@ Options:
   -r, --run TEXT                One-shot headless agent goal with read+write tools
                                 (also: ainiux run ...).
       --run-file PATH           One-shot agent goal from a file; use '-' for stdin.
+      --plan TEXT               One-shot Plan agent goal; writes only planning documents.
+      --plan-file PATH          One-shot Plan goal from a file; use '-' for stdin.
       --benchmark               Run benchmark mode (also: ainiux benchmark ...).
       --grade                   Grade benchmark results with a judge model (also: ainiux grade ...).
       --index-code              Create or incrementally refresh .ainiux-pr/index.sqlite.

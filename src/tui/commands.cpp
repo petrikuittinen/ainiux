@@ -62,6 +62,14 @@ AgentSlashCommand parse_agent_slash_command(const std::string& text) {
         command.action = AgentSlashAction::Compact;
         return command;
     }
+    if (text == "/plan") {
+        command.action = AgentSlashAction::Plan;
+        return command;
+    }
+    if (text == "/act") {
+        command.action = AgentSlashAction::Act;
+        return command;
+    }
     if (text.rfind("/compact ", 0) == 0) {
         command.action = AgentSlashAction::Invalid;
         command.error = "Usage: /compact";
@@ -86,6 +94,8 @@ void handle_tui_command(const std::string& text, TuiCommandContext& ctx, TuiComm
                 + std::string(ctx.context.options.agent
                                   ? "/new [PATH] (fresh agent project)\n"
                                     "/compact (compact model context; preserve transcript)\n"
+                                    "/plan (planning task mode)\n"
+                                    "/act (full coding task mode)\n"
                                   : "/new [NAME]\n") +
                 "/provider [PROVIDER]\n"
                 "/models\n"
@@ -347,6 +357,19 @@ void handle_tui_command(const std::string& text, TuiCommandContext& ctx, TuiComm
             return;
         }
         handlers.start_agent_compaction();
+        return;
+    }
+    if (agent_command.action == AgentSlashAction::Plan ||
+        agent_command.action == AgentSlashAction::Act) {
+        if (ctx.active_job != ActiveJob::None) {
+            ctx.status =
+                "Cannot switch task mode while an agent job is running; wait or cancel it first";
+            return;
+        }
+        handlers.switch_agent_task_mode(
+            agent_command.action == AgentSlashAction::Plan
+                ? agent::AgentTaskMode::Plan
+                : agent::AgentTaskMode::Act);
         return;
     }
     if (text == "/compact" || text.rfind("/compact ", 0) == 0) {

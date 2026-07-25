@@ -2240,7 +2240,8 @@ ContextResult build_context(const cli::Options& input_options) {
         !options.agent_run && ascii_trim(options.prompt).empty()) {
         return {{},
                 {ErrorCode::BadArgs,
-                 "prompt is empty; use -p/--prompt, --prompt-file, --run, --run-file, or --repl"}};
+                 "prompt is empty; use -p/--prompt, --prompt-file, --run/--run-file, "
+                 "--plan/--plan-file, or --repl"}};
     }
 
     if (provider_requests_responses(options.provider)) {

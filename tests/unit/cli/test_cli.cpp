@@ -567,6 +567,51 @@ void test_cli_agent_mode_parse() {
                   .ok(),
           "ainiux run accepts --run-file with provider name");
 
+    const char* plan_sub[] = {"ainiux", "plan", "design the server", "--provider",
+                              "openrouter", "-m", "model"};
+    parsed = ainiux::cli::parse_args(7, const_cast<char**>(plan_sub));
+    check(parsed.error.ok() && parsed.options.agent_run && parsed.options.agent_plan &&
+              parsed.options.prompt == "design the server" &&
+              parsed.options.provider == "openrouter" &&
+              ainiux::cli::validate_agent_run_arguments(7, const_cast<char**>(plan_sub),
+                                                       parsed.options)
+                  .ok(),
+          "ainiux plan consumes its quoted goal and named provider options");
+
+    const char* plan_flag[] = {"ainiux", "openrouter", "--plan", "design the server",
+                               "-m", "model"};
+    parsed = ainiux::cli::parse_args(6, const_cast<char**>(plan_flag));
+    check(parsed.error.ok() && parsed.options.agent_run && parsed.options.agent_plan &&
+              parsed.options.prompt == "design the server" &&
+              parsed.options.positional_url == "openrouter" &&
+              ainiux::cli::validate_agent_run_arguments(6, const_cast<char**>(plan_flag),
+                                                       parsed.options)
+                  .ok(),
+          "--plan accepts a positional provider");
+
+    const char* plan_file[] = {"ainiux", "--plan-file", "goal.txt", "--provider",
+                               "openai", "-m", "model"};
+    parsed = ainiux::cli::parse_args(7, const_cast<char**>(plan_file));
+    check(parsed.error.ok() && parsed.options.agent_run && parsed.options.agent_plan &&
+              parsed.options.prompt_file == "goal.txt" &&
+              ainiux::cli::validate_agent_run_arguments(7, const_cast<char**>(plan_file),
+                                                       parsed.options)
+                  .ok(),
+          "--plan-file selects one-shot Plan mode");
+
+    const char* mixed_task_modes[] = {"ainiux", "--run", "act goal", "--plan", "plan goal"};
+    parsed = ainiux::cli::parse_args(5, const_cast<char**>(mixed_task_modes));
+    check(parsed.error.ok() &&
+              !ainiux::cli::validate_agent_run_arguments(
+                   5, const_cast<char**>(mixed_task_modes), parsed.options)
+                   .ok(),
+          "one-shot Act and Plan entry forms cannot be combined");
+
+    const char* plan_positional_provider[] = {"ainiux", "plan", "goal", "openrouter"};
+    parsed = ainiux::cli::parse_args(4, const_cast<char**>(plan_positional_provider));
+    check(!parsed.error.ok(),
+          "ainiux plan requires provider selection through named options");
+
     const char* missing[] = {"ainiux", "--run"};
     // --run without value should fail parse
     parsed = ainiux::cli::parse_args(2, const_cast<char**>(missing));

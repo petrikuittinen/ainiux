@@ -91,7 +91,7 @@ agent::ReadToolRegistry make_registry(const std::string& workspace, bool mutatio
     check(agent::index::load_snapshot(options, snapshot).ok(), "load snapshot");
     agent::ReadToolRegistry tools;
     agent::ToolRegistryOptions tool_options;
-    tool_options.allow_mutations = mutations;
+    tool_options.mutation_policy = mutations ? agent::MutationPolicy::Full : agent::MutationPolicy::Disabled;
     // Adversarial write tests may nest dirs; auto-approve only create_dirs Ask.
     if (mutations) {
         tool_options.on_guard_ask =

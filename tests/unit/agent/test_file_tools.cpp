@@ -68,7 +68,7 @@ std::string json_data_string(const std::string& result, const std::string& key) 
 }
 
 agent::ReadToolRegistry make_registry(const std::string& workspace,
-                                      bool allow_mutations,
+                                      agent::MutationPolicy mutation_policy,
                                       bool auto_approve_create_dirs = false) {
     agent::index::Options options;
     options.workspace = workspace;
@@ -81,7 +81,7 @@ agent::ReadToolRegistry make_registry(const std::string& workspace,
     check(load_error.ok(), "load snapshot for file-tool fixture");
     agent::ReadToolRegistry tools;
     agent::ToolRegistryOptions tool_options;
-    tool_options.allow_mutations = allow_mutations;
+    tool_options.mutation_policy = mutation_policy;
     if (auto_approve_create_dirs) {
         tool_options.on_guard_ask =
             [](const agent::GuardApprovalRequest& request,
@@ -97,6 +97,15 @@ agent::ReadToolRegistry make_registry(const std::string& workspace,
                                         tool_options);
     check(create_error.ok(), "create tool registry");
     return tools;
+}
+
+agent::ReadToolRegistry make_registry(const std::string& workspace,
+                                      bool allow_mutations,
+                                      bool auto_approve_create_dirs = false) {
+    return make_registry(workspace,
+                         allow_mutations ? agent::MutationPolicy::Full
+                                         : agent::MutationPolicy::Disabled,
+                         auto_approve_create_dirs);
 }
 
 bool json_array_contains_string(const std::string& result, const std::string& needle) {
@@ -835,7 +844,7 @@ void test_git_and_network_tools_policy() {
     }
     agent::ReadToolRegistry tools = make_registry(workspace, true);
     agent::ToolRegistryOptions net_options;
-    net_options.allow_mutations = true;
+    net_options.mutation_policy = agent::MutationPolicy::Full;
     net_options.allow_network = true;
     {
         agent::index::Options options;
@@ -918,6 +927,112 @@ void test_git_and_network_tools_policy() {
     fs::remove_all(workspace, ec);
 }
 
+void test_plan_document_mutation_policy() {
+    const std::string workspace = write_temp_workspace("plan-policy");
+    std::error_code ec;
+    fs::create_directories(fs::path(workspace) / "docs" / "plans" / "existing", ec);
+    write_text(fs::path(workspace) / "PLANS.md", "old plan\n");
+    write_text(fs::path(workspace) / "README.md", "readme\n");
+    agent::ReadToolRegistry tools =
+        make_registry(workspace, agent::MutationPolicy::PlanningDocuments);
+
+    const std::string absolute_plans_args =
+        std::string("{\"path\":") +
+        json::quote((fs::path(workspace) / "PLANS.md").string()) +
+        ",\"content\":\"absolute plan\\n\"}";
+    const std::string absolute_plans_result =
+        tools.execute("write_file", absolute_plans_args);
+    check(json_ok(absolute_plans_result) &&
+              json_data_string(absolute_plans_result, "path") == "PLANS.md" &&
+              read_text(fs::path(workspace) / "PLANS.md") == "absolute plan\n",
+          "Plan policy normalizes an absolute path contained by the project");
+
+    const std::string outside_args =
+        std::string("{\"path\":") +
+        json::quote((fs::temp_directory_path() / "ainiux-outside-PLANS.md").string()) +
+        ",\"content\":\"outside\\n\"}";
+    check(!json_ok(tools.execute("write_file", outside_args)),
+          "Plan policy still denies absolute paths outside the project");
+
+    check(json_ok(tools.execute(
+              "write_file",
+              R"JSON({"path":"PLAN.md","content":"new plan\n","mode":"create_new"})JSON")),
+          "Plan policy allows approved root plan creation");
+    check(json_ok(tools.execute(
+              "write_file",
+              R"JSON({"path":"docs/plans/existing/design.md","content":"design\n","mode":"create_new"})JSON")),
+          "Plan policy allows lowercase .md below existing docs/plans tree");
+    check(!json_ok(tools.execute(
+              "write_file",
+              R"JSON({"path":"README.md","content":"changed\n"})JSON")) &&
+              read_text(fs::path(workspace) / "README.md") == "readme\n",
+          "Plan policy denies arbitrary root Markdown");
+    check(!json_ok(tools.execute(
+              "write_file",
+              R"JSON({"path":"src/plan.md","content":"changed\n"})JSON")),
+          "Plan policy denies Markdown outside docs/plans");
+    check(!json_ok(tools.execute(
+              "write_file",
+              R"JSON({"path":"docs/plans/existing/WRONG.MD","content":"changed\n"})JSON")),
+          "Plan policy enforces case-sensitive .md extension");
+    check(!json_ok(tools.execute(
+              "write_file",
+              R"JSON({"path":"docs/plans/missing/design.md","content":"changed\n","create_dirs":true})JSON")),
+          "Plan policy cannot create destination directories");
+    check(!json_ok(tools.execute(
+              "write_file",
+              R"JSON({"path":"../PLAN.md","content":"changed\n"})JSON")),
+          "Plan policy denies traversal targets");
+    fs::create_directory_symlink(fs::path(workspace) / "docs" / "plans" / "existing",
+                                 fs::path(workspace) / "docs" / "plans" / "linked", ec);
+    check(!json_ok(tools.execute(
+              "write_file",
+              R"JSON({"path":"docs/plans/linked/design.md","content":"changed\n"})JSON")),
+          "Plan policy denies symlink path components");
+    check(!json_ok(tools.execute(
+              "remove", R"JSON({"path":"PLANS.md"})JSON")),
+          "Plan policy hides and defensively denies remove");
+    check(!json_ok(tools.execute(
+              "apply_patch",
+              R"JSON({"patch":"*** Begin Patch\n*** Delete File: PLANS.md\n*** End Patch\n"})JSON")),
+          "Plan policy denies patch delete operations");
+    check(!json_ok(tools.execute(
+              "run_command", R"JSON({"command":"touch PLAN.md"})JSON")),
+          "Plan run_command uses inspection-only command policy");
+
+    const std::string mixed =
+        "*** Begin Patch\n"
+        "*** Update File: PLANS.md\n"
+        "@@\n"
+        "-absolute plan\n"
+        "+updated plan\n"
+        "*** Update File: README.md\n"
+        "@@\n"
+        "-readme\n"
+        "+changed\n"
+        "*** End Patch\n";
+    const std::string mixed_args =
+        std::string("{\"patch\":") + json::quote(mixed) + "}";
+    check(!json_ok(tools.execute("apply_patch", mixed_args)) &&
+              read_text(fs::path(workspace) / "PLANS.md") == "absolute plan\n" &&
+              read_text(fs::path(workspace) / "README.md") == "readme\n",
+          "Plan mixed patch is rejected before any allowed file changes");
+
+    bool saw_edit = false;
+    bool saw_remove = false;
+    bool saw_rebuild = false;
+    for (const provider::FunctionDefinition& definition : tools.definitions()) {
+        if (definition.name == "edit_file" || definition.name == "write_file" ||
+            definition.name == "str_replace" || definition.name == "apply_patch")
+            saw_edit = true;
+        if (definition.name == "remove") saw_remove = true;
+        if (definition.name == "index_rebuild") saw_rebuild = true;
+    }
+    check(saw_edit && !saw_remove && !saw_rebuild,
+          "Plan definitions expose planning edits but hide remove and index_rebuild");
+    fs::remove_all(workspace, ec);
+}
+
 }  // namespace
 
 void run_all() {
@@ -934,6 +1049,7 @@ void run_all() {
     test_index_status_and_update();
     test_inspect_and_find_tests();
     test_git_and_network_tools_policy();
+    test_plan_document_mutation_policy();
 }
 
 }  // namespace ainiux::test::agent_file_tools

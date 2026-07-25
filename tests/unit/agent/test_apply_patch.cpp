@@ -53,7 +53,7 @@ agent::ReadToolRegistry make_registry(const std::string& workspace, bool allow_m
     check(agent::index::load_snapshot(options, snapshot).ok(), "load snapshot");
     agent::ReadToolRegistry tools;
     agent::ToolRegistryOptions tool_options;
-    tool_options.allow_mutations = allow_mutations;
+    tool_options.mutation_policy = allow_mutations ? agent::MutationPolicy::Full : agent::MutationPolicy::Disabled;
     check(agent::ReadToolRegistry::create(std::move(options), std::move(snapshot), {}, tools,
                                           tool_options)
               .ok(),

@@ -45,14 +45,16 @@ void test_load_and_seed_injection() {
     check(error.ok(), "load root AGENTS.md");
     check(bundle.documents.size() == 1 && bundle.documents[0].path == "AGENTS.md",
           "one root document");
-    check(bundle.injection_text.find("untrusted") != std::string::npos, "injection marks untrusted");
+    check(bundle.injection_text.find("Project instructions") != std::string::npos,
+          "injection frames AGENTS.md as project instructions");
     check(bundle.injection_text.find("Use KISS.") != std::string::npos, "injection includes content");
 
     agent::TrustedPrompts prompts;
     prompts.master = "MASTER";
     prompts.security = "SECURITY";
     provider::ToolConversation conversation;
-    agent::seed_agent_conversation(conversation, prompts, agent::ToolProtocol::Native, "Do the task",
+    agent::seed_agent_conversation(conversation, prompts, agent::AgentTaskMode::Act,
+                                   agent::ToolProtocol::Native, "Do the task",
                                    bundle.injection_text);
     check(conversation.messages.size() == 3, "system + agents.md + goal");
     check(conversation.messages[0].role == "system" &&

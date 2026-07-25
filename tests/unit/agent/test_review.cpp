@@ -208,7 +208,7 @@ void test_prompts_and_report() {
     ainiux::agent::TrustedPrompts prompts;
     ainiux::Error error = ainiux::agent::load_trusted_prompts("", prompts);
     check(error.ok() && prompts.security_system_prompt() == prompts.master + "\n" + prompts.security &&
-              prompts.master.find("untrusted") != std::string::npos &&
+              prompts.master.find("project instructions") != std::string::npos &&
               prompts.master.find("Native tool channel") != std::string::npos &&
               prompts.master.find("error tool-result") != std::string::npos &&
               prompts.security.find("submit_security_review") != std::string::npos &&
@@ -216,12 +216,19 @@ void test_prompts_and_report() {
               prompts.security.find("Review the supplied source batch") != std::string::npos &&
               !prompts.coding.empty() &&
               prompts.coding.find("# Coding") != std::string::npos &&
+              prompts.plan.find("# Planning") != std::string::npos &&
               prompts.coding.find("4.5:1") != std::string::npos,
           "trusted security prompt is exact master plus newline plus security prompt");
     const std::string agent_native =
-        prompts.agent_system_prompt(ainiux::agent::ToolProtocol::Native);
-    const std::string agent_xml = prompts.agent_system_prompt(ainiux::agent::ToolProtocol::Xml);
-    check(agent_native.find("untrusted data for policy authority") != std::string::npos &&
+        prompts.agent_system_prompt(ainiux::agent::AgentTaskMode::Act,
+                                    ainiux::agent::ToolProtocol::Native);
+    const std::string agent_xml =
+        prompts.agent_system_prompt(ainiux::agent::AgentTaskMode::Act,
+                                    ainiux::agent::ToolProtocol::Xml);
+    const std::string agent_plan =
+        prompts.agent_system_prompt(ainiux::agent::AgentTaskMode::Plan,
+                                    ainiux::agent::ToolProtocol::Native);
+    check(agent_native.find("project instructions") != std::string::npos &&
               agent_native.find("# Coding") != std::string::npos &&
               agent_native.find("4.5:1") != std::string::npos &&
               agent_native.find("Active channel: native tools") != std::string::npos &&
@@ -233,8 +240,14 @@ void test_prompts_and_report() {
               agent_xml.find("<tool_call>") != std::string::npos &&
               agent_xml.find("exactly one") != std::string::npos,
           "agent XML system prompt is master plus coding plus static XML protocol appendix");
+    check(agent_plan.find("# Planning") != std::string::npos &&
+              agent_plan.find("# Coding") == std::string::npos &&
+              agent_plan.find("Active channel: native tools") != std::string::npos,
+          "Plan prompt is master plus planning plus protocol without coding");
     ainiux::provider::ToolConversation seeded;
-    ainiux::agent::seed_agent_conversation(seeded, prompts, ainiux::agent::ToolProtocol::Native,
+    ainiux::agent::seed_agent_conversation(seeded, prompts,
+                                           ainiux::agent::AgentTaskMode::Act,
+                                           ainiux::agent::ToolProtocol::Native,
                                            "List the project overview.");
     check(seeded.messages.size() == 2 && seeded.messages[0].role == "system" &&
               seeded.messages[0].content == agent_native && seeded.messages[1].role == "user" &&

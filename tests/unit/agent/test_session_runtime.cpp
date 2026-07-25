@@ -51,7 +51,7 @@ void test_prepare_opens_session_db_and_tools() {
     agent::AgentSessionRuntime runtime;
     agent::SessionRuntimeOptions options;
     options.workspace = workspace;
-    options.allow_mutations = true;
+    options.task_mode = agent::AgentTaskMode::Act;
     options.interactive = true;
     options.enable_session_db = true;
     options.enable_agent_log = false;
@@ -88,6 +88,42 @@ void test_empty_turn_rejected_when_unprepared() {
     check(!turn.error.ok(), "unprepared runtime rejects turns");
 }
 
+void test_task_mode_switch_is_session_scoped_and_failure_safe() {
+    const std::string workspace = temp_workspace("task-mode");
+    agent::AgentSessionRuntime runtime;
+    agent::SessionRuntimeOptions options;
+    options.workspace = workspace;
+    options.enable_session_db = false;
+    options.enable_agent_log = false;
+    provider::RequestContext context = offline_context(workspace);
+    Error error = runtime.prepare(context, {}, {}, options);
+    check(error.ok() && runtime.task_mode() == agent::AgentTaskMode::Act &&
+              runtime.mutation_policy() == agent::MutationPolicy::Full,
+          "agent runtime defaults to Act with full mutation policy");
+
+    error = runtime.switch_task_mode(agent::AgentTaskMode::Plan);
+    check(error.ok() && runtime.task_mode() == agent::AgentTaskMode::Plan &&
+              runtime.mutation_policy() == agent::MutationPolicy::PlanningDocuments,
+          "Act to Plan replaces the tool policy");
+    check(runtime.switch_task_mode(agent::AgentTaskMode::Plan).ok(),
+          "repeated Plan switch is idempotent");
+
+    std::error_code ec;
+    fs::create_symlink("src/hello.cpp", fs::path(workspace) / "AGENTS.md", ec);
+    error = runtime.switch_task_mode(agent::AgentTaskMode::Act);
+    check(!error.ok() && runtime.task_mode() == agent::AgentTaskMode::Plan &&
+              runtime.mutation_policy() == agent::MutationPolicy::PlanningDocuments,
+          "AGENTS reload failure leaves the prior task mode and policy intact");
+    fs::remove(fs::path(workspace) / "AGENTS.md", ec);
+    error = runtime.switch_task_mode(agent::AgentTaskMode::Act);
+    check(error.ok() && runtime.task_mode() == agent::AgentTaskMode::Act &&
+              runtime.mutation_policy() == agent::MutationPolicy::Full,
+          "Plan to Act succeeds after AGENTS reload is valid");
+
+    runtime.reset();
+    fs::remove_all(workspace, ec);
+}
+
 void test_prepare_loads_existing_display_history() {
     const std::string workspace = temp_workspace("history");
     const std::string previous = fs::current_path().string();
@@ -117,7 +153,7 @@ void test_prepare_loads_existing_display_history() {
     agent::AgentSessionRuntime runtime;
     agent::SessionRuntimeOptions options;
     options.workspace = workspace;
-    options.allow_mutations = true;
+    options.task_mode = agent::AgentTaskMode::Act;
     options.interactive = true;
     options.enable_session_db = true;
     options.enable_agent_log = false;
@@ -296,6 +332,7 @@ void test_project_replacement_failure_reopens_prior_project() {
 void run_all() {
     test_prepare_opens_session_db_and_tools();
     test_empty_turn_rejected_when_unprepared();
+    test_task_mode_switch_is_session_scoped_and_failure_safe();
     test_prepare_loads_existing_display_history();
     test_manual_compaction_preserves_transcript_and_noops_until_new_history();
     test_project_replacement_resets_exact_state_and_switches_workspace();

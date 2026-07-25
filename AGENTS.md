@@ -19,11 +19,11 @@ The program must stay excellent as a scriptable CLI. Keep the core engine indepe
 - grade (judge) pass
 - future local OpenAI-compatible server mode
 - postponed browser web UI
-- future local agent mode (last)
+- local agent mode with session-scoped Act/Plan task modes
 
 ## Current product snapshot
 
-Status: **v1.06** (see `README.md` and `PLANS.md` implementation notes). One-shot (`--run` / `-r`) and interactive (`--agent` / `-a`) local agent with workspace writes, multi-turn project session (`.ainiux-pr/`), compact tool lines, live tool streaming, elapsed-time display, window-% auto-compact, chat↔editor↔agent mode cycling, and interactive Guard Ask approvals (y/n + `approvals` DB) are landed. User profile stays `~/.ainiux/` (chat DB/media). Active development also continues remaining **v0.9** polish and **v0.90** local OpenAI-compatible server mode. Browser web UI is postponed.
+Status: **v1.07** (see `README.md` and `PLANS.md` implementation notes). One-shot (`run` / `--run` / `-r`) and interactive (`agent` / `--agent` / `-a`) local agent modes are landed with workspace writes, multi-turn project sessions (`.ainiux-pr/`), compact/live tool activity, transcript-preserving compaction, chat↔editor↔agent cycling, interactive Guard Ask approvals, and session-scoped Act/Plan task modes. One-shot planning is available through `plan`, `--plan`, and `--plan-file`; Plan retains research tools but code-enforces planning-document-only writes. User profile stays `~/.ainiux/` (chat DB/media). Active development also continues remaining **v0.9** polish and **v0.90** local OpenAI-compatible server mode. Browser web UI is postponed.
 
 ### Implemented modes
 
@@ -37,8 +37,9 @@ Status: **v1.06** (see `README.md` and `PLANS.md` implementation notes). One-sho
 | Standalone editor | `--editor [path]` | multi-buffer piece-table editor; optional AI assist |
 | Benchmark | `benchmark` / `--benchmark` | concurrent JSONL dataset runner |
 | Grade | `--grade` | second-pass judge scoring of benchmark results (not combined with `--benchmark`) |
-| Interactive agent | `agent` / `--agent` / `-a` | **Separate mode from `--chat`**. Project-local `.ainiux-pr/`; one transcript thread; compact tool lines; shared TUI shell + provider/model/reasoning pickers |
-| One-shot agent | `run` / `--run` / `-r` / `--run-file` | headless same project tools; compact tool lines on stderr; stdout = final answer |
+| Interactive agent | `agent` / `--agent` / `-a` | **Separate mode from `--chat`**. Project-local `.ainiux-pr/`; Act by default; `/plan` and `/act` switch session task policy; shared TUI shell + selectors |
+| One-shot agent | `run` / `--run` / `-r` / `--run-file` | headless Act mode; compact tool lines on stderr; stdout = final answer |
+| One-shot plan | `plan` / `--plan` / `--plan-file` | headless Plan mode; read/research tools plus planning-document-only writes |
 | Security review | `--security-review` | headless read-only whole-project review |
 | Code index | `--index-code` / `--print-index` / `--clear-index` | project-local `.ainiux-pr/index.sqlite` |
 
@@ -98,7 +99,7 @@ Work in this order unless the user explicitly changes priorities:
 2. Finish remaining v0.9 polish: benchmark cutoff/grade calibration, TUI/CLI polish, refactor hygiene, leak and cancellation hardening (see `TODO.md` / `PLANS.md`).
 3. Local OpenAI-compatible **server** mode (v0.90), reusing provider/runtime/security layers.
 4. Only then consider revived browser web UI on the same server/runtime foundation.
-5. Local agent mode last, only with explicit sandbox/approval design.
+5. Continue local-agent hardening and later security/refactor task modes using the landed Guard, workspace-containment, and approval design.
 
 Do not start autonomous agent features early. Do not treat postponed browser web UI as the next major surface; prefer server mode first.
 
@@ -418,7 +419,7 @@ Expected constraints:
 - Reuse provider, runtime, cancellation, and redaction layers.
 - Initial server mode is not agent mode: no shell execution, no unrestricted workspace reads.
 
-### Future agent mode (v1.0)
+### Agent safety baseline (v1.0+)
 
 Agent mode is last and separate from ordinary chat/editor assist.
 

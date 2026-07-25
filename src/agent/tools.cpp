@@ -486,7 +486,7 @@ Error ReadToolRegistry::create(index::Options index_options,
     loaded.index_options_ = std::move(index_options);
     loaded.snapshot_ = std::move(snapshot);
     loaded.secrets_ = std::move(secrets);
-    loaded.allow_mutations_ = options.allow_mutations;
+    loaded.mutation_policy_ = options.mutation_policy;
     loaded.allow_network_ = options.allow_network;
     loaded.history_backup_ = options.history_backup;
     loaded.fetch_options_ = options.fetch_options;
@@ -533,6 +533,78 @@ Error ReadToolRegistry::resolve_writable_path(const std::string& relative_path,
     // Final containment: never trust string join alone (symlink races, odd components).
     Error contained = ensure_under_workspace(snapshot_.workspace, absolute, generic);
     if (!contained.ok()) return contained;
+    return ok_error();
+}
+
+Error ReadToolRegistry::normalize_mutation_path(const std::string& input,
+                                                std::string& relative) const {
+    relative.clear();
+    if (input.empty())
+        return {ErrorCode::BadArgs, "path must not be empty"};
+    const fs::path supplied(input);
+    if (!supplied.is_absolute()) {
+        relative = supplied.generic_string();
+        if (!safe_relative_path(relative))
+            return {ErrorCode::BadArgs, unsafe_path_message(input, "create or modify")};
+        return ok_error();
+    }
+
+    std::error_code ec;
+    const fs::path workspace = fs::absolute(fs::path(snapshot_.workspace), ec).lexically_normal();
+    if (ec)
+        return {ErrorCode::FileWrite,
+                "could not resolve project workspace for path validation: " + ec.message()};
+    const fs::path normalized = supplied.lexically_normal();
+    const fs::path within = normalized.lexically_relative(workspace);
+    relative = within.generic_string();
+    if (relative.empty() || relative == "." || !safe_relative_path(relative)) {
+        relative.clear();
+        return {ErrorCode::BadArgs,
+                "absolute path is outside the project directory: " + input +
+                    " (use a project-relative path)"};
+    }
+    return ok_error();
+}
+
+Error ReadToolRegistry::validate_mutation_path(const std::string& relative_path,
+                                               bool create_dirs,
+                                               bool deleting) const {
+    if (mutation_policy_ == MutationPolicy::Disabled)
+        return {ErrorCode::UnsupportedFeature,
+                "workspace writes are disabled for this tool session"};
+    if (mutation_policy_ == MutationPolicy::Full) return ok_error();
+    if (deleting)
+        return {ErrorCode::UnsupportedFeature,
+                "Plan mode cannot delete planning documents"};
+    if (create_dirs)
+        return {ErrorCode::UnsupportedFeature,
+                "Plan mode cannot create directories"};
+    if (relative_path.empty() || !safe_relative_path(relative_path))
+        return {ErrorCode::BadArgs, unsafe_path_message(relative_path, "modify in Plan mode")};
+    const std::string path = fs::path(relative_path).generic_string();
+    const bool root_allowed =
+        path == "PLANS.md" || path == "PLAN.md" || path == "TODO.md" || path == "AGENTS.md";
+    const bool plans_markdown =
+        path.rfind("docs/plans/", 0) == 0 && path.size() > std::string("docs/plans/").size() &&
+        path.size() >= 3 && path.compare(path.size() - 3, 3, ".md") == 0;
+    if (!root_allowed && !plans_markdown)
+        return {ErrorCode::UnsupportedFeature,
+                "Plan mode may write only root PLANS.md, PLAN.md, TODO.md, AGENTS.md, "
+                "or case-sensitive *.md files below docs/plans/"};
+
+    fs::path absolute;
+    Error error = resolve_writable_path(path, absolute);
+    if (!error.ok()) return error;
+    std::error_code ec;
+    const fs::path parent = absolute.parent_path();
+    if (!fs::is_directory(parent, ec) || ec)
+        return {ErrorCode::FileWrite,
+                "Plan mode requires the destination parent directory to already exist: " +
+                    parent.string()};
+    const fs::file_status parent_status = fs::symlink_status(parent, ec);
+    if (ec || fs::is_symlink(parent_status))
+        return {ErrorCode::FileWrite,
+                "Plan mode refuses symlink destination parents: " + path};
     return ok_error();
 }
 
@@ -741,7 +813,8 @@ Error ReadToolRegistry::write_workspace_file(const std::string& relative_path,
     created = false;
     old_hash.clear();
     new_hash.clear();
-    if (!allow_mutations_) return {ErrorCode::UnsupportedFeature, "workspace writes are disabled for this tool session"};
+    Error policy_error = validate_mutation_path(relative_path, create_dirs, false);
+    if (!policy_error.ok()) return policy_error;
     if (content.find('\0') != std::string::npos)
         return {ErrorCode::BadArgs, "write_file content must be UTF-8 text without NUL bytes"};
     if (!html::is_valid_utf8(content))
@@ -984,7 +1057,8 @@ Error ReadToolRegistry::str_replace_workspace_file(const std::string& relative_p
     old_hash.clear();
     new_hash.clear();
     candidate_lines.clear();
-    if (!allow_mutations_) return {ErrorCode::UnsupportedFeature, "workspace writes are disabled for this tool session"};
+    Error policy_error = validate_mutation_path(relative_path, false, false);
+    if (!policy_error.ok()) return policy_error;
     if (old_text.empty()) return {ErrorCode::BadArgs, "old_text must not be empty"};
     if (old_text.find('\0') != std::string::npos || new_text.find('\0') != std::string::npos)
         return {ErrorCode::BadArgs, "str_replace text must not contain NUL bytes"};
@@ -1116,8 +1190,8 @@ Error ReadToolRegistry::remove_workspace_path(const std::string& relative_path,
     old_hash.clear();
     suggestions.clear();
     warnings.clear();
-    if (!allow_mutations_)
-        return {ErrorCode::UnsupportedFeature, "workspace writes are disabled for this tool session"};
+    Error policy_error = validate_mutation_path(relative_path, false, true);
+    if (!policy_error.ok()) return policy_error;
 
     fs::path absolute;
     Error error = resolve_writable_path(relative_path, absolute);
@@ -1313,12 +1387,20 @@ Error ReadToolRegistry::apply_workspace_patch(const std::string& patch_text,
     reverse_patch_path.clear();
     summary.clear();
     warnings.clear();
-    if (!allow_mutations_)
+    if (!allow_mutations())
         return {ErrorCode::UnsupportedFeature, "workspace writes are disabled for this tool session"};
 
     ParsedPatch parsed;
     Error error = parse_apply_patch(patch_text, parsed);
     if (!error.ok()) return error;
+    for (PatchFileOp& op : parsed.ops) {
+        std::string relative;
+        error = normalize_mutation_path(op.path, relative);
+        if (!error.ok()) return error;
+        op.path = std::move(relative);
+        error = validate_mutation_path(op.path, false, op.kind == PatchOpKind::DeleteFile);
+        if (!error.ok()) return error;
+    }
 
     struct Planned {
         PatchOpKind kind = PatchOpKind::UpdateFile;
@@ -1596,8 +1678,8 @@ Error ReadToolRegistry::edit_workspace_file(const std::string& relative_path,
     operations_applied = 0;
     summary.clear();
     warnings.clear();
-    if (!allow_mutations_)
-        return {ErrorCode::UnsupportedFeature, "workspace writes are disabled for this tool session"};
+    Error policy_error = validate_mutation_path(relative_path, create_dirs, false);
+    if (!policy_error.ok()) return policy_error;
     if (!ops.is_array() || ops.array.empty())
         return {ErrorCode::BadArgs, "edit_file requires a non-empty ops array"};
     if (ops.array.size() > 100)
@@ -2030,7 +2112,7 @@ std::vector<provider::FunctionDefinition> ReadToolRegistry::definitions() const 
         {"read_file", "Fingerprint-verify and read a bounded UTF-8 line range with hashes and line numbers.", schema(range, "\"path\"")},
         {"read_many", "Read multiple bounded line ranges under one aggregate byte cap.", schema("\"items\":{\"type\":\"array\",\"items\":" + schema(range, "\"path\"") + ",\"maxItems\":100},\"max_bytes\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":262144}", "\"items\"")},
         {"run_command",
-         allow_mutations_
+         mutation_policy_ == MutationPolicy::Full
              ? "Run a workspace command without a shell (argv exec, fixed PATH). Most commands "
                "are allowed; shells/sudo/package installs/disk destroyers and destructive forms "
                "(rm -rf, git reset --hard) are denied or need approval. No pipes/redirection/"
@@ -2040,7 +2122,7 @@ std::vector<provider::FunctionDefinition> ReadToolRegistry::definitions() const 
                "(pwd/ls/rg/grep/find/git allowlist).",
          schema("\"command\":{\"type\":\"string\"},\"cwd\":{\"type\":\"string\"},"
                 "\"timeout_ms\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":" +
-                    std::string(allow_mutations_ ? "120000" : "10000") + "}",
+                    std::string(mutation_policy_ == MutationPolicy::Full ? "120000" : "10000") + "}",
                 "\"command\"")},
         {"git_status",
          "Compact git status for the workspace (short form with branch by default). "
@@ -2077,7 +2159,7 @@ std::vector<provider::FunctionDefinition> ReadToolRegistry::definitions() const 
                 "\"max_bytes\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":262144}",
                 "\"query\"")},
     };
-    if (allow_mutations_) {
+    if (mutation_policy_ == MutationPolicy::Full) {
         tools.push_back(
             {"index_rebuild",
              "Full rebuild of .ainiux-pr/index.sqlite (recovery/debugging). Requires confirm=true.",
@@ -2105,7 +2187,7 @@ std::vector<provider::FunctionDefinition> ReadToolRegistry::definitions() const 
                     "\"site\":{\"type\":\"string\"}",
                     "\"term\"")});
     }
-    if (allow_mutations_) {
+    if (allow_mutations()) {
         tools.push_back(
             {"edit_file",
              "Preferred in-file edit (not for deleting whole files—use remove). Ops: "
@@ -2141,7 +2223,7 @@ std::vector<provider::FunctionDefinition> ReadToolRegistry::definitions() const 
                            "\"end_line\":{\"type\":\"integer\",\"minimum\":1}}},"
                            "\"expected_file_hash\":{\"type\":\"string\"}",
                     "\"path\",\"old_text\",\"new_text\"")});
-        tools.push_back(
+        if (mutation_policy_ == MutationPolicy::Full) tools.push_back(
             {"remove",
              "Delete a workspace-relative file or empty directory (recursive=true for non-empty "
              "dirs). Use the exact filename from list_directory—do not strip # or other "
@@ -2637,8 +2719,9 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
 
     if (name == "run_command") {
         std::string command, cwd;
-        const std::size_t timeout_cap = allow_mutations_ ? 120000 : 10000;
-        std::size_t timeout = allow_mutations_ ? 30000 : 10000;
+        const bool full = mutation_policy_ == MutationPolicy::Full;
+        const std::size_t timeout_cap = full ? 120000 : 10000;
+        std::size_t timeout = full ? 30000 : 10000;
         if (!get_string(args, "command", command, true, validation_error) ||
             !get_string(args, "cwd", cwd, false, validation_error) ||
             !get_size(args, "timeout_ms", timeout, timeout_cap, timeout, validation_error) ||
@@ -2649,7 +2732,7 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
         std::vector<std::string> parsed_arguments;
         std::string guard_rule_id;
         const CommandPolicy policy =
-            allow_mutations_ ? CommandPolicy::Agent : CommandPolicy::InspectionOnly;
+            full ? CommandPolicy::Agent : CommandPolicy::InspectionOnly;
         // Defer Ask so path validation runs before the interactive prompt.
         const GuardAskHandling preview_ask =
             policy == CommandPolicy::Agent ? GuardAskHandling::DeferAsk : GuardAskHandling::DenyAsk;
@@ -2666,7 +2749,7 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
         }
         // Security-review keeps path scope to the completed index. Agent mode allows
         // real workspace paths (empty dirs, #files#, scripts to execute).
-        const bool index_only_commands = !allow_mutations_;
+        const bool index_only_commands = !full;
         policy_error =
             validate_command_workspace_paths(snapshot_, parsed_arguments, cwd, index_only_commands);
         if (!policy_error.ok()) return tool_error_result("policy_denied", policy_error.message);
@@ -2732,7 +2815,7 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
     }
 
     if (name == "edit_file") {
-        if (!allow_mutations_)
+        if (!allow_mutations())
             return tool_error_result("policy_denied", "edit_file is not enabled in this session");
         // Models (esp. under natural-language goals) often nest path inside ops[i]
         // instead of the top-level edit_file.path required by the schema. Promote
@@ -2795,6 +2878,11 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
             !get_bool(edit_args, "create_dirs", false, create_dirs, validation_error) ||
             !get_string(edit_args, "expected_file_hash", expected_hash, false, validation_error))
             return tool_error_result("invalid_arguments", validation_error);
+        std::string relative_path;
+        Error normalize_error = normalize_mutation_path(path, relative_path);
+        if (!normalize_error.ok())
+            return tool_error_result("policy_denied", normalize_error.message);
+        path = std::move(relative_path);
         const json::Value& ops = *ops_value;
         std::string history_path, old_hash, new_hash;
         std::size_t operations_applied = 0;
@@ -2829,7 +2917,7 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
     }
 
     if (name == "write_file") {
-        if (!allow_mutations_)
+        if (!allow_mutations())
             return tool_error_result("policy_denied", "write_file is not enabled in this session");
         std::string path, content, mode, expected_hash;
         bool create_dirs = false;
@@ -2838,6 +2926,11 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
             !get_string(args, "mode", mode, false, validation_error) ||
             !get_string(args, "expected_file_hash", expected_hash, false, validation_error))
             return tool_error_result("invalid_arguments", validation_error);
+        std::string relative_path;
+        Error normalize_error = normalize_mutation_path(path, relative_path);
+        if (!normalize_error.ok())
+            return tool_error_result("policy_denied", normalize_error.message);
+        path = std::move(relative_path);
         // content may be empty for intentionally blank files; only require the key.
         if (args.get("content") == nullptr || !args.get("content")->is_string())
             return tool_error_result("invalid_arguments", "missing required string argument: content");
@@ -2869,7 +2962,7 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
     }
 
     if (name == "str_replace") {
-        if (!allow_mutations_)
+        if (!allow_mutations())
             return tool_error_result("policy_denied", "str_replace is not enabled in this session");
         std::string path, old_text, new_text, expected_hash;
         bool replace_all = false;
@@ -2881,6 +2974,11 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
             !get_bool(args, "fuzzy", true, allow_fuzzy, validation_error) ||
             !get_string(args, "expected_file_hash", expected_hash, false, validation_error))
             return tool_error_result("invalid_arguments", validation_error);
+        std::string relative_path;
+        Error normalize_error = normalize_mutation_path(path, relative_path);
+        if (!normalize_error.ok())
+            return tool_error_result("policy_denied", normalize_error.message);
+        path = std::move(relative_path);
         // new_text may be empty (delete match); require the key explicitly.
         if (args.get("new_text") == nullptr || !args.get("new_text")->is_string())
             return tool_error_result("invalid_arguments", "missing required string argument: new_text");
@@ -2932,7 +3030,7 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
     }
 
     if (name == "remove") {
-        if (!allow_mutations_)
+        if (mutation_policy_ != MutationPolicy::Full)
             return tool_error_result("policy_denied", "remove is not enabled in this session");
         std::string path, expected_hash;
         bool recursive = false;
@@ -2942,6 +3040,11 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
             !get_bool(args, "confirm", false, confirm, validation_error) ||
             !get_string(args, "expected_file_hash", expected_hash, false, validation_error))
             return tool_error_result("invalid_arguments", validation_error);
+        std::string relative_path;
+        Error normalize_error = normalize_mutation_path(path, relative_path);
+        if (!normalize_error.ok())
+            return tool_error_result("policy_denied", normalize_error.message);
+        path = std::move(relative_path);
         std::string history_path, old_hash, guard_decision, guard_rule_id;
         bool was_directory = false;
         std::vector<std::string> suggestions;
@@ -2981,7 +3084,7 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
     }
 
     if (name == "apply_patch") {
-        if (!allow_mutations_)
+        if (!allow_mutations())
             return tool_error_result("policy_denied", "apply_patch is not enabled in this session");
         // Accept patch / input / diff aliases (OpenAI tool variants).
         std::string patch_text;
@@ -3053,13 +3156,13 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
         if (include_branch) command += " --branch";
         ProcessOptions options;
         options.workspace = snapshot_.workspace;
-        options.timeout_ms = allow_mutations_ ? 30000 : 10000;
+        options.timeout_ms = allow_mutations() ? 30000 : 10000;
         options.cancellation = cancellation;
         options.stdout_limit = 65536;
         options.stderr_limit = 16384;
         ProcessResult process;
         const CommandPolicy policy =
-            allow_mutations_ ? CommandPolicy::Agent : CommandPolicy::InspectionOnly;
+            allow_mutations() ? CommandPolicy::Agent : CommandPolicy::InspectionOnly;
         const Error error = run_command(command, options, process, policy);
         json::Value data = object_value();
         data.object["command"] = string_value(command);
@@ -3103,13 +3206,13 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
         if (!path.empty()) command += " -- " + path;
         ProcessOptions options;
         options.workspace = snapshot_.workspace;
-        options.timeout_ms = allow_mutations_ ? 30000 : 10000;
+        options.timeout_ms = allow_mutations() ? 30000 : 10000;
         options.cancellation = cancellation;
         options.stdout_limit = max_bytes;
         options.stderr_limit = 16384;
         ProcessResult process;
         const CommandPolicy policy =
-            allow_mutations_ ? CommandPolicy::Agent : CommandPolicy::InspectionOnly;
+            allow_mutations() ? CommandPolicy::Agent : CommandPolicy::InspectionOnly;
         const Error error = run_command(command, options, process, policy);
         json::Value data = object_value();
         data.object["command"] = string_value(command);
@@ -3246,7 +3349,7 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
     }
 
     if (name == "index_rebuild") {
-        if (!allow_mutations_)
+        if (mutation_policy_ != MutationPolicy::Full)
             return tool_error_result("policy_denied", "index_rebuild is not enabled in this session");
         bool confirm = false;
         if (!get_bool(args, "confirm", false, confirm, validation_error))

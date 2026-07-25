@@ -7,6 +7,7 @@
 
 #include "chat/session.hpp"
 #include "chat/sqlite_store.hpp"
+#include "agent/prompts.hpp"
 #include "editor/editor.hpp"
 #include "provider/provider.hpp"
 #include "tui/events.hpp"
@@ -15,7 +16,7 @@
 
 namespace ainiux::tui {
 
-enum class AgentSlashAction { None, NewProject, Compact, Invalid };
+enum class AgentSlashAction { None, NewProject, Compact, Plan, Act, Invalid };
 
 struct AgentSlashCommand {
     AgentSlashAction action = AgentSlashAction::None;
@@ -32,6 +33,7 @@ struct TuiCommandHandlers {
     std::function<void(const std::string&)> start_new_chat_thread;
     std::function<void(const std::string&)> start_new_agent_project;
     std::function<void()> start_agent_compaction;
+    std::function<void(agent::AgentTaskMode)> switch_agent_task_mode;
     std::function<void(bool)> open_provider_picker;
     std::function<bool(const std::string&)> apply_selected_provider;
     std::function<void()> start_store_save;

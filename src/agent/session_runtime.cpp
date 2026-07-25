@@ -97,7 +97,7 @@ void AgentSessionRuntime::rebuild_compacted_conversation(
     const std::vector<AgentMessageRecord>& stored,
     const std::string& summary,
     std::size_t keep_recent) {
-    seed_agent_conversation(conversation_, prompts_, state_.protocol, "",
+    seed_agent_conversation(conversation_, prompts_, task_mode_, state_.protocol, "",
                             agents_md_.injection_text);
     conversation_.messages.push_back(
         {"user", "[Compacted earlier agent context]\n" + summary});
@@ -114,7 +114,7 @@ void AgentSessionRuntime::rebuild_compacted_conversation(
     publish_request_token_estimate();
 }
 
-SessionCompactionResult AgentSessionRuntime::compact(
+SessionCompactionResult AgentSessionRuntime::compact_impl(
     const provider::RequestContext& context,
     CompactionReason reason,
     runtime::CancellationToken cancellation) {
@@ -199,6 +199,23 @@ SessionCompactionResult AgentSessionRuntime::compact(
     return result;
 }
 
+SessionCompactionResult AgentSessionRuntime::compact(
+    const provider::RequestContext& context,
+    CompactionReason reason,
+    runtime::CancellationToken cancellation) {
+    SessionCompactionResult result;
+    bool expected = false;
+    if (!operation_active_.compare_exchange_strong(expected, true)) {
+        result.error = {ErrorCode::BadArgs, "an agent operation is already active"};
+        return result;
+    }
+    struct Release {
+        std::atomic<bool>& active;
+        ~Release() { active.store(false); }
+    } release{operation_active_};
+    return compact_impl(context, reason, cancellation);
+}
+
 SessionProjectReplaceResult AgentSessionRuntime::replace_project(
     const provider::RequestContext& context,
     const NewProjectTarget& requested_target,
@@ -226,6 +243,7 @@ SessionProjectReplaceResult AgentSessionRuntime::replace_project(
 
     SessionRuntimeOptions new_options = old_options;
     new_options.workspace = target.root;
+    new_options.task_mode = AgentTaskMode::Act;
     provider::RequestContext quiet_context = context;
     quiet_context.options.quiet = true;
 
@@ -358,8 +376,10 @@ void AgentSessionRuntime::reset() {
     conversation_seeded_ = false;
     prepared_ = false;
     options_ = SessionRuntimeOptions{};
+    task_mode_ = AgentTaskMode::Act;
     cached_request_tokens_.store(0, std::memory_order_relaxed);
     guard_approval_wait_ms_.store(0, std::memory_order_relaxed);
+    operation_active_.store(false, std::memory_order_relaxed);
 }
 
 Error AgentSessionRuntime::prepare(const provider::RequestContext& context,
@@ -368,6 +388,7 @@ Error AgentSessionRuntime::prepare(const provider::RequestContext& context,
                                    SessionRuntimeOptions options) {
     reset();
     options_ = std::move(options);
+    task_mode_ = options_.task_mode;
     if (options_.workspace.empty()) options_.workspace = ".";
     {
         std::string absolute;
@@ -445,8 +466,10 @@ Error AgentSessionRuntime::prepare(const provider::RequestContext& context,
     }
 
     ToolRegistryOptions tool_options;
-    tool_options.allow_mutations = options_.allow_mutations;
-    tool_options.allow_network = options_.allow_network && options_.allow_mutations;
+    tool_options.mutation_policy = task_mode_ == AgentTaskMode::Plan
+                                       ? MutationPolicy::PlanningDocuments
+                                       : MutationPolicy::Full;
+    tool_options.allow_network = options_.allow_network;
     tool_options.history_backup = options_.history_backup;
     tool_options.fetch_options = options_.fetch_options;
     tool_options.search_options = options_.search_options;
@@ -578,6 +601,58 @@ Error AgentSessionRuntime::append_display_notice(const std::string& content) {
     return session_store_.append_message("notice", redact_secrets(content, secrets_));
 }
 
+Error AgentSessionRuntime::switch_task_mode(AgentTaskMode mode) {
+    if (!prepared_)
+        return {ErrorCode::Internal, "agent session runtime is not prepared"};
+    if (mode == task_mode_) return ok_error();
+    bool expected = false;
+    if (!operation_active_.compare_exchange_strong(expected, true))
+        return {ErrorCode::BadArgs,
+                "cannot switch agent task mode while an agent operation is active"};
+    struct Release {
+        std::atomic<bool>& active;
+        ~Release() { active.store(false); }
+    } release{operation_active_};
+
+    AgentsMdBundle refreshed;
+    Error error = load_root_agents_md(options_.workspace, kDefaultAgentsMdMaxBytes, refreshed);
+    if (!error.ok()) return error;
+    const std::string next_prompt = prompts_.agent_system_prompt(mode, state_.protocol);
+    if (next_prompt.empty())
+        return {ErrorCode::Internal, "selected agent task prompt is empty"};
+
+    if (conversation_seeded_) {
+        if (conversation_.messages.empty() || conversation_.messages.front().role != "system")
+            return {ErrorCode::Internal,
+                    "agent conversation has no replaceable trusted system prompt"};
+        conversation_.messages.front().content = next_prompt;
+        const std::string old_injection = agents_md_.injection_text;
+        auto found = std::find_if(
+            conversation_.messages.begin() + 1, conversation_.messages.end(),
+            [&](const provider::Message& message) {
+                return message.role == "user" && message.content == old_injection;
+            });
+        if (found != conversation_.messages.end()) {
+            if (refreshed.injection_text.empty())
+                conversation_.messages.erase(found);
+            else
+                found->content = refreshed.injection_text;
+        } else if (!refreshed.injection_text.empty()) {
+            conversation_.messages.insert(conversation_.messages.begin() + 1,
+                                          {"user", refreshed.injection_text});
+        }
+    }
+    agents_md_ = std::move(refreshed);
+    task_mode_ = mode;
+    options_.task_mode = mode;
+    tools_.set_mutation_policy(mode == AgentTaskMode::Plan
+                                   ? MutationPolicy::PlanningDocuments
+                                   : MutationPolicy::Full);
+    known_tools_ = known_tool_names(tools_);
+    publish_request_token_estimate();
+    return ok_error();
+}
+
 Error AgentSessionRuntime::finish_session(const std::string& status,
                                           const std::string& final_text,
                                           const std::string& error_code,
@@ -613,6 +688,15 @@ SessionTurnResult AgentSessionRuntime::run_user_turn(
         result.error = {ErrorCode::Internal, "agent session runtime is not prepared"};
         return result;
     }
+    bool expected_active = false;
+    if (!operation_active_.compare_exchange_strong(expected_active, true)) {
+        result.error = {ErrorCode::BadArgs, "an agent operation is already active"};
+        return result;
+    }
+    struct ReleaseOperation {
+        std::atomic<bool>& active;
+        ~ReleaseOperation() { active.store(false); }
+    } release_operation{operation_active_};
     const std::string text = ascii_trim(user_text);
     if (text.empty()) {
         result.error = {ErrorCode::BadArgs, "agent turn requires a non-empty user message"};
@@ -673,10 +757,10 @@ SessionTurnResult AgentSessionRuntime::run_user_turn(
         if (session_store_.is_open()) (void)session_store_.load_messages(prior);
         const std::string prior_context = build_prior_session_context(prior);
         if (prior_context.empty()) {
-            seed_agent_conversation(conversation_, prompts_, state_.protocol, text,
+            seed_agent_conversation(conversation_, prompts_, task_mode_, state_.protocol, text,
                                     agents_md_.injection_text);
         } else {
-            seed_agent_conversation(conversation_, prompts_, state_.protocol, "",
+            seed_agent_conversation(conversation_, prompts_, task_mode_, state_.protocol, "",
                                     agents_md_.injection_text);
             conversation_.messages.push_back({"user", prior_context});
             conversation_.messages.push_back({"user", text});
@@ -698,8 +782,7 @@ SessionTurnResult AgentSessionRuntime::run_user_turn(
                       << "Using " << context.profile.name << "/" << context.options.model
                       << " with protocol "
                       << (state_.protocol == ToolProtocol::Xml ? "xml" : "native")
-                      << (options_.allow_mutations ? " (workspace writes enabled).\n"
-                                                   : " (read-only tools).\n");
+                      << " (" << agent_task_mode_name(task_mode_) << " tools).\n";
             if (!agents_md_.documents.empty()) {
                 std::cerr << "Loaded project AGENTS.md (" << agents_md_.total_bytes << " bytes";
                 if (agents_md_.truncated) std::cerr << ", truncated";
@@ -724,7 +807,7 @@ SessionTurnResult AgentSessionRuntime::run_user_turn(
     // Auto and manual commands share one atomic transcript-preserving pipeline.
     if (options_.auto_compact && session_store_.is_open()) {
         SessionCompactionResult compact_result =
-            compact(context, CompactionReason::Automatic, cancellation);
+            compact_impl(context, CompactionReason::Automatic, cancellation);
         if (!compact_result.error.ok()) {
             result.error = compact_result.error;
             return result;

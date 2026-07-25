@@ -25,7 +25,9 @@ Error load_directory(const fs::path& directory, TrustedPrompts& prompts) {
     if (!error.ok()) return error;
     error = read_prompt(directory / "security_prompt.md", prompts.security);
     if (!error.ok()) return error;
-    return read_prompt(directory / "coding_prompt.md", prompts.coding);
+    error = read_prompt(directory / "coding_prompt.md", prompts.coding);
+    if (!error.ok()) return error;
+    return read_prompt(directory / "plan_prompt.md", prompts.plan);
 }
 
 // Always insert exactly one separating newline between non-empty parts so
@@ -79,9 +81,14 @@ std::string TrustedPrompts::security_system_prompt() const {
     return master + "\n" + security;
 }
 
-std::string TrustedPrompts::agent_system_prompt(ToolProtocol protocol) const {
-    // Default agent: master + coding task layer + static protocol appendix.
-    return join_prompt_parts(join_prompt_parts(master, coding), protocol_block(protocol));
+const char* agent_task_mode_name(AgentTaskMode mode) {
+    return mode == AgentTaskMode::Plan ? "plan" : "act";
+}
+
+std::string TrustedPrompts::agent_system_prompt(AgentTaskMode mode,
+                                                ToolProtocol protocol) const {
+    const std::string& task = mode == AgentTaskMode::Plan ? plan : coding;
+    return join_prompt_parts(join_prompt_parts(master, task), protocol_block(protocol));
 }
 
 Error load_trusted_prompts(const std::string& override_directory, TrustedPrompts& prompts) {
@@ -104,16 +111,18 @@ Error load_trusted_prompts(const std::string& override_directory, TrustedPrompts
     prompts.master = kEmbeddedMasterPrompt;
     prompts.security = kEmbeddedSecurityPrompt;
     prompts.coding = kEmbeddedCodingPrompt;
+    prompts.plan = kEmbeddedPlanPrompt;
     return ok_error();
 }
 
 void seed_agent_conversation(provider::ToolConversation& conversation,
                              const TrustedPrompts& prompts,
+                             AgentTaskMode mode,
                              ToolProtocol protocol,
                              const std::string& user_goal,
                              const std::string& agents_md_injection) {
     conversation = provider::ToolConversation{};
-    conversation.messages.push_back({"system", prompts.agent_system_prompt(protocol)});
+    conversation.messages.push_back({"system", prompts.agent_system_prompt(mode, protocol)});
     // Keep the system prompt static for provider-side caching; project rules are
     // separate user-role context and remain untrusted data.
     if (!agents_md_injection.empty())

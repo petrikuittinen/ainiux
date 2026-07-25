@@ -122,7 +122,7 @@ agent::ReadToolRegistry make_registry(const std::string& workspace, bool mutatio
     check(agent::index::load_snapshot(options, snapshot).ok(), "snapshot");
     agent::ReadToolRegistry tools;
     agent::ToolRegistryOptions tool_options;
-    tool_options.allow_mutations = mutations;
+    tool_options.mutation_policy = mutations ? agent::MutationPolicy::Full : agent::MutationPolicy::Disabled;
     check(agent::ReadToolRegistry::create(std::move(options), std::move(snapshot), {}, tools,
                                           tool_options)
               .ok(),
@@ -170,7 +170,7 @@ void test_interactive_approval_allows_then_denies() {
 
     std::atomic<int> ask_count{0};
     agent::ToolRegistryOptions tool_options;
-    tool_options.allow_mutations = true;
+    tool_options.mutation_policy = agent::MutationPolicy::Full;
     tool_options.on_guard_ask =
         [&](const agent::GuardApprovalRequest& request,
             runtime::CancellationToken) -> agent::GuardApprovalDecision {

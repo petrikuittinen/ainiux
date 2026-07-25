@@ -49,7 +49,8 @@ AgentGoalResult run_agent_goal(provider::RequestContext context,
 
     agent::SessionRuntimeOptions options;
     options.workspace = ".";
-    options.allow_mutations = true;
+    options.task_mode = context.options.agent_plan ? agent::AgentTaskMode::Plan
+                                                   : agent::AgentTaskMode::Act;
     options.allow_network = true;
     options.interactive = !write_final_to_stdout;
     options.enable_session_db = true;
