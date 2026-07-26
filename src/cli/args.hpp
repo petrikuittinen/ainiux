@@ -83,9 +83,13 @@ struct Options {
     std::string profile;
     std::string api = "chat";
     std::string base_url;
+    bool base_url_cli_explicit = false;
     std::string chat_url;
+    bool chat_url_cli_explicit = false;
     std::string models_url;
+    bool models_url_cli_explicit = false;
     std::string responses_url;
+    bool responses_url_cli_explicit = false;
     std::string key_env;
     std::string key_file;
     std::string key;

@@ -459,12 +459,16 @@ ParseResult parse_args(int argc, char** argv, const Options& base_options) {
                 }
             } else if (opt == "--base-url") {
                 opts.base_url = value;
+                opts.base_url_cli_explicit = true;
             } else if (opt == "--chat-url") {
                 opts.chat_url = value;
+                opts.chat_url_cli_explicit = true;
             } else if (opt == "--models-url") {
                 opts.models_url = value;
+                opts.models_url_cli_explicit = true;
             } else if (opt == "--responses-url") {
                 opts.responses_url = value;
+                opts.responses_url_cli_explicit = true;
             } else if (opt == "--key-env") {
                 opts.key_env = value;
             } else if (opt == "--key-file") {

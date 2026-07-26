@@ -1049,6 +1049,9 @@ void test_cli_target_change_clears_stale_remembered_model() {
     remembered.provider = "openrouter";
     remembered.model = "google/gemini-3.1-flash-preview";
     remembered.api = "chat";
+    remembered.base_url = "https://openrouter.ai/api/v1";
+    remembered.chat_url = "https://openrouter.ai/api/v1/chat/completions";
+    remembered.models_url = "https://openrouter.ai/api/v1/models";
     remembered.reasoning = ainiux::ReasoningSelection::named("high");
     remembered.reasoning_explicit = true;
 
@@ -1069,6 +1072,9 @@ void test_cli_target_change_clears_stale_remembered_model() {
           "CLI provider change clears a remembered remote model so local discovery can run");
     check(parsed.options.reasoning.is_auto(),
           "CLI provider change resets reasoning when --reasoning was not given");
+    check(parsed.options.base_url.empty() && parsed.options.chat_url.empty() &&
+              parsed.options.models_url.empty(),
+          "CLI provider change clears endpoints restored for the previous provider");
 
     ainiux::provider::ContextResult context = ainiux::provider::build_context(parsed.options);
     check(context.error.ok(), "vllm editor context builds after clearing stale model");
@@ -1106,6 +1112,43 @@ void test_cli_target_change_clears_stale_remembered_model() {
     ainiux::provider::apply_cli_target_change(explicit_parsed.options, remembered_xai, false);
     check(explicit_parsed.options.model.empty(),
           "explicit --provider change clears a remembered model without --model");
+
+    const char* explicit_endpoint_argv[] = {
+        "ainiux", "deepseek", "-a", "--base-url", "https://gateway.example/v1",
+    };
+    ainiux::cli::ParseResult explicit_endpoint = ainiux::cli::parse_args(
+        5, const_cast<char**>(explicit_endpoint_argv), remembered);
+    check(explicit_endpoint.error.ok(),
+          "agent provider shortcut with an explicit replacement endpoint parses");
+    ainiux::provider::apply_cli_target_change(explicit_endpoint.options, remembered,
+                                              true);
+    check(explicit_endpoint.options.base_url ==
+              "https://gateway.example/v1" &&
+              explicit_endpoint.options.chat_url.empty() &&
+              explicit_endpoint.options.models_url.empty(),
+          "explicit replacement base URL survives while inherited endpoint URLs clear");
+
+    ainiux::cli::Options mixed_agent = remembered;
+    mixed_agent.provider = "deepseek";
+    mixed_agent.model = "google/gemini-3.5-flash-lite";
+    mixed_agent.key = "test-key";
+    const char* repeated_deepseek_argv[] = {"ainiux", "deepseek", "-a"};
+    ainiux::cli::ParseResult repeated_deepseek = ainiux::cli::parse_args(
+        3, const_cast<char**>(repeated_deepseek_argv), mixed_agent);
+    check(repeated_deepseek.error.ok(),
+          "agent parses an explicit provider matching corrupted restored metadata");
+    ainiux::provider::apply_cli_target_change(
+        repeated_deepseek.options, mixed_agent, false);
+    check(repeated_deepseek.options.base_url.empty() &&
+              repeated_deepseek.options.model.empty(),
+          "explicit provider repairs a mismatched restored base URL and model");
+    ainiux::provider::ContextResult repaired_deepseek =
+        ainiux::provider::build_context(repeated_deepseek.options);
+    check(repaired_deepseek.error.ok() &&
+              repaired_deepseek.context.profile.name == "deepseek" &&
+              repaired_deepseek.context.base_url ==
+                  "https://api.deepseek.com/v1",
+          "repaired agent provider uses the official DeepSeek base URL");
 
     // Explicit -m wins over the clear policy.
     const char* with_model_argv[] = {

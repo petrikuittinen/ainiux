@@ -52,8 +52,44 @@ bool can_restore_model_selection(const cli::Options& configured_options,
 void apply_cli_target_change(cli::Options& options,
                              const cli::Options& previous_options,
                              bool positional_target_changed) {
+    bool inherited_base_mismatches_named_target = false;
+    const bool named_target_explicit =
+        options.provider_explicit ||
+        (!options.positional_url.empty() &&
+         !looks_like_api_url(options.positional_url));
+    if (named_target_explicit && !options.base_url_cli_explicit &&
+        !previous_options.base_url.empty()) {
+        Profile target_profile;
+        const std::string target_name =
+            !options.positional_url.empty() ? options.positional_url
+                                            : options.provider;
+        const std::string canonical_target =
+            canonical_profile_name(target_name);
+        bool target_found = false;
+        for (const Profile& candidate : built_in_profiles()) {
+            if (candidate.name == canonical_target) {
+                target_profile = candidate;
+                target_found = true;
+                break;
+            }
+        }
+        if (target_found && !target_profile.base_url.empty()) {
+            Error previous_error;
+            Error official_error;
+            const std::string previous_base =
+                normalize_base_url(previous_options.base_url, nullptr,
+                                   previous_error);
+            const std::string official_base =
+                normalize_base_url(target_profile.base_url, nullptr,
+                                   official_error);
+            inherited_base_mismatches_named_target =
+                previous_error.ok() && official_error.ok() &&
+                previous_base != official_base;
+        }
+    }
     const bool provider_or_endpoint_changed =
         positional_target_changed ||
+        inherited_base_mismatches_named_target ||
         (options.provider_explicit &&
          canonical_profile_name(options.provider) !=
              canonical_profile_name(previous_options.provider));
@@ -62,6 +98,15 @@ void apply_cli_target_change(cli::Options& options,
     const bool api_changed =
         options.api_explicit && options.api != previous_options.api;
 
+    if (provider_or_endpoint_changed) {
+        // A project/editor restore may have supplied endpoint overrides belonging
+        // to the previous provider. An explicit CLI target replaces those
+        // inherited endpoints unless the user also explicitly replaced them.
+        if (!options.base_url_cli_explicit) options.base_url.clear();
+        if (!options.chat_url_cli_explicit) options.chat_url.clear();
+        if (!options.models_url_cli_explicit) options.models_url.clear();
+        if (!options.responses_url_cli_explicit) options.responses_url.clear();
+    }
     if (provider_or_endpoint_changed && !options.model_explicit) {
         // Never carry a remembered or configured model id across a provider or
         // endpoint switch. Interactive startup then discovers models the same
