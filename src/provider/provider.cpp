@@ -2793,6 +2793,22 @@ void apply_context_window_from_models(RequestContext& context,
             return;
         }
     }
+    const std::string api =
+        context.api_kind == ApiKind::Responses ? "responses" : "chat";
+    for (const std::string& selector : selectors) {
+        const ModelCapability* capability =
+            config::resolve_model_capability(context.options.model_catalog,
+                                             context.profile.name,
+                                             api,
+                                             selector);
+        if (capability != nullptr &&
+            capability->context_window_tokens.has_value() &&
+            *capability->context_window_tokens > 0) {
+            context.options.context_tokens =
+                *capability->context_window_tokens;
+            return;
+        }
+    }
 }
 
 Error resolve_context_window(RequestContext& context, const std::string& model_selector) {

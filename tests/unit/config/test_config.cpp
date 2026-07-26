@@ -491,6 +491,7 @@ void test_config_applies_model_catalog() {
         "api = chat\n"
         "model = \"^qwen3[.]6(?:[-.].*)?$\"\n"
         "value = low|1024\n"
+        "context_window = 1M\n"
         "priority = 100\n"
         "reasoning_protocol = qwen_chat\n"
         "reasoning_default = medium\n"
@@ -517,8 +518,9 @@ void test_config_applies_model_catalog() {
               capability.reasoning_options.size() == 2 &&
               capability.reasoning_options[0] == ainiux::ReasoningSelection::named("low") &&
               capability.reasoning_options[1] == ainiux::ReasoningSelection::token_budget(1024) &&
+              capability.context_window_tokens == 1000000 &&
               capability.temperature == ainiux::TemperatureSupport::Supported,
-          "model capability and compact reasoning values are stored");
+          "model capability, context fallback, and compact reasoning values are stored");
     const ainiux::ModelSetting& preset = options.model_catalog.presets.front();
     check(!preset.temperature.has_value() && preset.top_k == 20 && preset.top_p == 0.95 &&
               preset.reasoning == ainiux::ReasoningSelection::named("high"),
@@ -681,6 +683,12 @@ void test_config_reads_models_template() {
     check(gpt_oss_20b != nullptr && gpt_oss_20b->id == "openai-gpt-oss" &&
               gpt_oss_120b != nullptr && gpt_oss_120b->id == "openai-gpt-oss",
           "GPT OSS family rule covers both 20B and 120B through arbitrary prefixes");
+    const ainiux::ModelCapability* deepseek_v4 =
+        ainiux::config::resolve_model_capability(
+            options.model_catalog, "deepseek", "chat", "deepseek-v4-pro");
+    check(deepseek_v4 != nullptr &&
+              deepseek_v4->context_window_tokens == 1000000,
+          "DeepSeek V4 catalog record supplies its documented 1M context fallback");
 
     const std::string valid_warning = ainiux::config::reasoning_catalog_warning(
         options.model_catalog,
@@ -1056,6 +1064,33 @@ void test_editor_commands_config() {
           "legacy slash-prefixed command strings and explicit modes remain authoritative");
 }
 
+void test_bundled_model_catalog_outside_source_directory() {
+    const std::filesystem::path original_directory =
+        std::filesystem::current_path();
+    const std::filesystem::path isolated_directory =
+        std::filesystem::absolute("build/config-isolated-cwd").lexically_normal();
+    std::filesystem::create_directories(isolated_directory);
+    std::filesystem::current_path(isolated_directory);
+
+    const ainiux::config::Environment environment{
+        (isolated_directory / "no-user-config").string(),
+        (isolated_directory / "no-system-config").string(),
+        (isolated_directory / "no-home").string(),
+    };
+    const ainiux::config::LoadResult loaded =
+        ainiux::config::load_automatic(ainiux::cli::Options{}, environment, false);
+    std::filesystem::current_path(original_directory);
+
+    const ainiux::ModelCapability* deepseek_v4 =
+        ainiux::config::resolve_model_capability(
+            loaded.options.model_catalog, "deepseek", "chat",
+            "deepseek/deepseek-v4-pro");
+    check(loaded.error.ok() && deepseek_v4 != nullptr &&
+              deepseek_v4->context_window_tokens == 1000000,
+          "bundled catalog remains available outside the source directory and "
+          "matches a routed DeepSeek V4 Pro name");
+}
+
 void test_config_empty_and_numeric_edge_cases() {
     ainiux::config::ParseResult parsed = ainiux::config::parse("", "empty.conf");
     check(parsed.error.ok() && parsed.document.entries.empty(),
@@ -1170,6 +1205,7 @@ void run_all() {
     test_config_applies_model_catalog();
     test_model_catalog_layering_and_validation();
     test_config_reads_models_template();
+    test_bundled_model_catalog_outside_source_directory();
     test_config_empty_and_numeric_edge_cases();
     test_config_code_index_size();
     test_config_security_review_settings();

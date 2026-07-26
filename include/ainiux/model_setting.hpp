@@ -77,6 +77,7 @@ struct ModelCapability {
     std::string provider = "any";
     std::string api = "any";
     std::string model_regex;
+    std::optional<std::int64_t> context_window_tokens;
     int priority = 0;
     ReasoningProtocol reasoning_protocol = ReasoningProtocol::None;
     std::optional<ReasoningSelection> reasoning_default;

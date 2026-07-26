@@ -6,6 +6,7 @@
 #include "config/model_catalog.hpp"
 #include "editor/autosave.hpp"
 #include "editor/editor_prompts.hpp"
+#include "embedded_models_config.hpp"
 #include "ainiux/model_setting.hpp"
 #include "tui/theme_registry.hpp"
 
@@ -1397,6 +1398,7 @@ Error apply_configured_model_catalog(const Document& document, cli::Options& can
         std::string provider = "any";
         std::string api = "any";
         std::optional<std::string> regex;
+        std::optional<long long> context_window_tokens;
         int priority = 0;
         std::optional<ReasoningProtocol> protocol;
         std::optional<ReasoningSelection> reasoning_default;
@@ -1437,6 +1439,11 @@ Error apply_configured_model_catalog(const Document& document, cli::Options& can
             } else if (key == "value") {
                 Error err = reasoning_options_entry(entry, partial.reasoning_options);
                 if (!err.ok()) return err;
+            } else if (key == "context_window") {
+                long long value = 0;
+                Error err = context_window_tokens(entry, value);
+                if (!err.ok()) return err;
+                partial.context_window_tokens = value;
             } else if (key == "priority") {
                 Error err = require_type(entry, Value::Type::Integer);
                 if (!err.ok()) return err;
@@ -1541,6 +1548,7 @@ Error apply_configured_model_catalog(const Document& document, cli::Options& can
         capability.provider = partial.provider;
         capability.api = partial.api;
         capability.model_regex = *partial.regex;
+        capability.context_window_tokens = partial.context_window_tokens;
         capability.priority = partial.priority;
         capability.reasoning_protocol = *partial.protocol;
         capability.reasoning_default = partial.reasoning_default;
@@ -2409,8 +2417,26 @@ LoadResult load_automatic(const cli::Options& base_options,
         break;
     }
     if (!bundled_models_loaded) {
+        ParseResult parsed = parse(kEmbeddedModelsConfig, "embedded models.conf");
+        if (!parsed.error.ok()) {
+            result.diagnostics.push_back(
+                {ConfigScope::Bundled, ConfigFileKind::Models,
+                 ConfigFileState::Error, "embedded models.conf"});
+            result.error = std::move(parsed.error);
+            return result;
+        }
+        Error err = apply_models_document(parsed.document, result.options);
+        if (!err.ok()) {
+            result.diagnostics.push_back(
+                {ConfigScope::Bundled, ConfigFileKind::Models,
+                 ConfigFileState::Error, "embedded models.conf"});
+            result.error = std::move(err);
+            return result;
+        }
+        result.loaded_paths.push_back("embedded models.conf");
         result.diagnostics.push_back(
-            {ConfigScope::Bundled, ConfigFileKind::Models, ConfigFileState::Missing, "config/models.conf"});
+            {ConfigScope::Bundled, ConfigFileKind::Models,
+             ConfigFileState::Loaded, "embedded models.conf"});
     }
     for (const std::string& path : system_models_paths(environment)) {
         Error err = load_models_path(path, ConfigScope::System);

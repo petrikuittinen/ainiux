@@ -750,10 +750,33 @@ void test_model_context_window_tokens() {
     check(context.options.context_tokens == 1000000,
           "model changes replace the prior automatic window with the selected model's metadata");
 
-    context.options.has_context_tokens = true;
-    context.options.context_tokens = 1000000;
-    ainiux::provider::apply_context_window_from_models(context, models);
+    ainiux::provider::ModelsResult sparse_models;
+    ainiux::provider::ModelInfo sparse_deepseek;
+    sparse_deepseek.id = "deepseek/deepseek-v4-pro";
+    sparse_deepseek.attributes = {{"object", "model"}, {"owned_by", "deepseek"}};
+    sparse_models.models.push_back(sparse_deepseek);
+    sparse_models.model_ids.push_back(sparse_deepseek.id);
+    ainiux::ModelCapability deepseek_v4;
+    deepseek_v4.id = "deepseek-v4";
+    deepseek_v4.api = "chat";
+    deepseek_v4.model_regex = "^deepseek-v4-(?:pro|flash)$";
+    deepseek_v4.context_window_tokens = 1000000;
+    context.profile.name = "deepseek";
+    context.options.model = "deepseek/deepseek-v4-pro";
+    context.options.model_catalog.models.push_back(deepseek_v4);
+    ainiux::provider::apply_context_window_from_models(context, sparse_models);
     check(context.options.context_tokens == 1000000,
+          "catalog context window fills missing DeepSeek /models metadata");
+
+    sparse_models.models.front().attributes["context_length"] = "750000";
+    ainiux::provider::apply_context_window_from_models(context, sparse_models);
+    check(context.options.context_tokens == 750000,
+          "provider model metadata remains authoritative over the catalog fallback");
+
+    context.options.has_context_tokens = true;
+    context.options.context_tokens = 900000;
+    ainiux::provider::apply_context_window_from_models(context, models);
+    check(context.options.context_tokens == 900000,
           "explicit context window override survives model metadata refresh");
 
     ainiux::provider::ModelInfo aliased;

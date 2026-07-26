@@ -41,6 +41,7 @@ EDITOR_COMMANDS_CONFIG := config/editor-commands.conf
 THEMES_CONFIG := config/themes.conf
 BENCHMARKS_CONFIG := config/benchmarks.conf
 MODELS_CONFIG := config/models.conf
+MODELS_CONFIG_HEADER := $(GENERATED_DIR)/embedded_models_config.hpp
 COMMON_CONFIG_DIR := $(DESTDIR)$(SYSCONFDIR)/xdg/ainiux
 COMMON_CONFIG_PATH := $(COMMON_CONFIG_DIR)/config.conf
 EDITOR_COMMANDS_CONFIG_PATH := $(COMMON_CONFIG_DIR)/editor-commands.conf
@@ -118,6 +119,18 @@ $(BUILTIN_BENCHMARK_HEADER): $(BUILTIN_DATASET)
 	@mv $@.tmp $@
 
 $(OBJ_DIR)/src/benchmark/dataset.o: $(BUILTIN_BENCHMARK_HEADER)
+
+$(MODELS_CONFIG_HEADER): $(MODELS_CONFIG)
+	@mkdir -p $(dir $@)
+	@{ \
+		printf '%s\n' '#pragma once' 'namespace ainiux::config {' \
+			'inline constexpr char kEmbeddedModelsConfig[] = R"AINIUX_MODELS('; \
+		cat $<; \
+		printf '%s\n' ')AINIUX_MODELS";' '}  // namespace ainiux::config'; \
+	} >$@.tmp
+	@mv $@.tmp $@
+
+$(OBJ_DIR)/src/config/config.o: $(MODELS_CONFIG_HEADER)
 
 $(EDITOR_HELP_HEADER): $(EDITOR_HELP_SRC)
 	@mkdir -p $(dir $@)
