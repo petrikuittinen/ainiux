@@ -3028,6 +3028,21 @@ void test_editor_undo_redo_key_bindings() {
           "kitty Ctrl+Z sequence decodes to undo key");
     check(ainiux::editor::decode_control_key_sequence("[18;5u", decoded) && decoded == 18,
           "kitty Ctrl+R sequence decodes to regenerate key");
+    check(ainiux::editor::decode_control_key_sequence("[116;7u", decoded) &&
+              decoded == ainiux::editor::editor_key_toggle_thinking_traces(),
+          "kitty Alt+Ctrl+T decodes to the thinking-trace toggle");
+    check(ainiux::editor::decode_control_key_sequence("[27;7;116~", decoded) &&
+              decoded == ainiux::editor::editor_key_toggle_thinking_traces(),
+          "xterm modifyOtherKeys Alt+Ctrl+T decodes to the thinking-trace toggle");
+    ainiux::editor::clear_terminal_input_queue();
+    ainiux::editor::push_terminal_input_bytes(std::string("\x1b", 1) +
+                                               std::string(1, static_cast<char>(20)));
+    ainiux::editor::TerminalInputEvent alt_ctrl_t;
+    check(ainiux::editor::read_terminal_input(alt_ctrl_t, 0) &&
+              alt_ctrl_t.type == ainiux::editor::TerminalInputType::Byte &&
+              alt_ctrl_t.byte == ainiux::editor::editor_key_toggle_thinking_traces(),
+          "legacy Esc-prefixed Alt+Ctrl+T decodes to the thinking-trace toggle");
+    ainiux::editor::clear_terminal_input_queue();
 }
 
 void test_editor_split_layout() {

@@ -361,9 +361,10 @@ std::string reasoning_fields_json(const RequestContext& context) {
                                "generation_config",
                                "{\"thinking_level\":" + scalar + "}");
         case ReasoningProtocol::GemmaThinkingLevel:
-            return append_pair(fields,
-                               "generationConfig",
-                               "{\"thinkingConfig\":{\"thinkingLevel\":" + scalar + "}}");
+            fields = "\"chat_template_kwargs\":{\"enable_thinking\":";
+            fields += disabled ? "false" : "true";
+            fields += "}";
+            return fields;
         case ReasoningProtocol::AnthropicBudget:
             if (disabled) return append_pair(fields, "thinking", "{\"type\":\"disabled\"}");
             return append_pair(fields,
@@ -382,12 +383,9 @@ std::string reasoning_fields_json(const RequestContext& context) {
                                                : "enabled") +
                     "}");
         case ReasoningProtocol::QwenChat:
-            fields = append_pair(fields, "enable_thinking", disabled ? "false" : "true");
-            if (!disabled && !reasoning_selection_is_plain_enable(selection) &&
-                (selection.kind == ReasoningSelectionKind::TokenBudget ||
-                 selection.kind == ReasoningSelectionKind::Named)) {
-                fields = append_pair(fields, "thinking_budget", scalar);
-            }
+            fields = "\"chat_template_kwargs\":{\"enable_thinking\":";
+            fields += disabled ? "false" : "true";
+            fields += "}";
             return fields;
         case ReasoningProtocol::QwenResponses:
         case ReasoningProtocol::MiniMaxResponses:

@@ -151,7 +151,13 @@ class ReadToolRegistry {
                                std::size_t start_line,
                                std::size_t end_line,
                                std::size_t max_bytes,
-                               SourceRange& range) const;
+                               SourceRange& range,
+                               bool approved_external = true) const;
+    Error read_workspace_source(const std::string& relative_path,
+                                std::size_t start_line,
+                                std::size_t end_line,
+                                std::size_t max_bytes,
+                                SourceRange& range) const;
     Error write_external_file(const std::filesystem::path& absolute_path,
                               const std::string& content,
                               bool create_dirs,

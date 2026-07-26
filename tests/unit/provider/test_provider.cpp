@@ -1428,12 +1428,16 @@ void test_provider_reasoning_request_compatibility() {
                        "Gemini native protocol uses generation_config.thinking_level");
 
     context = chat_context(ainiux::ReasoningProtocol::GemmaThinkingLevel,
-                           ainiux::ReasoningSelection::named("minimal"));
+                           ainiux::ReasoningSelection::named("enabled"));
     request = serialized_request_json(context);
-    generation_config = field(request, "generationConfig");
-    thinking_config = field(generation_config, "thinkingConfig");
-    check_string_field(thinking_config, "thinkingLevel", "minimal",
-                       "Gemma preserves minimal as a level instead of treating it as disabled");
+    const ainiux::json::Value* chat_template_kwargs =
+        field(request, "chat_template_kwargs");
+    check_bool_field(chat_template_kwargs, "enable_thinking", true,
+                     "Gemma enables thinking through chat template kwargs");
+    context.options.reasoning = ainiux::ReasoningSelection::named("none");
+    request = serialized_request_json(context);
+    check_bool_field(field(request, "chat_template_kwargs"), "enable_thinking", false,
+                     "Gemma disables thinking through chat template kwargs");
 
     context = chat_context(ainiux::ReasoningProtocol::AnthropicBudget,
                            ainiux::ReasoningSelection::token_budget(2048));
@@ -1463,22 +1467,18 @@ void test_provider_reasoning_request_compatibility() {
                        "toggle protocol recognizes disable values");
 
     context = chat_context(ainiux::ReasoningProtocol::QwenChat,
-                           ainiux::ReasoningSelection::named("high"));
+                           ainiux::ReasoningSelection::named("enabled"));
     request = serialized_request_json(context);
-    check_bool_field(request, "enable_thinking", true,
-                     "Qwen Chat enables thinking");
-    check_string_field(request, "thinking_budget", "high",
-                       "Qwen Chat does not approximate a named value into tokens");
-    context.options.reasoning = ainiux::ReasoningSelection::named("enabled");
+    chat_template_kwargs = field(request, "chat_template_kwargs");
+    check_bool_field(chat_template_kwargs, "enable_thinking", true,
+                     "Qwen Chat enables thinking through chat template kwargs");
+    context.options.reasoning = ainiux::ReasoningSelection::named("none");
     request = serialized_request_json(context);
-    check_bool_field(request, "enable_thinking", true,
-                     "Qwen Chat selector enable value uses the toggle");
-    check(field(request, "thinking_budget") == nullptr,
-          "Qwen Chat selector enable value does not invent a budget");
-    context.options.reasoning = ainiux::ReasoningSelection::token_budget(1024);
-    request = serialized_request_json(context);
-    check_number_field(request, "thinking_budget", 1024.0,
-                       "Qwen Chat preserves exact token budgets");
+    check_bool_field(field(request, "chat_template_kwargs"), "enable_thinking", false,
+                     "Qwen Chat disables thinking through chat template kwargs");
+    check(field(request, "enable_thinking") == nullptr &&
+              field(request, "thinking_budget") == nullptr,
+          "Qwen Chat does not send unsupported top-level effort fields");
 
     context = context_for(ainiux::ReasoningProtocol::QwenResponses,
                           ainiux::ReasoningSelection::named("max"),

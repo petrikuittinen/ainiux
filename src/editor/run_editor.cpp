@@ -943,6 +943,33 @@ app::EditorRunResult run_editor(const std::string& path,
         schedule_selection_save();
     };
 
+    auto cycle_reasoning = [&]() {
+        if (!editor_ai_ready(ai_continue) || assist_session.active) return;
+        provider::RequestContext& request = ai_continue->request;
+        ReasoningSelection next;
+        if (!config::next_reasoning_selection(
+                request.options.model_catalog,
+                request.profile.name,
+                request.api_kind == provider::ApiKind::Responses ? "responses" : "chat",
+                request.options.model,
+                request.options.reasoning,
+                next)) {
+            return;
+        }
+        commit_reasoning_selection(config::reasoning_selection_value(next));
+    };
+
+    auto toggle_thinking_traces = [&]() {
+        if (!ai_continue.has_value()) return;
+        cli::Options& options = ai_continue->request.options;
+        options.show_thinking_traces = !options.show_thinking_traces;
+        options.has_show_thinking_traces = true;
+        minibuffer_message(minibuffer,
+                           options.show_thinking_traces
+                               ? "Thinking traces shown"
+                               : "Thinking traces hidden");
+    };
+
     auto apply_reasoning_selection = [&](const std::string& value) {
         if (!editor_ai_ready(ai_continue)) {
             minibuffer_message(minibuffer,
@@ -2572,6 +2599,14 @@ app::EditorRunResult run_editor(const std::string& path,
     handle_key = [&](unsigned char ch) {
         if (ch != '\t') {
             word_completer.reset();
+        }
+        if (ch == editor_key_toggle_thinking_traces()) {
+            toggle_thinking_traces();
+            return;
+        }
+        if (ch == 20) {
+            cycle_reasoning();
+            return;
         }
         if (minibuffer.active && ch == 22) {
             if (shared_clipboard().empty()) {

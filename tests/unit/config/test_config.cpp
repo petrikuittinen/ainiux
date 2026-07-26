@@ -547,6 +547,47 @@ void test_config_applies_model_catalog() {
     check(unknown.values.empty() && unknown.guidance.find("/reasoning VALUE") != std::string::npos &&
               unknown.guidance.find("models.conf") != std::string::npos,
           "unknown models receive direct-value and catalog guidance");
+
+    ainiux::ReasoningSelection next;
+    check(ainiux::config::next_reasoning_selection(
+              options.model_catalog, "qwen", "chat", "qwen3.6-coder",
+              ainiux::ReasoningSelection::automatic(), next) &&
+              next == ainiux::ReasoningSelection::named("none"),
+          "Qwen thinking toggle treats Auto as the default enabled state");
+    check(ainiux::config::next_reasoning_selection(
+              options.model_catalog, "qwen", "chat", "qwen3.6-coder", next, next) &&
+              next == ainiux::ReasoningSelection::named("enabled"),
+          "Qwen thinking toggle alternates from disabled to enabled");
+
+    ainiux::ModelCatalog effort_catalog;
+    ainiux::ModelCapability effort;
+    effort.id = "effort";
+    effort.model_regex = "^effort-model$";
+    effort.reasoning_protocol = ainiux::ReasoningProtocol::OpenAiEffort;
+    effort.reasoning_options = {
+        ainiux::ReasoningSelection::named("min"),
+        ainiux::ReasoningSelection::named("medium"),
+        ainiux::ReasoningSelection::named("high"),
+        ainiux::ReasoningSelection::named("xhigh"),
+    };
+    effort_catalog.models.push_back(std::move(effort));
+    next = ainiux::ReasoningSelection::named("medium");
+    check(ainiux::config::next_reasoning_selection(
+              effort_catalog, "openai", "chat", "effort-model", next, next) &&
+              next == ainiux::ReasoningSelection::named("high"),
+          "reasoning shortcut advances through catalog order");
+    check(ainiux::config::next_reasoning_selection(
+              effort_catalog, "openai", "chat", "effort-model",
+              ainiux::ReasoningSelection::named("xhigh"), next) &&
+              next.is_auto(),
+          "reasoning shortcut advances from the highest effort to Auto");
+    check(ainiux::config::next_reasoning_selection(
+              effort_catalog, "openai", "chat", "effort-model", next, next) &&
+              next == ainiux::ReasoningSelection::named("min"),
+          "reasoning shortcut cycles from Auto to the lowest effort");
+    check(!ainiux::config::next_reasoning_selection(
+              effort_catalog, "openai", "chat", "", next, next),
+          "reasoning shortcut silently ignores a missing model");
 }
 
 void test_model_catalog_layering_and_validation() {

@@ -49,6 +49,12 @@ ReasoningSelectorData reasoning_selector_data(const ModelCatalog& catalog,
                                               const std::string& provider,
                                               const std::string& api,
                                               const std::string& model);
+bool next_reasoning_selection(const ModelCatalog& catalog,
+                              const std::string& provider,
+                              const std::string& api,
+                              const std::string& model,
+                              const ReasoningSelection& current,
+                              ReasoningSelection& next);
 std::string reasoning_selector_text(const ModelCatalog& catalog,
                                     const std::string& provider,
                                     const std::string& api,

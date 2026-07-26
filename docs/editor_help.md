@@ -128,6 +128,11 @@ Use `Esc` then `/provider` or `/model` to change provider or model. `/provider` 
 
 Requires a configured provider **and** model. If either is missing, `Ctrl+Space` and other AI commands report what to configure next.
 
+`Ctrl+T` cycles the selected model's catalog-backed reasoning setting from lower
+to higher values, then Auto, and around again. For toggle-only Qwen 3.5/3.6 and
+Gemma 4 models it switches thinking off and on. With no selected model it does
+nothing. `Alt+Ctrl+T` toggles whether thinking traces are shown.
+
 `Ctrl+Space` runs **`/continue`** in **continue** mode:
 
 1. In `text` and `markdown` modes, sends bounded context before and after the cursor. It requests a natural, developed bridge into an existing postfix. At the buffer end (including a whitespace-only remainder), it requests substantial continuation: concrete examples and supported numbers for factual text, and brave, vivid, specific development for creative writing. It asks for the document itself, not suggestions or an outline, and prohibits recap/restart behavior.

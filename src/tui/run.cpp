@@ -1462,6 +1462,25 @@ app::TuiRunResult run(provider::RequestContext context,
         refresh_settings_panel_if_visible();
     };
 
+    auto cycle_reasoning = [&]() {
+        if (context.options.model.empty()) return;
+        if (active_job != ActiveJob::None) {
+            status = "Cannot change reasoning while a model job is running";
+            return;
+        }
+        ReasoningSelection next;
+        if (!config::next_reasoning_selection(
+                context.options.model_catalog,
+                context.profile.name,
+                context.api_kind == provider::ApiKind::Responses ? "responses" : "chat",
+                context.options.model,
+                context.options.reasoning,
+                next)) {
+            return;
+        }
+        commit_reasoning_selection(config::reasoning_selection_value(next));
+    };
+
     auto launch_agent_project_new = [&](agent::NewProjectTarget target) {
         if (!context.options.agent || !agent_runtime || !agent_runtime->prepared()) {
             report_agent_error("Agent project runtime is unavailable");
@@ -3046,8 +3065,12 @@ app::TuiRunResult run(provider::RequestContext context,
                     regenerate_last_turn();
                     continue;
                 }
-                if (ch == 20) {
+                if (ch == editor::editor_key_toggle_thinking_traces()) {
                     set_thinking_trace_mode(!show_thinking_traces);
+                    continue;
+                }
+                if (ch == 20) {
+                    cycle_reasoning();
                     continue;
                 }
                 if (ch == 19) {

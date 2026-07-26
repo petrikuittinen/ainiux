@@ -339,6 +339,37 @@ ReasoningSelectorData reasoning_selector_data(const ModelCatalog& catalog,
     return data;
 }
 
+bool next_reasoning_selection(const ModelCatalog& catalog,
+                              const std::string& provider,
+                              const std::string& api,
+                              const std::string& model,
+                              const ReasoningSelection& current,
+                              ReasoningSelection& next) {
+    if (model.empty()) return false;
+    const ModelCapability* capability =
+        resolve_model_capability(catalog, provider, api, model);
+    if (capability == nullptr || capability->reasoning_options.empty()) return false;
+
+    if (capability->reasoning_protocol == ReasoningProtocol::QwenChat ||
+        capability->reasoning_protocol == ReasoningProtocol::GemmaThinkingLevel) {
+        const bool currently_disabled = reasoning_selection_disables(current);
+        next = ReasoningSelection::named(currently_disabled ? "enabled" : "none");
+        return true;
+    }
+
+    ReasoningSelectorData data =
+        reasoning_selector_data(catalog, provider, api, model);
+    if (data.values.size() < 2) return false;
+    for (size_t i = 0; i < data.values.size(); ++i) {
+        if (data.values[i] == current) {
+            next = data.values[(i + 1) % data.values.size()];
+            return true;
+        }
+    }
+    next = data.values.front();
+    return true;
+}
+
 std::string reasoning_selector_text(const ModelCatalog& catalog,
                                     const std::string& provider,
                                     const std::string& api,

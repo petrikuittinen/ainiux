@@ -35,10 +35,10 @@ openai_effort, responses    reasoning: { effort: VALUE }
 openrouter                  reasoning: { effort: VALUE } or { max_tokens: TOKENS }
 gemini_effort               reasoning_effort: VALUE
 gemini_thinking_level       generation_config: { thinking_level: VALUE }
-gemma_thinking_level        generationConfig: { thinkingConfig: { thinkingLevel: VALUE } }
+gemma_thinking_level        chat_template_kwargs: { enable_thinking: BOOLEAN }
 anthropic_budget            thinking: { type: enabled, budget_tokens: TOKENS|VALUE }
 thinking_toggle             thinking: { type: enabled|disabled|VALUE }
-qwen_chat                   enable_thinking plus exact thinking_budget
+qwen_chat                   chat_template_kwargs: { enable_thinking: BOOLEAN }
 qwen_responses              reasoning: { effort: VALUE }
 deepseek, zai               thinking.type plus unmodified reasoning_effort
 kimi_effort                 reasoning_effort: VALUE

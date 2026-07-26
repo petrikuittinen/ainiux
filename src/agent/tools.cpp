@@ -2506,11 +2506,20 @@ std::vector<provider::FunctionDefinition> ReadToolRegistry::definitions() const 
         {"get_skeleton", "Return ordered indexed declarations, signatures, ranges, and documentation for one file.", schema(path, "\"path\"")},
         {"read_symbol", "Fingerprint-verify and read the actual indexed source range for a symbol id.", schema("\"symbol_id\":{\"type\":\"integer\",\"minimum\":1}", "\"symbol_id\"")},
         {"read_file",
-         "Fingerprint-verify and read a bounded UTF-8 line range with hashes and line numbers. "
-         "Exact outside-project paths follow the active interactive permission mode; headless "
-         "Ask decisions are denied.",
+         mutation_policy_ == MutationPolicy::Disabled
+             ? "Fingerprint-verify and read a bounded indexed UTF-8 line range with hashes and "
+               "line numbers."
+             : "Read any exact-path regular UTF-8 file in the live project filesystem; the file "
+               "does not need to be indexed. Returns bounded line-numbered text and hashes. "
+               "Exact outside-project paths follow the active interactive permission mode; "
+               "headless Ask decisions are denied.",
          schema(range, "\"path\"")},
-        {"read_many", "Read multiple bounded line ranges under one aggregate byte cap.", schema("\"items\":{\"type\":\"array\",\"items\":" + schema(range, "\"path\"") + ",\"maxItems\":100},\"max_bytes\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":262144}", "\"items\"")},
+        {"read_many",
+         mutation_policy_ == MutationPolicy::Disabled
+             ? "Read multiple indexed bounded line ranges under one aggregate byte cap."
+             : "Read multiple exact-path live project files under one aggregate byte cap; "
+               "project files do not need to be indexed.",
+         schema("\"items\":{\"type\":\"array\",\"items\":" + schema(range, "\"path\"") + ",\"maxItems\":100},\"max_bytes\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":262144}", "\"items\"")},
         {"run_command",
          mutation_policy_ == MutationPolicy::Full
              ? "Run a workspace command without a shell (argv exec, fixed PATH). Most commands "
@@ -2677,19 +2686,24 @@ Error ReadToolRegistry::read_external_source(const fs::path& absolute_path,
                                              std::size_t start_line,
                                              std::size_t end_line,
                                              std::size_t max_bytes,
-                                             SourceRange& range) const {
-    Error stable = ensure_approved_external_path_unchanged(
-        absolute_path, "read", ErrorCode::FileRead);
-    if (!stable.ok()) return stable;
+                                             SourceRange& range,
+                                             bool approved_external) const {
+    if (approved_external) {
+        Error stable = ensure_approved_external_path_unchanged(
+            absolute_path, "read", ErrorCode::FileRead);
+        if (!stable.ok()) return stable;
+    }
+    const std::string description =
+        approved_external ? "approved external file" : "workspace file";
     std::error_code ec;
     const std::uintmax_t file_size = fs::file_size(absolute_path, ec);
     if (ec)
         return {ErrorCode::FileRead,
-                "could not inspect approved external file " + absolute_path.generic_string() +
+                "could not inspect " + description + " " + absolute_path.generic_string() +
                     ": " + ec.message()};
     if (file_size > index_options_.max_source_code_file_size)
         return {ErrorCode::FileRead,
-                "approved external file exceeds max_source_code_file_size (" +
+                description + " exceeds max_source_code_file_size (" +
                     std::to_string(index_options_.max_source_code_file_size) + " bytes): " +
                     absolute_path.generic_string()};
 
@@ -2698,7 +2712,7 @@ Error ReadToolRegistry::read_external_source(const fs::path& absolute_path,
     if (!read_error.ok()) return read_error;
     if (source.find('\0') != std::string::npos || !html::is_valid_utf8(source))
         return {ErrorCode::FileRead,
-                "approved external file is not UTF-8 text: " +
+                description + " is not UTF-8 text: " +
                     absolute_path.generic_string()};
     if (max_bytes == 0)
         return {ErrorCode::BadArgs, "source byte cap must be positive"};
@@ -2710,7 +2724,7 @@ Error ReadToolRegistry::read_external_source(const fs::path& absolute_path,
     if (lines.empty()) {
         if (start_line != 1 || end_line > 1)
             return {ErrorCode::BadArgs,
-                    "requested line range is outside approved external file: " + display_path};
+                    "requested line range is outside " + description + ": " + display_path};
         range.path = display_path;
         range.file_hash = file_hash;
         range.range_hash = index::content_hash("");
@@ -2721,7 +2735,7 @@ Error ReadToolRegistry::read_external_source(const fs::path& absolute_path,
     if (end_line == 0) end_line = lines.size();
     if (start_line > lines.size() || end_line < start_line)
         return {ErrorCode::BadArgs,
-                "requested line range is outside approved external file: " + display_path};
+                "requested line range is outside " + description + ": " + display_path};
     end_line = std::min(end_line, lines.size());
 
     std::string selected;
@@ -2745,6 +2759,51 @@ Error ReadToolRegistry::read_external_source(const fs::path& absolute_path,
     range.truncated = truncated;
     range.redacted = redacted != selected;
     return ok_error();
+}
+
+Error ReadToolRegistry::read_workspace_source(const std::string& relative_path,
+                                              std::size_t start_line,
+                                              std::size_t end_line,
+                                              std::size_t max_bytes,
+                                              SourceRange& range) const {
+    if (relative_path.empty() || !safe_relative_path(relative_path))
+        return {ErrorCode::BadArgs, unsafe_path_message(relative_path, "read")};
+
+    fs::path current(snapshot_.workspace);
+    std::error_code ec;
+    for (const fs::path& component : fs::path(relative_path)) {
+        current /= component;
+        const fs::file_status status = fs::symlink_status(current, ec);
+        if (ec || status.type() == fs::file_type::not_found)
+            return {ErrorCode::FileRead,
+                    "file does not exist or cannot be inspected: " + relative_path +
+                        (ec ? " (" + ec.message() + ")" : std::string())};
+        if (fs::is_symlink(status))
+            return {ErrorCode::FileRead,
+                    "refusing symlink path in workspace read: " + relative_path};
+    }
+    if (!fs::is_regular_file(current, ec) || ec)
+        return {ErrorCode::FileRead,
+                "workspace read path must be a regular file: " + relative_path};
+
+    const fs::path canonical = fs::canonical(current, ec);
+    if (ec || canonical.empty())
+        return {ErrorCode::FileRead,
+                "could not resolve workspace file " + relative_path +
+                    (ec ? ": " + ec.message() : std::string())};
+    const fs::path root = fs::canonical(snapshot_.workspace, ec);
+    if (ec || !resolved_path_is_under(root, canonical))
+        return {ErrorCode::FileRead,
+                "workspace file escaped the active project during validation: " +
+                    relative_path};
+    Error stable = ensure_approved_external_path_unchanged(
+        canonical, "read workspace file", ErrorCode::FileRead);
+    if (!stable.ok()) return stable;
+
+    Error error =
+        read_external_source(canonical, start_line, end_line, max_bytes, range, false);
+    if (error.ok()) range.path = fs::path(relative_path).generic_string();
+    return error;
 }
 
 Error ReadToolRegistry::write_external_file(const fs::path& absolute_path,
@@ -3235,7 +3294,9 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
         SourceRange range;
         Error error;
         if (safe_relative_path(path) && !path.empty()) {
-            error = read_source(path, start, end, maximum, range);
+            error = mutation_policy_ == MutationPolicy::Disabled
+                        ? read_source(path, start, end, maximum, range)
+                        : read_workspace_source(path, start, end, maximum, range);
         } else {
             fs::path absolute;
             error = resolve_external_file_path(snapshot_.workspace, path, true, absolute);
@@ -3353,10 +3414,13 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
             SourceRange range;
             Error error;
             const auto external = external_paths.find(index);
-            if (external == external_paths.end())
-                error = read_source(path, start, end, remaining, range);
-            else
+            if (external == external_paths.end()) {
+                error = mutation_policy_ == MutationPolicy::Disabled
+                            ? read_source(path, start, end, remaining, range)
+                            : read_workspace_source(path, start, end, remaining, range);
+            } else {
                 error = read_external_source(external->second, start, end, remaining, range);
+            }
             if (!error.ok()) { warnings.push_back("omitted " + path + ": " + error.message); truncated = true; continue; }
             json::Value output = object_value(); output.object["path"] = string_value(range.path);
             output.object["line_start"] = number_value(range.start_line); output.object["line_end"] = number_value(range.end_line);

@@ -439,6 +439,11 @@ void test_read_only_registry_hides_writes() {
         tools.execute("write_file", R"({"path":"src/x.cpp","content":"x\n"})");
     check(!json_ok(denied) && json_error_code(denied) == "policy_denied",
           "write_file denied without mutations");
+    write_text(fs::path(workspace) / "after-snapshot.txt", "not review eligible\n");
+    const std::string unindexed_read = tools.execute(
+        "read_file", R"({"path":"after-snapshot.txt","max_bytes":4096})");
+    check(!json_ok(unindexed_read),
+          "security-review registry retains index-only read scope");
     std::error_code ec;
     fs::remove_all(workspace, ec);
 }
@@ -927,6 +932,61 @@ void test_list_directory_filesystem() {
     fs::remove_all(workspace, ec);
 }
 
+void test_smart_act_native_tools_accept_unindexed_project_paths() {
+    const std::string workspace = write_temp_workspace("smart-unindexed");
+    std::atomic<int> asks{0};
+    agent::ReadToolRegistry tools = make_registry(
+        workspace, agent::MutationPolicy::Full, false,
+        [&](const agent::GuardApprovalRequest&,
+            runtime::CancellationToken) -> agent::GuardApprovalDecision {
+            ++asks;
+            return agent::GuardApprovalDecision::Allow;
+        },
+        agent::PermissionMode::Smart, true);
+
+    // Create these after the snapshot so they are certainly absent from it.
+    write_text(fs::path(workspace) / "names.txt", "Ada\nLinus\n");
+    write_text(fs::path(workspace) / "remove-me.txt", "temporary\n");
+    fs::create_directory(fs::path(workspace) / "unindexed-dir");
+
+    const std::string read = tools.execute(
+        "read_file",
+        R"JSON({"path":"names.txt","start_line":1,"end_line":20,"max_bytes":4096})JSON");
+    check(json_ok(read) && read.find("Ada") != std::string::npos,
+          "Smart Act read_file reads an unindexed project file: " + read);
+    const std::string many = tools.execute(
+        "read_many",
+        R"JSON({"items":[{"path":"names.txt","start_line":1,"end_line":20}],"max_bytes":4096})JSON");
+    check(json_ok(many) && many.find("Linus") != std::string::npos,
+          "Smart Act read_many reads unindexed project files: " + many);
+
+    const std::string edited = tools.execute(
+        "edit_file",
+        R"JSON({"path":"names.txt","ops":[{"type":"replace_text","old_text":"Linus","new_text":"Grace"}]})JSON");
+    check(json_ok(edited) &&
+              read_text(fs::path(workspace) / "names.txt") == "Ada\nGrace\n",
+          "Smart Act edit_file modifies an unindexed project file: " + edited);
+    const std::string created = tools.execute(
+        "write_file",
+        R"JSON({"path":"unindexed-dir/created.txt","content":"created\n","mode":"create_new"})JSON");
+    check(json_ok(created), "Smart Act write_file creates under an unindexed directory: " + created);
+    const std::string renamed = tools.execute(
+        "rename_path",
+        R"JSON({"source":"unindexed-dir","destination":"renamed-dir"})JSON");
+    check(json_ok(renamed) &&
+              fs::exists(fs::path(workspace) / "renamed-dir" / "created.txt"),
+          "Smart Act rename_path renames an unindexed project directory: " + renamed);
+    const std::string removed = tools.execute(
+        "remove", R"JSON({"path":"remove-me.txt"})JSON");
+    check(json_ok(removed) && !fs::exists(fs::path(workspace) / "remove-me.txt"),
+          "Smart Act remove deletes an unindexed project file: " + removed);
+    check(asks.load() == 0,
+          "Smart Act native project operations need no ordinary write approval");
+
+    std::error_code ec;
+    fs::remove_all(workspace, ec);
+}
+
 void test_replace_symbol() {
     const std::string workspace = write_temp_workspace("symbol");
     write_text(fs::path(workspace) / "src" / "sym.cpp",
@@ -1238,6 +1298,7 @@ void run_all() {
     test_str_replace_fuzzy_whitespace_and_indent();
     test_remove_tool();
     test_list_directory_filesystem();
+    test_smart_act_native_tools_accept_unindexed_project_paths();
     test_replace_symbol();
     test_index_status_and_update();
     test_inspect_and_find_tests();

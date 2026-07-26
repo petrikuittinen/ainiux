@@ -80,7 +80,10 @@ bool is_ctrl_modifier(int modifier) {
     return modifier == 5 || modifier == 6 || modifier == 7 || modifier == 8;
 }
 
+// Enhanced keyboard modes used by supported terminals may encode the shifted
+// codepoint while retaining modifier 5. Keep the established save-as decoding.
 bool has_shift_modifier(int modifier) { return (modifier & 1) != 0; }
+bool has_alt_modifier(int modifier) { return ((modifier - 1) & 2) != 0; }
 
 bool ctrl_byte_from_codepoint(int codepoint, unsigned char& out) {
     if (codepoint >= 1 && codepoint <= 26) {
@@ -164,6 +167,11 @@ bool decode_control_key_sequence(const std::string& sequence, unsigned char& out
             if (!is_ctrl_modifier(modifier)) {
                 return false;
             }
+            if (has_alt_modifier(modifier) && (codepoint == 'T' || codepoint == 't' ||
+                                               codepoint == 20)) {
+                out = editor_key_toggle_thinking_traces();
+                return true;
+            }
             if (has_shift_modifier(modifier) && (codepoint == 'S' || codepoint == 's')) {
                 out = editor_key_save_as();
                 return true;
@@ -188,6 +196,10 @@ bool decode_control_key_sequence(const std::string& sequence, unsigned char& out
             }
             if (!is_ctrl_modifier(modifier)) {
                 return false;
+            }
+            if (has_alt_modifier(modifier) && (key == 'T' || key == 't' || key == 20)) {
+                out = editor_key_toggle_thinking_traces();
+                return true;
             }
             return ctrl_byte_from_codepoint(key, out);
         }
@@ -356,6 +368,12 @@ bool read_terminal_input(TerminalInputEvent& out, int timeout_ms) {
     }
 
     unsigned char decoded = 0;
+    if (after_esc.size() == 1 &&
+        static_cast<unsigned char>(after_esc[0]) == 20) {
+        out.type = TerminalInputType::Byte;
+        out.byte = editor_key_toggle_thinking_traces();
+        return true;
+    }
     if (decode_control_key_sequence(after_esc, decoded)) {
         out.type = TerminalInputType::Byte;
         out.byte = decoded;
