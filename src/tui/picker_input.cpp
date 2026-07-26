@@ -210,6 +210,18 @@ bool handle_tui_picker_input(unsigned char ch,
                 return true;
         }
     }
+    if (state.mode == TuiMode::AgentPermissionSelect) {
+        if (ch == 17) {
+            state.quit = true;
+            return true;
+        }
+        const InlineChoiceResult choice =
+            parse_inline_choice_key(agent_inline_choices_for_mode(state.mode), ch);
+        if (!choice.matched) return true;
+        if (callbacks.on_agent_permission_selected)
+            callbacks.on_agent_permission_selected(choice.index);
+        return true;
+    }
     if (state.mode == TuiMode::AgentContinueConfirm) {
         if (ch == 17) {
             state.quit = true;

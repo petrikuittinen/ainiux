@@ -54,6 +54,7 @@ enum class TuiMode {
     AttachmentDeleteConfirm,
     ThreadDeleteConfirm,
     GuardApprovalConfirm,
+    AgentPermissionSelect,
     AgentContinueConfirm,
     AgentNewConfirm,
 };

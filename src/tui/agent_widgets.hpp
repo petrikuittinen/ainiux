@@ -33,6 +33,7 @@ InlineChoiceModel agent_inline_choices_for_mode(TuiMode mode);
 struct AgentInputFrame {
     std::string workspace;
     std::string mode_label = "act";
+    std::string permission_label = "smart";
 };
 
 struct AgentInputGeometry {

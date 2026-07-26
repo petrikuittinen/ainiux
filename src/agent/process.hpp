@@ -13,6 +13,10 @@ namespace ainiux::agent {
 struct ProcessOptions {
     std::string workspace;
     std::string cwd;
+    bool allow_external_cwd = false;
+    // Set only after the tool layer has validated and authorized every absolute
+    // operand. Direct/headless process callers retain the deny-by-default policy.
+    bool allow_external_paths = false;
     long timeout_ms = 10000;
     std::size_t stdout_limit = 65536;
     std::size_t stderr_limit = 65536;
@@ -62,7 +66,8 @@ Error parse_command(const std::string& command,
                     std::string& guard_rule_id,
                     GuardAskHandling ask_handling = GuardAskHandling::DenyAsk,
                     const GuardApprovalCallback* on_guard_ask = nullptr,
-                    runtime::CancellationToken cancellation = runtime::CancellationToken());
+                    runtime::CancellationToken cancellation = runtime::CancellationToken(),
+                    bool allow_absolute_paths = false);
 Error run_inspection_command(const std::string& command,
                              const ProcessOptions& options,
                              ProcessResult& result);
@@ -72,4 +77,3 @@ Error run_command(const std::string& command,
                   CommandPolicy policy = CommandPolicy::InspectionOnly);
 
 }  // namespace ainiux::agent
-

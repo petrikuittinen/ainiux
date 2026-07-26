@@ -58,7 +58,11 @@ API keys, custom authorization headers, and resolved credentials are excluded.
 
 Security-review never enables mutation or network tools and never injects project `AGENTS.md` as instructions. Agent **tools** still do not expose unrestricted shell (`run_command` is argv-only; shells/sudo/etc. denied). Interactive user `/shell` / `!` is a separate UI feature (see above). Final assistant text is written to `stdout`; status, notices, and errors go to `stderr`. Turn/loop limits and transport retries follow the agent-loop reliability rules (identical-call soft/hard caps, consecutive-failure abort, 50-turn scripted cap, no automatic tool re-execution).
 
-### Guard Ask approvals
+### Interactive permission modes and Guard approvals
+
+Each project persists one interactive Agent permission mode in `settings_json`: `confirm`, `smart` (the legacy/fresh-project default), or `yolo`. Confirm asks for native writes and all exact-path native access outside the project. Smart allows project writes and native access beneath the canonical system temporary directory, asks for other external native access, and asks for every model-issued command. Yolo skips elevatable prompts after complete validation. Recursive/database/destructive actions ask in Smart and are allowed in Yolo. One tool call produces at most one consolidated prompt.
+
+No mode can elevate a hard Guard denial, Plan-policy denial, protected metadata access, unsafe symlink/path race, privilege escalation, host/disk destruction, prohibited package/environment mutation, or removal of filesystem/home/temp/workspace roots or a workspace ancestor. User-entered `/shell` and `!` remain explicit user actions and do not receive a second permission prompt.
 
 High-risk tool actions can return Guard decision **Ask** (for example `git reset --hard`, force push, recursive `rm`, deleting `*.sqlite`/`*.db` via `remove`). Behavior:
 

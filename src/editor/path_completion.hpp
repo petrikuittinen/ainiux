@@ -46,6 +46,7 @@ class PathCompleter {
 class ContextualCompleter {
    public:
     void set_assist_config(const EditorAssistConfig* config) { assist_config_ = config; }
+    void set_agent_mode(bool enabled) { agent_mode_ = enabled; }
 
     PathCompletionResult complete(EditorState& state,
                                   const std::function<bool()>& cancelled = {});
@@ -59,6 +60,7 @@ class ContextualCompleter {
 
     PathCompleter path_completer_;
     const EditorAssistConfig* assist_config_ = nullptr;
+    bool agent_mode_ = false;
     bool command_active_ = false;
     size_t command_start_ = 0;
     size_t command_next_choice_ = 0;

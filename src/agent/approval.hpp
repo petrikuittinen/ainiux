@@ -10,6 +10,15 @@
 
 namespace ainiux::agent {
 
+enum class PermissionMode {
+    Confirm,
+    Smart,
+    Yolo,
+};
+
+const char* permission_mode_name(PermissionMode mode);
+bool parse_permission_mode(const std::string& text, PermissionMode& mode);
+
 // Interactive Guard Ask request (PLANS.md §15.8). The model/tool never approves
 // itself; only the user (or headless Deny) resolves Ask decisions.
 

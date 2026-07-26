@@ -1,6 +1,7 @@
 #include "agent/test_file_tools.hpp"
 
 #include <cstdlib>
+#include <atomic>
 #include <filesystem>
 #include <fstream>
 #include <string>
@@ -77,7 +78,10 @@ std::string json_string(const std::string& text) {
 agent::ReadToolRegistry make_registry(const std::string& workspace,
                                       agent::MutationPolicy mutation_policy,
                                       bool auto_approve_create_dirs = false,
-                                      agent::GuardApprovalCallback on_guard_ask = {}) {
+                                      agent::GuardApprovalCallback on_guard_ask = {},
+                                      agent::PermissionMode permission_mode =
+                                          agent::PermissionMode::Smart,
+                                      bool permission_controls = false) {
     agent::index::Options options;
     options.workspace = workspace;
     options.max_source_code_file_size = 1024 * 1024;
@@ -90,6 +94,8 @@ agent::ReadToolRegistry make_registry(const std::string& workspace,
     agent::ReadToolRegistry tools;
     agent::ToolRegistryOptions tool_options;
     tool_options.mutation_policy = mutation_policy;
+    tool_options.permission_mode = permission_mode;
+    tool_options.permission_controls = permission_controls;
     if (on_guard_ask) {
         tool_options.on_guard_ask = std::move(on_guard_ask);
     } else if (auto_approve_create_dirs) {
@@ -197,6 +203,90 @@ void test_external_file_access_requires_one_shot_approval() {
           "selecting No leaves the outside file untouched");
 
     fs::remove_all(outside_dir, ec);
+    fs::remove_all(workspace, ec);
+}
+
+void test_permission_modes_and_native_path_tools() {
+    const std::string workspace = write_temp_workspace("permission-modes");
+    std::atomic<int> asks{0};
+    auto allow = [&](const agent::GuardApprovalRequest&,
+                     runtime::CancellationToken) {
+        ++asks;
+        return agent::GuardApprovalDecision::Allow;
+    };
+    agent::ReadToolRegistry confirm =
+        make_registry(workspace, agent::MutationPolicy::Full, false, allow,
+                      agent::PermissionMode::Confirm, true);
+    const std::string confirmed = confirm.execute(
+        "write_file", R"({"path":"confirmed.txt","content":"ok\n"})");
+    check(json_ok(confirmed) && asks.load() == 1,
+          "confirm mode asks once for project-native write");
+    const std::string confirmed_command =
+        confirm.execute("run_command", R"({"command":"pwd"})");
+    check(json_ok(confirmed_command) && asks.load() == 2,
+          "confirm mode asks once for every model-issued command");
+
+    agent::ReadToolRegistry smart =
+        make_registry(workspace, agent::MutationPolicy::Full, false, {},
+                      agent::PermissionMode::Smart, true);
+    const fs::path temp_parent =
+        fs::path(workspace).parent_path() /
+        (fs::path(workspace).filename().string() + "-native-tools");
+    std::error_code ec;
+    fs::remove_all(temp_parent, ec);
+    const std::string created = smart.execute(
+        "create_directory",
+        "{\"path\":" + json_string((temp_parent / "nested").string()) +
+            ",\"parents\":true}");
+    check(json_ok(created) && fs::is_directory(temp_parent / "nested"),
+          "smart mode permits native directory creation under system temp");
+    write_text(temp_parent / "nested" / "from.txt", "hello\n");
+    const std::string renamed = smart.execute(
+        "rename_path",
+        "{\"source\":" +
+            json_string((temp_parent / "nested" / "from.txt").string()) +
+            ",\"destination\":" +
+            json_string((temp_parent / "nested" / "to.txt").string()) + "}");
+    check(json_ok(renamed) && fs::exists(temp_parent / "nested" / "to.txt"),
+          "rename_path renames an external temp file without copy fallback");
+    const std::string listed = smart.execute(
+        "list_directory",
+        "{\"path\":" + json_string((temp_parent / "nested").string()) + "}");
+    check(json_ok(listed) && listed.find("to.txt") != std::string::npos,
+          "list_directory supports an exact external directory under temp");
+    const std::string smart_command =
+        smart.execute("run_command", R"({"command":"pwd"})");
+    check(!json_ok(smart_command) &&
+              json_error_code(smart_command) == "policy_denied",
+          "smart mode does not execute a model-issued command without approval");
+
+    agent::ReadToolRegistry yolo =
+        make_registry(workspace, agent::MutationPolicy::Full, false, {},
+                      agent::PermissionMode::Yolo, true);
+    const std::string hard_denied =
+        yolo.execute("run_command", R"({"command":"sudo true"})");
+    check(!json_ok(hard_denied) && json_error_code(hard_denied) == "policy_denied",
+          "yolo cannot elevate a hard Guard denial");
+    const std::string external_cwd = yolo.execute(
+        "run_command",
+        "{\"command\":\"pwd\",\"cwd\":" +
+            json_string((temp_parent / "nested").string()) + "}");
+    check(json_ok(external_cwd) &&
+              external_cwd.find((temp_parent / "nested").string()) !=
+                  std::string::npos,
+          "yolo run_command supports a validated canonical external cwd");
+    const std::string external_operand = yolo.execute(
+        "run_command",
+        "{\"command\":" +
+            json_string("stat " + (temp_parent / "nested" / "to.txt").string()) + "}");
+    check(json_ok(external_operand),
+          "yolo run_command supports an authorized standalone external path operand");
+    const std::string removed = yolo.execute(
+        "remove",
+        "{\"path\":" + json_string(temp_parent.string()) +
+            ",\"recursive\":true}");
+    check(json_ok(removed) && !fs::exists(temp_parent),
+          "yolo permits validated recursive external removal");
     fs::remove_all(workspace, ec);
 }
 
@@ -1137,6 +1227,7 @@ void test_plan_document_mutation_policy() {
 }  // namespace
 
 void run_all() {
+    test_permission_modes_and_native_path_tools();
     test_tool_schemas_gemini_compatible();
     test_external_file_access_requires_one_shot_approval();
     test_glob_recursive_root_and_nested();

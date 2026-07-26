@@ -5,12 +5,49 @@
 #include "agent/project_root.hpp"
 #include "agent/session_store.hpp"
 #include "chat/settings.hpp"
+#include "json/json.hpp"
 
 namespace ainiux::agent {
 
+Error permission_mode_from_settings_json(const std::string& settings_json,
+                                         PermissionMode& mode) {
+    mode = PermissionMode::Smart;
+    if (settings_json.empty() || settings_json == "{}") return ok_error();
+    const json::ParseResult parsed = json::parse(settings_json);
+    if (!parsed.error.ok() || !parsed.value.is_object())
+        return {ErrorCode::Config, "agent project settings must be a JSON object"};
+    const json::Value* value = parsed.value.get("permission_mode");
+    if (value == nullptr || value->type == json::Value::Type::Null) return ok_error();
+    if (!value->is_string() || !parse_permission_mode(value->string, mode))
+        return {ErrorCode::Config,
+                "agent permission_mode must be confirm, smart, or yolo"};
+    return ok_error();
+}
+
+Error settings_json_with_permission_mode(const std::string& settings_json,
+                                         PermissionMode mode,
+                                         std::string& updated) {
+    json::Value root;
+    if (settings_json.empty()) {
+        root.type = json::Value::Type::Object;
+    } else {
+        json::ParseResult parsed = json::parse(settings_json);
+        if (!parsed.error.ok() || !parsed.value.is_object())
+            return {ErrorCode::Config, "agent project settings must be a JSON object"};
+        root = std::move(parsed.value);
+    }
+    json::Value value;
+    value.type = json::Value::Type::String;
+    value.string = permission_mode_name(mode);
+    root.object["permission_mode"] = std::move(value);
+    updated = json::stringify(root);
+    return ok_error();
+}
+
 Error restore_project_settings(const std::string& workspace,
                                cli::Options& options,
-                               bool& restored) {
+                               bool& restored,
+                               PermissionMode* permission_mode) {
     restored = false;
     std::string root;
     Error error = resolve_agent_project_root(workspace, root);
@@ -39,6 +76,14 @@ Error restore_project_settings(const std::string& workspace,
         return {error.code,
                 "could not restore agent project settings from " + database + ": " +
                     error.message};
+    }
+    if (permission_mode != nullptr) {
+        error = permission_mode_from_settings_json(project.settings_json, *permission_mode);
+        if (!error.ok()) {
+            return {error.code,
+                    "could not restore agent permission settings from " + database + ": " +
+                        error.message};
+        }
     }
     if (!project.provider.empty() && project.provider != "none") {
         options.provider = project.provider;

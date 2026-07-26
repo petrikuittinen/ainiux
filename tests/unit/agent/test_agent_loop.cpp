@@ -27,6 +27,37 @@ std::string fail_result() {
     return R"({"ok":false,"error":{"code":"not_found","message":"missing"},"data":{},"warnings":[],"truncated":false,"metadata":{}})";
 }
 
+void test_approval_denial_stops_turn_and_new_user_resets_abort() {
+    using namespace ainiux::agent;
+    AgentLoopState state;
+    state.protocol = ToolProtocol::Xml;
+    AgentLoopLimits limits;
+    provider::ToolConversation conversation;
+    int executions = 0;
+    const AgentRoundOutcome denied = handle_agent_xml_round(
+        state, limits, chat_context(), conversation,
+        R"(<tool_call><name>remove</name><args>{"path":"/tmp/dug.txt"}</args></tool_call>)",
+        {"remove"},
+        [&](const std::string&, const std::string&, runtime::CancellationToken) {
+            ++executions;
+            return R"({"ok":false,"error":{"code":"unsupported_feature","message":"external remove requires user approval"},"data":{},"warnings":[],"truncated":false,"metadata":{}})";
+        });
+    check(executions == 1 && denied.kind == AgentRoundOutcome::Kind::FinalText &&
+              !state.aborted && state.consecutive_all_failed_turns == 0,
+          "declined approval ends the current turn without inviting a workaround");
+
+    state.aborted = true;
+    state.abort_reason = "three consecutive failures";
+    state.consecutive_all_failed_turns = 3;
+    state.identical_repeat_count = 4;
+    state.last_fingerprint = "old";
+    reset_agent_loop_for_user_turn(state);
+    check(!state.aborted && state.abort_reason.empty() &&
+              state.consecutive_all_failed_turns == 0 &&
+              state.identical_repeat_count == 0 && state.last_fingerprint.empty(),
+          "a new user message clears prior retry and abort state");
+}
+
 void test_transport_retry_classification() {
     using ainiux::agent::is_immediate_fail_transport_error;
     using ainiux::agent::is_retryable_transport_error;
@@ -525,6 +556,7 @@ void test_follow_up_user_appends_after_tool_history() {
 
 void run_all() {
     test_transport_retry_classification();
+    test_approval_denial_stops_turn_and_new_user_resets_abort();
     test_prepare_and_history_hygiene();
     test_loop_limits_and_no_tool_retry();
     test_protocol_downgrade_and_xml();

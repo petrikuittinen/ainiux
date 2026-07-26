@@ -198,12 +198,41 @@ void test_record_and_load_approvals() {
     fs::remove_all(workspace, ec);
 }
 
+void test_permission_settings_json() {
+    agent::PermissionMode mode = agent::PermissionMode::Yolo;
+    Error error = agent::permission_mode_from_settings_json("{}", mode);
+    check(error.ok() && mode == agent::PermissionMode::Smart,
+          "legacy project settings default permissions to smart");
+    check(agent::parse_permission_mode("confirm", mode) &&
+              mode == agent::PermissionMode::Confirm &&
+              std::string(agent::permission_mode_name(mode)) == "confirm",
+          "permission mode parses and formats confirm");
+    check(agent::parse_permission_mode("yolo", mode) &&
+              mode == agent::PermissionMode::Yolo,
+          "permission mode parses yolo");
+    check(!agent::parse_permission_mode("allow-all", mode),
+          "permission mode rejects non-canonical aliases");
+
+    std::string encoded;
+    error = agent::settings_json_with_permission_mode(
+        R"({"reasoning":"high"})", agent::PermissionMode::Yolo, encoded);
+    check(error.ok() && encoded.find("\"permission_mode\":\"yolo\"") !=
+                            std::string::npos &&
+              encoded.find("\"reasoning\":\"high\"") != std::string::npos,
+          "permission mode merges into existing settings JSON");
+    mode = agent::PermissionMode::Smart;
+    error = agent::permission_mode_from_settings_json(encoded, mode);
+    check(error.ok() && mode == agent::PermissionMode::Yolo,
+          "permission mode settings JSON round trip");
+}
+
 }  // namespace
 
 void run_all() {
     test_open_singleton_append_compact_load();
     test_restore_does_not_create_new_project_state();
     test_record_and_load_approvals();
+    test_permission_settings_json();
 }
 
 }  // namespace ainiux::test::agent_session_store

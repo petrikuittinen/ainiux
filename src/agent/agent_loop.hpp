@@ -47,6 +47,10 @@ struct AgentLoopState {
     std::vector<std::string> dangling_call_ids;
 };
 
+// A new explicit user message starts a fresh retry/abort segment while retaining
+// cumulative turn numbering and protocol health for the project session.
+void reset_agent_loop_for_user_turn(AgentLoopState& state);
+
 struct PreparedToolCall {
     std::string id;
     std::string name;

@@ -156,7 +156,9 @@ void render(const chat::Session& session,
     if (agent_mode) {
         draw_line(layout.input_label_row, cols,
                   agent_input_top_border(
-                      {agent_chrome.workspace, agent_chrome.mode_label}, cols),
+                      {agent_chrome.workspace, agent_chrome.mode_label,
+                       agent_chrome.permission_label},
+                      cols),
                   StyleRole::PanelBorder, style);
     } else {
         draw_line(layout.input_label_row, cols,

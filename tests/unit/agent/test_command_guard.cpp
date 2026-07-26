@@ -86,6 +86,14 @@ void test_parse_policies() {
     error = agent::parse_command("sudo make", args, agent::CommandPolicy::Agent, rule);
     check(!error.ok(), "agent still denylists sudo: " + error.message);
 
+    error = agent::parse_command("cat /etc/passwd", args, agent::CommandPolicy::Agent, rule);
+    check(!error.ok() && error.message.find("absolute path") != std::string::npos,
+          "direct agent command parsing rejects absolute operands by default");
+    error = agent::parse_command("cat /etc/passwd", args, agent::CommandPolicy::Agent, rule,
+                                 agent::GuardAskHandling::DeferAsk, nullptr, {}, true);
+    check(error.ok(),
+          "tool-layer preview may defer absolute operands to canonical authorization");
+
     error = agent::parse_command("stat tic_tac_toe.py", args, agent::CommandPolicy::InspectionOnly,
                                  rule);
     check(!error.ok() && error.message.find("inspection allowlist") != std::string::npos,

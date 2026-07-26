@@ -69,6 +69,9 @@ struct SessionRuntimeOptions {
     bool auto_compact = true;
     int compact_limit = 0;  // 0 = derive from window
     bool show_command_output = false;
+    // Headless callers always use Smart and retain Ask→Deny through an empty
+    // approval callback. Interactive projects restore their persisted value.
+    PermissionMode permission_mode = PermissionMode::Smart;
     fetch::Options fetch_options;
     search::Options search_options;
     std::function<void(const std::string& status_line)> on_progress;
@@ -93,6 +96,7 @@ class AgentSessionRuntime {
     ToolProtocol protocol() const { return state_.protocol; }
     AgentTaskMode task_mode() const { return task_mode_; }
     MutationPolicy mutation_policy() const { return tools_.mutation_policy(); }
+    PermissionMode permission_mode() const { return permission_mode_; }
     std::size_t session_turns() const { return session_turns_; }
     std::size_t session_tool_calls() const { return session_tool_calls_; }
 
@@ -122,6 +126,10 @@ class AgentSessionRuntime {
     // Switch the trusted task prompt and tool policy without resetting session
     // history. Only valid while no turn/compaction operation is active.
     Error switch_task_mode(AgentTaskMode mode);
+    // Persist first, then publish to the live registry. On failure the active
+    // mode is unchanged.
+    Error switch_permission_mode(PermissionMode mode,
+                                 const provider::RequestContext& context);
 
     // Run one user goal/follow-up until FinalText, NeedsUserContinue, abort, or error.
     // First turn seeds the tool conversation; later turns append a user message.
@@ -174,6 +182,7 @@ class AgentSessionRuntime {
 
     SessionRuntimeOptions options_;
     AgentTaskMode task_mode_ = AgentTaskMode::Act;
+    PermissionMode permission_mode_ = PermissionMode::Smart;
     bool prepared_ = false;
     bool conversation_seeded_ = false;
     std::vector<std::string> secrets_;

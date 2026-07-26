@@ -70,6 +70,20 @@ AgentSlashCommand parse_agent_slash_command(const std::string& text) {
         command.action = AgentSlashAction::Act;
         return command;
     }
+    if (text == "/permissions" || text.rfind("/permissions ", 0) == 0) {
+        command.action = AgentSlashAction::Permissions;
+        command.argument =
+            text.size() <= 12 ? std::string()
+                              : app::detail::trim_ascii(text.substr(12));
+        if (!command.argument.empty()) {
+            agent::PermissionMode ignored;
+            if (!agent::parse_permission_mode(command.argument, ignored)) {
+                command.action = AgentSlashAction::Invalid;
+                command.error = "Usage: /permissions [confirm|smart|yolo]";
+            }
+        }
+        return command;
+    }
     if (text.rfind("/compact ", 0) == 0) {
         command.action = AgentSlashAction::Invalid;
         command.error = "Usage: /compact";
@@ -96,6 +110,7 @@ void handle_tui_command(const std::string& text, TuiCommandContext& ctx, TuiComm
                                     "/compact (compact model context; preserve transcript)\n"
                                     "/plan (planning task mode)\n"
                                     "/act (full coding task mode)\n"
+                                    "/permissions [confirm|smart|yolo]\n"
                                     "/setting thinking_preview_max_chars=N (0 disables)\n"
                                   : "/new [NAME]\n") +
                 "/provider [PROVIDER]\n"
@@ -107,14 +122,16 @@ void handle_tui_command(const std::string& text, TuiCommandContext& ctx, TuiComm
                 "/setting (hide/show current settings)\n"
                 "/setting NAME=VALUE\n"
                 "/setting general|coding|instruct|creative\n"
-                "/clone\n"
-                "/save [PATH]\n"
-                "/load PATH\n"
-                "/remove\n"
-                "/remove-empty\n"
-                "/cleanup (expire inactive managed media)\n"
-                "/pop\n"
-                "/response\n"
+                + std::string(ctx.context.options.agent
+                                  ? ""
+                                  : "/clone\n"
+                                    "/save [PATH]\n"
+                                    "/load PATH\n"
+                                    "/remove\n"
+                                    "/remove-empty\n"
+                                    "/cleanup (expire inactive managed media)\n"
+                                    "/pop\n"
+                                    "/response\n") +
                 "/insert FILE_OR_URL (UTF-8 text at cursor)\n"
                 "/attach [PATH|URL] (queue text attachment; bare shows list, DEL deletes)\n"
                 "/fetch URL\n"
@@ -130,8 +147,11 @@ void handle_tui_command(const std::string& text, TuiCommandContext& ctx, TuiComm
                 "/mode [chat|editor|agent] (show or jump modes)\n"
                 "/cycle or Ctrl+P (toggle current chat/agent mode ↔ editor)\n"
                 "/cmd-out [on|off] (agent: show run_command stdout)\n"
-                "AI commands from editor-commands.conf (/spell, /grammar, /continue,\n"
-                "/Chinese, /German, /Japanese, /prompt, /regenerate, and custom commands)";
+                + std::string(ctx.context.options.agent
+                                  ? "Agent commands are isolated from Chat/editor AI commands"
+                                  : "AI commands from editor-commands.conf (/spell, /grammar, "
+                                    "/continue,\n/Chinese, /German, /Japanese, /prompt, "
+                                    "/regenerate, and custom commands)");
             ctx.status = "Help shown; /help hides it";
         } else {
             ctx.help_text.clear();
@@ -371,6 +391,20 @@ void handle_tui_command(const std::string& text, TuiCommandContext& ctx, TuiComm
             agent_command.action == AgentSlashAction::Plan
                 ? agent::AgentTaskMode::Plan
                 : agent::AgentTaskMode::Act);
+        return;
+    }
+    if (agent_command.action == AgentSlashAction::Permissions) {
+        if (ctx.active_job != ActiveJob::None ||
+            ctx.mode == TuiMode::GuardApprovalConfirm) {
+            ctx.status =
+                "Cannot switch permissions while an agent operation or approval is active";
+            return;
+        }
+        if (agent_command.argument.empty()) {
+            handlers.open_agent_permission_picker();
+            return;
+        }
+        handlers.switch_agent_permission_mode(agent_command.argument);
         return;
     }
     if (text == "/compact" || text.rfind("/compact ", 0) == 0) {

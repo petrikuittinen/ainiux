@@ -112,7 +112,10 @@ app::TuiRunResult run(provider::RequestContext context,
             ai_continue.assist_config = interactive->assist_config;
         }
     }
-    path_completer.set_assist_config(&ai_continue.assist_config);
+    path_completer.set_assist_config(context.options.agent
+                                         ? nullptr
+                                         : &ai_continue.assist_config);
+    path_completer.set_agent_mode(context.options.agent);
     ChatAssistCallbacks chat_assist_callbacks;
     size_t completion_generation = 0;
     bool completion_pending = false;
@@ -242,6 +245,10 @@ app::TuiRunResult run(provider::RequestContext context,
             agent_runtime && agent_runtime->prepared()
                 ? agent::agent_task_mode_name(agent_runtime->task_mode())
                 : "act";
+        chrome.permission_label =
+            agent_runtime && agent_runtime->prepared()
+                ? agent::permission_mode_name(agent_runtime->permission_mode())
+                : "smart";
         chrome.input_max_height_percent =
             context.options.agent_input_max_height_percent;
         chrome.cancellable = active_job != ActiveJob::None || file_job.joinable() ||
@@ -588,6 +595,13 @@ app::TuiRunResult run(provider::RequestContext context,
                 text += "\nPress y to allow · n or Esc to deny";
             return text;
         }
+        if (mode == TuiMode::AgentPermissionSelect) {
+            return std::string(
+                "Select project permission mode.\n\n"
+                "Confirm asks for writes and external access.\n"
+                "Smart allows project/system-temp native access and asks elsewhere.\n"
+                "Yolo allows validated actions; hard safety and Plan denials remain.");
+        }
         if (mode == TuiMode::AgentContinueConfirm) {
             return std::string("The agent reached its 50-round safety cap.\n\n"
                                "Continue the current task with a fresh round budget?");
@@ -695,7 +709,9 @@ app::TuiRunResult run(provider::RequestContext context,
 
         editor::EditorState completion_input = input;
         editor::ContextualCompleter completion_completer;
-        completion_completer.set_assist_config(&ai_continue.assist_config);
+        completion_completer.set_assist_config(
+            context.options.agent ? nullptr : &ai_continue.assist_config);
+        completion_completer.set_agent_mode(context.options.agent);
         const size_t generation = completion_generation;
         completion_job.start(
             [completion_input = std::move(completion_input),
@@ -1560,6 +1576,43 @@ app::TuiRunResult run(provider::RequestContext context,
                      : std::string("Switched agent task mode to ") +
                            agent::agent_task_mode_name(mode);
     };
+    command_handlers.switch_agent_permission_mode =
+        [&](const std::string& requested) {
+            if (!agent_runtime || !agent_runtime->prepared()) {
+                status = "Agent session runtime is not ready";
+                return;
+            }
+            if (file_job.joinable() ||
+                (agent_approval_gate && agent_approval_gate->has_pending())) {
+                status =
+                    "Cannot switch permissions while an agent operation or approval is active";
+                return;
+            }
+            agent::PermissionMode mode = agent::PermissionMode::Smart;
+            if (!agent::parse_permission_mode(requested, mode)) {
+                status = "Usage: /permissions [confirm|smart|yolo]";
+                return;
+            }
+            const agent::PermissionMode before =
+                agent_runtime->permission_mode();
+            const Error error =
+                agent_runtime->switch_permission_mode(mode, context);
+            if (!error.ok()) {
+                status = "Permission change failed; mode remains " +
+                         std::string(agent::permission_mode_name(before)) + ": " +
+                         error.message;
+                return;
+            }
+            status = before == mode
+                         ? "Permissions already " +
+                               std::string(agent::permission_mode_name(mode))
+                         : "Permissions set to " +
+                               std::string(agent::permission_mode_name(mode));
+        };
+    command_handlers.open_agent_permission_picker = [&]() {
+        mode = TuiMode::AgentPermissionSelect;
+        status = "Select permissions";
+    };
     command_handlers.open_provider_picker = open_provider_picker;
     command_handlers.apply_selected_provider = [&](const std::string& provider_target) {
         const bool applied =
@@ -1689,6 +1742,28 @@ app::TuiRunResult run(provider::RequestContext context,
                                       attachments_committed_for_turn};
 
     auto handle_command = [&](const std::string& text) {
+        if (context.options.agent) {
+            static const std::vector<std::string> chat_only = {
+                "/clone",        "/cleanup", "/remove", "/remove-empty",
+                "/pop",          "/load",    "/save",   "/prompt",
+                "/regenerate"};
+            for (const std::string& command : chat_only) {
+                if (text == command || text.rfind(command + " ", 0) == 0) {
+                    status = command +
+                             " is unavailable in Agent mode; switch to Chat with /chat";
+                    return;
+                }
+            }
+            for (const editor::EditorAssistCommand& command :
+                 ai_continue.assist_config.commands) {
+                if (text == command.command ||
+                    text.rfind(command.command + " ", 0) == 0) {
+                    status = command.command +
+                             " is a Chat/editor AI command and is unavailable in Agent mode";
+                    return;
+                }
+            }
+        }
         if (loaded_thread_requires_provider_selection &&
             (text == "/model" || text.rfind("/model ", 0) == 0)) {
             status = "Thread setup requires /provider first; model selection follows";
@@ -1808,6 +1883,12 @@ app::TuiRunResult run(provider::RequestContext context,
         have_pending_guard_request = false;
         mode = TuiMode::Chat;
         status = "Guard: denied";
+    };
+    picker_callbacks.on_agent_permission_selected = [&](size_t selected) {
+        static const char* modes[] = {"confirm", "smart", "yolo"};
+        if (selected >= 3) return;
+        mode = TuiMode::Chat;
+        command_handlers.switch_agent_permission_mode(modes[selected]);
     };
     picker_callbacks.on_guard_approval_retry =
         [&](const std::string& message) { status = message; };
@@ -1942,7 +2023,8 @@ app::TuiRunResult run(provider::RequestContext context,
                 handle_command(text);
                 return;
             }
-            if (try_handle_chat_assist_command(text,
+            if (!context.options.agent &&
+                try_handle_chat_assist_command(text,
                                                input,
                                                ai_continue.assist_config,
                                                context,
@@ -2557,7 +2639,10 @@ app::TuiRunResult run(provider::RequestContext context,
                         event.completion.handled) {
                         input = std::move(event.completed_input);
                         path_completer = std::move(event.path_completer);
-                        path_completer.set_assist_config(&ai_continue.assist_config);
+                        path_completer.set_assist_config(
+                            context.options.agent ? nullptr
+                                                  : &ai_continue.assist_config);
+                        path_completer.set_agent_mode(context.options.agent);
                         status = editor::path_completion_status(event.completion);
                     }
                     break;
@@ -2913,7 +2998,8 @@ app::TuiRunResult run(provider::RequestContext context,
                     scroll_chat_history_page_down(current_layout(screen.rows, screen.cols), history_scroll);
                     continue;
                 }
-                if (ch == 18 && mode == TuiMode::Chat) {
+                if (ch == 18 && mode == TuiMode::Chat &&
+                    !context.options.agent) {
                     regenerate_last_turn();
                     continue;
                 }
@@ -2929,7 +3015,8 @@ app::TuiRunResult run(provider::RequestContext context,
                     input.select_all();
                     continue;
                 }
-                if (ch == 0 && mode == TuiMode::Chat && active_job == ActiveJob::None) {
+                if (ch == 0 && mode == TuiMode::Chat &&
+                    !context.options.agent && active_job == ActiveJob::None) {
                     handle_chat_assist_continue_key(ai_continue.assist_config,
                                                     status,
                                                     chat_assist_callbacks);

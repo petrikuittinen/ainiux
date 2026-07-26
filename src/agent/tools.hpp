@@ -48,6 +48,8 @@ struct ToolRegistryOptions {
     search::Options search_options = search::default_options();
     // Interactive Guard Ask. Empty ⇒ headless Deny for Ask decisions.
     GuardApprovalCallback on_guard_ask;
+    PermissionMode permission_mode = PermissionMode::Smart;
+    bool permission_controls = false;
 };
 
 class ReadToolRegistry {
@@ -64,6 +66,8 @@ class ReadToolRegistry {
     bool allow_mutations() const { return mutation_policy_ != MutationPolicy::Disabled; }
     MutationPolicy mutation_policy() const { return mutation_policy_; }
     void set_mutation_policy(MutationPolicy policy) { mutation_policy_ = policy; }
+    PermissionMode permission_mode() const { return permission_mode_; }
+    void set_permission_mode(PermissionMode mode) { permission_mode_ = mode; }
     std::vector<provider::FunctionDefinition> definitions() const;
     // Mutating tools update the in-memory snapshot so later reads in the same
     // run see the new file hashes. Security-review never enables mutations.
@@ -160,6 +164,16 @@ class ReadToolRegistry {
     // Shared by run_command / remove when Guard returns Ask.
     GuardApprovalDecision request_guard_approval(const GuardApprovalRequest& request,
                                                  runtime::CancellationToken cancellation) const;
+    GuardApprovalDecision request_permission(const std::string& tool_name,
+                                              const std::string& preview,
+                                              const std::vector<std::string>& arguments,
+                                              bool outside_project,
+                                              bool under_system_temp,
+                                              bool write,
+                                              bool destructive,
+                                              const std::string& specific_rule,
+                                              const std::string& specific_message,
+                                              runtime::CancellationToken cancellation) const;
 
     index::Options index_options_;
     // Mutable so const execute() can refresh hashes after agent writes without
@@ -173,6 +187,8 @@ class ReadToolRegistry {
     fetch::Options fetch_options_{};
     search::Options search_options_{};
     GuardApprovalCallback on_guard_ask_;
+    PermissionMode permission_mode_ = PermissionMode::Smart;
+    bool permission_controls_ = false;
 };
 
 std::string tool_error_result(const std::string& code, const std::string& message);

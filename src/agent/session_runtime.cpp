@@ -11,6 +11,7 @@
 #include "agent/agent_loop.hpp"
 #include "agent/compact.hpp"
 #include "agent/project_root.hpp"
+#include "agent/project_settings.hpp"
 #include "agent/reasoning_preview.hpp"
 #include "agent/tool_display.hpp"
 #include "chat/settings.hpp"
@@ -102,7 +103,10 @@ Error AgentSessionRuntime::update_project_settings(
     project.api = context.api_kind == provider::ApiKind::Responses ? "responses" : "chat";
     project.protocol = state_.protocol == ToolProtocol::Xml ? "xml" : "native";
     project.base_url = context.base_url;
-    project.settings_json = chat::settings_json_from_options(context.options);
+    error = settings_json_with_permission_mode(
+        chat::settings_json_from_options(context.options), permission_mode_,
+        project.settings_json);
+    if (!error.ok()) return error;
     project.workspace = options_.workspace;
     return session_store_.update_project_meta(project);
 }
@@ -281,6 +285,7 @@ SessionProjectReplaceResult AgentSessionRuntime::replace_project(
     SessionRuntimeOptions new_options = old_options;
     new_options.workspace = target.root;
     new_options.task_mode = AgentTaskMode::Act;
+    new_options.permission_mode = PermissionMode::Smart;
     provider::RequestContext quiet_context = context;
     quiet_context.options.quiet = true;
 
@@ -414,6 +419,7 @@ void AgentSessionRuntime::reset() {
     prepared_ = false;
     options_ = SessionRuntimeOptions{};
     task_mode_ = AgentTaskMode::Act;
+    permission_mode_ = PermissionMode::Smart;
     cached_request_tokens_.store(0, std::memory_order_relaxed);
     guard_approval_wait_ms_.store(0, std::memory_order_relaxed);
     operation_active_.store(false, std::memory_order_relaxed);
@@ -426,6 +432,8 @@ Error AgentSessionRuntime::prepare(const provider::RequestContext& context,
     reset();
     options_ = std::move(options);
     task_mode_ = options_.task_mode;
+    permission_mode_ = options_.interactive ? options_.permission_mode
+                                            : PermissionMode::Smart;
     if (options_.workspace.empty()) options_.workspace = ".";
     {
         std::string absolute;
@@ -510,6 +518,8 @@ Error AgentSessionRuntime::prepare(const provider::RequestContext& context,
     tool_options.history_backup = options_.history_backup;
     tool_options.fetch_options = options_.fetch_options;
     tool_options.search_options = options_.search_options;
+    tool_options.permission_mode = permission_mode_;
+    tool_options.permission_controls = options_.interactive;
     // Wrap Ask so every resolution is persisted and optionally surfaced.
     if (options_.on_guard_ask) {
         tool_options.on_guard_ask =
@@ -576,6 +586,22 @@ Error AgentSessionRuntime::prepare(const provider::RequestContext& context,
         }
         if (!context.options.quiet)
             std::cerr << "Agent session DB: " << session_store_.path() << "\n";
+        if (options_.interactive) {
+            AgentProjectRecord project;
+            error = session_store_.open_project(project);
+            if (!error.ok()) {
+                reset();
+                return error;
+            }
+            error = permission_mode_from_settings_json(project.settings_json,
+                                                       permission_mode_);
+            if (!error.ok()) {
+                reset();
+                return error;
+            }
+            options_.permission_mode = permission_mode_;
+            tools_.set_permission_mode(permission_mode_);
+        }
     }
 
     error = load_root_agents_md(options_.workspace, kDefaultAgentsMdMaxBytes, agents_md_);
@@ -691,6 +717,48 @@ Error AgentSessionRuntime::switch_task_mode(AgentTaskMode mode) {
     return ok_error();
 }
 
+Error AgentSessionRuntime::switch_permission_mode(
+    PermissionMode mode,
+    const provider::RequestContext& context) {
+    if (!prepared_)
+        return {ErrorCode::Internal, "agent session runtime is not prepared"};
+    if (!options_.interactive)
+        return {ErrorCode::UnsupportedFeature,
+                "permission modes are available only in interactive agent mode"};
+    if (mode == permission_mode_) return ok_error();
+    bool expected = false;
+    if (!operation_active_.compare_exchange_strong(expected, true))
+        return {ErrorCode::BadArgs,
+                "cannot switch permissions while an agent operation or approval is active"};
+    struct Release {
+        std::atomic<bool>& active;
+        ~Release() { active.store(false); }
+    } release{operation_active_};
+
+    if (session_store_.is_open()) {
+        AgentProjectRecord project;
+        Error error = session_store_.open_project(project);
+        if (!error.ok()) return error;
+        project.provider = context.profile.name;
+        project.model = context.options.model;
+        project.api =
+            context.api_kind == provider::ApiKind::Responses ? "responses" : "chat";
+        project.protocol = state_.protocol == ToolProtocol::Xml ? "xml" : "native";
+        project.base_url = context.base_url;
+        project.workspace = options_.workspace;
+        error = settings_json_with_permission_mode(
+            chat::settings_json_from_options(context.options), mode,
+            project.settings_json);
+        if (!error.ok()) return error;
+        error = session_store_.update_project_meta(project);
+        if (!error.ok()) return error;
+    }
+    permission_mode_ = mode;
+    options_.permission_mode = mode;
+    tools_.set_permission_mode(mode);
+    return ok_error();
+}
+
 Error AgentSessionRuntime::finish_session(const std::string& status,
                                           const std::string& final_text,
                                           const std::string& error_code,
@@ -741,6 +809,7 @@ SessionTurnResult AgentSessionRuntime::run_user_turn(
         result.error = {ErrorCode::BadArgs, "agent turn requires a non-empty user message"};
         return result;
     }
+    reset_agent_loop_for_user_turn(state_);
 
     result.turn_started_ms = now_unix_ms();
     // Prefer the per-turn callback (TUI streaming); fall back to prepare-time options.
@@ -773,7 +842,6 @@ SessionTurnResult AgentSessionRuntime::run_user_turn(
                 context.api_kind == provider::ApiKind::Responses ? "responses" : "chat";
             project.protocol = state_.protocol == ToolProtocol::Xml ? "xml" : "native";
             project.base_url = context.base_url;
-            project.settings_json = chat::settings_json_from_options(context.options);
             project.workspace = options_.workspace;
             Error error = session_store_.open_project(project);
             if (!error.ok()) {
@@ -787,7 +855,13 @@ SessionTurnResult AgentSessionRuntime::run_user_turn(
                 context.api_kind == provider::ApiKind::Responses ? "responses" : "chat";
             project.protocol = state_.protocol == ToolProtocol::Xml ? "xml" : "native";
             project.base_url = context.base_url;
-            project.settings_json = chat::settings_json_from_options(context.options);
+            Error settings_error = settings_json_with_permission_mode(
+                chat::settings_json_from_options(context.options), permission_mode_,
+                project.settings_json);
+            if (!settings_error.ok()) {
+                result.error = settings_error;
+                return result;
+            }
             project.workspace = options_.workspace;
             (void)session_store_.update_project_meta(project);
             session_id_ = 1;
@@ -932,8 +1006,6 @@ SessionTurnResult AgentSessionRuntime::run_user_turn(
     const std::size_t turns_before = state_.turn;
     // The scripted-round cap is per user-approved task segment. Keep
     // state_.turn cumulative for logs/session statistics.
-    state_.scripted_turns = 0;
-
     for (;;) {
         if (is_interrupted(cancellation, interrupted)) {
             pair_dangling_tool_calls(context, conversation_, state_);

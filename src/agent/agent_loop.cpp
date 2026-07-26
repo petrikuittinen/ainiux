@@ -123,6 +123,25 @@ AgentRoundOutcome abort_outcome(AgentLoopState& state, const std::string& reason
     return outcome;
 }
 
+bool tool_result_is_approval_denial(const std::string& result) {
+    const json::ParseResult parsed = json::parse(result);
+    if (!parsed.error.ok() || !parsed.value.is_object()) return false;
+    const json::Value* error = parsed.value.get("error");
+    if (error == nullptr || !error->is_object()) return false;
+    const json::Value* code = error->get("code");
+    const json::Value* message = error->get("message");
+    const std::string code_text =
+        code != nullptr && code->is_string() ? lower_ascii(code->string) : std::string();
+    const std::string message_text =
+        message != nullptr && message->is_string() ? lower_ascii(message->string) : std::string();
+    if (code_text == "cancelled") return false;
+    return message_text.find("approval") != std::string::npos &&
+           (message_text.find("requires") != std::string::npos ||
+            message_text.find("without user") != std::string::npos ||
+            message_text.find("user selected no") != std::string::npos ||
+            message_text.find("user denied") != std::string::npos);
+}
+
 AgentRoundOutcome execute_prepared_calls(AgentLoopState& state,
                                          const AgentLoopLimits& limits,
                                          const provider::RequestContext& context,
@@ -169,6 +188,7 @@ AgentRoundOutcome execute_prepared_calls(AgentLoopState& state,
     std::vector<std::string> results;
     results.reserve(prepared.size());
     std::size_t failures = 0;
+    bool approval_declined = false;
     for (const PreparedToolCall& call : prepared) {
         if (cancellation.cancelled()) {
             const std::string cancelled = cancelled_tool_result_json("Tool was not executed.");
@@ -181,7 +201,10 @@ AgentRoundOutcome execute_prepared_calls(AgentLoopState& state,
             return outcome;
         }
         std::string result;
-        if (call.arguments_invalid) {
+        if (approval_declined) {
+            result = cancelled_tool_result_json(
+                "Tool was not executed after the user declined approval.");
+        } else if (call.arguments_invalid) {
             result = invalid_arguments_tool_result(
                 call.name.empty() ? std::string("unknown") : call.name,
                 call.parsed.error.ok() ? "tool arguments must be a JSON object"
@@ -194,12 +217,24 @@ AgentRoundOutcome execute_prepared_calls(AgentLoopState& state,
             result = executor(call.name, call.original_arguments, cancellation);
         }
         if (!tool_result_ok(result)) ++failures;
+        if (tool_result_is_approval_denial(result)) approval_declined = true;
         results.push_back(std::move(result));
     }
 
     append_prepared_tool_results(context, conversation, prepared, results);
     state.dangling_call_ids.clear();
     outcome.tool_results = results;
+
+    if (approval_declined) {
+        state.consecutive_all_failed_turns = 0;
+        state.last_fingerprint.clear();
+        state.identical_repeat_count = 0;
+        state.soft_repeat_notice_pending = false;
+        outcome.kind = AgentRoundOutcome::Kind::FinalText;
+        outcome.notice = "Action cancelled by user.";
+        outcome.error = ok_error();
+        return outcome;
+    }
 
     if (failures == prepared.size() && !prepared.empty()) {
         ++state.consecutive_all_failed_turns;
@@ -308,6 +343,17 @@ AgentRoundOutcome execute_prepared_calls(AgentLoopState& state,
 }
 
 }  // namespace
+
+void reset_agent_loop_for_user_turn(AgentLoopState& state) {
+    state.scripted_turns = 0;
+    state.consecutive_all_failed_turns = 0;
+    state.last_fingerprint.clear();
+    state.identical_repeat_count = 0;
+    state.soft_repeat_notice_pending = false;
+    state.aborted = false;
+    state.abort_reason.clear();
+    state.dangling_call_ids.clear();
+}
 
 void append_conversation_text(provider::ToolConversation& conversation,
                               const std::string& role,

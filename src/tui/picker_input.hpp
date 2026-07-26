@@ -31,6 +31,7 @@ struct TuiPickerCallbacks {
     std::function<void()> on_guard_approval_accepted;
     std::function<void()> on_guard_approval_rejected;
     std::function<void(const std::string&)> on_guard_approval_retry;
+    std::function<void(size_t)> on_agent_permission_selected;
     std::function<void()> on_agent_continue_accepted;
     std::function<void()> on_agent_continue_rejected;
     std::function<void()> on_agent_new_accepted;

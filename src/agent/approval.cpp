@@ -5,6 +5,34 @@
 
 namespace ainiux::agent {
 
+const char* permission_mode_name(PermissionMode mode) {
+    switch (mode) {
+        case PermissionMode::Confirm:
+            return "confirm";
+        case PermissionMode::Smart:
+            return "smart";
+        case PermissionMode::Yolo:
+            return "yolo";
+    }
+    return "smart";
+}
+
+bool parse_permission_mode(const std::string& text, PermissionMode& mode) {
+    if (text == "confirm") {
+        mode = PermissionMode::Confirm;
+        return true;
+    }
+    if (text == "smart") {
+        mode = PermissionMode::Smart;
+        return true;
+    }
+    if (text == "yolo") {
+        mode = PermissionMode::Yolo;
+        return true;
+    }
+    return false;
+}
+
 std::string guard_approval_decision_name(GuardApprovalDecision decision) {
     switch (decision) {
         case GuardApprovalDecision::Allow:

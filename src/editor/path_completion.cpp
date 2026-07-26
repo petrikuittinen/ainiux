@@ -63,6 +63,21 @@ const std::vector<std::string>& chat_command_completions() {
     return commands;
 }
 
+const std::vector<std::string>& agent_command_completions() {
+    static const std::vector<std::string> commands = {
+        "/act",          "/agent",        "/attach ",       "/chat",
+        "/clear",        "/cmd-out ",     "/compact",       "/context ",
+        "/cycle",        "/edit",         "/editor",        "/exit",
+        "/fetch ",       "/help",         "/highlight ",    "/insert ",
+        "/model ",       "/models",       "/mode ",         "/new ",
+        "/permissions ", "/plan",         "/provider ",     "/quit",
+        "/reasoning ",   "/search ",      "/setting",       "/setting ",
+        "/shell ",       "/shell-stdout ", "/system",       "/theme ",
+        "/thinking ",
+    };
+    return commands;
+}
+
 bool is_path_command(const std::string& command) {
     return command == "/save" || command == "/load" || command == "/attach" ||
            command == "/insert";
@@ -407,9 +422,11 @@ PathCompletionResult ContextualCompleter::complete_command(EditorState& state) {
 
     const std::string token = buffer.substr(0, cursor);
     const std::string normalized_token = ascii_lower(token);
-    const std::vector<std::string>& commands =
-        assist_config_ != nullptr ? chat_assist_command_completions(*assist_config_)
-                                  : chat_command_completions();
+    const std::vector<std::string> commands =
+        agent_mode_ ? agent_command_completions()
+                    : (assist_config_ != nullptr
+                           ? chat_assist_command_completions(*assist_config_)
+                           : chat_command_completions());
     for (const std::string& command : commands) {
         const std::string normalized_command = ascii_lower(command);
         if (normalized_command.compare(0, normalized_token.size(), normalized_token) == 0) {

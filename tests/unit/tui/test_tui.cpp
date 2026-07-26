@@ -414,7 +414,7 @@ void test_agent_widgets_and_dynamic_geometry() {
               agent_layout.input_rect.height == 6 && chat_layout.input_rect.height == 8,
           "dynamic agent input geometry does not change the fixed chat layout");
 
-    AgentInputFrame frame{"/home/eye/my_code_project", "act"};
+    AgentInputFrame frame{"/home/eye/my_code_project", "act", "smart"};
     check(abbreviate_agent_workspace(frame.workspace) == "~/my_code_project",
           "agent frame abbreviates the home directory");
     check(agent_input_title(frame, 40) == "~/my_code_project act",
@@ -422,9 +422,16 @@ void test_agent_widgets_and_dynamic_geometry() {
     check(agent_input_title({"/a/very/long/leading/path/project", "plan"}, 18).find("project plan") !=
               std::string::npos,
           "agent frame elision preserves the final project directory and future mode");
-    check(agent_input_top_border(frame, 40).find(u8"┌─~/my_code_project act ") == 0 &&
+    const std::string top_border = agent_input_top_border(frame, 40);
+    check(top_border.find(u8"┌─ ~/my_code_project act ") == 0 &&
+              top_border.find(" smart ") != std::string::npos &&
+              top_border.size() >= std::string(u8"┐").size() &&
+              top_border.compare(top_border.size() - std::string(u8"┐").size(),
+                                 std::string(u8"┐").size(), u8"┐") == 0 &&
+              ainiux::editor::detail::display_width_for_range(
+                  top_border, 0, top_border.size()) == 40 &&
               agent_input_bottom_border(40).find(u8"└") == 0,
-          "agent frame constructs titled top and full bottom borders");
+          "agent frame constructs project/task and permission borders");
 
     ainiux::editor::EditorState draft =
         ainiux::editor::EditorState::from_text(u8"ab界d\nsecond\nthird");
@@ -445,6 +452,12 @@ void test_agent_inline_choices() {
               parse_inline_choice_key(approval, 27).index == 1 &&
               !parse_inline_choice_key(approval, 'x').matched,
           "agent Guard accepts y/n, numbers, and Esc as No");
+    InlineChoiceModel permissions =
+        agent_inline_choices_for_mode(TuiMode::AgentPermissionSelect);
+    check(render_inline_choices(permissions) ==
+              "(1) [C]onfirm  (2) [S]mart  (3) [Y]olo" &&
+              parse_inline_choice_key(permissions, '3').index == 2,
+          "agent permissions render the three canonical choices");
     InlineChoiceModel continuation = agent_inline_choices_for_mode(
         TuiMode::AgentContinueConfirm);
     check(render_inline_choices(continuation) == "(1) [C]ontinue  (2) [S]top" &&
@@ -1541,6 +1554,17 @@ void test_agent_project_slash_command_parsing() {
     check(ainiux::tui::parse_agent_slash_command("/plan later").action ==
               ainiux::tui::AgentSlashAction::None,
           "agent task-mode commands require an exact match");
+    const auto permissions =
+        ainiux::tui::parse_agent_slash_command("/permissions yolo");
+    check(permissions.action == ainiux::tui::AgentSlashAction::Permissions &&
+              permissions.argument == "yolo",
+          "agent direct permission command parses");
+    const auto invalid_permissions =
+        ainiux::tui::parse_agent_slash_command("/permissions unsafe");
+    check(invalid_permissions.action == ainiux::tui::AgentSlashAction::Invalid &&
+              invalid_permissions.error ==
+                  "Usage: /permissions [confirm|smart|yolo]",
+          "agent permission command rejects unknown modes");
 }
 
 void test_agent_project_history_handoff_clears_successful_empty_project() {

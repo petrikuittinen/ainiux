@@ -137,6 +137,8 @@ InlineChoiceModel agent_inline_choices_for_mode(TuiMode mode) {
     switch (mode) {
         case TuiMode::GuardApprovalConfirm:
             return {{{"Yes", 'y'}, {"No", 'n'}}, 1};
+        case TuiMode::AgentPermissionSelect:
+            return {{{"Confirm", 'c'}, {"Smart", 's'}, {"Yolo", 'y'}}, 1};
         case TuiMode::AgentContinueConfirm:
             return {{{"Continue", 'c'}, {"Stop", 's'}}, 1};
         case TuiMode::AgentNewConfirm:
@@ -212,14 +214,35 @@ std::string agent_input_title(const AgentInputFrame& frame, int available_cells)
 std::string agent_input_top_border(const AgentInputFrame& frame, int cols) {
     cols = std::max(2, cols);
     if (cols == 2) return u8"┌┐";
-    const std::string title = agent_input_title(frame, std::max(0, cols - 4));
+    const std::string permission =
+        frame.permission_label.empty() ? "smart" : frame.permission_label;
+    const int permission_cells = static_cast<int>(text_cells(permission));
+    // Corners (2), leading/trailing dashes (2), spaces around both labels (4).
+    const int title_budget = std::max(0, cols - permission_cells - 8);
+    const std::string title = agent_input_title(frame, title_budget);
     std::string line = u8"┌─";
-    if (!title.empty()) line += title + " ";
-    const int occupied =
-        4 + static_cast<int>(editor::detail::display_width_for_range(
-                title, 0, title.size()));
-    for (int cell = occupied; cell < cols; ++cell) line += u8"─";
+    if (!title.empty()) line += " " + title + " ";
+    const int used_without_fill =
+        2 + (title.empty() ? 0 : 2 + static_cast<int>(text_cells(title))) +
+        permission_cells + 4;
+    for (int cell = used_without_fill; cell < cols; ++cell) line += u8"─";
+    if (!permission.empty()) line += " " + permission + " ";
+    line += u8"─";
     line += u8"┐";
+    // Very narrow terminals may not fit both labels. Preserve permission first.
+    while (static_cast<int>(text_cells(line)) > cols && !title.empty()) {
+        AgentInputFrame narrower = frame;
+        const int smaller = std::max(0, title_budget - 1);
+        const std::string clipped = agent_input_title(narrower, smaller);
+        std::string compact = u8"┌─";
+        if (!clipped.empty()) compact += " " + clipped + " ";
+        int fill = cols - (2 + (clipped.empty() ? 0 : 2 + static_cast<int>(text_cells(clipped))) +
+                           permission_cells + 4);
+        while (fill-- > 0) compact += u8"─";
+        compact += " " + permission + " ─┐";
+        line = std::move(compact);
+        break;
+    }
     return line;
 }
 

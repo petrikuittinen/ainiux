@@ -55,10 +55,17 @@ Error resolve_cwd(const ProcessOptions& options, fs::path& root, fs::path& cwd) 
     root = fs::canonical(fs::absolute(options.workspace, ec), ec);
     if (ec || !fs::is_directory(root, ec))
         return {ErrorCode::FileRead, "could not resolve command workspace: " + options.workspace};
-    fs::path requested = options.cwd.empty() ? root : root / fs::path(options.cwd);
+    const fs::path supplied(options.cwd);
+    fs::path requested =
+        options.cwd.empty() ? root
+                            : (supplied.is_absolute() ? supplied : root / supplied);
     cwd = fs::canonical(requested, ec);
-    if (ec || !fs::is_directory(cwd, ec) || !inside_root(root, cwd))
-        return {ErrorCode::BadArgs, "run_command cwd must be an existing directory inside the workspace"};
+    if (ec || !fs::is_directory(cwd, ec) ||
+        (!options.allow_external_cwd && !inside_root(root, cwd)))
+        return {ErrorCode::BadArgs,
+                options.allow_external_cwd
+                    ? "run_command cwd must be an existing canonical directory"
+                    : "run_command cwd must be an existing directory inside the workspace"};
     return ok_error();
 }
 
@@ -194,13 +201,14 @@ Error enforce_git_policy(const std::vector<std::string>& args) {
             "git subcommand is not available in snapshot-only security review mode: " + subcommand};
 }
 
-Error enforce_common_safety(const std::vector<std::string>& args) {
+Error enforce_common_safety(const std::vector<std::string>& args,
+                            bool allow_absolute_paths = false) {
     if (args.empty()) return {ErrorCode::BadArgs, "run_command command is empty"};
     for (const std::string& arg : args) {
         if (dangerous_argument(arg))
             return {ErrorCode::BadArgs, "run_command rejected shell metacharacters or substitutions"};
         const fs::path possible_path(arg);
-        if (possible_path.is_absolute())
+        if (possible_path.is_absolute() && !allow_absolute_paths)
             return {ErrorCode::BadArgs, "run_command rejects absolute path arguments"};
         for (const fs::path& component : possible_path) {
             const std::string value = component.string();
@@ -382,10 +390,11 @@ Error enforce_agent_policy(std::vector<std::string>& args,
                            GuardAskHandling ask_handling,
                            const GuardApprovalCallback* on_guard_ask,
                            runtime::CancellationToken cancellation,
-                           std::string& guard_decision_out) {
+                           std::string& guard_decision_out,
+                           bool allow_absolute_paths) {
     guard_rule_id.clear();
     guard_decision_out = "allow";
-    Error error = enforce_common_safety(args);
+    Error error = enforce_common_safety(args, allow_absolute_paths);
     if (!error.ok()) return error;
 
     // Denylist / Ask first: shells, privilege escalation, disk destroyers, rm -rf, etc.
@@ -497,14 +506,15 @@ Error parse_command(const std::string& command,
                     std::string& guard_rule_id,
                     GuardAskHandling ask_handling,
                     const GuardApprovalCallback* on_guard_ask,
-                    runtime::CancellationToken cancellation) {
+                    runtime::CancellationToken cancellation,
+                    bool allow_absolute_paths) {
     guard_rule_id.clear();
     Error error = tokenize_command(command, arguments);
     if (!error.ok()) return error;
     if (policy == CommandPolicy::Agent) {
         std::string unused_decision;
         return enforce_agent_policy(arguments, guard_rule_id, ask_handling, on_guard_ask,
-                                    cancellation, unused_decision);
+                                    cancellation, unused_decision, allow_absolute_paths);
     }
     return enforce_inspection_policy(arguments);
 }
@@ -527,7 +537,8 @@ Error run_command(const std::string& command,
     const GuardApprovalCallback* ask_ptr =
         options.on_guard_ask ? &options.on_guard_ask : nullptr;
     Error error = parse_command(command, output.arguments, policy, output.guard_rule_id,
-                                ask_handling, ask_ptr, options.cancellation);
+                                ask_handling, ask_ptr, options.cancellation,
+                                options.allow_external_paths);
     // Re-run with decision capture for agent policy (parse_command dropped it).
     if (policy == CommandPolicy::Agent && error.ok()) {
         // parse already applied guard; leave decision as allow when ok.

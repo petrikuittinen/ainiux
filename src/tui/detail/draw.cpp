@@ -552,6 +552,8 @@ const char* panel_title_for_mode(TuiMode mode) {
             return "Remove Thread";
         case TuiMode::GuardApprovalConfirm:
             return "Guard approval";
+        case TuiMode::AgentPermissionSelect:
+            return "Agent permissions";
         case TuiMode::AgentContinueConfirm:
             return "Continue agent task";
         case TuiMode::AgentNewConfirm:

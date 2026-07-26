@@ -207,6 +207,87 @@ bool resolved_path_is_under(const fs::path& root, const fs::path& candidate) {
             path_s[root_s.size()] == '/');
 }
 
+bool resolved_path_is_under_system_temp(const fs::path& candidate) {
+    std::error_code ec;
+    const fs::path temp =
+        fs::weakly_canonical(fs::temp_directory_path(ec), ec);
+    return !ec && !temp.empty() && resolved_path_is_under(temp, candidate);
+}
+
+bool contains_protected_metadata_component(const fs::path& path) {
+    for (const fs::path& component : path) {
+        if (is_protected_state_dir_name(component.string())) return true;
+    }
+    return false;
+}
+
+Error resolve_native_path(const fs::path& workspace,
+                          const std::string& requested,
+                          bool must_exist,
+                          fs::path& resolved,
+                          bool& external) {
+    external = false;
+    if (requested.empty() || requested[0] == '$')
+        return {ErrorCode::BadArgs, "native path must be an exact non-empty path"};
+    fs::path supplied;
+    if (requested[0] == '~') {
+        if (requested.size() < 2 || requested[1] != '/')
+            return {ErrorCode::BadArgs, "~user paths are not supported"};
+        const char* home = std::getenv("HOME");
+        if (home == nullptr || *home == '\0')
+            return {ErrorCode::BadArgs, "HOME is not set; provide an absolute path"};
+        supplied = fs::path(home) / requested.substr(2);
+    } else {
+        supplied = fs::path(requested);
+        if (!supplied.is_absolute()) {
+            if (!safe_relative_path(requested))
+                return {ErrorCode::BadArgs,
+                        "outside the project directory access requires an exact absolute or ~/ path"};
+            supplied = workspace / supplied;
+        }
+    }
+    std::error_code ec;
+    const fs::path root = fs::canonical(workspace, ec);
+    if (ec) return {ErrorCode::FileRead, "could not resolve project root"};
+    resolved = fs::weakly_canonical(fs::absolute(supplied, ec), ec);
+    if (ec || resolved.empty())
+        return {ErrorCode::FileRead,
+                "could not resolve native path " + requested + ": " + ec.message()};
+    external = !resolved_path_is_under(root, resolved);
+    if (contains_protected_metadata_component(resolved))
+        return {ErrorCode::BadArgs,
+                "refusing access to protected agent metadata: " +
+                    resolved.generic_string()};
+    if (must_exist) {
+        const fs::file_status status = fs::symlink_status(resolved, ec);
+        if (ec || status.type() == fs::file_type::not_found)
+            return {ErrorCode::FileRead,
+                    "path does not exist: " + resolved.generic_string()};
+        if (fs::is_symlink(status))
+            return {ErrorCode::BadArgs,
+                    "refusing symlink path: " + resolved.generic_string()};
+    }
+    return ok_error();
+}
+
+bool is_broad_removal_root(const fs::path& workspace, const fs::path& target) {
+    std::error_code ec;
+    const fs::path root = fs::canonical(workspace, ec);
+    if (ec) return true;
+    const fs::path filesystem_root = target.root_path();
+    if (target == filesystem_root || target == root ||
+        resolved_path_is_under(target, root))
+        return true;
+    const char* home = std::getenv("HOME");
+    if (home != nullptr && *home != '\0') {
+        const fs::path home_root = fs::weakly_canonical(home, ec);
+        if (!ec && target == home_root) return true;
+    }
+    const fs::path temp_root =
+        fs::weakly_canonical(fs::temp_directory_path(ec), ec);
+    return !ec && target == temp_root;
+}
+
 Error resolve_external_file_path(const fs::path& workspace,
                                  const std::string& requested,
                                  bool must_exist,
@@ -231,7 +312,12 @@ Error resolve_external_file_path(const fs::path& workspace,
         supplied = fs::path(home) / requested.substr(2);
     } else {
         supplied = fs::path(requested);
-        if (!supplied.is_absolute()) supplied = workspace / supplied;
+        if (!supplied.is_absolute()) {
+            if (!safe_relative_path(requested))
+                return {ErrorCode::BadArgs,
+                        "outside the project directory access requires an exact absolute or ~/ path"};
+            supplied = workspace / supplied;
+        }
     }
 
     std::error_code ec;
@@ -248,6 +334,10 @@ Error resolve_external_file_path(const fs::path& workspace,
                 unsafe_path_message(requested) +
                     " Protected or malformed paths inside the project cannot be approved as "
                     "external access."};
+    if (contains_protected_metadata_component(resolved))
+        return {ErrorCode::BadArgs,
+                "refusing access to protected agent metadata outside the project: " +
+                    resolved.generic_string()};
     if (must_exist) {
         const fs::file_status status = fs::status(resolved, ec);
         if (ec || !fs::exists(status))
@@ -258,6 +348,48 @@ Error resolve_external_file_path(const fs::path& workspace,
             return {ErrorCode::FileRead,
                     "external read path must be a regular file: " + resolved.generic_string()};
     }
+    return ok_error();
+}
+
+Error resolve_external_directory_path(const fs::path& workspace,
+                                      const std::string& requested,
+                                      fs::path& resolved) {
+    if (requested.empty())
+        return {ErrorCode::BadArgs, "outside-project directory path must not be empty"};
+    if (requested[0] == '$')
+        return {ErrorCode::BadArgs,
+                "environment-variable paths are not expanded; provide an exact path"};
+    fs::path supplied;
+    if (requested[0] == '~') {
+        if (requested.size() < 2 || requested[1] != '/')
+            return {ErrorCode::BadArgs, "~user paths are not supported"};
+        const char* home = std::getenv("HOME");
+        if (home == nullptr || *home == '\0')
+            return {ErrorCode::BadArgs, "HOME is not set; provide an absolute path"};
+        supplied = fs::path(home) / requested.substr(2);
+    } else {
+        supplied = fs::path(requested);
+        if (!supplied.is_absolute()) {
+            if (!safe_relative_path(requested))
+                return {ErrorCode::BadArgs,
+                        "outside the project directory access requires an exact absolute or ~/ path"};
+            supplied = workspace / supplied;
+        }
+    }
+    std::error_code ec;
+    const fs::path root = fs::canonical(workspace, ec);
+    if (ec) return {ErrorCode::FileRead, "could not resolve project root"};
+    resolved = fs::canonical(supplied, ec);
+    if (ec || !fs::is_directory(resolved, ec))
+        return {ErrorCode::FileRead,
+                "external directory does not exist or cannot be inspected: " +
+                    supplied.generic_string()};
+    if (resolved_path_is_under(root, resolved))
+        return {ErrorCode::BadArgs,
+                "protected or malformed project paths cannot be approved as external access"};
+    if (contains_protected_metadata_component(resolved))
+        return {ErrorCode::BadArgs,
+                "refusing access to protected agent metadata outside the project"};
     return ok_error();
 }
 
@@ -479,16 +611,45 @@ bool path_allowed_for_command(const index::Snapshot& snapshot,
 Error validate_command_workspace_paths(const index::Snapshot& snapshot,
                                        const std::vector<std::string>& arguments,
                                        const std::string& cwd,
-                                       bool index_only) {
+                                       bool index_only,
+                                       bool allow_external,
+                                       bool& uses_external) {
+    uses_external = false;
+    if (allow_external && !cwd.empty() && fs::path(cwd).is_absolute()) {
+        std::error_code ec;
+        const fs::path canonical = fs::canonical(cwd, ec);
+        if (ec || !fs::is_directory(canonical, ec) ||
+            contains_protected_metadata_component(canonical))
+            return {ErrorCode::BadArgs,
+                    "run_command external cwd must be an existing canonical directory"};
+        const fs::path root = fs::canonical(snapshot.workspace, ec);
+        if (ec) return {ErrorCode::FileRead, "could not resolve run_command workspace"};
+        uses_external = !resolved_path_is_under(root, canonical);
+    }
     const std::string normalized_cwd = normalized_workspace_path("", cwd.empty() ? "." : cwd);
-    if (!safe_relative_path(normalized_cwd) ||
+    if (!uses_external && (!safe_relative_path(normalized_cwd) ||
         !path_allowed_for_command(snapshot, normalized_cwd, true, index_only))
+        )
         return {ErrorCode::BadArgs,
                 index_only ? "run_command cwd has no eligible indexed content"
                            : "run_command cwd is outside the workspace or not visible"};
     for (std::size_t index = 1; index < arguments.size(); ++index) {
         const std::string& argument = arguments[index];
         if (argument.empty() || argument.front() == '-') continue;
+        if (allow_external && fs::path(argument).is_absolute()) {
+            std::error_code ec;
+            const fs::path canonical = fs::weakly_canonical(argument, ec);
+            if (ec || canonical.empty() || !fs::exists(canonical, ec) ||
+                contains_protected_metadata_component(canonical))
+                return {ErrorCode::BadArgs,
+                        "run_command external path operand is not an existing safe path: " +
+                            argument};
+            const fs::path root = fs::canonical(snapshot.workspace, ec);
+            if (ec) return {ErrorCode::FileRead, "could not resolve run_command workspace"};
+            if (!resolved_path_is_under(root, canonical)) uses_external = true;
+            continue;
+        }
+        if (uses_external) continue;
         const std::string relative = normalized_workspace_path(normalized_cwd, argument);
         if (!safe_relative_path(relative))
             return {ErrorCode::BadArgs, unsafe_path_message(relative, "access via run_command")};
@@ -573,6 +734,8 @@ Error ReadToolRegistry::create(index::Options index_options,
     loaded.fetch_options_ = options.fetch_options;
     loaded.search_options_ = options.search_options;
     loaded.on_guard_ask_ = std::move(options.on_guard_ask);
+    loaded.permission_mode_ = options.permission_mode;
+    loaded.permission_controls_ = options.permission_controls;
     registry = std::move(loaded);
     registry.rebuild_file_map();
     (void)registry.purge_expired_history_backups();
@@ -587,8 +750,70 @@ void ReadToolRegistry::rebuild_file_map() const {
 GuardApprovalDecision ReadToolRegistry::request_guard_approval(
     const GuardApprovalRequest& request,
     runtime::CancellationToken cancellation) const {
+    if (permission_mode_ == PermissionMode::Yolo)
+        return cancellation.cancelled() ? GuardApprovalDecision::Cancelled
+                                        : GuardApprovalDecision::Allow;
     if (!on_guard_ask_) return GuardApprovalDecision::Deny;
     return on_guard_ask_(request, cancellation);
+}
+
+GuardApprovalDecision ReadToolRegistry::request_permission(
+    const std::string& tool_name,
+    const std::string& preview,
+    const std::vector<std::string>& arguments,
+    bool outside_project,
+    bool under_system_temp,
+    bool write,
+    bool destructive,
+    const std::string& specific_rule,
+    const std::string& specific_message,
+    runtime::CancellationToken cancellation) const {
+    if (cancellation.cancelled()) return GuardApprovalDecision::Cancelled;
+    if (!permission_controls_) {
+        if (!outside_project) return GuardApprovalDecision::Allow;
+        GuardApprovalRequest legacy;
+        legacy.tool_name = tool_name;
+        legacy.command_preview = preview;
+        legacy.rule_id = specific_rule.empty() ? "ask_on_external_native_access"
+                                               : specific_rule;
+        legacy.message = specific_message.empty()
+                             ? "Access this exact path outside the active project?"
+                             : specific_message;
+        legacy.arguments = arguments;
+        return request_guard_approval(legacy, cancellation);
+    }
+    bool ask = false;
+    if (permission_mode_ == PermissionMode::Confirm)
+        ask = write || outside_project || destructive || tool_name == "run_command";
+    else if (permission_mode_ == PermissionMode::Smart)
+        ask = destructive || tool_name == "run_command" ||
+              (outside_project && !under_system_temp);
+    if (!ask) return GuardApprovalDecision::Allow;
+
+    GuardApprovalRequest request;
+    request.tool_name = tool_name;
+    request.command_preview = preview;
+    request.rule_id =
+        !specific_rule.empty()
+            ? specific_rule
+            : (tool_name == "run_command"
+                   ? "ask_on_model_command"
+                   : (outside_project ? "ask_on_external_native_access"
+                                      : "ask_on_confirm_mode_write"));
+    if (!specific_message.empty()) {
+        request.message = specific_message;
+    } else if (tool_name == "run_command") {
+        request.message =
+            "Run this model-issued command? Commands always require approval in " +
+            std::string(permission_mode_name(permission_mode_)) + " mode.";
+    } else {
+        request.message =
+            std::string(write ? "Modify" : "Read") +
+            (outside_project ? " this exact path outside the active project?"
+                             : " this path in the active project?");
+    }
+    request.arguments = arguments;
+    return request_guard_approval(request, cancellation);
 }
 
 Error ReadToolRegistry::resolve_writable_path(const std::string& relative_path,
@@ -929,8 +1154,6 @@ Error ReadToolRegistry::write_workspace_file(const std::string& relative_path,
         if (!expected_file_hash.empty() && expected_file_hash != old_hash)
             return {ErrorCode::FileWrite,
                     "stale_file: expected_file_hash does not match current file content"};
-        error = save_history_copy(relative_path, previous, history_path);
-        if (!error.ok()) return error;
     } else if (!expected_file_hash.empty()) {
         return {ErrorCode::FileWrite, "stale_file: expected_file_hash set but file does not exist"};
     }
@@ -956,7 +1179,7 @@ Error ReadToolRegistry::write_workspace_file(const std::string& relative_path,
                         "approval (interactive agent y/n)"};
             // Creating new directories is high-impact: require Guard Ask (y/n). Never
             // silently mkdir -p, and never treat missing parents as free license to wipe.
-            {
+            if (!permission_controls_) {
                 const std::string parent_rel =
                     fs::path(relative_path).parent_path().generic_string();
                 GuardApprovalRequest ask;
@@ -1004,6 +1227,10 @@ Error ReadToolRegistry::write_workspace_file(const std::string& relative_path,
                                    fs::path(relative_path).generic_string());
     if (!error.ok()) return error;
 
+    if (exists) {
+        error = save_history_copy(relative_path, previous, history_path);
+        if (!error.ok()) return error;
+    }
     error = write_bytes_atomic(absolute, content);
     if (!error.ok()) return error;
     created = !exists;
@@ -1281,6 +1508,7 @@ Error ReadToolRegistry::remove_workspace_path(const std::string& relative_path,
     const std::string generic = fs::path(relative_path).generic_string();
     const std::string basename = absolute.filename().string();
     const fs::path parent = absolute.parent_path();
+    bool permission_approved = false;
 
     std::error_code ec;
     if (!fs::exists(absolute, ec) || ec) {
@@ -1326,6 +1554,7 @@ Error ReadToolRegistry::remove_workspace_path(const std::string& relative_path,
                     message};
         }
         // User approved one-shot; continue.
+        permission_approved = true;
     }
 
     // Models often strip Markdown-like # from "#file#" and delete the plain file instead.
@@ -1417,9 +1646,49 @@ Error ReadToolRegistry::remove_workspace_path(const std::string& relative_path,
                 }
             }
             if (ec) return {ErrorCode::FileWrite, "could not walk directory: " + ec.message()};
+            if (permission_controls_ && !db_delete_approved) {
+                guard_rule_id = "ask_on_recursive_delete";
+                GuardApprovalRequest ask;
+                ask.tool_name = "remove";
+                ask.command_preview = "remove -r " + generic;
+                ask.rule_id = guard_rule_id;
+                ask.message = "recursively delete directory tree: " + generic;
+                ask.arguments = {generic, "recursive=true"};
+                const GuardApprovalDecision decision =
+                    request_guard_approval(ask, {});
+                if (decision != GuardApprovalDecision::Allow) {
+                    guard_decision =
+                        decision == GuardApprovalDecision::Cancelled ? "cancelled"
+                                                                     : "deny";
+                    return {decision == GuardApprovalDecision::Cancelled
+                                ? ErrorCode::Cancelled
+                                : ErrorCode::FileWrite,
+                            decision == GuardApprovalDecision::Cancelled
+                                ? "recursive remove approval cancelled"
+                                : "refusing recursive remove without user approval: " +
+                                      generic};
+                }
+            }
         }
         if (!expected_file_hash.empty())
             return {ErrorCode::BadArgs, "expected_file_hash is only valid for file removals"};
+        if (!recursive && permission_mode_ == PermissionMode::Confirm &&
+            permission_controls_ && !permission_approved) {
+            GuardApprovalRequest ask;
+            ask.tool_name = "remove";
+            ask.command_preview = "remove " + generic;
+            ask.rule_id = "ask_on_confirm_mode_write";
+            ask.message = "Delete this empty project directory?";
+            ask.arguments = {generic};
+            const GuardApprovalDecision decision = request_guard_approval(ask, {});
+            if (decision != GuardApprovalDecision::Allow)
+                return {decision == GuardApprovalDecision::Cancelled
+                            ? ErrorCode::Cancelled
+                            : ErrorCode::FileWrite,
+                        decision == GuardApprovalDecision::Cancelled
+                            ? "remove approval cancelled"
+                            : "remove requires user approval"};
+        }
         fs::remove_all(absolute, ec);
         if (ec) return {ErrorCode::FileWrite, "could not remove directory: " + ec.message()};
         guard_decision = "allow";
@@ -1440,12 +1709,32 @@ Error ReadToolRegistry::remove_workspace_path(const std::string& relative_path,
         if (!expected_file_hash.empty() && expected_file_hash != old_hash)
             return {ErrorCode::FileWrite,
                     "stale_file: expected_file_hash does not match current file content"};
-        error = save_history_copy(relative_path, previous, history_path);
-        if (!error.ok()) return error;
     } else if (!expected_file_hash.empty()) {
         return {ErrorCode::BadArgs, "expected_file_hash is only supported for UTF-8 text files"};
     }
 
+    if (permission_mode_ == PermissionMode::Confirm && permission_controls_ &&
+        !permission_approved) {
+        GuardApprovalRequest ask;
+        ask.tool_name = "remove";
+        ask.command_preview = "remove " + generic;
+        ask.rule_id = "ask_on_confirm_mode_write";
+        ask.message = "Delete this project file?";
+        ask.arguments = {generic};
+        const GuardApprovalDecision decision = request_guard_approval(ask, {});
+        if (decision != GuardApprovalDecision::Allow)
+            return {decision == GuardApprovalDecision::Cancelled
+                        ? ErrorCode::Cancelled
+                        : ErrorCode::FileWrite,
+                    decision == GuardApprovalDecision::Cancelled
+                        ? "remove approval cancelled"
+                        : "remove requires user approval"};
+    }
+
+    if (text_ok) {
+        error = save_history_copy(relative_path, previous, history_path);
+        if (!error.ok()) return error;
+    }
     fs::remove(absolute, ec);
     if (ec) return {ErrorCode::FileWrite, "could not remove file: " + ec.message()};
     guard_decision = "allow";
@@ -1759,8 +2048,16 @@ Error ReadToolRegistry::edit_workspace_file(const std::string& relative_path,
     operations_applied = 0;
     summary.clear();
     warnings.clear();
-    Error policy_error = validate_mutation_path(relative_path, create_dirs, false);
-    if (!policy_error.ok()) return policy_error;
+    const bool external = fs::path(relative_path).is_absolute();
+    Error policy_error;
+    if (external) {
+        if (mutation_policy_ != MutationPolicy::Full)
+            return {ErrorCode::UnsupportedFeature,
+                    "outside-project edits require interactive Act mode"};
+    } else {
+        policy_error = validate_mutation_path(relative_path, create_dirs, false);
+        if (!policy_error.ok()) return policy_error;
+    }
     if (!ops.is_array() || ops.array.empty())
         return {ErrorCode::BadArgs, "edit_file requires a non-empty ops array"};
     if (ops.array.size() > 100)
@@ -1817,6 +2114,9 @@ Error ReadToolRegistry::edit_workspace_file(const std::string& relative_path,
     if (saw_create && !create_file_only)
         return {ErrorCode::BadArgs, "create_file cannot be combined with other edit_file ops"};
     if (saw_create && create_file_only) {
+        if (external)
+            return {ErrorCode::UnsupportedFeature,
+                    "external edit_file create_file is unsupported; use write_file"};
         bool created = false;
         const Error create_error =
             write_workspace_file(relative_path, create_content, create_dirs, "create_new",
@@ -1946,7 +2246,17 @@ Error ReadToolRegistry::edit_workspace_file(const std::string& relative_path,
     if (parsed.empty()) return {ErrorCode::BadArgs, "edit_file ops produced no applicable operations"};
 
     fs::path absolute;
-    Error error = resolve_writable_path(relative_path, absolute);
+    Error error;
+    if (external) {
+        bool outside = false;
+        error = resolve_native_path(snapshot_.workspace, relative_path, true, absolute,
+                                    outside);
+        if (error.ok() && !outside)
+            error = {ErrorCode::BadArgs,
+                     "external edit path resolved inside the project"};
+    } else {
+        error = resolve_writable_path(relative_path, absolute);
+    }
     if (!error.ok()) return error;
     std::error_code ec;
     if (!fs::exists(absolute, ec) || ec)
@@ -1967,6 +2277,9 @@ Error ReadToolRegistry::edit_workspace_file(const std::string& relative_path,
     // Resolve replace_symbol into replace_range against the current snapshot index.
     for (LineEditOp& op : parsed) {
         if (op.type != LineEditOp::Type::ReplaceSymbol) continue;
+        if (external)
+            return {ErrorCode::UnsupportedFeature,
+                    "replace_symbol is index-dependent and unavailable outside the project"};
         const index::IndexedSymbol* found = nullptr;
         for (const index::IndexedSymbol& symbol : snapshot_.symbols) {
             if (symbol.id == static_cast<long long>(op.symbol_id)) {
@@ -2127,12 +2440,14 @@ Error ReadToolRegistry::edit_workspace_file(const std::string& relative_path,
                     std::to_string(index_options_.max_source_code_file_size) + " bytes)"};
 
     // Re-apply create_dirs only if needed for... not for existing files.
-    error = save_history_copy(relative_path, previous, history_path);
-    if (!error.ok()) return error;
+    if (!external) {
+        error = save_history_copy(relative_path, previous, history_path);
+        if (!error.ok()) return error;
+    }
     error = write_bytes_atomic(absolute, content);
     if (!error.ok()) return error;
     new_hash = index::content_hash(content);
-    note_written_file(relative_path, content);
+    if (!external) note_written_file(relative_path, content);
     return ok_error();
 }
 
@@ -2192,8 +2507,8 @@ std::vector<provider::FunctionDefinition> ReadToolRegistry::definitions() const 
         {"read_symbol", "Fingerprint-verify and read the actual indexed source range for a symbol id.", schema("\"symbol_id\":{\"type\":\"integer\",\"minimum\":1}", "\"symbol_id\"")},
         {"read_file",
          "Fingerprint-verify and read a bounded UTF-8 line range with hashes and line numbers. "
-         "A path outside the project requires one-shot interactive user approval; headless "
-         "sessions deny it.",
+         "Exact outside-project paths follow the active interactive permission mode; headless "
+         "Ask decisions are denied.",
          schema(range, "\"path\"")},
         {"read_many", "Read multiple bounded line ranges under one aggregate byte cap.", schema("\"items\":{\"type\":\"array\",\"items\":" + schema(range, "\"path\"") + ",\"maxItems\":100},\"max_bytes\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":262144}", "\"items\"")},
         {"run_command",
@@ -2298,8 +2613,22 @@ std::vector<provider::FunctionDefinition> ReadToolRegistry::definitions() const 
                            "\"mode\":{\"type\":\"string\",\"enum\":[\"overwrite\",\"create_new\"]}",
                     "\"path\",\"content\"")});
         tools.push_back(
+            {"create_directory",
+             "Create one exact-path directory. parents=true also creates missing parents. "
+             "Native paths may be outside the project subject to the active permission mode.",
+             schema(path + ",\"parents\":{\"type\":\"boolean\"}", "\"path\"")});
+        tools.push_back(
+            {"rename_path",
+             "Rename an exact-path file or directory. The destination must not exist; "
+             "cross-filesystem failures are reported and never converted into copy/delete.",
+             schema("\"source\":{\"type\":\"string\"},"
+                    "\"destination\":{\"type\":\"string\"}",
+                    "\"source\",\"destination\"")});
+        tools.push_back(
             {"str_replace",
-             "Text replacement in one workspace file (exact, then optional fuzzy whitespace/indent). "
+             "Text replacement in one exact-path UTF-8 file (exact, then optional fuzzy "
+             "whitespace/indent). External edits follow the active permission mode and have no "
+             "project history/index entry. "
              "Prefer edit_file when possible. Fails on 0 matches or ambiguous multi-match without "
              "replace_all or line_range_hint.",
              schema(path + ",\"old_text\":{\"type\":\"string\"},\"new_text\":{\"type\":\"string\"},"
@@ -2312,7 +2641,7 @@ std::vector<provider::FunctionDefinition> ReadToolRegistry::definitions() const 
                     "\"path\",\"old_text\",\"new_text\"")});
         if (mutation_policy_ == MutationPolicy::Full) tools.push_back(
             {"remove",
-             "Delete a workspace-relative file or empty directory (recursive=true for non-empty "
+             "Delete an exact-path file or empty directory (recursive=true for non-empty "
              "dirs). Use the exact filename from list_directory—do not strip # or other "
              "punctuation. When both name and #name# exist, plain name requires confirm=true. "
              "Database files (*.sqlite/*.db) are refused in headless mode. Prefer remove over "
@@ -2667,15 +2996,43 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
         if (!get_string(args, "path", path, false, validation_error) ||
             !get_size(args, "max_entries", 200, 500, maximum, validation_error))
             return tool_error_result("invalid_arguments", validation_error);
-        if (!safe_relative_path(path))
-            return tool_error_result("policy_denied", unsafe_path_message(path, "list"));
-        path = path == "." ? "" : fs::path(path).generic_string();
-        if (!path.empty() && path.back() == '/') path.pop_back();
-
-        const fs::path absolute =
-            path.empty() ? fs::path(snapshot_.workspace) : fs::path(snapshot_.workspace) / path;
+        bool external = false;
+        fs::path absolute;
+        if (!safe_relative_path(path)) {
+            Error resolved =
+                resolve_external_directory_path(snapshot_.workspace, path, absolute);
+            if (!resolved.ok())
+                return tool_error_result("policy_denied", resolved.message);
+            external = true;
+            const GuardApprovalDecision decision = request_permission(
+                "list_directory", "list_directory " + absolute.generic_string(),
+                {absolute.generic_string()}, true,
+                resolved_path_is_under_system_temp(absolute), false, false,
+                "ask_on_external_directory_read",
+                "List this exact directory outside the active project?\nExact resolved path: " +
+                    absolute.generic_string(),
+                cancellation);
+            if (decision != GuardApprovalDecision::Allow)
+                return tool_error_result(
+                    decision == GuardApprovalDecision::Cancelled ? "cancelled"
+                                                                 : "policy_denied",
+                    decision == GuardApprovalDecision::Cancelled
+                        ? "list_directory approval cancelled"
+                        : "external directory listing requires user approval");
+            Error stable = ensure_approved_external_path_unchanged(
+                absolute, "list directory", ErrorCode::FileRead);
+            if (!stable.ok())
+                return tool_error_result(error_code_string(stable.code),
+                                         stable.message);
+        } else {
+            path = path == "." ? "" : fs::path(path).generic_string();
+            if (!path.empty() && path.back() == '/') path.pop_back();
+            absolute =
+                path.empty() ? fs::path(snapshot_.workspace)
+                             : fs::path(snapshot_.workspace) / path;
+        }
         std::error_code ec;
-        if (!path.empty()) {
+        if (!external && !path.empty()) {
             // Walk components and refuse symlinks / missing parents.
             fs::path current(snapshot_.workspace);
             for (const fs::path& component : fs::path(path)) {
@@ -2746,9 +3103,11 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
             }
             const std::string relative =
                 path.empty() ? name : (fs::path(path) / name).generic_string();
-            item.indexed = eligible_indexed_path(snapshot_, relative, false) ||
-                           (item.type == "directory" &&
-                            eligible_indexed_path(snapshot_, relative, true));
+            item.indexed =
+                !external &&
+                (eligible_indexed_path(snapshot_, relative, false) ||
+                 (item.type == "directory" &&
+                  eligible_indexed_path(snapshot_, relative, true)));
             entries[name] = std::move(item);
         }
 
@@ -2769,9 +3128,11 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
             data.array.push_back(std::move(row));
         }
         std::vector<std::string> warnings;
-        if (path.empty())
+        if (!external && path.empty())
             warnings.push_back(
                 "filesystem listing (not index-only); empty directories and non-source files included");
+        if (external)
+            warnings.push_back("outside-project directory listing");
         return envelope(true, std::move(data), "", "", warnings, truncated);
     }
 
@@ -2879,18 +3240,17 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
             fs::path absolute;
             error = resolve_external_file_path(snapshot_.workspace, path, true, absolute);
             if (error.ok()) {
-                GuardApprovalRequest request;
-                request.tool_name = "read_file";
-                request.command_preview = "read_file " + absolute.generic_string();
-                request.rule_id = "ask_on_external_file_read";
-                request.message =
-                    "Read this file outside the active project?\nExact resolved path: " +
-                    absolute.generic_string() +
-                    "\nApproval applies only to this tool call and returned text remains bounded "
-                    "and credential-redacted.";
-                request.arguments = {absolute.generic_string()};
                 const GuardApprovalDecision decision =
-                    request_guard_approval(request, cancellation);
+                    request_permission(
+                        "read_file", "read_file " + absolute.generic_string(),
+                        {absolute.generic_string()}, true,
+                        resolved_path_is_under_system_temp(absolute), false, false,
+                        "ask_on_external_file_read",
+                        "Read this file outside the active project?\nExact resolved path: " +
+                            absolute.generic_string() +
+                            "\nApproval applies only to this tool call and returned text remains "
+                            "bounded and credential-redacted.",
+                        cancellation);
                 if (decision == GuardApprovalDecision::Allow) {
                     if (cancellation.cancelled())
                         error = {ErrorCode::Cancelled,
@@ -2938,6 +3298,46 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
         if (items == nullptr || !items->is_array() || items->array.size() > 100 ||
             !get_size(args, "max_bytes", 262144, 262144, maximum, validation_error) || maximum == 0)
             return tool_error_result("invalid_arguments", validation_error.empty() ? "items must be an array of at most 100 ranges" : validation_error);
+        std::map<std::size_t, fs::path> external_paths;
+        bool all_external_under_temp = true;
+        for (std::size_t index = 0; index < items->array.size(); ++index) {
+            const json::Value& item = items->array[index];
+            if (!item.is_object()) continue;
+            std::string item_path;
+            std::string item_error;
+            if (!get_string(item, "path", item_path, true, item_error)) continue;
+            if (safe_relative_path(item_path) && !item_path.empty()) continue;
+            fs::path absolute;
+            Error resolved =
+                resolve_external_file_path(snapshot_.workspace, item_path, true, absolute);
+            if (!resolved.ok()) return tool_error_result("policy_denied", resolved.message);
+            all_external_under_temp =
+                all_external_under_temp && resolved_path_is_under_system_temp(absolute);
+            external_paths[index] = std::move(absolute);
+        }
+        if (!external_paths.empty()) {
+            std::vector<std::string> exact_paths;
+            exact_paths.reserve(external_paths.size());
+            for (const auto& item : external_paths)
+                exact_paths.push_back(item.second.generic_string());
+            const GuardApprovalDecision decision = request_permission(
+                "read_many",
+                "read_many " + std::to_string(external_paths.size()) +
+                    " outside-project file(s)",
+                exact_paths, true, all_external_under_temp, false, false,
+                "ask_on_external_read_many",
+                "Read these exact files outside the active project? One approval covers all " +
+                    std::to_string(external_paths.size()) +
+                    " validated paths; returned text remains bounded and credential-redacted.",
+                cancellation);
+            if (decision != GuardApprovalDecision::Allow)
+                return tool_error_result(
+                    decision == GuardApprovalDecision::Cancelled ? "cancelled"
+                                                                 : "policy_denied",
+                    decision == GuardApprovalDecision::Cancelled
+                        ? "read_many approval cancelled"
+                        : "read_many external paths require user approval");
+        }
         json::Value data = array_value(); std::vector<std::string> warnings; std::size_t remaining = maximum;
         bool truncated = false;
         for (std::size_t index = 0; index < items->array.size(); ++index) {
@@ -2950,7 +3350,13 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
                 !get_size(item, "end_line", 0, 100000000, end, validation_error)) {
                 warnings.push_back("omitted item " + std::to_string(index) + ": " + validation_error); truncated = true; continue;
             }
-            SourceRange range; const Error error = read_source(path, start, end, remaining, range);
+            SourceRange range;
+            Error error;
+            const auto external = external_paths.find(index);
+            if (external == external_paths.end())
+                error = read_source(path, start, end, remaining, range);
+            else
+                error = read_external_source(external->second, start, end, remaining, range);
             if (!error.ok()) { warnings.push_back("omitted " + path + ": " + error.message); truncated = true; continue; }
             json::Value output = object_value(); output.object["path"] = string_value(range.path);
             output.object["line_start"] = number_value(range.start_line); output.object["line_end"] = number_value(range.end_line);
@@ -3023,7 +3429,8 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
         const GuardAskHandling preview_ask =
             policy == CommandPolicy::Agent ? GuardAskHandling::DeferAsk : GuardAskHandling::DenyAsk;
         Error policy_error =
-            parse_command(command, parsed_arguments, policy, guard_rule_id, preview_ask);
+            parse_command(command, parsed_arguments, policy, guard_rule_id, preview_ask,
+                          nullptr, cancellation, full);
         if (!policy_error.ok()) {
             const std::string code =
                 policy_error.message.find("refusing") != std::string::npos ||
@@ -3036,15 +3443,44 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
         // Security-review keeps path scope to the completed index. Agent mode allows
         // real workspace paths (empty dirs, #files#, scripts to execute).
         const bool index_only_commands = !full;
-        policy_error =
-            validate_command_workspace_paths(snapshot_, parsed_arguments, cwd, index_only_commands);
+        bool uses_external = false;
+        policy_error = validate_command_workspace_paths(
+            snapshot_, parsed_arguments, cwd, index_only_commands, true, uses_external);
         if (!policy_error.ok()) return tool_error_result("policy_denied", policy_error.message);
+        const GuardApprovalDecision permission = request_permission(
+            "run_command", format_command_preview(parsed_arguments), parsed_arguments,
+            uses_external, false, true, !guard_rule_id.empty(), guard_rule_id,
+            guard_rule_id.empty()
+                ? std::string()
+                : "This command also matched Guard rule " + guard_rule_id +
+                      ". One approval covers the complete validated command call.",
+            cancellation);
+        if (permission != GuardApprovalDecision::Allow) {
+            return tool_error_result(
+                permission == GuardApprovalDecision::Cancelled ? "cancelled"
+                                                               : "policy_denied",
+                permission == GuardApprovalDecision::Cancelled
+                    ? "run_command approval cancelled"
+                    : "run_command requires user approval in " +
+                          std::string(permission_mode_name(permission_mode_)) + " mode");
+        }
         ProcessOptions options;
         options.workspace = snapshot_.workspace;
         options.cwd = cwd;
+        options.allow_external_cwd = uses_external;
+        options.allow_external_paths = uses_external;
         options.timeout_ms = static_cast<long>(timeout);
         options.cancellation = cancellation;
-        if (on_guard_ask_) options.on_guard_ask = on_guard_ask_;
+        // The complete call was approved above (or Yolo allowed it). Guard hard
+        // denials were already enforced by parse_command and remain non-elevatable.
+        if (permission_controls_) {
+            options.on_guard_ask =
+                [](const GuardApprovalRequest&, runtime::CancellationToken) {
+                    return GuardApprovalDecision::Allow;
+                };
+        } else if (on_guard_ask_) {
+            options.on_guard_ask = on_guard_ask_;
+        }
         ProcessResult process;
         const Error error = run_command(command, options, process, policy);
         bool output_filtered = false;
@@ -3053,7 +3489,8 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
         // hardening pairs, leaving the validated subcommand at index 9.
         const bool git_file_listing = command_name == "git" && parsed_arguments.size() > 9 &&
                                       parsed_arguments[9] == "ls-files";
-        if (error.ok() && (command_name == "find" || command_name == "ls" ||
+        if (error.ok() && !uses_external &&
+            (command_name == "find" || command_name == "ls" ||
                            command_name == "rg" || command_name == "grep" || git_file_listing)) {
             process.stdout_text = filter_path_lines(snapshot_, cwd, process.stdout_text,
                                                     git_file_listing ? "find" : command_name,
@@ -3166,17 +3603,57 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
             return tool_error_result("invalid_arguments", validation_error);
         std::string relative_path;
         Error normalize_error = normalize_mutation_path(path, relative_path);
-        if (!normalize_error.ok())
-            return tool_error_result("policy_denied", normalize_error.message);
-        path = std::move(relative_path);
+        bool external = false;
+        fs::path external_path;
+        if (!normalize_error.ok()) {
+            Error external_error = resolve_external_file_path(
+                snapshot_.workspace, path, true, external_path);
+            if (external_error.ok()) {
+                if (mutation_policy_ != MutationPolicy::Full)
+                    return tool_error_result(
+                        "policy_denied",
+                        "Plan mode cannot edit files outside the project");
+                for (const json::Value& raw_op : ops_value->array) {
+                    const json::Value op = normalize_edit_op_shape(raw_op);
+                    if (infer_edit_op_type(op) == "replace_symbol")
+                        return tool_error_result(
+                            "policy_denied",
+                            "replace_symbol is index-dependent and unavailable outside the "
+                            "project; use replace_range or replace_text");
+                }
+                external = true;
+                path = external_path.generic_string();
+            } else {
+                return tool_error_result("policy_denied", normalize_error.message);
+            }
+        } else {
+            path = std::move(relative_path);
+        }
         const json::Value& ops = *ops_value;
         std::string history_path, old_hash, new_hash;
         std::size_t operations_applied = 0;
         std::vector<std::string> summary;
         std::vector<std::string> warnings;
+        const GuardApprovalDecision permission = request_permission(
+            "edit_file", "edit_file " + path, {path}, external,
+            external && resolved_path_is_under_system_temp(external_path), true, false,
+            external ? "ask_on_external_file_write" : std::string(),
+            external
+                ? "Edit this validated UTF-8 file outside the active project? The edit has no "
+                      "project history backup or index entry."
+                : std::string(),
+            cancellation);
         const Error error =
-            edit_workspace_file(path, expected_hash, ops, create_dirs, history_path, old_hash,
-                                new_hash, operations_applied, summary, warnings);
+            permission == GuardApprovalDecision::Allow
+                ? edit_workspace_file(path, expected_hash, ops, create_dirs,
+                                      history_path, old_hash, new_hash,
+                                      operations_applied, summary, warnings)
+                : Error{permission == GuardApprovalDecision::Cancelled
+                            ? ErrorCode::Cancelled
+                            : ErrorCode::UnsupportedFeature,
+                        permission == GuardApprovalDecision::Cancelled
+                            ? "edit_file approval cancelled"
+                            : "edit_file requires user approval"};
         json::Value data = object_value();
         data.object["path"] = string_value(fs::path(path).generic_string());
         data.object["applied"] = bool_value(error.ok());
@@ -3184,7 +3661,8 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
         data.object["old_file_hash"] = string_value(old_hash);
         data.object["new_file_hash"] = string_value(new_hash);
         data.object["history_path"] = string_value(history_path);
-        data.object["indexed_snapshot_updated"] = bool_value(error.ok());
+        data.object["indexed_snapshot_updated"] = bool_value(error.ok() && !external);
+        data.object["external"] = bool_value(external);
         json::Value summary_array = array_value();
         for (const std::string& item : summary) summary_array.array.push_back(string_value(item));
         data.object["summary"] = std::move(summary_array);
@@ -3199,6 +3677,9 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
                                                                          : error_code_string(error.code);
             return envelope(false, std::move(data), code, error.message, warnings, false);
         }
+        if (external)
+            warnings.push_back(
+                "outside-project edit; no project history backup or index update was created");
         return envelope(true, std::move(data), "", "", warnings, false);
     }
 
@@ -3224,29 +3705,42 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
         Error error = normalize_mutation_path(path, relative_path);
         if (error.ok()) {
             path = std::move(relative_path);
-            error = write_workspace_file(path, content, create_dirs, mode, expected_hash,
-                                         history_path, created, old_hash, new_hash);
+            const GuardApprovalDecision decision = request_permission(
+                "write_file",
+                "write_file " + path + " (" + std::to_string(content.size()) + " bytes)",
+                {path, mode, create_dirs ? "create_dirs=true" : "create_dirs=false"},
+                false, false, true, false, {}, {}, cancellation);
+            if (decision == GuardApprovalDecision::Allow)
+                error = write_workspace_file(path, content, create_dirs, mode, expected_hash,
+                                             history_path, created, old_hash, new_hash);
+            else
+                error = {decision == GuardApprovalDecision::Cancelled
+                             ? ErrorCode::Cancelled
+                             : ErrorCode::UnsupportedFeature,
+                         decision == GuardApprovalDecision::Cancelled
+                             ? "write_file approval cancelled"
+                             : "write_file requires user approval"};
         } else if (mutation_policy_ == MutationPolicy::Full) {
             error = resolve_external_file_path(snapshot_.workspace, path, false, external_path);
             if (error.ok()) {
                 external = true;
-                GuardApprovalRequest request;
-                request.tool_name = "write_file";
-                request.command_preview =
-                    "write_file " + external_path.generic_string() + " (" +
-                    std::to_string(content.size()) + " bytes)";
-                request.rule_id = "ask_on_external_file_write";
-                request.message =
-                    "Write this file outside the active project?\nExact resolved path: " +
-                    external_path.generic_string() +
-                    "\nApproval applies only to this tool call. The write has no project history "
-                    "backup and will not update the project index.";
-                if (create_dirs)
-                    request.message += "\nMissing parent directories may be created.";
-                request.arguments = {external_path.generic_string(), mode,
-                                     create_dirs ? "create_dirs=true" : "create_dirs=false"};
                 const GuardApprovalDecision decision =
-                    request_guard_approval(request, cancellation);
+                    request_permission(
+                        "write_file",
+                        "write_file " + external_path.generic_string() + " (" +
+                            std::to_string(content.size()) + " bytes)",
+                        {external_path.generic_string(), mode,
+                         create_dirs ? "create_dirs=true" : "create_dirs=false"},
+                        true, resolved_path_is_under_system_temp(external_path), true, false,
+                        "ask_on_external_file_write",
+                        "Write this file outside the active project?\nExact resolved path: " +
+                            external_path.generic_string() +
+                            "\nApproval applies only to this tool call. The write has no project "
+                            "history backup and will not update the project index." +
+                            (create_dirs
+                                 ? std::string("\nMissing parent directories may be created.")
+                                 : std::string()),
+                        cancellation);
                 if (decision == GuardApprovalDecision::Allow) {
                     if (cancellation.cancelled())
                         error = {ErrorCode::Cancelled,
@@ -3302,6 +3796,177 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
         return envelope(true, std::move(data), "", "", warnings, false);
     }
 
+    if (name == "create_directory") {
+        if (!allow_mutations())
+            return tool_error_result("policy_denied",
+                                     "create_directory is not enabled in this session");
+        std::string path;
+        bool parents = false;
+        if (!get_string(args, "path", path, true, validation_error) ||
+            !get_bool(args, "parents", false, parents, validation_error))
+            return tool_error_result("invalid_arguments", validation_error);
+        fs::path target;
+        bool external = false;
+        Error error =
+            resolve_native_path(snapshot_.workspace, path, false, target, external);
+        if (error.ok() && external && mutation_policy_ != MutationPolicy::Full)
+            error = {ErrorCode::UnsupportedFeature,
+                     "Plan mode cannot create directories outside the project"};
+        if (error.ok() && !external) {
+            std::error_code ec;
+            const fs::path root = fs::canonical(snapshot_.workspace, ec);
+            const std::string relative = target.lexically_relative(root).generic_string();
+            error = validate_mutation_path(relative, true, false);
+        }
+        const GuardApprovalDecision decision =
+            error.ok()
+                ? request_permission(
+                      "create_directory", "create_directory " + target.generic_string(),
+                      {target.generic_string(), parents ? "parents=true" : "parents=false"},
+                      external, external && resolved_path_is_under_system_temp(target), true,
+                      false, {}, {}, cancellation)
+                : GuardApprovalDecision::Deny;
+        if (error.ok() && decision != GuardApprovalDecision::Allow)
+            error = {decision == GuardApprovalDecision::Cancelled
+                         ? ErrorCode::Cancelled
+                         : ErrorCode::UnsupportedFeature,
+                     decision == GuardApprovalDecision::Cancelled
+                         ? "create_directory approval cancelled"
+                         : "create_directory requires user approval"};
+        if (error.ok()) {
+            fs::path current_target;
+            bool current_external = false;
+            Error stable = resolve_native_path(snapshot_.workspace, path, false,
+                                               current_target, current_external);
+            if (!stable.ok())
+                error = stable;
+            else if (current_target != target || current_external != external)
+                error = {ErrorCode::FileWrite,
+                         "directory target changed while awaiting approval"};
+        }
+        if (error.ok()) {
+            std::error_code ec;
+            if (fs::exists(target, ec))
+                error = {ErrorCode::FileWrite,
+                         "create_directory destination already exists: " +
+                             target.generic_string()};
+            else {
+                const bool created =
+                    parents ? fs::create_directories(target, ec)
+                            : fs::create_directory(target, ec);
+                if (ec || !created)
+                    error = {ErrorCode::FileWrite,
+                             "could not create directory " + target.generic_string() +
+                                 (ec ? ": " + ec.message() : std::string())};
+            }
+        }
+        json::Value data = object_value();
+        data.object["path"] = string_value(target.generic_string());
+        data.object["created"] = bool_value(error.ok());
+        data.object["external"] = bool_value(external);
+        return error.ok()
+                   ? envelope(true, std::move(data), "", "", {}, false)
+                   : envelope(false, std::move(data),
+                              error.code == ErrorCode::UnsupportedFeature
+                                  ? "policy_denied"
+                                  : error_code_string(error.code),
+                              error.message, {}, false);
+    }
+
+    if (name == "rename_path") {
+        if (mutation_policy_ != MutationPolicy::Full)
+            return tool_error_result("policy_denied",
+                                     "rename_path is enabled only in Act mode");
+        std::string source_text, destination_text;
+        if (!get_string(args, "source", source_text, true, validation_error) ||
+            !get_string(args, "destination", destination_text, true, validation_error))
+            return tool_error_result("invalid_arguments", validation_error);
+        fs::path source, destination;
+        bool source_external = false, destination_external = false;
+        Error error = resolve_native_path(snapshot_.workspace, source_text, true, source,
+                                          source_external);
+        if (error.ok())
+            error = resolve_native_path(snapshot_.workspace, destination_text, false,
+                                        destination, destination_external);
+        const bool external = source_external || destination_external;
+        const bool under_temp =
+            (!source_external || resolved_path_is_under_system_temp(source)) &&
+            (!destination_external || resolved_path_is_under_system_temp(destination));
+        const GuardApprovalDecision decision =
+            error.ok()
+                ? request_permission(
+                      "rename_path",
+                      "rename_path " + source.generic_string() + " -> " +
+                          destination.generic_string(),
+                      {source.generic_string(), destination.generic_string()}, external,
+                      under_temp, true, false, {}, {}, cancellation)
+                : GuardApprovalDecision::Deny;
+        if (error.ok() && decision != GuardApprovalDecision::Allow)
+            error = {decision == GuardApprovalDecision::Cancelled
+                         ? ErrorCode::Cancelled
+                         : ErrorCode::UnsupportedFeature,
+                     decision == GuardApprovalDecision::Cancelled
+                         ? "rename_path approval cancelled"
+                         : "rename_path requires user approval"};
+        if (error.ok()) {
+            Error stable = ensure_approved_external_path_unchanged(
+                source, "rename", ErrorCode::FileWrite);
+            if (!stable.ok()) error = stable;
+            fs::path current_destination;
+            bool current_external = false;
+            if (error.ok()) {
+                Error destination_stable = resolve_native_path(
+                    snapshot_.workspace, destination_text, false,
+                    current_destination, current_external);
+                if (!destination_stable.ok())
+                    error = destination_stable;
+                else if (current_destination != destination ||
+                         current_external != destination_external)
+                    error = {ErrorCode::FileWrite,
+                             "rename destination changed while awaiting approval"};
+            }
+        }
+        if (error.ok()) {
+            std::error_code ec;
+            if (fs::exists(destination, ec))
+                error = {ErrorCode::FileWrite,
+                         "rename_path destination already exists: " +
+                             destination.generic_string()};
+            else {
+                fs::rename(source, destination, ec);
+                if (ec)
+                    error = {ErrorCode::FileWrite,
+                             "could not rename " + source.generic_string() + " to " +
+                                 destination.generic_string() + ": " + ec.message() +
+                                 " (cross-filesystem renames are not copied)"};
+            }
+        }
+        if (error.ok()) {
+            std::error_code ec;
+            const fs::path root = fs::canonical(snapshot_.workspace, ec);
+            if (!source_external)
+                note_removed_path(source.lexically_relative(root).generic_string());
+            if (!destination_external && fs::is_regular_file(destination, ec)) {
+                Error read_error;
+                const std::string content = read_all_bytes(destination, read_error);
+                if (read_error.ok())
+                    note_written_file(
+                        destination.lexically_relative(root).generic_string(), content);
+            }
+        }
+        json::Value data = object_value();
+        data.object["source"] = string_value(source.generic_string());
+        data.object["destination"] = string_value(destination.generic_string());
+        data.object["renamed"] = bool_value(error.ok());
+        return error.ok()
+                   ? envelope(true, std::move(data), "", "", {}, false)
+                   : envelope(false, std::move(data),
+                              error.code == ErrorCode::UnsupportedFeature
+                                  ? "policy_denied"
+                                  : error_code_string(error.code),
+                              error.message, {}, false);
+    }
+
     if (name == "str_replace") {
         if (!allow_mutations())
             return tool_error_result("policy_denied", "str_replace is not enabled in this session");
@@ -3317,9 +3982,6 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
             return tool_error_result("invalid_arguments", validation_error);
         std::string relative_path;
         Error normalize_error = normalize_mutation_path(path, relative_path);
-        if (!normalize_error.ok())
-            return tool_error_result("policy_denied", normalize_error.message);
-        path = std::move(relative_path);
         // new_text may be empty (delete match); require the key explicitly.
         if (args.get("new_text") == nullptr || !args.get("new_text")->is_string())
             return tool_error_result("invalid_arguments", "missing required string argument: new_text");
@@ -3338,19 +4000,125 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
         std::size_t matches_found = 0;
         std::size_t replacements_made = 0;
         std::vector<std::string> candidate_lines;
-        const Error error = str_replace_workspace_file(
-            path, old_text, new_text, replace_all, allow_fuzzy, hint_start, hint_end, expected_hash,
-            history_path, matches_found, replacements_made, match_mode, old_hash, new_hash,
-            candidate_lines);
+        bool external = false;
+        fs::path external_path;
+        Error error;
+        if (normalize_error.ok()) {
+            path = std::move(relative_path);
+            const GuardApprovalDecision decision = request_permission(
+                "str_replace", "str_replace " + path, {path}, false, false, true,
+                false, {}, {}, cancellation);
+            if (decision == GuardApprovalDecision::Allow)
+                error = str_replace_workspace_file(
+                    path, old_text, new_text, replace_all, allow_fuzzy, hint_start,
+                    hint_end, expected_hash, history_path, matches_found,
+                    replacements_made, match_mode, old_hash, new_hash,
+                    candidate_lines);
+            else
+                error = {decision == GuardApprovalDecision::Cancelled
+                             ? ErrorCode::Cancelled
+                             : ErrorCode::UnsupportedFeature,
+                         decision == GuardApprovalDecision::Cancelled
+                             ? "str_replace approval cancelled"
+                             : "str_replace requires user approval"};
+        } else {
+            if (mutation_policy_ != MutationPolicy::Full)
+                return tool_error_result(
+                    "policy_denied",
+                    "Plan mode cannot edit files outside the project");
+            error = resolve_external_file_path(snapshot_.workspace, path, true,
+                                               external_path);
+            external = error.ok();
+            std::string previous;
+            if (error.ok()) {
+                previous = read_all_bytes(external_path, error);
+                if (error.ok() &&
+                    (previous.find('\0') != std::string::npos ||
+                     !html::is_valid_utf8(previous)))
+                    error = {ErrorCode::FileRead,
+                             "external str_replace requires a UTF-8 text file"};
+            }
+            old_hash = error.ok() ? index::content_hash(previous) : std::string();
+            if (error.ok() && !expected_hash.empty() && expected_hash != old_hash)
+                error = {ErrorCode::FileWrite,
+                         "stale_file: expected_file_hash does not match current file content"};
+            std::size_t region_start = 0, region_end = previous.size();
+            if (error.ok())
+                error = region_from_line_hint(previous, hint_start, hint_end,
+                                              region_start, region_end);
+            TextMatchResult found;
+            std::vector<TextSpan> chosen;
+            if (error.ok()) {
+                found = find_text_matches(previous, old_text, allow_fuzzy,
+                                          region_start, region_end);
+                error = disambiguate_matches(
+                    found, replace_all, hint_start, hint_end, chosen,
+                    candidate_lines, matches_found);
+                if (!error.ok() && matches_found == 0)
+                    error = {ErrorCode::FileWrite,
+                             "old_text not found in external file: " +
+                                 external_path.generic_string()};
+            }
+            std::string updated;
+            if (error.ok()) {
+                match_mode = found.mode;
+                updated = apply_text_replacements(previous, chosen, new_text,
+                                                  replace_all, replacements_made);
+                if (updated.size() > index_options_.max_source_code_file_size)
+                    error = {ErrorCode::BadArgs,
+                             "str_replace result exceeds max_source_code_file_size"};
+            }
+            if (error.ok()) {
+                const GuardApprovalDecision decision = request_permission(
+                    "str_replace",
+                    "str_replace " + external_path.generic_string(),
+                    {external_path.generic_string()}, true,
+                    resolved_path_is_under_system_temp(external_path), true, false,
+                    "ask_on_external_file_write",
+                    "Edit this validated UTF-8 file outside the active project? The edit has "
+                    "no project history backup or index entry.",
+                    cancellation);
+                if (decision != GuardApprovalDecision::Allow)
+                    error = {decision == GuardApprovalDecision::Cancelled
+                                 ? ErrorCode::Cancelled
+                                 : ErrorCode::UnsupportedFeature,
+                             decision == GuardApprovalDecision::Cancelled
+                                 ? "str_replace approval cancelled"
+                                 : "external str_replace requires user approval"};
+            }
+            if (error.ok()) {
+                Error stable = ensure_approved_external_path_unchanged(
+                    external_path, "edit", ErrorCode::FileWrite);
+                if (!stable.ok())
+                    error = stable;
+                else {
+                    Error reread_error;
+                    const std::string current =
+                        read_all_bytes(external_path, reread_error);
+                    if (!reread_error.ok())
+                        error = reread_error;
+                    else if (index::content_hash(current) != old_hash)
+                        error = {ErrorCode::FileWrite,
+                                 "stale_file: external file changed while awaiting approval"};
+                }
+            }
+            if (error.ok()) {
+                error = write_bytes_atomic(external_path, updated);
+                if (error.ok()) new_hash = index::content_hash(updated);
+            }
+        }
         json::Value data = object_value();
-        data.object["path"] = string_value(fs::path(path).generic_string());
+        data.object["path"] =
+            string_value(external ? external_path.generic_string()
+                                  : fs::path(path).generic_string());
         data.object["matches_found"] = number_value(static_cast<double>(matches_found));
         data.object["replacements_made"] = number_value(static_cast<double>(replacements_made));
         data.object["match_mode"] = string_value(match_mode.empty() ? "exact" : match_mode);
         data.object["old_file_hash"] = string_value(old_hash);
         data.object["new_file_hash"] = string_value(new_hash);
         data.object["history_path"] = string_value(history_path);
-        data.object["indexed_snapshot_updated"] = bool_value(error.ok());
+        data.object["indexed_snapshot_updated"] = bool_value(error.ok() && !external);
+        data.object["external"] = bool_value(external);
         if (!candidate_lines.empty()) {
             json::Value candidates = array_value();
             for (const std::string& line : candidate_lines)
@@ -3367,7 +4135,11 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
                                                                        : error_code_string(error.code);
             return envelope(false, std::move(data), code, error.message, {}, false);
         }
-        return envelope(true, std::move(data), "", "", {}, false);
+        std::vector<std::string> success_warnings;
+        if (external)
+            success_warnings.push_back(
+                "outside-project edit; no project history backup or index update was created");
+        return envelope(true, std::move(data), "", "", success_warnings, false);
     }
 
     if (name == "remove") {
@@ -3383,23 +4155,128 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
             return tool_error_result("invalid_arguments", validation_error);
         std::string relative_path;
         Error normalize_error = normalize_mutation_path(path, relative_path);
-        if (!normalize_error.ok())
-            return tool_error_result("policy_denied", normalize_error.message);
-        path = std::move(relative_path);
         std::string history_path, old_hash, guard_decision, guard_rule_id;
         bool was_directory = false;
         std::vector<std::string> suggestions;
         std::vector<std::string> warnings;
-        const Error error = remove_workspace_path(path, recursive, confirm, expected_hash,
-                                                  history_path, was_directory, guard_decision,
-                                                  guard_rule_id, old_hash, suggestions, warnings);
+        bool external = false;
+        fs::path external_path;
+        Error error;
+        if (normalize_error.ok()) {
+            path = std::move(relative_path);
+            error = remove_workspace_path(path, recursive, confirm, expected_hash,
+                                          history_path, was_directory, guard_decision,
+                                          guard_rule_id, old_hash, suggestions, warnings);
+        } else {
+            error = resolve_native_path(snapshot_.workspace, path, true, external_path,
+                                        external);
+            if (error.ok() && !external)
+                error = {ErrorCode::BadArgs, normalize_error.message};
+            std::error_code ec;
+            if (error.ok() && is_broad_removal_root(snapshot_.workspace, external_path))
+                error = {ErrorCode::BadArgs,
+                         "refusing to remove a filesystem, home, temp, workspace root, "
+                         "or workspace ancestor: " +
+                             external_path.generic_string()};
+            const fs::file_status status =
+                error.ok() ? fs::symlink_status(external_path, ec) : fs::file_status{};
+            if (error.ok() && (ec || fs::is_symlink(status)))
+                error = {ErrorCode::FileWrite,
+                         "refusing to remove symlink path: " +
+                             external_path.generic_string()};
+            was_directory = error.ok() && fs::is_directory(status);
+            if (error.ok() && was_directory && !recursive &&
+                !fs::is_empty(external_path, ec))
+                error = {ErrorCode::FileWrite,
+                         "directory is not empty; pass recursive=true to remove it"};
+            bool tree_has_database = is_database_path(external_path.generic_string());
+            if (error.ok() && was_directory && recursive) {
+                for (fs::recursive_directory_iterator it(external_path, ec), end;
+                     !ec && it != end; it.increment(ec)) {
+                    if (fs::is_symlink(it->symlink_status(ec))) {
+                        error = {ErrorCode::FileWrite,
+                                 "refusing recursive removal of a tree containing symlink: " +
+                                     it->path().generic_string()};
+                        break;
+                    }
+                    tree_has_database =
+                        tree_has_database ||
+                        is_database_path(it->path().generic_string());
+                }
+                if (ec && error.ok())
+                    error = {ErrorCode::FileWrite,
+                             "could not validate recursive removal tree: " + ec.message()};
+            }
+            if (error.ok()) {
+                const bool destructive = recursive || tree_has_database;
+                const GuardApprovalDecision decision = request_permission(
+                    "remove",
+                    std::string(recursive ? "remove -r " : "remove ") +
+                        external_path.generic_string(),
+                    {external_path.generic_string(),
+                     recursive ? "recursive=true" : "recursive=false"},
+                    true, resolved_path_is_under_system_temp(external_path), true,
+                    destructive,
+                    tree_has_database ? "ask_on_database_delete"
+                                      : (recursive ? "ask_on_recursive_delete"
+                                                   : "ask_on_external_remove"),
+                    "Delete this validated path outside the active project? One approval covers "
+                    "the external and destructive aspects of this call.",
+                    cancellation);
+                if (decision != GuardApprovalDecision::Allow)
+                    error = {decision == GuardApprovalDecision::Cancelled
+                                 ? ErrorCode::Cancelled
+                                 : ErrorCode::UnsupportedFeature,
+                             decision == GuardApprovalDecision::Cancelled
+                                 ? "remove approval cancelled"
+                                 : "external remove requires user approval"};
+            }
+            if (error.ok()) {
+                Error stable = ensure_approved_external_path_unchanged(
+                    external_path, "remove", ErrorCode::FileWrite);
+                if (!stable.ok()) error = stable;
+            }
+            if (error.ok()) {
+                if (!was_directory && !expected_hash.empty()) {
+                    Error read_error;
+                    const std::string previous =
+                        read_all_bytes(external_path, read_error);
+                    if (!read_error.ok())
+                        error = read_error;
+                    else if (index::content_hash(previous) != expected_hash)
+                        error = {ErrorCode::FileWrite,
+                                 "stale_file: expected_file_hash does not match current file "
+                                 "content"};
+                    else
+                        old_hash = index::content_hash(previous);
+                } else if (was_directory && !expected_hash.empty()) {
+                    error = {ErrorCode::BadArgs,
+                             "expected_file_hash is only valid for file removals"};
+                }
+            }
+            if (error.ok()) {
+                if (was_directory && recursive)
+                    fs::remove_all(external_path, ec);
+                else
+                    fs::remove(external_path, ec);
+                if (ec)
+                    error = {ErrorCode::FileWrite,
+                             "could not remove external path " +
+                                 external_path.generic_string() + ": " + ec.message()};
+                else
+                    guard_decision = "allow";
+            }
+        }
         json::Value data = object_value();
-        data.object["path"] = string_value(fs::path(path).generic_string());
+        data.object["path"] =
+            string_value(external ? external_path.generic_string()
+                                  : fs::path(path).generic_string());
         data.object["removed"] = bool_value(error.ok());
         data.object["was_directory"] = bool_value(was_directory);
         data.object["history_path"] = string_value(history_path);
         data.object["old_file_hash"] = string_value(old_hash);
-        data.object["index_updated"] = bool_value(error.ok());
+        data.object["index_updated"] = bool_value(error.ok() && !external);
+        data.object["external"] = bool_value(external);
         if (!suggestions.empty()) {
             json::Value list = array_value();
             for (const std::string& item : suggestions) list.array.push_back(string_value(item));

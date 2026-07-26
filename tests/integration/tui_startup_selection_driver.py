@@ -6,6 +6,7 @@ import pty
 import re
 import select
 import shutil
+import sqlite3
 import subprocess
 import sys
 import tempfile
@@ -134,6 +135,57 @@ def check_multiple_model_surface(binary, base_url, model, mode):
     require(output, model + "-second", f"showing the second startup {mode} model")
     require(output, "ready", f"accepting a startup {mode} model")
 
+def check_agent_permission_persistence(binary, base_url):
+    workspace = tempfile.mkdtemp(prefix="ainiux-agent-permissions-")
+    env = os.environ.copy()
+    env["HOME"] = workspace
+    env["TERM"] = env.get("TERM", "xterm-256color")
+
+    def run(actions):
+        master, slave = pty.openpty()
+        process = subprocess.Popen(
+            [binary, base_url, "--quiet", "--agent"],
+            stdin=slave,
+            stdout=slave,
+            stderr=slave,
+            close_fds=True,
+            env=env,
+            cwd=workspace,
+        )
+        os.close(slave)
+        output = bytearray()
+        try:
+            time.sleep(1.0)
+            output.extend(drain(master, 1.0))
+            for data, delay in actions:
+                output.extend(send(master, data, delay))
+            process.wait(timeout=10)
+        finally:
+            if process.poll() is None:
+                process.terminate()
+                process.wait(timeout=2)
+            os.close(master)
+        if process.returncode != 0:
+            raise RuntimeError(
+                f"agent permission TUI exited with status {process.returncode}"
+            )
+        return bytes(output)
+
+    try:
+        changed = run([("/permissions yolo\r", 0.6), ("/quit\r", 0.4)])
+        require(changed, " yolo ", "switching agent permissions")
+        database = os.path.join(workspace, ".ainiux-pr", "agent.sqlite")
+        with sqlite3.connect(database) as connection:
+            settings = connection.execute(
+                "SELECT settings_json FROM project WHERE id=1"
+            ).fetchone()[0]
+        if '"permission_mode":"yolo"' not in settings:
+            raise RuntimeError(f"permission mode was not persisted: {settings!r}")
+        restored = run([("/quit\r", 0.4)])
+        require(restored, " yolo ", "restoring persisted agent permissions")
+    finally:
+        shutil.rmtree(workspace, ignore_errors=True)
+
 
 def main():
     if len(sys.argv) != 4:
@@ -147,6 +199,7 @@ def main():
     check_single_model_chat(binary, base_url, model)
     for mode in ("--chat", "--agent"):
         check_multiple_model_surface(binary, base_url, model, mode)
+    check_agent_permission_persistence(binary, base_url)
     print("TUI startup provider/model selection integration checks passed")
     return 0
 
