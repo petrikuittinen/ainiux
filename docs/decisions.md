@@ -58,6 +58,8 @@ Destructive-command Guard returns Allow, Deny, or Ask. Hard Deny (shell wrappers
 
 Interactive Agent layers a project-persisted `confirm`/`smart`/`yolo` permission policy above Guard. The registry validates a complete tool call before requesting one consolidated decision, then revalidates canonical external targets before mutation. Native exact-path tools are preferred over command equivalents because they are structured, bounded, cancellable, and easier to validate. External changes intentionally receive no project history/index entry. `run_command` stays fixed-PATH direct argv execution; approval never enables shell composition.
 
+Provider account-credit display is likewise registry-driven and optional. A profile may expose one official authenticated credit URL; the provider adapter owns its response schema and normalized currency/amount result, while a cancellable runtime job delivers that result to the TUI event queue. The UI stores only the formatted in-memory label, silently omits unavailable balances, and never persists raw billing responses.
+
 - Headless `run` maps Ask → Deny (no self-approval).
 - Interactive agent blocks the tool worker on an `ApprovalGate`; the TUI shows a **y/n** panel (not Enter). Decisions are one-shot. Outcomes are written to `.ainiux-pr/agent.sqlite` `approvals` and a short transcript `notice`.
 - Agent git policy is broader than security-review so a user-approved Ask can actually run (still no shell, still common path/safety checks).

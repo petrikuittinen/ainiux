@@ -4,6 +4,7 @@
 #include "provider/provider.hpp"
 
 #include <chrono>
+#include <cerrno>
 #include <cmath>
 #include <cctype>
 #include <cstdlib>
@@ -87,10 +88,20 @@ Profile make_offline_profile() {
     return profile;
 }
 
+Profile with_credit_endpoint(Profile profile, const std::string& credit_url) {
+    profile.credit_url = credit_url;
+    profile.capabilities.credit_balance = !credit_url.empty();
+    return profile;
+}
+
 const std::vector<Profile>& profile_registry() {
     static const std::vector<Profile> profiles = {
         make_offline_profile(),
-        make_profile("openrouter", {}, "https://openrouter.ai/api/v1", "/chat/completions", "/models", "", {"OPENROUTER_API_KEY", "AINIUX_API_KEY"}, true, false),
+        with_credit_endpoint(
+            make_profile("openrouter", {}, "https://openrouter.ai/api/v1",
+                         "/chat/completions", "/models", "",
+                         {"OPENROUTER_API_KEY", "AINIUX_API_KEY"}, true, false),
+            "https://openrouter.ai/api/v1/key"),
         make_profile(names::kOpenAi,
                      {names::kOpenAiChat, names::kOpenAiResponses},
                      "https://api.openai.com/v1",
@@ -100,7 +111,11 @@ const std::vector<Profile>& profile_registry() {
                      {"OPENAI_API_KEY", "AINIUX_API_KEY"},
                      true,
                      false),
-        make_profile("deepseek", {}, "https://api.deepseek.com", "/chat/completions", "/models", "", {"DEEPSEEK_API_KEY", "AINIUX_API_KEY"}, true, false),
+        with_credit_endpoint(
+            make_profile("deepseek", {}, "https://api.deepseek.com",
+                         "/chat/completions", "/models", "",
+                         {"DEEPSEEK_API_KEY", "AINIUX_API_KEY"}, true, false),
+            "https://api.deepseek.com/user/balance"),
         make_profile("gemini", {}, "https://generativelanguage.googleapis.com/v1beta/openai", "/chat/completions", "/models", "", {"GEMINI_API_KEY", "AINIUX_API_KEY"}, true, false),
         make_profile("anthropic", {}, "https://api.anthropic.com/v1", "/chat/completions", "/models", "", {"ANTHROPIC_API_KEY", "AINIUX_API_KEY"}, true, false, "", "OpenAI compatibility layer is mainly for testing/comparison."),
         make_profile("xai", {"grok"}, "https://api.x.ai/v1", "/chat/completions", "/models", "", {"XAI_API_KEY", "AINIUX_API_KEY"}, true, false),
@@ -2559,6 +2574,18 @@ const Capabilities& capabilities_for(const RequestContext& context) {
     return context.profile.capabilities;
 }
 
+bool credit_balance_available(const RequestContext& context) {
+    auto without_trailing_slash = [](std::string value) {
+        while (value.size() > 1 && value.back() == '/') value.pop_back();
+        return value;
+    };
+    return context.profile.capabilities.credit_balance &&
+           !context.profile.credit_url.empty() &&
+           !context.api_key.empty() &&
+           without_trailing_slash(context.base_url) ==
+               without_trailing_slash(context.profile.base_url);
+}
+
 Capabilities detected_capabilities_for(const RequestContext& context) {
     Capabilities caps = capabilities_for(context);
     if (context.api_kind != ApiKind::ChatCompletions || context.options.image_capability == "deny") {
@@ -2832,6 +2859,98 @@ Error parse_models_response(const std::string& body, ModelsResult& result) {
     return parse_models_json(body, result);
 }
 
+namespace {
+
+bool valid_currency_code(const std::string& currency) {
+    if (currency.size() < 3 || currency.size() > 8) return false;
+    for (const unsigned char ch : currency) {
+        if (!std::isalnum(ch) && ch != '-' && ch != '_') return false;
+    }
+    return true;
+}
+
+Error parse_decimal_string(const std::string& text, double& value) {
+    if (text.empty()) return {ErrorCode::ProviderSchema, "balance amount is empty"};
+    char* end = nullptr;
+    errno = 0;
+    value = std::strtod(text.c_str(), &end);
+    if (errno != 0 || end == text.c_str() || *end != '\0' || !std::isfinite(value))
+        return {ErrorCode::ProviderSchema, "balance amount is not a finite decimal"};
+    return ok_error();
+}
+
+}  // namespace
+
+Error parse_credit_balance_response(const std::string& provider_name,
+                                    const std::string& body,
+                                    CreditBalanceResult& result) {
+    result = {};
+    const json::ParseResult parsed = json::parse(body);
+    if (!parsed.error.ok())
+        return {ErrorCode::JsonParse,
+                provider_name + " credit response is not valid JSON: " +
+                    parsed.error.message};
+    if (!parsed.value.is_object())
+        return {ErrorCode::ProviderSchema,
+                provider_name + " credit response must be a JSON object"};
+
+    const std::string canonical = normalize_provider_key(provider_name);
+    if (canonical == "openrouter") {
+        const json::Value* data = parsed.value.get("data");
+        const json::Value* remaining =
+            data != nullptr && data->is_object() ? data->get("limit_remaining") : nullptr;
+        if (remaining == nullptr || remaining->is_null()) return ok_error();
+        if (remaining->type != json::Value::Type::Number ||
+            !std::isfinite(remaining->number))
+            return {ErrorCode::ProviderSchema,
+                    "OpenRouter credit response data.limit_remaining must be a number or null"};
+        result.balances.push_back({remaining->number, "USD"});
+        return ok_error();
+    }
+    if (canonical == "deepseek") {
+        const json::Value* infos = parsed.value.get("balance_infos");
+        if (infos == nullptr || !infos->is_array())
+            return {ErrorCode::ProviderSchema,
+                    "DeepSeek credit response is missing balance_infos array"};
+        for (const json::Value& item : infos->array) {
+            if (!item.is_object())
+                return {ErrorCode::ProviderSchema,
+                        "DeepSeek balance_infos entries must be objects"};
+            const json::Value* currency = item.get("currency");
+            const json::Value* total = item.get("total_balance");
+            if (currency == nullptr || !currency->is_string() ||
+                !valid_currency_code(currency->string) ||
+                total == nullptr || !total->is_string())
+                return {ErrorCode::ProviderSchema,
+                        "DeepSeek balance entry requires currency and total_balance strings"};
+            double amount = 0.0;
+            Error decimal_error = parse_decimal_string(total->string, amount);
+            if (!decimal_error.ok())
+                return {decimal_error.code,
+                        "DeepSeek " + currency->string + " " + decimal_error.message};
+            std::string normalized_currency = currency->string;
+            for (char& ch : normalized_currency)
+                ch = static_cast<char>(std::toupper(static_cast<unsigned char>(ch)));
+            result.balances.push_back({amount, normalized_currency});
+        }
+        return ok_error();
+    }
+    return {ErrorCode::UnsupportedFeature,
+            "provider " + provider_name + " does not support credit balance queries"};
+}
+
+std::string format_credit_balance(const CreditBalanceResult& result) {
+    std::ostringstream out;
+    for (std::size_t index = 0; index < result.balances.size(); ++index) {
+        if (index > 0) out << " · ";
+        out << std::fixed << std::setprecision(2) << result.balances[index].amount
+            << " " << (result.balances[index].currency.empty()
+                            ? "USD"
+                            : result.balances[index].currency);
+    }
+    return out.str();
+}
+
 Error list_models(const RequestContext& context, ModelsResult& result, runtime::CancellationToken cancellation) {
     if (context.profile.offline) {
         return {ErrorCode::UnsupportedFeature,
@@ -2856,6 +2975,36 @@ Error list_models(const RequestContext& context, ModelsResult& result, runtime::
         return http_status_error(context, http_result.response, context.models_url);
     }
     return parse_models_json(http_result.response.body, result);
+}
+
+Error get_credit_balance(const RequestContext& context,
+                         CreditBalanceResult& result,
+                         runtime::CancellationToken cancellation) {
+    result = {};
+    if (!context.profile.capabilities.credit_balance ||
+        context.profile.credit_url.empty()) {
+        return {ErrorCode::UnsupportedFeature,
+                "provider " + context.profile.name +
+                    " does not define a credit-balance endpoint"};
+    }
+    if (context.api_key.empty())
+        return {ErrorCode::Auth,
+                "provider " + context.profile.name +
+                    " credit balance requires an API key"};
+    if (!credit_balance_available(context))
+        return {ErrorCode::UnsupportedFeature,
+                "credit balance is disabled when provider " +
+                    context.profile.name + " uses a custom base URL"};
+    http::Request request =
+        base_http_request(context, "GET", context.profile.credit_url, cancellation);
+    request.max_body_bytes = 65536;
+    const http::Result fetched = http::perform(request, {context.api_key});
+    if (!fetched.error.ok()) return fetched.error;
+    if (fetched.response.status < 200 || fetched.response.status >= 300)
+        return http_status_error(context, fetched.response,
+                                 context.profile.credit_url);
+    return parse_credit_balance_response(context.profile.name,
+                                         fetched.response.body, result);
 }
 
 Error send_chat_messages(const RequestContext& context,

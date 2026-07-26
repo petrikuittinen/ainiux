@@ -12,6 +12,7 @@
 #include <sys/time.h>
 #include <unistd.h>
 
+#include <algorithm>
 #include <cstdlib>
 #include <optional>
 #include <string>
@@ -1684,6 +1685,62 @@ void test_native_tool_protocols() {
     check(!error.ok(), "native tool stream rejects fractional call indexes");
 }
 
+void test_credit_balance_parsing_and_formatting() {
+    ainiux::provider::CreditBalanceResult result;
+    ainiux::Error error = ainiux::provider::parse_credit_balance_response(
+        "openrouter", R"({"data":{"limit_remaining":4.5}})", result);
+    check(error.ok() && result.balances.size() == 1 &&
+              result.balances.front().amount == 4.5 &&
+              result.balances.front().currency == "USD" &&
+              ainiux::provider::format_credit_balance(result) == "4.50 USD",
+          "OpenRouter limit_remaining formats as USD credit");
+
+    error = ainiux::provider::parse_credit_balance_response(
+        "deepseek",
+        R"({"is_available":true,"balance_infos":[{"currency":"CNY","total_balance":"110.00","granted_balance":"10.00","topped_up_balance":"100.00"},{"currency":"USD","total_balance":"4.5","granted_balance":"0","topped_up_balance":"4.5"}]})",
+        result);
+    check(error.ok() && result.balances.size() == 2 &&
+              ainiux::provider::format_credit_balance(result) ==
+                  "110.00 CNY · 4.50 USD",
+          "DeepSeek preserves and formats every returned currency");
+
+    error = ainiux::provider::parse_credit_balance_response(
+        "deepseek",
+        R"({"balance_infos":[{"currency":"CNY","total_balance":"not-money"}]})",
+        result);
+    check(!error.ok() && error.code == ErrorCode::ProviderSchema,
+          "DeepSeek rejects malformed balance decimals");
+
+    const std::vector<ainiux::provider::Profile> profiles =
+        ainiux::provider::built_in_profiles();
+    const auto openrouter =
+        std::find_if(profiles.begin(), profiles.end(), [](const auto& profile) {
+            return profile.name == "openrouter";
+        });
+    const auto deepseek =
+        std::find_if(profiles.begin(), profiles.end(), [](const auto& profile) {
+            return profile.name == "deepseek";
+        });
+    check(openrouter != profiles.end() &&
+              openrouter->capabilities.credit_balance &&
+              openrouter->credit_url == "https://openrouter.ai/api/v1/key" &&
+              deepseek != profiles.end() &&
+              deepseek->capabilities.credit_balance &&
+              deepseek->credit_url ==
+                  "https://api.deepseek.com/user/balance",
+          "OpenRouter and DeepSeek profiles expose official credit endpoints");
+
+    ainiux::provider::RequestContext credit_context;
+    credit_context.profile = *openrouter;
+    credit_context.base_url = credit_context.profile.base_url;
+    credit_context.api_key = "test-secret";
+    check(ainiux::provider::credit_balance_available(credit_context),
+          "official OpenRouter context enables credit lookup");
+    credit_context.base_url = "https://gateway.example/v1";
+    check(!ainiux::provider::credit_balance_available(credit_context),
+          "custom provider base URL disables official credit lookup");
+}
+
 }  // namespace
 
 void run_all() {
@@ -1728,6 +1785,7 @@ void run_all() {
     test_provider_responses_unsupported_and_override();
     test_provider_reasoning_request_compatibility();
     test_native_tool_protocols();
+    test_credit_balance_parsing_and_formatting();
 }
 
 }  // namespace ainiux::test::provider

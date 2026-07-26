@@ -34,6 +34,7 @@ struct AgentInputFrame {
     std::string workspace;
     std::string mode_label = "act";
     std::string permission_label = "smart";
+    std::string credit_label;
 };
 
 struct AgentInputGeometry {

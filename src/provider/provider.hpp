@@ -21,6 +21,7 @@ struct Capabilities {
     bool streaming = false;
     bool model_listing = false;
     bool usage_reporting = false;
+    bool credit_balance = false;
     bool requires_bearer_key = false;
     bool optional_bearer_key = false;
     bool images = false;
@@ -40,6 +41,7 @@ struct Profile {
     std::string chat_path = "/chat/completions";
     std::string responses_path = "/responses";
     std::string models_path = "/models";
+    std::string credit_url;
     bool requires_bearer_key = false;
     bool local_endpoint = false;
     bool offline = false;
@@ -200,6 +202,15 @@ struct ModelsResult {
     std::vector<std::string> model_ids;
 };
 
+struct CreditBalance {
+    double amount = 0.0;
+    std::string currency = "USD";
+};
+
+struct CreditBalanceResult {
+    std::vector<CreditBalance> balances;
+};
+
 using DeltaCallback = std::function<Error(const std::string&)>;
 using ReasoningDeltaCallback = std::function<Error(const std::string&)>;
 
@@ -220,6 +231,10 @@ std::string format_models_markdown(const std::string& provider_name,
                                    const std::string& models_url,
                                    const ModelsResult& result);
 Error parse_models_response(const std::string& body, ModelsResult& result);
+Error parse_credit_balance_response(const std::string& provider_name,
+                                    const std::string& body,
+                                    CreditBalanceResult& result);
+std::string format_credit_balance(const CreditBalanceResult& result);
 std::vector<Profile> built_in_profiles();
 std::string normalize_provider_key(std::string text);
 std::string canonical_profile_name(const std::string& name);
@@ -228,6 +243,7 @@ bool needs_interactive_model_selection(const RequestContext& context);
 std::string display_name_for_profile(const std::string& profile_name);
 Error validate_profile_name(const std::string& name);
 const Capabilities& capabilities_for(const RequestContext& context);
+bool credit_balance_available(const RequestContext& context);
 const ModelCapability* matched_model_capability(const RequestContext& context);
 std::string reasoning_temperature_advisory(const RequestContext& context);
 Capabilities detected_capabilities_for(const RequestContext& context);
@@ -266,6 +282,10 @@ Error send_tool_round(const RequestContext& context,
 Error list_models(const RequestContext& context,
                   ModelsResult& result,
                   runtime::CancellationToken cancellation = runtime::CancellationToken());
+Error get_credit_balance(
+    const RequestContext& context,
+    CreditBalanceResult& result,
+    runtime::CancellationToken cancellation = runtime::CancellationToken());
 Error send_chat(const RequestContext& context,
                 DeltaCallback on_delta,
                 ChatResult& result,

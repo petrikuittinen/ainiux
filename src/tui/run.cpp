@@ -16,6 +16,7 @@
 #include "tui/detail/render.hpp"
 
 #include "provider/model_list_job.hpp"
+#include "provider/credit_balance_job.hpp"
 
 #include "app/app.hpp"
 #include "app/interactive_mode.hpp"
@@ -82,9 +83,11 @@ app::TuiRunResult run(provider::RequestContext context,
 
     runtime::EventQueue<TuiEvent> events;
     runtime::JobHandle model_job;
+    runtime::JobHandle credit_job;
     runtime::JobHandle file_job;
     runtime::JobHandle completion_job;
     ActiveJob active_job = ActiveJob::None;
+    std::string credit_balance_label;
     std::optional<chat::Session> deferred_store_save;
     const size_t input_undo_limit = static_cast<size_t>(std::max(0, context.options.editor_undo_limit));
     bool syntax_highlight = interactive != nullptr ? interactive->highlight_enabled
@@ -249,6 +252,7 @@ app::TuiRunResult run(provider::RequestContext context,
             agent_runtime && agent_runtime->prepared()
                 ? agent::permission_mode_name(agent_runtime->permission_mode())
                 : "smart";
+        chrome.credit_label = credit_balance_label;
         chrome.input_max_height_percent =
             context.options.agent_input_max_height_percent;
         chrome.cancellable = active_job != ActiveJob::None || file_job.joinable() ||
@@ -863,6 +867,29 @@ app::TuiRunResult run(provider::RequestContext context,
             events.push(std::move(event));
         });
         status = purpose == ModelsRequestPurpose::Picker ? "Loading models..." : "Listing models...";
+    };
+
+    auto refresh_credit_balance = [&]() {
+        credit_balance_label.clear();
+        if (!context.options.agent ||
+            !provider::credit_balance_available(context)) {
+            credit_job.cancel();
+            return;
+        }
+        provider::RequestContext job_context = context;
+        const std::string requested_provider =
+            provider::normalize_provider_key(context.profile.name);
+        provider::start_credit_balance_job(
+            credit_job, std::move(job_context),
+            [&events, requested_provider](Error error,
+                                          provider::CreditBalanceResult result) {
+                TuiEvent event;
+                event.type = TuiEventType::CreditBalanceDone;
+                event.text = requested_provider;
+                event.error = std::move(error);
+                event.credit_balance = std::move(result);
+                events.push(std::move(event));
+            });
     };
 
     auto open_provider_picker = [&](bool cancel_quits) {
@@ -1623,6 +1650,7 @@ app::TuiRunResult run(provider::RequestContext context,
                 const Error error = agent_runtime->update_project_settings(context);
                 if (!error.ok()) status = "Agent settings save failed: " + error.message;
             }
+            refresh_credit_balance();
         }
         return applied;
     };
@@ -1793,6 +1821,7 @@ app::TuiRunResult run(provider::RequestContext context,
                 const Error error = agent_runtime->update_project_settings(context);
                 if (!error.ok()) status = "Agent settings save failed: " + error.message;
             }
+            refresh_credit_balance();
             start_models(ModelsRequestPurpose::Picker);
         }
     };
@@ -2078,6 +2107,7 @@ app::TuiRunResult run(provider::RequestContext context,
         context.options.context_tokens = 0;
         start_models(ModelsRequestPurpose::ContextRefresh);
     }
+    refresh_credit_balance();
 
     // Agent mode: refresh the code index and restore project history before the
     // first user turn so reopening a .ainiux-pr workspace is not a blank UI.
@@ -2278,6 +2308,7 @@ app::TuiRunResult run(provider::RequestContext context,
                         start_save(context.options.save_chat_path, session, true);
                         start_store_save();
                     }
+                    if (context.options.agent) refresh_credit_balance();
                     break;
                 }
                 case TuiEventType::Error: {
@@ -2629,6 +2660,18 @@ app::TuiRunResult run(provider::RequestContext context,
                         status = join_models_preview(event.models);
                     } else {
                         set_status_maybe_agent_error(detail::error_line(event.error), true);
+                    }
+                    break;
+                }
+                case TuiEventType::CreditBalanceDone: {
+                    credit_job.join();
+                    if (event.text ==
+                        provider::normalize_provider_key(context.profile.name)) {
+                        credit_balance_label =
+                            event.error.ok()
+                                ? provider::format_credit_balance(
+                                      event.credit_balance)
+                                : std::string();
                     }
                     break;
                 }
@@ -3069,9 +3112,11 @@ app::TuiRunResult run(provider::RequestContext context,
     }
 
     model_job.cancel();
+    credit_job.cancel();
     clipboard_runtime.cancel_all();
     completion_job.cancel();
     model_job.join();
+    credit_job.join();
     completion_job.join();
     file_job.cancel();
     file_job.join();

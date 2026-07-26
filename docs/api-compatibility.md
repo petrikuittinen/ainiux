@@ -20,6 +20,8 @@ Implemented text-only support is available with `--api responses`, `--responses`
 
 Current Responses support maps `output_text` and streaming `response.output_text.delta` into the same internal assistant message/delta model used by Chat Completions. Reasoning summary deltas are rendered as `<think>...</think>` blocks when providers emit them. Images, files, tools, provider-side context management, and capability probing are not implemented yet.
 
+Interactive Agent credit display currently supports OpenRouter `GET https://openrouter.ai/api/v1/key` (`data.limit_remaining`, displayed as USD) and DeepSeek `GET https://api.deepseek.com/user/balance` (`balance_infos[].total_balance` plus its returned currency). These authenticated lookups use the selected provider key, are bounded and cancellable, never persist the response or credential, and do not change inference endpoint compatibility.
+
 ## Unified Reasoning Control
 
 `--reasoning auto|VALUE|TOKENS` is the public CLI control. Chat and editor expose `/reasoning`, `/reasoning VALUE`, and `/setting reasoning=VALUE`. Auto omits the override. A non-negative integer is retained exactly, and a bounded ASCII token is retained verbatim; no approximate effort-label/token-budget conversion occurs.

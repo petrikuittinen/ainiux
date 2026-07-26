@@ -30,6 +30,7 @@ enum class TuiEventType {
     SearchDone,
     ShellDone,
     ModelsDone,
+    CreditBalanceDone,
     CompletionDone,
     GuardApproval,  // agent Guard Ask pending (worker blocked)
     AgentProjectNewDone,
@@ -69,6 +70,7 @@ struct TuiEvent {
     chat::Session session;
     std::vector<std::string> models;
     provider::ModelsResult models_result;
+    provider::CreditBalanceResult credit_balance;
     provider::Message inserted_message;
     std::string inserted_text;
     provider::ImageInput image;

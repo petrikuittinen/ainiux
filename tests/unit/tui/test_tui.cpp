@@ -414,12 +414,14 @@ void test_agent_widgets_and_dynamic_geometry() {
               agent_layout.input_rect.height == 6 && chat_layout.input_rect.height == 8,
           "dynamic agent input geometry does not change the fixed chat layout");
 
-    AgentInputFrame frame{"/home/eye/my_code_project", "act", "smart"};
+    AgentInputFrame frame{"/home/eye/my_code_project", "act", "smart", ""};
     check(abbreviate_agent_workspace(frame.workspace) == "~/my_code_project",
           "agent frame abbreviates the home directory");
     check(agent_input_title(frame, 40) == "~/my_code_project act",
           "agent frame title includes workspace and mode");
-    check(agent_input_title({"/a/very/long/leading/path/project", "plan"}, 18).find("project plan") !=
+    check(agent_input_title(
+              {"/a/very/long/leading/path/project", "plan", "smart", ""}, 18)
+              .find("project plan") !=
               std::string::npos,
           "agent frame elision preserves the final project directory and future mode");
     const std::string top_border = agent_input_top_border(frame, 40);
@@ -432,6 +434,15 @@ void test_agent_widgets_and_dynamic_geometry() {
                   top_border, 0, top_border.size()) == 40 &&
               agent_input_bottom_border(40).find(u8"└") == 0,
           "agent frame constructs project/task and permission borders");
+    frame.credit_label = "4.50 USD";
+    const std::string credit_border = agent_input_top_border(frame, 48);
+    check(credit_border.find(" smart 4.50 USD ") != std::string::npos &&
+              credit_border.compare(
+                  credit_border.size() - std::string(u8"┐").size(),
+                  std::string(u8"┐").size(), u8"┐") == 0 &&
+              ainiux::editor::detail::display_width_for_range(
+                  credit_border, 0, credit_border.size()) == 48,
+          "agent frame shows formatted credits after permission at exact width");
 
     ainiux::editor::EditorState draft =
         ainiux::editor::EditorState::from_text(u8"ab界d\nsecond\nthird");

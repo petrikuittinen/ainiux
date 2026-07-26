@@ -83,6 +83,7 @@ transport, filesystem, or PTY boundary is involved.
 - Per-model `/v1/models` context-window refresh across chat, editor, and agent; sticky CLI/`/context` overrides; and token-only usage when model metadata has no window
 - Agent compact tool rows with independent execution durations, Guard-wait subtraction, failed-tool timing, persisted timed-row replay, and unchanged whole-task completion timing
 - Agent permission parsing/persistence and Confirm/Smart/Yolo native-path/command policy, including external exact-path tools, hard denials, and permission border/command parsing
+- OpenRouter and DeepSeek credit-response schema parsing, currency formatting, provider endpoint registration, and Agent border placement
 - TUI insert/attach/fetch driver
 - SQLite TUI workflows: `/new`, autosave/reload, `/list`, `/provider`, `/remove`, stale `last_thread_id`, corrupt database, image persistence across restart, `/cleanup`, and read-only expired-media threads
 

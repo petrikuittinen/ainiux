@@ -214,19 +214,35 @@ std::string agent_input_title(const AgentInputFrame& frame, int available_cells)
 std::string agent_input_top_border(const AgentInputFrame& frame, int cols) {
     cols = std::max(2, cols);
     if (cols == 2) return u8"┌┐";
+    if (cols == 3) return u8"┌─┐";
     const std::string permission =
         frame.permission_label.empty() ? "smart" : frame.permission_label;
+    const int right_budget = std::max(0, cols - 6);
+    std::string right_label;
     const int permission_cells = static_cast<int>(text_cells(permission));
+    if (permission_cells >= right_budget) {
+        right_label = shorten_end(permission, static_cast<std::size_t>(right_budget));
+    } else if (frame.credit_label.empty()) {
+        right_label = permission;
+    } else {
+        const int credit_budget = right_budget - permission_cells - 1;
+        right_label = permission;
+        if (credit_budget > 0)
+            right_label +=
+                " " + shorten_end(frame.credit_label,
+                                  static_cast<std::size_t>(credit_budget));
+    }
+    const int right_label_cells = static_cast<int>(text_cells(right_label));
     // Corners (2), leading/trailing dashes (2), spaces around both labels (4).
-    const int title_budget = std::max(0, cols - permission_cells - 8);
+    const int title_budget = std::max(0, cols - right_label_cells - 8);
     const std::string title = agent_input_title(frame, title_budget);
     std::string line = u8"┌─";
     if (!title.empty()) line += " " + title + " ";
     const int used_without_fill =
         2 + (title.empty() ? 0 : 2 + static_cast<int>(text_cells(title))) +
-        permission_cells + 4;
+        right_label_cells + 4;
     for (int cell = used_without_fill; cell < cols; ++cell) line += u8"─";
-    if (!permission.empty()) line += " " + permission + " ";
+    if (!right_label.empty()) line += " " + right_label + " ";
     line += u8"─";
     line += u8"┐";
     // Very narrow terminals may not fit both labels. Preserve permission first.
@@ -237,9 +253,9 @@ std::string agent_input_top_border(const AgentInputFrame& frame, int cols) {
         std::string compact = u8"┌─";
         if (!clipped.empty()) compact += " " + clipped + " ";
         int fill = cols - (2 + (clipped.empty() ? 0 : 2 + static_cast<int>(text_cells(clipped))) +
-                           permission_cells + 4);
+                           right_label_cells + 4);
         while (fill-- > 0) compact += u8"─";
-        compact += " " + permission + " ─┐";
+        compact += " " + right_label + " ─┐";
         line = std::move(compact);
         break;
     }

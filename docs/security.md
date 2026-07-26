@@ -43,7 +43,9 @@ Interactive agent startup stores and restores non-secret provider, model, API/ba
 URL, reasoning, and generation/display preferences in project-local `agent.sqlite`.
 API keys, custom authorization headers, and resolved credentials are excluded.
 
-- `edit_file` (preferred), `str_replace`, `remove`, and `apply_patch` may mutate workspace-relative UTF-8 files only. `write_file` is also workspace-relative by default; interactive Act mode may perform one exact outside-project write after a one-shot Yes/No Guard approval.
+Interactive Agent may use the selected OpenRouter or DeepSeek API key for a bounded, cancellable GET to that provider's official credit endpoint. This is enabled only when the active inference base URL matches the built-in official base; custom gateways never have their credential forwarded to an official billing endpoint. The key remains in the authorization header and existing HTTP redaction path; neither the key nor the raw balance response is logged or persisted. Lookup failure is non-fatal and removes the optional border label.
+
+- `apply_patch`, index/symbol/search tools, and dedicated Git tools remain project-scoped. Validated exact-path native filesystem tools may access external paths according to the active interactive permission mode; external changes create no project history or index entry.
 - `git_status` / `git_diff` use the git CLI with pager/external-diff disabled; only read-only options are allowed (no `--output`, no force push, etc.).
 - `index_status` / `index_update` refresh project `.ainiux-pr/index.sqlite`; `index_rebuild` requires `confirm=true` and is agent-only.
 - `fetch_url` and `search_web` reuse `src/fetch/` and `src/search/` safety (timeouts, size caps, private/loopback blocking unless explicitly allowed).
