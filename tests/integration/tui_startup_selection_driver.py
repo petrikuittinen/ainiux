@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Verify provider/model startup behavior in the chat TUI."""
+"""Verify provider/model startup behavior in the Chat and Agent TUIs."""
 
 import os
 import pty
@@ -50,7 +50,7 @@ def require(raw, needle, context):
         raise RuntimeError(f"expected {needle!r} while {context}; saw {rendered[-700:]!r}")
 
 
-def run_case(binary, args, actions):
+def run_case(binary, args, actions, isolated_workspace=False):
     home_dir = tempfile.mkdtemp(prefix="ainiux-tui-startup-")
     env = os.environ.copy()
     env["HOME"] = home_dir
@@ -63,6 +63,7 @@ def run_case(binary, args, actions):
         stderr=slave,
         close_fds=True,
         env=env,
+        cwd=home_dir if isolated_workspace else None,
     )
     os.close(slave)
     output = bytearray()
@@ -79,27 +80,25 @@ def run_case(binary, args, actions):
         os.close(master)
         shutil.rmtree(home_dir, ignore_errors=True)
     if process.returncode != 0:
-        raise RuntimeError(f"chat TUI startup case exited with status {process.returncode}")
+        raise RuntimeError(f"TUI startup case exited with status {process.returncode}")
     return bytes(output)
 
 
-def check_bare_chat(binary):
+def check_missing_provider(binary, mode, model=None):
+    args = ["--quiet", mode]
+    if model is not None:
+        args.extend(["--model", model])
     output = run_case(
         binary,
-        ["--quiet", "--chat"],
-        [
-            ("must-not-send\r", 0.5),
-            ("\x0c", 0.4),
-            ("\x11", 0.3),
-        ],
+        args,
+        [("\x11", 0.3)],
+        isolated_workspace=mode == "--agent",
     )
-    require(output, "/list browse", "starting chat without a provider")
-    require(output, "/provider then /model", "explaining bare chat setup")
-    require(output, "sending disabled", "blocking bare chat generation")
-    require(output, "No saved chat threads", "using Ctrl+L while chat is offline")
-    rendered = plain(output)
-    if "── Provider" in rendered or "── Model" in rendered:
-        raise RuntimeError("bare chat startup unexpectedly opened provider/model selection")
+    context = f"starting {mode} without a provider"
+    if model is not None:
+        context += " even though a model name was supplied"
+    require(output, "── Provider", context)
+    require(output, "openai", "showing providers during required startup setup")
 
 
 def check_single_model_chat(binary, base_url, model):
@@ -114,7 +113,7 @@ def check_single_model_chat(binary, base_url, model):
         raise RuntimeError("single-model chat startup unnecessarily opened a picker")
 
 
-def check_multiple_model_chat(binary, base_url, model):
+def check_multiple_model_surface(binary, base_url, model, mode):
     output = run_case(
         binary,
         [
@@ -122,17 +121,18 @@ def check_multiple_model_chat(binary, base_url, model):
             "--models-url",
             base_url + "/v1/models-multiple",
             "--quiet",
-            "--chat",
+            mode,
         ],
         [
             ("\r", 0.6),
             ("\x11", 0.3),
         ],
+        isolated_workspace=mode == "--agent",
     )
-    require(output, "── Model", "opening startup chat model selection")
-    require(output, model, "showing the first startup chat model")
-    require(output, model + "-second", "showing the second startup chat model")
-    require(output, "ready", "accepting a startup chat model")
+    require(output, "── Model", f"opening startup {mode} model selection")
+    require(output, model, f"showing the first startup {mode} model")
+    require(output, model + "-second", f"showing the second startup {mode} model")
+    require(output, "ready", f"accepting a startup {mode} model")
 
 
 def main():
@@ -140,9 +140,13 @@ def main():
         print("usage: tui_startup_selection_driver.py BINARY BASE_URL MODEL", file=sys.stderr)
         return 2
     binary, base_url, model = sys.argv[1:]
-    check_bare_chat(binary)
+    binary = os.path.abspath(binary)
+    for mode in ("--chat", "--agent"):
+        check_missing_provider(binary, mode)
+        check_missing_provider(binary, mode, model)
     check_single_model_chat(binary, base_url, model)
-    check_multiple_model_chat(binary, base_url, model)
+    for mode in ("--chat", "--agent"):
+        check_multiple_model_surface(binary, base_url, model, mode)
     print("TUI startup provider/model selection integration checks passed")
     return 0
 

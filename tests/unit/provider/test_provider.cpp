@@ -861,7 +861,7 @@ void test_tui_local_endpoint_auto_selects_model() {
     ainiux::provider::ContextResult offline = ainiux::provider::build_context(bare_chat);
     check(offline.error.ok(), "bare chat UI offline context builds");
     check(!ainiux::provider::needs_interactive_model_selection(offline.context),
-          "bare offline chat UI does not start provider or model selection");
+          "bare chat offline placeholder waits for provider selection before model discovery");
 
     const char* editor_argv[] = {"ainiux", "http://localhost:30000", "--editor"};
     ainiux::cli::ParseResult editor_parsed = ainiux::cli::parse_args(3, const_cast<char**>(editor_argv));
@@ -883,7 +883,14 @@ void test_tui_startup_provider_selection_helpers() {
           "bare chat UI requests startup provider selection");
 
     ainiux::provider::apply_tui_startup_default(bare_chat);
-    check(bare_chat.provider == "none", "bare chat UI startup default uses offline provider until selection");
+    check(bare_chat.provider == "none",
+          "bare chat UI uses an offline placeholder while its provider picker is open");
+
+    ainiux::cli::Options model_only_chat;
+    model_only_chat.tui = true;
+    model_only_chat.model = "remembered-model";
+    check(ainiux::provider::tui_needs_startup_provider_selection(model_only_chat),
+          "chat with a model but no selected provider still requests provider selection");
 
     ainiux::cli::Options explicit_provider;
     explicit_provider.tui = true;
@@ -905,6 +912,12 @@ void test_tui_startup_provider_selection_helpers() {
     ainiux::provider::apply_tui_startup_default(bare_agent);
     check(bare_agent.provider == "none",
           "bare agent starts offline while the provider picker is open");
+
+    ainiux::cli::Options model_only_agent;
+    model_only_agent.agent = true;
+    model_only_agent.model = "remembered-model";
+    check(ainiux::provider::tui_needs_startup_provider_selection(model_only_agent),
+          "agent with a model but no selected provider still requests provider selection");
 
     ainiux::cli::Options restored_agent;
     restored_agent.agent = true;
