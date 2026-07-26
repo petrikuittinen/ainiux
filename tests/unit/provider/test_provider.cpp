@@ -1688,12 +1688,18 @@ void test_native_tool_protocols() {
 void test_credit_balance_parsing_and_formatting() {
     ainiux::provider::CreditBalanceResult result;
     ainiux::Error error = ainiux::provider::parse_credit_balance_response(
-        "openrouter", R"({"data":{"limit_remaining":4.5}})", result);
+        "openrouter",
+        R"({"data":{"total_credits":10.0,"total_usage":5.5}})", result);
     check(error.ok() && result.balances.size() == 1 &&
               result.balances.front().amount == 4.5 &&
               result.balances.front().currency == "USD" &&
               ainiux::provider::format_credit_balance(result) == "4.50 USD",
-          "OpenRouter limit_remaining formats as USD credit");
+          "OpenRouter purchased credits minus usage formats as USD credit");
+
+    error = ainiux::provider::parse_credit_balance_response(
+        "openrouter", R"({"data":{"total_credits":10.0}})", result);
+    check(!error.ok() && error.code == ErrorCode::ProviderSchema,
+          "OpenRouter rejects incomplete credit totals");
 
     error = ainiux::provider::parse_credit_balance_response(
         "deepseek",
@@ -1723,7 +1729,8 @@ void test_credit_balance_parsing_and_formatting() {
         });
     check(openrouter != profiles.end() &&
               openrouter->capabilities.credit_balance &&
-              openrouter->credit_url == "https://openrouter.ai/api/v1/key" &&
+              openrouter->credit_url ==
+                  "https://openrouter.ai/api/v1/credits" &&
               deepseek != profiles.end() &&
               deepseek->capabilities.credit_balance &&
               deepseek->credit_url ==
@@ -1739,6 +1746,11 @@ void test_credit_balance_parsing_and_formatting() {
     credit_context.base_url = "https://gateway.example/v1";
     check(!ainiux::provider::credit_balance_available(credit_context),
           "custom provider base URL disables official credit lookup");
+
+    credit_context.profile = *deepseek;
+    credit_context.base_url = "https://api.deepseek.com/v1";
+    check(ainiux::provider::credit_balance_available(credit_context),
+          "normalized official DeepSeek base URL enables credit lookup");
 }
 
 }  // namespace

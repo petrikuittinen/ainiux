@@ -101,7 +101,7 @@ const std::vector<Profile>& profile_registry() {
             make_profile("openrouter", {}, "https://openrouter.ai/api/v1",
                          "/chat/completions", "/models", "",
                          {"OPENROUTER_API_KEY", "AINIUX_API_KEY"}, true, false),
-            "https://openrouter.ai/api/v1/key"),
+            "https://openrouter.ai/api/v1/credits"),
         make_profile(names::kOpenAi,
                      {names::kOpenAiChat, names::kOpenAiResponses},
                      "https://api.openai.com/v1",
@@ -2579,11 +2579,15 @@ bool credit_balance_available(const RequestContext& context) {
         while (value.size() > 1 && value.back() == '/') value.pop_back();
         return value;
     };
+    Error normalization_error;
+    const std::string official_base =
+        normalize_base_url(context.profile.base_url, nullptr, normalization_error);
     return context.profile.capabilities.credit_balance &&
            !context.profile.credit_url.empty() &&
            !context.api_key.empty() &&
+           normalization_error.ok() &&
            without_trailing_slash(context.base_url) ==
-               without_trailing_slash(context.profile.base_url);
+               without_trailing_slash(official_base);
 }
 
 Capabilities detected_capabilities_for(const RequestContext& context) {
@@ -2897,14 +2901,18 @@ Error parse_credit_balance_response(const std::string& provider_name,
     const std::string canonical = normalize_provider_key(provider_name);
     if (canonical == "openrouter") {
         const json::Value* data = parsed.value.get("data");
-        const json::Value* remaining =
-            data != nullptr && data->is_object() ? data->get("limit_remaining") : nullptr;
-        if (remaining == nullptr || remaining->is_null()) return ok_error();
-        if (remaining->type != json::Value::Type::Number ||
-            !std::isfinite(remaining->number))
+        const json::Value* total =
+            data != nullptr && data->is_object() ? data->get("total_credits") : nullptr;
+        const json::Value* usage =
+            data != nullptr && data->is_object() ? data->get("total_usage") : nullptr;
+        if (total == nullptr || total->type != json::Value::Type::Number ||
+            !std::isfinite(total->number) || usage == nullptr ||
+            usage->type != json::Value::Type::Number ||
+            !std::isfinite(usage->number))
             return {ErrorCode::ProviderSchema,
-                    "OpenRouter credit response data.limit_remaining must be a number or null"};
-        result.balances.push_back({remaining->number, "USD"});
+                    "OpenRouter credit response requires numeric "
+                    "data.total_credits and data.total_usage"};
+        result.balances.push_back({total->number - usage->number, "USD"});
         return ok_error();
     }
     if (canonical == "deepseek") {
