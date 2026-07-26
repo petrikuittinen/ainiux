@@ -149,6 +149,38 @@ void test_tui_reasoning_picker_input() {
     check(ainiux::tui::handle_tui_picker_input('r', state, callbacks) &&
               project_reset && !project_declined,
           "agent project reset accepts its semantic mnemonic");
+
+    bool guard_allowed = false;
+    bool guard_denied = false;
+    callbacks.on_guard_approval_accepted = [&]() { guard_allowed = true; };
+    callbacks.on_guard_approval_rejected = [&]() { guard_denied = true; };
+    mode = ainiux::tui::TuiMode::GuardApprovalConfirm;
+    check(ainiux::tui::handle_tui_picker_input('x', state, callbacks) &&
+              !guard_allowed && !guard_denied,
+          "agent Guard Yes/No ignores ambiguous input");
+    check(ainiux::tui::handle_tui_picker_input('y', state, callbacks) &&
+              guard_allowed && !guard_denied,
+          "agent Guard accepts y as Yes");
+    guard_allowed = false;
+    check(ainiux::tui::handle_tui_picker_input(27, state, callbacks) &&
+              guard_denied && !guard_allowed,
+          "agent Guard treats Esc as No");
+
+    bool continued = false;
+    bool stopped = false;
+    callbacks.on_agent_continue_accepted = [&]() { continued = true; };
+    callbacks.on_agent_continue_rejected = [&]() { stopped = true; };
+    mode = ainiux::tui::TuiMode::AgentContinueConfirm;
+    check(ainiux::tui::handle_tui_picker_input('x', state, callbacks) &&
+              !continued && !stopped,
+          "agent continuation confirmation ignores ambiguous input");
+    check(ainiux::tui::handle_tui_picker_input('c', state, callbacks) &&
+              continued && !stopped,
+          "agent continuation confirmation accepts its Continue mnemonic");
+    continued = false;
+    check(ainiux::tui::handle_tui_picker_input(27, state, callbacks) &&
+              stopped && !continued,
+          "agent continuation confirmation defaults to Stop on Esc");
 }
 
 void test_tui_layout_reserves_editor_input_panel() {
@@ -404,14 +436,20 @@ void test_agent_inline_choices() {
     using namespace ainiux::tui;
     InlineChoiceModel approval = agent_inline_choices_for_mode(
         TuiMode::GuardApprovalConfirm);
-    check(render_inline_choices(approval) == "(1) [A]pprove  (2) [C]ancel",
-          "agent confirmation renders numbered semantic choices");
+    check(render_inline_choices(approval) == "(1) [Y]es  (2) [N]o",
+          "agent Guard confirmation renders explicit Yes/No choices");
     check(parse_inline_choice_key(approval, '1').matched &&
-              parse_inline_choice_key(approval, 'a').index == 0 &&
-              parse_inline_choice_key(approval, 'C').index == 1 &&
+              parse_inline_choice_key(approval, 'y').index == 0 &&
+              parse_inline_choice_key(approval, 'N').index == 1 &&
               parse_inline_choice_key(approval, 27).index == 1 &&
               !parse_inline_choice_key(approval, 'x').matched,
-          "agent confirmation accepts numbers, case-insensitive mnemonics, and Esc default");
+          "agent Guard accepts y/n, numbers, and Esc as No");
+    InlineChoiceModel continuation = agent_inline_choices_for_mode(
+        TuiMode::AgentContinueConfirm);
+    check(render_inline_choices(continuation) == "(1) [C]ontinue  (2) [S]top" &&
+              parse_inline_choice_key(continuation, 'c').index == 0 &&
+              parse_inline_choice_key(continuation, 27).index == 1,
+          "agent turn cap renders Continue/Stop with Stop as the safe default");
     InlineChoiceModel four{{{"Alpha", 'a'}, {"Beta", 'b'}, {"Gamma", 'g'}, {"Delta", 'd'}}, 3};
     check(valid_inline_choices(four) && parse_inline_choice_key(four, '4').index == 3,
           "inline choice widget supports four choices");

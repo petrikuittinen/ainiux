@@ -213,8 +213,10 @@ Error AgentSessionStore::ensure_schema() {
     }
 
     if (applied == kAgentSessionSchemaVersion) {
-        // Existing v2 DBs may predate the approvals table.
-        return ensure_approvals_table();
+        // Soft extensions preserve existing v2 project transcripts.
+        error = ensure_approvals_table();
+        if (!error.ok()) return error;
+        return ensure_project_settings_columns();
     }
 
     error = exec(
@@ -227,6 +229,8 @@ Error AgentSessionStore::ensure_schema() {
         "  model TEXT,"
         "  api TEXT,"
         "  protocol TEXT,"
+        "  base_url TEXT,"
+        "  settings_json TEXT NOT NULL DEFAULT '{}',"
         "  workspace TEXT NOT NULL,"
         "  summary_text TEXT,"
         "  turns INTEGER NOT NULL DEFAULT 0,"
@@ -277,7 +281,7 @@ Error AgentSessionStore::ensure_schema() {
     error = insert.bind_int64(db_, path_, 2, now_unix_seconds());
     if (!error.ok()) return error;
     if (insert.step() != SQLITE_DONE) return sqlite_error(db_, "could not record schema version", path_);
-    return ok_error();
+    return ensure_project_settings_columns();
 }
 
 Error AgentSessionStore::ensure_approvals_table() {
@@ -301,6 +305,41 @@ Error AgentSessionStore::ensure_approvals_table() {
     const std::string detail = message == nullptr ? sqlite3_errmsg(db_) : message;
     sqlite3_free(message);
     return {ErrorCode::FileWrite, "agent approvals schema: " + detail};
+}
+
+Error AgentSessionStore::ensure_project_settings_columns() {
+    bool have_base_url = false;
+    bool have_settings_json = false;
+    Error error;
+    {
+        Statement columns;
+        error = columns.prepare(db_, path_, "PRAGMA table_info(project)");
+        if (!error.ok()) return error;
+        while (columns.step() == SQLITE_ROW) {
+            const std::string name = columns.column_text(1);
+            if (name == "base_url") have_base_url = true;
+            if (name == "settings_json") have_settings_json = true;
+        }
+    }
+
+    auto add_column = [&](const char* sql) -> Error {
+        char* message = nullptr;
+        const int rc = sqlite3_exec(db_, sql, nullptr, nullptr, &message);
+        if (rc == SQLITE_OK) return ok_error();
+        const std::string detail = message == nullptr ? sqlite3_errmsg(db_) : message;
+        sqlite3_free(message);
+        return {ErrorCode::FileWrite, "agent project settings schema: " + detail};
+    };
+    if (!have_base_url) {
+        error = add_column("ALTER TABLE project ADD COLUMN base_url TEXT");
+        if (!error.ok()) return error;
+    }
+    if (!have_settings_json) {
+        error = add_column(
+            "ALTER TABLE project ADD COLUMN settings_json TEXT NOT NULL DEFAULT '{}'");
+        if (!error.ok()) return error;
+    }
+    return ok_error();
 }
 
 Error AgentSessionStore::next_seq(long long& seq) {
@@ -333,7 +372,7 @@ Error AgentSessionStore::open_project(AgentProjectRecord& record) {
     Error error = select.prepare(
         db_, path_,
         "SELECT id, created_at, updated_at, status, provider, model, api, protocol, workspace, "
-        "summary_text, turns, tool_calls FROM project WHERE id=1");
+        "summary_text, turns, tool_calls, base_url, settings_json FROM project WHERE id=1");
     if (!error.ok()) return error;
     if (select.step() == SQLITE_ROW) {
         record.id = select.column_int64(0);
@@ -348,6 +387,8 @@ Error AgentSessionStore::open_project(AgentProjectRecord& record) {
         record.summary_text = select.column_text(9);
         record.turns = select.column_int64(10);
         record.tool_calls = select.column_int64(11);
+        record.base_url = select.column_text(12);
+        record.settings_json = select.column_text(13);
         return ok_error();
     }
 
@@ -356,7 +397,8 @@ Error AgentSessionStore::open_project(AgentProjectRecord& record) {
     error = insert.prepare(
         db_, path_,
         "INSERT INTO project(id, created_at, updated_at, status, provider, model, api, protocol, "
-        "workspace, summary_text, turns, tool_calls) VALUES(1,?,?,?,?,?,?,?,?,?,?,?)");
+        "workspace, summary_text, turns, tool_calls, base_url, settings_json) "
+        "VALUES(1,?,?,?,?,?,?,?,?,?,?,?,?,?)");
     if (!error.ok()) return error;
     error = insert.bind_int64(db_, path_, 1, now);
     if (!error.ok()) return error;
@@ -381,6 +423,11 @@ Error AgentSessionStore::open_project(AgentProjectRecord& record) {
     if (!error.ok()) return error;
     error = insert.bind_int64(db_, path_, 11, record.tool_calls);
     if (!error.ok()) return error;
+    error = insert.bind_text(db_, path_, 12, record.base_url);
+    if (!error.ok()) return error;
+    error = insert.bind_text(db_, path_, 13,
+                             record.settings_json.empty() ? "{}" : record.settings_json);
+    if (!error.ok()) return error;
     if (insert.step() != SQLITE_DONE) return sqlite_error(db_, "could not create project row", path_);
 
     record.id = 1;
@@ -396,7 +443,8 @@ Error AgentSessionStore::update_project_meta(const AgentProjectRecord& record) {
     Error error = statement.prepare(
         db_, path_,
         "UPDATE project SET updated_at=?, status=?, provider=?, model=?, api=?, protocol=?, "
-        "workspace=?, summary_text=?, turns=?, tool_calls=? WHERE id=1");
+        "workspace=?, summary_text=?, turns=?, tool_calls=?, base_url=?, settings_json=? "
+        "WHERE id=1");
     if (!error.ok()) return error;
     error = statement.bind_int64(db_, path_, 1, now_unix_seconds());
     if (!error.ok()) return error;
@@ -417,6 +465,11 @@ Error AgentSessionStore::update_project_meta(const AgentProjectRecord& record) {
     error = statement.bind_int64(db_, path_, 9, record.turns);
     if (!error.ok()) return error;
     error = statement.bind_int64(db_, path_, 10, record.tool_calls);
+    if (!error.ok()) return error;
+    error = statement.bind_text(db_, path_, 11, record.base_url);
+    if (!error.ok()) return error;
+    error = statement.bind_text(db_, path_, 12,
+                                record.settings_json.empty() ? "{}" : record.settings_json);
     if (!error.ok()) return error;
     if (statement.step() != SQLITE_DONE)
         return sqlite_error(db_, "could not update project meta", path_);
@@ -615,7 +668,7 @@ Error AgentSessionStore::list_sessions(std::vector<AgentSessionRecord>& sessions
     Error error = select.prepare(
         db_, path_,
         "SELECT id, created_at, updated_at, status, provider, model, api, protocol, workspace, "
-        "summary_text, turns, tool_calls FROM project WHERE id=1");
+        "summary_text, turns, tool_calls, base_url, settings_json FROM project WHERE id=1");
     if (!error.ok()) return error;
     if (select.step() != SQLITE_ROW) return ok_error();
     project.id = select.column_int64(0);
@@ -630,6 +683,8 @@ Error AgentSessionStore::list_sessions(std::vector<AgentSessionRecord>& sessions
     project.summary_text = select.column_text(9);
     project.turns = select.column_int64(10);
     project.tool_calls = select.column_int64(11);
+    project.base_url = select.column_text(12);
+    project.settings_json = select.column_text(13);
     sessions.push_back(std::move(project));
     return ok_error();
 }

@@ -586,6 +586,10 @@ app::TuiRunResult run(provider::RequestContext context,
                 text += "\nPress y to allow · n or Esc to deny";
             return text;
         }
+        if (mode == TuiMode::AgentContinueConfirm) {
+            return std::string("The agent reached its 50-round safety cap.\n\n"
+                               "Continue the current task with a fresh round budget?");
+        }
         if (mode == TuiMode::AgentNewConfirm) {
             if (!have_pending_new_project) return std::string("No agent project selected");
             return "Permanently remove agent project state:\n  " +
@@ -800,6 +804,10 @@ app::TuiRunResult run(provider::RequestContext context,
         app::refresh_session_metadata(session, context);
         status = message;
         start_store_save();
+        if (context.options.agent && agent_runtime && agent_runtime->prepared()) {
+            const Error error = agent_runtime->update_project_settings(context);
+            if (!error.ok()) status = "Agent settings save failed: " + error.message;
+        }
     };
 
     auto set_thinking_trace_mode = [&](bool show_traces) {
@@ -813,6 +821,10 @@ app::TuiRunResult run(provider::RequestContext context,
         }
         app::refresh_session_metadata(session, context);
         start_store_save();
+        if (context.options.agent && agent_runtime && agent_runtime->prepared()) {
+            const Error error = agent_runtime->update_project_settings(context);
+            if (!error.ok()) status = "Agent settings save failed: " + error.message;
+        }
         refresh_settings_panel_if_visible();
     };
 
@@ -1087,6 +1099,7 @@ app::TuiRunResult run(provider::RequestContext context,
                     event.agent_tool_lines = std::move(agent_turn.compact_tool_lines);
                     event.agent_tool_line_ms = std::move(agent_turn.compact_tool_line_ms);
                     event.agent_final_text = std::move(agent_turn.final_text);
+                    event.agent_needs_user_continue = agent_turn.needs_user_continue;
                     event.agent_turn_started_ms = agent_turn.turn_started_ms;
                     event.agent_finished_at_ms = agent_turn.finished_at_ms;
                 }
@@ -1542,6 +1555,10 @@ app::TuiRunResult run(provider::RequestContext context,
             apply_selected_provider(context, session, show_thinking_traces, provider_target, status);
         if (applied) {
             loaded_thread_requires_provider_selection = false;
+            if (context.options.agent && agent_runtime && agent_runtime->prepared()) {
+                const Error error = agent_runtime->update_project_settings(context);
+                if (!error.ok()) status = "Agent settings save failed: " + error.message;
+            }
         }
         return applied;
     };
@@ -1686,6 +1703,10 @@ app::TuiRunResult run(provider::RequestContext context,
             mode = TuiMode::Chat;
             status = "Provider set to " + provider::display_name_for_profile(context.profile.name);
             start_store_save();
+            if (context.options.agent && agent_runtime && agent_runtime->prepared()) {
+                const Error error = agent_runtime->update_project_settings(context);
+                if (!error.ok()) status = "Agent settings save failed: " + error.message;
+            }
             start_models(ModelsRequestPurpose::Picker);
         }
     };
@@ -1709,6 +1730,10 @@ app::TuiRunResult run(provider::RequestContext context,
         mode = TuiMode::Chat;
         status = provider_model_status_message(context, "ready");
         start_store_save();
+        if (context.options.agent && agent_runtime && agent_runtime->prepared()) {
+            const Error error = agent_runtime->update_project_settings(context);
+            if (!error.ok()) status = "Agent settings save failed: " + error.message;
+        }
     };
     picker_callbacks.on_reasoning_selected = [&](const std::string& reasoning) {
         commit_reasoning_selection(reasoning);
@@ -1775,6 +1800,15 @@ app::TuiRunResult run(provider::RequestContext context,
     };
     picker_callbacks.on_guard_approval_retry =
         [&](const std::string& message) { status = message; };
+    picker_callbacks.on_agent_continue_accepted = [&]() {
+        mode = TuiMode::Chat;
+        start_turn("Continue the current task.");
+        status = "Continuing agent task...";
+    };
+    picker_callbacks.on_agent_continue_rejected = [&]() {
+        mode = TuiMode::Chat;
+        status = "Agent stopped at the turn cap";
+    };
     picker_callbacks.on_agent_new_accepted = [&]() {
         if (!have_pending_new_project) {
             mode = TuiMode::Chat;
@@ -1954,7 +1988,7 @@ app::TuiRunResult run(provider::RequestContext context,
 
     // Agent mode: refresh the code index and restore project history before the
     // first user turn so reopening a .ainiux-pr workspace is not a blank UI.
-    if (context.options.agent && agent_runtime) {
+    if (context.options.agent && agent_runtime && !context.profile.offline) {
         status = "Refreshing code index...";
         std::string visible_panel_boot = panel_text();
         size_t render_frame_boot = 0;
@@ -1992,7 +2026,9 @@ app::TuiRunResult run(provider::RequestContext context,
     file_jobs.start_media_cleanup(context.options.media_auto_expiration_days,
                                   session.thread_id, true);
 
-    if (provider::needs_interactive_model_selection(context)) {
+    if (provider::tui_needs_startup_provider_selection(context.options)) {
+        open_provider_picker(true);
+    } else if (provider::needs_interactive_model_selection(context)) {
         start_models(ModelsRequestPurpose::Picker);
     } else if (!app::detail::trim_ascii(context.options.prompt).empty()) {
         start_turn(context.options.prompt);
@@ -2122,6 +2158,9 @@ app::TuiRunResult run(provider::RequestContext context,
                     } else {
                         if (event.compacted) {
                             status = event.compaction.notice;
+                        } else if (event.agent_needs_user_continue) {
+                            mode = TuiMode::AgentContinueConfirm;
+                            status = "Agent turn cap reached";
                         } else if (context.options.agent) {
                             // Provider/model/tokens live on the permanent agent chrome line.
                             status = agent_ready_status();

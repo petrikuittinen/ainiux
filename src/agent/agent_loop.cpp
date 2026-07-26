@@ -133,18 +133,28 @@ AgentRoundOutcome execute_prepared_calls(AgentLoopState& state,
     AgentRoundOutcome outcome;
     outcome.prepared_calls = prepared;
 
-    if (state.turn >= limits.max_scripted_turns) {
+    if (state.scripted_turns >= limits.max_scripted_turns) {
+        const std::string deferred =
+            cancelled_tool_result_json("Tool was not executed because the agent turn cap "
+                                       "was reached. Continue the task to retry it.");
+        outcome.tool_results.assign(prepared.size(), deferred);
+        append_prepared_tool_results(context, conversation, prepared, outcome.tool_results);
         if (limits.interactive) {
             outcome.kind = AgentRoundOutcome::Kind::NeedsUserContinue;
             outcome.notice = "agent turn cap of " + std::to_string(limits.max_scripted_turns) +
                              " reached; continue?";
             return outcome;
         }
-        return abort_outcome(state,
-                             "agent turn cap of " + std::to_string(limits.max_scripted_turns) +
-                                 " exceeded");
+        state.aborted = true;
+        state.abort_reason =
+            "agent turn cap of " + std::to_string(limits.max_scripted_turns) + " exceeded";
+        outcome.kind = AgentRoundOutcome::Kind::Aborted;
+        outcome.notice = state.abort_reason;
+        outcome.error = {ErrorCode::Cancelled, state.abort_reason};
+        return outcome;
     }
     ++state.turn;
+    ++state.scripted_turns;
 
     std::string soft_notice;
     if (track_identical_calls(state, prepared, limits, &soft_notice)) {
@@ -619,6 +629,7 @@ AgentRoundOutcome handle_agent_tool_round(
             return xml_outcome;
         }
         ++state.turn;
+        ++state.scripted_turns;
         // Append bare assistant text continuation if present.
         for (const std::string& item : round.continuation_items_json)
             conversation.continuation_items_json.push_back(item);
@@ -673,10 +684,12 @@ AgentRoundOutcome handle_agent_xml_round(
         outcome.notice = xml.error.message;
         outcome.error = ok_error();
         ++state.turn;
+        ++state.scripted_turns;
         return outcome;
     }
     if (!xml.found) {
         ++state.turn;
+        ++state.scripted_turns;
         outcome.kind = AgentRoundOutcome::Kind::FinalText;
         outcome.final_text = assistant_text;
         outcome.error = ok_error();

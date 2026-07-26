@@ -5,6 +5,7 @@
 #include <unistd.h>
 #include <vector>
 
+#include "agent/project_settings.hpp"
 #include "agent/session_store.hpp"
 #include "support/test_support.hpp"
 
@@ -39,6 +40,8 @@ void test_open_singleton_append_compact_load() {
     project.model = "test-model";
     project.api = "chat";
     project.protocol = "native";
+    project.base_url = "https://example.test/v1";
+    project.settings_json = R"({"reasoning":"high","temperature":0.25})";
     project.workspace = workspace;
     project.status = "running";
     error = store.open_project(project);
@@ -93,7 +96,51 @@ void test_open_singleton_append_compact_load() {
     agent::AgentProjectRecord again_project;
     error = again.open_project(again_project);
     check(error.ok() && again_project.id == 1, "singleton survives reopen");
+    check(again_project.base_url == "https://example.test/v1",
+          "agent project base URL survives reopen");
+    check(again_project.settings_json == R"({"reasoning":"high","temperature":0.25})",
+          "agent project request settings survive reopen");
 
+    cli::Options restored_options;
+    bool restored = false;
+    error = agent::restore_project_settings(workspace, restored_options, restored);
+    check(error.ok() && restored, "restore existing agent project settings");
+    check(restored_options.provider == "openai" &&
+              restored_options.model == "test-model" &&
+              restored_options.base_url == "https://example.test/v1",
+          "restored provider, model, and base URL");
+    check(restored_options.reasoning.kind == ReasoningSelectionKind::Named &&
+              restored_options.reasoning.value == "high" &&
+              restored_options.has_temperature &&
+              restored_options.temperature == 0.25,
+          "restored reasoning and generation settings");
+    check(restored_options.agent_project_settings_restored,
+          "restored project suppresses startup provider picker");
+
+    const char* override_argv[] = {
+        "ainiux", "-a", "--provider", "deepseek", "-m", "cli-model",
+        "--reasoning", "low"};
+    cli::ParseResult overridden =
+        cli::parse_args(8, const_cast<char**>(override_argv), restored_options);
+    check(overridden.error.ok(), "parse explicit agent project overrides");
+    check(overridden.options.provider == "deepseek" &&
+              overridden.options.model == "cli-model" &&
+              overridden.options.reasoning.kind == ReasoningSelectionKind::Named &&
+              overridden.options.reasoning.value == "low",
+          "explicit CLI provider, model, and reasoning override restored values");
+
+    std::error_code ec;
+    fs::remove_all(workspace, ec);
+}
+
+void test_restore_does_not_create_new_project_state() {
+    const std::string workspace = temp_workspace("restore-new");
+    cli::Options options;
+    bool restored = true;
+    const Error error = agent::restore_project_settings(workspace, options, restored);
+    check(error.ok() && !restored, "new project has no settings to restore");
+    check(!fs::exists(fs::path(workspace) / ".ainiux-pr"),
+          "settings probe does not create .ainiux-pr for a new project");
     std::error_code ec;
     fs::remove_all(workspace, ec);
 }
@@ -155,6 +202,7 @@ void test_record_and_load_approvals() {
 
 void run_all() {
     test_open_singleton_append_compact_load();
+    test_restore_does_not_create_new_project_state();
     test_record_and_load_approvals();
 }
 

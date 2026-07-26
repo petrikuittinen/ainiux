@@ -61,6 +61,8 @@ struct Options {
     bool security_review_log_cli_explicit = false;
     // Interactive agent TUI (chat-like UI + agent tool loop): -a / --agent / ainiux agent
     bool agent = false;
+    // Internal startup state: an existing project supplied its provider/settings.
+    bool agent_project_settings_restored = false;
     // One-shot headless agent goal: -r / --run / --run-file / ainiux run
     bool agent_run = false;
     // One-shot agent task uses the planning prompt and planning-document policy.

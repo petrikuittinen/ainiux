@@ -6,6 +6,7 @@
 
 #include "app/app.hpp"
 #include "app/interactive_mode.hpp"
+#include "agent/project_settings.hpp"
 #include "chat/session.hpp"
 #include "chat/sqlite_store.hpp"
 #include "cli/args.hpp"
@@ -115,6 +116,15 @@ int main(int argc, char** argv) {
         } else if (parsed.options.debug && !parsed.options.quiet) {
             std::cerr << "Config debug: editor model selection unavailable: "
                       << open_error.message << "\n";
+        }
+    }
+    if (parsed.options.agent) {
+        bool restored = false;
+        const ainiux::Error restore_error =
+            ainiux::agent::restore_project_settings(".", configured.options, restored);
+        if (!restore_error.ok()) {
+            ainiux::app::print_error(restore_error);
+            return ainiux::app::exit_code_for(restore_error.code);
         }
     }
     parsed = ainiux::cli::parse_args(argc, argv, configured.options);
@@ -617,12 +627,6 @@ int main(int argc, char** argv) {
         if (context.options.tui && context.options.agent) {
             const ainiux::Error error{ainiux::ErrorCode::BadArgs,
                                       "--chat and --agent are separate modes and cannot be combined"};
-            ainiux::app::print_error(error);
-            return ainiux::app::exit_code_for(error.code);
-        }
-        if (context.options.agent && context.profile.offline) {
-            const ainiux::Error error{ainiux::ErrorCode::UnsupportedFeature,
-                                      "--agent requires an online provider with tool-capable models"};
             ainiux::app::print_error(error);
             return ainiux::app::exit_code_for(error.code);
         }

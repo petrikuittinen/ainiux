@@ -114,6 +114,10 @@ class AgentSessionRuntime {
     // No-op when the session DB is not open.
     Error append_display_notice(const std::string& content);
 
+    // Persist the active provider/model/API endpoint and request settings for
+    // restoration the next time this project opens in interactive agent mode.
+    Error update_project_settings(const provider::RequestContext& context);
+
     // Switch the trusted task prompt and tool policy without resetting session
     // history. Only valid while no turn/compaction operation is active.
     Error switch_task_mode(AgentTaskMode mode);

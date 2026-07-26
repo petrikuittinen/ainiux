@@ -67,9 +67,17 @@ std::string json_data_string(const std::string& result, const std::string& key) 
     return value != nullptr && value->is_string() ? value->string : std::string{};
 }
 
+std::string json_string(const std::string& text) {
+    json::Value value;
+    value.type = json::Value::Type::String;
+    value.string = text;
+    return json::stringify(value);
+}
+
 agent::ReadToolRegistry make_registry(const std::string& workspace,
                                       agent::MutationPolicy mutation_policy,
-                                      bool auto_approve_create_dirs = false) {
+                                      bool auto_approve_create_dirs = false,
+                                      agent::GuardApprovalCallback on_guard_ask = {}) {
     agent::index::Options options;
     options.workspace = workspace;
     options.max_source_code_file_size = 1024 * 1024;
@@ -82,7 +90,9 @@ agent::ReadToolRegistry make_registry(const std::string& workspace,
     agent::ReadToolRegistry tools;
     agent::ToolRegistryOptions tool_options;
     tool_options.mutation_policy = mutation_policy;
-    if (auto_approve_create_dirs) {
+    if (on_guard_ask) {
+        tool_options.on_guard_ask = std::move(on_guard_ask);
+    } else if (auto_approve_create_dirs) {
         tool_options.on_guard_ask =
             [](const agent::GuardApprovalRequest& request,
                runtime::CancellationToken) -> agent::GuardApprovalDecision {
@@ -97,6 +107,97 @@ agent::ReadToolRegistry make_registry(const std::string& workspace,
                                         tool_options);
     check(create_error.ok(), "create tool registry");
     return tools;
+}
+
+agent::ReadToolRegistry make_registry(const std::string& workspace,
+                                      bool allow_mutations,
+                                      bool auto_approve_create_dirs);
+
+void test_external_file_access_requires_one_shot_approval() {
+    const std::string workspace = write_temp_workspace("external-project");
+    const fs::path outside_dir =
+        fs::path(workspace).parent_path() /
+        (fs::path(workspace).filename().string() + "-outside");
+    std::error_code ec;
+    fs::remove_all(outside_dir, ec);
+    fs::create_directories(outside_dir, ec);
+    check(!ec, "create external file fixture");
+    const fs::path outside_read = outside_dir / "read.txt";
+    const fs::path outside_write = outside_dir / "written.txt";
+    write_text(outside_read, "outside line one\noutside line two\n");
+
+    agent::ReadToolRegistry headless = make_registry(workspace, true, false);
+    const std::string read_args =
+        std::string("{\"path\":") + json_string(outside_read.generic_string()) +
+        ",\"max_bytes\":4096}";
+    const std::string denied_read = headless.execute("read_file", read_args);
+    check(!json_ok(denied_read) && denied_read.find("approval") != std::string::npos,
+          "headless external read is denied without approval: " + denied_read);
+    const std::string write_args =
+        std::string("{\"path\":") + json_string(outside_write.generic_string()) +
+        ",\"content\":\"approved write\\n\",\"mode\":\"create_new\"}";
+    const std::string denied_write = headless.execute("write_file", write_args);
+    check(!json_ok(denied_write) && !fs::exists(outside_write),
+          "headless external write is denied without touching the file");
+
+    std::vector<std::string> asked_rules;
+    agent::ReadToolRegistry approved = make_registry(
+        workspace, agent::MutationPolicy::Full, false,
+        [&](const agent::GuardApprovalRequest& request,
+            runtime::CancellationToken) -> agent::GuardApprovalDecision {
+            asked_rules.push_back(request.rule_id);
+            check(request.command_preview.find(outside_dir.generic_string()) != std::string::npos,
+                  "external approval shows exact resolved target");
+            check(request.message.find("only to this tool call") != std::string::npos,
+                  "external approval is explicitly one-shot");
+            return agent::GuardApprovalDecision::Allow;
+        });
+    const std::string allowed_read = approved.execute("read_file", read_args);
+    check(json_ok(allowed_read) &&
+              allowed_read.find("outside line one") != std::string::npos &&
+              !asked_rules.empty() && asked_rules.back() == "ask_on_external_file_read",
+          "approved external read returns bounded file content: " + allowed_read);
+    const std::string allowed_write = approved.execute("write_file", write_args);
+    check(json_ok(allowed_write) && read_text(outside_write) == "approved write\n" &&
+              asked_rules.size() == 2 &&
+              asked_rules.back() == "ask_on_external_file_write",
+          "approved external write changes only the exact requested file: " + allowed_write);
+    check(json_data_string(allowed_write, "history_path").empty(),
+          "external write does not claim a project history backup");
+
+    int plan_asks = 0;
+    agent::ReadToolRegistry plan = make_registry(
+        workspace, agent::MutationPolicy::PlanningDocuments, false,
+        [&](const agent::GuardApprovalRequest&,
+            runtime::CancellationToken) -> agent::GuardApprovalDecision {
+            ++plan_asks;
+            return agent::GuardApprovalDecision::Allow;
+        });
+    const fs::path plan_target = outside_dir / "plan-write.txt";
+    const std::string plan_args =
+        std::string("{\"path\":") + json_string(plan_target.generic_string()) +
+        ",\"content\":\"no\\n\"}";
+    check(!json_ok(plan.execute("write_file", plan_args)) && plan_asks == 0 &&
+              !fs::exists(plan_target),
+          "Plan mode cannot approve or perform outside-project writes");
+
+    agent::ReadToolRegistry user_denied = make_registry(
+        workspace, agent::MutationPolicy::Full, false,
+        [](const agent::GuardApprovalRequest&,
+           runtime::CancellationToken) -> agent::GuardApprovalDecision {
+            return agent::GuardApprovalDecision::Deny;
+        });
+    const fs::path denied_target = outside_dir / "denied.txt";
+    const std::string user_denied_args =
+        std::string("{\"path\":") + json_string(denied_target.generic_string()) +
+        ",\"content\":\"no\\n\"}";
+    const std::string user_denied_result =
+        user_denied.execute("write_file", user_denied_args);
+    check(!json_ok(user_denied_result) && !fs::exists(denied_target),
+          "selecting No leaves the outside file untouched");
+
+    fs::remove_all(outside_dir, ec);
+    fs::remove_all(workspace, ec);
 }
 
 agent::ReadToolRegistry make_registry(const std::string& workspace,
@@ -1037,6 +1138,7 @@ void test_plan_document_mutation_policy() {
 
 void run_all() {
     test_tool_schemas_gemini_compatible();
+    test_external_file_access_requires_one_shot_approval();
     test_glob_recursive_root_and_nested();
     test_read_only_registry_hides_writes();
     test_write_file_create_and_readback();

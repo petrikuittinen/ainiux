@@ -897,6 +897,22 @@ void test_tui_startup_provider_selection_helpers() {
     positional_provider.positional_url = "lmstudio";
     check(!ainiux::provider::tui_needs_startup_provider_selection(positional_provider),
           "positional chat provider shortcut skips startup provider selection");
+
+    ainiux::cli::Options bare_agent;
+    bare_agent.agent = true;
+    check(ainiux::provider::tui_needs_startup_provider_selection(bare_agent),
+          "bare agent requests startup provider selection");
+    ainiux::provider::apply_tui_startup_default(bare_agent);
+    check(bare_agent.provider == "none",
+          "bare agent starts offline while the provider picker is open");
+
+    ainiux::cli::Options restored_agent;
+    restored_agent.agent = true;
+    restored_agent.provider = "deepseek";
+    restored_agent.model = "deepseek-chat";
+    restored_agent.agent_project_settings_restored = true;
+    check(!ainiux::provider::tui_needs_startup_provider_selection(restored_agent),
+          "agent with restored project settings skips provider selection");
 }
 
 void test_editor_startup_local_only_default() {

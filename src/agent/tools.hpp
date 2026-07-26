@@ -143,6 +143,19 @@ class ReadToolRegistry {
                             const std::string& previous_content,
                             std::string& history_path) const;
     Error purge_expired_history_backups() const;
+    Error read_external_source(const std::filesystem::path& absolute_path,
+                               std::size_t start_line,
+                               std::size_t end_line,
+                               std::size_t max_bytes,
+                               SourceRange& range) const;
+    Error write_external_file(const std::filesystem::path& absolute_path,
+                              const std::string& content,
+                              bool create_dirs,
+                              const std::string& mode,
+                              const std::string& expected_file_hash,
+                              bool& created,
+                              std::string& old_hash,
+                              std::string& new_hash) const;
 
     // Shared by run_command / remove when Guard returns Ask.
     GuardApprovalDecision request_guard_approval(const GuardApprovalRequest& request,

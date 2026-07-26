@@ -25,6 +25,8 @@ struct AgentProjectRecord {
     std::string model;
     std::string api;
     std::string protocol;  // native | xml
+    std::string base_url;
+    std::string settings_json = "{}";
     std::string workspace;
     std::string summary_text;
     long long turns = 0;
@@ -133,6 +135,7 @@ class AgentSessionStore {
    private:
     Error ensure_schema();
     Error ensure_approvals_table();
+    Error ensure_project_settings_columns();
     Error next_seq(long long& seq);
     Error touch();
 

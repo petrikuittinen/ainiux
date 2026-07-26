@@ -4,6 +4,7 @@
 #include <cctype>
 #include <chrono>
 #include <cstdio>
+#include <cstdlib>
 #include <ctime>
 #include <filesystem>
 #include <fstream>
@@ -195,6 +196,86 @@ Error ensure_under_workspace(const fs::path& workspace,
                 "escapes workspace). Refused: " +
                     display_path};
     }
+    return ok_error();
+}
+
+bool resolved_path_is_under(const fs::path& root, const fs::path& candidate) {
+    const std::string root_s = root.generic_string();
+    const std::string path_s = candidate.generic_string();
+    return path_s == root_s ||
+           (path_s.size() > root_s.size() && path_s.compare(0, root_s.size(), root_s) == 0 &&
+            path_s[root_s.size()] == '/');
+}
+
+Error resolve_external_file_path(const fs::path& workspace,
+                                 const std::string& requested,
+                                 bool must_exist,
+                                 fs::path& resolved) {
+    resolved.clear();
+    if (requested.empty())
+        return {ErrorCode::BadArgs, "outside-project file path must not be empty"};
+    if (requested[0] == '$')
+        return {ErrorCode::BadArgs,
+                "environment-variable paths are not expanded for external file access; "
+                "provide the exact absolute path"};
+
+    fs::path supplied;
+    if (requested[0] == '~') {
+        if (requested.size() < 2 || requested[1] != '/')
+            return {ErrorCode::BadArgs,
+                    "~user paths are not supported; provide the exact absolute path"};
+        const char* home = std::getenv("HOME");
+        if (home == nullptr || *home == '\0')
+            return {ErrorCode::BadArgs,
+                    "could not expand ~/ because HOME is not set; provide an absolute path"};
+        supplied = fs::path(home) / requested.substr(2);
+    } else {
+        supplied = fs::path(requested);
+        if (!supplied.is_absolute()) supplied = workspace / supplied;
+    }
+
+    std::error_code ec;
+    const fs::path root = fs::weakly_canonical(fs::absolute(workspace, ec), ec);
+    if (ec || root.empty())
+        return {ErrorCode::FileRead,
+                "could not resolve project root before external file approval: " + ec.message()};
+    resolved = fs::weakly_canonical(fs::absolute(supplied, ec), ec);
+    if (ec || resolved.empty())
+        return {ErrorCode::FileRead,
+                "could not resolve external file path " + requested + ": " + ec.message()};
+    if (resolved_path_is_under(root, resolved))
+        return {ErrorCode::BadArgs,
+                unsafe_path_message(requested) +
+                    " Protected or malformed paths inside the project cannot be approved as "
+                    "external access."};
+    if (must_exist) {
+        const fs::file_status status = fs::status(resolved, ec);
+        if (ec || !fs::exists(status))
+            return {ErrorCode::FileRead,
+                    "external file does not exist or cannot be inspected: " +
+                        resolved.generic_string()};
+        if (!fs::is_regular_file(status))
+            return {ErrorCode::FileRead,
+                    "external read path must be a regular file: " + resolved.generic_string()};
+    }
+    return ok_error();
+}
+
+Error ensure_approved_external_path_unchanged(const fs::path& approved,
+                                              const char* action,
+                                              ErrorCode error_code) {
+    std::error_code ec;
+    const fs::path current = fs::weakly_canonical(fs::absolute(approved, ec), ec);
+    if (ec || current.empty())
+        return {error_code,
+                std::string("could not re-resolve approved external path before ") + action +
+                    ": " + approved.generic_string() +
+                    (ec ? " (" + ec.message() + ")" : std::string())};
+    if (current != approved)
+        return {error_code,
+                std::string("approved external path changed while waiting; refusing to ") +
+                    action + ". Approved: " + approved.generic_string() +
+                    "; now resolves to: " + current.generic_string()};
     return ok_error();
 }
 
@@ -2109,7 +2190,11 @@ std::vector<provider::FunctionDefinition> ReadToolRegistry::definitions() const 
         {"search_symbol", "Rank indexed symbol names by case-insensitive exact, prefix, then substring match.", schema("\"query\":{\"type\":\"string\"},\"max_results\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":200}", "\"query\"")},
         {"get_skeleton", "Return ordered indexed declarations, signatures, ranges, and documentation for one file.", schema(path, "\"path\"")},
         {"read_symbol", "Fingerprint-verify and read the actual indexed source range for a symbol id.", schema("\"symbol_id\":{\"type\":\"integer\",\"minimum\":1}", "\"symbol_id\"")},
-        {"read_file", "Fingerprint-verify and read a bounded UTF-8 line range with hashes and line numbers.", schema(range, "\"path\"")},
+        {"read_file",
+         "Fingerprint-verify and read a bounded UTF-8 line range with hashes and line numbers. "
+         "A path outside the project requires one-shot interactive user approval; headless "
+         "sessions deny it.",
+         schema(range, "\"path\"")},
         {"read_many", "Read multiple bounded line ranges under one aggregate byte cap.", schema("\"items\":{\"type\":\"array\",\"items\":" + schema(range, "\"path\"") + ",\"maxItems\":100},\"max_bytes\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":262144}", "\"items\"")},
         {"run_command",
          mutation_policy_ == MutationPolicy::Full
@@ -2204,7 +2289,9 @@ std::vector<provider::FunctionDefinition> ReadToolRegistry::definitions() const 
                     "\"path\",\"ops\"")});
         tools.push_back(
             {"write_file",
-             "Create or overwrite a workspace-relative UTF-8 file. Prefer edit_file.replace_range for edits.",
+             "Create or overwrite a UTF-8 file. Outside-project paths require one-shot "
+             "interactive user approval in Act mode and receive no project history backup. "
+             "Prefer edit_file.replace_range for project edits.",
              schema(path + ",\"content\":{\"type\":\"string\"},"
                            "\"create_dirs\":{\"type\":\"boolean\"},"
                            "\"expected_file_hash\":{\"type\":\"string\"},"
@@ -2255,6 +2342,158 @@ std::vector<provider::FunctionDefinition> ReadToolRegistry::definitions() const 
                     "")});
     }
     return tools;
+}
+
+Error ReadToolRegistry::read_external_source(const fs::path& absolute_path,
+                                             std::size_t start_line,
+                                             std::size_t end_line,
+                                             std::size_t max_bytes,
+                                             SourceRange& range) const {
+    Error stable = ensure_approved_external_path_unchanged(
+        absolute_path, "read", ErrorCode::FileRead);
+    if (!stable.ok()) return stable;
+    std::error_code ec;
+    const std::uintmax_t file_size = fs::file_size(absolute_path, ec);
+    if (ec)
+        return {ErrorCode::FileRead,
+                "could not inspect approved external file " + absolute_path.generic_string() +
+                    ": " + ec.message()};
+    if (file_size > index_options_.max_source_code_file_size)
+        return {ErrorCode::FileRead,
+                "approved external file exceeds max_source_code_file_size (" +
+                    std::to_string(index_options_.max_source_code_file_size) + " bytes): " +
+                    absolute_path.generic_string()};
+
+    Error read_error;
+    const std::string source = read_all_bytes(absolute_path, read_error);
+    if (!read_error.ok()) return read_error;
+    if (source.find('\0') != std::string::npos || !html::is_valid_utf8(source))
+        return {ErrorCode::FileRead,
+                "approved external file is not UTF-8 text: " +
+                    absolute_path.generic_string()};
+    if (max_bytes == 0)
+        return {ErrorCode::BadArgs, "source byte cap must be positive"};
+
+    const std::vector<std::string> lines = split_lines(source);
+    if (start_line == 0) start_line = 1;
+    const std::string display_path = absolute_path.generic_string();
+    const std::string file_hash = index::content_hash(source);
+    if (lines.empty()) {
+        if (start_line != 1 || end_line > 1)
+            return {ErrorCode::BadArgs,
+                    "requested line range is outside approved external file: " + display_path};
+        range.path = display_path;
+        range.file_hash = file_hash;
+        range.range_hash = index::content_hash("");
+        range.start_line = 1;
+        range.end_line = 0;
+        return ok_error();
+    }
+    if (end_line == 0) end_line = lines.size();
+    if (start_line > lines.size() || end_line < start_line)
+        return {ErrorCode::BadArgs,
+                "requested line range is outside approved external file: " + display_path};
+    end_line = std::min(end_line, lines.size());
+
+    std::string selected;
+    for (std::size_t line = start_line; line <= end_line && line != 0; ++line)
+        selected += lines[line - 1];
+    const bool truncated = selected.size() > max_bytes;
+    if (truncated) selected.resize(utf8_prefix(selected, max_bytes));
+    const std::string raw_hash = index::content_hash(selected);
+    const std::string redacted = redact_source_secrets(selected, secrets_);
+    std::size_t returned_end_line =
+        start_line + static_cast<std::size_t>(std::count(selected.begin(), selected.end(), '\n'));
+    if (!selected.empty() && selected.back() == '\n' && returned_end_line > start_line)
+        --returned_end_line;
+    range.path = display_path;
+    range.content = redacted;
+    range.file_hash = file_hash;
+    range.range_hash = raw_hash;
+    range.start_line = start_line;
+    range.end_line = truncated ? returned_end_line : end_line;
+    range.bytes = redacted.size();
+    range.truncated = truncated;
+    range.redacted = redacted != selected;
+    return ok_error();
+}
+
+Error ReadToolRegistry::write_external_file(const fs::path& absolute_path,
+                                            const std::string& content,
+                                            bool create_dirs,
+                                            const std::string& mode,
+                                            const std::string& expected_file_hash,
+                                            bool& created,
+                                            std::string& old_hash,
+                                            std::string& new_hash) const {
+    created = false;
+    old_hash.clear();
+    new_hash.clear();
+    if (mutation_policy_ != MutationPolicy::Full)
+        return {ErrorCode::UnsupportedFeature,
+                "outside-project writes require interactive Act mode"};
+    if (content.find('\0') != std::string::npos || !html::is_valid_utf8(content))
+        return {ErrorCode::BadArgs,
+                "write_file content must be valid UTF-8 text without NUL bytes"};
+    if (content.size() > index_options_.max_source_code_file_size)
+        return {ErrorCode::BadArgs,
+                "write_file content exceeds max_source_code_file_size (" +
+                    std::to_string(index_options_.max_source_code_file_size) + " bytes)"};
+    const std::string write_mode = mode.empty() ? "overwrite" : mode;
+    if (write_mode != "overwrite" && write_mode != "create_new")
+        return {ErrorCode::BadArgs, "mode must be overwrite or create_new"};
+
+    std::error_code ec;
+    const bool exists = fs::exists(absolute_path, ec) && !ec;
+    if (ec)
+        return {ErrorCode::FileWrite,
+                "could not inspect approved external destination: " + ec.message()};
+    if (exists && !fs::is_regular_file(absolute_path, ec))
+        return {ErrorCode::FileWrite,
+                "approved external destination is not a regular file: " +
+                    absolute_path.generic_string()};
+    if (write_mode == "create_new" && exists)
+        return {ErrorCode::FileWrite,
+                "external file already exists (mode=create_new): " +
+                    absolute_path.generic_string()};
+    if (exists) {
+        Error read_error;
+        const std::string previous = read_all_bytes(absolute_path, read_error);
+        if (!read_error.ok()) return read_error;
+        old_hash = index::content_hash(previous);
+        if (!expected_file_hash.empty() && expected_file_hash != old_hash)
+            return {ErrorCode::FileWrite,
+                    "stale_file: expected_file_hash does not match external file content"};
+    } else if (!expected_file_hash.empty()) {
+        return {ErrorCode::FileWrite,
+                "stale_file: expected_file_hash set but external file does not exist"};
+    }
+
+    const fs::path parent = absolute_path.parent_path();
+    const bool parent_exists = fs::is_directory(parent, ec) && !ec;
+    if (ec)
+        return {ErrorCode::FileWrite,
+                "could not inspect approved external parent: " + ec.message()};
+    if (!parent_exists) {
+        if (!create_dirs)
+            return {ErrorCode::FileWrite,
+                    "external parent directory does not exist; pass create_dirs=true so the "
+                    "approval prompt includes directory creation"};
+        fs::create_directories(parent, ec);
+        if (ec || !fs::is_directory(parent))
+            return {ErrorCode::FileWrite,
+                    "could not create approved external parent " + parent.generic_string() +
+                        (ec ? ": " + ec.message() : std::string())};
+    }
+
+    Error stable = ensure_approved_external_path_unchanged(
+        absolute_path, "write", ErrorCode::FileWrite);
+    if (!stable.ok()) return stable;
+    Error write_error = write_bytes_atomic(absolute_path, content);
+    if (!write_error.ok()) return write_error;
+    created = !exists;
+    new_hash = index::content_hash(content);
+    return ok_error();
 }
 
 Error ReadToolRegistry::read_source(const std::string& path,
@@ -2633,8 +2872,55 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
             !get_size(args, "max_bytes", 65536, 262144, maximum, validation_error) || maximum == 0)
             return tool_error_result("invalid_arguments", validation_error.empty() ? "max_bytes must be positive" : validation_error);
         SourceRange range;
-        const Error error = read_source(path, start, end, maximum, range);
-        if (!error.ok()) return tool_error_result(error_code_string(error.code), error.message);
+        Error error;
+        if (safe_relative_path(path) && !path.empty()) {
+            error = read_source(path, start, end, maximum, range);
+        } else {
+            fs::path absolute;
+            error = resolve_external_file_path(snapshot_.workspace, path, true, absolute);
+            if (error.ok()) {
+                GuardApprovalRequest request;
+                request.tool_name = "read_file";
+                request.command_preview = "read_file " + absolute.generic_string();
+                request.rule_id = "ask_on_external_file_read";
+                request.message =
+                    "Read this file outside the active project?\nExact resolved path: " +
+                    absolute.generic_string() +
+                    "\nApproval applies only to this tool call and returned text remains bounded "
+                    "and credential-redacted.";
+                request.arguments = {absolute.generic_string()};
+                const GuardApprovalDecision decision =
+                    request_guard_approval(request, cancellation);
+                if (decision == GuardApprovalDecision::Allow) {
+                    if (cancellation.cancelled())
+                        error = {ErrorCode::Cancelled,
+                                 "external file read cancelled after approval"};
+                    else
+                        error = read_external_source(absolute, start, end, maximum, range);
+                } else {
+                    std::string message =
+                        "refusing to read file outside the project directory without user "
+                        "approval: " +
+                        absolute.generic_string();
+                    if (decision == GuardApprovalDecision::Cancelled)
+                        message += " (approval cancelled)";
+                    else if (!on_guard_ask_)
+                        message += " (headless agent denies external file access)";
+                    else
+                        message += " (user selected No)";
+                    error = {decision == GuardApprovalDecision::Cancelled
+                                 ? ErrorCode::Cancelled
+                                 : ErrorCode::UnsupportedFeature,
+                             message};
+                }
+            }
+        }
+        if (!error.ok()) {
+            const std::string code =
+                error.code == ErrorCode::UnsupportedFeature ? "policy_denied"
+                                                            : error_code_string(error.code);
+            return tool_error_result(code, error.message);
+        }
         std::ostringstream numbered;
         const std::vector<std::string> lines = split_lines(range.content);
         for (std::size_t index = 0; index < lines.size(); ++index) numbered << (range.start_line + index) << ": " << lines[index];
@@ -2926,27 +3212,77 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
             !get_string(args, "mode", mode, false, validation_error) ||
             !get_string(args, "expected_file_hash", expected_hash, false, validation_error))
             return tool_error_result("invalid_arguments", validation_error);
-        std::string relative_path;
-        Error normalize_error = normalize_mutation_path(path, relative_path);
-        if (!normalize_error.ok())
-            return tool_error_result("policy_denied", normalize_error.message);
-        path = std::move(relative_path);
         // content may be empty for intentionally blank files; only require the key.
         if (args.get("content") == nullptr || !args.get("content")->is_string())
             return tool_error_result("invalid_arguments", "missing required string argument: content");
         content = args.get("content")->string;
         std::string history_path, old_hash, new_hash;
         bool created = false;
-        const Error error = write_workspace_file(path, content, create_dirs, mode, expected_hash,
-                                                 history_path, created, old_hash, new_hash);
+        bool external = false;
+        fs::path external_path;
+        std::string relative_path;
+        Error error = normalize_mutation_path(path, relative_path);
+        if (error.ok()) {
+            path = std::move(relative_path);
+            error = write_workspace_file(path, content, create_dirs, mode, expected_hash,
+                                         history_path, created, old_hash, new_hash);
+        } else if (mutation_policy_ == MutationPolicy::Full) {
+            error = resolve_external_file_path(snapshot_.workspace, path, false, external_path);
+            if (error.ok()) {
+                external = true;
+                GuardApprovalRequest request;
+                request.tool_name = "write_file";
+                request.command_preview =
+                    "write_file " + external_path.generic_string() + " (" +
+                    std::to_string(content.size()) + " bytes)";
+                request.rule_id = "ask_on_external_file_write";
+                request.message =
+                    "Write this file outside the active project?\nExact resolved path: " +
+                    external_path.generic_string() +
+                    "\nApproval applies only to this tool call. The write has no project history "
+                    "backup and will not update the project index.";
+                if (create_dirs)
+                    request.message += "\nMissing parent directories may be created.";
+                request.arguments = {external_path.generic_string(), mode,
+                                     create_dirs ? "create_dirs=true" : "create_dirs=false"};
+                const GuardApprovalDecision decision =
+                    request_guard_approval(request, cancellation);
+                if (decision == GuardApprovalDecision::Allow) {
+                    if (cancellation.cancelled())
+                        error = {ErrorCode::Cancelled,
+                                 "external file write cancelled after approval"};
+                    else
+                        error = write_external_file(external_path, content, create_dirs, mode,
+                                                    expected_hash, created, old_hash, new_hash);
+                } else {
+                    std::string message =
+                        "refusing to write file outside the project directory without user "
+                        "approval: " +
+                        external_path.generic_string();
+                    if (decision == GuardApprovalDecision::Cancelled)
+                        message += " (approval cancelled)";
+                    else if (!on_guard_ask_)
+                        message += " (headless agent denies external file access)";
+                    else
+                        message += " (user selected No)";
+                    error = {decision == GuardApprovalDecision::Cancelled
+                                 ? ErrorCode::Cancelled
+                                 : ErrorCode::UnsupportedFeature,
+                             message};
+                }
+            }
+        }
         json::Value data = object_value();
-        data.object["path"] = string_value(fs::path(path).generic_string());
+        data.object["path"] =
+            string_value(external ? external_path.generic_string()
+                                  : fs::path(path).generic_string());
         data.object["bytes_written"] = number_value(static_cast<double>(content.size()));
         data.object["created"] = bool_value(created);
         data.object["old_file_hash"] = string_value(old_hash);
         data.object["new_file_hash"] = string_value(new_hash);
         data.object["history_path"] = string_value(history_path);
-        data.object["indexed_snapshot_updated"] = bool_value(error.ok());
+        data.object["indexed_snapshot_updated"] = bool_value(error.ok() && !external);
+        data.object["external"] = bool_value(external);
         json::Value guard = object_value();
         guard.object["decision"] = string_value(error.ok() ? "allow" : "deny");
         data.object["guard"] = std::move(guard);
@@ -2958,7 +3294,12 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
                                                                      : error_code_string(error.code);
             return envelope(false, std::move(data), code, error.message, {}, false);
         }
-        return envelope(true, std::move(data), "", "", {}, false);
+        std::vector<std::string> warnings;
+        if (external)
+            warnings.push_back(
+                "outside-project write explicitly approved; no project history backup or index "
+                "update was created");
+        return envelope(true, std::move(data), "", "", warnings, false);
     }
 
     if (name == "str_replace") {

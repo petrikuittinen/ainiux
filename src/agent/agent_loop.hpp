@@ -32,6 +32,10 @@ struct AgentLoopLimits {
 struct AgentLoopState {
     ToolProtocol protocol = ToolProtocol::Native;
     std::size_t turn = 0;
+    // Model tool rounds consumed since the most recent user message. Keep this
+    // separate from cumulative turn so an approved continuation gets a fresh
+    // budget without losing session/log numbering.
+    std::size_t scripted_turns = 0;
     std::size_t consecutive_all_failed_turns = 0;
     std::size_t native_xml_leak_strikes = 0;
     std::string last_fingerprint;

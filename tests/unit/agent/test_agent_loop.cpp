@@ -435,18 +435,48 @@ void test_scripted_turn_cap() {
 
     limits.interactive = true;
     AgentLoopState interactive;
-    auto need = handle_agent_tool_round(interactive, limits, chat_context(), conversation,
-                                        make_round(10), {"project_overview"}, executor);
-    // turn starts at 0; after max_scripted_turns turns, next needs user
-    // With interactive true and turn already 0, first two work... reset:
-    interactive = AgentLoopState{};
+    provider::ToolConversation interactive_conversation;
+    AgentRoundOutcome need;
     for (int i = 0; i < 2; ++i)
-        need = handle_agent_tool_round(interactive, limits, chat_context(), conversation,
+        need = handle_agent_tool_round(interactive, limits, chat_context(),
+                                       interactive_conversation,
                                        make_round(20 + i), {"project_overview"}, executor);
-    need = handle_agent_tool_round(interactive, limits, chat_context(), conversation,
-                                   make_round(99), {"project_overview"}, executor);
-    check(need.kind == AgentRoundOutcome::Kind::NeedsUserContinue,
-          "interactive mode asks the user at the turn cap");
+    need = handle_agent_tool_round(interactive, limits, chat_context(),
+                                   interactive_conversation, make_round(99),
+                                   {"project_overview"}, executor);
+    check(need.kind == AgentRoundOutcome::Kind::NeedsUserContinue &&
+              need.tool_results.size() == 1 &&
+              need.tool_results.front().find("turn cap") != std::string::npos,
+          "interactive mode asks the user and pairs the capped tool call");
+    check(interactive_conversation.continuation_items_json.size() == 6,
+          "capped native assistant call has a matching synthetic tool result");
+
+    ainiux::agent::append_conversation_text(interactive_conversation, "user",
+                                            "Continue the current task.");
+    provider::RequestContext serialized_context = chat_context();
+    const std::vector<provider::FunctionDefinition> definitions = {
+        {"project_overview", "Inspect the project", R"({"type":"object"})"}};
+    json::ParseResult capped_request = json::parse(
+        provider::serialize_tool_request(serialized_context, interactive_conversation,
+                                         definitions));
+    check(capped_request.error.ok(),
+          "continuation after the cap serializes as valid Chat Completions history");
+    const json::Value* capped_messages = capped_request.value.get("messages");
+    check(capped_messages != nullptr && capped_messages->is_array() &&
+              capped_messages->array.size() == 7 &&
+              capped_messages->array[5].get("role") != nullptr &&
+              capped_messages->array[5].get("role")->string == "tool" &&
+              capped_messages->array[6].get("role") != nullptr &&
+              capped_messages->array[6].get("role")->string == "user",
+          "capped tool result precedes the user continuation message");
+
+    interactive.scripted_turns = 0;
+    auto resumed = handle_agent_tool_round(interactive, limits, chat_context(),
+                                           interactive_conversation, make_round(100),
+                                           {"project_overview"}, executor);
+    check(resumed.kind == AgentRoundOutcome::Kind::Continue &&
+              interactive.turn == 3 && interactive.scripted_turns == 1,
+          "approved continuation receives a fresh budget while cumulative turns continue");
 }
 
 void test_follow_up_user_appends_after_tool_history() {

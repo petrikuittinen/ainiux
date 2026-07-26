@@ -136,7 +136,9 @@ InlineChoiceResult parse_inline_choice_key(const InlineChoiceModel& model, unsig
 InlineChoiceModel agent_inline_choices_for_mode(TuiMode mode) {
     switch (mode) {
         case TuiMode::GuardApprovalConfirm:
-            return {{{"Approve", 'a'}, {"Cancel", 'c'}}, 1};
+            return {{{"Yes", 'y'}, {"No", 'n'}}, 1};
+        case TuiMode::AgentContinueConfirm:
+            return {{{"Continue", 'c'}, {"Stop", 's'}}, 1};
         case TuiMode::AgentNewConfirm:
             return {{{"Reset", 'r'}, {"Cancel", 'c'}}, 1};
         case TuiMode::ReasoningConfirm:

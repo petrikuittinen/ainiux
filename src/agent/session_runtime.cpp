@@ -12,6 +12,7 @@
 #include "agent/compact.hpp"
 #include "agent/project_root.hpp"
 #include "agent/tool_display.hpp"
+#include "chat/settings.hpp"
 #include "security/redact.hpp"
 
 namespace ainiux::agent {
@@ -76,6 +77,33 @@ bool AgentSessionRuntime::is_interrupted(runtime::CancellationToken cancellation
 
 long long AgentSessionRuntime::estimated_request_tokens() const {
     return cached_request_tokens_.load(std::memory_order_relaxed);
+}
+
+Error AgentSessionRuntime::update_project_settings(
+    const provider::RequestContext& context) {
+    if (!prepared_) return {ErrorCode::Internal, "agent runtime is not prepared"};
+    if (!session_store_.is_open() || context.profile.offline) return ok_error();
+
+    // Provider selection may change before the first turn. No conversation has
+    // been encoded yet, so it is safe to select the matching tool protocol.
+    if (!conversation_seeded_) {
+        state_.protocol =
+            default_tool_protocol(provider::capabilities_for(context).tool_calls);
+    }
+
+    AgentProjectRecord project;
+    project.status = "idle";
+    project.workspace = options_.workspace;
+    Error error = session_store_.open_project(project);
+    if (!error.ok()) return error;
+    project.provider = context.profile.name;
+    project.model = context.options.model;
+    project.api = context.api_kind == provider::ApiKind::Responses ? "responses" : "chat";
+    project.protocol = state_.protocol == ToolProtocol::Xml ? "xml" : "native";
+    project.base_url = context.base_url;
+    project.settings_json = chat::settings_json_from_options(context.options);
+    project.workspace = options_.workspace;
+    return session_store_.update_project_meta(project);
 }
 
 void AgentSessionRuntime::publish_request_token_estimate() {
@@ -726,6 +754,8 @@ SessionTurnResult AgentSessionRuntime::run_user_turn(
             project.api =
                 context.api_kind == provider::ApiKind::Responses ? "responses" : "chat";
             project.protocol = state_.protocol == ToolProtocol::Xml ? "xml" : "native";
+            project.base_url = context.base_url;
+            project.settings_json = chat::settings_json_from_options(context.options);
             project.workspace = options_.workspace;
             Error error = session_store_.open_project(project);
             if (!error.ok()) {
@@ -738,6 +768,8 @@ SessionTurnResult AgentSessionRuntime::run_user_turn(
             project.api =
                 context.api_kind == provider::ApiKind::Responses ? "responses" : "chat";
             project.protocol = state_.protocol == ToolProtocol::Xml ? "xml" : "native";
+            project.base_url = context.base_url;
+            project.settings_json = chat::settings_json_from_options(context.options);
             project.workspace = options_.workspace;
             (void)session_store_.update_project_meta(project);
             session_id_ = 1;
@@ -874,6 +906,9 @@ SessionTurnResult AgentSessionRuntime::run_user_turn(
     std::size_t turn_tool_calls = 0;
     std::string final_text;
     const std::size_t turns_before = state_.turn;
+    // The scripted-round cap is per user-approved task segment. Keep
+    // state_.turn cumulative for logs/session statistics.
+    state_.scripted_turns = 0;
 
     for (;;) {
         if (is_interrupted(cancellation, interrupted)) {

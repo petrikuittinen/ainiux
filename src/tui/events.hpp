@@ -53,6 +53,7 @@ enum class TuiMode {
     AttachmentDeleteConfirm,
     ThreadDeleteConfirm,
     GuardApprovalConfirm,
+    AgentContinueConfirm,
     AgentNewConfirm,
 };
 
@@ -93,6 +94,7 @@ struct TuiEvent {
     std::vector<std::string> agent_tool_lines;
     std::vector<long long> agent_tool_line_ms;
     std::string agent_final_text;
+    bool agent_needs_user_continue = false;
     long long agent_turn_started_ms = 0;
     long long agent_finished_at_ms = 0;
     // Guard Ask prompt (paired with ApprovalGate on the agent worker).

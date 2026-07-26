@@ -2365,7 +2365,8 @@ bool editor_has_configured_model_endpoint(const cli::Options& options) {
 bool tui_needs_startup_provider_selection(const cli::Options& options) {
     // Shared by full-screen Chat and interactive Agent (same provider picker UX).
     const bool fullscreen_interactive = options.tui || options.agent;
-    return fullscreen_interactive && !options.provider_explicit && options.positional_url.empty() &&
+    return fullscreen_interactive && !options.agent_project_settings_restored &&
+           !options.provider_explicit && options.positional_url.empty() &&
            options.base_url.empty() && options.chat_url.empty() && options.models_url.empty() &&
            options.responses_url.empty();
 }
