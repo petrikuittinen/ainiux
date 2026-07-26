@@ -37,7 +37,7 @@ struct AgentMessageRecord {
     long long id = 0;
     long long seq = 0;
     long long created_at = 0;
-    std::string role;  // user | assistant | tool | notice | summary
+    std::string role;  // user | assistant | tool | notice | thinking | summary
     std::string content;
     std::string tool_name;
     bool tool_ok = true;

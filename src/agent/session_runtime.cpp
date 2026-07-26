@@ -11,6 +11,7 @@
 #include "agent/agent_loop.hpp"
 #include "agent/compact.hpp"
 #include "agent/project_root.hpp"
+#include "agent/reasoning_preview.hpp"
 #include "agent/tool_display.hpp"
 #include "chat/settings.hpp"
 #include "security/redact.hpp"
@@ -190,9 +191,17 @@ SessionCompactionResult AgentSessionRuntime::compact_impl(
         }
     }
 
-    std::vector<AgentMessageRecord> projection(stored.begin() +
-                                                   static_cast<std::ptrdiff_t>(projection_begin),
-                                               stored.end());
+    std::vector<AgentMessageRecord> projection;
+    for (std::size_t index = projection_begin; index < stored.size(); ++index) {
+        if (stored[index].role != "notice" && stored[index].role != "thinking")
+            projection.push_back(stored[index]);
+    }
+    if (projection.size() <= keep_recent) {
+        result.error = ok_error();
+        result.no_op = true;
+        result.notice = "Nothing new to compact";
+        return result;
+    }
     const std::size_t drop = projection.size() - keep_recent;
     const std::string summary = build_local_compact_summary(projection, drop);
     if (summary.empty()) {
@@ -210,7 +219,7 @@ SessionCompactionResult AgentSessionRuntime::compact_impl(
         session_store_.compact_with_summary(summary, static_cast<int>(keep_recent));
     if (!result.error.ok()) return result;
 
-    rebuild_compacted_conversation(stored, summary, keep_recent);
+    rebuild_compacted_conversation(projection, summary, keep_recent);
     result.error = ok_error();
     result.compacted = true;
     if (reason == CompactionReason::Manual) {
@@ -606,13 +615,14 @@ Error AgentSessionRuntime::load_display_messages(std::vector<provider::Message>&
     for (const AgentMessageRecord& row : rows) {
         provider::Message message;
         if (row.role == "user" || row.role == "assistant" || row.role == "system" ||
-            row.role == "tool" || row.role == "notice" || row.role == "summary") {
+            row.role == "tool" || row.role == "notice" || row.role == "thinking" ||
+            row.role == "summary") {
             message.role = row.role;
         } else {
             message.role = "notice";
         }
         // Tool/notice lines are single-row activity; clip to terminal width.
-        if (row.role == "tool" || row.role == "notice") {
+        if (row.role == "tool" || row.role == "notice" || row.role == "thinking") {
             message.content = clip_to_cells(row.content, cols);
         } else {
             message.content = row.content;
@@ -710,7 +720,8 @@ SessionTurnResult AgentSessionRuntime::run_user_turn(
     const std::string& user_text,
     runtime::CancellationToken cancellation,
     std::function<bool()> interrupted,
-    std::function<void(const std::string& status_line)> on_progress) {
+    std::function<void(const std::string& status_line)> on_progress,
+    std::function<void(const AgentProgressUpdate&)> on_structured_progress) {
     SessionTurnResult result;
     if (!prepared_) {
         result.error = {ErrorCode::Internal, "agent session runtime is not prepared"};
@@ -742,6 +753,13 @@ SessionTurnResult AgentSessionRuntime::run_user_turn(
     };
     auto publish_phase = [&](AgentActivityPhase phase) {
         if (options_.on_phase) options_.on_phase(phase);
+    };
+    auto structured_progress = [&](const AgentProgressUpdate& update) {
+        if (on_structured_progress) {
+            on_structured_progress(update);
+            return;
+        }
+        if (options_.on_structured_progress) options_.on_structured_progress(update);
     };
 
     // First turn: open singleton project row and seed provider conversation.
@@ -855,6 +873,7 @@ SessionTurnResult AgentSessionRuntime::run_user_turn(
     const std::size_t log_width = terminal_column_count();
     const std::size_t tool_line_width = log_width > 8 ? log_width : 8;
     std::size_t turn_tool_index = 0;
+    std::size_t active_round_id = 0;
     auto executor = [&](const std::string& name, const std::string& arguments_json,
                         runtime::CancellationToken token) {
         ++turn_tool_index;
@@ -869,7 +888,10 @@ SessionTurnResult AgentSessionRuntime::run_user_turn(
                     << compact_tool_args_preview(arguments_json,
                                                  tool_line_width > 24 ? tool_line_width - 24 : 8)
                     << ") …";
-            progress(clip_to_cells(running.str(), tool_line_width));
+            const std::string running_line = clip_to_cells(running.str(), tool_line_width);
+            progress(running_line);
+            structured_progress({AgentProgressAction::Upsert, AgentProgressKind::Tool,
+                                 active_round_id, turn_tool_index, running_line, 0});
         }
         std::string body = tools_.execute(name, arguments_json, token);
         const long long approval_after =
@@ -886,6 +908,8 @@ SessionTurnResult AgentSessionRuntime::run_user_turn(
         result.compact_tool_lines.push_back(line);
         result.compact_tool_line_ms.push_back(completed_ms);
         progress(line);
+        structured_progress({AgentProgressAction::Commit, AgentProgressKind::Tool,
+                             active_round_id, turn_tool_index, line, completed_ms});
         if (!options_.interactive && !context.options.quiet) {
             std::cerr << line << "\n";
         }
@@ -930,6 +954,10 @@ SessionTurnResult AgentSessionRuntime::run_user_turn(
                                                  : tools_.definitions();
 
         provider::ToolRoundResult round;
+        active_round_id = state_.turn + 1;
+        std::string round_reasoning;
+        std::string round_preview;
+        bool reasoning_row_started = false;
         publish_phase(AgentActivityPhase::Thinking);
         ReviewLogContext log_context("agent");
         log_context.round = state_.turn + 1;
@@ -952,6 +980,8 @@ SessionTurnResult AgentSessionRuntime::run_user_turn(
                 return ctx;
             }(),
             [&](const Error& retry_error, int attempt, int backoff_seconds) {
+                round_reasoning.clear();
+                round_preview.clear();
                 if (!logger_) return;
                 json::Value fields = log_object();
                 fields.object["error_code"] = log_string(error_code_name(retry_error.code));
@@ -959,8 +989,31 @@ SessionTurnResult AgentSessionRuntime::run_user_turn(
                 fields.object["attempt"] = log_number(attempt);
                 fields.object["backoff_ms"] = log_number(backoff_seconds * 1000);
                 logger_->event("retry_scheduled", log_context, std::move(fields), "failure");
+            },
+            [&](const std::string& delta) -> Error {
+                if (!options_.interactive) return ok_error();
+                round_reasoning += delta;
+                const std::string preview = clip_to_cells(format_reasoning_preview(
+                    round_reasoning,
+                    static_cast<std::size_t>(
+                        std::max(0, context.options.agent_thinking_preview_max_chars)),
+                    secrets_), tool_line_width);
+                if (!preview.empty()) {
+                    round_preview = preview;
+                    reasoning_row_started = true;
+                    structured_progress({AgentProgressAction::Upsert,
+                                         AgentProgressKind::Thinking, active_round_id, 0,
+                                         preview, 0});
+                }
+                return cancellation.cancelled()
+                           ? Error{ErrorCode::Cancelled,
+                                   "agent reasoning preview cancelled"}
+                           : ok_error();
             });
         if (!error.ok()) {
+            if (reasoning_row_started)
+                structured_progress({AgentProgressAction::Discard,
+                                     AgentProgressKind::Thinking, active_round_id, 0, {}, 0});
             pair_dangling_tool_calls(context, conversation_, state_);
             publish_request_token_estimate();
             result.error = error;
@@ -971,6 +1024,26 @@ SessionTurnResult AgentSessionRuntime::run_user_turn(
             result.session_tool_calls = session_tool_calls_;
             result.finished_at_ms = now_unix_ms();
             return result;
+        }
+        if (options_.interactive && round_reasoning.empty())
+            round_reasoning = round.reasoning_text;
+        if (options_.interactive && !round_reasoning.empty()) {
+            round_preview = clip_to_cells(format_reasoning_preview(
+                round_reasoning,
+                static_cast<std::size_t>(
+                    std::max(0, context.options.agent_thinking_preview_max_chars)),
+                secrets_), tool_line_width);
+        }
+        if (!round_preview.empty()) {
+            const long long preview_ms = now_unix_ms();
+            structured_progress({AgentProgressAction::Commit,
+                                 AgentProgressKind::Thinking, active_round_id, 0,
+                                 round_preview, preview_ms});
+            if (session_store_.is_open() && session_id_ > 0)
+                (void)session_store_.append_message("thinking", round_preview);
+        } else if (reasoning_row_started) {
+            structured_progress({AgentProgressAction::Discard,
+                                 AgentProgressKind::Thinking, active_round_id, 0, {}, 0});
         }
 
         turn_tool_calls += round.tool_calls.size();

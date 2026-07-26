@@ -157,6 +157,7 @@ void reset_thread_setting_overrides(cli::Options& options) {
     options.has_context_tokens = false;
     options.context_tokens = 0;
     options.has_show_thinking_traces = false;
+    options.has_agent_thinking_preview_max_chars = false;
 }
 
 Error apply_model_setting_preset(cli::Options& options,
@@ -221,6 +222,23 @@ Error apply_chat_setting(cli::Options& options, const std::string& raw_name, con
             return invalid_setting_value(name, "expected yes or no");
         }
         options.auto_convert_html_to_markdown = enabled;
+        return ok_error();
+    }
+    if (name == "thinking_preview_max_chars") {
+        long long parsed = 0;
+        if (value.empty()) {
+            return invalid_setting_value(name, "expected an integer from 0 through 1000");
+        }
+        for (char ch : value) {
+            if (ch < '0' || ch > '9') {
+                return invalid_setting_value(name, "expected an integer from 0 through 1000");
+            }
+            parsed = parsed * 10 + (ch - '0');
+            if (parsed > 1000)
+                return invalid_setting_value(name, "expected an integer from 0 through 1000");
+        }
+        options.agent_thinking_preview_max_chars = static_cast<int>(parsed);
+        options.has_agent_thinking_preview_max_chars = true;
         return ok_error();
     }
     if (is_null_setting_value(value)) {
@@ -367,6 +385,9 @@ std::string settings_json_from_options(const cli::Options& options) {
                          options.show_thinking_traces);
     append_optional_string(out, first, "purpose", options.has_chat_purpose, options.chat_purpose);
     append_optional_int(out, first, "context_tokens", options.has_context_tokens, options.context_tokens);
+    append_optional_int(out, first, "thinking_preview_max_chars",
+                        options.has_agent_thinking_preview_max_chars,
+                        options.agent_thinking_preview_max_chars);
     append_json_bool(out, first, "auto_convert_html_to_md", options.auto_convert_html_to_markdown);
     out << '}';
     return out.str();
@@ -545,6 +566,21 @@ Error apply_settings_json(cli::Options& options, const std::string& settings_jso
             options.has_context_tokens = true;
         }
     }
+    if (const json::Value* preview = root.get("thinking_preview_max_chars")) {
+        if (preview->is_null()) {
+            // Global [tui] fallback remains active.
+        } else if (preview->type != json::Value::Type::Number ||
+                   !std::isfinite(preview->number) || preview->number < 0.0 ||
+                   preview->number > 1000.0 ||
+                   std::floor(preview->number) != preview->number) {
+            return {ErrorCode::ProviderSchema,
+                    "chat settings thinking_preview_max_chars must be an integer from 0 through 1000 or null"};
+        } else {
+            options.agent_thinking_preview_max_chars =
+                static_cast<int>(preview->number);
+            options.has_agent_thinking_preview_max_chars = true;
+        }
+    }
     return ok_error();
 }
 
@@ -594,6 +630,10 @@ std::string format_settings_panel(const cli::Options& options,
            options.has_show_thinking_traces ? (options.show_thinking_traces ? "trace" : "notrace") : "");
     append("purpose", options.has_chat_purpose ? options.chat_purpose : "");
     append("context_tokens", options.has_context_tokens ? std::to_string(options.context_tokens) : "");
+    append("thinking_preview_max_chars",
+           options.has_agent_thinking_preview_max_chars
+               ? std::to_string(options.agent_thinking_preview_max_chars)
+               : "");
     append("auto-convert-html-to-md", options.auto_convert_html_to_markdown ? "yes" : "no");
     if (!advisory.empty()) append("warning", advisory);
     std::string text = out.str();

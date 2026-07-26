@@ -731,7 +731,7 @@ void test_config_reads_models_template() {
 void test_config_reads_common_template() {
     ainiux::config::ParseResult parsed = ainiux::config::read_file("config/ainiux.conf");
     check(parsed.error.ok(), "common config file parses");
-    check(parsed.document.entries.size() == 67, "common config has every expected setting");
+    check(parsed.document.entries.size() == 68, "common config has every expected setting");
     ainiux::cli::Options highlight_options;
     ainiux::Error apply_error = ainiux::config::apply_document(parsed.document, highlight_options);
     check(apply_error.ok() && highlight_options.tui_highlight,
@@ -1140,6 +1140,27 @@ void test_agent_input_height_config() {
         check(!error.ok() && error.message.find("10 through 80") != std::string::npos,
               "agent input height rejects values outside 10 through 80 actionably");
     }
+    check(options.agent_thinking_preview_max_chars == 100,
+          "agent thinking preview defaults to 100 characters");
+    for (int value : {0, 1000}) {
+        ainiux::config::ParseResult parsed = ainiux::config::parse(
+            "[tui]\nagent_thinking_preview_max_chars = " +
+                std::to_string(value) + "\n",
+            "agent-thinking.conf");
+        ainiux::Error error =
+            ainiux::config::apply_document(parsed.document, options);
+        check(parsed.error.ok() && error.ok() &&
+                  options.agent_thinking_preview_max_chars == value,
+              "agent thinking preview accepts its inclusive boundaries");
+    }
+    ainiux::config::ParseResult parsed = ainiux::config::parse(
+        "[tui]\nagent_thinking_preview_max_chars = 1001\n",
+        "agent-thinking-invalid.conf");
+    ainiux::Error error =
+        ainiux::config::apply_document(parsed.document, options);
+    check(!error.ok() &&
+              error.message.find("0 through 1000") != std::string::npos,
+          "agent thinking preview rejects values above 1000 actionably");
 }
 
 }  // namespace

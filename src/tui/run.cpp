@@ -1,4 +1,5 @@
 #include "tui/activity.hpp"
+#include "tui/agent_progress.hpp"
 #include "tui/agent_widgets.hpp"
 #include "tui/tui.hpp"
 #include "tui/events.hpp"
@@ -208,6 +209,7 @@ app::TuiRunResult run(provider::RequestContext context,
     size_t pending_user = static_cast<size_t>(-1);
     size_t pending_assistant = static_cast<size_t>(-1);
     bool pending_user_added_for_job = false;
+    std::vector<AgentLiveRow> live_agent_rows;
     int history_scroll = 0;
 
     auto build_agent_chrome = [&]() -> AgentChrome {
@@ -960,6 +962,7 @@ app::TuiRunResult run(provider::RequestContext context,
         history_scroll = 0;
         pending_assistant = session.messages.size();
         session.messages.push_back({"assistant", ""});
+        live_agent_rows.clear();
 
         // Exclude display-only notice/tool/summary lines from the provider payload.
         std::vector<provider::Message> request_messages =
@@ -1032,8 +1035,16 @@ app::TuiRunResult run(provider::RequestContext context,
                             if (delta.text.back() != '\n') delta.text.push_back('\n');
                             events.push(std::move(delta));
                         };
+                        auto structured_progress =
+                            [&events](const agent::AgentProgressUpdate& update) {
+                                TuiEvent event;
+                                event.type = TuiEventType::AgentProgress;
+                                event.agent_progress = update;
+                                events.push(std::move(event));
+                            };
                         agent_turn = runtime->run_user_turn(job_context, agent_goal, token, {},
-                                                            agent_progress);
+                                                            agent_progress,
+                                                            structured_progress);
                         have_agent_turn = true;
                         send_error = agent_turn.error;
                         // Fallback single-blob content (Done prefers structured fields).
@@ -2048,10 +2059,16 @@ app::TuiRunResult run(provider::RequestContext context,
             bool completed_file_job = false;
             switch (event.type) {
                 case TuiEventType::Delta:
+                    if (context.options.agent) break;
                     if (pending_assistant != static_cast<size_t>(-1) && pending_assistant < session.messages.size()) {
                         session.messages[pending_assistant].content += event.text;
                     }
                     break;
+                case TuiEventType::AgentProgress: {
+                    apply_agent_progress_update(session, live_agent_rows,
+                                                event.agent_progress);
+                    break;
+                }
                 case TuiEventType::Done: {
                     model_job.join();
                     if (mode == TuiMode::GuardApprovalConfirm) {
@@ -2072,15 +2089,19 @@ app::TuiRunResult run(provider::RequestContext context,
                         }
                         if (pending_assistant != static_cast<size_t>(-1) &&
                             pending_assistant < session.messages.size()) {
+                            const std::size_t erased = pending_assistant;
                             session.messages.erase(session.messages.begin() +
                                                    static_cast<long>(pending_assistant));
+                            adjust_agent_live_rows_after_erase(live_agent_rows, erased);
                         }
-                        for (std::size_t i = 0; i < event.agent_tool_lines.size(); ++i) {
-                            provider::Message tool_msg{"tool", event.agent_tool_lines[i]};
-                            if (i < event.agent_tool_line_ms.size()) {
-                                tool_msg.created_at_ms = event.agent_tool_line_ms[i];
+                        if (live_agent_rows.empty()) {
+                            for (std::size_t i = 0; i < event.agent_tool_lines.size(); ++i) {
+                                provider::Message tool_msg{"tool", event.agent_tool_lines[i]};
+                                if (i < event.agent_tool_line_ms.size()) {
+                                    tool_msg.created_at_ms = event.agent_tool_line_ms[i];
+                                }
+                                session.messages.push_back(std::move(tool_msg));
                             }
-                            session.messages.push_back(std::move(tool_msg));
                         }
                         if (!event.agent_final_text.empty()) {
                             provider::Message assistant_msg{"assistant", event.agent_final_text};
@@ -2234,15 +2255,22 @@ app::TuiRunResult run(provider::RequestContext context,
                                 }
                                 if (pending_assistant != static_cast<size_t>(-1) &&
                                     pending_assistant < session.messages.size()) {
+                                    const std::size_t erased = pending_assistant;
                                     session.messages.erase(session.messages.begin() +
                                                            static_cast<long>(pending_assistant));
+                                    adjust_agent_live_rows_after_erase(live_agent_rows, erased);
                                 }
-                                for (std::size_t i = 0; i < event.agent_tool_lines.size(); ++i) {
-                                    provider::Message tool_msg{"tool", event.agent_tool_lines[i]};
-                                    if (i < event.agent_tool_line_ms.size()) {
-                                        tool_msg.created_at_ms = event.agent_tool_line_ms[i];
+                                if (live_agent_rows.empty()) {
+                                    for (std::size_t i = 0;
+                                         i < event.agent_tool_lines.size(); ++i) {
+                                        provider::Message tool_msg{
+                                            "tool", event.agent_tool_lines[i]};
+                                        if (i < event.agent_tool_line_ms.size()) {
+                                            tool_msg.created_at_ms =
+                                                event.agent_tool_line_ms[i];
+                                        }
+                                        session.messages.push_back(std::move(tool_msg));
                                     }
-                                    session.messages.push_back(std::move(tool_msg));
                                 }
                                 const std::string fail_text =
                                     !event.agent_final_text.empty()

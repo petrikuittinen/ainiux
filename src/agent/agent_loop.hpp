@@ -96,7 +96,8 @@ Error send_tool_round_with_transport_retries(
     const provider::ToolRoundObserver* observer = nullptr,
     const provider::ToolRoundContext& observation_context = provider::ToolRoundContext{},
     std::function<void(const Error& error, int attempt, int backoff_seconds)> on_retry =
-        {});
+        {},
+    provider::ReasoningDeltaCallback on_reasoning_delta = {});
 
 // Normalize arguments and tool names; mark invalid args for history hygiene.
 std::vector<PreparedToolCall> prepare_tool_calls(

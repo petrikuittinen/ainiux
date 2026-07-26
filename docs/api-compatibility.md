@@ -53,6 +53,8 @@ Catalog entries currently cover model-specific GPT-5 generations, Gemini/Gemma, 
 
 Temperature metadata is advisory for explicit overrides. Purpose presets omit temperature when the matched model/reasoning combination marks it unsupported. Explicit CLI, configuration, chat, or editor temperature values remain serialized and produce a warning because the provider may reject them. In particular, the bundled catalog distinguishes older GPT-5 models that reject temperature from GPT-5.4/GPT-5.2 models that permit it only with `reasoning=none`; see [OpenAI's current GPT-5 parameter compatibility](https://developers.openai.com/api/docs/guides/latest-model?model=gpt-5.4).
 
+Native agent tool rounds also expose provider-supplied readable reasoning to the interactive agent UI. Chat Completions accepts streamed or non-streamed `reasoning_content`, textual `reasoning` and `reasoning_details`, and `<think>...</think>` traces. Responses accepts readable reasoning summaries/text and their delta events. Encrypted reasoning details and opaque Responses reasoning state are preserved only where protocol continuation requires them and are never rendered as previews. This display path does not synthesize reasoning when the provider supplies none and does not change one-shot agent output.
+
 ## Built-In Profiles
 
 ```text

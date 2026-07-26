@@ -18,6 +18,7 @@
 #include <utility>
 
 #include "json/json.hpp"
+#include "output/thinking.hpp"
 #include "security/redact.hpp"
 
 namespace ainiux::provider {
@@ -3003,6 +3004,26 @@ std::string response_item_text(const json::Value& item) {
     return text;
 }
 
+std::string thinking_trace_text(const std::string& content) {
+    output::ThinkingChunk split = output::split_thinking_traces(content);
+    std::string trace = std::move(split.trace);
+    const std::string open = "<think>";
+    const std::string close = "</think>";
+    std::string readable;
+    std::size_t position = 0;
+    while (position < trace.size()) {
+        const std::size_t begin = trace.find(open, position);
+        if (begin == std::string::npos) break;
+        const std::size_t end = trace.find(close, begin + open.size());
+        const std::size_t text_end = end == std::string::npos ? trace.size() : end;
+        if (!readable.empty() && readable.back() != '\n') readable.push_back('\n');
+        readable.append(trace, begin + open.size(), text_end - begin - open.size());
+        if (end == std::string::npos) break;
+        position = end + close.size();
+    }
+    return normalize_provider_text(std::move(readable));
+}
+
 Error parse_chat_tool_root(const json::Value& root, ToolRoundResult& result) {
     if (const std::string provider_msg = provider_error_message(root); !provider_msg.empty())
         return {ErrorCode::ProviderSchema, "provider error: " + provider_msg};
@@ -3016,8 +3037,11 @@ Error parse_chat_tool_root(const json::Value& root, ToolRoundResult& result) {
     const json::Value* message = choice.get("message");
     if (message == nullptr || !message->is_object())
         return {ErrorCode::ProviderSchema, "native-tool chat response did not contain choices[0].message"};
+    result.reasoning_text = reasoning_text_from_object(*message);
     if (const json::Value* content = message->get("content"); content != nullptr && content->is_string())
         result.content = normalize_provider_text(content->string);
+    if (result.reasoning_text.empty())
+        result.reasoning_text = thinking_trace_text(result.content);
     if (const json::Value* calls = message->get("tool_calls"); calls != nullptr) {
         if (!calls->is_array()) return {ErrorCode::ProviderSchema, "assistant tool_calls must be an array"};
         for (std::size_t index = 0; index < calls->array.size(); ++index) {
@@ -3060,6 +3084,8 @@ Error parse_responses_tool_root(const json::Value& root, ToolRoundResult& result
         const json::Value& item = output->array[index];
         result.continuation_items_json.push_back(json::stringify(item));
         const json::Value* type = item.get("type");
+        if (type != nullptr && type->is_string() && type->string == "reasoning")
+            append_responses_reasoning_text(item, result.reasoning_text);
         if (type != nullptr && type->is_string() && type->string == "function_call") {
             const json::Value* call_id = item.get("call_id");
             const json::Value* id = item.get("id");
@@ -3076,12 +3102,17 @@ Error parse_responses_tool_root(const json::Value& root, ToolRoundResult& result
             result.content += response_item_text(item);
         }
     }
+    result.reasoning_text = normalize_provider_text(std::move(result.reasoning_text));
+    if (result.reasoning_text.empty())
+        result.reasoning_text = thinking_trace_text(result.content);
     if (result.content.empty() && result.tool_calls.empty() && !result.truncated)
         return {ErrorCode::ProviderSchema, "native-tool Responses result contained neither text nor calls"};
     return ok_error();
 }
 
-Error parse_chat_tool_stream(const std::string& body, ToolRoundResult& result) {
+Error parse_chat_tool_stream(const std::string& body,
+                             ToolRoundResult& result,
+                             const ReasoningDeltaCallback& on_reasoning_delta) {
     std::map<std::size_t, ToolCall> calls;
     json::Value preserved = json_object_value();
     auto process = [&](const std::string& data) -> Error {
@@ -3100,6 +3131,14 @@ Error parse_chat_tool_stream(const std::string& body, ToolRoundResult& result) {
             finish != nullptr && finish->is_string() && finish->string == "length") result.truncated = true;
         const json::Value* delta = choice.get("delta");
         if (delta == nullptr || !delta->is_object()) return ok_error();
+        const std::string reasoning_delta = reasoning_text_from_object(*delta);
+        if (!reasoning_delta.empty()) {
+            result.reasoning_text += reasoning_delta;
+            if (on_reasoning_delta) {
+                Error callback_error = on_reasoning_delta(reasoning_delta);
+                if (!callback_error.ok()) return callback_error;
+            }
+        }
         if (const json::Value* content = delta->get("content"); content != nullptr && content->is_string())
             result.content += normalize_provider_text(content->string);
         for (const auto& field : delta->object) {
@@ -3174,12 +3213,16 @@ Error parse_chat_tool_stream(const std::string& body, ToolRoundResult& result) {
         assistant.object["tool_calls"] = std::move(array);
     }
     result.continuation_items_json.push_back(json::stringify(assistant));
+    if (result.reasoning_text.empty())
+        result.reasoning_text = thinking_trace_text(result.content);
     if (result.content.empty() && result.tool_calls.empty() && !result.truncated)
         return {ErrorCode::ProviderSchema, "native-tool stream contained neither text nor calls"};
     return ok_error();
 }
 
-Error parse_responses_tool_stream(const std::string& body, ToolRoundResult& result) {
+Error parse_responses_tool_stream(const std::string& body,
+                                  ToolRoundResult& result,
+                                  const ReasoningDeltaCallback& on_reasoning_delta) {
     std::map<std::size_t, json::Value> items;
     std::map<std::size_t, std::string> argument_fragments;
     json::Value completed_response;
@@ -3219,6 +3262,16 @@ Error parse_responses_tool_stream(const std::string& body, ToolRoundResult& resu
         } else if (event == "response.output_text.delta") {
             if (const json::Value* delta = parsed.value.get("delta"); delta != nullptr && delta->is_string())
                 result.content += delta->string;
+        } else if (event == "response.reasoning_summary_text.delta" ||
+                   event == "response.reasoning_text.delta") {
+            if (const json::Value* delta = parsed.value.get("delta");
+                delta != nullptr && delta->is_string()) {
+                result.reasoning_text += delta->string;
+                if (on_reasoning_delta) {
+                    Error callback_error = on_reasoning_delta(delta->string);
+                    if (!callback_error.ok()) return callback_error;
+                }
+            }
         } else if (event == "error") {
             return {ErrorCode::ProviderSchema, "Responses stream reported an error"};
         }
@@ -3236,7 +3289,15 @@ Error parse_responses_tool_stream(const std::string& body, ToolRoundResult& resu
         }
         pos = next;
     }
-    if (completed) return parse_responses_tool_root(completed_response, result);
+    if (completed) {
+        ToolRoundResult completed_result;
+        Error error = parse_responses_tool_root(completed_response, completed_result);
+        if (!error.ok()) return error;
+        if (!result.reasoning_text.empty())
+            completed_result.reasoning_text = result.reasoning_text;
+        result = std::move(completed_result);
+        return ok_error();
+    }
     json::Value root = json_object_value();
     json::Value output = json_array_value();
     for (auto& entry : items) {
@@ -3249,7 +3310,12 @@ Error parse_responses_tool_stream(const std::string& body, ToolRoundResult& resu
     }
     root.object["output"] = std::move(output);
     if (!result.content.empty()) root.object["output_text"] = json_string_value(result.content);
-    return parse_responses_tool_root(root, result);
+    ToolRoundResult parsed_result;
+    Error error = parse_responses_tool_root(root, parsed_result);
+    if (!error.ok()) return error;
+    if (!result.reasoning_text.empty()) parsed_result.reasoning_text = result.reasoning_text;
+    result = std::move(parsed_result);
+    return ok_error();
 }
 
 }  // namespace
@@ -3295,15 +3361,21 @@ std::string serialize_tool_request(const RequestContext& context,
 Error parse_tool_response(const RequestContext& context,
                           const std::string& body,
                           ToolRoundResult& result,
-                          bool streaming) {
+                          bool streaming,
+                          ReasoningDeltaCallback on_reasoning_delta) {
     result = ToolRoundResult{};
     if (streaming)
-        return context.api_kind == ApiKind::Responses ? parse_responses_tool_stream(body, result)
-                                                       : parse_chat_tool_stream(body, result);
+        return context.api_kind == ApiKind::Responses
+                   ? parse_responses_tool_stream(body, result, on_reasoning_delta)
+                   : parse_chat_tool_stream(body, result, on_reasoning_delta);
     json::ParseResult parsed = json::parse(body);
     if (!parsed.error.ok()) return parsed.error;
-    return context.api_kind == ApiKind::Responses ? parse_responses_tool_root(parsed.value, result)
-                                                   : parse_chat_tool_root(parsed.value, result);
+    Error error = context.api_kind == ApiKind::Responses
+                      ? parse_responses_tool_root(parsed.value, result)
+                      : parse_chat_tool_root(parsed.value, result);
+    if (error.ok() && on_reasoning_delta && !result.reasoning_text.empty())
+        return on_reasoning_delta(result.reasoning_text);
+    return error;
 }
 
 void append_tool_results(const RequestContext& context,
@@ -3332,7 +3404,8 @@ Error send_tool_round(const RequestContext& context,
                       ToolRoundResult& result,
                       runtime::CancellationToken cancellation,
                       const ToolRoundObserver* observer,
-                      const ToolRoundContext& observation_context) {
+                      const ToolRoundContext& observation_context,
+                      ReasoningDeltaCallback on_reasoning_delta) {
     Error precondition_error;
     if (context.profile.offline)
         precondition_error = {ErrorCode::UnsupportedFeature, "provider none disables native tool requests"};
@@ -3365,13 +3438,81 @@ Error send_tool_round(const RequestContext& context,
                                   serialization_error);
         return serialization_error;
     }
+    std::string reasoning_stream_buffer;
+    output::ThinkingTraceSplitter thinking_splitter;
+    if (context.options.stream && on_reasoning_delta) {
+        request.on_body = [&](const std::string& chunk) -> Error {
+            reasoning_stream_buffer += chunk;
+            std::size_t position = 0;
+            for (;;) {
+                std::size_t end = 0;
+                std::size_t next = 0;
+                if (!find_sse_event_boundary(reasoning_stream_buffer, position, end, next))
+                    break;
+                const std::vector<std::string> lines =
+                    collect_sse_data_lines(reasoning_stream_buffer.substr(position,
+                                                                          end - position));
+                position = next;
+                if (lines.empty()) continue;
+                const std::string data = join_sse_data_lines(lines);
+                if (data.empty() || data == "[DONE]") continue;
+                json::ParseResult parsed = json::parse(data);
+                if (!parsed.error.ok()) continue;  // Final parser reports malformed SSE.
+                std::string delta;
+                if (context.api_kind == ApiKind::Responses) {
+                    const json::Value* type = parsed.value.get("type");
+                    const std::string event =
+                        type != nullptr && type->is_string() ? type->string : std::string();
+                    if (event == "response.reasoning_summary_text.delta" ||
+                        event == "response.reasoning_text.delta") {
+                        if (const json::Value* value = parsed.value.get("delta");
+                            value != nullptr && value->is_string())
+                            delta = value->string;
+                    }
+                } else {
+                    const json::Value* choices = parsed.value.get("choices");
+                    if (choices != nullptr && choices->is_array() &&
+                        !choices->array.empty()) {
+                        const json::Value* value = choices->array.front().get("delta");
+                        if (value != nullptr && value->is_object()) {
+                            delta = reasoning_text_from_object(*value);
+                            if (delta.empty()) {
+                                if (const json::Value* content = value->get("content");
+                                    content != nullptr && content->is_string()) {
+                                    output::ThinkingChunk thinking =
+                                        thinking_splitter.feed(content->string);
+                                    delta = std::move(thinking.trace);
+                                    for (const std::string& tag :
+                                         {std::string("<think>"),
+                                          std::string("</think>")}) {
+                                        std::size_t tag_position = 0;
+                                        while ((tag_position = delta.find(tag, tag_position)) !=
+                                               std::string::npos)
+                                            delta.erase(tag_position, tag.size());
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                if (!delta.empty()) {
+                    Error callback_error = on_reasoning_delta(delta);
+                    if (!callback_error.ok()) return callback_error;
+                }
+            }
+            if (position > 0) reasoning_stream_buffer.erase(0, position);
+            return ok_error();
+        };
+    }
     const auto started = std::chrono::steady_clock::now();
     const http::Result response = http::perform(request, {context.api_key});
     Error error = response.error;
     if (error.ok() && (response.response.status < 200 || response.response.status >= 300))
         error = http_status_error(context, response.response, request.url);
     if (error.ok())
-        error = parse_tool_response(context, response.response.body, result, context.options.stream);
+        error = parse_tool_response(
+            context, response.response.body, result, context.options.stream,
+            context.options.stream ? ReasoningDeltaCallback{} : on_reasoning_delta);
     result.metrics.http_status = response.response.status;
     result.metrics.total_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
                                   std::chrono::steady_clock::now() - started).count();

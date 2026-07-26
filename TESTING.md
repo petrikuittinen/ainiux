@@ -59,7 +59,7 @@ transport, filesystem, or PTY boundary is involved.
 
 - CLI parsing and options
 - Full editor-language code-index parity: Markdown, Python, C/C++, C#, Java, JavaScript/TypeScript and React/module endings, HTML/HTML-only, CSS, XML, JSON, Bash, PHP, Perl, Ruby, Rust, Go, PowerShell, Assembly, SQL, TOML, YAML, and INI; plus embedded HTML scanning, qualification, ranges, documentation, false-positive masking, incremental refresh, line totals, stale detection, clearing, and Markdown reports
-- Provider registry, every registered reasoning request protocol, and response parsing
+- Provider registry, every registered reasoning request protocol, ordinary response parsing, and native-tool readable-reasoning extraction for Chat/Responses streams, summaries, details, think tags, and encrypted-state omission
 - Main configuration plus `models.conf` parsing, layering, disabling, regex validation, final-component/case-insensitive family matching, and precedence
 - HTML/Markdown/input/output conversion
 - Editor piece table, panels, selection, and file I/O
@@ -67,7 +67,7 @@ transport, filesystem, or PTY boundary is involved.
 - SQLite store round-trip, editor model-selection app state, listing, soft delete, corrupt DB, and missing-thread handling
 - Runtime cancellation and event delivery
 - Security redaction helpers
-- Agent Act/Plan prompt selection, CLI/TUI switching, and typed mutation policy with atomic planning-patch preflight
+- Agent Act/Plan prompt selection, CLI/TUI switching, typed mutation policy with atomic planning-patch preflight, structured in-place Thinking/tool activity, Unicode-safe redacted preview clipping, project preview settings, persisted preview restore, and display-role exclusion from provider projections
 - Native Chat/Responses tool definition, call, streamed-fragment/index validation, multi-item text, continuation, and result serialization
 - Security-review read tools, shared tool-argument pipeline (empty/`{}`, fenced JSON, single-object extraction, one-pass repair, schema coercion, case/snake-camel name repair, XML channel parse), agent loop history hygiene / transport-retry classification / identical-call and consecutive-failure limits / native→XML downgrade, trusted prompt layering (master foundation + security task layer; agent master+coding + native/XML static appendices; seed_agent_conversation), CLI/dispatch for headless `run`/`--run` and interactive `agent`/`--agent` (goal required, no system override, separate agent log dir), explicit exact batch coverage, native final submission, conservative normalization of omitted/empty optional finding metadata, bounded finalization of over-exploring workers, safe single-object extraction from JSON preambles/fences, ambiguous/malformed response rejection, index fingerprint checks, ignored/traversal/symlink rejection, secret redaction, command/helper allowlisting, Markdown-field escaping, deterministic report rendering, and concurrent secure JSONL diagnostic logging with mid-run flush of the live `.partial` path plus finalization/retention
 - Unicode, numeric, and malformed-input edge cases

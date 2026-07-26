@@ -140,6 +140,8 @@ void test_prepare_loads_existing_display_history() {
         project.model = "test";
         check(store.open_project(project).ok(), "seed project");
         check(store.append_message("user", "earlier goal").ok(), "seed user");
+        check(store.append_message("thinking", "Thinking: inspect callers").ok(),
+              "seed thinking preview");
         check(store.append_message("tool",
                                    "1: read_file(\"src/hello.cpp\") → ok in 15 ms",
                                    "read_file",
@@ -171,15 +173,20 @@ void test_prepare_loads_existing_display_history() {
           "first message is prior user goal");
     bool saw_tool = false;
     bool saw_assistant = false;
+    bool saw_thinking = false;
     for (const auto& message : display) {
         if (message.role == "tool" &&
             message.content.find("in 15 ms") != std::string::npos)
             saw_tool = true;
         if (message.role == "assistant" && message.content.find("all done") != std::string::npos)
             saw_assistant = true;
+        if (message.role == "thinking" &&
+            message.content.find("inspect callers") != std::string::npos)
+            saw_thinking = true;
     }
     check(saw_tool, "persisted timed tool activity restored for UI");
     check(saw_assistant, "assistant reply restored for UI");
+    check(saw_thinking, "persisted thinking preview restored for UI");
 
     runtime.reset();
     fs::current_path(previous);

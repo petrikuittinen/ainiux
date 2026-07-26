@@ -72,6 +72,7 @@ struct SessionRuntimeOptions {
     fetch::Options fetch_options;
     search::Options search_options;
     std::function<void(const std::string& status_line)> on_progress;
+    std::function<void(const AgentProgressUpdate&)> on_structured_progress;
     std::function<void(AgentActivityPhase)> on_phase;
     // Interactive Guard Ask (blocks tool worker until resolved). Empty ⇒ headless Deny.
     GuardApprovalCallback on_guard_ask;
@@ -107,7 +108,7 @@ class AgentSessionRuntime {
                   SessionRuntimeOptions options = {});
 
     // After prepare: load the project transcript for TUI display (roles
-    // user/assistant/tool/notice/summary). Empty when the DB has no messages.
+    // user/assistant/tool/notice/thinking/summary). Empty when the DB has no messages.
     Error load_display_messages(std::vector<provider::Message>& out) const;
 
     // Append a display-only notice to the project agent transcript (e.g. user /shell).
@@ -131,7 +132,8 @@ class AgentSessionRuntime {
         const std::string& user_text,
         runtime::CancellationToken cancellation = runtime::CancellationToken(),
         std::function<bool()> interrupted = {},
-        std::function<void(const std::string& status_line)> on_progress = {});
+        std::function<void(const std::string& status_line)> on_progress = {},
+        std::function<void(const AgentProgressUpdate&)> on_structured_progress = {});
 
     // Compact only the model-visible request projection. The durable transcript
     // remains complete. Manual compaction bypasses the configured threshold.

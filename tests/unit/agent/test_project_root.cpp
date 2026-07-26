@@ -8,6 +8,7 @@
 
 #include "agent/compact.hpp"
 #include "agent/project_root.hpp"
+#include "agent/reasoning_preview.hpp"
 #include "agent/tool_display.hpp"
 #include "support/test_support.hpp"
 
@@ -216,11 +217,44 @@ void test_prior_session_context_includes_recent_work() {
     messages[2].content = "created game.py";
     messages[3].role = "notice";
     messages[3].content = "left agent mode";
+    agent::AgentMessageRecord thinking;
+    thinking.role = "thinking";
+    thinking.content = "Thinking: secret analysis";
+    messages.push_back(thinking);
+    agent::AgentMessageRecord notice;
+    notice.role = "notice";
+    notice.content = "display only";
+    messages.push_back(notice);
     const std::string context = agent::build_prior_session_context(messages, 4000);
     check(!context.empty(), "prior context non-empty");
     check(context.find("write a game") != std::string::npos, "includes prior user goal");
     check(context.find("write_file") != std::string::npos, "includes tool activity");
     check(context.find("left agent mode") == std::string::npos, "skips leave notices");
+    check(context.find("secret analysis") == std::string::npos,
+          "skips thinking previews");
+    check(context.find("display only") == std::string::npos,
+          "skips every display notice");
+    check(agent::estimate_transcript_tokens(messages) <
+              agent::estimate_transcript_tokens(
+                  {messages[0], messages[1], messages[2]}) + 8,
+          "display-only roles do not materially affect transcript token estimates");
+}
+
+void test_reasoning_preview_unicode_redaction_and_limits() {
+    const std::string preview = agent::format_reasoning_preview(
+        u8"  e\u0301 \n 👩‍💻 你好 SECRET trailing", 22, {"SECRET"});
+    check(preview.rfind("Thinking: ", 0) == 0, "reasoning preview has stable prefix");
+    check(preview.find('\n') == std::string::npos &&
+              preview.find("  ") == std::string::npos,
+          "reasoning preview normalizes whitespace");
+    check(preview.find("SECRET") == std::string::npos,
+          "reasoning preview redacts configured secrets");
+    check(agent::format_reasoning_preview("anything", 0, {}).empty(),
+          "zero disables reasoning previews");
+    const std::string clipped =
+        agent::format_reasoning_preview(u8"😀😀😀😀", 13, {});
+    check(clipped == u8"Thinking: 😀😀…",
+          "reasoning preview clips by grapheme with ellipsis inside limit");
 }
 
 }  // namespace
@@ -236,6 +270,7 @@ void run_all() {
     test_tool_display_clips_to_width();
     test_elapsed_seconds_format();
     test_prior_session_context_includes_recent_work();
+    test_reasoning_preview_unicode_redaction_and_limits();
 }
 
 }  // namespace ainiux::test::agent_project_root

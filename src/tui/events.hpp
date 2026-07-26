@@ -35,6 +35,7 @@ enum class TuiEventType {
     AgentProjectNewDone,
     AgentCompactDone,
     AgentPhase,
+    AgentProgress,
 };
 
 enum class ActiveJob { None, Chat, Models };
@@ -107,6 +108,7 @@ struct TuiEvent {
     bool agent_compacted = false;
     bool agent_compact_no_op = false;
     agent::AgentActivityPhase agent_phase = agent::AgentActivityPhase::Thinking;
+    agent::AgentProgressUpdate agent_progress;
 };
 
 enum class EscapeResult {

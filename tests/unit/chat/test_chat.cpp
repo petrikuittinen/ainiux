@@ -559,6 +559,14 @@ void test_chat_settings_helpers() {
     err = ainiux::chat::apply_chat_setting(options, "auto-convert-html-to-md", "no");
     check(err.ok() && !options.auto_convert_html_to_markdown,
           "chat setting parser can disable HTML-to-Markdown insertion conversion");
+    err = ainiux::chat::apply_chat_setting(
+        options, "thinking_preview_max_chars", "321");
+    check(err.ok() && options.has_agent_thinking_preview_max_chars &&
+              options.agent_thinking_preview_max_chars == 321,
+          "agent thinking preview setting accepts a project override");
+    err = ainiux::chat::apply_chat_setting(
+        options, "thinking_preview_max_chars", "1001");
+    check(!err.ok(), "agent thinking preview setting rejects values above 1000");
 
     ainiux::cli::Options source;
     source.has_top_k = true;
@@ -568,13 +576,17 @@ void test_chat_settings_helpers() {
     source.reasoning = ainiux::ReasoningSelection::named("high");
     source.reasoning_explicit = true;
     source.auto_convert_html_to_markdown = false;
+    source.has_agent_thinking_preview_max_chars = true;
+    source.agent_thinking_preview_max_chars = 0;
     const std::string encoded = ainiux::chat::settings_json_from_options(source);
     ainiux::cli::Options loaded;
     err = ainiux::chat::apply_settings_json(loaded, encoded);
     check(err.ok() && loaded.has_top_k && loaded.top_k == 40 && loaded.has_chat_purpose &&
               loaded.chat_purpose == "general" &&
               loaded.reasoning == ainiux::ReasoningSelection::named("high") &&
-              !loaded.auto_convert_html_to_markdown,
+              !loaded.auto_convert_html_to_markdown &&
+              loaded.has_agent_thinking_preview_max_chars &&
+              loaded.agent_thinking_preview_max_chars == 0,
           "chat settings JSON round-trips a named reasoning selection");
 
     source = ainiux::cli::Options{};

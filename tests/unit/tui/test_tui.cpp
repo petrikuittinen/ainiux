@@ -5,6 +5,7 @@
 #include "provider/provider.hpp"
 #include "tui/activity.hpp"
 #include "tui/agent_widgets.hpp"
+#include "tui/agent_progress.hpp"
 #include "editor/terminal_input.hpp"
 #include "editor/detail/wrap.hpp"
 #include "tui/input_handlers.hpp"
@@ -1563,9 +1564,50 @@ void test_agent_project_history_handoff_clears_successful_empty_project() {
           "failed /new restores the prior visible transcript");
 }
 
+void test_agent_progress_replaces_rows_in_place() {
+    chat::Session session;
+    std::vector<ainiux::tui::AgentLiveRow> rows;
+    ainiux::tui::apply_agent_progress_update(
+        session, rows,
+        {agent::AgentProgressAction::Upsert, agent::AgentProgressKind::Thinking,
+         1, 0, "Thinking: first", 0});
+    ainiux::tui::apply_agent_progress_update(
+        session, rows,
+        {agent::AgentProgressAction::Upsert, agent::AgentProgressKind::Thinking,
+         1, 0, "Thinking: updated", 0});
+    check(session.messages.size() == 1 &&
+              session.messages[0].content == "Thinking: updated",
+          "Thinking deltas reuse one live history row");
+
+    ainiux::tui::apply_agent_progress_update(
+        session, rows,
+        {agent::AgentProgressAction::Upsert, agent::AgentProgressKind::Tool,
+         1, 1, "1: read_file(\"a\") …", 0});
+    ainiux::tui::apply_agent_progress_update(
+        session, rows,
+        {agent::AgentProgressAction::Upsert, agent::AgentProgressKind::Tool,
+         1, 2, "2: glob(\"*.cpp\") …", 0});
+    ainiux::tui::apply_agent_progress_update(
+        session, rows,
+        {agent::AgentProgressAction::Commit, agent::AgentProgressKind::Tool,
+         1, 1, "1: read_file(\"a\") → ok in 0 ms", 10});
+    check(session.messages.size() == 3 &&
+              session.messages[1].content.find("→ ok") != std::string::npos &&
+              session.messages[2].content.find("glob") != std::string::npos,
+          "tool completion replaces its running row without reordering tools");
+
+    ainiux::tui::apply_agent_progress_update(
+        session, rows,
+        {agent::AgentProgressAction::Discard, agent::AgentProgressKind::Thinking,
+         1, 0, {}, 0});
+    check(session.messages.size() == 2 && session.messages[0].role == "tool",
+          "failed provisional Thinking row is discarded and row indexes stay valid");
+}
+
 }  // namespace
 
 void run_all() {
+    test_agent_progress_replaces_rows_in_place();
     test_tui_history_jump_helpers();
     test_tui_provider_change_resets_only_on_actual_change();
     test_tui_reasoning_picker_input();

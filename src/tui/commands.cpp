@@ -96,6 +96,7 @@ void handle_tui_command(const std::string& text, TuiCommandContext& ctx, TuiComm
                                     "/compact (compact model context; preserve transcript)\n"
                                     "/plan (planning task mode)\n"
                                     "/act (full coding task mode)\n"
+                                    "/setting thinking_preview_max_chars=N (0 disables)\n"
                                   : "/new [NAME]\n") +
                 "/provider [PROVIDER]\n"
                 "/models\n"
@@ -556,6 +557,12 @@ void handle_tui_command(const std::string& text, TuiCommandContext& ctx, TuiComm
         const std::string value = app::detail::trim_ascii(requested.substr(equals + 1));
         if (name.empty()) {
             ctx.status = "Usage: /setting NAME=VALUE";
+            return;
+        }
+        if (ascii_lower(name) == "thinking_preview_max_chars" &&
+            !ctx.context.options.agent) {
+            ctx.status =
+                "thinking_preview_max_chars is available only in interactive agent mode";
             return;
         }
         if (ascii_lower(name) == "reasoning" &&

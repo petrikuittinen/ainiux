@@ -149,6 +149,10 @@ struct ToolConversation {
 
 struct ToolRoundResult {
     std::string content;
+    // Provider-supplied readable reasoning only. Opaque/encrypted state is
+    // retained in continuation_items_json when required by the protocol, but
+    // is never exposed here.
+    std::string reasoning_text;
     std::vector<ToolCall> tool_calls;
     std::vector<std::string> continuation_items_json;
     ChatResult metrics;
@@ -197,6 +201,7 @@ struct ModelsResult {
 };
 
 using DeltaCallback = std::function<Error(const std::string&)>;
+using ReasoningDeltaCallback = std::function<Error(const std::string&)>;
 
 struct ContextResult {
     RequestContext context;
@@ -244,7 +249,8 @@ std::string serialize_tool_request(const RequestContext& context,
 Error parse_tool_response(const RequestContext& context,
                           const std::string& body,
                           ToolRoundResult& result,
-                          bool streaming);
+                          bool streaming,
+                          ReasoningDeltaCallback on_reasoning_delta = {});
 void append_tool_results(const RequestContext& context,
                          const std::vector<ToolCall>& calls,
                          const std::vector<std::string>& result_json,
@@ -255,7 +261,8 @@ Error send_tool_round(const RequestContext& context,
                       ToolRoundResult& result,
                       runtime::CancellationToken cancellation = runtime::CancellationToken(),
                       const ToolRoundObserver* observer = nullptr,
-                      const ToolRoundContext& observation_context = ToolRoundContext{});
+                      const ToolRoundContext& observation_context = ToolRoundContext{},
+                      ReasoningDeltaCallback on_reasoning_delta = {});
 Error list_models(const RequestContext& context,
                   ModelsResult& result,
                   runtime::CancellationToken cancellation = runtime::CancellationToken());

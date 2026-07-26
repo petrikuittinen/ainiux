@@ -3,6 +3,13 @@
 #include <sstream>
 
 namespace ainiux::agent {
+namespace {
+
+bool model_projection_role(const std::string& role) {
+    return role != "notice" && role != "thinking";
+}
+
+}  // namespace
 
 int effective_compact_limit_percent(int configured_limit, long long context_window_tokens) {
     if (configured_limit >= 1 && configured_limit <= 100) return configured_limit;
@@ -31,6 +38,7 @@ long long estimate_tokens_from_text(const std::string& text) {
 long long estimate_transcript_tokens(const std::vector<AgentMessageRecord>& messages) {
     long long total = 0;
     for (const AgentMessageRecord& message : messages) {
+        if (!model_projection_role(message.role)) continue;
         total += estimate_tokens_from_text(message.role);
         total += estimate_tokens_from_text(message.content);
         total += estimate_tokens_from_text(message.tool_name);
@@ -48,6 +56,7 @@ std::string build_local_compact_summary(const std::vector<AgentMessageRecord>& m
     std::size_t tool_n = 0;
     std::size_t assistant_n = 0;
     for (std::size_t i = 0; i < drop_count && i < messages.size(); ++i) {
+        if (!model_projection_role(messages[i].role)) continue;
         if (messages[i].role == "summary") {
             std::string prior = messages[i].content;
             if (prior.size() > 1200) prior = prior.substr(0, 1197) + "...";
@@ -82,11 +91,7 @@ std::string build_prior_session_context(const std::vector<AgentMessageRecord>& m
     std::ostringstream body;
     for (std::size_t i = start; i < messages.size(); ++i) {
         const AgentMessageRecord& message = messages[i];
-        if (message.role == "notice" &&
-            (message.content.find("left agent") != std::string::npos ||
-             message.content.find("Cancelled") != std::string::npos)) {
-            continue;
-        }
+        if (!model_projection_role(message.role)) continue;
         std::string content = message.content;
         if (content.size() > 1500) content = content.substr(0, 1497) + "...";
         body << "[" << (message.role.empty() ? "message" : message.role) << "] " << content

@@ -1535,6 +1535,21 @@ void test_native_tool_protocols() {
           "Chat native tool parser preserves parallel ordered calls");
     check(round.continuation_items_json.front().find("reasoning_details") != std::string::npos,
           "Chat native tool parser preserves opaque reasoning details");
+    check(round.reasoning_text.empty(),
+          "Chat native tool parser does not expose encrypted reasoning");
+
+    const std::string readable_chat_body =
+        R"({"choices":[{"message":{"role":"assistant","content":null,"reasoning_content":"inspect the file","tool_calls":[{"id":"r1","type":"function","function":{"name":"read_file","arguments":"{}"}}]}}]})";
+    std::string reasoning_delta;
+    error = ainiux::provider::parse_tool_response(
+        context, readable_chat_body, round, false,
+        [&](const std::string& delta) {
+            reasoning_delta += delta;
+            return ainiux::ok_error();
+        });
+    check(error.ok() && round.reasoning_text == "inspect the file" &&
+              reasoning_delta == round.reasoning_text,
+          "non-streamed native Chat exposes readable reasoning and callback text");
 
     const std::string chat_stream =
         "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_\",\"function\":{\"name\":\"read_\",\"arguments\":\"{\\\"path\\\":\"}}]},\"finish_reason\":null}]}\n\n"
@@ -1545,6 +1560,22 @@ void test_native_tool_protocols() {
               round.tool_calls[0].name == "read_file" &&
               round.tool_calls[0].arguments_json == R"({"path":"a.cpp"})",
           "fragmented streamed Chat tool call assembles id, name, and arguments by index");
+
+    const std::string reasoning_chat_stream =
+        "data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"inspect \"}}]}\n\n"
+        "data: {\"choices\":[{\"delta\":{\"reasoning_details\":[{\"type\":\"reasoning.text\",\"text\":\"carefully\"}]}}]}\n\n"
+        "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"c1\",\"function\":{\"name\":\"read_file\",\"arguments\":\"{}\"}}]}}]}\n\n"
+        "data: [DONE]\n\n";
+    reasoning_delta.clear();
+    error = ainiux::provider::parse_tool_response(
+        context, reasoning_chat_stream, round, true,
+        [&](const std::string& delta) {
+            reasoning_delta += delta;
+            return ainiux::ok_error();
+        });
+    check(error.ok() && round.reasoning_text == "inspect carefully" &&
+              reasoning_delta == round.reasoning_text,
+          "streamed native Chat exposes DeepSeek/OpenRouter readable reasoning deltas");
 
     context.api_kind = ainiux::provider::ApiKind::Responses;
     context.options.api = "responses";
@@ -1565,16 +1596,50 @@ void test_native_tool_protocols() {
     check(error.ok() && round.tool_calls.size() == 1 && round.tool_calls[0].id == "call_7" &&
               round.continuation_items_json.size() == 2,
           "Responses parser preserves reasoning and function_call output items");
-    ainiux::provider::append_tool_results(context, round.tool_calls, {R"({"ok":true})"}, conversation);
-    check(conversation.continuation_items_json.back().find("function_call_output") != std::string::npos &&
-              conversation.continuation_items_json.back().find("call_7") != std::string::npos,
+    check(round.reasoning_text.empty(),
+          "Responses parser omits opaque encrypted reasoning");
+    ainiux::provider::append_tool_results(context, round.tool_calls,
+                                          {R"({"ok":true})"}, conversation);
+    check(conversation.continuation_items_json.back().find("function_call_output") !=
+                  std::string::npos &&
+              conversation.continuation_items_json.back().find("call_7") !=
+                  std::string::npos,
           "Responses tool results replay as function_call_output with call_id");
+
+    const std::string responses_reasoning_body =
+        R"({"status":"completed","output":[{"type":"reasoning","summary":[{"type":"summary_text","text":"check callers"}]},{"type":"function_call","call_id":"call_8","name":"search_text","arguments":"{}"}]})";
+    error = ainiux::provider::parse_tool_response(
+        context, responses_reasoning_body, round, false);
+    check(error.ok() && round.reasoning_text == "check callers",
+          "Responses native tool parser exposes readable reasoning summaries");
 
     const std::string responses_text_body =
         R"({"model":"mock-model","status":"completed","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"first"}]},{"type":"message","role":"assistant","content":[{"type":"output_text","text":" second"}]}]})";
     error = ainiux::provider::parse_tool_response(context, responses_text_body, round, false);
     check(error.ok() && round.content == "first second",
           "Responses native tool parser accumulates text from every output message");
+
+    const std::string responses_reasoning_stream =
+        "data: {\"type\":\"response.reasoning_summary_text.delta\",\"output_index\":0,\"delta\":\"check \"}\n\n"
+        "data: {\"type\":\"response.reasoning_summary_text.delta\",\"output_index\":0,\"delta\":\"tests\"}\n\n"
+        "data: {\"type\":\"response.output_item.done\",\"output_index\":1,\"item\":{\"type\":\"function_call\",\"call_id\":\"call_9\",\"name\":\"search_text\",\"arguments\":\"{}\"}}\n\n";
+    reasoning_delta.clear();
+    error = ainiux::provider::parse_tool_response(
+        context, responses_reasoning_stream, round, true,
+        [&](const std::string& delta) {
+            reasoning_delta += delta;
+            return ainiux::ok_error();
+        });
+    check(error.ok() && round.reasoning_text == "check tests" &&
+              reasoning_delta == round.reasoning_text,
+          "streamed Responses reasoning summaries expose readable deltas");
+
+    context.api_kind = ainiux::provider::ApiKind::ChatCompletions;
+    const std::string think_body =
+        R"({"choices":[{"message":{"role":"assistant","content":"<think>trace supplied</think>\n\nDone"}}]})";
+    error = ainiux::provider::parse_tool_response(context, think_body, round, false);
+    check(error.ok() && round.reasoning_text == "trace supplied",
+          "native tool parser extracts readable think-tag traces");
 
     const std::string invalid_index_stream =
         "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0.5,\"id\":\"call\",\"function\":{\"name\":\"read_file\",\"arguments\":\"{}\"}}]}}]}\n\n";

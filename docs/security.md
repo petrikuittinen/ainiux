@@ -37,6 +37,8 @@ The diagnostic log intentionally preserves source and model payloads without tru
 
 `ainiux run` / `--run` / `-r` / `--run-file` is a non-interactive coding agent for a single user goal. Interactive `ainiux agent` / `--agent` / `-a` uses the same tools from a chat-like TUI. It refreshes `.ainiux-pr/index.sqlite`, loads the trusted master + coding prompts plus a static native or XML protocol appendix, optionally injects workspace-root `AGENTS.md` as a separate untrusted user-context message (capped; never system prompt), and runs the shared agent loop with the same snapshot-backed read tools and inspection command allowlist as security review, plus ordinary workspace mutations and network tools when the agent registry is created with writes/network enabled:
 
+Interactive reasoning previews contain only readable text explicitly supplied by the provider. Before display/persistence they are whitespace-normalized, redacted with the configured credential set, and bounded by grapheme count and terminal width; only the final clipped preview is stored. Encrypted or opaque reasoning is never converted to display text. Persisted `thinking` rows and every display-only `notice` row are excluded from provider resume context, compaction projections/summaries, and transcript token estimates. Deliberate retry, loop, and protocol feedback uses explicit model-conversation messages instead of relying on display notices. One-shot `run` and `plan` do not emit or persist these previews.
+
 Interactive agent startup stores and restores non-secret provider, model, API/base
 URL, reasoning, and generation/display preferences in project-local `agent.sqlite`.
 API keys, custom authorization headers, and resolved credentials are excluded.

@@ -2209,6 +2209,13 @@ Error apply_document(const Document& document, cli::Options& options) {
                     entry,
                     "tui.agent_input_max_height_percent expects an integer from 10 through 80");
             }
+        } else if (name == "tui.agent_thinking_preview_max_chars") {
+            err = nonnegative_int(entry, candidate.agent_thinking_preview_max_chars);
+            if (err.ok() && candidate.agent_thinking_preview_max_chars > 1000) {
+                err = schema_error(
+                    entry,
+                    "tui.agent_thinking_preview_max_chars expects an integer from 0 through 1000");
+            }
         } else {
             err = schema_error(entry, "unknown section or key");
         }
