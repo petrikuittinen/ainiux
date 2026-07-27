@@ -102,15 +102,17 @@ const std::vector<Profile>& profile_registry() {
                          "/chat/completions", "/models", "",
                          {"OPENROUTER_API_KEY", "AINIUX_API_KEY"}, true, false),
             "https://openrouter.ai/api/v1/credits"),
-        make_profile(names::kOpenAi,
-                     {names::kOpenAiChat, names::kOpenAiResponses},
-                     "https://api.openai.com/v1",
-                     "/chat/completions",
-                     "/models",
-                     "/responses",
-                     {"OPENAI_API_KEY", "AINIUX_API_KEY"},
-                     true,
-                     false),
+        with_credit_endpoint(
+            make_profile(names::kOpenAi,
+                         {names::kOpenAiChat, names::kOpenAiResponses},
+                         "https://api.openai.com/v1",
+                         "/chat/completions",
+                         "/models",
+                         "/responses",
+                         {"OPENAI_API_KEY", "AINIUX_API_KEY"},
+                         true,
+                         false),
+            "https://api.openai.com/v1/dashboard/billing/credit_grants"),
         with_credit_endpoint(
             make_profile("deepseek", {}, "https://api.deepseek.com",
                          "/chat/completions", "/models", "",
@@ -2937,6 +2939,16 @@ Error parse_credit_balance_response(const std::string& provider_name,
                     "OpenRouter credit response requires numeric "
                     "data.total_credits and data.total_usage"};
         result.balances.push_back({total->number - usage->number, "USD"});
+        return ok_error();
+    }
+    if (canonical == names::kOpenAi) {
+        const json::Value* available = parsed.value.get("total_available");
+        if (available == nullptr ||
+            available->type != json::Value::Type::Number ||
+            !std::isfinite(available->number))
+            return {ErrorCode::ProviderSchema,
+                    "OpenAI credit response requires numeric total_available"};
+        result.balances.push_back({available->number, "USD"});
         return ok_error();
     }
     if (canonical == "deepseek") {

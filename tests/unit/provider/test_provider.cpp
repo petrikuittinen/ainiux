@@ -1789,6 +1789,23 @@ void test_credit_balance_parsing_and_formatting() {
           "OpenRouter rejects incomplete credit totals");
 
     error = ainiux::provider::parse_credit_balance_response(
+        "openai",
+        R"({"object":"credit_summary","total_granted":20.0,"total_used":7.25,"total_available":12.75,"grants":{"object":"list","data":[],"has_more":false}})",
+        result);
+    check(error.ok() && result.balances.size() == 1 &&
+              result.balances.front().amount == 12.75 &&
+              result.balances.front().currency == "USD" &&
+              ainiux::provider::format_credit_balance(result) == "12.75 USD",
+          "OpenAI total_available formats as remaining USD credit");
+
+    error = ainiux::provider::parse_credit_balance_response(
+        "openai",
+        R"({"object":"credit_summary","total_granted":20.0,"total_used":7.25})",
+        result);
+    check(!error.ok() && error.code == ErrorCode::ProviderSchema,
+          "OpenAI rejects credit responses without total_available");
+
+    error = ainiux::provider::parse_credit_balance_response(
         "deepseek",
         R"({"is_available":true,"balance_infos":[{"currency":"CNY","total_balance":"110.00","granted_balance":"10.00","topped_up_balance":"100.00"},{"currency":"USD","total_balance":"4.5","granted_balance":"0","topped_up_balance":"4.5"}]})",
         result);
@@ -1810,6 +1827,10 @@ void test_credit_balance_parsing_and_formatting() {
         std::find_if(profiles.begin(), profiles.end(), [](const auto& profile) {
             return profile.name == "openrouter";
         });
+    const auto openai =
+        std::find_if(profiles.begin(), profiles.end(), [](const auto& profile) {
+            return profile.name == "openai";
+        });
     const auto deepseek =
         std::find_if(profiles.begin(), profiles.end(), [](const auto& profile) {
             return profile.name == "deepseek";
@@ -1818,11 +1839,15 @@ void test_credit_balance_parsing_and_formatting() {
               openrouter->capabilities.credit_balance &&
               openrouter->credit_url ==
                   "https://openrouter.ai/api/v1/credits" &&
+              openai != profiles.end() &&
+              openai->capabilities.credit_balance &&
+              openai->credit_url ==
+                  "https://api.openai.com/v1/dashboard/billing/credit_grants" &&
               deepseek != profiles.end() &&
               deepseek->capabilities.credit_balance &&
               deepseek->credit_url ==
                   "https://api.deepseek.com/user/balance",
-          "OpenRouter and DeepSeek profiles expose official credit endpoints");
+          "OpenRouter, OpenAI, and DeepSeek profiles expose credit endpoints");
 
     ainiux::provider::RequestContext credit_context;
     credit_context.profile = *openrouter;
@@ -1833,6 +1858,11 @@ void test_credit_balance_parsing_and_formatting() {
     credit_context.base_url = "https://gateway.example/v1";
     check(!ainiux::provider::credit_balance_available(credit_context),
           "custom provider base URL disables official credit lookup");
+
+    credit_context.profile = *openai;
+    credit_context.base_url = "https://api.openai.com/v1";
+    check(ainiux::provider::credit_balance_available(credit_context),
+          "official OpenAI context enables credit lookup");
 
     credit_context.profile = *deepseek;
     credit_context.base_url = "https://api.deepseek.com/v1";
