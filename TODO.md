@@ -1,16 +1,27 @@
 # TODO
 
-## Local agent mode (v1.0)
+## Smarter local agent and code index (v1.1)
 
-- Project-centric agent rework landed: singleton `.ainiux-pr/agent.sqlite` v2, one-backup history policy, compact tool lines, window-% auto-compact, Chat/Agent chrome, `/cmd-out`. Agent tools now include git_status/git_diff, index_status/update/rebuild, fetch_url/search_web, find_tests, inspect_code_task.
-- Agent TUI chrome: permanent input-label line `Ainiux vX [provider/model reasoning] N tok (P.P%)` (window from `--context` → `/v1/models` → default 256k); agent-mode errors go to history notices, not status-bar-only.
-- Interactive Guard `Ask` approvals landed: agent TUI y/n panel, one-shot decisions, persist to `approvals` in `.ainiux-pr/agent.sqlite`, headless `run` still maps Ask→Deny.
-- Add a future Agent-specific custom-command and skill system; do not reuse `editor-commands.conf`, whose commands remain Chat/editor-only.
-- Audit finding: split the agent controller from chat-only SQLite/media/thread commands before adding more agent UI. Auto/manual compaction now preserve the full transcript while rebuilding only provider request context; interactive `/compact` and failure-safe `/new [PATH]` are landed.
-- Measure representative agent turns before adding **read-only tool parallelism**. Revisit a bounded pool only when local tool execution is at least 5% of turn wall time; keep network-tool parallelism as a separate follow-up—see PLANS.md §14 and “Next agent slices”.
-- Act/Plan task modes are landed in v1.07. Also next: find_callers/find_callees (call-graph refs), load agent transcript as sole TUI source of truth (less chat-session coupling), security/refactor task modes, stronger editor↔agent handoff.
-- v1.08 reasoning-preview/activity polish landed: one structured Thinking row per readable provider round, in-place tool-row completion, project preview overrides, and provider-context isolation for display notices/thinking.
-- Keep security-review strictly read-only when expanding agent tools (`run_command` stays index-scoped there; network tools stay agent-only).
+- Add confidence-scored call/import/include/inherit/instantiate/use references to `.ainiux-pr/index.sqlite`; keep ambiguous and unresolved references explicit.
+- Resolve common direct calls and simple receiver types across the first acceptance languages without adding compiler, language-server, embedding, or model dependencies.
+- Add distinct caller counts, secondary global PageRank, task-aware graph proximity, and deterministic ranking reasons.
+- Inject a bounded `[Approximate code-index hints; verify before editing]` block before the first provider request of every agent user turn. Generate it locally, replace it on later turns, and never persist it as transcript history.
+- Add `find_callers` and `find_callees`; enrich `search_symbol`, `read_symbol`, `inspect_code_task`, `project_overview`, and where cheap `search_text`.
+- Persist exact touched-file updates after native mutations, run an incremental check after potentially mutating commands, and finish each task with a full-tree freshness pass that reparses only changed files.
+- Use cancellable/coalesced index jobs, atomic graph publication, and at most approximately 75% of available cores for full/multi-file scans.
+- Benchmark before/after model rounds, tool calls, prompt bytes/tokens, full-file reads, time to first useful edit, missed callers/tests, false hints, and final correctness.
+- Keep `glob`, `search_text`/`grep`, targeted reads, compiler output, and tests as verification/fallback paths. The graph remains a hint.
+- Do not rewrite the built-in agent prompt in this milestone; the user will specify a separate prompt-optimization pass for small local models.
+- Reserve `/goal`, `/loop`, and sub-agents for v1.1, but do not implement or infer their syntax, persistence, concurrency, safety, or UI until the user supplies specifications.
+- Continue agent cleanup: load the agent transcript as the sole TUI source of truth, reduce chat-session coupling, strengthen editor↔agent handoff, and retain security-review as strictly read-only.
+- Measure representative agent turns before adding read-only tool parallelism. Add a bounded pool only if local tool execution reaches at least 5% of turn wall time; treat network-tool parallelism separately.
+- Add a future Agent-specific custom-command and skill system only after its own design; do not reuse `editor-commands.conf`, whose commands remain Chat/editor-only.
+
+## Deferred roadmap
+
+- Local OpenAI-compatible server mode remains planned but follows v1.1.
+- Image generation is v1.2, after the smarter-indexing milestone.
+- Browser web UI remains postponed behind the local server/runtime foundation.
 
 ## Web search / fetch
 

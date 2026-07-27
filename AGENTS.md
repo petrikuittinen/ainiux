@@ -23,7 +23,7 @@ The program must stay excellent as a scriptable CLI. Keep the core engine indepe
 
 ## Current product snapshot
 
-Status: **v1.09** (see `README.md` and `PLANS.md` implementation notes). One-shot (`run` / `--run` / `-r`) and interactive (`agent` / `--agent` / `-a`) local agent modes are landed with workspace writes, multi-turn project sessions (`.ainiux-pr/`), compact live tool activity, provider-supplied reasoning previews in interactive agent history, transcript-preserving compaction, chat↔editor↔agent cycling, project-persisted Confirm/Smart/Yolo permissions, OpenRouter/OpenAI/DeepSeek credit display, interactive Guard approvals, and session-scoped Act/Plan task modes. Live tool rows update in place, while display-only `notice` and `thinking` rows remain outside provider context. One-shot planning is available through `plan`, `--plan`, and `--plan-file`; Plan retains research tools but code-enforces planning-document-only writes. User profile stays `~/.ainiux/` (chat DB/media). Active development also continues remaining **v0.9** polish and **v0.90** local OpenAI-compatible server mode. Browser web UI is postponed.
+Status: **v1.09** (see `README.md` and `PLANS.md` implementation notes). One-shot (`run` / `--run` / `-r`) and interactive (`agent` / `--agent` / `-a`) local agent modes are landed with workspace writes, multi-turn project sessions (`.ainiux-pr/`), compact live tool activity, provider-supplied reasoning previews in interactive agent history, transcript-preserving compaction, chat↔editor↔agent cycling, project-persisted Confirm/Smart/Yolo permissions, OpenRouter/OpenAI/DeepSeek credit display, interactive Guard approvals, and session-scoped Act/Plan task modes. Live tool rows update in place, while display-only `notice` and `thinking` rows remain outside provider context. One-shot planning is available through `plan`, `--plan`, and `--plan-file`; Plan retains research tools but code-enforces planning-document-only writes. User profile stays `~/.ainiux/` (chat DB/media). The next major milestone is **v1.1** agent improvement: an approximate caller/reference graph, graph-aware ranking, and small task-aware index hints injected before model tool work. Remaining v0.9 polish continues alongside it; local server mode is deferred behind v1.1, image generation moves to v1.2, and browser web UI remains postponed.
 
 ### Implemented modes
 
@@ -63,6 +63,9 @@ Status: **v1.09** (see `README.md` and `PLANS.md` implementation notes). One-sho
 
 - Local OpenAI-compatible **server** mode (`--server` in `PLANS.md` v0.90)
 - Browser local web UI (`src/web/` reserved; `docs/web-mode.md` is still a stub plan)
+- Reference/caller graph, PageRank, `find_callers`, `find_callees`, and automatic per-turn code-index hints (planned for v1.1)
+- `/goal`, `/loop`, and sub-agents. Their names are reserved for v1.1, but their behavior is not specified or implementation-ready
+- Image generation (`ainiux image` / `/image`; moved to v1.2)
 - Agent session resume/list UI and richer tool-call transcript chrome; Guard Ask y/n in interactive agent is landed (headless Ask still denies); one-shot `ainiux run` / `--run` and interactive `ainiux agent` / `--agent` with multi-turn tools + mode cycling are landed
 - PDF / DOCX conversion modules
 - Native Anthropic Messages adapter; full live capability probing for all models
@@ -97,11 +100,12 @@ Work in this order unless the user explicitly changes priorities:
 
 1. Keep script-friendly CLI, provider, HTTP/SSE, and error behavior solid.
 2. Finish remaining v0.9 polish: benchmark cutoff/grade calibration, TUI/CLI polish, refactor hygiene, leak and cancellation hardening (see `TODO.md` / `PLANS.md`).
-3. Local OpenAI-compatible **server** mode (v0.90), reusing provider/runtime/security layers.
-4. Only then consider revived browser web UI on the same server/runtime foundation.
-5. Continue local-agent hardening and later security/refactor task modes using the landed Guard, workspace-containment, and approval design.
+3. Implement v1.1 smarter agent indexing: approximate references/callers, graph ranking, automatic bounded task hints, and mutation-aware persistent refresh.
+4. Add `/goal`, `/loop`, and sub-agents only after the user supplies their detailed specifications; reuse the landed Guard, workspace-containment, cancellation, and logging design.
+5. Local OpenAI-compatible **server** mode (v0.90), reusing provider/runtime/security layers.
+6. Image generation (v1.2), then only later consider revived browser UI on the server/runtime foundation.
 
-Do not start autonomous agent features early. Do not treat postponed browser web UI as the next major surface; prefer server mode first.
+Do not infer `/goal`, `/loop`, or sub-agent semantics from their names. Do not rewrite or expand the built-in agent system prompt as part of v1.1 indexing work; the user plans a separate prompt-optimization pass for small local models. Do not treat postponed browser web UI as the next major surface.
 
 ## Repository layout
 
@@ -225,6 +229,25 @@ Treat LM Studio as a first-class local profile (default `http://localhost:1234/v
 `--provider none` has no base URL or model transport. Use it for local conversion and editor workflows that must not invent a dummy endpoint. URL fetch and web search remain separate explicit network operations with their own safety rules.
 
 The UI must not hard-code the difference between OpenAI Chat Completions, Responses, OpenRouter, Ollama, vLLM, LM Studio, or a custom URL beyond selecting a profile and showing status.
+
+### Code index and v1.1 graph hints
+
+The project-local code index lives at `.ainiux-pr/index.sqlite` and remains a fast hint source, never ground truth. The current implementation stores files and symbols only. References, caller/callee relationships, PageRank, and automatic model-context hints are planned v1.1 work and must not be presented as available before they land.
+
+When implementing v1.1:
+
+- Extend `src/agent/index/`; do not create a parallel index or use the user chat database.
+- Prefer lightweight lexical extraction and confidence-scored resolution over compiler-grade parsing or new language-server dependencies.
+- Retain unresolved or ambiguous references as such. Never invent a high-confidence edge merely to make the graph complete.
+- Use caller count and task match as primary model-facing signals; PageRank is a secondary ranking prior, not proof of importance or relevance.
+- Before the first model request of each agent user turn, generate a small deterministic `[Approximate code-index hints; verify before editing]` block locally. Make no summarization/model call.
+- Treat that hint as request-only context: replace it on later user turns, do not persist it as transcript history, and exclude it from display and compaction history.
+- Include only bounded task-relevant paths, qualified symbols, line ranges, caller counts, graph neighbors, and likely tests. Fall back to a few global anchors only when task matching is weak.
+- Require the model and tools to verify indexed locations against current source before editing. Preserve `glob`, `search_text`/`grep`, `read_file`, compiler, and test fallbacks.
+- Native mutations must immediately update the live touched-file snapshot. Persist definitions/references for affected files through a cancellable coalescing job; potentially mutating commands trigger an incremental check; task completion performs a full-tree freshness pass that reparses only changed files.
+- Publish graph snapshots atomically. Cancellation or failure preserves the previous completed database state.
+- Full/multi-file scanning may use at most approximately 75% of available cores with a conservative cap. Single-file refresh should avoid unnecessary worker creation.
+- Do not rewrite the built-in agent system prompt during this milestone; prompt/tool-selection optimization is a separate user-directed pass.
 
 ### HTTP and streaming
 
@@ -453,6 +476,7 @@ Minimum areas (many already have coverage — extend rather than replace):
 CLI parsing, URL normalization, config loading
 JSON request generation and provider response parsing
 Provider registry / aliases / LM Studio defaults
+Code-index schema migration, reference confidence/resolution, graph ranking, incremental refresh, and bounded request-only hints
 SSE parsing with arbitrary chunk boundaries
 Runtime cancellation and event delivery
 Error formatting and credential redaction
