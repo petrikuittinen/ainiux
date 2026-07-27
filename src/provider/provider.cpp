@@ -1320,6 +1320,15 @@ long long usage_token_value(const json::Value& usage, const std::string& name) {
     return static_cast<long long>(value->number);
 }
 
+long long nested_usage_token_value(const json::Value& usage,
+                                   const std::string& object_name,
+                                   const std::string& name) {
+    const json::Value* object = usage.get(object_name);
+    return object != nullptr && object->is_object()
+               ? usage_token_value(*object, name)
+               : -1;
+}
+
 void parse_usage(const json::Value& usage, ChatResult& result) {
     if (!usage.is_object()) {
         return;
@@ -1328,6 +1337,23 @@ void parse_usage(const json::Value& usage, ChatResult& result) {
     result.prompt_tokens = usage_token_value(usage, "prompt_tokens");
     if (result.prompt_tokens < 0) {
         result.prompt_tokens = usage_token_value(usage, "input_tokens");
+    }
+    result.cache_read_tokens = usage_token_value(usage, "prompt_cache_hit_tokens");
+    result.fresh_prompt_tokens = usage_token_value(usage, "prompt_cache_miss_tokens");
+    result.cache_write_tokens = usage_token_value(usage, "cache_write_tokens");
+    for (const char* details_name : {"prompt_tokens_details", "input_tokens_details"}) {
+        if (result.cache_read_tokens < 0)
+            result.cache_read_tokens =
+                nested_usage_token_value(usage, details_name, "cached_tokens");
+        if (result.cache_write_tokens < 0)
+            result.cache_write_tokens =
+                nested_usage_token_value(usage, details_name, "cache_write_tokens");
+    }
+    if (result.fresh_prompt_tokens < 0 && result.prompt_tokens >= 0) {
+        result.fresh_prompt_tokens =
+            result.cache_read_tokens >= 0 && result.cache_read_tokens <= result.prompt_tokens
+                ? result.prompt_tokens - result.cache_read_tokens
+                : result.cache_read_tokens < 0 ? result.prompt_tokens : -1;
     }
     const long long completion_tokens = [&] {
         const long long chat_tokens = usage_token_value(usage, "completion_tokens");

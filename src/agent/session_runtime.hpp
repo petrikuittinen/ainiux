@@ -25,6 +25,18 @@ namespace ainiux::agent {
 // Prepare once (index + tools + agent.sqlite + AGENTS.md); run multiple user
 // turns without re-seeding the system prompt or re-opening the DB each time.
 
+struct AgentTokenUsage {
+    long long input_tokens = 0;
+    long long fresh_input_tokens = 0;
+    long long cache_read_tokens = 0;
+    long long cache_write_tokens = 0;
+    long long output_tokens = 0;
+    std::size_t reported_rounds = 0;
+};
+
+void accumulate_agent_token_usage(const provider::ChatResult& metrics,
+                                  AgentTokenUsage& usage);
+
 struct SessionTurnResult {
     Error error;
     std::string final_text;
@@ -32,6 +44,7 @@ struct SessionTurnResult {
     std::size_t tool_calls = 0;   // tool calls this turn
     std::size_t session_turns = 0;
     std::size_t session_tool_calls = 0;
+    AgentTokenUsage token_usage;
     bool needs_user_continue = false;
     std::string notice;
     std::vector<std::string> compact_tool_lines;  // timed rows, ready to persist/render

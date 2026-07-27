@@ -2,6 +2,7 @@
 
 #include <filesystem>
 #include <fstream>
+#include <limits>
 #include <string>
 #include <unistd.h>
 
@@ -86,6 +87,41 @@ void test_empty_turn_rejected_when_unprepared() {
     provider::RequestContext context = offline_context(".");
     agent::SessionTurnResult turn = runtime.run_user_turn(context, "hello");
     check(!turn.error.ok(), "unprepared runtime rejects turns");
+}
+
+void test_agent_token_usage_aggregation_is_bounded() {
+    provider::ChatResult absent;
+    agent::AgentTokenUsage usage;
+    agent::accumulate_agent_token_usage(absent, usage);
+    check(usage.reported_rounds == 0 && usage.input_tokens == 0,
+          "absent provider usage does not create an agent usage round");
+
+    provider::ChatResult first;
+    first.usage_json = "{}";
+    first.prompt_tokens = 100;
+    first.fresh_prompt_tokens = 20;
+    first.cache_read_tokens = 80;
+    first.cache_write_tokens = 5;
+    first.completion_tokens = 7;
+    agent::accumulate_agent_token_usage(first, usage);
+    check(usage.reported_rounds == 1 && usage.input_tokens == 100 &&
+              usage.fresh_input_tokens == 20 && usage.cache_read_tokens == 80 &&
+              usage.cache_write_tokens == 5 && usage.output_tokens == 7,
+          "agent usage aggregates normalized input/cache/output metrics");
+
+    provider::ChatResult overflow = first;
+    overflow.prompt_tokens = std::numeric_limits<long long>::max();
+    overflow.fresh_prompt_tokens = std::numeric_limits<long long>::max();
+    overflow.cache_read_tokens = std::numeric_limits<long long>::max();
+    overflow.cache_write_tokens = std::numeric_limits<long long>::max();
+    overflow.completion_tokens = std::numeric_limits<long long>::max();
+    agent::accumulate_agent_token_usage(overflow, usage);
+    check(usage.input_tokens == std::numeric_limits<long long>::max() &&
+              usage.fresh_input_tokens == std::numeric_limits<long long>::max() &&
+              usage.cache_read_tokens == std::numeric_limits<long long>::max() &&
+              usage.cache_write_tokens == std::numeric_limits<long long>::max() &&
+              usage.output_tokens == std::numeric_limits<long long>::max(),
+          "agent usage aggregation saturates instead of overflowing");
 }
 
 void test_task_mode_switch_is_session_scoped_and_failure_safe() {
@@ -339,6 +375,7 @@ void test_project_replacement_failure_reopens_prior_project() {
 void run_all() {
     test_prepare_opens_session_db_and_tools();
     test_empty_turn_rejected_when_unprepared();
+    test_agent_token_usage_aggregation_is_bounded();
     test_task_mode_switch_is_session_scoped_and_failure_safe();
     test_prepare_loads_existing_display_history();
     test_manual_compaction_preserves_transcript_and_noops_until_new_history();

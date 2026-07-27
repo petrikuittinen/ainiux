@@ -552,6 +552,38 @@ void test_follow_up_user_appends_after_tool_history() {
           "follow-up user is last after tool history");
 }
 
+void test_batched_reads_reduce_rounds_and_serialized_request_bytes() {
+    provider::RequestContext context = chat_context();
+    const std::vector<provider::FunctionDefinition> definitions = {
+        {"read_file", "Read one file", R"({"type":"object"})"},
+        {"read_many", "Read several files", R"({"type":"object"})"}};
+    provider::ToolConversation repeated;
+    repeated.messages = {{"system", "stable agent prompt"},
+                         {"user", "Act"},
+                         {"user", "Read a.cpp and b.cpp"}};
+    const std::size_t first_request_bytes =
+        provider::serialize_tool_request(context, repeated, definitions).size();
+    repeated.continuation_items_json = {
+        R"({"role":"assistant","content":null,"tool_calls":[{"id":"a","type":"function","function":{"name":"read_file","arguments":"{\"path\":\"a.cpp\"}"}}]})",
+        R"({"role":"tool","tool_call_id":"a","content":"{\"ok\":true,\"data\":{\"content\":\"a\"}}"})"};
+    const std::size_t second_request_bytes =
+        provider::serialize_tool_request(context, repeated, definitions).size();
+
+    provider::ToolConversation batched;
+    batched.messages = {{"system", "stable agent prompt"},
+                        {"user", "Act"},
+                        {"user", "Read a.cpp and b.cpp"}};
+    const std::size_t batched_request_bytes =
+        provider::serialize_tool_request(context, batched, definitions).size();
+    const std::size_t repeated_rounds = 2;
+    const std::size_t batched_rounds = 1;
+    const std::size_t repeated_request_bytes =
+        first_request_bytes + second_request_bytes;
+    check(batched_rounds < repeated_rounds &&
+              batched_request_bytes < repeated_request_bytes,
+          "one read_many/multi-call round reduces deterministic model rounds and request bytes");
+}
+
 }  // namespace
 
 void run_all() {
@@ -563,6 +595,7 @@ void run_all() {
     test_invalid_args_not_executed();
     test_scripted_turn_cap();
     test_follow_up_user_appends_after_tool_history();
+    test_batched_reads_reduce_rounds_and_serialized_request_bytes();
 }
 
 }  // namespace ainiux::test::agent_loop

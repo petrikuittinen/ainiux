@@ -7,7 +7,7 @@
 - Interactive Guard `Ask` approvals landed: agent TUI y/n panel, one-shot decisions, persist to `approvals` in `.ainiux-pr/agent.sqlite`, headless `run` still maps Ask→Deny.
 - Add a future Agent-specific custom-command and skill system; do not reuse `editor-commands.conf`, whose commands remain Chat/editor-only.
 - Audit finding: split the agent controller from chat-only SQLite/media/thread commands before adding more agent UI. Auto/manual compaction now preserve the full transcript while rebuilding only provider request context; interactive `/compact` and failure-safe `/new [PATH]` are landed.
-- Next: **read-only tool parallelism** in multi-call agent rounds (bounded pool for reads/searches; limited parallel `fetch_url`/`search_web`; keep mutations, index writes, Guard Ask, and `run_command` serial for now)—see PLANS.md §14 and “Next agent slices”.
+- Measure representative agent turns before adding **read-only tool parallelism**. Revisit a bounded pool only when local tool execution is at least 5% of turn wall time; keep network-tool parallelism as a separate follow-up—see PLANS.md §14 and “Next agent slices”.
 - Act/Plan task modes are landed in v1.07. Also next: find_callers/find_callees (call-graph refs), load agent transcript as sole TUI source of truth (less chat-session coupling), security/refactor task modes, stronger editor↔agent handoff.
 - v1.08 reasoning-preview/activity polish landed: one structured Thinking row per readable provider round, in-place tool-row completion, project preview overrides, and provider-context isolation for display notices/thinking.
 - Keep security-review strictly read-only when expanding agent tools (`run_command` stays index-scoped there; network tools stay agent-only).

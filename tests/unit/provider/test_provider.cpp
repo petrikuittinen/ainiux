@@ -1726,6 +1726,50 @@ void test_native_tool_protocols() {
     context.api_kind = ainiux::provider::ApiKind::ChatCompletions;
     error = ainiux::provider::parse_tool_response(context, invalid_index_stream, round, true);
     check(!error.ok(), "native tool stream rejects fractional call indexes");
+
+    const std::string openai_cache_body =
+        R"({"usage":{"prompt_tokens":100,"completion_tokens":7,"prompt_tokens_details":{"cached_tokens":80,"cache_write_tokens":12}},"choices":[{"message":{"role":"assistant","content":"done"}}]})";
+    error = ainiux::provider::parse_tool_response(
+        context, openai_cache_body, round, false);
+    check(error.ok() && round.metrics.prompt_tokens == 100 &&
+              round.metrics.fresh_prompt_tokens == 20 &&
+              round.metrics.cache_read_tokens == 80 &&
+              round.metrics.cache_write_tokens == 12 &&
+              round.metrics.completion_tokens == 7,
+          "OpenAI cache details normalize into fresh/read/write token metrics");
+
+    const std::string deepseek_cache_body =
+        R"({"usage":{"prompt_tokens":100,"completion_tokens":9,"prompt_cache_hit_tokens":75,"prompt_cache_miss_tokens":25},"choices":[{"message":{"role":"assistant","content":"done"}}]})";
+    error = ainiux::provider::parse_tool_response(
+        context, deepseek_cache_body, round, false);
+    check(error.ok() && round.metrics.fresh_prompt_tokens == 25 &&
+              round.metrics.cache_read_tokens == 75 &&
+              round.metrics.cache_write_tokens == -1,
+          "DeepSeek hit/miss usage normalizes without inventing cache writes");
+
+    const std::string partial_cache_body =
+        R"({"usage":{"prompt_tokens":10,"prompt_tokens_details":{"cached_tokens":20}},"choices":[{"message":{"role":"assistant","content":"done"}}]})";
+    error = ainiux::provider::parse_tool_response(
+        context, partial_cache_body, round, false);
+    check(error.ok() && round.metrics.fresh_prompt_tokens == -1 &&
+              round.metrics.cache_read_tokens == 20,
+          "inconsistent partial cache usage remains observable without underflow");
+
+    context.api_kind = ainiux::provider::ApiKind::Responses;
+    const std::string cached_responses_stream =
+        "data: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\","
+        "\"usage\":{\"input_tokens\":40,\"output_tokens\":3,"
+        "\"input_tokens_details\":{\"cached_tokens\":30,\"cache_write_tokens\":4}},"
+        "\"output\":[{\"type\":\"message\",\"role\":\"assistant\",\"content\":[{"
+        "\"type\":\"output_text\",\"text\":\"done\"}]}]}}\n\n";
+    error = ainiux::provider::parse_tool_response(
+        context, cached_responses_stream, round, true);
+    check(error.ok() && round.metrics.prompt_tokens == 40 &&
+              round.metrics.fresh_prompt_tokens == 10 &&
+              round.metrics.cache_read_tokens == 30 &&
+              round.metrics.cache_write_tokens == 4 &&
+              round.metrics.completion_tokens == 3,
+          "streaming Responses final usage retains normalized cache metrics");
 }
 
 void test_credit_balance_parsing_and_formatting() {

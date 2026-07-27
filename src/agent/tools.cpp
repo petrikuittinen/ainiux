@@ -20,6 +20,7 @@
 #include "agent/apply_patch.hpp"
 #include "agent/process.hpp"
 #include "agent/project_paths.hpp"
+#include "agent/read_only_command.hpp"
 #include "agent/text_match.hpp"
 #include "agent/tool_args.hpp"
 #include "fetch/fetch.hpp"
@@ -217,6 +218,18 @@ bool resolved_path_is_under_system_temp(const fs::path& candidate) {
 bool contains_protected_metadata_component(const fs::path& path) {
     for (const fs::path& component : path) {
         if (is_protected_state_dir_name(component.string())) return true;
+    }
+    return false;
+}
+
+bool contains_symlink_component(const fs::path& path) {
+    fs::path current = path.root_path();
+    for (const fs::path& component : path.relative_path()) {
+        current /= component;
+        std::error_code ec;
+        const fs::file_status status = fs::symlink_status(current, ec);
+        if (ec || status.type() == fs::file_type::not_found) break;
+        if (fs::is_symlink(status)) return true;
     }
     return false;
 }
@@ -615,20 +628,30 @@ Error validate_command_workspace_paths(const index::Snapshot& snapshot,
                                        bool allow_external,
                                        bool& uses_external) {
     uses_external = false;
-    if (allow_external && !cwd.empty() && fs::path(cwd).is_absolute()) {
-        std::error_code ec;
-        const fs::path canonical = fs::canonical(cwd, ec);
-        if (ec || !fs::is_directory(canonical, ec) ||
-            contains_protected_metadata_component(canonical))
-            return {ErrorCode::BadArgs,
-                    "run_command external cwd must be an existing canonical directory"};
-        const fs::path root = fs::canonical(snapshot.workspace, ec);
-        if (ec) return {ErrorCode::FileRead, "could not resolve run_command workspace"};
-        uses_external = !resolved_path_is_under(root, canonical);
-    }
-    const std::string normalized_cwd = normalized_workspace_path("", cwd.empty() ? "." : cwd);
-    if (!uses_external && (!safe_relative_path(normalized_cwd) ||
-        !path_allowed_for_command(snapshot, normalized_cwd, true, index_only))
+    std::error_code ec;
+    const fs::path root = fs::canonical(snapshot.workspace, ec);
+    if (ec) return {ErrorCode::FileRead, "could not resolve run_command workspace"};
+    fs::path requested_cwd =
+        cwd.empty() ? root
+                    : (fs::path(cwd).is_absolute() ? fs::path(cwd) : root / cwd);
+    const fs::path canonical_cwd = fs::canonical(requested_cwd, ec);
+    if (ec || !fs::is_directory(canonical_cwd, ec) ||
+        contains_symlink_component(fs::absolute(requested_cwd).lexically_normal()) ||
+        contains_protected_metadata_component(canonical_cwd))
+        return {ErrorCode::BadArgs,
+                "run_command cwd must be an existing safe canonical directory"};
+    uses_external = !resolved_path_is_under(root, canonical_cwd);
+    if (uses_external && !allow_external)
+        return {ErrorCode::BadArgs, "run_command cwd is outside the workspace"};
+    const std::string normalized_cwd =
+        uses_external ? canonical_cwd.generic_string()
+                      : fs::relative(canonical_cwd, root, ec).generic_string();
+    if (ec)
+        return {ErrorCode::BadArgs, "could not normalize run_command cwd"};
+    const std::string workspace_cwd =
+        normalized_cwd == "." ? std::string() : normalized_cwd;
+    if (!uses_external && (!safe_relative_path(workspace_cwd) ||
+        !path_allowed_for_command(snapshot, workspace_cwd, true, index_only))
         )
         return {ErrorCode::BadArgs,
                 index_only ? "run_command cwd has no eligible indexed content"
@@ -637,31 +660,86 @@ Error validate_command_workspace_paths(const index::Snapshot& snapshot,
         const std::string& argument = arguments[index];
         if (argument.empty() || argument.front() == '-') continue;
         if (allow_external && fs::path(argument).is_absolute()) {
-            std::error_code ec;
             const fs::path canonical = fs::weakly_canonical(argument, ec);
+            const fs::file_status literal_status = fs::symlink_status(argument, ec);
             if (ec || canonical.empty() || !fs::exists(canonical, ec) ||
+                fs::is_symlink(literal_status) ||
+                contains_symlink_component(fs::absolute(argument).lexically_normal()) ||
                 contains_protected_metadata_component(canonical))
                 return {ErrorCode::BadArgs,
                         "run_command external path operand is not an existing safe path: " +
                             argument};
-            const fs::path root = fs::canonical(snapshot.workspace, ec);
-            if (ec) return {ErrorCode::FileRead, "could not resolve run_command workspace"};
             if (!resolved_path_is_under(root, canonical)) uses_external = true;
             continue;
         }
         if (uses_external) continue;
-        const std::string relative = normalized_workspace_path(normalized_cwd, argument);
+        const std::string relative = normalized_workspace_path(workspace_cwd, argument);
         if (!safe_relative_path(relative))
             return {ErrorCode::BadArgs, unsafe_path_message(relative, "access via run_command")};
         std::error_code ec;
         const fs::file_status status = fs::symlink_status(fs::path(snapshot.workspace) / relative, ec);
         if (!ec && status.type() != fs::file_type::not_found &&
-            !path_allowed_for_command(snapshot, relative, fs::is_directory(status), index_only))
+            (contains_symlink_component(
+                 fs::absolute(fs::path(snapshot.workspace) / relative).lexically_normal()) ||
+             !path_allowed_for_command(snapshot, relative, fs::is_directory(status), index_only)))
             return {ErrorCode::BadArgs,
                     index_only
                         ? ("run_command path is not eligible in the completed index snapshot: " +
                            relative)
                         : ("run_command path is not a visible workspace entry: " + relative)};
+    }
+    return ok_error();
+}
+
+Error validate_vetted_read_only_paths(const index::Snapshot& snapshot,
+                                      const ReadOnlyCommandAssessment& assessment,
+                                      const std::string& cwd,
+                                      bool& outside_project) {
+    outside_project = false;
+    std::error_code ec;
+    const fs::path root = fs::canonical(snapshot.workspace, ec);
+    if (ec || root.empty())
+        return {ErrorCode::FileRead,
+                "could not resolve project root for read-only command validation"};
+    const fs::path requested_cwd =
+        cwd.empty() ? root
+                    : (fs::path(cwd).is_absolute() ? fs::path(cwd) : root / cwd);
+    const fs::path canonical_cwd = fs::canonical(requested_cwd, ec);
+    if (ec || !fs::is_directory(canonical_cwd, ec) ||
+        contains_symlink_component(fs::absolute(requested_cwd).lexically_normal()) ||
+        contains_protected_metadata_component(requested_cwd.lexically_normal()) ||
+        contains_protected_metadata_component(canonical_cwd))
+        return {ErrorCode::BadArgs,
+                "vetted read-only command cwd must be an existing safe directory"};
+    if (!resolved_path_is_under(root, canonical_cwd)) outside_project = true;
+
+    for (const std::string& operand : assessment.path_operands) {
+        if (operand.empty() || operand == "-") continue;
+        const fs::path supplied(operand);
+        const fs::path requested =
+            supplied.is_absolute() ? supplied : canonical_cwd / supplied;
+        if (contains_protected_metadata_component(requested.lexically_normal()))
+            return {ErrorCode::BadArgs,
+                    "vetted read-only command refused protected metadata path: " +
+                        operand};
+        const fs::file_status literal_status = fs::symlink_status(requested, ec);
+        if (ec || literal_status.type() == fs::file_type::not_found)
+            return {ErrorCode::BadArgs,
+                    "vetted read-only command path does not exist: " + operand};
+        if (fs::is_symlink(literal_status))
+            return {ErrorCode::BadArgs,
+                    "vetted read-only command refused symlink path: " + operand};
+        if (contains_symlink_component(fs::absolute(requested).lexically_normal()))
+            return {ErrorCode::BadArgs,
+                    "vetted read-only command refused symlink path component: " +
+                        operand};
+        const fs::path canonical = fs::canonical(requested, ec);
+        if (ec || canonical.empty() ||
+            contains_protected_metadata_component(canonical))
+            return {ErrorCode::BadArgs,
+                    "could not safely resolve vetted read-only command path: " +
+                        operand};
+        if (!resolved_path_is_under(root, canonical)) outside_project = true;
     }
     return ok_error();
 }
@@ -2452,6 +2530,7 @@ Error ReadToolRegistry::edit_workspace_file(const std::string& relative_path,
 }
 
 std::vector<provider::FunctionDefinition> ReadToolRegistry::definitions() const {
+    const bool agent_session = mutation_policy_ != MutationPolicy::Disabled;
     const std::string path = "\"path\":{\"type\":\"string\"}";
     const std::string range = path + ",\"start_line\":{\"type\":\"integer\",\"minimum\":1},"
                                       "\"end_line\":{\"type\":\"integer\",\"minimum\":1},"
@@ -2506,7 +2585,7 @@ std::vector<provider::FunctionDefinition> ReadToolRegistry::definitions() const 
         {"get_skeleton", "Return ordered indexed declarations, signatures, ranges, and documentation for one file.", schema(path, "\"path\"")},
         {"read_symbol", "Fingerprint-verify and read the actual indexed source range for a symbol id.", schema("\"symbol_id\":{\"type\":\"integer\",\"minimum\":1}", "\"symbol_id\"")},
         {"read_file",
-         mutation_policy_ == MutationPolicy::Disabled
+         !agent_session
              ? "Fingerprint-verify and read a bounded indexed UTF-8 line range with hashes and "
                "line numbers."
              : "Read any exact-path regular UTF-8 file in the live project filesystem; the file "
@@ -2515,23 +2594,27 @@ std::vector<provider::FunctionDefinition> ReadToolRegistry::definitions() const 
                "headless Ask decisions are denied.",
          schema(range, "\"path\"")},
         {"read_many",
-         mutation_policy_ == MutationPolicy::Disabled
+         !agent_session
              ? "Read multiple indexed bounded line ranges under one aggregate byte cap."
              : "Read multiple exact-path live project files under one aggregate byte cap; "
                "project files do not need to be indexed.",
          schema("\"items\":{\"type\":\"array\",\"items\":" + schema(range, "\"path\"") + ",\"maxItems\":100},\"max_bytes\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":262144}", "\"items\"")},
         {"run_command",
-         mutation_policy_ == MutationPolicy::Full
-             ? "Run a workspace command without a shell (argv exec, fixed PATH). Most commands "
-               "are allowed; shells/sudo/package installs/disk destroyers and destructive forms "
-               "(rm -rf, git reset --hard) are denied or need approval. No pipes/redirection/"
-               "metacharacters. Prefer native tools (read_file, list_directory, edit_file) for "
-               "edits; use stat/ls for metadata."
+         agent_session
+             ? "Run a workspace command without a shell (argv exec, fixed PATH). Act permits "
+               "ordinary Guard-controlled commands; Plan permits only conservatively vetted "
+               "read-only argv forms. In Smart mode, vetted read-only commands whose cwd and "
+               "path inputs resolve inside the project run without a prompt; unknown options, "
+               "other commands, and external paths require approval. Confirm always asks and "
+               "Yolo retains validated no-prompt execution. Shells/sudo/package installs/disk "
+               "destroyers and destructive forms (rm -rf, git reset --hard) are denied or need "
+               "approval. No pipes, redirects, substitutions, or shell metacharacters. Prefer "
+               "native tools and dedicated Git tools."
              : "Run one read-only inspection command without a shell "
                "(pwd/ls/rg/grep/find/git allowlist).",
          schema("\"command\":{\"type\":\"string\"},\"cwd\":{\"type\":\"string\"},"
                 "\"timeout_ms\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":" +
-                    std::string(mutation_policy_ == MutationPolicy::Full ? "120000" : "10000") + "}",
+                    std::string(agent_session ? "120000" : "10000") + "}",
                 "\"command\"")},
         {"git_status",
          "Compact git status for the workspace (short form with branch by default). "
@@ -2568,10 +2651,11 @@ std::vector<provider::FunctionDefinition> ReadToolRegistry::definitions() const 
                 "\"max_bytes\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":262144}",
                 "\"query\"")},
     };
-    if (mutation_policy_ == MutationPolicy::Full) {
+    if (agent_session) {
         tools.push_back(
             {"index_rebuild",
-             "Full rebuild of .ainiux-pr/index.sqlite (recovery/debugging). Requires confirm=true.",
+             "Act-only full rebuild of .ainiux-pr/index.sqlite (recovery/debugging). Requires "
+             "confirm=true; Plan returns policy_denied.",
              schema("\"confirm\":{\"type\":\"boolean\"}", "\"confirm\"")});
     }
     if (allow_network_) {
@@ -2623,13 +2707,15 @@ std::vector<provider::FunctionDefinition> ReadToolRegistry::definitions() const 
                     "\"path\",\"content\"")});
         tools.push_back(
             {"create_directory",
-             "Create one exact-path directory. parents=true also creates missing parents. "
-             "Native paths may be outside the project subject to the active permission mode.",
+             "Act-only creation of one exact-path directory. parents=true also creates missing "
+             "parents. Plan returns policy_denied. Native paths may be outside the project "
+             "subject to the active permission mode.",
              schema(path + ",\"parents\":{\"type\":\"boolean\"}", "\"path\"")});
         tools.push_back(
             {"rename_path",
-             "Rename an exact-path file or directory. The destination must not exist; "
-             "cross-filesystem failures are reported and never converted into copy/delete.",
+             "Act-only rename of an exact-path file or directory. Plan returns policy_denied. "
+             "The destination must not exist; cross-filesystem failures are reported and never "
+             "converted into copy/delete.",
              schema("\"source\":{\"type\":\"string\"},"
                     "\"destination\":{\"type\":\"string\"}",
                     "\"source\",\"destination\"")});
@@ -2648,10 +2734,11 @@ std::vector<provider::FunctionDefinition> ReadToolRegistry::definitions() const 
                            "\"end_line\":{\"type\":\"integer\",\"minimum\":1}}},"
                            "\"expected_file_hash\":{\"type\":\"string\"}",
                     "\"path\",\"old_text\",\"new_text\"")});
-        if (mutation_policy_ == MutationPolicy::Full) tools.push_back(
+        tools.push_back(
             {"remove",
-             "Delete an exact-path file or empty directory (recursive=true for non-empty "
-             "dirs). Use the exact filename from list_directory—do not strip # or other "
+             "Act-only deletion of an exact-path file or empty directory (recursive=true for "
+             "non-empty dirs); Plan returns policy_denied. Use the exact filename from "
+             "list_directory—do not strip # or other "
              "punctuation. When both name and #name# exist, plain name requires confirm=true. "
              "Database files (*.sqlite/*.db) are refused in headless mode. Prefer remove over "
              "edit_file for deleting files.",
@@ -3476,7 +3563,10 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
     if (name == "run_command") {
         std::string command, cwd;
         const bool full = mutation_policy_ == MutationPolicy::Full;
-        const std::size_t timeout_cap = full ? 120000 : 10000;
+        const bool agent_session =
+            mutation_policy_ != MutationPolicy::Disabled;
+        const std::size_t timeout_cap =
+            mutation_policy_ == MutationPolicy::Disabled ? 10000 : 120000;
         std::size_t timeout = full ? 30000 : 10000;
         if (!get_string(args, "command", command, true, validation_error) ||
             !get_string(args, "cwd", cwd, false, validation_error) ||
@@ -3488,13 +3578,16 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
         std::vector<std::string> parsed_arguments;
         std::string guard_rule_id;
         const CommandPolicy policy =
-            full ? CommandPolicy::Agent : CommandPolicy::InspectionOnly;
+            full ? CommandPolicy::Agent
+                 : (agent_session ? CommandPolicy::PlanReadOnly
+                                  : CommandPolicy::InspectionOnly);
         // Defer Ask so path validation runs before the interactive prompt.
         const GuardAskHandling preview_ask =
-            policy == CommandPolicy::Agent ? GuardAskHandling::DeferAsk : GuardAskHandling::DenyAsk;
+            policy == CommandPolicy::Agent ? GuardAskHandling::DeferAsk
+                                           : GuardAskHandling::DenyAsk;
         Error policy_error =
             parse_command(command, parsed_arguments, policy, guard_rule_id, preview_ask,
-                          nullptr, cancellation, full);
+                          nullptr, cancellation, agent_session);
         if (!policy_error.ok()) {
             const std::string code =
                 policy_error.message.find("refusing") != std::string::npos ||
@@ -3506,19 +3599,43 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
         }
         // Security-review keeps path scope to the completed index. Agent mode allows
         // real workspace paths (empty dirs, #files#, scripts to execute).
-        const bool index_only_commands = !full;
+        const bool index_only_commands =
+            mutation_policy_ == MutationPolicy::Disabled;
         bool uses_external = false;
         policy_error = validate_command_workspace_paths(
-            snapshot_, parsed_arguments, cwd, index_only_commands, true, uses_external);
+            snapshot_, parsed_arguments, cwd, index_only_commands, agent_session,
+            uses_external);
         if (!policy_error.ok()) return tool_error_result("policy_denied", policy_error.message);
-        const GuardApprovalDecision permission = request_permission(
-            "run_command", format_command_preview(parsed_arguments), parsed_arguments,
-            uses_external, false, true, !guard_rule_id.empty(), guard_rule_id,
-            guard_rule_id.empty()
-                ? std::string()
-                : "This command also matched Guard rule " + guard_rule_id +
-                      ". One approval covers the complete validated command call.",
-            cancellation);
+        if (!full && agent_session && uses_external)
+            return tool_error_result(
+                "policy_denied",
+                "Plan run_command paths and cwd must remain inside the project");
+        const ReadOnlyCommandAssessment read_only =
+            assess_read_only_command(parsed_arguments);
+        bool read_only_uses_external = false;
+        if (read_only.vetted) {
+            policy_error = validate_vetted_read_only_paths(
+                snapshot_, read_only, cwd, read_only_uses_external);
+            if (!policy_error.ok())
+                return tool_error_result("policy_denied", policy_error.message);
+            uses_external = uses_external || read_only_uses_external;
+        }
+        const bool smart_read_only_exemption =
+            permission_controls_ && permission_mode_ == PermissionMode::Smart &&
+            read_only.vetted && !uses_external && guard_rule_id.empty();
+        const GuardApprovalDecision permission =
+            smart_read_only_exemption
+                ? GuardApprovalDecision::Allow
+                : request_permission(
+                      "run_command", format_command_preview(parsed_arguments),
+                      parsed_arguments, uses_external, false, !read_only.vetted,
+                      !guard_rule_id.empty(), guard_rule_id,
+                      guard_rule_id.empty()
+                          ? std::string()
+                          : "This command also matched Guard rule " +
+                                guard_rule_id +
+                                ". One approval covers the complete validated command call.",
+                      cancellation);
         if (permission != GuardApprovalDecision::Allow) {
             return tool_error_result(
                 permission == GuardApprovalDecision::Cancelled ? "cancelled"
@@ -3532,7 +3649,7 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
         options.workspace = snapshot_.workspace;
         options.cwd = cwd;
         options.allow_external_cwd = uses_external;
-        options.allow_external_paths = uses_external;
+        options.allow_external_paths = agent_session;
         options.timeout_ms = static_cast<long>(timeout);
         options.cancellation = cancellation;
         // The complete call was approved above (or Yolo allowed it). Guard hard
@@ -3553,7 +3670,12 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
         // hardening pairs, leaving the validated subcommand at index 9.
         const bool git_file_listing = command_name == "git" && parsed_arguments.size() > 9 &&
                                       parsed_arguments[9] == "ls-files";
-        if (error.ok() && !uses_external &&
+        // Only security-review treats the index snapshot as an output
+        // authorization list. Agent Act/Plan commands operate on the validated
+        // live project filesystem, so filtering their stdout would incorrectly
+        // hide safe generated, ignored, or otherwise unindexed project paths
+        // (and cannot reliably parse formatted output such as `ls -l`).
+        if (error.ok() && index_only_commands && !uses_external &&
             (command_name == "find" || command_name == "ls" ||
                            command_name == "rg" || command_name == "grep" || git_file_listing)) {
             process.stdout_text = filter_path_lines(snapshot_, cwd, process.stdout_text,

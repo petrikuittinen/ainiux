@@ -121,6 +121,10 @@ struct ChatResult {
     long long completion_tokens = 0;
     bool completion_tokens_estimated = false;
     long long prompt_tokens = -1;
+    // Normalized provider prompt-cache accounting. -1 means not reported.
+    long long fresh_prompt_tokens = -1;
+    long long cache_read_tokens = -1;
+    long long cache_write_tokens = -1;
     long long total_tokens = -1;
     long http_status = 0;
     long long dns_ms = -1;

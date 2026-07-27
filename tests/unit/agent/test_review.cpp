@@ -152,6 +152,36 @@ void test_read_tools_and_policy() {
     check(!result_ok(result) && result.find("changed after the snapshot") != std::string::npos,
           "read_symbol rejects stale indexed fingerprints");
 
+    tools.set_mutation_policy(ainiux::agent::MutationPolicy::PlanningDocuments);
+    const std::vector<ainiux::provider::FunctionDefinition> plan_definitions =
+        tools.definitions();
+    const std::string plan_remove =
+        tools.execute("remove", R"({"path":"src/extra.hpp"})");
+    check(!result_ok(plan_remove) &&
+              plan_remove.find("policy_denied") != std::string::npos,
+          "stable Plan superset does not elevate Act-only remove");
+    tools.set_mutation_policy(ainiux::agent::MutationPolicy::Full);
+    const std::vector<ainiux::provider::FunctionDefinition> act_definitions =
+        tools.definitions();
+    bool definitions_equal = act_definitions.size() == plan_definitions.size();
+    for (std::size_t i = 0; definitions_equal && i < act_definitions.size(); ++i) {
+        definitions_equal =
+            act_definitions[i].name == plan_definitions[i].name &&
+            act_definitions[i].description == plan_definitions[i].description &&
+            act_definitions[i].parameters_json == plan_definitions[i].parameters_json;
+    }
+    check(definitions_equal,
+          "Act and Plan expose byte-identical native tool definitions in stable order");
+    const auto run_definition =
+        std::find_if(plan_definitions.begin(), plan_definitions.end(),
+                     [](const ainiux::provider::FunctionDefinition& definition) {
+                         return definition.name == "run_command";
+                     });
+    check(run_definition != plan_definitions.end() &&
+              run_definition->parameters_json.find("\"maximum\":120000") !=
+                  std::string::npos,
+          "agent run_command schema has a stable 120-second maximum");
+
     std::error_code cleanup;
     fs::remove_all(root, cleanup);
     check(!cleanup, "review tool workspace is removed");
@@ -206,53 +236,89 @@ void test_process_runner() {
 
 void test_prompts_and_report() {
     ainiux::agent::TrustedPrompts prompts;
-    ainiux::Error error = ainiux::agent::load_trusted_prompts("", prompts);
-    check(error.ok() && prompts.security_system_prompt() == prompts.master + "\n" + prompts.security &&
-              prompts.master.find("project instructions") != std::string::npos &&
-              prompts.master.find("Native tool channel") != std::string::npos &&
-              prompts.master.find("error tool-result") != std::string::npos &&
+    ainiux::Error error =
+        ainiux::agent::load_trusted_prompts("resources/prompts", prompts);
+    const std::string security_system = prompts.security_system_prompt();
+    std::istringstream words(prompts.agent);
+    std::size_t word_count = 0;
+    std::string word;
+    while (words >> word) ++word_count;
+    check(error.ok() && security_system == prompts.master + "\n" + prompts.security &&
+              security_system.size() == 7270 &&
+              ainiux::agent::index::content_hash(security_system) == "18f13a7ba7ff2097" &&
               prompts.security.find("submit_security_review") != std::string::npos &&
               prompts.security.find("EXPECTED_COVERAGE") != std::string::npos &&
               prompts.security.find("Review the supplied source batch") != std::string::npos &&
-              !prompts.coding.empty() &&
-              prompts.coding.find("# Coding") != std::string::npos &&
-              prompts.plan.find("# Planning") != std::string::npos &&
-              prompts.coding.find("4.5:1") != std::string::npos,
-          "trusted security prompt is exact master plus newline plus security prompt");
+              prompts.agent.size() <= 4096 && word_count <= 450 &&
+              prompts.agent.find("## Trust") != std::string::npos &&
+              prompts.agent.find("read_many") != std::string::npos &&
+              prompts.agent.find("Plan:") != std::string::npos &&
+              prompts.agent.find("edit_file") != std::string::npos &&
+              prompts.agent.find("tests") != std::string::npos &&
+              prompts.agent.find("refactoring") != std::string::npos &&
+              prompts.agent.find("4.5:1") != std::string::npos,
+          "merged agent prompt is bounded and security prompt bytes remain unchanged");
     const std::string agent_native =
-        prompts.agent_system_prompt(ainiux::agent::AgentTaskMode::Act,
-                                    ainiux::agent::ToolProtocol::Native);
+        prompts.agent_system_prompt(ainiux::agent::ToolProtocol::Native);
     const std::string agent_xml =
-        prompts.agent_system_prompt(ainiux::agent::AgentTaskMode::Act,
-                                    ainiux::agent::ToolProtocol::Xml);
-    const std::string agent_plan =
-        prompts.agent_system_prompt(ainiux::agent::AgentTaskMode::Plan,
-                                    ainiux::agent::ToolProtocol::Native);
-    check(agent_native.find("project instructions") != std::string::npos &&
-              agent_native.find("# Coding") != std::string::npos &&
+        prompts.agent_system_prompt(ainiux::agent::ToolProtocol::Xml);
+    check(agent_native.find("AGENTS.md project instructions") != std::string::npos &&
+              agent_native.find("Act:") != std::string::npos &&
+              agent_native.find("Plan:") != std::string::npos &&
               agent_native.find("4.5:1") != std::string::npos &&
               agent_native.find("Active channel: native tools") != std::string::npos &&
               agent_native.find("submit_security_review") == std::string::npos &&
-              agent_native.find("Do not create git commits") != std::string::npos,
-          "agent native system prompt is master plus coding plus native protocol, without security");
-    check(agent_xml.find("# Coding") != std::string::npos &&
-              agent_xml.find("Active channel: XML tool markup") != std::string::npos &&
+              agent_native.find("Do not create commits") != std::string::npos,
+          "agent native system prompt is merged base plus native protocol");
+    check(agent_xml.find("Active channel: XML tool markup") != std::string::npos &&
               agent_xml.find("<tool_call>") != std::string::npos &&
               agent_xml.find("exactly one") != std::string::npos,
-          "agent XML system prompt is master plus coding plus static XML protocol appendix");
-    check(agent_plan.find("# Planning") != std::string::npos &&
-              agent_plan.find("# Coding") == std::string::npos &&
-              agent_plan.find("Active channel: native tools") != std::string::npos,
-          "Plan prompt is master plus planning plus protocol without coding");
+          "agent XML system prompt retains the one-block JSON/XML contract");
     ainiux::provider::ToolConversation seeded;
     ainiux::agent::seed_agent_conversation(seeded, prompts,
                                            ainiux::agent::AgentTaskMode::Act,
                                            ainiux::agent::ToolProtocol::Native,
                                            "List the project overview.");
-    check(seeded.messages.size() == 2 && seeded.messages[0].role == "system" &&
+    check(seeded.messages.size() == 3 && seeded.messages[0].role == "system" &&
               seeded.messages[0].content == agent_native && seeded.messages[1].role == "user" &&
-              seeded.messages[1].content == "List the project overview.",
-          "seed_agent_conversation installs a static system prompt and the user goal");
+              seeded.messages[1].content ==
+                  ainiux::agent::agent_task_mode_control(
+                      ainiux::agent::AgentTaskMode::Act) &&
+              seeded.messages[2].role == "user" &&
+              seeded.messages[2].content == "List the project overview.",
+          "seed_agent_conversation inserts initial mode control before the goal");
+    const std::vector<ainiux::provider::Message> stable_prefix = seeded.messages;
+    ainiux::agent::append_conversation_text(
+        seeded, "user",
+        ainiux::agent::agent_task_mode_control(ainiux::agent::AgentTaskMode::Plan));
+    ainiux::agent::append_conversation_text(
+        seeded, "user",
+        ainiux::agent::agent_task_mode_control(ainiux::agent::AgentTaskMode::Act));
+    bool prefix_unchanged = seeded.messages.size() == stable_prefix.size();
+    for (std::size_t i = 0; prefix_unchanged && i < stable_prefix.size(); ++i)
+        prefix_unchanged = seeded.messages[i].role == stable_prefix[i].role &&
+                           seeded.messages[i].content == stable_prefix[i].content;
+    check(prefix_unchanged &&
+              seeded.continuation_items_json.size() == 2 &&
+              seeded.continuation_items_json[0].find("Plan.") != std::string::npos &&
+              seeded.continuation_items_json[1].find("Act.") != std::string::npos,
+          "Act to Plan to Act preserves the earlier request items and appends controls");
+    const fs::path prompt_directory = temporary_workspace();
+    write_file(prompt_directory / "master_prompt.md", "master");
+    write_file(prompt_directory / "security_prompt.md", "security");
+    ainiux::agent::TrustedPrompts overridden;
+    error = ainiux::agent::load_trusted_prompts(prompt_directory.string(), overridden);
+    check(!error.ok() &&
+              error.message.find("agent_prompt.md") != std::string::npos,
+          "trusted prompt override names a missing required agent_prompt.md");
+    write_file(prompt_directory / "agent_prompt.md", "agent");
+    error = ainiux::agent::load_trusted_prompts(prompt_directory.string(), overridden);
+    check(error.ok() && overridden.agent == "agent" &&
+              overridden.master == "master" && overridden.security == "security",
+          "trusted prompt override requires exactly the three active prompt resources");
+    std::error_code prompt_cleanup;
+    fs::remove_all(prompt_directory, prompt_cleanup);
+    check(!prompt_cleanup, "trusted prompt fixture is removed");
     ainiux::agent::index::Snapshot snapshot;
     ainiux::agent::index::IndexedFile indexed;
     indexed.path = "src/a.cpp";

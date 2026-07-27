@@ -1,6 +1,7 @@
 #include "agent/process.hpp"
 
 #include "agent/command_guard.hpp"
+#include "agent/read_only_command.hpp"
 
 #include <algorithm>
 #include <cerrno>
@@ -294,6 +295,19 @@ Error enforce_inspection_policy(std::vector<std::string>& args) {
                 " (allowed: pwd, ls, rg, grep, find, git status/diff/…)"};
 }
 
+Error enforce_plan_read_only_policy(std::vector<std::string>& args,
+                                    bool allow_absolute_paths) {
+    Error error = enforce_common_safety(args, allow_absolute_paths);
+    if (!error.ok()) return error;
+    const ReadOnlyCommandAssessment assessment = assess_read_only_command(args);
+    if (!assessment.vetted)
+        return {ErrorCode::BadArgs,
+                "command is not a vetted read-only Plan invocation" +
+                    (assessment.reason.empty() ? std::string()
+                                               : ": " + assessment.reason)};
+    return ok_error();
+}
+
 // Inject git -c pager/external-diff hardening and return subcommand name.
 Error harden_git_argv(std::vector<std::string>& args, std::string& subcommand) {
     if (args.size() < 2) return {ErrorCode::BadArgs, "git requires a subcommand"};
@@ -516,6 +530,8 @@ Error parse_command(const std::string& command,
         return enforce_agent_policy(arguments, guard_rule_id, ask_handling, on_guard_ask,
                                     cancellation, unused_decision, allow_absolute_paths);
     }
+    if (policy == CommandPolicy::PlanReadOnly)
+        return enforce_plan_read_only_policy(arguments, allow_absolute_paths);
     return enforce_inspection_policy(arguments);
 }
 

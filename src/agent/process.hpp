@@ -43,12 +43,13 @@ struct ProcessResult {
     std::string guard_decision;  // allow | deny | ask→resolved
 };
 
-// InspectionOnly: security-review read-only allowlist (pwd/ls/rg/find/git/…).
+// InspectionOnly: security-review's historical narrow snapshot allowlist.
+// PlanReadOnly: expanded, conservatively classified read-only argv forms.
 // Agent: default-allow any basename found on a fixed PATH, shell-free execve,
 // structural argument safety, and a hard denylist / Guard for dangerous forms.
-// Do not grow per-command option allowlists for agent mode.
 enum class CommandPolicy {
     InspectionOnly,
+    PlanReadOnly,
     Agent,
 };
 

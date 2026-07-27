@@ -52,18 +52,22 @@ void test_load_and_seed_injection() {
     agent::TrustedPrompts prompts;
     prompts.master = "MASTER";
     prompts.security = "SECURITY";
+    prompts.agent = "AGENT";
     provider::ToolConversation conversation;
     agent::seed_agent_conversation(conversation, prompts, agent::AgentTaskMode::Act,
                                    agent::ToolProtocol::Native, "Do the task",
                                    bundle.injection_text);
-    check(conversation.messages.size() == 3, "system + agents.md + goal");
+    check(conversation.messages.size() == 4, "system + agents.md + mode + goal");
     check(conversation.messages[0].role == "system" &&
-              conversation.messages[0].content.find("MASTER") != std::string::npos,
-          "system stays trusted master");
+              conversation.messages[0].content.find("AGENT") != std::string::npos,
+          "system stays trusted agent base");
     check(conversation.messages[1].role == "user" &&
               conversation.messages[1].content.find("AGENTS.md") != std::string::npos,
           "AGENTS.md is user-role context");
-    check(conversation.messages[2].role == "user" && conversation.messages[2].content == "Do the task",
+    check(conversation.messages[2].role == "user" &&
+              conversation.messages[2].content.find("Act.") != std::string::npos,
+          "active mode control follows project instructions");
+    check(conversation.messages[3].role == "user" && conversation.messages[3].content == "Do the task",
           "goal is final user message");
 
     std::error_code ec;

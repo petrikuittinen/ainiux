@@ -256,9 +256,67 @@ void test_permission_modes_and_native_path_tools() {
           "list_directory supports an exact external directory under temp");
     const std::string smart_command =
         smart.execute("run_command", R"({"command":"pwd"})");
-    check(!json_ok(smart_command) &&
-              json_error_code(smart_command) == "policy_denied",
-          "smart mode does not execute a model-issued command without approval");
+    check(json_ok(smart_command),
+          "smart mode auto-approves a vetted read-only project command");
+    const std::string smart_build =
+        smart.execute("run_command", R"({"command":"make test"})");
+    check(!json_ok(smart_build) &&
+              json_error_code(smart_build) == "policy_denied",
+          "smart mode still requires approval for builds and tests");
+    const std::string smart_external = smart.execute(
+        "run_command",
+        "{\"command\":\"pwd\",\"cwd\":" +
+            json_string((temp_parent / "nested").string()) + "}");
+    check(!json_ok(smart_external) &&
+              smart_external.find("approval") != std::string::npos,
+          "smart mode still requires approval for an external command cwd");
+    std::atomic<int> smart_asks{0};
+    agent::ReadToolRegistry smart_prompting = make_registry(
+        workspace, agent::MutationPolicy::Full, false,
+        [&](const agent::GuardApprovalRequest&,
+            runtime::CancellationToken) -> agent::GuardApprovalDecision {
+            ++smart_asks;
+            return agent::GuardApprovalDecision::Deny;
+        },
+        agent::PermissionMode::Smart, true);
+    check(json_ok(smart_prompting.execute(
+              "run_command", R"({"command":"ls -laFg src"})")) &&
+              smart_asks.load() == 0,
+          "smart mode does not prompt for a vetted project read");
+    check(!json_ok(smart_prompting.execute(
+              "run_command", R"({"command":"make test"})")) &&
+              smart_asks.load() == 1,
+          "smart mode prompts for a non-vetted command");
+    check(!json_ok(smart_prompting.execute(
+              "run_command",
+              "{\"command\":\"pwd\",\"cwd\":" +
+                  json_string((temp_parent / "nested").string()) + "}")) &&
+              smart_asks.load() == 2,
+          "smart mode prompts for an external-path read-only command");
+    const std::string absolute_project_file = smart.execute(
+        "run_command",
+        "{\"command\":" +
+            json_string("cat " + (fs::path(workspace) / "src" / "hello.cpp").string()) +
+            "}");
+    check(json_ok(absolute_project_file) &&
+              absolute_project_file.find("int main") != std::string::npos,
+          "smart mode accepts a canonical absolute in-project read operand");
+    check(!json_ok(smart.execute(
+              "run_command", R"({"command":"cat ../outside.txt"})")),
+          "smart mode rejects traversal before approval");
+    check(!json_ok(smart.execute(
+              "run_command", R"({"command":"ls .ainiux-pr"})")),
+          "smart mode rejects protected metadata before approval");
+    fs::create_symlink(temp_parent / "nested" / "to.txt",
+                       fs::path(workspace) / "escape-link", ec);
+    check(!json_ok(smart.execute(
+              "run_command", R"({"command":"cat escape-link"})")),
+          "smart mode rejects symlink operands before approval");
+    check(!json_ok(smart.execute(
+              "run_command", R"({"command":"pwd > owned"})")) &&
+              !json_ok(smart.execute(
+                  "run_command", "{\"command\":\"pwd $(whoami)\"}")),
+          "redirects and substitutions remain structurally denied");
 
     agent::ReadToolRegistry yolo =
         make_registry(workspace, agent::MutationPolicy::Full, false, {},
@@ -267,6 +325,9 @@ void test_permission_modes_and_native_path_tools() {
         yolo.execute("run_command", R"({"command":"sudo true"})");
     check(!json_ok(hard_denied) && json_error_code(hard_denied) == "policy_denied",
           "yolo cannot elevate a hard Guard denial");
+    check(json_ok(yolo.execute(
+              "run_command", R"({"command":"echo yolo-non-vetted"})")),
+          "yolo remains prompt-free for other validated commands");
     const std::string external_cwd = yolo.execute(
         "run_command",
         "{\"command\":\"pwd\",\"cwd\":" +
@@ -987,6 +1048,54 @@ void test_smart_act_native_tools_accept_unindexed_project_paths() {
     fs::remove_all(workspace, ec);
 }
 
+void test_agent_command_output_keeps_unindexed_project_paths() {
+    const std::string workspace = write_temp_workspace("command-unindexed");
+    std::atomic<int> confirm_asks{0};
+    agent::ReadToolRegistry confirm = make_registry(
+        workspace, agent::MutationPolicy::Full, false,
+        [&](const agent::GuardApprovalRequest&,
+            runtime::CancellationToken) -> agent::GuardApprovalDecision {
+            ++confirm_asks;
+            return agent::GuardApprovalDecision::Allow;
+        },
+        agent::PermissionMode::Confirm, true);
+    agent::ReadToolRegistry smart = make_registry(
+        workspace, agent::MutationPolicy::Full, false, {},
+        agent::PermissionMode::Smart, true);
+    agent::ReadToolRegistry yolo = make_registry(
+        workspace, agent::MutationPolicy::Full, false, {},
+        agent::PermissionMode::Yolo, true);
+
+    // Create after every registry snapshot so this path is guaranteed to be
+    // absent from all three indexes.
+    const std::string late_name = "late-unindexed-output.txt";
+    write_text(fs::path(workspace) / late_name, "visible\n");
+    const std::string command = R"JSON({"command":"ls -laFg"})JSON";
+    const std::string confirmed = confirm.execute("run_command", command);
+    const std::string smart_result = smart.execute("run_command", command);
+    const std::string yolo_result = yolo.execute("run_command", command);
+    check(json_ok(confirmed) && confirmed.find(late_name) != std::string::npos &&
+              confirm_asks.load() == 1,
+          "Confirm preserves unindexed long-format ls output after approval: " +
+              confirmed);
+    check(json_ok(smart_result) &&
+              smart_result.find(late_name) != std::string::npos,
+          "Smart preserves unindexed long-format ls output: " + smart_result);
+    check(json_ok(yolo_result) &&
+              yolo_result.find(late_name) != std::string::npos,
+          "Yolo preserves unindexed long-format ls output: " + yolo_result);
+    check(confirmed.find("output referring to non-indexed paths was omitted") ==
+                  std::string::npos &&
+              smart_result.find("output referring to non-indexed paths was omitted") ==
+                  std::string::npos &&
+              yolo_result.find("output referring to non-indexed paths was omitted") ==
+                  std::string::npos,
+          "Agent permission modes do not emit the security-review index filter warning");
+
+    std::error_code ec;
+    fs::remove_all(workspace, ec);
+}
+
 void test_replace_symbol() {
     const std::string workspace = write_temp_workspace("symbol");
     write_text(fs::path(workspace) / "src" / "sym.cpp",
@@ -1249,7 +1358,24 @@ void test_plan_document_mutation_policy() {
           "Plan policy denies patch delete operations");
     check(!json_ok(tools.execute(
               "run_command", R"JSON({"command":"touch PLAN.md"})JSON")),
-          "Plan run_command uses inspection-only command policy");
+          "Plan run_command denies non-vetted commands");
+    check(json_ok(tools.execute(
+              "run_command", R"JSON({"command":"stat -c %y PLANS.md"})JSON")),
+          "Plan run_command accepts the expanded vetted read-only set");
+    check(json_ok(tools.execute(
+              "run_command",
+              std::string("{\"command\":") +
+                  json::quote("cat " +
+                              (fs::path(workspace) / "PLANS.md").string()) +
+                  "}")),
+          "Plan run_command accepts a canonical absolute in-project read path");
+    check(!json_ok(tools.execute(
+              "run_command", R"JSON({"command":"tail -f PLANS.md"})JSON")) &&
+              !json_ok(tools.execute(
+                  "run_command", R"JSON({"command":"find . -exec touch owned ;"})JSON")) &&
+              !json_ok(tools.execute(
+                  "run_command", R"JSON({"command":"rg --pre cat plan ."})JSON")),
+          "Plan denies following, execution, and external-preprocessor forms");
 
     const std::string mixed =
         "*** Begin Patch\n"
@@ -1279,8 +1405,8 @@ void test_plan_document_mutation_policy() {
         if (definition.name == "remove") saw_remove = true;
         if (definition.name == "index_rebuild") saw_rebuild = true;
     }
-    check(saw_edit && !saw_remove && !saw_rebuild,
-          "Plan definitions expose planning edits but hide remove and index_rebuild");
+    check(saw_edit && saw_remove && saw_rebuild,
+          "Plan definitions expose the stable agent superset while policy denies Act-only tools");
     fs::remove_all(workspace, ec);
 }
 
@@ -1299,6 +1425,7 @@ void run_all() {
     test_remove_tool();
     test_list_directory_filesystem();
     test_smart_act_native_tools_accept_unindexed_project_paths();
+    test_agent_command_output_keeps_unindexed_project_paths();
     test_replace_symbol();
     test_index_status_and_update();
     test_inspect_and_find_tests();

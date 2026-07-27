@@ -10,6 +10,7 @@
 #include "agent/command_guard.hpp"
 #include "agent/index/index.hpp"
 #include "agent/process.hpp"
+#include "agent/read_only_command.hpp"
 #include "agent/tools.hpp"
 #include "json/json.hpp"
 #include "support/test_support.hpp"
@@ -98,6 +99,74 @@ void test_parse_policies() {
                                  rule);
     check(!error.ok() && error.message.find("inspection allowlist") != std::string::npos,
           "security-review remains a strict allowlist: " + error.message);
+
+    error = agent::parse_command("stat -c %y tic_tac_toe.py", args,
+                                 agent::CommandPolicy::PlanReadOnly, rule);
+    check(error.ok(), "Plan accepts expanded vetted read-only commands: " + error.message);
+    error = agent::parse_command("make test", args, agent::CommandPolicy::PlanReadOnly, rule);
+    check(!error.ok(), "Plan denies non-vetted build commands");
+    error = agent::parse_command("tail -f tic_tac_toe.py", args,
+                                 agent::CommandPolicy::PlanReadOnly, rule);
+    check(!error.ok(), "Plan denies mutating/following display-command forms");
+}
+
+void test_read_only_command_classifier() {
+    auto vetted = [](std::initializer_list<const char*> words) {
+        std::vector<std::string> args;
+        for (const char* word : words) args.emplace_back(word);
+        return agent::assess_read_only_command(args).vetted;
+    };
+    check(vetted({"pwd"}), "classifier: pwd");
+    check(vetted({"ls", "-laFg", "src"}), "classifier: ordinary combined ls flags");
+    check(vetted({"cat", "-n", "README.md"}), "classifier: cat");
+    check(vetted({"head", "-n", "5", "README.md"}), "classifier: head");
+    check(vetted({"tail", "-n", "5", "README.md"}), "classifier: non-following tail");
+    check(vetted({"stat", "-c", "%y", "README.md"}), "classifier: stat");
+    check(vetted({"file", "--mime-type", "README.md"}), "classifier: file");
+    check(vetted({"wc", "-l", "README.md"}), "classifier: wc");
+    check(vetted({"du", "-sh", "src"}), "classifier: du");
+    check(vetted({"grep", "-n", "-C", "2", "needle", "src/main.cpp"}),
+          "classifier: grep context flags");
+    check(vetted({"rg", "-n", "-g", "*.cpp", "needle", "src"}),
+          "classifier: rg matching and glob flags");
+    check(vetted({"find", "src", "-type", "f", "-print"}),
+          "classifier: print-only find");
+    check(vetted({"diff", "-u", "input1.txt", "input2.txt"}), "classifier: diff");
+    check(vetted({"cmp", "-s", "input1.txt", "input2.txt"}), "classifier: cmp");
+    check(vetted({"readlink", "-f", "src"}), "classifier: readlink");
+    check(vetted({"md5sum", "README.md"}) &&
+              vetted({"sha256sum", "README.md"}) &&
+              vetted({"b2sum", "README.md"}) &&
+              vetted({"cksum", "README.md"}),
+          "classifier: checksum families");
+    check(vetted({"ps", "aux"}) && vetted({"ps", "-eo", "pid,cmd"}) &&
+              vetted({"df", "-h"}) &&
+              vetted({"whoami"}) && vetted({"id", "-u"}) &&
+              vetted({"groups"}) && vetted({"who", "-H"}) &&
+              vetted({"uname", "-a"}) && vetted({"lsb_release", "-a"}) &&
+              vetted({"uptime"}) && vetted({"free", "-h"}) &&
+              vetted({"nproc"}) && vetted({"arch"}),
+          "classifier: passive host snapshots");
+    check(vetted({"hostname", "-f"}) && vetted({"date", "-u", "+%FT%TZ"}) &&
+              vetted({"ifconfig", "-a"}) && vetted({"ip", "addr", "show"}),
+          "classifier: strict display-only forms");
+
+    check(!vetted({"ls", "--definitely-unknown"}), "classifier: unknown option fallback");
+    check(!vetted({"date", "--set", "tomorrow"}), "classifier: date --set trap");
+    check(!vetted({"hostname", "new-name"}), "classifier: hostname mutation trap");
+    check(!vetted({"ifconfig", "eth0", "up"}), "classifier: ifconfig mutation trap");
+    check(!vetted({"find", ".", "-fprint", "owned"}), "classifier: find output trap");
+    check(!vetted({"find", ".", "-exec", "touch", "owned", ";"}),
+          "classifier: find exec trap");
+    check(!vetted({"rg", "--pre", "cat", "needle"}), "classifier: rg preprocessor trap");
+    check(!vetted({"sha256sum", "--check", "sums"}), "classifier: checksum check trap");
+    check(!vetted({"tail", "--follow", "README.md"}), "classifier: tail follow trap");
+    check(!vetted({"diff", "--output=owned", "input1.txt", "input2.txt"}),
+          "classifier: output-file option trap");
+    check(!vetted({"file", "--compile"}), "classifier: file compile trap");
+    check(!vetted({"ping", "localhost"}) && !vetted({"top"}) &&
+              !vetted({"git", "status"}) && !vetted({"make", "test"}),
+          "classifier: intentionally non-vetted command families");
 }
 
 std::string temp_workspace(const std::string& name) {
@@ -270,15 +339,35 @@ void test_ask_raw_decision_not_finalized() {
           "headless message mentions headless: " + headless.message);
 }
 
+void test_run_command_cancellation_remains_effective() {
+    const std::string workspace = temp_workspace("cancel");
+    runtime::CancellationSource source;
+    source.cancel();
+    agent::ProcessOptions options;
+    options.workspace = workspace;
+    options.timeout_ms = 5000;
+    options.cancellation = source.token();
+    agent::ProcessResult result;
+    const Error error =
+        agent::run_command("sleep 5", options, result,
+                           agent::CommandPolicy::Agent);
+    check(error.code == ErrorCode::Cancelled && result.cancelled,
+          "direct argv command remains cancellation-aware");
+    std::error_code ec;
+    fs::remove_all(workspace, ec);
+}
+
 }  // namespace
 
 void run_all() {
     test_guard_patterns();
     test_parse_policies();
+    test_read_only_command_classifier();
     test_tool_agent_python_and_security_deny();
     test_interactive_approval_allows_then_denies();
     test_approval_gate_resolve_and_cancel();
     test_ask_raw_decision_not_finalized();
+    test_run_command_cancellation_remains_effective();
 }
 
 }  // namespace ainiux::test::agent_command_guard

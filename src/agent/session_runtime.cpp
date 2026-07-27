@@ -4,6 +4,7 @@
 #include <chrono>
 #include <filesystem>
 #include <iostream>
+#include <limits>
 #include <sstream>
 #include <utility>
 #include <unistd.h>
@@ -69,6 +70,23 @@ std::vector<std::string> known_tool_names(const ReadToolRegistry& tools) {
 }
 
 }  // namespace
+
+void accumulate_agent_token_usage(const provider::ChatResult& metrics,
+                                  AgentTokenUsage& usage) {
+    if (metrics.usage_json.empty() || metrics.usage_json == "null") return;
+    auto add = [](long long& total, long long value) {
+        if (value <= 0) return;
+        total = total > std::numeric_limits<long long>::max() - value
+                    ? std::numeric_limits<long long>::max()
+                    : total + value;
+    };
+    ++usage.reported_rounds;
+    add(usage.input_tokens, metrics.prompt_tokens);
+    add(usage.fresh_input_tokens, metrics.fresh_prompt_tokens);
+    add(usage.cache_read_tokens, metrics.cache_read_tokens);
+    add(usage.cache_write_tokens, metrics.cache_write_tokens);
+    add(usage.output_tokens, metrics.completion_tokens);
+}
 
 bool AgentSessionRuntime::is_interrupted(runtime::CancellationToken cancellation,
                                          const std::function<bool()>& interrupted) const {
@@ -681,30 +699,22 @@ Error AgentSessionRuntime::switch_task_mode(AgentTaskMode mode) {
     AgentsMdBundle refreshed;
     Error error = load_root_agents_md(options_.workspace, kDefaultAgentsMdMaxBytes, refreshed);
     if (!error.ok()) return error;
-    const std::string next_prompt = prompts_.agent_system_prompt(mode, state_.protocol);
-    if (next_prompt.empty())
-        return {ErrorCode::Internal, "selected agent task prompt is empty"};
-
     if (conversation_seeded_) {
         if (conversation_.messages.empty() || conversation_.messages.front().role != "system")
             return {ErrorCode::Internal,
-                    "agent conversation has no replaceable trusted system prompt"};
-        conversation_.messages.front().content = next_prompt;
-        const std::string old_injection = agents_md_.injection_text;
-        auto found = std::find_if(
-            conversation_.messages.begin() + 1, conversation_.messages.end(),
-            [&](const provider::Message& message) {
-                return message.role == "user" && message.content == old_injection;
-            });
-        if (found != conversation_.messages.end()) {
-            if (refreshed.injection_text.empty())
-                conversation_.messages.erase(found);
-            else
-                found->content = refreshed.injection_text;
-        } else if (!refreshed.injection_text.empty()) {
-            conversation_.messages.insert(conversation_.messages.begin() + 1,
-                                          {"user", refreshed.injection_text});
+                    "agent conversation has no trusted system prompt"};
+        // Preserve the serialized prefix. Refreshed project instructions and
+        // mode controls are appended for later rounds.
+        if (refreshed.injection_text != agents_md_.injection_text) {
+            const std::string refreshed_context =
+                refreshed.injection_text.empty()
+                    ? "[Ainiux refreshed project instructions]\n"
+                      "No workspace-root AGENTS.md instructions are currently present."
+                    : refreshed.injection_text;
+            append_conversation_text(conversation_, "user", refreshed_context);
         }
+        append_conversation_text(conversation_, "user",
+                                 agent_task_mode_control(mode));
     }
     agents_md_ = std::move(refreshed);
     task_mode_ = mode;
@@ -829,6 +839,26 @@ SessionTurnResult AgentSessionRuntime::run_user_turn(
             return;
         }
         if (options_.on_structured_progress) options_.on_structured_progress(update);
+    };
+    bool token_usage_logged = false;
+    auto log_token_usage = [&]() {
+        if (!logger_ || token_usage_logged || result.token_usage.reported_rounds == 0)
+            return;
+        token_usage_logged = true;
+        json::Value fields = log_object();
+        fields.object["model_rounds"] =
+            log_number(result.token_usage.reported_rounds);
+        fields.object["input_tokens"] =
+            log_number(result.token_usage.input_tokens);
+        fields.object["fresh_input_tokens"] =
+            log_number(result.token_usage.fresh_input_tokens);
+        fields.object["cache_read_tokens"] =
+            log_number(result.token_usage.cache_read_tokens);
+        fields.object["cache_write_tokens"] =
+            log_number(result.token_usage.cache_write_tokens);
+        fields.object["output_tokens"] =
+            log_number(result.token_usage.output_tokens);
+        logger_->event("agent_turn_usage", {"agent"}, std::move(fields), "success");
     };
 
     // First turn: open singleton project row and seed provider conversation.
@@ -1017,6 +1047,7 @@ SessionTurnResult AgentSessionRuntime::run_user_turn(
             result.session_turns = session_turns_;
             result.session_tool_calls = session_tool_calls_;
             result.finished_at_ms = now_unix_ms();
+            log_token_usage();
             return result;
         }
 
@@ -1095,6 +1126,7 @@ SessionTurnResult AgentSessionRuntime::run_user_turn(
             result.session_turns = session_turns_;
             result.session_tool_calls = session_tool_calls_;
             result.finished_at_ms = now_unix_ms();
+            log_token_usage();
             return result;
         }
         if (options_.interactive && round_reasoning.empty())
@@ -1120,6 +1152,8 @@ SessionTurnResult AgentSessionRuntime::run_user_turn(
 
         turn_tool_calls += round.tool_calls.size();
         if (!round.tool_calls.empty()) publish_phase(AgentActivityPhase::Working);
+        accumulate_agent_token_usage(round.metrics, result.token_usage);
+        const provider::ChatResult round_metrics = round.metrics;
         AgentRoundOutcome outcome = handle_agent_tool_round(
             state_, limits_, context, conversation_, std::move(round), known_tools_, executor,
             cancellation);
@@ -1137,6 +1171,15 @@ SessionTurnResult AgentSessionRuntime::run_user_turn(
             fields.object["tool_result_count"] = log_number(outcome.tool_results.size());
             fields.object["protocol"] =
                 log_string(state_.protocol == ToolProtocol::Xml ? "xml" : "native");
+            fields.object["input_tokens"] = log_number(round_metrics.prompt_tokens);
+            fields.object["fresh_input_tokens"] =
+                log_number(round_metrics.fresh_prompt_tokens);
+            fields.object["cache_read_tokens"] =
+                log_number(round_metrics.cache_read_tokens);
+            fields.object["cache_write_tokens"] =
+                log_number(round_metrics.cache_write_tokens);
+            fields.object["output_tokens"] =
+                log_number(round_metrics.completion_tokens);
             if (!outcome.notice.empty())
                 fields.object["notice"] = ReviewLogger::payload(outcome.notice);
             if (!outcome.final_text.empty())
@@ -1252,6 +1295,7 @@ SessionTurnResult AgentSessionRuntime::run_user_turn(
                               << redact_secrets(assistant_error.message, secrets_) << "\n";
             }
             publish_request_token_estimate();
+            log_token_usage();
             return result;
         }
 
@@ -1268,6 +1312,7 @@ SessionTurnResult AgentSessionRuntime::run_user_turn(
                                                     redact_secrets(result.notice, secrets_));
             }
             publish_request_token_estimate();
+            log_token_usage();
             return result;
         }
 
@@ -1289,6 +1334,7 @@ SessionTurnResult AgentSessionRuntime::run_user_turn(
             (void)session_store_.append_message("notice",
                                                 redact_secrets(result.notice, secrets_));
         }
+        log_token_usage();
         return result;
     }
 }
