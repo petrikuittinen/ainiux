@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cctype>
 #include <chrono>
+#include <condition_variable>
 #include <cstdio>
 #include <cstdlib>
 #include <ctime>
@@ -11,9 +12,11 @@
 #include <iomanip>
 #include <iterator>
 #include <limits>
+#include <mutex>
 #include <regex>
 #include <set>
 #include <sstream>
+#include <thread>
 #include <sys/stat.h>
 #include <unistd.h>
 
@@ -30,6 +33,128 @@
 #include "security/redact.hpp"
 
 namespace ainiux::agent {
+
+struct IndexRefreshState {
+    explicit IndexRefreshState(index::Options base_options)
+        : options(std::move(base_options)) {
+        options.cancellation = stop_source.token();
+        options.interrupted = {};
+        worker = std::thread([this] { run(); });
+    }
+
+    ~IndexRefreshState() {
+        {
+            std::lock_guard<std::mutex> lock(mutex);
+            stopping = true;
+            stop_source.cancel();
+        }
+        ready.notify_all();
+        if (worker.joinable()) worker.join();
+    }
+
+    std::size_t enqueue(const std::vector<std::string>& paths,
+                        bool full_tree) {
+        std::lock_guard<std::mutex> lock(mutex);
+        if (stopping) return requested_generation;
+        if (full_tree) {
+            full_refresh = true;
+        } else {
+            for (const std::string& path : paths)
+                if (!path.empty()) pending_paths.insert(path);
+        }
+        ++requested_generation;
+        ready.notify_one();
+        return requested_generation;
+    }
+
+    std::size_t generation() const {
+        std::lock_guard<std::mutex> lock(mutex);
+        return requested_generation;
+    }
+
+    Error wait_for(std::size_t generation,
+                   runtime::CancellationToken cancellation) const {
+        std::unique_lock<std::mutex> lock(mutex);
+        while (completed_generation < generation && !stopping) {
+            if (cancellation.cancelled())
+                return {ErrorCode::Cancelled,
+                        "waiting for code-index refresh was cancelled"};
+            ready.wait_for(lock, std::chrono::milliseconds(20));
+        }
+        if (completed_generation < generation)
+            return {ErrorCode::Cancelled, "code-index refresh stopped"};
+        return last_error;
+    }
+
+    void run() {
+        for (;;) {
+            std::vector<std::string> paths;
+            bool full = false;
+            bool completes_generation = true;
+            std::size_t generation = 0;
+            {
+                std::unique_lock<std::mutex> lock(mutex);
+                ready.wait(lock, [&] {
+                    return stopping || full_refresh || !pending_paths.empty() ||
+                           completed_generation < requested_generation;
+                });
+                if (stopping && completed_generation >= requested_generation)
+                    return;
+                // A known native mutation must be force-scanned before a broad
+                // metadata pass, otherwise a same-size write on a coarse-mtime
+                // filesystem could be mistaken for unchanged.
+                if (full_refresh && !pending_paths.empty()) {
+                    full = false;
+                    paths.assign(pending_paths.begin(), pending_paths.end());
+                    pending_paths.clear();
+                    completes_generation = false;
+                } else {
+                    full = full_refresh;
+                    if (!full)
+                        paths.assign(pending_paths.begin(),
+                                     pending_paths.end());
+                    full_refresh = false;
+                    pending_paths.clear();
+                }
+                generation = requested_generation;
+            }
+            index::Options refresh_options = options;
+            refresh_options.update_paths = full ? std::vector<std::string>{}
+                                                : paths;
+            // Native mutations are authoritative even on filesystems whose
+            // timestamp granularity cannot distinguish a same-size rapid write.
+            refresh_options.force_rescan = !full && !paths.empty();
+            index::RefreshStats stats;
+            const Error error = index::refresh(refresh_options, stats);
+            {
+                std::lock_guard<std::mutex> lock(mutex);
+                last_error = error;
+                if (completes_generation)
+                    completed_generation = generation;
+            }
+            ready.notify_all();
+        }
+    }
+
+    index::Options options;
+    runtime::CancellationSource stop_source;
+    mutable std::mutex mutex;
+    mutable std::condition_variable ready;
+    std::set<std::string> pending_paths;
+    bool full_refresh = false;
+    bool stopping = false;
+    std::size_t requested_generation = 0;
+    std::size_t completed_generation = 0;
+    Error last_error;
+    std::thread worker;
+};
+
+ReadToolRegistry::ReadToolRegistry() = default;
+ReadToolRegistry::~ReadToolRegistry() = default;
+ReadToolRegistry::ReadToolRegistry(ReadToolRegistry&&) noexcept = default;
+ReadToolRegistry& ReadToolRegistry::operator=(
+    ReadToolRegistry&&) noexcept = default;
+
 namespace {
 namespace fs = std::filesystem;
 
@@ -814,6 +939,22 @@ Error ReadToolRegistry::create(index::Options index_options,
     loaded.on_guard_ask_ = std::move(options.on_guard_ask);
     loaded.permission_mode_ = options.permission_mode;
     loaded.permission_controls_ = options.permission_controls;
+    if (loaded.mutation_policy_ != MutationPolicy::Disabled) {
+        // Session preparation runs as its own cancellable job. That job's token
+        // is valid only while the initial refresh/snapshot load is running; a
+        // long-lived agent registry must use the cancellation token supplied by
+        // each later tool call instead of retaining the completed job token.
+        loaded.index_options_.cancellation = runtime::CancellationToken();
+        loaded.index_options_.interrupted = {};
+        try {
+            loaded.index_refresh_ =
+                std::make_unique<IndexRefreshState>(loaded.index_options_);
+        } catch (const std::exception& exception) {
+            return {ErrorCode::Internal,
+                    "could not start code-index refresh worker: " +
+                        std::string(exception.what())};
+        }
+    }
     registry = std::move(loaded);
     registry.rebuild_file_map();
     (void)registry.purge_expired_history_backups();
@@ -823,6 +964,52 @@ Error ReadToolRegistry::create(index::Options index_options,
 void ReadToolRegistry::rebuild_file_map() const {
     files_.clear();
     for (const index::IndexedFile& file : snapshot_.files) files_[file.path] = &file;
+}
+
+void ReadToolRegistry::queue_index_paths(
+    const std::vector<std::string>& paths,
+    bool full_tree) const {
+    if (index_refresh_)
+        (void)index_refresh_->enqueue(paths, full_tree);
+}
+
+Error ReadToolRegistry::refresh_persistent_index(
+    bool full_tree,
+    runtime::CancellationToken cancellation) const {
+    if (!index_refresh_) {
+        return full_tree
+                   ? Error{ErrorCode::UnsupportedFeature,
+                           "code-index persistence is disabled for this read-only tool session"}
+                   : ok_error();
+    }
+    const std::size_t generation =
+        full_tree ? index_refresh_->enqueue({}, true)
+                  : index_refresh_->generation();
+    Error error = index_refresh_->wait_for(generation, cancellation);
+    if (!error.ok()) return error;
+    if (generation <= loaded_index_generation_) return ok_error();
+    index::Options options = index_options_;
+    options.cancellation = cancellation;
+    index::Snapshot next;
+    error = index::load_snapshot(options, next);
+    if (!error.ok()) return error;
+    snapshot_ = std::move(next);
+    loaded_index_generation_ = generation;
+    rebuild_file_map();
+    return ok_error();
+}
+
+std::string ReadToolRegistry::task_hints(
+    const std::string& task,
+    std::size_t max_symbols,
+    std::size_t max_bytes,
+    std::size_t seed_symbols,
+    runtime::CancellationToken cancellation) const {
+    if (max_symbols == 0 || max_bytes < 96) return {};
+    const Error error = refresh_persistent_index(false, cancellation);
+    if (!error.ok()) return {};
+    return index::format_task_hints(snapshot_, task, max_symbols, max_bytes,
+                                    seed_symbols);
 }
 
 GuardApprovalDecision ReadToolRegistry::request_guard_approval(
@@ -1104,7 +1291,22 @@ void ReadToolRegistry::note_written_file(const std::string& relative_path,
         std::remove_if(snapshot_.symbols.begin(), snapshot_.symbols.end(),
                        [&](const index::IndexedSymbol& symbol) { return symbol.path == generic; }),
         snapshot_.symbols.end());
+    snapshot_.references.erase(
+        std::remove_if(snapshot_.references.begin(), snapshot_.references.end(),
+                       [&](const index::IndexedReference& reference) {
+                           return reference.source_path == generic ||
+                                  reference.target_path == generic;
+                       }),
+        snapshot_.references.end());
     const index::ScanResult scan = index::scan_source(generic, content, language);
+    if (scan.language != language) {
+        for (index::IndexedFile& file : snapshot_.files) {
+            if (file.path == generic) {
+                file.language = scan.language;
+                break;
+            }
+        }
+    }
     long long next_symbol_id = 1;
     for (const index::IndexedSymbol& symbol : snapshot_.symbols)
         next_symbol_id = std::max(next_symbol_id, symbol.id + 1);
@@ -1116,7 +1318,42 @@ void ReadToolRegistry::note_written_file(const std::string& relative_path,
         entry.symbol = symbol;
         snapshot_.symbols.push_back(std::move(entry));
     }
+    long long next_reference_id = 1;
+    for (const index::IndexedReference& reference : snapshot_.references)
+        next_reference_id = std::max(next_reference_id, reference.id + 1);
+    for (const index::Reference& reference : scan.references) {
+        index::IndexedReference entry;
+        entry.id = next_reference_id++;
+        entry.source_file_id = file_id;
+        entry.source_path = generic;
+        if (reference.source_symbol_index >= 0 &&
+            static_cast<std::size_t>(reference.source_symbol_index) <
+                scan.symbols.size()) {
+            const index::Symbol& source_symbol =
+                scan.symbols[static_cast<std::size_t>(
+                    reference.source_symbol_index)];
+            for (const index::IndexedSymbol& indexed : snapshot_.symbols) {
+                if (indexed.path == generic &&
+                    indexed.symbol.qualified_name ==
+                        source_symbol.qualified_name &&
+                    indexed.symbol.line_start == source_symbol.line_start) {
+                    entry.source_symbol_id = indexed.id;
+                    break;
+                }
+            }
+        }
+        entry.kind = reference.kind;
+        entry.target_spelling = reference.target_spelling;
+        entry.qualifier = reference.qualifier;
+        entry.receiver_type = reference.receiver_type;
+        entry.evidence = reference.evidence;
+        entry.line = reference.line;
+        entry.confidence = reference.confidence;
+        entry.resolution = "unresolved";
+        snapshot_.references.push_back(std::move(entry));
+    }
     rebuild_file_map();
+    queue_index_paths({generic});
 }
 
 void ReadToolRegistry::note_removed_path(const std::string& relative_path) const {
@@ -1139,7 +1376,21 @@ void ReadToolRegistry::note_removed_path(const std::string& relative_path) const
                                    symbol.path[generic.size()] == '/');
                        }),
         snapshot_.symbols.end());
+    snapshot_.references.erase(
+        std::remove_if(snapshot_.references.begin(), snapshot_.references.end(),
+                       [&](const index::IndexedReference& reference) {
+                           const auto matches = [&](const std::string& path) {
+                               return path == generic ||
+                                      (path.size() > generic.size() &&
+                                       path.compare(0, generic.size(), generic) == 0 &&
+                                       path[generic.size()] == '/');
+                           };
+                           return matches(reference.source_path) ||
+                                  matches(reference.target_path);
+                       }),
+        snapshot_.references.end());
     rebuild_file_map();
+    queue_index_paths({generic});
 }
 
 namespace {
@@ -2581,9 +2832,19 @@ std::vector<provider::FunctionDefinition> ReadToolRegistry::definitions() const 
         {"search_text", "Search indexed UTF-8 files using bounded literal or line-oriented regex matching.", schema("\"query\":{\"type\":\"string\"},\"regex\":{\"type\":\"boolean\"},\"case_sensitive\":{\"type\":\"boolean\"},\"word\":{\"type\":\"boolean\"},\"glob\":{\"type\":\"string\"},\"context\":{\"type\":\"integer\",\"minimum\":0,\"maximum\":10},\"max_results\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":500}", "\"query\"")},
         {"grep", "Alias for search_text.", schema("\"query\":{\"type\":\"string\"},\"regex\":{\"type\":\"boolean\"},\"case_sensitive\":{\"type\":\"boolean\"},\"word\":{\"type\":\"boolean\"},\"glob\":{\"type\":\"string\"},\"context\":{\"type\":\"integer\",\"minimum\":0,\"maximum\":10},\"max_results\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":500}", "\"query\"")},
         {"find", "Validated alias for search_text.", schema("\"query\":{\"type\":\"string\"},\"regex\":{\"type\":\"boolean\"},\"case_sensitive\":{\"type\":\"boolean\"},\"word\":{\"type\":\"boolean\"},\"glob\":{\"type\":\"string\"},\"context\":{\"type\":\"integer\",\"minimum\":0,\"maximum\":10},\"max_results\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":500}", "\"query\"")},
-        {"search_symbol", "Rank indexed symbol names by case-insensitive exact, prefix, then substring match.", schema("\"query\":{\"type\":\"string\"},\"max_results\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":200}", "\"query\"")},
+        {"search_symbol", "Rank indexed symbol names by case-insensitive exact, prefix, substring, caller count, then graph centrality.", schema("\"query\":{\"type\":\"string\"},\"max_results\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":200}", "\"query\"")},
         {"get_skeleton", "Return ordered indexed declarations, signatures, ranges, and documentation for one file.", schema(path, "\"path\"")},
-        {"read_symbol", "Fingerprint-verify and read the actual indexed source range for a symbol id.", schema("\"symbol_id\":{\"type\":\"integer\",\"minimum\":1}", "\"symbol_id\"")},
+        {"read_symbol", "Fingerprint-verify and read the actual indexed source range for a symbol id, with a bounded approximate caller/callee summary.", schema("\"symbol_id\":{\"type\":\"integer\",\"minimum\":1}", "\"symbol_id\"")},
+        {"find_callers",
+         "Find approximate resolved callers of an indexed symbol. Verify source before editing.",
+         schema("\"symbol_id\":{\"type\":\"integer\",\"minimum\":1},"
+                "\"max_results\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":200}",
+                "\"symbol_id\"")},
+        {"find_callees",
+         "Find approximate resolved callees from an indexed symbol. Verify source before editing.",
+         schema("\"symbol_id\":{\"type\":\"integer\",\"minimum\":1},"
+                "\"max_results\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":200}",
+                "\"symbol_id\"")},
         {"read_file",
          !agent_session
              ? "Fingerprint-verify and read a bounded indexed UTF-8 line range with hashes and "
@@ -2601,7 +2862,9 @@ std::vector<provider::FunctionDefinition> ReadToolRegistry::definitions() const 
          schema("\"items\":{\"type\":\"array\",\"items\":" + schema(range, "\"path\"") + ",\"maxItems\":100},\"max_bytes\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":262144}", "\"items\"")},
         {"run_command",
          agent_session
-             ? "Run a workspace command without a shell (argv exec, fixed PATH). Act permits "
+             ? "Run a workspace command without a shell (argv exec, fixed PATH). Give the "
+               "executable as a bare name, never /usr/bin/NAME; use `command -v NAME` to test "
+               "whether one is installed. Act permits "
                "ordinary Guard-controlled commands; Plan permits only conservatively vetted "
                "read-only argv forms. In Smart mode, vetted read-only commands whose cwd and "
                "path inputs resolve inside the project run without a prompt; unknown options, "
@@ -3088,6 +3351,18 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
     }
 
     std::string validation_error;
+    static const std::set<std::string> snapshot_tools = {
+        "project_overview", "glob",          "search_text",
+        "search_symbol",    "get_skeleton",  "read_symbol",
+        "find_callers",     "find_callees",  "find_tests",
+        "inspect_code_task", "index_status", "edit_file"};
+    if (snapshot_tools.find(name) != snapshot_tools.end()) {
+        const Error refresh_error =
+            refresh_persistent_index(false, cancellation);
+        if (!refresh_error.ok())
+            return tool_error_result(error_code_string(refresh_error.code),
+                                     refresh_error.message);
+    }
 
     if (name == "project_overview") {
         json::Value data = object_value();
@@ -3108,6 +3383,13 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
         data.object["files"] = number_value(total_files);
         data.object["lines"] = number_value(total_lines);
         data.object["bytes"] = number_value(total_bytes);
+        data.object["references"] =
+            number_value(static_cast<double>(snapshot_.references.size()));
+        std::size_t resolved_references = 0;
+        for (const index::IndexedReference& reference : snapshot_.references)
+            if (reference.resolution == "resolved") ++resolved_references;
+        data.object["resolved_references"] =
+            number_value(static_cast<double>(resolved_references));
         json::Value important = array_value();
         static const std::vector<std::string> names = {"README.md", "AGENTS.md", "Makefile", "CMakeLists.txt", "package.json", "pyproject.toml", "Cargo.toml", "go.mod"};
         for (const std::string& candidate : names) if (files_.find(candidate) != files_.end()) important.array.push_back(string_value(candidate));
@@ -3123,6 +3405,23 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
             }
         }
         data.object["entry_points"] = std::move(entries);
+        json::Value central = array_value();
+        const std::vector<index::RankedSymbol> anchors =
+            index::rank_task_symbols(snapshot_, "", 10);
+        for (const index::RankedSymbol& anchor : anchors) {
+            if (anchor.symbol == nullptr) continue;
+            json::Value item = object_value();
+            item.object["path"] = string_value(anchor.symbol->path);
+            item.object["symbol_id"] = number_value(anchor.symbol->id);
+            item.object["symbol"] =
+                string_value(anchor.symbol->symbol.qualified_name);
+            item.object["line"] =
+                number_value(anchor.symbol->symbol.line_start);
+            item.object["caller_count"] =
+                number_value(static_cast<double>(anchor.caller_count));
+            central.array.push_back(std::move(item));
+        }
+        data.object["central_symbols"] = std::move(central);
         json::Value tests = array_value();
         if (files_.find("Makefile") != files_.end()) { tests.array.push_back(string_value("make test")); tests.array.push_back(string_value("make test-sanitize")); }
         if (files_.find("package.json") != files_.end()) tests.array.push_back(string_value("npm test"));
@@ -3309,18 +3608,39 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
             !get_size(args, "max_results", 50, 200, maximum, validation_error))
             return tool_error_result("invalid_arguments", validation_error);
         const std::string needle = lowercase(query);
-        struct Ranked { int rank; const index::IndexedSymbol* symbol; };
+        struct Ranked {
+            int rank;
+            std::size_t caller_count;
+            double page_rank;
+            const index::IndexedSymbol* symbol;
+        };
         std::vector<Ranked> ranked;
+        std::map<long long, index::SymbolScore> graph_scores;
+        for (const index::SymbolScore& score : snapshot_.symbol_scores)
+            graph_scores[score.symbol_id] = score;
         for (const index::IndexedSymbol& symbol : snapshot_.symbols) {
             const std::string simple = lowercase(symbol.symbol.name);
             const std::string qualified = lowercase(symbol.symbol.qualified_name);
             int rank = simple == needle || qualified == needle ? 0 :
                        simple.rfind(needle, 0) == 0 || qualified.rfind(needle, 0) == 0 ? 1 :
                        simple.find(needle) != std::string::npos || qualified.find(needle) != std::string::npos ? 2 : 3;
-            if (rank < 3) ranked.push_back({rank, &symbol});
+            if (rank < 3) {
+                double page_rank = 0.0;
+                std::size_t caller_count = 0;
+                const auto score = graph_scores.find(symbol.id);
+                if (score != graph_scores.end()) {
+                    page_rank = score->second.page_rank;
+                    caller_count = score->second.caller_count;
+                }
+                ranked.push_back(
+                    {rank, caller_count, page_rank, &symbol});
+            }
         }
         std::sort(ranked.begin(), ranked.end(), [](const Ranked& a, const Ranked& b) {
             if (a.rank != b.rank) return a.rank < b.rank;
+            if (a.caller_count != b.caller_count)
+                return a.caller_count > b.caller_count;
+            if (a.page_rank != b.page_rank) return a.page_rank > b.page_rank;
             if (a.symbol->path != b.symbol->path) return a.symbol->path < b.symbol->path;
             if (a.symbol->symbol.line_start != b.symbol->symbol.line_start) return a.symbol->symbol.line_start < b.symbol->symbol.line_start;
             return a.symbol->id < b.symbol->id;
@@ -3332,6 +3652,8 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
             item.object["path"] = string_value(symbol.path); item.object["kind"] = string_value(symbol.symbol.kind);
             item.object["name"] = string_value(symbol.symbol.qualified_name); item.object["signature"] = string_value(symbol.symbol.signature);
             item.object["line_start"] = number_value(symbol.symbol.line_start); item.object["line_end"] = number_value(symbol.symbol.line_end);
+            item.object["caller_count"] =
+                number_value(static_cast<double>(ranked[i].caller_count));
             data.array.push_back(std::move(item));
         }
         return envelope(true, std::move(data), "", "", {}, truncated);
@@ -3366,8 +3688,141 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
         json::Value data = object_value(); data.object["symbol_id"] = number_value(found->id); data.object["path"] = string_value(range.path);
         data.object["line_start"] = number_value(range.start_line); data.object["line_end"] = number_value(range.end_line);
         data.object["content"] = string_value(range.content); data.object["file_hash"] = string_value(range.file_hash); data.object["range_hash"] = string_value(range.range_hash);
+        data.object["caller_count"] = number_value(static_cast<double>(
+            index::distinct_caller_count(snapshot_, found->id)));
+        json::Value callers = array_value();
+        json::Value callees = array_value();
+        for (const index::IndexedReference& reference : snapshot_.references) {
+            if (reference.resolution != "resolved") continue;
+            if (reference.target_symbol_id == found->id && callers.array.size() < 12) {
+                json::Value item = object_value();
+                item.object["path"] = string_value(reference.source_path);
+                item.object["line"] = number_value(reference.line);
+                item.object["kind"] = string_value(reference.kind);
+                item.object["confidence"] = number_value(reference.confidence);
+                if (reference.source_symbol_id != 0) {
+                    for (const index::IndexedSymbol& source : snapshot_.symbols) {
+                        if (source.id == reference.source_symbol_id) {
+                            item.object["symbol_id"] = number_value(source.id);
+                            item.object["symbol"] =
+                                string_value(source.symbol.qualified_name);
+                            break;
+                        }
+                    }
+                }
+                callers.array.push_back(std::move(item));
+            }
+            if (reference.source_symbol_id == found->id &&
+                reference.target_symbol_id != 0 && callees.array.size() < 12) {
+                json::Value item = object_value();
+                item.object["symbol_id"] =
+                    number_value(reference.target_symbol_id);
+                item.object["path"] = string_value(reference.target_path);
+                item.object["symbol"] =
+                    string_value(reference.target_qualified_name);
+                item.object["line"] = number_value(reference.line);
+                item.object["kind"] = string_value(reference.kind);
+                item.object["confidence"] = number_value(reference.confidence);
+                callees.array.push_back(std::move(item));
+            }
+        }
+        data.object["approximate_callers"] = std::move(callers);
+        data.object["approximate_callees"] = std::move(callees);
         std::vector<std::string> warnings; if (range.redacted) warnings.push_back("configured credential value was redacted");
+        warnings.push_back("caller/callee relationships are approximate; verify source");
         return envelope(true, std::move(data), "", "", warnings, range.truncated);
+    }
+
+    if (name == "find_callers" || name == "find_callees") {
+        std::size_t id = 0;
+        std::size_t maximum = 50;
+        if (!get_size(args, "symbol_id", 0,
+                      static_cast<std::size_t>(std::numeric_limits<int>::max()),
+                      id, validation_error) ||
+            !get_size(args, "max_results", 50, 200, maximum,
+                      validation_error) ||
+            id == 0 || maximum == 0)
+            return tool_error_result(
+                "invalid_arguments",
+                validation_error.empty() ? "symbol_id and max_results must be positive"
+                                         : validation_error);
+        const index::IndexedSymbol* selected = nullptr;
+        for (const index::IndexedSymbol& symbol : snapshot_.symbols) {
+            if (symbol.id == static_cast<long long>(id)) {
+                selected = &symbol;
+                break;
+            }
+        }
+        if (selected == nullptr)
+            return tool_error_result("not_found",
+                                     "indexed symbol id was not found");
+        json::Value rows = array_value();
+        bool truncated = false;
+        std::set<std::string> seen;
+        for (const index::IndexedReference& reference : snapshot_.references) {
+            const bool match =
+                name == "find_callers"
+                    ? reference.target_symbol_id == selected->id
+                    : reference.source_symbol_id == selected->id &&
+                          reference.target_symbol_id != 0;
+            if (!match || reference.resolution != "resolved") continue;
+            const std::string key =
+                std::to_string(reference.source_symbol_id) + "#" +
+                std::to_string(reference.target_symbol_id) + "#" +
+                reference.kind + "#" + std::to_string(reference.line);
+            if (!seen.insert(key).second) continue;
+            if (rows.array.size() >= maximum) {
+                truncated = true;
+                break;
+            }
+            json::Value item = object_value();
+            item.object["kind"] = string_value(reference.kind);
+            item.object["confidence"] = number_value(reference.confidence);
+            item.object["reference_line"] = number_value(reference.line);
+            if (name == "find_callers") {
+                item.object["path"] = string_value(reference.source_path);
+                if (reference.source_symbol_id != 0) {
+                    item.object["symbol_id"] =
+                        number_value(reference.source_symbol_id);
+                    for (const index::IndexedSymbol& source : snapshot_.symbols) {
+                        if (source.id == reference.source_symbol_id) {
+                            item.object["symbol"] =
+                                string_value(source.symbol.qualified_name);
+                            item.object["line_start"] =
+                                number_value(source.symbol.line_start);
+                            item.object["line_end"] =
+                                number_value(source.symbol.line_end);
+                            break;
+                        }
+                    }
+                }
+            } else {
+                item.object["path"] = string_value(reference.target_path);
+                item.object["symbol_id"] =
+                    number_value(reference.target_symbol_id);
+                item.object["symbol"] =
+                    string_value(reference.target_qualified_name);
+                for (const index::IndexedSymbol& target : snapshot_.symbols) {
+                    if (target.id == reference.target_symbol_id) {
+                        item.object["line_start"] =
+                            number_value(target.symbol.line_start);
+                        item.object["line_end"] =
+                            number_value(target.symbol.line_end);
+                        break;
+                    }
+                }
+            }
+            rows.array.push_back(std::move(item));
+        }
+        json::Value data = object_value();
+        data.object["symbol_id"] = number_value(selected->id);
+        data.object["symbol"] =
+            string_value(selected->symbol.qualified_name);
+        data.object[name == "find_callers" ? "callers" : "callees"] =
+            std::move(rows);
+        return envelope(
+            true, std::move(data), "", "",
+            {"approximate index relationships; verify current source"}, truncated);
     }
 
     if (name == "read_file") {
@@ -3664,6 +4119,8 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
         }
         ProcessResult process;
         const Error error = run_command(command, options, process, policy);
+        if (mutation_policy_ == MutationPolicy::Full && !read_only.vetted)
+            queue_index_paths({}, true);
         bool output_filtered = false;
         const std::string command_name = parsed_arguments.empty() ? std::string() : parsed_arguments.front();
         // parse_inspection_command has already inserted the fixed Git -c
@@ -4138,6 +4595,9 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
                 if (read_error.ok())
                     note_written_file(
                         destination.lexically_relative(root).generic_string(), content);
+            } else if (!destination_external &&
+                       fs::is_directory(destination, ec)) {
+                queue_index_paths({}, true);
             }
         }
         json::Value data = object_value();
@@ -4657,7 +5117,8 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
         data.object["files_indexed"] = number_value(static_cast<double>(snapshot_.files.size()));
         data.object["symbols_indexed"] =
             number_value(static_cast<double>(snapshot_.symbols.size()));
-        data.object["refs_indexed"] = number_value(0);  // call-graph refs not stored yet
+        data.object["refs_indexed"] =
+            number_value(static_cast<double>(snapshot_.references.size()));
         data.object["last_updated"] = number_value(static_cast<double>(snapshot_.updated_at));
         data.object["workspace"] = string_value(snapshot_.workspace);
         bool fresh = true;
@@ -4698,6 +5159,11 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
     }
 
     if (name == "index_update") {
+        const Error pending_error =
+            refresh_persistent_index(false, cancellation);
+        if (!pending_error.ok())
+            return tool_error_result(error_code_string(pending_error.code),
+                                     pending_error.message);
         bool force = false;
         if (!get_bool(args, "force", false, force, validation_error))
             return tool_error_result("invalid_arguments", validation_error);
@@ -4739,6 +5205,8 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
         data.object["skipped"] = number_value(static_cast<double>(stats.skipped));
         data.object["removed"] = number_value(static_cast<double>(stats.removed));
         data.object["symbols"] = number_value(static_cast<double>(stats.symbols));
+        data.object["references"] =
+            number_value(static_cast<double>(stats.references));
         data.object["elapsed_ms"] = number_value(static_cast<double>(stats.elapsed_ms));
         data.object["files_indexed"] = number_value(static_cast<double>(snapshot_.files.size()));
         data.object["symbols_indexed"] =
@@ -4753,6 +5221,11 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
     }
 
     if (name == "index_rebuild") {
+        const Error pending_error =
+            refresh_persistent_index(false, cancellation);
+        if (!pending_error.ok())
+            return tool_error_result(error_code_string(pending_error.code),
+                                     pending_error.message);
         if (mutation_policy_ != MutationPolicy::Full)
             return tool_error_result("policy_denied", "index_rebuild is not enabled in this session");
         bool confirm = false;
@@ -4783,6 +5256,8 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
         data.object["discovered"] = number_value(static_cast<double>(stats.discovered));
         data.object["indexed"] = number_value(static_cast<double>(stats.indexed));
         data.object["symbols"] = number_value(static_cast<double>(stats.symbols));
+        data.object["references"] =
+            number_value(static_cast<double>(stats.references));
         data.object["elapsed_ms"] = number_value(static_cast<double>(stats.elapsed_ms));
         data.object["files_indexed"] = number_value(static_cast<double>(snapshot_.files.size()));
         data.object["symbols_indexed"] =
@@ -4999,21 +5474,17 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
         struct RankedSymbol {
             double score = 0;
             const index::IndexedSymbol* symbol = nullptr;
+            std::size_t caller_count = 0;
+            std::string reason;
         };
         std::vector<RankedSymbol> symbol_hits;
-        for (const index::IndexedSymbol& symbol : snapshot_.symbols) {
-            const std::string n = lowercase(symbol.symbol.name);
-            const std::string qn = lowercase(symbol.symbol.qualified_name);
-            const std::string path_l = lowercase(symbol.path);
-            double score = token_score(n) * 1.2 + token_score(qn) + token_score(path_l) * 0.5;
-            if (score <= 0) continue;
-            symbol_hits.push_back({score, &symbol});
-        }
-        std::sort(symbol_hits.begin(), symbol_hits.end(),
-                  [](const RankedSymbol& a, const RankedSymbol& b) {
-                      if (a.score != b.score) return a.score > b.score;
-                      return a.symbol->id < b.symbol->id;
-                  });
+        const std::vector<index::RankedSymbol> graph_ranked =
+            index::rank_task_symbols(snapshot_, query,
+                                     std::max(max_symbols, max_files) * 4);
+        for (const index::RankedSymbol& ranked : graph_ranked)
+            symbol_hits.push_back(
+                {ranked.score, ranked.symbol, ranked.caller_count,
+                 ranked.reason});
 
         struct RankedFile {
             double score = 0;
@@ -5061,7 +5532,9 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
             item.object["start_line"] = number_value(symbol.symbol.line_start);
             item.object["end_line"] = number_value(symbol.symbol.line_end);
             item.object["score"] = number_value(symbol_hits[i].score);
-            item.object["reason"] = string_value("name/path token match");
+            item.object["caller_count"] = number_value(
+                static_cast<double>(symbol_hits[i].caller_count));
+            item.object["reason"] = string_value(symbol_hits[i].reason);
             likely_symbols.array.push_back(std::move(item));
             if (suggested_reads.array.size() < max_files) {
                 json::Value read = object_value();

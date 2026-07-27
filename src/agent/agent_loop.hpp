@@ -123,6 +123,13 @@ Error sanitize_round_continuation_for_history(provider::ApiKind api_kind,
 void append_conversation_text(provider::ToolConversation& conversation,
                               const std::string& role,
                               const std::string& content);
+// Request-only context is serialized like a continuation message, but callers
+// remove it after the active user turn so it never accumulates in history.
+std::size_t append_request_only_context(
+    provider::ToolConversation& conversation,
+    const std::string& content);
+bool remove_request_only_context(provider::ToolConversation& conversation,
+                                 std::size_t index);
 
 // Append assistant continuation (already sanitized) then tool results.
 void append_prepared_tool_results(const provider::RequestContext& context,

@@ -58,7 +58,7 @@ transport, filesystem, or PTY boundary is involved.
 **Strong unit coverage**
 
 - CLI parsing and options
-- Full editor-language code-index parity: Markdown, Python, C/C++, C#, Java, JavaScript/TypeScript and React/module endings, HTML/HTML-only, CSS, XML, JSON, Bash, PHP, Perl, Ruby, Rust, Go, PowerShell, Assembly, SQL, TOML, YAML, and INI; plus embedded HTML scanning, qualification, ranges, documentation, false-positive masking, incremental refresh, line totals, stale detection, clearing, and Markdown reports
+- Full editor-language code-index definition parity: Markdown, Python, C/C++, C#, Java, JavaScript/TypeScript and React/module endings, HTML/HTML-only, CSS, XML, JSON, Bash, PHP, Perl, Ruby, Rust, Go, PowerShell, Assembly, SQL, TOML, YAML, and INI; plus embedded HTML scanning, qualification, ranges, documentation, false-positive masking, incremental refresh, line totals, stale detection, clearing, and Markdown reports. Python/C/C++ additionally cover call/import/include/inherit/instantiate extraction, receiver inference, cross-file resolution, prototype preference, caller counts, PageRank/task ranking, configurable bounded deterministic hints, schema migration, touched-file graph persistence, and snapshot reload after the session-preparation job token is cancelled.
 - Provider registry, every registered reasoning request protocol, ordinary response parsing, and native-tool readable-reasoning extraction for Chat/Responses streams, summaries, details, think tags, and encrypted-state omission
 - Main configuration plus `models.conf` parsing, embedded fallback availability outside the source directory, layering, disabling, regex validation, context-window fallback precedence, and final-component/case-insensitive family matching
 - HTML/Markdown/input/output conversion
@@ -82,7 +82,7 @@ transport, filesystem, or PTY boundary is involved.
 - Editor/chat shared compact provider/model labels plus agent's model-only 80-column status line (aliases, custom URLs, model paths, Unicode truncation, reasoning, exact whitespace), separate ready/thinking/working activity text with live elapsed and completed-task timing, colored selector panels, explicit-provider startup discovery, one-model auto-selection, multiple-model selection, and non-modal bare-offline startup
 - Per-model `/v1/models` context-window refresh across chat, editor, and agent; sticky CLI/`/context` overrides; and token-only usage when model metadata has no window
 - Agent compact tool rows with independent execution durations, Guard-wait subtraction, failed-tool timing, persisted timed-row replay, and unchanged whole-task completion timing
-- Agent permission parsing/persistence and Confirm/Smart/Yolo native-path/command policy, including external exact-path tools, hard denials, and permission border/command parsing
+- Agent permission parsing/persistence and Confirm/Smart/Yolo native-path/command policy, including external exact-path tools, hard denials, permission border/command parsing, shell-free `command -v` lookup, and quoted-literal versus unquoted-substitution handling
 - OpenRouter and DeepSeek credit-response schema parsing, currency formatting, provider endpoint registration, and Agent border placement
 - TUI insert/attach/fetch driver
 - SQLite TUI workflows: `/new`, autosave/reload, `/list`, `/provider`, `/remove`, stale `last_thread_id`, corrupt database, image persistence across restart, `/cleanup`, and read-only expired-media threads

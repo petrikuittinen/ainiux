@@ -93,8 +93,39 @@ Error resolve_executable(const std::string& name, std::string& resolved) {
 }
 
 bool dangerous_argument(const std::string& argument) {
-    return argument.find_first_of("|;&<>\r\n`") != std::string::npos ||
-           argument.find("$(") != std::string::npos || argument.find("${") != std::string::npos;
+    return argument.find_first_of("|;&<>\r\n`") != std::string::npos;
+}
+
+bool has_unquoted_shell_substitution(const std::string& command) {
+    char quote = 0;
+    bool escaping = false;
+    for (std::size_t index = 0; index < command.size(); ++index) {
+        const char ch = command[index];
+        if (quote == '\'') {
+            if (ch == quote) quote = 0;
+            continue;
+        }
+        if (escaping) {
+            escaping = false;
+            continue;
+        }
+        if (ch == '\\') {
+            escaping = true;
+            continue;
+        }
+        if (quote != 0) {
+            if (ch == quote) quote = 0;
+            continue;
+        }
+        if (ch == '\'' || ch == '"') {
+            quote = ch;
+            continue;
+        }
+        if (ch == '$' && index + 1 < command.size() &&
+            (command[index + 1] == '(' || command[index + 1] == '{'))
+            return true;
+    }
+    return false;
 }
 
 bool option_or_assignment(const std::string& argument, const std::string& option) {
@@ -419,6 +450,10 @@ Error enforce_agent_policy(std::vector<std::string>& args,
     if (!error.ok()) return error;
 
     const std::string& command = args.front();
+    if (command == "command" &&
+        (args.size() < 3 || args[1] != "-v"))
+        return {ErrorCode::BadArgs,
+                "run_command supports the shell builtin only as: command -v NAME"};
     // Soft hardening only where the runner must inject safe defaults (git pagers).
     // Do not option-allowlist ordinary tools (ls, stat, cat, …).
     if (command == "git") return enforce_agent_git_policy(args);
@@ -447,6 +482,13 @@ Error tokenize_command(const std::string& command, std::vector<std::string>& arg
     bool escaping = false;
     bool token_started = false;
     for (char ch : command) {
+        if (quote == '\'') {
+            if (ch == quote)
+                quote = 0;
+            else
+                current.push_back(ch);
+            continue;
+        }
         if (escaping) {
             current.push_back(ch);
             escaping = false;
@@ -523,6 +565,10 @@ Error parse_command(const std::string& command,
                     runtime::CancellationToken cancellation,
                     bool allow_absolute_paths) {
     guard_rule_id.clear();
+    arguments.clear();
+    if (has_unquoted_shell_substitution(command))
+        return {ErrorCode::BadArgs,
+                "run_command rejected unquoted shell substitutions"};
     Error error = tokenize_command(command, arguments);
     if (!error.ok()) return error;
     if (policy == CommandPolicy::Agent) {
@@ -571,6 +617,26 @@ Error run_command(const std::string& command,
     fs::path cwd;
     if (!(error = resolve_cwd(options, root, cwd)).ok()) { result = std::move(output); return error; }
     output.cwd = cwd.string();
+    if (output.arguments.front() == "command") {
+        const auto started = std::chrono::steady_clock::now();
+        bool found_all = true;
+        for (std::size_t index = 2; index < output.arguments.size(); ++index) {
+            std::string found;
+            if (resolve_executable(output.arguments[index], found).ok())
+                output.stdout_text += found + "\n";
+            else
+                found_all = false;
+        }
+        output.exit_status = found_all ? 0 : 1;
+        output.duration_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                 std::chrono::steady_clock::now() - started)
+                                 .count();
+        output.policy =
+            policy == CommandPolicy::Agent ? "allowed-agent" : "allowed-read-only";
+        if (output.guard_decision.empty()) output.guard_decision = "allow";
+        result = std::move(output);
+        return ok_error();
+    }
     std::string executable;
     if (!(error = resolve_executable(output.arguments.front(), executable)).ok()) { result = std::move(output); return error; }
 

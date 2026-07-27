@@ -30,6 +30,17 @@ bool has_symbol(const ScanResult& scan,
     return false;
 }
 
+bool has_reference(const ScanResult& scan,
+                   const std::string& kind,
+                   const std::string& target) {
+    for (const auto& reference : scan.references) {
+        if (reference.kind == kind &&
+            reference.target_spelling == target)
+            return true;
+    }
+    return false;
+}
+
 const ainiux::agent::index::Symbol* find_symbol(const ScanResult& scan,
                                                 const std::string& kind,
                                                 const std::string& qualified_name) {
@@ -100,10 +111,11 @@ void test_python_scanner() {
         "        self, value: str\n"
         "    ) -> str:\n"
         "        local = 1\n"
-        "        return value\n\n"
+        "        return format_value(value)\n\n"
         "async def fetch(name):\n"
         "    # def hidden_too(): pass\n"
-        "    return name\n";
+        "    widget = Widget()\n"
+        "    return widget.render(name)\n";
     const ScanResult scan = ainiux::agent::index::scan_source("sample.py", source, Language::Python);
     check(has_symbol(scan, "constant", "CONSTANT"), "Python scanner finds module constant");
     check(has_symbol(scan, "class", "Widget"), "Python scanner finds class");
@@ -111,6 +123,10 @@ void test_python_scanner() {
     check(has_symbol(scan, "method", "Widget::render"), "Python scanner finds multiline method");
     check(has_symbol(scan, "function", "fetch"), "Python scanner finds async function");
     check(!has_symbol(scan, "global", "Widget::render::local"), "Python scanner excludes local variables");
+    check(has_reference(scan, "call", "format_value") &&
+              has_reference(scan, "instantiate", "Widget") &&
+              has_reference(scan, "call", "widget.render"),
+          "Python scanner extracts direct calls, instantiation, and inferred receiver calls");
     bool documented = false;
     for (const auto& symbol : scan.symbols) {
         if (symbol.qualified_name == "Widget") documented = symbol.documentation == "A useful widget.";
@@ -132,7 +148,7 @@ void test_c_scanner() {
         "    const char *fake = \"int hidden(void);\";\n"
         "    return left + right;\n"
         "}\n"
-        "int compact(void) { return 1; }\n";
+        "int compact(void) { return add(1, 2); }\n";
     source += "#define DECLARE(name) ";
     source.push_back('\\');
     source += "\n           int name(void);\n";
@@ -146,6 +162,8 @@ void test_c_scanner() {
     check(has_symbol(scan, "function", "compact"), "C scanner finds compact one-line functions");
     check(!has_symbol(scan, "function", "hidden"), "C scanner ignores declarations in strings");
     check(!has_symbol(scan, "function", "name"), "C scanner ignores continued macro declarations");
+    check(has_reference(scan, "call", "add"),
+          "C scanner extracts a direct function call");
 }
 
 void test_cpp_header_detection() {
@@ -157,6 +175,8 @@ void test_cpp_header_detection() {
         "    std::string hello(const std::string& name) const;\n"
         "};\n"
         "using Count = unsigned long;\n"
+        "class FriendlyGreeter : public Greeter {};\n"
+        "std::string greet() { Greeter value; return value.hello(\"A\"); }\n"
         "}\n";
     const ScanResult scan = ainiux::agent::index::scan_source("greeter.h", source, Language::C);
     check(scan.language == Language::Cpp, "ambiguous .h with C++ declarations is labeled C++");
@@ -164,6 +184,9 @@ void test_cpp_header_detection() {
     check(has_symbol(scan, "class", "demo::Greeter"), "C++ scanner finds qualified class");
     check(has_symbol(scan, "method", "demo::Greeter::Greeter"), "C++ scanner finds constructor");
     check(has_symbol(scan, "alias", "demo::Count"), "C++ scanner finds aliases");
+    check(has_reference(scan, "inherit", "Greeter") &&
+              has_reference(scan, "call", "value.hello"),
+          "C++ scanner extracts inheritance and receiver calls");
 
     const ScanResult c_header = ainiux::agent::index::scan_source(
         "plain.h", "struct Plain { int value; };\n", Language::C);
@@ -723,6 +746,191 @@ void test_refresh_incremental_report_and_skips() {
     check(!cleanup_error, "symlink escape target is removed");
 }
 
+void test_reference_graph_ranking_and_hints() {
+    const fs::path root = temporary_workspace("graph");
+    write_file(root / "include" / "util.h",
+               "int add(int left, int right);\n");
+    write_file(root / "src" / "util.c",
+               "int add(int left, int right) {\n"
+               "    return left + right;\n"
+               "}\n");
+    write_file(root / "src" / "main.c",
+               "#include \"util.h\"\n"
+               "int main(void) {\n"
+               "    return add(1, 2);\n"
+               "}\n");
+    write_file(root / "models.py",
+               "class Widget:\n"
+               "    def render(self, text):\n"
+               "        return text\n\n"
+               "def make_widget():\n"
+               "    item = Widget()\n"
+               "    return item.render('ok')\n");
+    write_file(root / "types.cpp",
+               "class Base {\n"
+               "public:\n"
+               "    int ping() { return 1; }\n"
+               "};\n"
+               "class Derived : public Base {\n"
+               "public:\n"
+               "    int run() { return ping(); }\n"
+               "};\n");
+    write_file(root / "tests" / "test_main.c",
+               "int add(int, int);\n"
+               "int test_add(void) { return add(2, 3) == 5; }\n");
+    write_file(root / "dup_a.c",
+               "int duplicate(void) { return 1; }\n");
+    write_file(root / "dup_b.c",
+               "int duplicate(void) { return 2; }\n");
+    write_file(root / "ambiguous.c",
+               "int use_duplicate(void) { return duplicate(); }\n");
+
+    ainiux::agent::index::Options options;
+    options.workspace = root.string();
+    ainiux::agent::index::RefreshStats stats;
+    ainiux::Error error =
+        ainiux::agent::index::refresh(options, stats);
+    check(error.ok() && stats.indexed == 9 && stats.references >= 8,
+          "graph refresh stores Python/C/C++ references");
+
+    ainiux::agent::index::Snapshot snapshot;
+    error = ainiux::agent::index::load_snapshot(options, snapshot);
+    check(error.ok() && !snapshot.references.empty() &&
+              snapshot.symbol_scores.size() == snapshot.symbols.size(),
+          "completed snapshot loads references and one score per symbol");
+
+    const ainiux::agent::index::IndexedSymbol* add = nullptr;
+    const ainiux::agent::index::IndexedSymbol* base = nullptr;
+    const ainiux::agent::index::IndexedSymbol* render = nullptr;
+    for (const auto& symbol : snapshot.symbols) {
+        if (symbol.path == "src/util.c" && symbol.symbol.name == "add")
+            add = &symbol;
+        if (symbol.path == "types.cpp" && symbol.symbol.name == "Base")
+            base = &symbol;
+        if (symbol.path == "models.py" &&
+            symbol.symbol.qualified_name == "Widget::render")
+            render = &symbol;
+    }
+    check(add != nullptr && base != nullptr && render != nullptr,
+          "graph fixture target symbols are indexed");
+
+    bool main_calls_add = false;
+    bool test_calls_add = false;
+    bool derived_inherits_base = false;
+    bool receiver_resolved = false;
+    bool duplicate_ambiguous = false;
+    for (const auto& reference : snapshot.references) {
+        if (add != nullptr && reference.target_symbol_id == add->id &&
+            reference.source_path == "src/main.c" &&
+            reference.resolution == "resolved")
+            main_calls_add = true;
+        if (add != nullptr && reference.target_symbol_id == add->id &&
+            reference.source_path == "tests/test_main.c")
+            test_calls_add = true;
+        if (base != nullptr && reference.target_symbol_id == base->id &&
+            reference.kind == "inherit")
+            derived_inherits_base = true;
+        if (render != nullptr && reference.target_symbol_id == render->id &&
+            reference.target_spelling == "item.render" &&
+            reference.confidence >= 0.8)
+            receiver_resolved = true;
+        if (reference.source_path == "ambiguous.c" &&
+            reference.target_spelling == "duplicate" &&
+            reference.resolution == "ambiguous" &&
+            reference.target_symbol_id == 0)
+            duplicate_ambiguous = true;
+    }
+    check(main_calls_add && test_calls_add,
+          "resolver links direct C callers across files and through a prototype");
+    check(derived_inherits_base,
+          "resolver links C++ inheritance");
+    check(receiver_resolved,
+          "resolver uses simple Python receiver inference");
+    check(duplicate_ambiguous,
+          "equally plausible duplicate definitions remain explicitly ambiguous");
+    check(add != nullptr &&
+              ainiux::agent::index::distinct_caller_count(snapshot, add->id) == 2,
+          "distinct caller count combines production and test callers");
+
+    const auto ranked =
+        ainiux::agent::index::rank_task_symbols(snapshot, "change add behavior", 6);
+    check(!ranked.empty() && ranked.front().symbol != nullptr &&
+              ranked.front().symbol->symbol.name == "add",
+          "task ranking prioritizes a direct symbol-name match");
+    const std::string hints =
+        ainiux::agent::index::format_task_hints(
+            snapshot, "change add behavior", 5, 512);
+    const std::string repeated =
+        ainiux::agent::index::format_task_hints(
+            snapshot, "change add behavior", 5, 512);
+    check(hints == repeated && hints.size() <= 512 &&
+              hints.rfind(
+                  "[Approximate code-index hints; verify before editing]\n",
+                  0) == 0 &&
+              hints.find("src/util.c: add") != std::string::npos &&
+              hints.find("callers") != std::string::npos,
+          "automatic hint formatting is deterministic, bounded, labeled, and impact-aware");
+    const std::string lexical_only =
+        ainiux::agent::index::format_task_hints(
+            snapshot, "change add behavior", 5, 512, 0);
+    check(lexical_only.find("graph neighbor") == std::string::npos,
+          "zero hint seeds disable graph-neighbor expansion");
+    check(ainiux::agent::index::format_task_hints(
+              snapshot, "change add behavior", 0, 4096, 16)
+              .empty() &&
+              ainiux::agent::index::format_task_hints(
+                  snapshot, "change add behavior", 16, 0, 16)
+                  .empty(),
+          "zero symbol or byte budgets disable automatic hints");
+
+    ainiux::agent::index::RefreshStats unchanged_stats;
+    error = ainiux::agent::index::refresh(options, unchanged_stats);
+    ainiux::agent::index::Snapshot unchanged_snapshot;
+    if (error.ok())
+        error = ainiux::agent::index::load_snapshot(options,
+                                                    unchanged_snapshot);
+    bool same_scores =
+        snapshot.symbol_scores.size() ==
+        unchanged_snapshot.symbol_scores.size();
+    for (std::size_t index = 0;
+         same_scores && index < snapshot.symbol_scores.size(); ++index) {
+        same_scores =
+            snapshot.symbol_scores[index].symbol_id ==
+                unchanged_snapshot.symbol_scores[index].symbol_id &&
+            snapshot.symbol_scores[index].caller_count ==
+                unchanged_snapshot.symbol_scores[index].caller_count &&
+            snapshot.symbol_scores[index].page_rank ==
+                unchanged_snapshot.symbol_scores[index].page_rank;
+    }
+    check(error.ok() && unchanged_stats.indexed == 0 && same_scores,
+          "unchanged refresh preserves deterministic caller/PageRank scores without reparsing");
+
+    write_file(root / "src" / "util.c",
+               "int add(int left, int right) {\n"
+               "    return left + right;\n"
+               "}\n"
+               "int subtract(int left, int right) {\n"
+               "    return left - right;\n"
+               "}\n");
+    ainiux::agent::index::Options touched = options;
+    touched.update_paths = {"src/util.c"};
+    ainiux::agent::index::RefreshStats touched_stats;
+    error = ainiux::agent::index::refresh(touched, touched_stats);
+    check(error.ok() && touched_stats.indexed == 1,
+          "touched-path refresh reparses only the requested changed source");
+    ainiux::agent::index::Snapshot updated;
+    error = ainiux::agent::index::load_snapshot(options, updated);
+    bool subtract_found = false;
+    for (const auto& symbol : updated.symbols)
+        subtract_found = subtract_found || symbol.symbol.name == "subtract";
+    check(error.ok() && subtract_found,
+          "touched-path graph transaction publishes new definitions");
+
+    std::error_code cleanup_error;
+    fs::remove_all(root, cleanup_error);
+    check(!cleanup_error, "reference graph test workspace is removed");
+}
+
 void test_corrupt_index_errors() {
     const fs::path root = temporary_workspace("corrupt");
     write_file(root / "main.c", "int main(void);\n");
@@ -780,6 +988,53 @@ void test_schema_upgrade_adds_line_counts() {
     std::error_code cleanup_error;
     fs::remove_all(root, cleanup_error);
     check(!cleanup_error, "schema upgrade test workspace is removed");
+}
+
+void test_schema_two_upgrade_adds_reference_graph() {
+    const fs::path root = temporary_workspace("schema-two-graph");
+    write_file(root / "main.c",
+               "int helper(void) { return 1; }\n"
+               "int main(void) { return helper(); }\n");
+    std::error_code directory_error;
+    fs::create_directories(root / ".ainiux-pr", directory_error);
+    check(!directory_error, "schema-two index directory is created");
+    {
+        TestSqliteDatabase database;
+        check(database.open(root / ".ainiux-pr" / "index.sqlite"),
+              "schema-two SQLite index is opened");
+        check(database.execute(
+                  "CREATE TABLE metadata(key TEXT PRIMARY KEY,value TEXT NOT NULL);"
+                  "CREATE TABLE files(id INTEGER PRIMARY KEY,path TEXT NOT NULL UNIQUE,"
+                  "language TEXT NOT NULL,size INTEGER NOT NULL,mtime_ns INTEGER NOT NULL,"
+                  "content_hash TEXT NOT NULL,line_count INTEGER NOT NULL,"
+                  "scan_status TEXT NOT NULL,scan_error TEXT NOT NULL,indexed_at INTEGER NOT NULL);"
+                  "CREATE TABLE symbols(id INTEGER PRIMARY KEY,file_id INTEGER NOT NULL "
+                  "REFERENCES files(id) ON DELETE CASCADE,kind TEXT NOT NULL,name TEXT NOT NULL,"
+                  "qualified_name TEXT NOT NULL,signature TEXT NOT NULL,parameters TEXT NOT NULL,"
+                  "return_type TEXT NOT NULL,line_start INTEGER NOT NULL,line_end INTEGER NOT NULL,"
+                  "documentation TEXT NOT NULL,signature_hash TEXT NOT NULL,body_hash TEXT NOT NULL);"
+                  "INSERT INTO metadata(key,value) VALUES('schema_version','2');"
+                  "INSERT INTO metadata(key,value) VALUES('scanner_version','3');"
+                  "INSERT INTO metadata(key,value) VALUES('complete','1');"),
+              "files/symbols-only schema-two fixture is created");
+    }
+
+    ainiux::agent::index::Options options;
+    options.workspace = root.string();
+    ainiux::agent::index::RefreshStats stats;
+    ainiux::Error error =
+        ainiux::agent::index::refresh(options, stats);
+    ainiux::agent::index::Snapshot snapshot;
+    if (error.ok())
+        error = ainiux::agent::index::load_snapshot(options, snapshot);
+    check(error.ok() && stats.indexed == 1 &&
+              !snapshot.references.empty() &&
+              snapshot.symbol_scores.size() == snapshot.symbols.size(),
+          "schema-two files/symbols index migrates to resolved graph storage");
+
+    std::error_code cleanup_error;
+    fs::remove_all(root, cleanup_error);
+    check(!cleanup_error, "schema-two graph workspace is removed");
 }
 
 void test_clear_database() {
@@ -845,8 +1100,10 @@ void run_all() {
     test_systems_language_scanners();
     test_sql_and_configuration_scanners();
     test_refresh_incremental_report_and_skips();
+    test_reference_graph_ranking_and_hints();
     test_corrupt_index_errors();
     test_schema_upgrade_adds_line_counts();
+    test_schema_two_upgrade_adds_reference_graph();
     test_clear_database();
 }
 

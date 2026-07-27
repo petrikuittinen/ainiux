@@ -81,6 +81,9 @@ struct SessionRuntimeOptions {
     HistoryBackupPolicy history_backup;
     bool auto_compact = true;
     int compact_limit = 0;  // 0 = derive from window
+    std::size_t code_index_hint_max_symbols = 16;
+    std::size_t code_index_hint_max_bytes = 4U * 1024U;
+    std::size_t code_index_hint_seed_symbols = 16;
     bool show_command_output = false;
     // Headless callers always use Smart and retain Ask→Deny through an empty
     // approval callback. Interactive projects restore their persisted value.

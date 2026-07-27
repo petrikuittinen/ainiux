@@ -1126,11 +1126,67 @@ void test_replace_symbol() {
     const std::string content = read_text(fs::path(workspace) / "src" / "sym.cpp");
     check(content.find("return 42;") != std::string::npos, "symbol body updated");
     check(content.find("int beta()") != std::string::npos, "other symbol preserved");
+    check(tools.refresh_persistent_index(false).ok(),
+          "native mutation flushes its coalesced touched-file index update");
+    ainiux::agent::index::Options persisted_options;
+    persisted_options.workspace = workspace;
+    ainiux::agent::index::Snapshot persisted;
+    check(ainiux::agent::index::load_snapshot(persisted_options, persisted).ok(),
+          "mutation-aware persistent snapshot reloads");
+    bool alpha_persisted = false;
+    for (const auto& symbol : persisted.symbols) {
+        if (symbol.path == "src/sym.cpp" && symbol.symbol.name == "alpha" &&
+            symbol.symbol.line_end >= 3)
+            alpha_persisted = true;
+    }
+    check(alpha_persisted,
+          "touched-file persistence keeps the edited symbol definition");
 
     const std::string missing = tools.execute(
         "edit_file",
         R"JSON({"path":"src/sym.cpp","ops":[{"type":"replace_symbol","symbol_id":999999,"replacement":"x"}]})JSON");
     check(!json_ok(missing), "unknown symbol_id fails: " + missing);
+
+    std::error_code ec;
+    fs::remove_all(workspace, ec);
+}
+
+void test_index_refresh_drops_completed_prepare_cancellation() {
+    const std::string workspace = write_temp_workspace("stale-index-cancel");
+    runtime::CancellationSource prepare_source;
+    const runtime::CancellationToken prepare_token = prepare_source.token();
+    agent::index::Options options;
+    options.workspace = workspace;
+    options.max_source_code_file_size = 1024 * 1024;
+    options.cancellation = prepare_token;
+    options.interrupted = [prepare_token] { return prepare_token.cancelled(); };
+    agent::index::RefreshStats stats;
+    check(agent::index::refresh(options, stats).ok(),
+          "prepare-time index refresh succeeds before cancellation");
+    agent::index::Snapshot snapshot;
+    check(agent::index::load_snapshot(options, snapshot).ok(),
+          "prepare-time index snapshot loads before cancellation");
+
+    agent::ToolRegistryOptions tool_options;
+    tool_options.mutation_policy = agent::MutationPolicy::Full;
+    agent::ReadToolRegistry tools;
+    check(agent::ReadToolRegistry::create(
+              std::move(options), std::move(snapshot), {}, tools, tool_options)
+              .ok(),
+          "create long-lived registry from prepare-time index options");
+
+    // Mirrors the TUI runtime job finishing after session preparation.
+    prepare_source.cancel();
+    const Error refresh_error = tools.refresh_persistent_index(true);
+    check(refresh_error.ok(),
+          "later index generation ignores the completed prepare-job token: " +
+              refresh_error.message);
+    const std::string search = tools.execute(
+        "search_text",
+        R"JSON({"query":"main","glob":"src/*.cpp","max_results":10})JSON");
+    check(json_ok(search),
+          "snapshot search remains usable after prepare-job cancellation: " +
+              search);
 
     std::error_code ec;
     fs::remove_all(workspace, ec);
@@ -1171,7 +1227,9 @@ void test_index_status_and_update() {
 
 void test_inspect_and_find_tests() {
     const std::string workspace = write_temp_workspace("inspect");
-    write_text(fs::path(workspace) / "src" / "agent_loop.cpp", "void run_agent_loop() {}\n");
+    write_text(fs::path(workspace) / "src" / "agent_loop.cpp",
+               "void helper() {}\n"
+               "void run_agent_loop() { helper(); }\n");
     std::error_code mkdir_ec;
     fs::create_directories(fs::path(workspace) / "tests", mkdir_ec);
     write_text(fs::path(workspace) / "tests" / "test_agent_loop.cpp",
@@ -1185,6 +1243,48 @@ void test_inspect_and_find_tests() {
     const std::string tests =
         tools.execute("find_tests", R"JSON({"path":"src/agent_loop.cpp"})JSON");
     check(json_ok(tests), "find_tests succeeds: " + tests);
+
+    const std::string helper_search =
+        tools.execute("search_symbol", R"JSON({"query":"helper"})JSON");
+    const json::ParseResult helper_parsed = json::parse(helper_search);
+    long long helper_id = 0;
+    long long run_id = 0;
+    if (helper_parsed.error.ok() && helper_parsed.value.get("data") != nullptr &&
+        helper_parsed.value.get("data")->is_array()) {
+        for (const json::Value& hit :
+             helper_parsed.value.get("data")->array) {
+            const json::Value* id = hit.get("id");
+            const json::Value* name = hit.get("name");
+            if (id != nullptr && id->type == json::Value::Type::Number &&
+                name != nullptr && name->is_string() &&
+                name->string == "helper")
+                helper_id = static_cast<long long>(id->number);
+        }
+    }
+    const std::string run_search =
+        tools.execute("search_symbol", R"JSON({"query":"run_agent_loop"})JSON");
+    const json::ParseResult run_parsed = json::parse(run_search);
+    if (run_parsed.error.ok() && run_parsed.value.get("data") != nullptr &&
+        run_parsed.value.get("data")->is_array() &&
+        !run_parsed.value.get("data")->array.empty()) {
+        const json::Value* id =
+            run_parsed.value.get("data")->array.front().get("id");
+        if (id != nullptr && id->type == json::Value::Type::Number)
+            run_id = static_cast<long long>(id->number);
+    }
+    check(helper_id > 0 && run_id > 0,
+          "graph tool fixture symbols have ids");
+    const std::string callers = tools.execute(
+        "find_callers",
+        "{\"symbol_id\":" + std::to_string(helper_id) + "}");
+    const std::string callees = tools.execute(
+        "find_callees",
+        "{\"symbol_id\":" + std::to_string(run_id) + "}");
+    check(json_ok(callers) &&
+              callers.find("run_agent_loop") != std::string::npos,
+          "find_callers returns the approximate enclosing caller");
+    check(json_ok(callees) && callees.find("helper") != std::string::npos,
+          "find_callees returns the approximate resolved target");
 
     std::error_code ec;
     fs::remove_all(workspace, ec);
@@ -1427,6 +1527,7 @@ void run_all() {
     test_smart_act_native_tools_accept_unindexed_project_paths();
     test_agent_command_output_keeps_unindexed_project_paths();
     test_replace_symbol();
+    test_index_refresh_drops_completed_prepare_cancellation();
     test_index_status_and_update();
     test_inspect_and_find_tests();
     test_git_and_network_tools_policy();

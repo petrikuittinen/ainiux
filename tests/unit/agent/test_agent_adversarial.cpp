@@ -428,6 +428,8 @@ void test_command_guard_adversarial() {
           "shell metacharacters rejected");
     check(!agent::parse_command("python3 $(whoami)", args, agent::CommandPolicy::Agent, rule).ok(),
           "command substitution rejected");
+    check(!agent::parse_command("python3 ${HOME}", args, agent::CommandPolicy::Agent, rule).ok(),
+          "parameter substitution rejected when unquoted");
     check(!agent::parse_command("python3 `id`", args, agent::CommandPolicy::Agent, rule).ok(),
           "backticks rejected");
     check(!agent::parse_command("cat /etc/passwd", args, agent::CommandPolicy::Agent, rule).ok(),

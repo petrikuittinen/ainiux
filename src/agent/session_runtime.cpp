@@ -502,6 +502,7 @@ Error AgentSessionRuntime::prepare(const provider::RequestContext& context,
         fields.object["indexed"] = log_number(index_stats.indexed);
         fields.object["unchanged"] = log_number(index_stats.unchanged);
         fields.object["skipped"] = log_number(index_stats.skipped);
+        fields.object["references"] = log_number(index_stats.references);
         if (!error.ok()) {
             fields.object["error_code"] = log_string(error_code_name(error.code));
             fields.object["error_message"] = log_string(error.message);
@@ -518,7 +519,8 @@ Error AgentSessionRuntime::prepare(const provider::RequestContext& context,
             std::cerr << "Index warning: " << redact_secrets(diagnostic, secrets_) << "\n";
         std::cerr << "Code index refreshed: " << index_stats.discovered << " eligible, "
                   << index_stats.indexed << " indexed, " << index_stats.unchanged
-                  << " unchanged, " << index_stats.skipped << " skipped.\n";
+                  << " unchanged, " << index_stats.skipped << " skipped, "
+                  << index_stats.references << " references extracted.\n";
     }
 
     index::Snapshot snapshot;
@@ -974,6 +976,42 @@ SessionTurnResult AgentSessionRuntime::run_user_turn(
         }
     }
 
+    // Local, deterministic orientation for this user turn. It is appended after
+    // the active user message (and prior tool history), remains visible through
+    // all tool rounds, then is erased before this function returns. It is never
+    // written to agent.sqlite or shown in the transcript.
+    const std::string index_hints =
+        tools_.task_hints(text, options_.code_index_hint_max_symbols,
+                          options_.code_index_hint_max_bytes,
+                          options_.code_index_hint_seed_symbols, cancellation);
+    std::size_t index_hint_position = 0;
+    bool index_hint_active = false;
+    if (!index_hints.empty()) {
+        index_hint_position =
+            append_request_only_context(conversation_, index_hints);
+        index_hint_active = true;
+        publish_request_token_estimate();
+        if (logger_) {
+            json::Value fields = log_object();
+            fields.object["bytes"] = log_number(index_hints.size());
+            logger_->event("code_index_hints", {"index"}, std::move(fields),
+                           "success");
+        }
+    }
+    struct RemoveRequestOnlyHint {
+        provider::ToolConversation& conversation;
+        std::size_t position = 0;
+        bool& active;
+        std::function<void()> after_remove;
+        ~RemoveRequestOnlyHint() {
+            if (!active) return;
+            (void)remove_request_only_context(conversation, position);
+            active = false;
+            if (after_remove) after_remove();
+        }
+    } remove_index_hint{conversation_, index_hint_position, index_hint_active,
+                        [this] { publish_request_token_estimate(); }};
+
     const std::size_t log_width = terminal_column_count();
     const std::size_t tool_line_width = log_width > 8 ? log_width : 8;
     std::size_t turn_tool_index = 0;
@@ -1286,6 +1324,25 @@ SessionTurnResult AgentSessionRuntime::run_user_turn(
             final_text = outcome.final_text;
             result.error = ok_error();
             result.final_text = final_text;
+            const Error final_index_error =
+                tools_.refresh_persistent_index(true, cancellation);
+            if (!final_index_error.ok() &&
+                final_index_error.code != ErrorCode::Cancelled) {
+                result.notice =
+                    "final code-index refresh failed: " +
+                    redact_secrets(final_index_error.message, secrets_);
+                if (!context.options.quiet)
+                    std::cerr << "Agent warning: " << result.notice << "\n";
+                if (logger_) {
+                    json::Value fields = log_object();
+                    fields.object["error_code"] =
+                        log_string(error_code_name(final_index_error.code));
+                    fields.object["error_message"] =
+                        log_string(final_index_error.message);
+                    logger_->event("final_index_refresh", {"index"},
+                                   std::move(fields), "failure");
+                }
+            }
             result.finished_at_ms = now_unix_ms();
             if (session_store_.is_open() && session_id_ > 0 && !final_text.empty()) {
                 Error assistant_error =

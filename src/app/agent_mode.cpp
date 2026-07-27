@@ -63,6 +63,14 @@ AgentGoalResult run_agent_goal(provider::RequestContext context,
     options.history_backup.ttl_days = context.options.agent_history_backup_ttl_days;
     options.auto_compact = context.options.agent_auto_compact;
     options.compact_limit = context.options.agent_compact_limit;
+    options.code_index_hint_max_symbols =
+        static_cast<std::size_t>(
+            context.options.agent_code_index_hint_max_symbols);
+    options.code_index_hint_max_bytes =
+        context.options.agent_code_index_hint_max_bytes;
+    options.code_index_hint_seed_symbols =
+        static_cast<std::size_t>(
+            context.options.agent_code_index_hint_seed_symbols);
     options.show_command_output = context.options.agent_show_command_output;
     options.fetch_options.connect_timeout_seconds = context.options.connect_timeout_seconds;
     options.fetch_options.timeout_seconds =

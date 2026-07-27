@@ -552,6 +552,33 @@ void test_follow_up_user_appends_after_tool_history() {
           "follow-up user is last after tool history");
 }
 
+void test_request_only_context_is_removed_without_history_loss() {
+    provider::ToolConversation conversation;
+    conversation.messages = {{"system", "trusted"}, {"user", "change add"}};
+    conversation.continuation_items_json = {
+        R"({"role":"assistant","content":"checking"})",
+        R"({"role":"user","content":"tool history"})"};
+    const std::vector<std::string> before =
+        conversation.continuation_items_json;
+    const std::size_t position = agent::append_request_only_context(
+        conversation,
+        "[Approximate code-index hints; verify before editing]\nsrc/util.c: add");
+    check(conversation.continuation_items_json.size() == before.size() + 1 &&
+              conversation.continuation_items_json.back().find(
+                  "Approximate code-index hints") != std::string::npos,
+          "request-only index hint is appended after current history");
+    conversation.continuation_items_json.push_back(
+        R"({"role":"assistant","content":"later round"})");
+    check(agent::remove_request_only_context(conversation, position) &&
+              conversation.continuation_items_json.size() ==
+                  before.size() + 1 &&
+              conversation.continuation_items_json[0] == before[0] &&
+              conversation.continuation_items_json[1] == before[1] &&
+              conversation.continuation_items_json.back().find(
+                  "later round") != std::string::npos,
+          "request-only index hint is removed without discarding tool rounds");
+}
+
 void test_batched_reads_reduce_rounds_and_serialized_request_bytes() {
     provider::RequestContext context = chat_context();
     const std::vector<provider::FunctionDefinition> definitions = {
@@ -595,6 +622,7 @@ void run_all() {
     test_invalid_args_not_executed();
     test_scripted_turn_cap();
     test_follow_up_user_appends_after_tool_history();
+    test_request_only_context_is_removed_without_history_loss();
     test_batched_reads_reduce_rounds_and_serialized_request_bytes();
 }
 

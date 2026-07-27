@@ -2030,6 +2030,34 @@ Error apply_document(const Document& document, cli::Options& options) {
             err = nonnegative_int(entry, candidate.agent_compact_limit);
             if (err.ok() && candidate.agent_compact_limit > 100)
                 err = schema_error(entry, "expected an integer from 0 through 100 (0=auto)");
+        } else if (name == "agent.code_index_hint_max_symbols") {
+            err = nonnegative_int(
+                entry, candidate.agent_code_index_hint_max_symbols);
+            if (err.ok() &&
+                candidate.agent_code_index_hint_max_symbols > 128)
+                err = schema_error(entry,
+                                   "expected an integer from 0 through 128");
+        } else if (name == "agent.code_index_hint_max_bytes") {
+            long long value = 0;
+            err = auto_save_byte_size(entry, value);
+            constexpr long long kMaximumHintBytes = 64LL * 1024LL;
+            if (err.ok() &&
+                (value < 0 || value > kMaximumHintBytes ||
+                 (value != 0 && value < 256))) {
+                err = schema_error(
+                    entry,
+                    "expected 0 (disabled) or a byte size from 256 through 64K");
+            }
+            if (err.ok())
+                candidate.agent_code_index_hint_max_bytes =
+                    static_cast<size_t>(value);
+        } else if (name == "agent.code_index_hint_seed_symbols") {
+            err = nonnegative_int(
+                entry, candidate.agent_code_index_hint_seed_symbols);
+            if (err.ok() &&
+                candidate.agent_code_index_hint_seed_symbols > 128)
+                err = schema_error(entry,
+                                   "expected an integer from 0 through 128");
         } else if (name == "agent.show_command_output") {
             err = require_type(entry, Value::Type::Boolean);
             if (err.ok()) candidate.agent_show_command_output = entry.value.boolean;

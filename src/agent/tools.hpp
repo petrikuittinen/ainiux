@@ -3,6 +3,7 @@
 #include <cstddef>
 #include <filesystem>
 #include <map>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -16,6 +17,8 @@
 #include "search/search.hpp"
 
 namespace ainiux::agent {
+
+struct IndexRefreshState;
 
 struct SourceRange {
     std::string path;
@@ -54,7 +57,12 @@ struct ToolRegistryOptions {
 
 class ReadToolRegistry {
    public:
-    ReadToolRegistry() = default;
+    ReadToolRegistry();
+    ~ReadToolRegistry();
+    ReadToolRegistry(const ReadToolRegistry&) = delete;
+    ReadToolRegistry& operator=(const ReadToolRegistry&) = delete;
+    ReadToolRegistry(ReadToolRegistry&&) noexcept;
+    ReadToolRegistry& operator=(ReadToolRegistry&&) noexcept;
 
     static Error create(index::Options index_options,
                         index::Snapshot snapshot,
@@ -79,6 +87,17 @@ class ReadToolRegistry {
                       std::size_t end_line,
                       std::size_t max_bytes,
                       SourceRange& range) const;
+    // Wait for queued mutation-aware persistence, optionally enqueue a full-tree
+    // incremental freshness pass, then publish the newest complete snapshot.
+    Error refresh_persistent_index(
+        bool full_tree,
+        runtime::CancellationToken cancellation = runtime::CancellationToken()) const;
+    std::string task_hints(
+        const std::string& task,
+        std::size_t max_symbols = 16,
+        std::size_t max_bytes = 4U * 1024U,
+        std::size_t seed_symbols = 16,
+        runtime::CancellationToken cancellation = runtime::CancellationToken()) const;
 
    private:
     Error write_workspace_file(const std::string& relative_path,
@@ -137,6 +156,8 @@ class ReadToolRegistry {
                                 std::vector<std::string>& warnings) const;
     void note_written_file(const std::string& relative_path, const std::string& content) const;
     void note_removed_path(const std::string& relative_path) const;
+    void queue_index_paths(const std::vector<std::string>& paths,
+                           bool full_tree = false) const;
     void rebuild_file_map() const;
     Error resolve_writable_path(const std::string& relative_path, std::filesystem::path& absolute) const;
     Error normalize_mutation_path(const std::string& input, std::string& relative) const;
@@ -187,6 +208,8 @@ class ReadToolRegistry {
     mutable index::Snapshot snapshot_;
     std::vector<std::string> secrets_;
     mutable std::map<std::string, const index::IndexedFile*> files_;
+    std::unique_ptr<IndexRefreshState> index_refresh_;
+    mutable std::size_t loaded_index_generation_ = 0;
     MutationPolicy mutation_policy_ = MutationPolicy::Disabled;
     bool allow_network_ = false;
     HistoryBackupPolicy history_backup_{};

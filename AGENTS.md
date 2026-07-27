@@ -23,7 +23,7 @@ The program must stay excellent as a scriptable CLI. Keep the core engine indepe
 
 ## Current product snapshot
 
-Status: **v1.09** (see `README.md` and `PLANS.md` implementation notes). One-shot (`run` / `--run` / `-r`) and interactive (`agent` / `--agent` / `-a`) local agent modes are landed with workspace writes, multi-turn project sessions (`.ainiux-pr/`), compact live tool activity, provider-supplied reasoning previews in interactive agent history, transcript-preserving compaction, chat↔editor↔agent cycling, project-persisted Confirm/Smart/Yolo permissions, OpenRouter/OpenAI/DeepSeek credit display, interactive Guard approvals, and session-scoped Act/Plan task modes. Live tool rows update in place, while display-only `notice` and `thinking` rows remain outside provider context. One-shot planning is available through `plan`, `--plan`, and `--plan-file`; Plan retains research tools but code-enforces planning-document-only writes. User profile stays `~/.ainiux/` (chat DB/media). The next major milestone is **v1.1** agent improvement: an approximate caller/reference graph, graph-aware ranking, and small task-aware index hints injected before model tool work. Remaining v0.9 polish continues alongside it; local server mode is deferred behind v1.1, image generation moves to v1.2, and browser web UI remains postponed.
+Status: **v1.10** (see `README.md` and `PLANS.md` implementation notes). One-shot (`run` / `--run` / `-r`) and interactive (`agent` / `--agent` / `-a`) local agent modes are landed with workspace writes, multi-turn project sessions (`.ainiux-pr/`), compact live tool activity, provider-supplied reasoning previews in interactive agent history, transcript-preserving compaction, chat↔editor↔agent cycling, project-persisted Confirm/Smart/Yolo permissions, OpenRouter/OpenAI/DeepSeek credit display, interactive Guard approvals, and session-scoped Act/Plan task modes. Live tool rows update in place, while display-only `notice` and `thinking` rows remain outside provider context. One-shot planning is available through `plan`, `--plan`, and `--plan-file`; Plan retains research tools but code-enforces planning-document-only writes. User profile stays `~/.ainiux/` (chat DB/media). The first review slice of **v1.1** agent improvement is landed for Python, C, and C++: approximate references/callers, graph-aware ranking, request-only task hints, and mutation-aware persistence. Remaining v1.1 languages and tuning follow after review; local server mode is deferred behind v1.1, image generation moves to v1.2, and browser web UI remains postponed.
 
 ### Implemented modes
 
@@ -63,7 +63,7 @@ Status: **v1.09** (see `README.md` and `PLANS.md` implementation notes). One-sho
 
 - Local OpenAI-compatible **server** mode (`--server` in `PLANS.md` v0.90)
 - Browser local web UI (`src/web/` reserved; `docs/web-mode.md` is still a stub plan)
-- Reference/caller graph, PageRank, `find_callers`, `find_callees`, and automatic per-turn code-index hints (planned for v1.1)
+- Reference extraction beyond the landed Python/C/C++ v1.1 review slice; JavaScript/TypeScript, Java/C#, Go, Rust, and other languages still have definitions-only indexes
 - `/goal`, `/loop`, and sub-agents. Their names are reserved for v1.1, but their behavior is not specified or implementation-ready
 - Image generation (`ainiux image` / `/image`; moved to v1.2)
 - Agent session resume/list UI and richer tool-call transcript chrome; Guard Ask y/n in interactive agent is landed (headless Ask still denies); one-shot `ainiux run` / `--run` and interactive `ainiux agent` / `--agent` with multi-turn tools + mode cycling are landed
@@ -232,9 +232,9 @@ The UI must not hard-code the difference between OpenAI Chat Completions, Respon
 
 ### Code index and v1.1 graph hints
 
-The project-local code index lives at `.ainiux-pr/index.sqlite` and remains a fast hint source, never ground truth. The current implementation stores files and symbols only. References, caller/callee relationships, PageRank, and automatic model-context hints are planned v1.1 work and must not be presented as available before they land.
+The project-local code index lives at `.ainiux-pr/index.sqlite` and remains a fast hint source, never ground truth. The current v1.1 review slice stores confidence-scored references for Python, C, and C++, resolves common callers/callees, computes distinct caller counts and secondary PageRank, exposes `find_callers` / `find_callees`, and injects bounded request-only task hints. Other indexed languages still store definitions only.
 
-When implementing v1.1:
+When extending v1.1:
 
 - Extend `src/agent/index/`; do not create a parallel index or use the user chat database.
 - Prefer lightweight lexical extraction and confidence-scored resolution over compiler-grade parsing or new language-server dependencies.

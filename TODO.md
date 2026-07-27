@@ -2,13 +2,11 @@
 
 ## Smarter local agent and code index (v1.1)
 
-- Add confidence-scored call/import/include/inherit/instantiate/use references to `.ainiux-pr/index.sqlite`; keep ambiguous and unresolved references explicit.
-- Resolve common direct calls and simple receiver types across the first acceptance languages without adding compiler, language-server, embedding, or model dependencies.
-- Add distinct caller counts, secondary global PageRank, task-aware graph proximity, and deterministic ranking reasons.
-- Inject a bounded `[Approximate code-index hints; verify before editing]` block before the first provider request of every agent user turn. Generate it locally, replace it on later turns, and never persist it as transcript history.
-- Add `find_callers` and `find_callees`; enrich `search_symbol`, `read_symbol`, `inspect_code_task`, `project_overview`, and where cheap `search_text`.
-- Persist exact touched-file updates after native mutations, run an incremental check after potentially mutating commands, and finish each task with a full-tree freshness pass that reparses only changed files.
-- Use cancellable/coalesced index jobs, atomic graph publication, and at most approximately 75% of available cores for full/multi-file scans.
+- Review and tune the landed Python/C/C++ first slice: confidence-scored references, explicit ambiguity, caller counts, secondary PageRank, graph-aware tools/ranking, request-only hints, and mutation-aware persistence.
+- Extend the reviewed extractor/resolver to JavaScript/TypeScript, Java/C#, Go, and Rust without adding compiler, language-server, embedding, or model dependencies.
+- Add inexpensive `use` edges only where they improve navigation without flooding the graph; imports/includes may remain file-oriented unresolved evidence when no honest symbol target exists.
+- Enrich `search_text` with the enclosing indexed symbol where cheap.
+- Add command-generated/rename/removal stress coverage and tune coalescing/shutdown behavior on larger repositories.
 - Benchmark before/after model rounds, tool calls, prompt bytes/tokens, full-file reads, time to first useful edit, missed callers/tests, false hints, and final correctness.
 - Keep `glob`, `search_text`/`grep`, targeted reads, compiler output, and tests as verification/fallback paths. The graph remains a hint.
 - Do not rewrite the built-in agent prompt in this milestone; the user will specify a separate prompt-optimization pass for small local models.

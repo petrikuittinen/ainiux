@@ -367,6 +367,24 @@ void append_conversation_text(provider::ToolConversation& conversation,
     conversation.continuation_items_json.push_back(json::stringify(item));
 }
 
+std::size_t append_request_only_context(
+    provider::ToolConversation& conversation,
+    const std::string& content) {
+    append_conversation_text(conversation, "user", content);
+    return conversation.continuation_items_json.empty()
+               ? 0
+               : conversation.continuation_items_json.size() - 1;
+}
+
+bool remove_request_only_context(provider::ToolConversation& conversation,
+                                 std::size_t index) {
+    if (index >= conversation.continuation_items_json.size()) return false;
+    conversation.continuation_items_json.erase(
+        conversation.continuation_items_json.begin() +
+        static_cast<std::ptrdiff_t>(index));
+    return true;
+}
+
 ToolProtocol default_tool_protocol(bool provider_supports_tool_calls) {
     return provider_supports_tool_calls ? ToolProtocol::Native : ToolProtocol::Xml;
 }

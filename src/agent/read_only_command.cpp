@@ -429,6 +429,15 @@ ReadOnlyCommandAssessment assess_read_only_command(
     const std::vector<std::string>& args) {
     if (args.empty()) return reject("command is empty");
     const std::string& command = args[0];
+    if (command == "command") {
+        if (args.size() < 3 || args[1] != "-v")
+            return reject("only command -v NAME is a vetted shell-builtin form");
+        for (std::size_t index = 2; index < args.size(); ++index)
+            if (args[index].empty() || args[index][0] == '-' ||
+                args[index].find('/') != std::string::npos)
+                return reject("command -v requires bare command names");
+        return accept();
+    }
     if (command == "pwd") {
         for (std::size_t i = 1; i < args.size(); ++i)
             if (args[i] != "-L" && args[i] != "-P" &&

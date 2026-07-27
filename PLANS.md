@@ -36,7 +36,7 @@ error layers should serve:
 | v0.0–v0.8 | CLI, persistence, runtime/TUI, providers, context, config, benchmarks, editor | Landed |
 | v0.9 | Benchmark calibration, refactor hygiene, TUI/CLI/editor polish | Remaining work continues |
 | v0.90 | Local OpenAI-compatible server | Deferred behind v1.1 |
-| v1.0–v1.09 | Local agent foundation and hardening | Landed through v1.09 |
+| v1.0–v1.10 | Local agent foundation and hardening | Landed through v1.10 |
 | **v1.1** | **Approximate caller graph, smarter indexing, automatic code-index hints, later `/goal`, `/loop`, and sub-agents** | **Next priority** |
 | **v1.2** | **Image generation across CLI and interactive surfaces** | Planned after v1.1 |
 
@@ -46,7 +46,7 @@ ready.
 
 ## Current baseline
 
-Implementation status (2026-07-27): **v1.09**.
+Implementation status (2026-07-27): **v1.10**.
 
 The shipped product includes:
 
@@ -64,10 +64,11 @@ The shipped product includes:
 - OpenRouter, OpenAI, and DeepSeek credit display when the selected key can query it
 - a fast project-local symbol index with incremental discovery and lightweight scanners
 
-The current code index stores files, physical line totals, symbols, ranges, signatures,
-documentation hints, and hashes. It does **not** yet store references, a call graph,
-PageRank, or automatic task-specific context hints. `find_callers` and `find_callees`
-are not implemented.
+The current v1.1 review slice stores files, symbols, and confidence-scored references
+for Python, C, and C++. It resolves common callers/callees, persists distinct caller
+counts plus secondary PageRank, injects bounded request-only task hints, and exposes
+`find_callers` / `find_callees`. JavaScript/TypeScript, Java/C#, Go, Rust, and other
+languages remain definitions-only until this first slice is tested and reviewed.
 
 ## Compact release history
 
@@ -93,11 +94,28 @@ are not implemented.
 | v1.07 | Session-scoped Act/Plan modes |
 | v1.08 | Provider reasoning previews and in-place activity rows |
 | v1.09 | Stable prompt caching/accounting, Smart read-only commands, and context polish |
+| v1.10 | Python/C/C++ caller graphs, graph-guided request hints, and incremental index refresh |
 
 Historical implementation details remain available in Git history and the dated
 notes in `README.md` and `docs/decisions.md`.
 
 # v1.1 - Smarter agent indexing and graph-guided context
+
+## Implementation checkpoint: Python, C, and C++ review slice
+
+Landed for review:
+
+- schema v3 raw/resolved references and per-symbol scores, migrated by normal refresh
+- Python/C/C++ calls, imports/includes, inheritance, instantiation, and simple receiver inference
+- global transactional re-resolution, explicit unresolved/ambiguous rows, caller counts, and deterministic PageRank
+- task-aware ranking plus bounded `[Approximate code-index hints; verify before editing]` request context
+- `find_callers`, `find_callees`, and graph-enriched overview/symbol/task tools
+- immediate live touched-file rescans, a cancellable/coalescing persistence worker, command freshness checks, and final task refresh
+- approximately 75% core use for multi-file discovery/scanning
+
+This checkpoint intentionally stops before adding the remaining acceptance languages
+so the ranking quality, false positives, hint size, and mutation behavior can be tested
+and reviewed first.
 
 ## Goal
 
@@ -278,7 +296,7 @@ Requirements:
 - use the current user request as the task-ranking seed
 - prefer task-relevant symbols, direct graph neighbors, and likely tests
 - fall back to a few global architectural anchors only when task matching is weak
-- use a small fixed line/byte budget and deterministic ordering
+- use configurable small symbol/byte/graph-seed budgets and deterministic ordering
 - omit the block when the index has no useful result
 - label it exactly as approximate and instruct the model to verify before editing
 - include path, qualified symbol name, line range, and caller count where available

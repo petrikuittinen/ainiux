@@ -780,7 +780,7 @@ void test_config_reads_models_template() {
 void test_config_reads_common_template() {
     ainiux::config::ParseResult parsed = ainiux::config::read_file("config/ainiux.conf");
     check(parsed.error.ok(), "common config file parses");
-    check(parsed.document.entries.size() == 68, "common config has every expected setting");
+    check(parsed.document.entries.size() == 71, "common config has every expected setting");
     ainiux::cli::Options highlight_options;
     ainiux::Error apply_error = ainiux::config::apply_document(parsed.document, highlight_options);
     check(apply_error.ok() && highlight_options.tui_highlight,
@@ -834,6 +834,9 @@ void test_config_reads_common_template() {
               options.agent_history_backup_max_bytes == 1024U * 1024U &&
               options.agent_history_backup_ttl_days == 7 &&
               options.agent_auto_compact &&
+              options.agent_code_index_hint_max_symbols == 16 &&
+              options.agent_code_index_hint_max_bytes == 4U * 1024U &&
+              options.agent_code_index_hint_seed_symbols == 16 &&
               !options.agent_show_command_output,
           "common config maps to the built-in runtime defaults");
     check(options.model_catalog.models.empty(),
@@ -1195,6 +1198,51 @@ void test_config_security_review_settings() {
     check(!error.ok(), "security review log retention rejects values above 1000");
 }
 
+void test_config_code_index_hint_settings() {
+    ainiux::config::ParseResult parsed = ainiux::config::parse(
+        "[agent]\n"
+        "code_index_hint_max_symbols = 24\n"
+        "code_index_hint_max_bytes = 6K\n"
+        "code_index_hint_seed_symbols = 12\n",
+        "agent-hints.conf");
+    ainiux::cli::Options options;
+    ainiux::Error error =
+        ainiux::config::apply_document(parsed.document, options);
+    check(parsed.error.ok() && error.ok() &&
+              options.agent_code_index_hint_max_symbols == 24 &&
+              options.agent_code_index_hint_max_bytes == 6U * 1024U &&
+              options.agent_code_index_hint_seed_symbols == 12,
+          "agent code-index hint limits accept configurable counts and bytes");
+
+    parsed = ainiux::config::parse(
+        "[agent]\n"
+        "code_index_hint_max_symbols = 0\n"
+        "code_index_hint_max_bytes = 0\n"
+        "code_index_hint_seed_symbols = 0\n",
+        "agent-hints-disabled.conf");
+    options = ainiux::cli::Options{};
+    error = ainiux::config::apply_document(parsed.document, options);
+    check(parsed.error.ok() && error.ok() &&
+              options.agent_code_index_hint_max_symbols == 0 &&
+              options.agent_code_index_hint_max_bytes == 0 &&
+              options.agent_code_index_hint_seed_symbols == 0,
+          "agent code-index hint settings accept explicit disable values");
+
+    for (const std::string& setting : {
+             std::string("code_index_hint_max_symbols = 129"),
+             std::string("code_index_hint_max_bytes = 128"),
+             std::string("code_index_hint_max_bytes = 65K"),
+             std::string("code_index_hint_seed_symbols = 129")}) {
+        parsed = ainiux::config::parse("[agent]\n" + setting + "\n",
+                                       "agent-hints-bad.conf");
+        options = ainiux::cli::Options{};
+        error = ainiux::config::apply_document(parsed.document, options);
+        check(!error.ok(),
+              "agent code-index hint setting rejects unsafe bound: " +
+                  setting);
+    }
+}
+
 void test_agent_input_height_config() {
     ainiux::cli::Options options;
     check(options.agent_input_max_height_percent == 25,
@@ -1250,6 +1298,7 @@ void run_all() {
     test_config_empty_and_numeric_edge_cases();
     test_config_code_index_size();
     test_config_security_review_settings();
+    test_config_code_index_hint_settings();
     test_agent_input_height_config();
     test_config_file_read_errors();
     test_config_parses_supported_values();

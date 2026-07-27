@@ -72,7 +72,9 @@ int run_index_mode(const cli::Options& options) {
         std::cerr << "Code index updated in " << stats.elapsed_ms << " ms: "
                   << stats.discovered << " eligible, " << stats.indexed << " indexed, "
                   << stats.unchanged << " unchanged, " << stats.skipped << " skipped, "
-                  << stats.removed << " removed, " << stats.symbols << " symbols extracted; "
+                  << stats.removed << " removed, " << stats.symbols
+                  << " symbols and " << stats.references
+                  << " references extracted; "
                   << stats.worker_count << " worker(s).\n";
     }
 

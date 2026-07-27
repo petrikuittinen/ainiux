@@ -81,6 +81,16 @@ void test_parse_policies() {
     error = agent::parse_command("touch notes.txt", args, agent::CommandPolicy::Agent, rule);
     check(error.ok(), "agent default-allow accepts touch (not an allowlist game): " + error.message);
 
+    error = agent::parse_command(
+        R"(dpkg-query -W -f='${Status} ${Version}\n' apache2)", args,
+        agent::CommandPolicy::Agent, rule);
+    check(error.ok() && args.size() == 4 && args[2] == "-f=${Status} ${Version}\\n",
+          "agent preserves quoted literal package-query formats: " + error.message);
+    error = agent::parse_command("python3 ${UNQUOTED}", args,
+                                 agent::CommandPolicy::Agent, rule);
+    check(!error.ok() && error.message.find("unquoted shell substitutions") != std::string::npos,
+          "agent still rejects unquoted shell substitutions");
+
     error = agent::parse_command("bash -c echo", args, agent::CommandPolicy::Agent, rule);
     check(!error.ok(), "agent still denylists shell wrappers: " + error.message);
 
@@ -150,6 +160,11 @@ void test_read_only_command_classifier() {
     check(vetted({"hostname", "-f"}) && vetted({"date", "-u", "+%FT%TZ"}) &&
               vetted({"ifconfig", "-a"}) && vetted({"ip", "addr", "show"}),
           "classifier: strict display-only forms");
+    check(vetted({"command", "-v", "apache2"}),
+          "classifier: command -v executable lookup");
+    check(!vetted({"command", "-p", "apache2"}) &&
+              !vetted({"command", "-v", "/usr/bin/apache2"}),
+          "classifier: command builtin remains narrowly vetted");
 
     check(!vetted({"ls", "--definitely-unknown"}), "classifier: unknown option fallback");
     check(!vetted({"date", "--set", "tomorrow"}), "classifier: date --set trap");
@@ -215,6 +230,17 @@ void test_tool_agent_python_and_security_deny() {
     check(json_ok(py), "agent run_command python3 hello.py: " + py);
     check(py.find("ok") != std::string::npos || py.find("\"exit_status\":0") != std::string::npos,
           "python output/status: " + py);
+
+    const std::string lookup =
+        agent_tools.execute("run_command", R"JSON({"command":"command -v ls"})JSON");
+    check(json_ok(lookup) && lookup.find("/ls") != std::string::npos,
+          "agent run_command emulates command -v without a shell: " + lookup);
+    const std::string missing = agent_tools.execute(
+        "run_command",
+        R"JSON({"command":"command -v ainiux-definitely-missing-command"})JSON");
+    check(json_ok(missing) && missing.find("\"exit_status\":1") != std::string::npos,
+          "command -v reports a missing executable as process status, not a tool error: " +
+              missing);
 
     agent::ReadToolRegistry review = make_registry(workspace, false);
     const std::string denied =
