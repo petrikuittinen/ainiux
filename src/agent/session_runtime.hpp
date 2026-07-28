@@ -31,11 +31,18 @@ struct AgentTokenUsage {
     long long cache_read_tokens = 0;
     long long cache_write_tokens = 0;
     long long output_tokens = 0;
+    // Number of model rounds included in these totals, whether provider-reported
+    // or locally estimated.
     std::size_t reported_rounds = 0;
+    // True when at least one round contributing to that total was estimated.
+    bool input_estimated = false;
+    bool output_estimated = false;
 };
 
 void accumulate_agent_token_usage(const provider::ChatResult& metrics,
-                                  AgentTokenUsage& usage);
+                                  AgentTokenUsage& usage,
+                                  long long estimated_input_tokens = 0,
+                                  long long estimated_output_tokens = 0);
 
 struct SessionTurnResult {
     Error error;

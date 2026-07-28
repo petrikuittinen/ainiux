@@ -6,6 +6,7 @@
 #include <string>
 #include <vector>
 
+#include "agent/session_runtime.hpp"
 #include "chat/session.hpp"
 #include "cli/args.hpp"
 #include "common.hpp"
@@ -64,7 +65,10 @@ struct AgentGoalResult {
     std::string final_text;
     std::size_t turns = 0;
     std::size_t tool_calls = 0;
+    agent::AgentTokenUsage token_usage;
+    long long elapsed_ms = 0;
 };
+std::string format_agent_run_metrics(const AgentGoalResult& result);
 AgentGoalResult run_agent_goal(
     provider::RequestContext context,
     const std::string& goal,

@@ -7,6 +7,7 @@
 #include <unistd.h>
 
 #include "agent/session_runtime.hpp"
+#include "app/app.hpp"
 #include "cli/args.hpp"
 #include "provider/provider.hpp"
 #include "support/test_support.hpp"
@@ -122,6 +123,24 @@ void test_agent_token_usage_aggregation_is_bounded() {
               usage.cache_write_tokens == std::numeric_limits<long long>::max() &&
               usage.output_tokens == std::numeric_limits<long long>::max(),
           "agent usage aggregation saturates instead of overflowing");
+
+    provider::ChatResult estimated;
+    estimated.usage_json = "null";
+    estimated.completion_tokens = 11;
+    estimated.completion_tokens_estimated = true;
+    agent::AgentTokenUsage fallback;
+    agent::accumulate_agent_token_usage(estimated, fallback, 250, 11);
+    check(fallback.reported_rounds == 1 && fallback.input_tokens == 250 &&
+              fallback.output_tokens == 11 && fallback.input_estimated &&
+              fallback.output_estimated,
+          "agent usage falls back to per-round input and output estimates");
+
+    app::AgentGoalResult run;
+    run.token_usage = fallback;
+    run.elapsed_ms = 6540;
+    check(app::format_agent_run_metrics(run) ==
+              "Agent metrics: input 250 tokens (estimated), output 11 tokens (estimated), time 6.54 s",
+          "one-shot agent metrics format includes input, output, estimate labels, and time");
 }
 
 void test_task_mode_switch_is_session_scoped_and_failure_safe() {

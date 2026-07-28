@@ -432,6 +432,18 @@ class Handler(BaseHTTPRequestHandler):
         )
         all_text = self._chat_text(request)
         if request.get("tools") and "AINIUX_AGENT_SMOKE" in all_text:
+            if "Prior agent work on this project" in all_text:
+                self._send(
+                    400,
+                    json.dumps(
+                        {
+                            "error": {
+                                "message": "one-shot agent request included prior project transcript"
+                            }
+                        }
+                    ),
+                )
+                return
             tool_result_seen = any(
                 isinstance(message, dict) and message.get("role") == "tool"
                 for message in messages

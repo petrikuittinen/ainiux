@@ -72,20 +72,40 @@ std::vector<std::string> known_tool_names(const ReadToolRegistry& tools) {
 }  // namespace
 
 void accumulate_agent_token_usage(const provider::ChatResult& metrics,
-                                  AgentTokenUsage& usage) {
-    if (metrics.usage_json.empty() || metrics.usage_json == "null") return;
+                                  AgentTokenUsage& usage,
+                                  long long estimated_input_tokens,
+                                  long long estimated_output_tokens) {
     auto add = [](long long& total, long long value) {
-        if (value <= 0) return;
+        if (value < 0) return;
         total = total > std::numeric_limits<long long>::max() - value
                     ? std::numeric_limits<long long>::max()
                     : total + value;
     };
+    const bool has_input = metrics.prompt_tokens >= 0 || estimated_input_tokens > 0;
+    const bool has_output =
+        (metrics.completion_tokens >= 0 &&
+         (!metrics.completion_tokens_estimated &&
+          !metrics.usage_json.empty() && metrics.usage_json != "null")) ||
+        estimated_output_tokens > 0 || metrics.completion_tokens_estimated;
+    if (!has_input && !has_output) return;
+
     ++usage.reported_rounds;
-    add(usage.input_tokens, metrics.prompt_tokens);
+    if (metrics.prompt_tokens >= 0) {
+        add(usage.input_tokens, metrics.prompt_tokens);
+    } else {
+        add(usage.input_tokens, estimated_input_tokens);
+        usage.input_estimated = true;
+    }
     add(usage.fresh_input_tokens, metrics.fresh_prompt_tokens);
     add(usage.cache_read_tokens, metrics.cache_read_tokens);
     add(usage.cache_write_tokens, metrics.cache_write_tokens);
-    add(usage.output_tokens, metrics.completion_tokens);
+    if (!metrics.completion_tokens_estimated &&
+        !metrics.usage_json.empty() && metrics.usage_json != "null") {
+        add(usage.output_tokens, metrics.completion_tokens);
+    } else {
+        add(usage.output_tokens, estimated_output_tokens);
+        usage.output_estimated = true;
+    }
 }
 
 bool AgentSessionRuntime::is_interrupted(runtime::CancellationToken cancellation,
@@ -906,11 +926,13 @@ SessionTurnResult AgentSessionRuntime::run_user_turn(
                 logger_->event("agent_session", {"session"}, std::move(fields), "success");
             }
         }
-        // Seed system (+ optional AGENTS.md). If agent.sqlite already has a
-        // transcript (reopened project), inject it as model context so the first
-        // turn after resume is not amnesiac. The new goal is always last.
+        // Seed system (+ optional AGENTS.md). Interactive agent sessions resume
+        // the project transcript as model context. Headless --run/--plan always
+        // start with a fresh model conversation, while still using the durable
+        // project DB for logging/display and the persistent code index.
         std::vector<AgentMessageRecord> prior;
-        if (session_store_.is_open()) (void)session_store_.load_messages(prior);
+        if (options_.interactive && session_store_.is_open())
+            (void)session_store_.load_messages(prior);
         const std::string prior_context = build_prior_session_context(prior);
         if (prior_context.empty()) {
             seed_agent_conversation(conversation_, prompts_, task_mode_, state_.protocol, text,
@@ -1188,9 +1210,28 @@ SessionTurnResult AgentSessionRuntime::run_user_turn(
                                  AgentProgressKind::Thinking, active_round_id, 0, {}, 0});
         }
 
+        long long estimated_round_input_tokens = 0;
+        if (round.metrics.prompt_tokens < 0) {
+            const std::string serialized_request =
+                provider::serialize_tool_request(context, conversation_, definitions);
+            estimated_round_input_tokens =
+                serialized_request == "{}"
+                    ? estimated_request_tokens()
+                    : estimate_tokens_from_text(serialized_request);
+        }
+        long long estimated_round_output_tokens = round.metrics.completion_tokens;
+        if (estimated_round_output_tokens <= 0) {
+            for (const std::string& item : round.continuation_items_json)
+                estimated_round_output_tokens += estimate_tokens_from_text(item);
+            if (estimated_round_output_tokens <= 0)
+                estimated_round_output_tokens = estimate_tokens_from_text(round.content);
+        }
+
         turn_tool_calls += round.tool_calls.size();
         if (!round.tool_calls.empty()) publish_phase(AgentActivityPhase::Working);
-        accumulate_agent_token_usage(round.metrics, result.token_usage);
+        accumulate_agent_token_usage(round.metrics, result.token_usage,
+                                     estimated_round_input_tokens,
+                                     estimated_round_output_tokens);
         const provider::ChatResult round_metrics = round.metrics;
         AgentRoundOutcome outcome = handle_agent_tool_round(
             state_, limits_, context, conversation_, std::move(round), known_tools_, executor,

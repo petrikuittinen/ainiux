@@ -1,9 +1,12 @@
 #include "app/app.hpp"
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <csignal>
+#include <iomanip>
 #include <iostream>
+#include <sstream>
 #include <thread>
 
 #include "agent/session_runtime.hpp"
@@ -34,16 +37,31 @@ class AgentSignalGuard {
 
 }  // namespace
 
+std::string format_agent_run_metrics(const AgentGoalResult& result) {
+    std::ostringstream out;
+    out << "Agent metrics: input " << result.token_usage.input_tokens << " tokens";
+    if (result.token_usage.input_estimated) out << " (estimated)";
+    out << ", output " << result.token_usage.output_tokens << " tokens";
+    if (result.token_usage.output_estimated) out << " (estimated)";
+    out << ", time " << std::fixed << std::setprecision(2)
+        << static_cast<double>(std::max(0LL, result.elapsed_ms)) / 1000.0 << " s";
+    return out.str();
+}
+
 AgentGoalResult run_agent_goal(provider::RequestContext context,
                                const std::string& goal_text,
                                runtime::CancellationToken cancellation,
                                std::function<bool()> interrupted,
                                bool write_final_to_stdout,
                                std::function<void(const std::string& status_line)> on_progress) {
+    const auto started = std::chrono::steady_clock::now();
     AgentGoalResult result;
     const std::string goal = ascii_trim(goal_text);
     if (goal.empty()) {
         result.error = {ErrorCode::BadArgs, "agent goal is empty; pass -r/--run TEXT or --run-file PATH"};
+        result.elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                std::chrono::steady_clock::now() - started)
+                                .count();
         return result;
     }
 
@@ -87,6 +105,9 @@ AgentGoalResult run_agent_goal(provider::RequestContext context,
     Error error = runtime.prepare(context, cancellation, interrupted, options);
     if (!error.ok()) {
         result.error = error;
+        result.elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                std::chrono::steady_clock::now() - started)
+                                .count();
         return result;
     }
 
@@ -96,6 +117,7 @@ AgentGoalResult run_agent_goal(provider::RequestContext context,
     result.final_text = turn.final_text;
     result.turns = turn.session_turns;
     result.tool_calls = turn.session_tool_calls;
+    result.token_usage = turn.token_usage;
 
     if (write_final_to_stdout && turn.error.ok() && !turn.needs_user_continue) {
         std::cout << result.final_text;
@@ -121,6 +143,9 @@ AgentGoalResult run_agent_goal(provider::RequestContext context,
     if (!finish_error.ok() && !context.options.quiet)
         std::cerr << "Agent warning: could not finish session DB: " << finish_error.message
                   << "\n";
+    result.elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                            std::chrono::steady_clock::now() - started)
+                            .count();
     return result;
 }
 
@@ -147,13 +172,16 @@ int run_agent_mode(provider::RequestContext context) {
     } monitor_join{finished, interrupt_monitor};
 
     const std::string goal = ascii_trim(context.options.prompt);
+    const bool quiet = context.options.quiet;
     AgentGoalResult result =
         run_agent_goal(std::move(context), goal, cancellation.token(),
                        [] { return g_agent_interrupt != 0; }, true, {});
     if (!result.error.ok()) {
         print_error(result.error);
+        if (!quiet) std::cerr << format_agent_run_metrics(result) << "\n";
         return exit_code_for(result.error.code);
     }
+    if (!quiet) std::cerr << format_agent_run_metrics(result) << "\n";
     return 0;
 }
 
