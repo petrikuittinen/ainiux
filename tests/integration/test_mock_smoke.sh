@@ -63,7 +63,7 @@ grep -E 'read_file.* in [0-9]+ ms' "$agent_err" >/dev/null || {
     cat "$agent_err" >&2
     exit 1
 }
-grep -E '^Agent metrics: input [0-9]+ tokens( \(estimated\))?, output [0-9]+ tokens( \(estimated\))?, time [0-9]+\.[0-9]{2} s$' "$agent_err" >/dev/null || {
+grep -E '^Agent metrics: tool calls [0-9]+ \([0-9]+ failed\), input [0-9]+ tokens( \(estimated\))?, output [0-9]+ tokens( \(estimated\))?, time [0-9]+\.[0-9]{2} s$' "$agent_err" >/dev/null || {
     cat "$agent_err" >&2
     exit 1
 }

@@ -1323,394 +1323,121 @@ bool language_for_path(const std::string& path, Language& language) {
 
 namespace {
 
-bool callable_symbol(const Symbol& symbol) {
-    return symbol.kind == "function" || symbol.kind == "method";
+bool kind_is_type_or_container(const std::string& kind) {
+    static const std::set<std::string> kinds = {
+        "class", "struct", "union", "interface", "enum", "trait", "type",
+        "record", "namespace", "module", "mod", "package"};
+    return kinds.find(kind) != kinds.end();
 }
 
-int enclosing_symbol_index(const std::vector<Symbol>& symbols, int line) {
-    int best = -1;
-    int best_span = std::numeric_limits<int>::max();
-    bool best_callable = false;
-    for (std::size_t index = 0; index < symbols.size(); ++index) {
-        const Symbol& symbol = symbols[index];
-        if (line < symbol.line_start || line > symbol.line_end) continue;
-        const bool candidate_callable = callable_symbol(symbol);
-        const int span = symbol.line_end - symbol.line_start;
-        if (best < 0 || (candidate_callable && !best_callable) ||
-            (candidate_callable == best_callable && span < best_span)) {
-            best = static_cast<int>(index);
-            best_span = span;
-            best_callable = candidate_callable;
+bool kind_is_document_structure(const std::string& kind) {
+    static const std::set<std::string> kinds = {
+        "heading", "section", "key", "table", "rule", "selector",
+        "element", "tag"};
+    return kinds.find(kind) != kinds.end();
+}
+
+int base_importance(const Symbol& symbol, bool top_level) {
+    if (kind_is_document_structure(symbol.kind)) return 10;
+    if (kind_is_type_or_container(symbol.kind)) return 70;
+    if (symbol.kind == "function") return top_level ? 65 : 50;
+    if (symbol.kind == "method" || symbol.kind == "constructor") return 50;
+    if (symbol.kind == "alias" || symbol.kind == "type-alias" ||
+        symbol.kind == "typedef")
+        return 45;
+    if (symbol.kind == "global" || symbol.kind == "constant" ||
+        (symbol.kind == "variable" && top_level))
+        return 40;
+    if (symbol.kind == "property" || symbol.kind == "field" ||
+        symbol.kind == "member")
+        return 25;
+    return top_level ? 40 : 25;
+}
+
+enum class Visibility { Unknown, Public, Protected, Private };
+
+bool contains_word(const std::string& text, const std::string& word) {
+    std::size_t position = 0;
+    while ((position = text.find(word, position)) != std::string::npos) {
+        const bool left =
+            position == 0 ||
+            !(std::isalnum(static_cast<unsigned char>(text[position - 1])) ||
+              text[position - 1] == '_');
+        const std::size_t end = position + word.size();
+        const bool right =
+            end == text.size() ||
+            !(std::isalnum(static_cast<unsigned char>(text[end])) ||
+              text[end] == '_');
+        if (left && right) return true;
+        position = end;
+    }
+    return false;
+}
+
+Visibility symbol_visibility(const Symbol& symbol, Language language,
+                             const std::vector<std::string>& lines,
+                             bool top_level) {
+    const std::string declaration = ascii_lower(symbol.signature);
+    if (contains_word(declaration, "private") ||
+        contains_word(declaration, "internal"))
+        return Visibility::Private;
+    if (contains_word(declaration, "protected"))
+        return Visibility::Protected;
+    if (contains_word(declaration, "public") ||
+        contains_word(declaration, "export") ||
+        contains_word(declaration, "pub"))
+        return Visibility::Public;
+
+    if (language == Language::Python) {
+        return !symbol.name.empty() && symbol.name.front() == '_' &&
+                       !(symbol.name.size() > 1 && symbol.name[1] == '_')
+                   ? Visibility::Private
+                   : (top_level ? Visibility::Public : Visibility::Unknown);
+    }
+    if (language == Language::Go)
+        return !symbol.name.empty() &&
+                       std::isupper(static_cast<unsigned char>(symbol.name.front()))
+                   ? Visibility::Public
+                   : Visibility::Private;
+    if (language == Language::JavaScript ||
+        language == Language::TypeScript) {
+        if (!symbol.name.empty() && symbol.name.front() == '#')
+            return Visibility::Private;
+        return declaration.find("export") != std::string::npos
+                   ? Visibility::Public
+                   : Visibility::Unknown;
+    }
+    if ((language == Language::C || language == Language::Cpp) &&
+        !top_level && symbol.line_start > 1) {
+        for (int line = symbol.line_start - 2; line >= 0; --line) {
+            const std::string text = trim(lines[static_cast<std::size_t>(line)]);
+            if (text == "public:") return Visibility::Public;
+            if (text == "protected:") return Visibility::Protected;
+            if (text == "private:") return Visibility::Private;
+            if (text.find("class ") != std::string::npos)
+                return Visibility::Private;
+            if (text.find("struct ") != std::string::npos)
+                return Visibility::Public;
         }
     }
-    return best;
+    return Visibility::Unknown;
 }
 
-int declaration_symbol_index(const std::vector<Symbol>& symbols,
-                             int line,
-                             const std::string& kind = {}) {
-    for (std::size_t index = 0; index < symbols.size(); ++index) {
-        const Symbol& symbol = symbols[index];
-        if (symbol.line_start == line && (kind.empty() || symbol.kind == kind))
-            return static_cast<int>(index);
-    }
-    return -1;
-}
-
-std::string reference_evidence(const std::string& line) {
-    std::string evidence = collapse_space(line);
-    if (evidence.size() > 200) {
-        evidence.resize(197);
-        evidence += "...";
-    }
-    return evidence;
-}
-
-std::string last_component(const std::string& target) {
-    std::size_t separator = target.rfind("::");
-    const std::size_t dot = target.rfind('.');
-    const std::size_t arrow = target.rfind("->");
-    if (dot != std::string::npos && (separator == std::string::npos || dot > separator))
-        separator = dot;
-    if (arrow != std::string::npos &&
-        (separator == std::string::npos || arrow + 1 > separator))
-        return target.substr(arrow + 2);
-    return separator == std::string::npos
-               ? target
-               : target.substr(separator + (target.compare(separator, 2, "::") == 0 ? 2 : 1));
-}
-
-std::string target_qualifier(const std::string& target) {
-    const std::string simple = last_component(target);
-    if (simple.size() >= target.size()) return {};
-    std::size_t size = target.size() - simple.size();
-    if (size >= 2 && target.compare(size - 2, 2, "::") == 0) size -= 2;
-    else if (size >= 2 && target.compare(size - 2, 2, "->") == 0) size -= 2;
-    else if (size >= 1) --size;
-    return target.substr(0, size);
-}
-
-bool ignored_call_word(const std::string& name) {
-    static const std::set<std::string> ignored = {
-        "if",       "for",       "while",    "switch",   "catch",
-        "sizeof",   "alignof",   "decltype", "typeof",   "return",
-        "new",      "delete",    "class",    "def",      "assert",
-        "with",     "lambda",    "match",    "case",     "static_cast",
-        "const_cast", "dynamic_cast", "reinterpret_cast"};
-    return ignored.find(name) != ignored.end();
-}
-
-void append_reference(ScanResult& result,
-                      std::set<std::string>& seen,
-                      Reference reference) {
-    if (reference.target_spelling.empty()) return;
-    const std::string key =
-        reference.kind + "\n" + reference.target_spelling + "\n" +
-        std::to_string(reference.line) + "\n" +
-        std::to_string(reference.source_symbol_index);
-    if (!seen.insert(key).second) return;
-    result.references.push_back(std::move(reference));
-}
-
-void scan_python_references(const std::string& source, ScanResult& result) {
-    const std::vector<std::string> original = source_lines(source);
-    const std::vector<std::string> masked = source_lines(mask_python(source));
-    std::set<std::string> seen;
-    std::map<std::pair<int, std::string>, std::string> receiver_types;
-    static const std::regex import_pattern(
-        R"(^\s*import\s+([A-Za-z_][A-Za-z0-9_\.]*))", std::regex::optimize);
-    static const std::regex from_pattern(
-        R"(^\s*from\s+([A-Za-z_\.][A-Za-z0-9_\.]*)\s+import\s+([A-Za-z_*][A-Za-z0-9_]*))",
-        std::regex::optimize);
-    static const std::regex inheritance_pattern(
-        R"(^\s*class\s+[A-Za-z_][A-Za-z0-9_]*\s*\(([^\)]*)\))",
-        std::regex::optimize);
-    static const std::regex inferred_type_pattern(
-        R"(\b([A-Za-z_][A-Za-z0-9_]*)\s*=\s*([A-Z][A-Za-z0-9_\.]*)\s*\()",
-        std::regex::optimize);
-    static const std::regex call_pattern(
-        R"(([A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*)\s*\()",
-        std::regex::optimize);
-
-    for (std::size_t row = 0; row < masked.size(); ++row) {
-        const int line = static_cast<int>(row + 1);
-        const int enclosing = enclosing_symbol_index(result.symbols, line);
-        const std::string evidence = reference_evidence(masked[row]);
-        std::smatch match;
-        const bool has_import =
-            masked[row].find("import") != std::string::npos;
-        const bool has_call = masked[row].find('(') != std::string::npos;
-        if (has_import &&
-            std::regex_search(masked[row], match, from_pattern)) {
-            Reference reference;
-            reference.kind = "import";
-            reference.target_spelling = match[1].str() + "." + match[2].str();
-            reference.qualifier = match[1].str();
-            reference.line = line;
-            reference.source_symbol_index = enclosing;
-            reference.confidence = 0.95;
-            reference.evidence = evidence;
-            append_reference(result, seen, std::move(reference));
-        } else if (has_import &&
-                   std::regex_search(masked[row], match, import_pattern)) {
-            Reference reference;
-            reference.kind = "import";
-            reference.target_spelling = match[1].str();
-            reference.line = line;
-            reference.source_symbol_index = enclosing;
-            reference.confidence = 0.95;
-            reference.evidence = evidence;
-            append_reference(result, seen, std::move(reference));
+void assign_importance(const std::string& source, ScanResult& result) {
+    const std::vector<std::string> lines = source_lines(source);
+    for (Symbol& symbol : result.symbols) {
+        const bool top_level =
+            symbol.qualified_name.find("::") == std::string::npos &&
+            symbol.qualified_name.find('.') == std::string::npos;
+        int importance = base_importance(symbol, top_level);
+        switch (symbol_visibility(symbol, result.language, lines, top_level)) {
+            case Visibility::Public: importance += 20; break;
+            case Visibility::Protected: importance += 5; break;
+            case Visibility::Private: importance -= 20; break;
+            case Visibility::Unknown: break;
         }
-        if (masked[row].find("class") != std::string::npos &&
-            std::regex_search(masked[row], match, inheritance_pattern)) {
-            const int source_class = declaration_symbol_index(result.symbols, line, "class");
-            std::istringstream bases(match[1].str());
-            std::string base;
-            while (std::getline(bases, base, ',')) {
-                base = trim(std::move(base));
-                const std::size_t bracket = base.find('[');
-                if (bracket != std::string::npos) base.resize(bracket);
-                if (base.empty() || base.find('=') != std::string::npos) continue;
-                Reference reference;
-                reference.kind = "inherit";
-                reference.target_spelling = base;
-                reference.qualifier = target_qualifier(base);
-                reference.line = line;
-                reference.source_symbol_index = source_class;
-                reference.confidence = 0.85;
-                reference.evidence = evidence;
-                append_reference(result, seen, std::move(reference));
-            }
-        }
-        if (has_call && masked[row].find('=') != std::string::npos) {
-            for (std::sregex_iterator it(masked[row].begin(),
-                                         masked[row].end(),
-                                         inferred_type_pattern),
-                 end;
-                 it != end; ++it) {
-                receiver_types[{enclosing, (*it)[1].str()}] =
-                    (*it)[2].str();
-            }
-        }
-        if (!has_call) continue;
-        for (std::sregex_iterator it(masked[row].begin(), masked[row].end(),
-                                     call_pattern),
-             end;
-             it != end; ++it) {
-            const std::string target = (*it)[1].str();
-            const std::string simple = last_component(target);
-            if (ignored_call_word(simple)) continue;
-            if (enclosing >= 0) {
-                const Symbol& source_symbol =
-                    result.symbols[static_cast<std::size_t>(enclosing)];
-                if (source_symbol.line_start == line && source_symbol.name == simple)
-                    continue;
-            }
-            Reference reference;
-            reference.kind =
-                !target.empty() && target_qualifier(target).empty() &&
-                        std::isupper(static_cast<unsigned char>(target.front()))
-                    ? "instantiate"
-                    : "call";
-            reference.target_spelling = target;
-            reference.qualifier = target_qualifier(target);
-            reference.line = line;
-            reference.source_symbol_index = enclosing;
-            reference.confidence = reference.kind == "instantiate" ? 0.75 : 0.55;
-            reference.evidence = evidence;
-            if (!reference.qualifier.empty()) {
-                if (reference.qualifier == "self" && enclosing >= 0) {
-                    const std::string& qualified =
-                        result.symbols[static_cast<std::size_t>(enclosing)]
-                            .qualified_name;
-                    const std::size_t parent = qualified.rfind("::");
-                    if (parent != std::string::npos)
-                        reference.receiver_type = qualified.substr(0, parent);
-                } else {
-                    const auto inferred =
-                        receiver_types.find({enclosing, reference.qualifier});
-                    if (inferred != receiver_types.end())
-                        reference.receiver_type = inferred->second;
-                    else if (std::isupper(
-                                 static_cast<unsigned char>(
-                                     reference.qualifier.front())))
-                        reference.receiver_type = reference.qualifier;
-                }
-                if (!reference.receiver_type.empty()) reference.confidence = 0.72;
-            }
-            append_reference(result, seen, std::move(reference));
-        }
-    }
-}
-
-void scan_c_family_references(const std::string& source, ScanResult& result) {
-    const std::vector<std::string> original = source_lines(source);
-    const std::vector<std::string> masked = source_lines(mask_c_family(source));
-    std::set<std::string> seen;
-    std::map<std::pair<int, std::string>, std::string> receiver_types;
-    static const std::regex include_pattern(
-        R"(^\s*#\s*include\s*[<"]([^>"]+)[>"])", std::regex::optimize);
-    static const std::regex include_marker(
-        R"(^\s*#\s*include\b)", std::regex::optimize);
-    static const std::regex inheritance_pattern(
-        R"(\b(?:class|struct)\s+[A-Za-z_][A-Za-z0-9_]*\s*:\s*([^\{]+)\{)",
-        std::regex::optimize);
-    static const std::regex inheritance_access_pattern(
-        R"(\b(public|private|protected|virtual)\b)", std::regex::optimize);
-    static const std::regex new_pattern(
-        R"(\bnew\s+([A-Za-z_][A-Za-z0-9_:<>]*)\s*[\(\{])",
-        std::regex::optimize);
-    static const std::regex variable_type_pattern(
-        R"(\b([A-Z][A-Za-z0-9_:<>]*)\s*[*&]?\s+([A-Za-z_][A-Za-z0-9_]*)\s*(?:[=\(\{;]))",
-        std::regex::optimize);
-    static const std::regex direct_instance_pattern(
-        R"(\b([A-Z][A-Za-z0-9_:<>]*)\s+([A-Za-z_][A-Za-z0-9_]*)\s*[\(\{])",
-        std::regex::optimize);
-    static const std::regex call_pattern(
-        R"(([A-Za-z_][A-Za-z0-9_]*(?:(?:::|\.|->)[A-Za-z_][A-Za-z0-9_]*)*)\s*\()",
-        std::regex::optimize);
-    static const std::regex new_prefix_pattern(
-        R"(\bnew\s*$)", std::regex::optimize);
-
-    for (std::size_t row = 0; row < masked.size(); ++row) {
-        const int line = static_cast<int>(row + 1);
-        const int enclosing = enclosing_symbol_index(result.symbols, line);
-        const std::string evidence = reference_evidence(masked[row]);
-        const bool has_call = masked[row].find('(') != std::string::npos;
-        std::smatch match;
-        if (masked[row].find('#') != std::string::npos &&
-            std::regex_search(masked[row], include_marker) &&
-            std::regex_search(original[row], match, include_pattern)) {
-            Reference reference;
-            reference.kind = "include";
-            reference.target_spelling = match[1].str();
-            reference.line = line;
-            reference.source_symbol_index = enclosing;
-            reference.confidence = 0.98;
-            reference.evidence = evidence;
-            append_reference(result, seen, std::move(reference));
-        }
-        if (masked[row].find(':') != std::string::npos &&
-            (masked[row].find("class") != std::string::npos ||
-             masked[row].find("struct") != std::string::npos) &&
-            std::regex_search(masked[row], match, inheritance_pattern)) {
-            const int source_type = declaration_symbol_index(result.symbols, line);
-            std::istringstream bases(match[1].str());
-            std::string base;
-            while (std::getline(bases, base, ',')) {
-                base = std::regex_replace(
-                    base, inheritance_access_pattern, " ");
-                base = trim(std::move(base));
-                if (base.empty()) continue;
-                Reference reference;
-                reference.kind = "inherit";
-                reference.target_spelling = base;
-                reference.qualifier = target_qualifier(base);
-                reference.line = line;
-                reference.source_symbol_index = source_type;
-                reference.confidence = 0.9;
-                reference.evidence = evidence;
-                append_reference(result, seen, std::move(reference));
-            }
-        }
-        if (masked[row].find_first_of("=;({") != std::string::npos) {
-            for (std::sregex_iterator it(masked[row].begin(),
-                                         masked[row].end(),
-                                         variable_type_pattern),
-                 end;
-                 it != end; ++it) {
-                receiver_types[{enclosing, (*it)[2].str()}] =
-                    (*it)[1].str();
-            }
-        }
-        if (masked[row].find("new") != std::string::npos) {
-            for (std::sregex_iterator it(masked[row].begin(),
-                                         masked[row].end(), new_pattern),
-                 end;
-                 it != end; ++it) {
-                Reference reference;
-                reference.kind = "instantiate";
-                reference.target_spelling = (*it)[1].str();
-                reference.qualifier =
-                    target_qualifier(reference.target_spelling);
-                reference.line = line;
-                reference.source_symbol_index = enclosing;
-                reference.confidence = 0.9;
-                reference.evidence = evidence;
-                append_reference(result, seen, std::move(reference));
-            }
-        }
-        if (has_call || masked[row].find('{') != std::string::npos) {
-            for (std::sregex_iterator it(masked[row].begin(),
-                                         masked[row].end(),
-                                         direct_instance_pattern),
-                 end;
-                 it != end; ++it) {
-                const std::string variable = (*it)[2].str();
-                const int declaration =
-                    declaration_symbol_index(result.symbols, line);
-                if (declaration >= 0 &&
-                    result.symbols[static_cast<std::size_t>(declaration)]
-                            .name == variable)
-                    continue;
-                Reference reference;
-                reference.kind = "instantiate";
-                reference.target_spelling = (*it)[1].str();
-                reference.qualifier =
-                    target_qualifier(reference.target_spelling);
-                reference.line = line;
-                reference.source_symbol_index = enclosing;
-                reference.confidence = 0.72;
-                reference.evidence = evidence;
-                append_reference(result, seen, std::move(reference));
-            }
-        }
-        if (!has_call) continue;
-        for (std::sregex_iterator it(masked[row].begin(), masked[row].end(), call_pattern),
-             end;
-             it != end; ++it) {
-            const std::string target = (*it)[1].str();
-            const std::string simple = last_component(target);
-            if (ignored_call_word(simple)) continue;
-            if (enclosing >= 0) {
-                const Symbol& source_symbol =
-                    result.symbols[static_cast<std::size_t>(enclosing)];
-                if (source_symbol.line_start == line && source_symbol.name == simple)
-                    continue;
-            }
-            // `new Type(` is already represented as an instantiation.
-            const std::size_t match_pos = static_cast<std::size_t>((*it).position());
-            const std::string prefix = masked[row].substr(0, match_pos);
-            if (std::regex_search(prefix, new_prefix_pattern)) continue;
-            Reference reference;
-            reference.kind = "call";
-            reference.target_spelling = target;
-            reference.qualifier = target_qualifier(target);
-            reference.line = line;
-            reference.source_symbol_index = enclosing;
-            reference.confidence = 0.58;
-            reference.evidence = evidence;
-            if (!reference.qualifier.empty()) {
-                if (reference.qualifier == "this" && enclosing >= 0) {
-                    const std::string& qualified =
-                        result.symbols[static_cast<std::size_t>(enclosing)]
-                            .qualified_name;
-                    const std::size_t parent = qualified.rfind("::");
-                    if (parent != std::string::npos)
-                        reference.receiver_type = qualified.substr(0, parent);
-                } else {
-                    const auto inferred =
-                        receiver_types.find({enclosing, reference.qualifier});
-                    if (inferred != receiver_types.end())
-                        reference.receiver_type = inferred->second;
-                    else if (target.find("::") != std::string::npos)
-                        reference.receiver_type = reference.qualifier;
-                }
-                if (!reference.receiver_type.empty()) reference.confidence = 0.75;
-            }
-            append_reference(result, seen, std::move(reference));
-        }
+        if (top_level) importance += 10;
+        symbol.importance = std::max(0, std::min(100, importance));
     }
 }
 
@@ -1745,10 +1472,7 @@ ScanResult scan_source(const std::string& path, const std::string& source, Langu
         case Language::HtmlOnly: result = scan_html(source, false); break;
         case Language::Css: result = scan_css(source); break;
     }
-    if (result.language == Language::Python)
-        scan_python_references(source, result);
-    else if (result.language == Language::C || result.language == Language::Cpp)
-        scan_c_family_references(source, result);
+    assign_importance(source, result);
     return result;
 }
 

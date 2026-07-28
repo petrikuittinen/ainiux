@@ -74,8 +74,14 @@ struct AgentRoundOutcome {
     Error error;
     std::vector<std::string> tool_results;
     std::vector<PreparedToolCall> prepared_calls;
+    std::size_t tool_calls = 0;
+    std::size_t failed_tool_calls = 0;
     bool protocol_downgraded = false;
 };
+
+// A tool call succeeds only when its parsed top-level envelope contains the
+// Boolean field "ok": true. Text searches and truthy non-Booleans do not count.
+bool normalized_tool_result_ok(const std::string& result_json);
 
 // Default protocol: native when the provider/model path supports tools, else XML.
 ToolProtocol default_tool_protocol(bool provider_supports_tool_calls);

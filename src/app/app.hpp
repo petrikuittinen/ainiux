@@ -65,6 +65,7 @@ struct AgentGoalResult {
     std::string final_text;
     std::size_t turns = 0;
     std::size_t tool_calls = 0;
+    std::size_t failed_tool_calls = 0;
     agent::AgentTokenUsage token_usage;
     long long elapsed_ms = 0;
 };

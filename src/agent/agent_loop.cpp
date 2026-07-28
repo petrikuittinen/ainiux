@@ -151,12 +151,14 @@ AgentRoundOutcome execute_prepared_calls(AgentLoopState& state,
                                          runtime::CancellationToken cancellation) {
     AgentRoundOutcome outcome;
     outcome.prepared_calls = prepared;
+    outcome.tool_calls = prepared.size();
 
     if (state.scripted_turns >= limits.max_scripted_turns) {
         const std::string deferred =
             cancelled_tool_result_json("Tool was not executed because the agent turn cap "
                                        "was reached. Continue the task to retry it.");
         outcome.tool_results.assign(prepared.size(), deferred);
+        outcome.failed_tool_calls = prepared.size();
         append_prepared_tool_results(context, conversation, prepared, outcome.tool_results);
         if (limits.interactive) {
             outcome.kind = AgentRoundOutcome::Kind::NeedsUserContinue;
@@ -178,7 +180,11 @@ AgentRoundOutcome execute_prepared_calls(AgentLoopState& state,
     std::string soft_notice;
     if (track_identical_calls(state, prepared, limits, &soft_notice)) {
         pair_dangling_tool_calls(context, conversation, state);
-        return abort_outcome(state, state.abort_reason);
+        AgentRoundOutcome aborted = abort_outcome(state, state.abort_reason);
+        aborted.prepared_calls = std::move(prepared);
+        aborted.tool_calls = aborted.prepared_calls.size();
+        aborted.failed_tool_calls = aborted.tool_calls;
+        return aborted;
     }
 
     // Record dangling ids before execution so cancel mid-tool can pair them.
@@ -192,12 +198,14 @@ AgentRoundOutcome execute_prepared_calls(AgentLoopState& state,
     for (const PreparedToolCall& call : prepared) {
         if (cancellation.cancelled()) {
             const std::string cancelled = cancelled_tool_result_json("Tool was not executed.");
+            failures += prepared.size() - results.size();
             while (results.size() < prepared.size()) results.push_back(cancelled);
             append_prepared_tool_results(context, conversation, prepared, results);
             state.dangling_call_ids.clear();
             outcome.kind = AgentRoundOutcome::Kind::Error;
             outcome.error = {ErrorCode::Cancelled, "agent tool round cancelled"};
             outcome.tool_results = std::move(results);
+            outcome.failed_tool_calls = failures;
             return outcome;
         }
         std::string result;
@@ -224,6 +232,7 @@ AgentRoundOutcome execute_prepared_calls(AgentLoopState& state,
     append_prepared_tool_results(context, conversation, prepared, results);
     state.dangling_call_ids.clear();
     outcome.tool_results = results;
+    outcome.failed_tool_calls = failures;
 
     if (approval_declined) {
         state.consecutive_all_failed_turns = 0;
@@ -343,6 +352,10 @@ AgentRoundOutcome execute_prepared_calls(AgentLoopState& state,
 }
 
 }  // namespace
+
+bool normalized_tool_result_ok(const std::string& result_json) {
+    return tool_result_ok(result_json);
+}
 
 void reset_agent_loop_for_user_turn(AgentLoopState& state) {
     state.scripted_turns = 0;
@@ -714,6 +727,9 @@ AgentRoundOutcome handle_agent_tool_round(
     if (!sanitize_error.ok()) {
         outcome.kind = AgentRoundOutcome::Kind::Error;
         outcome.error = sanitize_error;
+        outcome.prepared_calls = std::move(prepared);
+        outcome.tool_calls = outcome.prepared_calls.size();
+        outcome.failed_tool_calls = outcome.tool_calls;
         return outcome;
     }
     for (const std::string& item : round.continuation_items_json)

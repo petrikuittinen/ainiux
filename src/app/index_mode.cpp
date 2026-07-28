@@ -80,8 +80,7 @@ int run_index_mode(const cli::Options& options) {
                   << stats.discovered << " eligible, " << stats.indexed << " indexed, "
                   << stats.unchanged << " unchanged, " << stats.skipped << " skipped, "
                   << stats.removed << " removed, " << stats.symbols
-                  << " symbols and " << stats.references
-                  << " references extracted; "
+                  << " symbols; "
                   << stats.worker_count << " worker(s).\n";
     }
 

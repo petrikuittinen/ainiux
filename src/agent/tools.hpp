@@ -74,6 +74,10 @@ class ReadToolRegistry {
                                       std::vector<std::string> secrets,
                                       ReadToolRegistry& registry,
                                       ToolRegistryOptions options = {});
+    static Error create_without_index(index::Options index_options,
+                                      std::vector<std::string> secrets,
+                                      ReadToolRegistry& registry,
+                                      ToolRegistryOptions options = {});
 
     const index::Snapshot& snapshot() const { return snapshot_; }
     bool allow_mutations() const { return mutation_policy_ != MutationPolicy::Disabled; }
@@ -97,13 +101,6 @@ class ReadToolRegistry {
     Error refresh_persistent_index(
         bool full_tree,
         runtime::CancellationToken cancellation = runtime::CancellationToken()) const;
-    std::string task_hints(
-        const std::string& task,
-        std::size_t max_symbols = 16,
-        std::size_t max_bytes = 4U * 1024U,
-        std::size_t seed_symbols = 8,
-        runtime::CancellationToken cancellation = runtime::CancellationToken()) const;
-
    private:
     Error write_workspace_file(const std::string& relative_path,
                                const std::string& content,

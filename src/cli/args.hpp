@@ -172,9 +172,6 @@ struct Options {
     bool agent_auto_compact = true;
     // 0 = derive from context window (75% if >64k tokens, else 100%).
     int agent_compact_limit = 0;
-    int agent_code_index_hint_max_symbols = 16;
-    size_t agent_code_index_hint_max_bytes = 4U * 1024U;
-    int agent_code_index_hint_seed_symbols = 8;
     bool agent_show_command_output = false;
     long max_image_bytes = 20971520;
     long media_max_size_to_store_to_db = 65536;

@@ -63,7 +63,6 @@ struct ScannedFile {
     std::string status = "indexed";
     std::string error;
     std::vector<Symbol> symbols;
-    std::vector<Reference> references;
 };
 
 std::uint64_t fnv1a_bytes(const std::string& text) {
@@ -256,25 +255,42 @@ Error ensure_schema(Database& db) {
         " kind TEXT NOT NULL, name TEXT NOT NULL, qualified_name TEXT NOT NULL, signature TEXT NOT NULL,"
         " parameters TEXT NOT NULL, return_type TEXT NOT NULL, line_start INTEGER NOT NULL,"
         " line_end INTEGER NOT NULL, documentation TEXT NOT NULL, signature_hash TEXT NOT NULL,"
-        " body_hash TEXT NOT NULL);"
+        " body_hash TEXT NOT NULL, importance INTEGER NOT NULL);"
         "CREATE INDEX IF NOT EXISTS symbols_file_source ON symbols(file_id,line_start,id);"
         "CREATE INDEX IF NOT EXISTS symbols_name ON symbols(name);"
         "CREATE INDEX IF NOT EXISTS symbols_qualified_name ON symbols(qualified_name);"
-        "CREATE INDEX IF NOT EXISTS symbols_kind ON symbols(kind);"
-        "CREATE TABLE IF NOT EXISTS refs("
-        " id INTEGER PRIMARY KEY,"
-        " source_file_id INTEGER NOT NULL REFERENCES files(id) ON DELETE CASCADE,"
-        " source_symbol_id INTEGER REFERENCES symbols(id) ON DELETE CASCADE,"
-        " kind TEXT NOT NULL,target_spelling TEXT NOT NULL,qualifier TEXT NOT NULL,"
-        " receiver_type TEXT NOT NULL,evidence TEXT NOT NULL,line INTEGER NOT NULL,"
-        " confidence REAL NOT NULL,target_symbol_id INTEGER REFERENCES symbols(id) ON DELETE SET NULL,"
-        " resolution TEXT NOT NULL);"
-        "CREATE INDEX IF NOT EXISTS refs_source_symbol ON refs(source_symbol_id,kind,line,id);"
-        "CREATE INDEX IF NOT EXISTS refs_target_symbol ON refs(target_symbol_id,kind,id);"
-        "CREATE INDEX IF NOT EXISTS refs_target_spelling ON refs(target_spelling);"
-        "CREATE TABLE IF NOT EXISTS symbol_scores("
-        " symbol_id INTEGER PRIMARY KEY REFERENCES symbols(id) ON DELETE CASCADE,"
-        " caller_count INTEGER NOT NULL,page_rank REAL NOT NULL);");
+        "CREATE INDEX IF NOT EXISTS symbols_kind ON symbols(kind);");
+}
+
+bool table_has_column(Database& db, const char* table, const char* column,
+                      Error& error) {
+    Statement columns;
+    const std::string sql = std::string("PRAGMA table_info(") + table + ")";
+    error = columns.prepare(db, sql.c_str());
+    if (!error.ok()) return false;
+    for (int rc = columns.step(); rc != SQLITE_DONE; rc = columns.step()) {
+        if (rc != SQLITE_ROW) {
+            error = sqlite_error(db.get(), "could not inspect code index schema",
+                                 db.path());
+            return false;
+        }
+        if (columns.column_text(1) == column) return true;
+    }
+    return false;
+}
+
+bool table_exists(Database& db, const char* table, Error& error) {
+    Statement statement;
+    error = statement.prepare(
+        db, "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?");
+    if (!error.ok()) return false;
+    if (!(error = statement.bind_text(db, 1, table)).ok()) return false;
+    const int rc = statement.step();
+    if (rc == SQLITE_ROW) return true;
+    if (rc == SQLITE_DONE) return false;
+    error = sqlite_error(db.get(), "could not inspect code index tables",
+                         db.path());
+    return false;
 }
 
 Error ensure_line_count_column(Database& db) {
@@ -682,7 +698,6 @@ ScannedFile scan_candidate(const Candidate& candidate, const Options& options) {
     ScanResult scan = scan_source(candidate.path, source, candidate.language);
     output.language = scan.language;
     output.symbols = std::move(scan.symbols);
-    output.references = std::move(scan.references);
     return output;
 }
 
@@ -713,13 +728,6 @@ Error replace_file(Database& db, const ScannedFile& file, long long indexed_at) 
     if (find.step() != SQLITE_ROW) return sqlite_error(db.get(), "could not locate indexed file", db.path());
     const sqlite3_int64 file_id = find.column_int64(0);
 
-    Statement remove_references;
-    if (!(error = remove_references.prepare(
-              db, "DELETE FROM refs WHERE source_file_id=?")).ok() ||
-        !(error = remove_references.bind_int64(db, 1, file_id)).ok()) return error;
-    if (remove_references.step() != SQLITE_DONE)
-        return sqlite_error(db.get(), "could not replace indexed references", db.path());
-
     Statement remove;
     if (!(error = remove.prepare(db, "DELETE FROM symbols WHERE file_id=?")).ok() ||
         !(error = remove.bind_int64(db, 1, file_id)).ok()) return error;
@@ -728,10 +736,9 @@ Error replace_file(Database& db, const ScannedFile& file, long long indexed_at) 
     Statement insert;
     error = insert.prepare(
         db, "INSERT INTO symbols(file_id,kind,name,qualified_name,signature,parameters,return_type,"
-            "line_start,line_end,documentation,signature_hash,body_hash) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)");
+            "line_start,line_end,documentation,signature_hash,body_hash,importance)"
+            " VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)");
     if (!error.ok()) return error;
-    std::vector<sqlite3_int64> symbol_ids;
-    symbol_ids.reserve(file.symbols.size());
     for (const Symbol& symbol : file.symbols) {
         parameter = 1;
         if (!(error = insert.bind_int64(db, parameter++, file_id)).ok() ||
@@ -745,382 +752,12 @@ Error replace_file(Database& db, const ScannedFile& file, long long indexed_at) 
             !(error = insert.bind_int64(db, parameter++, symbol.line_end)).ok() ||
             !(error = insert.bind_text(db, parameter++, symbol.documentation)).ok() ||
             !(error = insert.bind_text(db, parameter++, hash_hex(symbol.signature_hash))).ok() ||
-            !(error = insert.bind_text(db, parameter, hash_hex(symbol.body_hash))).ok()) return error;
+            !(error = insert.bind_text(db, parameter++, hash_hex(symbol.body_hash))).ok() ||
+            !(error = insert.bind_int64(db, parameter, symbol.importance)).ok()) return error;
         if (insert.step() != SQLITE_DONE) return sqlite_error(db.get(), "could not store indexed symbol", db.path());
-        symbol_ids.push_back(sqlite3_last_insert_rowid(db.get()));
         insert.reset();
     }
 
-    Statement insert_reference;
-    error = insert_reference.prepare(
-        db, "INSERT INTO refs(source_file_id,source_symbol_id,kind,target_spelling,qualifier,"
-            "receiver_type,evidence,line,confidence,target_symbol_id,resolution)"
-            " VALUES(?,?,?,?,?,?,?,?,?,NULL,'unresolved')");
-    if (!error.ok()) return error;
-    for (const Reference& reference : file.references) {
-        parameter = 1;
-        if (!(error = insert_reference.bind_int64(db, parameter++, file_id)).ok()) return error;
-        if (reference.source_symbol_index >= 0 &&
-            static_cast<std::size_t>(reference.source_symbol_index) < symbol_ids.size()) {
-            error = insert_reference.bind_int64(
-                db, parameter++, symbol_ids[static_cast<std::size_t>(
-                                      reference.source_symbol_index)]);
-        } else {
-            error = insert_reference.bind_null(db, parameter++);
-        }
-        if (!error.ok() ||
-            !(error = insert_reference.bind_text(db, parameter++, reference.kind)).ok() ||
-            !(error = insert_reference.bind_text(
-                  db, parameter++, reference.target_spelling)).ok() ||
-            !(error = insert_reference.bind_text(db, parameter++, reference.qualifier)).ok() ||
-            !(error = insert_reference.bind_text(
-                  db, parameter++, reference.receiver_type)).ok() ||
-            !(error = insert_reference.bind_text(db, parameter++, reference.evidence)).ok() ||
-            !(error = insert_reference.bind_int64(db, parameter++, reference.line)).ok() ||
-            !(error = insert_reference.bind_double(
-                  db, parameter, reference.confidence)).ok())
-            return error;
-        if (insert_reference.step() != SQLITE_DONE)
-            return sqlite_error(db.get(), "could not store indexed reference", db.path());
-        insert_reference.reset();
-    }
-    return ok_error();
-}
-
-std::string normalized_symbol_name(std::string name) {
-    std::string output;
-    output.reserve(name.size());
-    int template_depth = 0;
-    for (std::size_t index = 0; index < name.size(); ++index) {
-        const char ch = name[index];
-        if (ch == '<') {
-            ++template_depth;
-            continue;
-        }
-        if (ch == '>' && template_depth > 0) {
-            --template_depth;
-            continue;
-        }
-        if (template_depth > 0 || std::isspace(static_cast<unsigned char>(ch))) continue;
-        if (ch == '-' && index + 1 < name.size() && name[index + 1] == '>') {
-            output += "::";
-            ++index;
-        } else if (ch == '.') {
-            output += "::";
-        } else {
-            output.push_back(ch);
-        }
-    }
-    while (output.rfind("::", 0) == 0) output.erase(0, 2);
-    return output;
-}
-
-std::string normalized_simple_name(const std::string& name) {
-    const std::string normalized = normalized_symbol_name(name);
-    const std::size_t separator = normalized.rfind("::");
-    return separator == std::string::npos ? normalized : normalized.substr(separator + 2);
-}
-
-bool compatible_reference_target(const std::string& reference_kind,
-                                 const std::string& symbol_kind) {
-    if (reference_kind == "call")
-        return symbol_kind == "function" || symbol_kind == "method";
-    if (reference_kind == "instantiate" || reference_kind == "inherit")
-        return symbol_kind == "class" || symbol_kind == "struct" ||
-               symbol_kind == "union" || symbol_kind == "typedef" ||
-               symbol_kind == "alias";
-    return reference_kind == "use";
-}
-
-struct ResolverSymbol {
-    sqlite3_int64 id = 0;
-    sqlite3_int64 file_id = 0;
-    std::string path;
-    std::string kind;
-    std::string name;
-    std::string qualified_name;
-    std::string normalized_qualified;
-    int line_start = 1;
-    int line_end = 1;
-};
-
-struct ResolverReference {
-    sqlite3_int64 id = 0;
-    sqlite3_int64 source_file_id = 0;
-    sqlite3_int64 source_symbol_id = 0;
-    std::string source_path;
-    std::string kind;
-    std::string target_spelling;
-    std::string qualifier;
-    std::string receiver_type;
-    double lexical_confidence = 0.0;
-};
-
-Error resolve_graph(Database& db,
-                    const Options& options,
-                    const std::chrono::steady_clock::time_point& started,
-                    std::size_t discovered,
-                    std::size_t changed) {
-    std::vector<ResolverSymbol> symbols;
-    std::map<std::string, std::vector<std::size_t>> by_simple;
-    {
-        Statement statement;
-        Error error = statement.prepare(
-            db, "SELECT s.id,s.file_id,f.path,s.kind,s.name,s.qualified_name,"
-                "s.line_start,s.line_end FROM symbols s JOIN files f ON f.id=s.file_id "
-                "ORDER BY f.path,s.line_start,s.id");
-        if (!error.ok()) return error;
-        for (int rc = statement.step(); rc != SQLITE_DONE; rc = statement.step()) {
-            if (cancelled(options))
-                return {ErrorCode::Cancelled,
-                        "code graph resolution cancelled; previous snapshot preserved"};
-            if (rc != SQLITE_ROW)
-                return sqlite_error(db.get(), "could not load symbols for graph resolution",
-                                    db.path());
-            ResolverSymbol symbol;
-            symbol.id = statement.column_int64(0);
-            symbol.file_id = statement.column_int64(1);
-            symbol.path = statement.column_text(2);
-            symbol.kind = statement.column_text(3);
-            symbol.name = statement.column_text(4);
-            symbol.qualified_name = statement.column_text(5);
-            symbol.normalized_qualified =
-                normalized_symbol_name(symbol.qualified_name);
-            symbol.line_start = static_cast<int>(statement.column_int64(6));
-            symbol.line_end = static_cast<int>(statement.column_int64(7));
-            const std::size_t index = symbols.size();
-            symbols.push_back(std::move(symbol));
-            by_simple[normalized_simple_name(symbols.back().name)].push_back(index);
-        }
-    }
-
-    std::vector<ResolverReference> references;
-    {
-        Statement statement;
-        Error error = statement.prepare(
-            db, "SELECT r.id,r.source_file_id,COALESCE(r.source_symbol_id,0),f.path,"
-                "r.kind,r.target_spelling,r.qualifier,r.receiver_type,r.confidence "
-                "FROM refs r JOIN files f ON f.id=r.source_file_id ORDER BY r.id");
-        if (!error.ok()) return error;
-        for (int rc = statement.step(); rc != SQLITE_DONE; rc = statement.step()) {
-            if (rc != SQLITE_ROW)
-                return sqlite_error(db.get(),
-                                    "could not load references for graph resolution",
-                                    db.path());
-            ResolverReference reference;
-            reference.id = statement.column_int64(0);
-            reference.source_file_id = statement.column_int64(1);
-            reference.source_symbol_id = statement.column_int64(2);
-            reference.source_path = statement.column_text(3);
-            reference.kind = statement.column_text(4);
-            reference.target_spelling = statement.column_text(5);
-            reference.qualifier = statement.column_text(6);
-            reference.receiver_type = statement.column_text(7);
-            reference.lexical_confidence = statement.column_double(8);
-            references.push_back(std::move(reference));
-        }
-    }
-
-    Statement update;
-    Error error = update.prepare(
-        db, "UPDATE refs SET target_symbol_id=?,confidence=?,resolution=? WHERE id=?");
-    if (!error.ok()) return error;
-    struct ResolvedEdge {
-        sqlite3_int64 source_file_id = 0;
-        sqlite3_int64 source_symbol_id = 0;
-        sqlite3_int64 target_symbol_id = 0;
-    };
-    std::vector<ResolvedEdge> resolved_edges;
-    std::size_t resolved_progress = 0;
-    for (const ResolverReference& reference : references) {
-        if (cancelled(options))
-            return {ErrorCode::Cancelled,
-                    "code graph resolution cancelled; previous snapshot preserved"};
-        sqlite3_int64 target_id = 0;
-        double confidence = reference.lexical_confidence;
-        std::string resolution = "unresolved";
-        if (compatible_reference_target(reference.kind, "function") ||
-            reference.kind == "instantiate" || reference.kind == "inherit" ||
-            reference.kind == "use") {
-            const std::string normalized_target =
-                normalized_symbol_name(reference.target_spelling);
-            const std::string simple = normalized_simple_name(normalized_target);
-            const std::string normalized_receiver =
-                normalized_symbol_name(reference.receiver_type);
-            struct CandidateScore {
-                int score = 0;
-                std::size_t index = 0;
-            };
-            std::vector<CandidateScore> candidates;
-            const auto bucket = by_simple.find(simple);
-            if (bucket != by_simple.end()) {
-                for (const std::size_t symbol_index : bucket->second) {
-                    const ResolverSymbol& symbol = symbols[symbol_index];
-                    if (!compatible_reference_target(reference.kind, symbol.kind))
-                        continue;
-                    int score = 50;
-                    if (symbol.normalized_qualified == normalized_target)
-                        score += 60;
-                    else if (symbol.normalized_qualified.size() >
-                                 normalized_target.size() + 2 &&
-                             symbol.normalized_qualified.compare(
-                                 symbol.normalized_qualified.size() -
-                                     normalized_target.size(),
-                                 normalized_target.size(), normalized_target) == 0)
-                        score += 35;
-                    if (symbol.path == reference.source_path) score += 24;
-                    if (!normalized_receiver.empty()) {
-                        const std::string owner_suffix =
-                            normalized_receiver + "::" + simple;
-                        if (symbol.normalized_qualified == owner_suffix ||
-                            (symbol.normalized_qualified.size() >
-                                 owner_suffix.size() + 2 &&
-                             symbol.normalized_qualified.compare(
-                                 symbol.normalized_qualified.size() -
-                                     owner_suffix.size(),
-                                 owner_suffix.size(), owner_suffix) == 0))
-                            score += 48;
-                    }
-                    // Prefer a body over a one-line declaration when both share a
-                    // qualified name. Overloads with equally plausible bodies stay
-                    // ambiguous.
-                    if (symbol.line_end > symbol.line_start) score += 30;
-                    candidates.push_back({score, symbol_index});
-                }
-            }
-            std::sort(candidates.begin(), candidates.end(),
-                      [&](const CandidateScore& left,
-                          const CandidateScore& right) {
-                          if (left.score != right.score)
-                              return left.score > right.score;
-                          return symbols[left.index].path <
-                                     symbols[right.index].path;
-                      });
-            if (!candidates.empty()) {
-                const bool unique_best =
-                    candidates.size() == 1 ||
-                    candidates[0].score > candidates[1].score;
-                if (unique_best) {
-                    target_id = symbols[candidates[0].index].id;
-                    resolution = "resolved";
-                    if (candidates[0].score >= 105)
-                        confidence = std::max(confidence, 0.95);
-                    else if (!normalized_receiver.empty())
-                        confidence = std::max(confidence, 0.82);
-                    else if (symbols[candidates[0].index].path ==
-                             reference.source_path)
-                        confidence = std::max(confidence, 0.78);
-                    else
-                        confidence = std::max(confidence, 0.65);
-                    resolved_edges.push_back(
-                        {reference.source_file_id, reference.source_symbol_id,
-                         target_id});
-                } else {
-                    resolution = "ambiguous";
-                    confidence = std::min(confidence, 0.49);
-                }
-            }
-        }
-
-        int parameter = 1;
-        if (target_id == 0)
-            error = update.bind_null(db, parameter++);
-        else
-            error = update.bind_int64(db, parameter++, target_id);
-        if (!error.ok() ||
-            !(error = update.bind_double(db, parameter++, confidence)).ok() ||
-            !(error = update.bind_text(db, parameter++, resolution)).ok() ||
-            !(error = update.bind_int64(db, parameter, reference.id)).ok())
-            return error;
-        if (update.step() != SQLITE_DONE)
-            return sqlite_error(db.get(), "could not publish resolved reference",
-                                db.path());
-        update.reset();
-        ++resolved_progress;
-        if (options.on_progress) {
-            Progress progress;
-            progress.phase = ProgressPhase::GraphResolution;
-            progress.completed = resolved_progress;
-            progress.total = references.size();
-            progress.discovered = discovered;
-            progress.changed = changed;
-            progress.elapsed_ms =
-                std::chrono::duration_cast<std::chrono::milliseconds>(
-                    std::chrono::steady_clock::now() - started)
-                    .count();
-            options.on_progress(progress);
-        }
-    }
-
-    std::map<sqlite3_int64, std::set<sqlite3_int64>> callers;
-    for (const ResolvedEdge& edge : resolved_edges) {
-        const sqlite3_int64 caller =
-            edge.source_symbol_id != 0 ? edge.source_symbol_id
-                                       : -edge.source_file_id;
-        callers[edge.target_symbol_id].insert(caller);
-    }
-
-    std::vector<double> rank(symbols.size(), 0.0);
-    std::map<sqlite3_int64, std::size_t> symbol_position;
-    for (std::size_t index = 0; index < symbols.size(); ++index)
-        symbol_position[symbols[index].id] = index;
-    if (!symbols.empty()) {
-        const double initial = 1.0 / static_cast<double>(symbols.size());
-        std::fill(rank.begin(), rank.end(), initial);
-        std::vector<std::set<std::size_t>> outgoing(symbols.size());
-        for (const ResolvedEdge& edge : resolved_edges) {
-            if (edge.source_symbol_id == 0) continue;
-            const auto source = symbol_position.find(edge.source_symbol_id);
-            const auto target = symbol_position.find(edge.target_symbol_id);
-            if (source != symbol_position.end() &&
-                target != symbol_position.end() &&
-                source->second != target->second)
-                outgoing[source->second].insert(target->second);
-        }
-        constexpr double damping = 0.85;
-        for (int iteration = 0; iteration < 20; ++iteration) {
-            std::vector<double> next(
-                symbols.size(),
-                (1.0 - damping) / static_cast<double>(symbols.size()));
-            double dangling = 0.0;
-            for (std::size_t source = 0; source < symbols.size(); ++source) {
-                if (outgoing[source].empty()) {
-                    dangling += rank[source];
-                    continue;
-                }
-                const double share =
-                    damping * rank[source] /
-                    static_cast<double>(outgoing[source].size());
-                for (const std::size_t target : outgoing[source])
-                    next[target] += share;
-            }
-            const double dangling_share =
-                damping * dangling / static_cast<double>(symbols.size());
-            for (double& value : next) value += dangling_share;
-            rank.swap(next);
-        }
-    }
-
-    if (!(error = db.exec("DELETE FROM symbol_scores")).ok()) return error;
-    Statement insert_score;
-    if (!(error = insert_score.prepare(
-              db, "INSERT INTO symbol_scores(symbol_id,caller_count,page_rank)"
-                  " VALUES(?,?,?)")).ok())
-        return error;
-    for (std::size_t index = 0; index < symbols.size(); ++index) {
-        const std::size_t caller_count = callers[symbols[index].id].size();
-        if (!(error = insert_score.bind_int64(
-                  db, 1, symbols[index].id)).ok() ||
-            !(error = insert_score.bind_int64(
-                  db, 2, static_cast<sqlite3_int64>(caller_count))).ok() ||
-            !(error = insert_score.bind_double(
-                  db, 3, rank.empty() ? 0.0 : rank[index])).ok())
-            return error;
-        if (insert_score.step() != SQLITE_DONE)
-            return sqlite_error(db.get(), "could not store symbol graph score",
-                                db.path());
-        insert_score.reset();
-    }
     return ok_error();
 }
 
@@ -1180,6 +817,26 @@ std::string utc_time(std::string seconds) {
 
 std::string database_path(const std::string& workspace) {
     return (fs::path(workspace) / kProjectStateDirName / "index.sqlite").string();
+}
+
+Error discover_source_files(const Options& options,
+                            std::vector<DiscoveredFile>& files) {
+    files.clear();
+    const auto started = std::chrono::steady_clock::now();
+    fs::path root;
+    Error error = workspace_root(options.workspace, root);
+    if (!error.ok()) return error;
+    IgnoreRules ignores;
+    if (!(error = load_ignore_rules(root, ignores)).ok()) return error;
+    std::vector<Candidate> candidates;
+    if (!(error = discover(root, ignores, options, candidates, started)).ok())
+        return error;
+    files.reserve(candidates.size());
+    for (const Candidate& candidate : candidates) {
+        files.push_back(
+            {candidate.path, candidate.language, candidate.size});
+    }
+    return ok_error();
 }
 
 Error clear_database(const Options& options, ClearStats& stats) {
@@ -1281,7 +938,13 @@ Error probe(const Options& options, ProbeResult& result) {
         result.state = ProbeState::MissingOrIncomplete;
         return ok_error();
     }
-    if (schema != std::to_string(kSchemaVersion)) {
+    int schema_version = 0;
+    try {
+        schema_version = std::stoi(schema);
+    } catch (...) {
+        schema_version = 0;
+    }
+    if (schema_version < 1 || schema_version > kSchemaVersion) {
         result.state = ProbeState::Corrupt;
         result.error = {
             ErrorCode::UnsupportedFeature,
@@ -1377,8 +1040,31 @@ Error refresh(const Options& options, RefreshStats& stats) {
     std::string stored_schema;
     if (!(error = metadata(db, "schema_version", stored_schema, found)).ok())
         return error;
+    int stored_schema_version = 0;
+    if (found) {
+        try {
+            stored_schema_version = std::stoi(stored_schema);
+        } catch (...) {
+            return {ErrorCode::UnsupportedFeature,
+                    "code index schema at " + db_path.string() +
+                        " is invalid; rebuild it with --index-code"};
+        }
+        if (stored_schema_version < 1 ||
+            stored_schema_version > kSchemaVersion)
+            return {ErrorCode::UnsupportedFeature,
+                    "code index schema at " + db_path.string() +
+                        " is not supported; rebuild it with --index-code"};
+    }
     const bool schema_changed =
         !found || stored_schema != std::to_string(kSchemaVersion);
+    Error inspection_error;
+    const bool had_refs = table_exists(db, "refs", inspection_error);
+    if (!inspection_error.ok()) return inspection_error;
+    const bool had_scores =
+        table_exists(db, "symbol_scores", inspection_error);
+    if (!inspection_error.ok()) return inspection_error;
+    const bool compact_after_migration =
+        schema_changed && (had_refs || had_scores);
     std::string stored_scanner;
     if (!(error = metadata(db, "scanner_version", stored_scanner, found)).ok()) return error;
     const bool scanner_changed = !found || stored_scanner != std::to_string(kScannerVersion);
@@ -1414,7 +1100,6 @@ Error refresh(const Options& options, RefreshStats& stats) {
         if (current_paths.find(item.first) == current_paths.end()) removed.push_back(item.first);
     }
 
-    std::vector<ScannedFile> scanned(changed.size());
     report(ProgressPhase::Scanning, 0, changed.size(), stats.discovered,
            changed.size());
     const unsigned hardware = std::thread::hardware_concurrency();
@@ -1424,79 +1109,97 @@ Error refresh(const Options& options, RefreshStats& stats) {
     stats.worker_count =
         changed.empty()
             ? 0
-            : std::min<std::size_t>({32, automatic, changed.size()});
-    std::atomic<std::size_t> cursor{0};
-    std::atomic<std::size_t> scanned_count{0};
-    std::atomic<bool> worker_failed{false};
-    std::mutex worker_error_mutex;
-    std::string worker_error;
-    std::vector<std::thread> workers;
-    workers.reserve(stats.worker_count);
-    try {
-        for (std::size_t worker = 0; worker < stats.worker_count; ++worker) {
-            workers.emplace_back([&] {
-                try {
-                    while (!cancelled(options) && !worker_failed.load()) {
-                        const std::size_t index = cursor.fetch_add(1);
-                        if (index >= changed.size()) break;
-                        scanned[index] = scan_candidate(changed[index], options);
-                        const std::size_t completed =
-                            scanned_count.fetch_add(1) + 1;
-                        report(ProgressPhase::Scanning, completed, changed.size(),
-                               stats.discovered, changed.size());
-                    }
-                } catch (const std::exception& exception) {
-                    worker_failed.store(true);
-                    std::lock_guard<std::mutex> lock(worker_error_mutex);
-                    worker_error = exception.what();
-                } catch (...) {
-                    worker_failed.store(true);
-                    std::lock_guard<std::mutex> lock(worker_error_mutex);
-                    worker_error = "unknown scanner exception";
-                }
-            });
-        }
-    } catch (const std::exception& exception) {
-        worker_failed.store(true);
-        std::lock_guard<std::mutex> lock(worker_error_mutex);
-        worker_error = exception.what();
-    }
-    for (std::thread& worker : workers) worker.join();
-    if (worker_failed.load()) {
-        return {ErrorCode::Internal, "parallel source scan failed: " + worker_error};
-    }
-    if (cancelled(options)) return {ErrorCode::Cancelled, "code indexing cancelled; previous snapshot preserved"};
+            : std::min<std::size_t>({8, automatic, changed.size()});
 
     Transaction transaction(db);
     if (!(error = transaction.begin()).ok()) return error;
     if (!(error = ensure_line_count_column(db)).ok()) return error;
+    Error column_error;
+    if (!table_has_column(db, "symbols", "importance", column_error)) {
+        if (!column_error.ok()) return column_error;
+        if (!(error = db.exec(
+                  "ALTER TABLE symbols ADD COLUMN importance INTEGER NOT NULL DEFAULT 0"))
+                 .ok())
+            return error;
+    }
     for (const std::string& path : removed) {
         if (cancelled(options)) return {ErrorCode::Cancelled, "code indexing cancelled; previous snapshot preserved"};
         if (!(error = remove_file(db, path)).ok()) return error;
         ++stats.removed;
     }
     const long long indexed_at = current_unix_seconds();
-    for (const ScannedFile& file : scanned) {
-        if (cancelled(options)) return {ErrorCode::Cancelled, "code indexing cancelled; previous snapshot preserved"};
-        if (!(error = replace_file(db, file, indexed_at)).ok()) return error;
-        if (file.status == "indexed") {
-            ++stats.indexed;
-            stats.symbols += file.symbols.size();
-            stats.references += file.references.size();
-        } else {
-            ++stats.skipped;
-            stats.diagnostics.push_back(file.candidate.path + ": " + file.error);
+    constexpr std::size_t kScanBatchSize = 128;
+    std::size_t scanned_count = 0;
+    for (std::size_t batch_begin = 0; batch_begin < changed.size();
+         batch_begin += kScanBatchSize) {
+        const std::size_t batch_count =
+            std::min(kScanBatchSize, changed.size() - batch_begin);
+        std::vector<ScannedFile> scanned(batch_count);
+        std::atomic<std::size_t> cursor{0};
+        std::atomic<bool> worker_failed{false};
+        std::mutex worker_error_mutex;
+        std::string worker_error;
+        std::vector<std::thread> workers;
+        const std::size_t batch_workers =
+            std::min(stats.worker_count, batch_count);
+        workers.reserve(batch_workers);
+        try {
+            for (std::size_t worker = 0; worker < batch_workers; ++worker) {
+                workers.emplace_back([&] {
+                    try {
+                        while (!cancelled(options) &&
+                               !worker_failed.load()) {
+                            const std::size_t local = cursor.fetch_add(1);
+                            if (local >= batch_count) break;
+                            scanned[local] = scan_candidate(
+                                changed[batch_begin + local], options);
+                            report(ProgressPhase::Scanning,
+                                   batch_begin + local + 1, changed.size(),
+                                   stats.discovered, changed.size());
+                        }
+                    } catch (const std::exception& exception) {
+                        worker_failed.store(true);
+                        std::lock_guard<std::mutex> lock(worker_error_mutex);
+                        worker_error = exception.what();
+                    } catch (...) {
+                        worker_failed.store(true);
+                        std::lock_guard<std::mutex> lock(worker_error_mutex);
+                        worker_error = "unknown scanner exception";
+                    }
+                });
+            }
+        } catch (const std::exception& exception) {
+            worker_failed.store(true);
+            std::lock_guard<std::mutex> lock(worker_error_mutex);
+            worker_error = exception.what();
+        }
+        for (std::thread& worker : workers) worker.join();
+        if (worker_failed.load())
+            return {ErrorCode::Internal,
+                    "parallel source scan failed: " + worker_error};
+        if (cancelled(options))
+            return {ErrorCode::Cancelled,
+                    "code indexing cancelled; previous snapshot preserved"};
+        for (const ScannedFile& file : scanned) {
+            if (!(error = replace_file(db, file, indexed_at)).ok())
+                return error;
+            ++scanned_count;
+            report(ProgressPhase::Scanning, scanned_count, changed.size(),
+                   stats.discovered, changed.size());
+            if (file.status == "indexed") {
+                ++stats.indexed;
+                stats.symbols += file.symbols.size();
+            } else {
+                ++stats.skipped;
+                stats.diagnostics.push_back(file.candidate.path + ": " +
+                                            file.error);
+            }
         }
     }
     if (cancelled(options)) return {ErrorCode::Cancelled, "code indexing cancelled; previous snapshot preserved"};
-    if (schema_changed || scanner_changed || !scanned.empty() ||
-        !removed.empty()) {
-        report(ProgressPhase::GraphResolution, 0, 0, stats.discovered,
-               changed.size());
-        if (!(error = resolve_graph(db, options, started, stats.discovered,
-                                    changed.size())).ok())
-            return error;
-    }
+    if (had_refs && !(error = db.exec("DROP TABLE refs")).ok()) return error;
+    if (had_scores && !(error = db.exec("DROP TABLE symbol_scores")).ok())
+        return error;
     if (cancelled(options)) return {ErrorCode::Cancelled, "code indexing cancelled; previous snapshot preserved"};
     if (!(error = set_metadata(db, "schema_version", std::to_string(kSchemaVersion))).ok() ||
         !(error = set_metadata(db, "scanner_version", std::to_string(kScannerVersion))).ok() ||
@@ -1511,6 +1214,30 @@ Error refresh(const Options& options, RefreshStats& stats) {
     if (!(error = transaction.commit()).ok()) return error;
     report(ProgressPhase::SnapshotCommit, 1, 1, stats.discovered,
            changed.size());
+    if (compact_after_migration) {
+        report(ProgressPhase::Compaction, 0, 1, stats.discovered,
+               changed.size());
+        struct VacuumCancellation {
+            const Options* options = nullptr;
+        } vacuum_cancellation{&options};
+        sqlite3_progress_handler(
+            db.get(), 1000,
+            [](void* value) {
+                const auto* state =
+                    static_cast<const VacuumCancellation*>(value);
+                return cancelled(*state->options) ? 1 : 0;
+            },
+            &vacuum_cancellation);
+        const Error compact_error = db.exec("VACUUM");
+        sqlite3_progress_handler(db.get(), 0, nullptr, nullptr);
+        if (!compact_error.ok())
+            stats.diagnostics.push_back(
+                "index migrated successfully, but SQLite compaction failed: " +
+                compact_error.message);
+        else
+            report(ProgressPhase::Compaction, 1, 1, stats.discovered,
+                   changed.size());
+    }
     stats.elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
                            std::chrono::steady_clock::now() - started)
                            .count();
@@ -1612,24 +1339,6 @@ Error print_markdown(const Options& options, const Freshness& freshness, std::os
            << total_symbols << "** |\n";
     output << "\n";
 
-    Statement graph;
-    if (!(error = graph.prepare(
-              db, "SELECT COUNT(*),"
-                  "COALESCE(SUM(CASE WHEN resolution='resolved' THEN 1 ELSE 0 END),0),"
-                  "COALESCE(SUM(CASE WHEN resolution='ambiguous' THEN 1 ELSE 0 END),0),"
-                  "COALESCE(SUM(CASE WHEN resolution='unresolved' THEN 1 ELSE 0 END),0) "
-                  "FROM refs")).ok())
-        return error;
-    if (graph.step() != SQLITE_ROW)
-        return sqlite_error(db.get(), "could not read reference graph totals",
-                            db.path());
-    output << "## Reference Graph\n\n"
-           << "| References | Resolved | Ambiguous | Unresolved |\n"
-              "| ---: | ---: | ---: | ---: |\n"
-           << "| " << graph.column_int64(0) << " | " << graph.column_int64(1)
-           << " | " << graph.column_int64(2) << " | "
-           << graph.column_int64(3) << " |\n\n";
-
     if (!freshness.fresh) {
         output << "## Stale Snapshot\n\n";
         if (!freshness.reason.empty()) output << "- " << markdown_text(freshness.reason) << "\n";
@@ -1670,9 +1379,7 @@ Error print_markdown(const Options& options, const Freshness& freshness, std::os
         Statement symbols;
         if (!(error = symbols.prepare(
                   db, "SELECT s.kind,s.qualified_name,s.signature,s.line_start,s.line_end,"
-                      "s.documentation,COALESCE(ss.caller_count,0),"
-                      "COALESCE(ss.page_rank,0.0) FROM symbols s "
-                      "LEFT JOIN symbol_scores ss ON ss.symbol_id=s.id "
+                      "s.documentation,s.importance FROM symbols s "
                       "WHERE s.file_id=? ORDER BY s.line_start,s.id")).ok() ||
             !(error = symbols.bind_int64(db, 1, file_id)).ok()) return error;
         bool any = false;
@@ -1684,9 +1391,7 @@ Error print_markdown(const Options& options, const Freshness& freshness, std::os
                    << markdown_code(symbols.column_text(1)) << " (lines " << symbols.column_int64(3)
                    << "-" << symbols.column_int64(4) << ")\n"
                    << "  - Signature: " << markdown_code(symbols.column_text(2)) << "\n"
-                   << "  - Graph: callers " << symbols.column_int64(6)
-                   << "; PageRank " << std::fixed << std::setprecision(8)
-                   << symbols.column_double(7) << std::defaultfloat << "\n";
+                   << "  - Importance: " << symbols.column_int64(6) << "\n";
             const std::string documentation = symbols.column_text(5);
             if (!documentation.empty()) output << "  - Documentation: " << markdown_text(documentation) << "\n";
         }
@@ -1743,7 +1448,8 @@ Error load_snapshot(const Options& options, Snapshot& snapshot) {
     Statement symbols;
     if (!(error = symbols.prepare(
               db, "SELECT s.id,s.file_id,f.path,s.kind,s.name,s.qualified_name,s.signature,s.parameters,"
-                  "s.return_type,s.line_start,s.line_end,s.documentation,s.signature_hash,s.body_hash "
+                  "s.return_type,s.line_start,s.line_end,s.documentation,s.signature_hash,s.body_hash,"
+                  "s.importance "
                   "FROM symbols s JOIN files f ON f.id=s.file_id ORDER BY f.path,s.line_start,s.id")).ok())
         return error;
     for (int rc = symbols.step(); rc != SQLITE_DONE; rc = symbols.step()) {
@@ -1767,61 +1473,9 @@ Error load_snapshot(const Options& options, Snapshot& snapshot) {
         };
         item.symbol.signature_hash = parse_hash(symbols.column_text(12));
         item.symbol.body_hash = parse_hash(symbols.column_text(13));
+        item.symbol.importance =
+            static_cast<int>(symbols.column_int64(14));
         loaded.symbols.push_back(std::move(item));
-    }
-
-    Statement references;
-    if (!(error = references.prepare(
-              db, "SELECT r.id,r.source_file_id,COALESCE(r.source_symbol_id,0),f.path,"
-                  "r.kind,r.target_spelling,r.qualifier,r.receiver_type,r.evidence,r.line,"
-                  "r.confidence,COALESCE(r.target_symbol_id,0),COALESCE(tf.path,''),"
-                  "COALESCE(ts.qualified_name,''),r.resolution "
-                  "FROM refs r JOIN files f ON f.id=r.source_file_id "
-                  "LEFT JOIN symbols ts ON ts.id=r.target_symbol_id "
-                  "LEFT JOIN files tf ON tf.id=ts.file_id ORDER BY f.path,r.line,r.id")).ok())
-        return error;
-    for (int rc = references.step(); rc != SQLITE_DONE;
-         rc = references.step()) {
-        if (cancelled(options))
-            return {ErrorCode::Cancelled,
-                    "loading code index references cancelled"};
-        if (rc != SQLITE_ROW)
-            return sqlite_error(db.get(), "could not read indexed references",
-                                db.path());
-        IndexedReference reference;
-        reference.id = references.column_int64(0);
-        reference.source_file_id = references.column_int64(1);
-        reference.source_symbol_id = references.column_int64(2);
-        reference.source_path = references.column_text(3);
-        reference.kind = references.column_text(4);
-        reference.target_spelling = references.column_text(5);
-        reference.qualifier = references.column_text(6);
-        reference.receiver_type = references.column_text(7);
-        reference.evidence = references.column_text(8);
-        reference.line = static_cast<int>(references.column_int64(9));
-        reference.confidence = references.column_double(10);
-        reference.target_symbol_id = references.column_int64(11);
-        reference.target_path = references.column_text(12);
-        reference.target_qualified_name = references.column_text(13);
-        reference.resolution = references.column_text(14);
-        loaded.references.push_back(std::move(reference));
-    }
-
-    Statement scores;
-    if (!(error = scores.prepare(
-              db, "SELECT symbol_id,caller_count,page_rank FROM symbol_scores "
-                  "ORDER BY symbol_id")).ok())
-        return error;
-    for (int rc = scores.step(); rc != SQLITE_DONE; rc = scores.step()) {
-        if (rc != SQLITE_ROW)
-            return sqlite_error(db.get(), "could not read symbol graph scores",
-                                db.path());
-        SymbolScore score;
-        score.symbol_id = scores.column_int64(0);
-        score.caller_count =
-            static_cast<std::size_t>(scores.column_int64(1));
-        score.page_rank = scores.column_double(2);
-        loaded.symbol_scores.push_back(std::move(score));
     }
 
     std::map<Language, LanguageTotal> totals;
@@ -1837,12 +1491,35 @@ Error load_snapshot(const Options& options, Snapshot& snapshot) {
     return ok_error();
 }
 
-std::size_t distinct_caller_count(const Snapshot& snapshot,
-                                  long long symbol_id) {
-    for (const SymbolScore& score : snapshot.symbol_scores) {
-        if (score.symbol_id == symbol_id) return score.caller_count;
+std::vector<std::string> identifier_components(const std::string& text) {
+    std::vector<std::string> components;
+    std::string component;
+    auto append = [&]() {
+        if (!component.empty()) components.push_back(component);
+        component.clear();
+    };
+    for (std::size_t index = 0; index < text.size(); ++index) {
+        const unsigned char byte = static_cast<unsigned char>(text[index]);
+        if (!std::isalnum(byte)) {
+            append();
+            continue;
+        }
+        const bool uppercase = std::isupper(byte) != 0;
+        if (!component.empty() && uppercase) {
+            const unsigned char previous =
+                static_cast<unsigned char>(text[index - 1]);
+            const bool previous_lower_or_digit =
+                std::islower(previous) != 0 || std::isdigit(previous) != 0;
+            const bool acronym_boundary =
+                std::isupper(previous) != 0 && index + 1 < text.size() &&
+                std::islower(static_cast<unsigned char>(text[index + 1])) != 0;
+            if (previous_lower_or_digit || acronym_boundary) append();
+        }
+        component.push_back(
+            static_cast<char>(std::tolower(static_cast<unsigned char>(byte))));
     }
-    return 0;
+    append();
+    return components;
 }
 
 std::vector<std::string> task_tokens(const std::string& task) {
@@ -1853,25 +1530,51 @@ std::vector<std::string> task_tokens(const std::string& task) {
         "into",    "is",      "it",      "me",       "of",       "on",
         "or",      "our",     "please",  "that",     "the",      "this",
         "to",      "try",     "we",      "with",     "you"};
-    std::vector<std::string> tokens;
-    std::string token;
-    auto append = [&]() {
-        if (token.size() >= 2 && ignored.find(token) == ignored.end())
-            tokens.push_back(token);
-        token.clear();
-    };
-    for (unsigned char byte : task) {
-        if (std::isalnum(byte) || byte == '_' || byte == '-' || byte == '.') {
-            token.push_back(
-                static_cast<char>(std::tolower(static_cast<unsigned char>(byte))));
-        } else {
-            append();
-        }
-    }
-    append();
+    std::vector<std::string> tokens = identifier_components(task);
+    tokens.erase(
+        std::remove_if(tokens.begin(), tokens.end(),
+                       [&](const std::string& token) {
+                           return token.size() < 2 ||
+                                  ignored.find(token) != ignored.end();
+                       }),
+        tokens.end());
     std::sort(tokens.begin(), tokens.end());
     tokens.erase(std::unique(tokens.begin(), tokens.end()), tokens.end());
     return tokens;
+}
+
+bool component_prefix_match(const std::string& left,
+                            const std::string& right) {
+    if (left == right) return true;
+    const std::string& shorter =
+        left.size() < right.size() ? left : right;
+    const std::string& longer =
+        left.size() < right.size() ? right : left;
+    if (shorter.size() < 3) return false;
+    if (longer.compare(0, shorter.size(), shorter) == 0) return true;
+    // Common e-dropping gerunds: save/saving, persist/persisting. This remains
+    // component-bounded and therefore cannot match log inside catalog.
+    if (shorter.size() >= 4 && shorter.back() == 'e') {
+        const std::string stem = shorter.substr(0, shorter.size() - 1);
+        return longer.compare(0, stem.size(), stem) == 0 &&
+               longer.compare(stem.size(), 3, "ing") == 0;
+    }
+    return false;
+}
+
+bool contains_token(const std::vector<std::string>& components,
+                    const std::string& token,
+                    bool& exact) {
+    exact = false;
+    for (const std::string& component : components) {
+        if (component == token) {
+            exact = true;
+            return true;
+        }
+    }
+    for (const std::string& component : components)
+        if (component_prefix_match(component, token)) return true;
+    return false;
 }
 
 bool likely_test_path(const std::string& path) {
@@ -1881,6 +1584,30 @@ bool likely_test_path(const std::string& path) {
            lower.find("_test.") != std::string::npos ||
            lower.find(".test.") != std::string::npos ||
            lower.find("_spec.") != std::string::npos;
+}
+
+bool task_targets_any(const std::vector<std::string>& tokens,
+                      const std::set<std::string>& targets) {
+    for (const std::string& token : tokens)
+        if (targets.find(token) != targets.end()) return true;
+    return false;
+}
+
+bool auxiliary_path(const std::string& path) {
+    static const std::set<std::string> components = {
+        "doc", "docs", "documentation", "website", "site", "sites", "skill",
+        "skills", "packaging", "package", "packages", "homebrew", "brew",
+        "formula", "formulae"};
+    for (const std::string& component : identifier_components(path))
+        if (components.find(component) != components.end()) return true;
+    const std::string lower = ascii_lower(path);
+    return lower == "readme" || lower.rfind("readme.", 0) == 0;
+}
+
+std::string top_level_directory(const std::string& path) {
+    const std::size_t slash = path.find('/');
+    return slash == std::string::npos ? std::string(".")
+                                      : path.substr(0, slash);
 }
 
 std::string hint_field(std::string text) {
@@ -1893,126 +1620,63 @@ std::string hint_field(std::string text) {
 
 std::vector<RankedSymbol> rank_task_symbols(const Snapshot& snapshot,
                                             const std::string& task,
-                                            std::size_t maximum,
-                                            std::size_t seed_maximum) {
-    if (maximum == 0 || snapshot.symbols.empty()) return {};
+                                            std::size_t maximum) {
+    if (maximum == 0) return {};
     const std::vector<std::string> tokens = task_tokens(task);
-    std::map<long long, double> lexical;
-    std::map<long long, std::string> reasons;
-    std::map<long long, SymbolScore> scores_by_id;
-    double maximum_page_rank = 0.0;
-    for (const SymbolScore& score : snapshot.symbol_scores) {
-        maximum_page_rank = std::max(maximum_page_rank, score.page_rank);
-        scores_by_id[score.symbol_id] = score;
-    }
-
+    if (tokens.empty()) return {};
+    std::vector<RankedSymbol> ranked;
+    ranked.reserve(snapshot.symbols.size());
     for (const IndexedSymbol& symbol : snapshot.symbols) {
         const std::string simple = ascii_lower(symbol.symbol.name);
         const std::string qualified =
             ascii_lower(symbol.symbol.qualified_name);
-        const std::string path = ascii_lower(symbol.path);
-        double score = 0.0;
+        const std::vector<std::string> simple_components =
+            identifier_components(symbol.symbol.name);
+        const std::vector<std::string> qualified_components =
+            identifier_components(symbol.symbol.qualified_name);
+        const std::vector<std::string> path_components =
+            identifier_components(symbol.path);
+        int best_tier = 0;
+        std::size_t matched = 0;
         for (const std::string& token : tokens) {
-            if (simple == token)
-                score += 8.0;
-            else if (qualified == token ||
-                     (qualified.size() > token.size() + 2 &&
-                      qualified.compare(qualified.size() - token.size(),
-                                        token.size(), token) == 0))
-                score += 6.0;
-            else if (simple.rfind(token, 0) == 0)
-                score += 4.0;
-            else if (simple.find(token) != std::string::npos ||
-                     qualified.find(token) != std::string::npos)
-                score += 2.5;
-            if (path.find(token) != std::string::npos) score += 1.5;
+            int tier = 0;
+            if (simple == token || qualified == token) {
+                tier = 3;
+            } else {
+                bool exact = false;
+                if (contains_token(simple_components, token, exact) && exact)
+                    tier = 2;
+                else if (contains_token(qualified_components, token, exact) &&
+                         exact)
+                    tier = 2;
+                else if (contains_token(simple_components, token, exact) ||
+                         contains_token(qualified_components, token, exact))
+                    tier = 1;
+                else if (contains_token(path_components, token, exact))
+                    tier = exact ? 2 : 1;
+            }
+            if (tier > 0) {
+                ++matched;
+                best_tier = std::max(best_tier, tier);
+            }
         }
-        lexical[symbol.id] = score;
-        if (score > 0.0) reasons[symbol.id] = "task match";
-    }
-
-    std::set<long long> seeds;
-    std::vector<std::pair<double, long long>> ordered_seeds;
-    for (const auto& item : lexical) {
-        if (item.second > 0.0) ordered_seeds.push_back({item.second, item.first});
-    }
-    std::sort(ordered_seeds.begin(), ordered_seeds.end(),
-              [](const auto& left, const auto& right) {
-                  if (left.first != right.first) return left.first > right.first;
-                  return left.second < right.second;
-              });
-    for (std::size_t index = 0;
-         index < ordered_seeds.size() && index < seed_maximum; ++index)
-        seeds.insert(ordered_seeds[index].second);
-
-    std::map<long long, double> proximity;
-    for (const IndexedReference& reference : snapshot.references) {
-        if (reference.resolution != "resolved" ||
-            reference.target_symbol_id == 0)
-            continue;
-        if (reference.source_symbol_id != 0 &&
-            seeds.find(reference.source_symbol_id) != seeds.end()) {
-            proximity[reference.target_symbol_id] +=
-                1.5 * reference.confidence;
-        }
-        if (seeds.find(reference.target_symbol_id) != seeds.end() &&
-            reference.source_symbol_id != 0) {
-            proximity[reference.source_symbol_id] +=
-                2.0 * reference.confidence;
-        }
-    }
-
-    std::vector<RankedSymbol> ranked;
-    ranked.reserve(snapshot.symbols.size());
-    const bool weak_task_match =
-        ordered_seeds.empty() || ordered_seeds.front().first < 2.5;
-    for (const IndexedSymbol& symbol : snapshot.symbols) {
-        double page_rank = 0.0;
-        std::size_t callers = 0;
-        const auto stored_score = scores_by_id.find(symbol.id);
-        if (stored_score != scores_by_id.end()) {
-            callers = stored_score->second.caller_count;
-            page_rank = stored_score->second.page_rank;
-        }
-        double score = lexical[symbol.id] + proximity[symbol.id];
-        if (callers > 0)
-            score += std::min(2.5, std::log1p(static_cast<double>(callers)));
-        if (maximum_page_rank > 0.0)
-            score += 0.75 * page_rank / maximum_page_rank;
-        const std::string lower_name = ascii_lower(symbol.symbol.name);
-        const bool architectural_kind =
-            symbol.symbol.kind == "function" ||
-            symbol.symbol.kind == "method" ||
-            symbol.symbol.kind == "class" ||
-            symbol.symbol.kind == "struct" ||
-            symbol.symbol.kind == "namespace" ||
-            symbol.symbol.kind == "module" ||
-            symbol.symbol.kind == "package";
-        if (lower_name == "main" || lower_name.rfind("run_", 0) == 0)
-            score += weak_task_match ? 1.25 : 0.25;
-        if (likely_test_path(symbol.path) && proximity[symbol.id] > 0.0)
-            score += 1.0;
-        if (!weak_task_match && lexical[symbol.id] <= 0.0 &&
-            proximity[symbol.id] <= 0.0)
-            continue;
-        if (weak_task_match && lexical[symbol.id] <= 0.0 &&
-            proximity[symbol.id] <= 0.0 && callers == 0 &&
-            !architectural_kind)
-            continue;
-        if (score <= 0.0) continue;
-
-        std::string reason = reasons[symbol.id];
-        if (proximity[symbol.id] > 0.0)
-            reason += reason.empty() ? "graph neighbor" : ", graph neighbor";
-        if (likely_test_path(symbol.path))
-            reason += reason.empty() ? "likely test" : ", likely test";
-        if (reason.empty())
-            reason = callers > 0 ? "high-impact anchor" : "architectural anchor";
-        ranked.push_back({&symbol, score, callers, std::move(reason)});
+        if (best_tier == 0) continue;
+        const double score =
+            static_cast<double>(best_tier) * 1000000.0 +
+            static_cast<double>(matched) * 10000.0 +
+            static_cast<double>(symbol.symbol.importance);
+        const char* reason = best_tier == 3
+                                 ? "full-name match"
+                                 : best_tier == 2
+                                       ? "exact component match"
+                                       : "component-prefix match";
+        ranked.push_back({&symbol, score, symbol.symbol.importance, reason,
+                          true, matched});
     }
     std::sort(ranked.begin(), ranked.end(),
               [](const RankedSymbol& left, const RankedSymbol& right) {
-                  if (left.score != right.score) return left.score > right.score;
+                  if (left.score != right.score)
+                      return left.score > right.score;
                   if (left.symbol->path != right.symbol->path)
                       return left.symbol->path < right.symbol->path;
                   if (left.symbol->symbol.line_start !=
@@ -2023,65 +1687,6 @@ std::vector<RankedSymbol> rank_task_symbols(const Snapshot& snapshot,
               });
     if (ranked.size() > maximum) ranked.resize(maximum);
     return ranked;
-}
-
-std::string format_task_hints(const Snapshot& snapshot,
-                              const std::string& task,
-                              std::size_t max_symbols,
-                              std::size_t max_bytes,
-                              std::size_t seed_maximum) {
-    if (max_symbols == 0 || max_bytes < 96) return {};
-    const std::vector<RankedSymbol> ranked =
-        rank_task_symbols(snapshot, task, max_symbols * 3, seed_maximum);
-    if (ranked.empty()) return {};
-    std::ostringstream output;
-    output << "[Approximate code-index hints; verify before editing]\n";
-    std::set<std::string> seen;
-    std::size_t count = 0;
-    std::size_t bytes = output.str().size();
-    auto write_group = [&](bool related, const char* heading) {
-        bool wrote_heading = false;
-        for (const RankedSymbol& ranked_symbol : ranked) {
-            if (ranked_symbol.symbol == nullptr || count >= max_symbols) break;
-            const bool item_related =
-                ranked_symbol.reason.find("graph neighbor") !=
-                    std::string::npos ||
-                ranked_symbol.reason.find("likely test") != std::string::npos ||
-                ranked_symbol.reason.find("anchor") != std::string::npos;
-            if (item_related != related) continue;
-            const IndexedSymbol& symbol = *ranked_symbol.symbol;
-            const std::string key =
-                symbol.path + "#" + symbol.symbol.qualified_name;
-            if (seen.find(key) != seen.end()) continue;
-            std::ostringstream line;
-            line << hint_field(symbol.path) << ": "
-                 << hint_field(symbol.symbol.qualified_name)
-                 << " (lines " << symbol.symbol.line_start << "-"
-                 << symbol.symbol.line_end;
-            if (ranked_symbol.caller_count > 0)
-                line << "; " << ranked_symbol.caller_count
-                     << (ranked_symbol.caller_count == 1 ? " caller"
-                                                        : " callers");
-            line << "; " << ranked_symbol.reason << ")\n";
-            const std::string encoded = line.str();
-            const std::size_t heading_bytes =
-                wrote_heading ? 0 : std::strlen(heading);
-            if (bytes + heading_bytes + encoded.size() > max_bytes) break;
-            if (!wrote_heading) {
-                output << heading;
-                bytes += heading_bytes;
-                wrote_heading = true;
-            }
-            output << encoded;
-            bytes += encoded.size();
-            seen.insert(key);
-            ++count;
-        }
-    };
-    write_group(false, "Task matches:\n");
-    write_group(true, "Related/high-impact:\n");
-    const std::string formatted = output.str();
-    return count == 0 ? std::string{} : formatted;
 }
 
 std::string content_hash(const std::string& content) {

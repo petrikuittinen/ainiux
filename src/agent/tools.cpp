@@ -968,13 +968,22 @@ Error ReadToolRegistry::create_without_index(
     std::vector<std::string> secrets,
     ReadToolRegistry& registry,
     ToolRegistryOptions options) {
-    if (workspace.empty())
+    index::Options index_options;
+    index_options.workspace = std::move(workspace);
+    return create_without_index(std::move(index_options), std::move(secrets),
+                                registry, std::move(options));
+}
+
+Error ReadToolRegistry::create_without_index(
+    index::Options index_options,
+    std::vector<std::string> secrets,
+    ReadToolRegistry& registry,
+    ToolRegistryOptions options) {
+    if (index_options.workspace.empty())
         return {ErrorCode::Internal,
                 "tool registry requires a canonical workspace"};
     index::Snapshot empty;
-    empty.workspace = std::move(workspace);
-    index::Options index_options;
-    index_options.workspace = empty.workspace;
+    empty.workspace = index_options.workspace;
     options.indexing_enabled = false;
     return create(std::move(index_options), std::move(empty),
                   std::move(secrets), registry, std::move(options));
@@ -1018,20 +1027,6 @@ Error ReadToolRegistry::refresh_persistent_index(
     loaded_index_generation_ = generation;
     rebuild_file_map();
     return ok_error();
-}
-
-std::string ReadToolRegistry::task_hints(
-    const std::string& task,
-    std::size_t max_symbols,
-    std::size_t max_bytes,
-    std::size_t seed_symbols,
-    runtime::CancellationToken cancellation) const {
-    if (!indexing_enabled_) return {};
-    if (max_symbols == 0 || max_bytes < 96) return {};
-    const Error error = refresh_persistent_index(false, cancellation);
-    if (!error.ok()) return {};
-    return index::format_task_hints(snapshot_, task, max_symbols, max_bytes,
-                                    seed_symbols);
 }
 
 GuardApprovalDecision ReadToolRegistry::request_guard_approval(
@@ -1314,13 +1309,6 @@ void ReadToolRegistry::note_written_file(const std::string& relative_path,
         std::remove_if(snapshot_.symbols.begin(), snapshot_.symbols.end(),
                        [&](const index::IndexedSymbol& symbol) { return symbol.path == generic; }),
         snapshot_.symbols.end());
-    snapshot_.references.erase(
-        std::remove_if(snapshot_.references.begin(), snapshot_.references.end(),
-                       [&](const index::IndexedReference& reference) {
-                           return reference.source_path == generic ||
-                                  reference.target_path == generic;
-                       }),
-        snapshot_.references.end());
     const index::ScanResult scan = index::scan_source(generic, content, language);
     if (scan.language != language) {
         for (index::IndexedFile& file : snapshot_.files) {
@@ -1340,40 +1328,6 @@ void ReadToolRegistry::note_written_file(const std::string& relative_path,
         entry.path = generic;
         entry.symbol = symbol;
         snapshot_.symbols.push_back(std::move(entry));
-    }
-    long long next_reference_id = 1;
-    for (const index::IndexedReference& reference : snapshot_.references)
-        next_reference_id = std::max(next_reference_id, reference.id + 1);
-    for (const index::Reference& reference : scan.references) {
-        index::IndexedReference entry;
-        entry.id = next_reference_id++;
-        entry.source_file_id = file_id;
-        entry.source_path = generic;
-        if (reference.source_symbol_index >= 0 &&
-            static_cast<std::size_t>(reference.source_symbol_index) <
-                scan.symbols.size()) {
-            const index::Symbol& source_symbol =
-                scan.symbols[static_cast<std::size_t>(
-                    reference.source_symbol_index)];
-            for (const index::IndexedSymbol& indexed : snapshot_.symbols) {
-                if (indexed.path == generic &&
-                    indexed.symbol.qualified_name ==
-                        source_symbol.qualified_name &&
-                    indexed.symbol.line_start == source_symbol.line_start) {
-                    entry.source_symbol_id = indexed.id;
-                    break;
-                }
-            }
-        }
-        entry.kind = reference.kind;
-        entry.target_spelling = reference.target_spelling;
-        entry.qualifier = reference.qualifier;
-        entry.receiver_type = reference.receiver_type;
-        entry.evidence = reference.evidence;
-        entry.line = reference.line;
-        entry.confidence = reference.confidence;
-        entry.resolution = "unresolved";
-        snapshot_.references.push_back(std::move(entry));
     }
     rebuild_file_map();
     queue_index_paths({generic});
@@ -1400,19 +1354,6 @@ void ReadToolRegistry::note_removed_path(const std::string& relative_path) const
                                    symbol.path[generic.size()] == '/');
                        }),
         snapshot_.symbols.end());
-    snapshot_.references.erase(
-        std::remove_if(snapshot_.references.begin(), snapshot_.references.end(),
-                       [&](const index::IndexedReference& reference) {
-                           const auto matches = [&](const std::string& path) {
-                               return path == generic ||
-                                      (path.size() > generic.size() &&
-                                       path.compare(0, generic.size(), generic) == 0 &&
-                                       path[generic.size()] == '/');
-                           };
-                           return matches(reference.source_path) ||
-                                  matches(reference.target_path);
-                       }),
-        snapshot_.references.end());
     rebuild_file_map();
     queue_index_paths({generic});
 }
@@ -2860,23 +2801,13 @@ std::vector<provider::FunctionDefinition> ReadToolRegistry::definitions() const 
          "non-source names). Names are literal (may include #, spaces). Index-only tools miss "
          "empty directories and non-code files—prefer this for layout questions and before remove.",
          schema(path + ",\"max_entries\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":500}")},
-        {"glob", "Match indexed relative file paths using *, ?, **, and brace alternatives.", schema("\"pattern\":{\"type\":\"string\"},\"max_results\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":1000}", "\"pattern\"")},
-        {"search_text", "Search indexed UTF-8 files using bounded literal or line-oriented regex matching.", schema("\"query\":{\"type\":\"string\"},\"regex\":{\"type\":\"boolean\"},\"case_sensitive\":{\"type\":\"boolean\"},\"word\":{\"type\":\"boolean\"},\"glob\":{\"type\":\"string\"},\"context\":{\"type\":\"integer\",\"minimum\":0,\"maximum\":10},\"max_results\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":500}", "\"query\"")},
+        {"glob", "Match eligible workspace source paths using *, ?, **, and brace alternatives.", schema("\"pattern\":{\"type\":\"string\"},\"max_results\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":1000}", "\"pattern\"")},
+        {"search_text", "Search eligible workspace UTF-8 source files using bounded literal or line-oriented regex matching. Set regex=true for alternation such as foo|bar.", schema("\"query\":{\"type\":\"string\"},\"regex\":{\"type\":\"boolean\"},\"case_sensitive\":{\"type\":\"boolean\"},\"word\":{\"type\":\"boolean\"},\"glob\":{\"type\":\"string\"},\"context\":{\"type\":\"integer\",\"minimum\":0,\"maximum\":10},\"max_results\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":500}", "\"query\"")},
         {"grep", "Alias for search_text.", schema("\"query\":{\"type\":\"string\"},\"regex\":{\"type\":\"boolean\"},\"case_sensitive\":{\"type\":\"boolean\"},\"word\":{\"type\":\"boolean\"},\"glob\":{\"type\":\"string\"},\"context\":{\"type\":\"integer\",\"minimum\":0,\"maximum\":10},\"max_results\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":500}", "\"query\"")},
         {"find", "Validated alias for search_text.", schema("\"query\":{\"type\":\"string\"},\"regex\":{\"type\":\"boolean\"},\"case_sensitive\":{\"type\":\"boolean\"},\"word\":{\"type\":\"boolean\"},\"glob\":{\"type\":\"string\"},\"context\":{\"type\":\"integer\",\"minimum\":0,\"maximum\":10},\"max_results\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":500}", "\"query\"")},
-        {"search_symbol", "Rank indexed symbol names by case-insensitive exact, prefix, substring, caller count, then graph centrality.", schema("\"query\":{\"type\":\"string\"},\"max_results\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":200}", "\"query\"")},
+        {"search_symbol", "Rank indexed symbol names by lexical match, then static declaration importance.", schema("\"query\":{\"type\":\"string\"},\"max_results\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":200}", "\"query\"")},
         {"get_skeleton", "Return ordered indexed declarations, signatures, ranges, and documentation for one file.", schema(path, "\"path\"")},
-        {"read_symbol", "Fingerprint-verify and read the actual indexed source range for a symbol id, with a bounded approximate caller/callee summary.", schema("\"symbol_id\":{\"type\":\"integer\",\"minimum\":1}", "\"symbol_id\"")},
-        {"find_callers",
-         "Find approximate resolved callers of an indexed symbol. Verify source before editing.",
-         schema("\"symbol_id\":{\"type\":\"integer\",\"minimum\":1},"
-                "\"max_results\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":200}",
-                "\"symbol_id\"")},
-        {"find_callees",
-         "Find approximate resolved callees from an indexed symbol. Verify source before editing.",
-         schema("\"symbol_id\":{\"type\":\"integer\",\"minimum\":1},"
-                "\"max_results\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":200}",
-                "\"symbol_id\"")},
+        {"read_symbol", "Fingerprint-verify and read the actual indexed source range for a symbol id.", schema("\"symbol_id\":{\"type\":\"integer\",\"minimum\":1}", "\"symbol_id\"")},
         {"read_file",
          !agent_session
              ? "Fingerprint-verify and read a bounded indexed UTF-8 line range with hashes and "
@@ -2955,9 +2886,8 @@ std::vector<provider::FunctionDefinition> ReadToolRegistry::definitions() const 
     }
     if (!indexing_enabled_) {
         static const std::set<std::string> hidden = {
-            "project_overview", "glob", "search_text", "grep", "find",
-            "search_symbol", "get_skeleton", "read_symbol", "find_callers",
-            "find_callees", "index_status", "index_update", "index_rebuild",
+            "project_overview", "search_symbol", "get_skeleton", "read_symbol",
+            "index_status", "index_update", "index_rebuild",
             "find_tests", "inspect_code_task"};
         tools.erase(
             std::remove_if(
@@ -3372,8 +3302,7 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
     }
     if (!indexing_enabled_) {
         static const std::set<std::string> disabled = {
-            "project_overview", "glob", "search_text", "search_symbol",
-            "get_skeleton", "read_symbol", "find_callers", "find_callees",
+            "project_overview", "search_symbol", "get_skeleton", "read_symbol",
             "index_status", "index_update", "index_rebuild", "find_tests",
             "inspect_code_task"};
         if (disabled.find(name) != disabled.end())
@@ -3412,8 +3341,7 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
     static const std::set<std::string> snapshot_tools = {
         "project_overview", "glob",          "search_text",
         "search_symbol",    "get_skeleton",  "read_symbol",
-        "find_callers",     "find_callees",  "find_tests",
-        "inspect_code_task", "index_status", "edit_file"};
+        "find_tests", "inspect_code_task", "index_status", "edit_file"};
     if (snapshot_tools.find(name) != snapshot_tools.end()) {
         const Error refresh_error =
             refresh_persistent_index(false, cancellation);
@@ -3441,13 +3369,6 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
         data.object["files"] = number_value(total_files);
         data.object["lines"] = number_value(total_lines);
         data.object["bytes"] = number_value(total_bytes);
-        data.object["references"] =
-            number_value(static_cast<double>(snapshot_.references.size()));
-        std::size_t resolved_references = 0;
-        for (const index::IndexedReference& reference : snapshot_.references)
-            if (reference.resolution == "resolved") ++resolved_references;
-        data.object["resolved_references"] =
-            number_value(static_cast<double>(resolved_references));
         json::Value important = array_value();
         static const std::vector<std::string> names = {"README.md", "AGENTS.md", "Makefile", "CMakeLists.txt", "package.json", "pyproject.toml", "Cargo.toml", "go.mod"};
         for (const std::string& candidate : names) if (files_.find(candidate) != files_.end()) important.array.push_back(string_value(candidate));
@@ -3464,22 +3385,33 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
         }
         data.object["entry_points"] = std::move(entries);
         json::Value central = array_value();
-        const std::vector<index::RankedSymbol> anchors =
-            index::rank_task_symbols(snapshot_, "", 10);
-        for (const index::RankedSymbol& anchor : anchors) {
-            if (anchor.symbol == nullptr) continue;
+        std::vector<const index::IndexedSymbol*> anchors;
+        anchors.reserve(snapshot_.symbols.size());
+        for (const index::IndexedSymbol& symbol : snapshot_.symbols)
+            anchors.push_back(&symbol);
+        std::sort(anchors.begin(), anchors.end(), [](const auto* left,
+                                                     const auto* right) {
+            if (left->symbol.importance != right->symbol.importance)
+                return left->symbol.importance > right->symbol.importance;
+            if (left->path != right->path) return left->path < right->path;
+            if (left->symbol.line_start != right->symbol.line_start)
+                return left->symbol.line_start < right->symbol.line_start;
+            return left->id < right->id;
+        });
+        if (anchors.size() > 10) anchors.resize(10);
+        for (const index::IndexedSymbol* anchor : anchors) {
             json::Value item = object_value();
-            item.object["path"] = string_value(anchor.symbol->path);
-            item.object["symbol_id"] = number_value(anchor.symbol->id);
+            item.object["path"] = string_value(anchor->path);
+            item.object["symbol_id"] = number_value(anchor->id);
             item.object["symbol"] =
-                string_value(anchor.symbol->symbol.qualified_name);
+                string_value(anchor->symbol.qualified_name);
             item.object["line"] =
-                number_value(anchor.symbol->symbol.line_start);
-            item.object["caller_count"] =
-                number_value(static_cast<double>(anchor.caller_count));
+                number_value(anchor->symbol.line_start);
+            item.object["importance"] =
+                number_value(anchor->symbol.importance);
             central.array.push_back(std::move(item));
         }
-        data.object["central_symbols"] = std::move(central);
+        data.object["important_symbols"] = std::move(central);
         json::Value tests = array_value();
         if (files_.find("Makefile") != files_.end()) { tests.array.push_back(string_value("make test")); tests.array.push_back(string_value("make test-sanitize")); }
         if (files_.find("package.json") != files_.end()) tests.array.push_back(string_value("npm test"));
@@ -3649,9 +3581,34 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
             return tool_error_result("policy_denied", unsafe_path_message(pattern, "search"));
         json::Value data = array_value(); bool truncated = false;
         try {
-            for (const index::IndexedFile& file : snapshot_.files) if (glob_matches(file.path, pattern)) {
+            std::vector<std::string> paths;
+            if (indexing_enabled_) {
+                paths.reserve(snapshot_.files.size());
+                for (const index::IndexedFile& file : snapshot_.files)
+                    paths.push_back(file.path);
+            } else {
+                index::Options discovery_options = index_options_;
+                discovery_options.cancellation = cancellation;
+                discovery_options.interrupted = {};
+                discovery_options.on_progress = {};
+                std::vector<index::DiscoveredFile> discovered;
+                const Error discovery_error =
+                    index::discover_source_files(discovery_options, discovered);
+                if (!discovery_error.ok())
+                    return tool_error_result(
+                        error_code_string(discovery_error.code),
+                        discovery_error.message);
+                paths.reserve(discovered.size());
+                for (const index::DiscoveredFile& file : discovered)
+                    paths.push_back(file.path);
+            }
+            for (const std::string& path : paths) {
+                if (cancellation.cancelled())
+                    return tool_error_result("cancelled",
+                                             "glob search cancelled");
+                if (!glob_matches(path, pattern)) continue;
                 if (data.array.size() >= maximum) { truncated = true; break; }
-                data.array.push_back(string_value(file.path));
+                data.array.push_back(string_value(path));
             }
         } catch (const std::regex_error& exception) {
             return tool_error_result("invalid_glob", exception.what());
@@ -3665,44 +3622,8 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
         if (!get_string(args, "query", query, true, validation_error) ||
             !get_size(args, "max_results", 50, 200, maximum, validation_error))
             return tool_error_result("invalid_arguments", validation_error);
-        const std::string needle = lowercase(query);
-        struct Ranked {
-            int rank;
-            std::size_t caller_count;
-            double page_rank;
-            const index::IndexedSymbol* symbol;
-        };
-        std::vector<Ranked> ranked;
-        std::map<long long, index::SymbolScore> graph_scores;
-        for (const index::SymbolScore& score : snapshot_.symbol_scores)
-            graph_scores[score.symbol_id] = score;
-        for (const index::IndexedSymbol& symbol : snapshot_.symbols) {
-            const std::string simple = lowercase(symbol.symbol.name);
-            const std::string qualified = lowercase(symbol.symbol.qualified_name);
-            int rank = simple == needle || qualified == needle ? 0 :
-                       simple.rfind(needle, 0) == 0 || qualified.rfind(needle, 0) == 0 ? 1 :
-                       simple.find(needle) != std::string::npos || qualified.find(needle) != std::string::npos ? 2 : 3;
-            if (rank < 3) {
-                double page_rank = 0.0;
-                std::size_t caller_count = 0;
-                const auto score = graph_scores.find(symbol.id);
-                if (score != graph_scores.end()) {
-                    page_rank = score->second.page_rank;
-                    caller_count = score->second.caller_count;
-                }
-                ranked.push_back(
-                    {rank, caller_count, page_rank, &symbol});
-            }
-        }
-        std::sort(ranked.begin(), ranked.end(), [](const Ranked& a, const Ranked& b) {
-            if (a.rank != b.rank) return a.rank < b.rank;
-            if (a.caller_count != b.caller_count)
-                return a.caller_count > b.caller_count;
-            if (a.page_rank != b.page_rank) return a.page_rank > b.page_rank;
-            if (a.symbol->path != b.symbol->path) return a.symbol->path < b.symbol->path;
-            if (a.symbol->symbol.line_start != b.symbol->symbol.line_start) return a.symbol->symbol.line_start < b.symbol->symbol.line_start;
-            return a.symbol->id < b.symbol->id;
-        });
+        const std::vector<index::RankedSymbol> ranked =
+            index::rank_task_symbols(snapshot_, query, maximum + 1);
         json::Value data = array_value(); bool truncated = ranked.size() > maximum;
         for (std::size_t i = 0; i < std::min(maximum, ranked.size()); ++i) {
             const index::IndexedSymbol& symbol = *ranked[i].symbol;
@@ -3710,8 +3631,8 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
             item.object["path"] = string_value(symbol.path); item.object["kind"] = string_value(symbol.symbol.kind);
             item.object["name"] = string_value(symbol.symbol.qualified_name); item.object["signature"] = string_value(symbol.symbol.signature);
             item.object["line_start"] = number_value(symbol.symbol.line_start); item.object["line_end"] = number_value(symbol.symbol.line_end);
-            item.object["caller_count"] =
-                number_value(static_cast<double>(ranked[i].caller_count));
+            item.object["importance"] =
+                number_value(symbol.symbol.importance);
             data.array.push_back(std::move(item));
         }
         return envelope(true, std::move(data), "", "", {}, truncated);
@@ -3728,6 +3649,7 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
             item.object["kind"] = string_value(symbol.symbol.kind); item.object["name"] = string_value(symbol.symbol.qualified_name);
             item.object["signature"] = string_value(symbol.symbol.signature); item.object["line_start"] = number_value(symbol.symbol.line_start);
             item.object["line_end"] = number_value(symbol.symbol.line_end); item.object["documentation"] = string_value(symbol.symbol.documentation);
+            item.object["importance"] = number_value(symbol.symbol.importance);
             data.array.push_back(std::move(item));
         }
         return envelope(true, std::move(data), "", "", {}, false);
@@ -3746,141 +3668,10 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
         json::Value data = object_value(); data.object["symbol_id"] = number_value(found->id); data.object["path"] = string_value(range.path);
         data.object["line_start"] = number_value(range.start_line); data.object["line_end"] = number_value(range.end_line);
         data.object["content"] = string_value(range.content); data.object["file_hash"] = string_value(range.file_hash); data.object["range_hash"] = string_value(range.range_hash);
-        data.object["caller_count"] = number_value(static_cast<double>(
-            index::distinct_caller_count(snapshot_, found->id)));
-        json::Value callers = array_value();
-        json::Value callees = array_value();
-        for (const index::IndexedReference& reference : snapshot_.references) {
-            if (reference.resolution != "resolved") continue;
-            if (reference.target_symbol_id == found->id && callers.array.size() < 12) {
-                json::Value item = object_value();
-                item.object["path"] = string_value(reference.source_path);
-                item.object["line"] = number_value(reference.line);
-                item.object["kind"] = string_value(reference.kind);
-                item.object["confidence"] = number_value(reference.confidence);
-                if (reference.source_symbol_id != 0) {
-                    for (const index::IndexedSymbol& source : snapshot_.symbols) {
-                        if (source.id == reference.source_symbol_id) {
-                            item.object["symbol_id"] = number_value(source.id);
-                            item.object["symbol"] =
-                                string_value(source.symbol.qualified_name);
-                            break;
-                        }
-                    }
-                }
-                callers.array.push_back(std::move(item));
-            }
-            if (reference.source_symbol_id == found->id &&
-                reference.target_symbol_id != 0 && callees.array.size() < 12) {
-                json::Value item = object_value();
-                item.object["symbol_id"] =
-                    number_value(reference.target_symbol_id);
-                item.object["path"] = string_value(reference.target_path);
-                item.object["symbol"] =
-                    string_value(reference.target_qualified_name);
-                item.object["line"] = number_value(reference.line);
-                item.object["kind"] = string_value(reference.kind);
-                item.object["confidence"] = number_value(reference.confidence);
-                callees.array.push_back(std::move(item));
-            }
-        }
-        data.object["approximate_callers"] = std::move(callers);
-        data.object["approximate_callees"] = std::move(callees);
+        data.object["importance"] =
+            number_value(found->symbol.importance);
         std::vector<std::string> warnings; if (range.redacted) warnings.push_back("configured credential value was redacted");
-        warnings.push_back("caller/callee relationships are approximate; verify source");
         return envelope(true, std::move(data), "", "", warnings, range.truncated);
-    }
-
-    if (name == "find_callers" || name == "find_callees") {
-        std::size_t id = 0;
-        std::size_t maximum = 50;
-        if (!get_size(args, "symbol_id", 0,
-                      static_cast<std::size_t>(std::numeric_limits<int>::max()),
-                      id, validation_error) ||
-            !get_size(args, "max_results", 50, 200, maximum,
-                      validation_error) ||
-            id == 0 || maximum == 0)
-            return tool_error_result(
-                "invalid_arguments",
-                validation_error.empty() ? "symbol_id and max_results must be positive"
-                                         : validation_error);
-        const index::IndexedSymbol* selected = nullptr;
-        for (const index::IndexedSymbol& symbol : snapshot_.symbols) {
-            if (symbol.id == static_cast<long long>(id)) {
-                selected = &symbol;
-                break;
-            }
-        }
-        if (selected == nullptr)
-            return tool_error_result("not_found",
-                                     "indexed symbol id was not found");
-        json::Value rows = array_value();
-        bool truncated = false;
-        std::set<std::string> seen;
-        for (const index::IndexedReference& reference : snapshot_.references) {
-            const bool match =
-                name == "find_callers"
-                    ? reference.target_symbol_id == selected->id
-                    : reference.source_symbol_id == selected->id &&
-                          reference.target_symbol_id != 0;
-            if (!match || reference.resolution != "resolved") continue;
-            const std::string key =
-                std::to_string(reference.source_symbol_id) + "#" +
-                std::to_string(reference.target_symbol_id) + "#" +
-                reference.kind + "#" + std::to_string(reference.line);
-            if (!seen.insert(key).second) continue;
-            if (rows.array.size() >= maximum) {
-                truncated = true;
-                break;
-            }
-            json::Value item = object_value();
-            item.object["kind"] = string_value(reference.kind);
-            item.object["confidence"] = number_value(reference.confidence);
-            item.object["reference_line"] = number_value(reference.line);
-            if (name == "find_callers") {
-                item.object["path"] = string_value(reference.source_path);
-                if (reference.source_symbol_id != 0) {
-                    item.object["symbol_id"] =
-                        number_value(reference.source_symbol_id);
-                    for (const index::IndexedSymbol& source : snapshot_.symbols) {
-                        if (source.id == reference.source_symbol_id) {
-                            item.object["symbol"] =
-                                string_value(source.symbol.qualified_name);
-                            item.object["line_start"] =
-                                number_value(source.symbol.line_start);
-                            item.object["line_end"] =
-                                number_value(source.symbol.line_end);
-                            break;
-                        }
-                    }
-                }
-            } else {
-                item.object["path"] = string_value(reference.target_path);
-                item.object["symbol_id"] =
-                    number_value(reference.target_symbol_id);
-                item.object["symbol"] =
-                    string_value(reference.target_qualified_name);
-                for (const index::IndexedSymbol& target : snapshot_.symbols) {
-                    if (target.id == reference.target_symbol_id) {
-                        item.object["line_start"] =
-                            number_value(target.symbol.line_start);
-                        item.object["line_end"] =
-                            number_value(target.symbol.line_end);
-                        break;
-                    }
-                }
-            }
-            rows.array.push_back(std::move(item));
-        }
-        json::Value data = object_value();
-        data.object["symbol_id"] = number_value(selected->id);
-        data.object["symbol"] =
-            string_value(selected->symbol.qualified_name);
-        data.object[name == "find_callers" ? "callers" : "callees"] =
-            std::move(rows);
-        return envelope(
-            true, std::move(data), "", "",
-            {"approximate index relationships; verify current source"}, truncated);
     }
 
     if (name == "read_file") {
@@ -4043,18 +3834,79 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
             !get_size(args, "max_results", 50, 500, maximum, validation_error))
             return tool_error_result("invalid_arguments", validation_error);
         std::regex expression;
-        try {
-            std::string pattern = regex_mode ? query : regex_escape(query);
-            if (word) pattern = "\\b(?:" + pattern + ")\\b";
-            expression = std::regex(pattern, std::regex::ECMAScript | (case_sensitive ? std::regex::flag_type{} : std::regex::icase));
-        } catch (const std::regex_error& exception) { return tool_error_result("invalid_regex", exception.what()); }
+        const bool use_regex = regex_mode || word;
+        if (use_regex) {
+            try {
+                std::string pattern = regex_mode ? query : regex_escape(query);
+                if (word) pattern = "\\b(?:" + pattern + ")\\b";
+                expression = std::regex(
+                    pattern,
+                    std::regex::ECMAScript |
+                        (case_sensitive ? std::regex::flag_type{}
+                                        : std::regex::icase));
+            } catch (const std::regex_error& exception) {
+                return tool_error_result("invalid_regex", exception.what());
+            }
+        }
+        const std::string literal_query =
+            case_sensitive ? query : lowercase(query);
+        auto matches = [&](const std::string& line) {
+            if (use_regex) return std::regex_search(line, expression);
+            if (case_sensitive)
+                return line.find(literal_query) != std::string::npos;
+            return lowercase(line).find(literal_query) != std::string::npos;
+        };
+        struct SearchFile {
+            std::string path;
+            std::uintmax_t size = 0;
+        };
+        std::vector<SearchFile> candidates;
+        if (indexing_enabled_) {
+            candidates.reserve(snapshot_.files.size());
+            for (const index::IndexedFile& file : snapshot_.files) {
+                if (file.status == "indexed")
+                    candidates.push_back({file.path, file.size});
+            }
+        } else {
+            index::Options discovery_options = index_options_;
+            discovery_options.cancellation = cancellation;
+            discovery_options.interrupted = {};
+            discovery_options.on_progress = {};
+            std::vector<index::DiscoveredFile> discovered;
+            const Error discovery_error =
+                index::discover_source_files(discovery_options, discovered);
+            if (!discovery_error.ok())
+                return tool_error_result(
+                    error_code_string(discovery_error.code),
+                    discovery_error.message);
+            candidates.reserve(discovered.size());
+            for (const index::DiscoveredFile& file : discovered) {
+                if (file.size <= index_options_.max_source_code_file_size)
+                    candidates.push_back({file.path, file.size});
+            }
+        }
         json::Value data = array_value(); std::vector<std::string> warnings; bool truncated = false;
-        for (const index::IndexedFile& file : snapshot_.files) {
-            if (file.status != "indexed" || (!glob.empty() && !glob_matches(file.path, glob))) continue;
-            SourceRange source; const Error read_error = read_source(file.path, 1, 0, static_cast<std::size_t>(file.size) + 1, source);
+        for (const SearchFile& file : candidates) {
+            if (cancellation.cancelled())
+                return tool_error_result("cancelled",
+                                         "text search cancelled");
+            if (!glob.empty() && !glob_matches(file.path, glob)) continue;
+            SourceRange source;
+            const std::size_t read_cap =
+                std::max<std::size_t>(
+                    1, index_options_.max_source_code_file_size);
+            const Error read_error =
+                indexing_enabled_
+                    ? read_source(file.path, 1, 0, read_cap, source)
+                    : read_workspace_source(file.path, 1, 0, read_cap,
+                                            source);
             if (!read_error.ok()) { warnings.push_back(read_error.message); continue; }
             const std::vector<std::string> lines = split_lines(source.content);
-            for (std::size_t line = 0; line < lines.size(); ++line) if (std::regex_search(lines[line], expression)) {
+            for (std::size_t line = 0; line < lines.size(); ++line) {
+                if (cancellation.cancelled())
+                    return tool_error_result("cancelled",
+                                             "text search cancelled");
+                if (!matches(lines[line])) continue;
                 if (data.array.size() >= maximum) { truncated = true; break; }
                 json::Value match = object_value(); match.object["path"] = string_value(file.path); match.object["line"] = number_value(line + 1);
                 match.object["text"] = string_value(lines[line]);
@@ -5175,8 +5027,6 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
         data.object["files_indexed"] = number_value(static_cast<double>(snapshot_.files.size()));
         data.object["symbols_indexed"] =
             number_value(static_cast<double>(snapshot_.symbols.size()));
-        data.object["refs_indexed"] =
-            number_value(static_cast<double>(snapshot_.references.size()));
         data.object["last_updated"] = number_value(static_cast<double>(snapshot_.updated_at));
         data.object["workspace"] = string_value(snapshot_.workspace);
         bool fresh = true;
@@ -5263,8 +5113,6 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
         data.object["skipped"] = number_value(static_cast<double>(stats.skipped));
         data.object["removed"] = number_value(static_cast<double>(stats.removed));
         data.object["symbols"] = number_value(static_cast<double>(stats.symbols));
-        data.object["references"] =
-            number_value(static_cast<double>(stats.references));
         data.object["elapsed_ms"] = number_value(static_cast<double>(stats.elapsed_ms));
         data.object["files_indexed"] = number_value(static_cast<double>(snapshot_.files.size()));
         data.object["symbols_indexed"] =
@@ -5314,8 +5162,6 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
         data.object["discovered"] = number_value(static_cast<double>(stats.discovered));
         data.object["indexed"] = number_value(static_cast<double>(stats.indexed));
         data.object["symbols"] = number_value(static_cast<double>(stats.symbols));
-        data.object["references"] =
-            number_value(static_cast<double>(stats.references));
         data.object["elapsed_ms"] = number_value(static_cast<double>(stats.elapsed_ms));
         data.object["files_indexed"] = number_value(static_cast<double>(snapshot_.files.size()));
         data.object["symbols_indexed"] =
@@ -5532,16 +5378,16 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
         struct RankedSymbol {
             double score = 0;
             const index::IndexedSymbol* symbol = nullptr;
-            std::size_t caller_count = 0;
+            int importance = 0;
             std::string reason;
         };
         std::vector<RankedSymbol> symbol_hits;
-        const std::vector<index::RankedSymbol> graph_ranked =
+        const std::vector<index::RankedSymbol> ranked_symbols =
             index::rank_task_symbols(snapshot_, query,
                                      std::max(max_symbols, max_files) * 4);
-        for (const index::RankedSymbol& ranked : graph_ranked)
+        for (const index::RankedSymbol& ranked : ranked_symbols)
             symbol_hits.push_back(
-                {ranked.score, ranked.symbol, ranked.caller_count,
+                {ranked.score, ranked.symbol, ranked.importance,
                  ranked.reason});
 
         struct RankedFile {
@@ -5590,8 +5436,8 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
             item.object["start_line"] = number_value(symbol.symbol.line_start);
             item.object["end_line"] = number_value(symbol.symbol.line_end);
             item.object["score"] = number_value(symbol_hits[i].score);
-            item.object["caller_count"] = number_value(
-                static_cast<double>(symbol_hits[i].caller_count));
+            item.object["importance"] =
+                number_value(symbol_hits[i].importance);
             item.object["reason"] = string_value(symbol_hits[i].reason);
             likely_symbols.array.push_back(std::move(item));
             if (suggested_reads.array.size() < max_files) {

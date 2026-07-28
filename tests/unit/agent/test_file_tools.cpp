@@ -1194,17 +1194,29 @@ void test_index_refresh_drops_completed_prepare_cancellation() {
 
 void test_indexing_disabled_registry_is_strict_and_live() {
     const std::string workspace = write_temp_workspace("indexing-disabled");
+    write_text(fs::path(workspace) / ".gitignore", "ignored.py\n");
+    write_text(fs::path(workspace) / "ignored.py",
+               "def ignored_marker():\n    pass\n");
+    write_text(fs::path(workspace) / "src" / "live.py",
+               "def LiveMarker():\n    return 'Needle'\n");
     agent::ToolRegistryOptions options;
     options.mutation_policy = agent::MutationPolicy::Full;
     options.indexing_enabled = false;
+    agent::index::Options index_options;
+    index_options.workspace = fs::canonical(workspace).string();
+    index_options.max_source_code_file_size = 1024 * 1024;
     agent::ReadToolRegistry tools;
     Error error = agent::ReadToolRegistry::create_without_index(
-        fs::canonical(workspace).string(), {}, tools, options);
+        index_options, {}, tools, options);
     check(error.ok(), "create live registry without an index: " + error.message);
 
     bool has_list = false;
     bool has_read = false;
     bool has_edit = false;
+    bool has_glob = false;
+    bool has_search = false;
+    bool has_grep = false;
+    bool has_find = false;
     bool has_index_tool = false;
     bool advertises_replace_symbol = false;
     for (const provider::FunctionDefinition& definition :
@@ -1212,10 +1224,12 @@ void test_indexing_disabled_registry_is_strict_and_live() {
         has_list = has_list || definition.name == "list_directory";
         has_read = has_read || definition.name == "read_file";
         has_edit = has_edit || definition.name == "edit_file";
+        has_glob = has_glob || definition.name == "glob";
+        has_search = has_search || definition.name == "search_text";
+        has_grep = has_grep || definition.name == "grep";
+        has_find = has_find || definition.name == "find";
         has_index_tool =
             has_index_tool || definition.name == "project_overview" ||
-            definition.name == "glob" ||
-            definition.name == "search_text" ||
             definition.name == "search_symbol" ||
             definition.name == "index_status" ||
             definition.name == "inspect_code_task";
@@ -1226,29 +1240,56 @@ void test_indexing_disabled_registry_is_strict_and_live() {
                 definition.parameters_json.find("replace_symbol") !=
                     std::string::npos;
     }
-    check(has_list && has_read && has_edit && !has_index_tool &&
+    check(has_list && has_read && has_edit && has_glob && has_search &&
+              has_grep && has_find && !has_index_tool &&
               !advertises_replace_symbol,
-          "indexing-off definitions retain live tools and hide index-backed tools");
+          "indexing-off definitions retain live search/edit tools and hide index tools");
     check(json_ok(tools.execute(
               "list_directory", R"JSON({"path":"src"})JSON")) &&
               json_ok(tools.execute(
                   "read_file", R"JSON({"path":"src/hello.cpp"})JSON")),
           "indexing-off registry retains live directory and exact-path reads");
+    const std::string live_glob =
+        tools.execute("glob", R"JSON({"pattern":"**/*.{cpp,py}"})JSON");
+    check(json_ok(live_glob) &&
+              json_array_contains_string(live_glob, "src/hello.cpp") &&
+              json_array_contains_string(live_glob, "src/live.py") &&
+              !json_array_contains_string(live_glob, "ignored.py"),
+          "indexing-off glob discovers eligible live files and honors ignores: " +
+              live_glob);
+    const std::string live_search = tools.execute(
+        "search_text",
+        R"JSON({"query":"needle","case_sensitive":false,"glob":"src/*.py","context":1})JSON");
+    check(json_ok(live_search) &&
+              live_search.find("src/live.py") != std::string::npos &&
+              live_search.find("Needle") != std::string::npos,
+          "indexing-off literal search reads live UTF-8 sources: " +
+              live_search);
+    const std::string regex_search = tools.execute(
+        "grep",
+        R"JSON({"query":"Live(Marker|Missing)","regex":true,"glob":"src/*.py"})JSON");
+    check(json_ok(regex_search) &&
+              regex_search.find("LiveMarker") != std::string::npos,
+          "indexing-off grep alias retains regex behavior: " +
+              regex_search);
+    check(!json_ok(tools.execute(
+              "search_text", R"JSON({"query":"(","regex":true})JSON")),
+          "indexing-off search returns structured invalid-regex errors");
     check(json_ok(tools.execute(
               "edit_file",
               R"JSON({"path":"src/hello.cpp","ops":[{"type":"replace_text","old_text":"return 0","new_text":"return 7"}]})JSON")),
           "indexing-off registry retains ordinary edits");
-    check(!json_ok(tools.execute("search_text",
-                                 R"JSON({"query":"main"})JSON")) &&
+    check(json_ok(tools.execute("search_text",
+                                R"JSON({"query":"return 7","glob":"src/hello.cpp"})JSON")) &&
+              !json_ok(tools.execute("project_overview", "{}")) &&
               !json_ok(tools.execute(
                   "edit_file",
                   R"JSON({"path":"src/hello.cpp","ops":[{"type":"replace_symbol","symbol_id":1,"replacement":"x"}]})JSON")),
-          "indexing-off registry defensively denies hidden search and replace_symbol");
-    check(tools.task_hints("hello", 16, 4096, 8).empty() &&
-              tools.refresh_persistent_index(true).ok() &&
+          "indexing-off search sees writes while index tools and replace_symbol stay denied");
+    check(tools.refresh_persistent_index(true).ok() &&
               !fs::exists(fs::path(workspace) / ".ainiux-pr" /
                           "index.sqlite"),
-          "indexing-off registry produces no hints or refresh database");
+          "indexing-off registry does not create a refresh database");
 
     std::error_code ec;
     fs::remove_all(workspace, ec);
@@ -1308,6 +1349,8 @@ void test_inspect_and_find_tests() {
 
     const std::string helper_search =
         tools.execute("search_symbol", R"JSON({"query":"helper"})JSON");
+    check(helper_search.find("\"importance\"") != std::string::npos,
+          "search_symbol returns static importance");
     const json::ParseResult helper_parsed = json::parse(helper_search);
     long long helper_id = 0;
     long long run_id = 0;
@@ -1335,18 +1378,21 @@ void test_inspect_and_find_tests() {
             run_id = static_cast<long long>(id->number);
     }
     check(helper_id > 0 && run_id > 0,
-          "graph tool fixture symbols have ids");
-    const std::string callers = tools.execute(
-        "find_callers",
+          "inspect fixture symbols have ids");
+    const std::string helper_read = tools.execute(
+        "read_symbol",
         "{\"symbol_id\":" + std::to_string(helper_id) + "}");
-    const std::string callees = tools.execute(
-        "find_callees",
-        "{\"symbol_id\":" + std::to_string(run_id) + "}");
-    check(json_ok(callers) &&
-              callers.find("run_agent_loop") != std::string::npos,
-          "find_callers returns the approximate enclosing caller");
-    check(json_ok(callees) && callees.find("helper") != std::string::npos,
-          "find_callees returns the approximate resolved target");
+    check(json_ok(helper_read) &&
+              helper_read.find("\"importance\"") != std::string::npos &&
+              helper_read.find("caller_count") == std::string::npos,
+          "read_symbol returns importance without graph fields");
+    check(!json_ok(tools.execute(
+              "find_callers",
+              "{\"symbol_id\":" + std::to_string(helper_id) + "}")) &&
+              !json_ok(tools.execute(
+                  "find_callees",
+                  "{\"symbol_id\":" + std::to_string(run_id) + "}")),
+          "removed graph tools are unavailable");
 
     std::error_code ec;
     fs::remove_all(workspace, ec);

@@ -12,8 +12,8 @@
 
 namespace ainiux::agent::index {
 
-inline constexpr int kSchemaVersion = 3;
-inline constexpr int kScannerVersion = 4;
+inline constexpr int kSchemaVersion = 4;
+inline constexpr int kScannerVersion = 5;
 
 enum class Language {
     Markdown,
@@ -53,31 +53,17 @@ struct Symbol {
     int line_start = 1;
     int line_end = 1;
     std::string documentation;
+    int importance = 0;
     std::uint64_t signature_hash = 0;
     std::uint64_t body_hash = 0;
-};
-
-struct Reference {
-    // call | import | include | inherit | instantiate | use
-    std::string kind;
-    std::string target_spelling;
-    std::string qualifier;
-    std::string receiver_type;
-    std::string evidence;
-    int line = 1;
-    // Index into ScanResult::symbols. -1 means file/module scope.
-    int source_symbol_index = -1;
-    // Lexical extraction confidence before project-wide resolution.
-    double confidence = 0.0;
 };
 
 struct ScanResult {
     Language language = Language::Python;
     std::vector<Symbol> symbols;
-    std::vector<Reference> references;
 };
 
-enum class ProgressPhase { Discovery, Scanning, GraphResolution, SnapshotCommit };
+enum class ProgressPhase { Discovery, Scanning, SnapshotCommit, Compaction };
 
 struct Progress {
     ProgressPhase phase = ProgressPhase::Discovery;
@@ -103,6 +89,12 @@ struct Options {
     std::function<void(const Progress&)> on_progress;
 };
 
+struct DiscoveredFile {
+    std::string path;
+    Language language = Language::Python;
+    std::uintmax_t size = 0;
+};
+
 enum class ProbeState { MissingOrIncomplete, Completed, Corrupt };
 
 struct ProbeResult {
@@ -118,7 +110,6 @@ struct RefreshStats {
     std::size_t skipped = 0;
     std::size_t removed = 0;
     std::size_t symbols = 0;
-    std::size_t references = 0;
     std::size_t worker_count = 0;
     long long elapsed_ms = 0;
     std::vector<std::string> diagnostics;
@@ -155,31 +146,6 @@ struct IndexedSymbol {
     Symbol symbol;
 };
 
-struct IndexedReference {
-    long long id = 0;
-    long long source_file_id = 0;
-    long long source_symbol_id = 0;
-    std::string source_path;
-    std::string kind;
-    std::string target_spelling;
-    std::string qualifier;
-    std::string receiver_type;
-    std::string evidence;
-    int line = 1;
-    double confidence = 0.0;
-    long long target_symbol_id = 0;
-    std::string target_path;
-    std::string target_qualified_name;
-    // resolved | ambiguous | unresolved
-    std::string resolution;
-};
-
-struct SymbolScore {
-    long long symbol_id = 0;
-    std::size_t caller_count = 0;
-    double page_rank = 0.0;
-};
-
 struct LanguageTotal {
     Language language = Language::Python;
     std::size_t files = 0;
@@ -192,16 +158,16 @@ struct Snapshot {
     long long updated_at = 0;
     std::vector<IndexedFile> files;
     std::vector<IndexedSymbol> symbols;
-    std::vector<IndexedReference> references;
-    std::vector<SymbolScore> symbol_scores;
     std::vector<LanguageTotal> language_totals;
 };
 
 struct RankedSymbol {
     const IndexedSymbol* symbol = nullptr;
     double score = 0.0;
-    std::size_t caller_count = 0;
+    int importance = 0;
     std::string reason;
+    bool direct_task_match = false;
+    std::size_t matched_task_tokens = 0;
 };
 
 const char* language_name(Language language);
@@ -209,6 +175,10 @@ bool language_for_path(const std::string& path, Language& language);
 ScanResult scan_source(const std::string& path, const std::string& source, Language language);
 
 std::string database_path(const std::string& workspace);
+// Discover the same eligible source paths as refresh(), without probing,
+// opening, creating, or mutating the project index database.
+Error discover_source_files(const Options& options,
+                            std::vector<DiscoveredFile>& files);
 Error clear_database(const Options& options, ClearStats& stats);
 Error probe(const Options& options, ProbeResult& result);
 Error refresh(const Options& options, RefreshStats& stats);
@@ -217,15 +187,8 @@ Error print_markdown(const Options& options, const Freshness& freshness, std::os
 Error load_snapshot(const Options& options, Snapshot& snapshot);
 std::string content_hash(const std::string& content);
 
-std::size_t distinct_caller_count(const Snapshot& snapshot, long long symbol_id);
 std::vector<RankedSymbol> rank_task_symbols(const Snapshot& snapshot,
                                             const std::string& task,
-                                            std::size_t maximum,
-                                            std::size_t seed_maximum = 8);
-std::string format_task_hints(const Snapshot& snapshot,
-                              const std::string& task,
-                              std::size_t max_symbols = 16,
-                              std::size_t max_bytes = 4U * 1024U,
-                              std::size_t seed_maximum = 8);
+                                            std::size_t maximum);
 
 }  // namespace ainiux::agent::index

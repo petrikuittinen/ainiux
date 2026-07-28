@@ -27,6 +27,37 @@ std::string fail_result() {
     return R"({"ok":false,"error":{"code":"not_found","message":"missing"},"data":{},"warnings":[],"truncated":false,"metadata":{}})";
 }
 
+provider::ToolRoundResult native_round(
+    const std::vector<provider::ToolCall>& calls) {
+    provider::ToolRoundResult round;
+    round.tool_calls = calls;
+    json::Value assistant;
+    assistant.type = json::Value::Type::Object;
+    assistant.object["role"].type = json::Value::Type::String;
+    assistant.object["role"].string = "assistant";
+    json::Value tool_calls;
+    tool_calls.type = json::Value::Type::Array;
+    for (const provider::ToolCall& call : calls) {
+        json::Value item;
+        item.type = json::Value::Type::Object;
+        item.object["id"].type = json::Value::Type::String;
+        item.object["id"].string = call.id;
+        item.object["type"].type = json::Value::Type::String;
+        item.object["type"].string = "function";
+        json::Value function;
+        function.type = json::Value::Type::Object;
+        function.object["name"].type = json::Value::Type::String;
+        function.object["name"].string = call.name;
+        function.object["arguments"].type = json::Value::Type::String;
+        function.object["arguments"].string = call.arguments_json;
+        item.object["function"] = std::move(function);
+        tool_calls.array.push_back(std::move(item));
+    }
+    assistant.object["tool_calls"] = std::move(tool_calls);
+    round.continuation_items_json.push_back(json::stringify(assistant));
+    return round;
+}
+
 void test_approval_denial_stops_turn_and_new_user_resets_abort() {
     using namespace ainiux::agent;
     AgentLoopState state;
@@ -43,6 +74,7 @@ void test_approval_denial_stops_turn_and_new_user_resets_abort() {
             return R"({"ok":false,"error":{"code":"unsupported_feature","message":"external remove requires user approval"},"data":{},"warnings":[],"truncated":false,"metadata":{}})";
         });
     check(executions == 1 && denied.kind == AgentRoundOutcome::Kind::FinalText &&
+              denied.tool_calls == 1 && denied.failed_tool_calls == 1 &&
               !state.aborted && state.consecutive_all_failed_turns == 0,
           "declined approval ends the current turn without inviting a workaround");
 
@@ -400,12 +432,121 @@ void test_invalid_args_not_executed() {
                                            {"read_file"}, executor);
     check(outcome.kind == AgentRoundOutcome::Kind::Continue && executions == 0,
           "invalid arguments produce a rich error tool-result without executing the tool");
+    check(outcome.tool_calls == 1 && outcome.failed_tool_calls == 1,
+          "invalid arguments count as one prepared and failed native tool call");
     check(outcome.tool_results.size() == 1 &&
               outcome.tool_results.front().find("received_arguments") != std::string::npos &&
               outcome.tool_results.front().find("@@@") != std::string::npos,
           "rich invalid-arguments result includes the original text");
     check(conversation.continuation_items_json.front().find("@@@") == std::string::npos,
           "provider-facing history uses {} instead of invalid arguments");
+}
+
+void test_tool_result_metrics_cover_native_xml_and_early_exits() {
+    using namespace ainiux::agent;
+    check(normalized_tool_result_ok(ok_result()) &&
+              !normalized_tool_result_ok(fail_result()) &&
+              !normalized_tool_result_ok(R"({"ok":"true"})") &&
+              !normalized_tool_result_ok(R"({"nested":{"ok":true}})") &&
+              !normalized_tool_result_ok("malformed"),
+          "tool success requires a parsed top-level Boolean ok true");
+
+    AgentLoopLimits limits;
+    AgentLoopState native_state;
+    provider::ToolConversation native_conversation;
+    const std::vector<provider::ToolCall> mixed_calls = {
+        {"ok", "read_file", R"({"path":"ok"})", 0},
+        {"failed", "read_file", R"({"path":"failed"})", 1},
+        {"malformed", "read_file", R"({"path":"malformed"})", 2},
+        {"unknown", "missing_tool", "{}", 3}};
+    const AgentRoundOutcome mixed = handle_agent_tool_round(
+        native_state, limits, chat_context(), native_conversation,
+        native_round(mixed_calls), {"read_file"},
+        [](const std::string&, const std::string& arguments,
+           runtime::CancellationToken) {
+            if (arguments.find("\"ok\"") != std::string::npos)
+                return ok_result();
+            if (arguments.find("\"failed\"") != std::string::npos)
+                return fail_result();
+            return std::string("malformed");
+        });
+    check(mixed.kind == AgentRoundOutcome::Kind::Continue &&
+              mixed.tool_calls == 4 && mixed.failed_tool_calls == 3,
+          "mixed native results count execution failures, malformed envelopes, and unknown tools");
+
+    AgentLoopState xml_state;
+    xml_state.protocol = ToolProtocol::Xml;
+    provider::ToolConversation xml_conversation;
+    const AgentRoundOutcome xml = handle_agent_xml_round(
+        xml_state, limits, chat_context(), xml_conversation,
+        R"(<tool_call><name>read_file</name><args>{"path":"ok"}</args></tool_call>)",
+        {"read_file"},
+        [](const std::string&, const std::string&,
+           runtime::CancellationToken) { return ok_result(); });
+    check(xml.kind == AgentRoundOutcome::Kind::Continue &&
+              xml.tool_calls == 1 && xml.failed_tool_calls == 0,
+          "XML calls use the same prepared-call and normalized-result counters");
+
+    runtime::CancellationSource cancelled;
+    cancelled.cancel();
+    AgentLoopState cancelled_state;
+    provider::ToolConversation cancelled_conversation;
+    const AgentRoundOutcome cancelled_outcome = handle_agent_tool_round(
+        cancelled_state, limits, chat_context(), cancelled_conversation,
+        native_round({{"one", "read_file", "{}", 0},
+                      {"two", "read_file", "{}", 1}}),
+        {"read_file"},
+        [](const std::string&, const std::string&,
+           runtime::CancellationToken) { return ok_result(); },
+        cancelled.token());
+    check(cancelled_outcome.kind == AgentRoundOutcome::Kind::Error &&
+              cancelled_outcome.tool_calls == 2 &&
+              cancelled_outcome.failed_tool_calls == 2,
+          "cancellation counts every prepared but uncompleted call as failed");
+
+    runtime::CancellationSource partial_cancel;
+    AgentLoopState partial_state;
+    provider::ToolConversation partial_conversation;
+    int partial_executions = 0;
+    const AgentRoundOutcome partial = handle_agent_tool_round(
+        partial_state, limits, chat_context(), partial_conversation,
+        native_round({{"completed", "read_file", "{}", 0},
+                      {"cancelled", "read_file", "{}", 1}}),
+        {"read_file"},
+        [&](const std::string&, const std::string&,
+            runtime::CancellationToken) {
+            ++partial_executions;
+            partial_cancel.cancel();
+            return ok_result();
+        },
+        partial_cancel.token());
+    check(partial.kind == AgentRoundOutcome::Kind::Error &&
+              partial_executions == 1 && partial.tool_calls == 2 &&
+              partial.failed_tool_calls == 1,
+          "mid-batch cancellation preserves completed successes and fails only remaining calls");
+
+    AgentLoopLimits capped_limits;
+    capped_limits.max_scripted_turns = 0;
+    AgentLoopState capped_state;
+    provider::ToolConversation capped_conversation;
+    const AgentRoundOutcome capped = handle_agent_tool_round(
+        capped_state, capped_limits, chat_context(), capped_conversation,
+        native_round({{"capped", "read_file", "{}", 0}}),
+        {"read_file"}, {});
+    check(capped.kind == AgentRoundOutcome::Kind::Aborted &&
+              capped.tool_calls == 1 && capped.failed_tool_calls == 1,
+          "turn-cap early exits count their synthetic cancelled result as failed");
+
+    provider::ToolRoundResult final_round;
+    final_round.content = "done";
+    AgentLoopState final_state;
+    provider::ToolConversation final_conversation;
+    const AgentRoundOutcome zero = handle_agent_tool_round(
+        final_state, limits, chat_context(), final_conversation,
+        std::move(final_round), {"read_file"}, {});
+    check(zero.kind == AgentRoundOutcome::Kind::FinalText &&
+              zero.tool_calls == 0 && zero.failed_tool_calls == 0,
+          "zero-tool final rounds retain explicit zero counters");
 }
 
 void test_scripted_turn_cap() {
@@ -562,11 +703,11 @@ void test_request_only_context_is_removed_without_history_loss() {
         conversation.continuation_items_json;
     const std::size_t position = agent::append_request_only_context(
         conversation,
-        "[Approximate code-index hints; verify before editing]\nsrc/util.c: add");
+        "[Temporary context]\nsrc/util.c: add");
     check(conversation.continuation_items_json.size() == before.size() + 1 &&
               conversation.continuation_items_json.back().find(
-                  "Approximate code-index hints") != std::string::npos,
-          "request-only index hint is appended after current history");
+                  "Temporary context") != std::string::npos,
+          "request-only context is appended after current history");
     conversation.continuation_items_json.push_back(
         R"({"role":"assistant","content":"later round"})");
     check(agent::remove_request_only_context(conversation, position) &&
@@ -576,7 +717,7 @@ void test_request_only_context_is_removed_without_history_loss() {
               conversation.continuation_items_json[1] == before[1] &&
               conversation.continuation_items_json.back().find(
                   "later round") != std::string::npos,
-          "request-only index hint is removed without discarding tool rounds");
+          "request-only context is removed without discarding tool rounds");
 }
 
 void test_batched_reads_reduce_rounds_and_serialized_request_bytes() {
@@ -620,6 +761,7 @@ void run_all() {
     test_loop_limits_and_no_tool_retry();
     test_protocol_downgrade_and_xml();
     test_invalid_args_not_executed();
+    test_tool_result_metrics_cover_native_xml_and_early_exits();
     test_scripted_turn_cap();
     test_follow_up_user_appends_after_tool_history();
     test_request_only_context_is_removed_without_history_loss();

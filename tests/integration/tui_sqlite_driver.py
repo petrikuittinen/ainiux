@@ -676,6 +676,67 @@ def scenario_corrupt_database(binary, base, model, home_dir):
         raise RuntimeError("expected /list to repeat the saved chat database error")
 
 
+def scenario_agent_deferred_startup_prompt(binary, base, model, home_dir):
+    agent_home = home_dir + "-agent-startup"
+    shutil.rmtree(agent_home, ignore_errors=True)
+    workspace = os.path.join(agent_home, "workspace")
+    os.makedirs(workspace, exist_ok=True)
+
+    env = os.environ.copy()
+    env["HOME"] = agent_home
+    env["TERM"] = env.get("TERM", "xterm-256color")
+    env.setdefault("OPENAI_API_KEY", "integration-test-key")
+    master, slave = pty.openpty()
+    process = subprocess.Popen(
+        [
+            binary,
+            base,
+            "--quiet",
+            "--agent",
+            "--disable-indexing",
+            "--no-stream",
+            "-m",
+            model,
+            "-p",
+            "deferred startup prompt marker",
+        ],
+        cwd=workspace,
+        stdin=slave,
+        stdout=slave,
+        stderr=slave,
+        close_fds=True,
+        env=env,
+    )
+    os.close(slave)
+    transcript = bytearray()
+    deadline = time.time() + 15
+    try:
+        while time.time() < deadline and process.poll() is None:
+            transcript.extend(drain(master, timeout=0.1))
+            if b"Task complete" in transcript:
+                break
+    finally:
+        if process.poll() is None:
+            process.terminate()
+            process.wait(timeout=3)
+        os.close(master)
+
+    if b"Task complete" not in transcript:
+        raise RuntimeError("agent launch-time prompt was dropped during asynchronous preparation")
+
+    project_db = os.path.join(workspace, ".ainiux-pr", "agent.sqlite")
+    conn = query_db(project_db)
+    try:
+        row = conn.execute(
+            "SELECT COUNT(*) AS count FROM messages "
+            "WHERE role = 'user' AND content = 'deferred startup prompt marker'"
+        ).fetchone()
+        if row is None or row["count"] != 1:
+            raise RuntimeError("deferred agent prompt was not persisted exactly once")
+    finally:
+        conn.close()
+
+
 def main():
     if len(sys.argv) < 2:
         print(
@@ -698,6 +759,7 @@ def main():
         "remove": scenario_remove_thread,
         "stale-last": scenario_stale_last_thread,
         "corrupt-db": scenario_corrupt_database,
+        "agent-startup-prompt": scenario_agent_deferred_startup_prompt,
     }
 
     if scenario == "all":

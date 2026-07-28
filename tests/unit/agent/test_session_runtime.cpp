@@ -108,7 +108,8 @@ void test_prepare_with_indexing_disabled_never_touches_index_database() {
     options.interactive = true;
     options.enable_session_db = true;
     options.enable_agent_log = false;
-    options.indexing_enabled = false;
+    options.index_mode =
+        agent::SessionRuntimeOptions::IndexMode::Disabled;
     provider::RequestContext context = offline_context(workspace);
     const Error error = runtime.prepare(context, {}, {}, options);
     check(error.ok() && runtime.prepared(),
@@ -122,6 +123,70 @@ void test_prepare_with_indexing_disabled_never_touches_index_database() {
     runtime.reset();
     std::error_code ec;
     fs::remove_all(workspace, ec);
+}
+
+void test_optional_index_modes_create_refresh_and_fallback() {
+    const std::string missing_workspace = temp_workspace("index-missing");
+    const fs::path missing_database =
+        fs::path(missing_workspace) / ".ainiux-pr" / "index.sqlite";
+    provider::RequestContext context = offline_context(missing_workspace);
+    agent::SessionRuntimeOptions options;
+    options.workspace = missing_workspace;
+    options.enable_session_db = false;
+    options.enable_agent_log = false;
+    options.index_mode =
+        agent::SessionRuntimeOptions::IndexMode::UseExisting;
+    agent::AgentSessionRuntime runtime;
+    Error error = runtime.prepare(context, {}, {}, options);
+    check(error.ok() && runtime.prepared() && !fs::exists(missing_database),
+          "headless-style use-existing mode continues without creating a missing index");
+    runtime.reset();
+
+    options.index_mode =
+        agent::SessionRuntimeOptions::IndexMode::CreateOrRefresh;
+    error = runtime.prepare(context, {}, {}, options);
+    check(error.ok() && fs::exists(missing_database),
+          "interactive create/refresh mode creates a missing index");
+    runtime.reset();
+
+    {
+        std::ofstream out(fs::path(missing_workspace) / "src" / "hello.cpp",
+                          std::ios::app);
+        out << "int changed() { return 1; }\n";
+    }
+    options.index_mode =
+        agent::SessionRuntimeOptions::IndexMode::UseExisting;
+    error = runtime.prepare(context, {}, {}, options);
+    ainiux::agent::index::Options index_options;
+    index_options.workspace = missing_workspace;
+    ainiux::agent::index::Freshness freshness;
+    const Error freshness_error =
+        ainiux::agent::index::check_freshness(index_options, freshness);
+    check(error.ok() && freshness_error.ok() && freshness.fresh,
+          "use-existing mode refreshes an existing index");
+    runtime.reset();
+
+    const std::string corrupt_workspace = temp_workspace("index-corrupt");
+    const fs::path corrupt_database =
+        fs::path(corrupt_workspace) / ".ainiux-pr" / "index.sqlite";
+    fs::create_directories(corrupt_database.parent_path());
+    {
+        std::ofstream out(corrupt_database, std::ios::binary);
+        out << "not sqlite";
+    }
+    const auto corrupt_size = fs::file_size(corrupt_database);
+    context = offline_context(corrupt_workspace);
+    options.workspace = corrupt_workspace;
+    error = runtime.prepare(context, {}, {}, options);
+    check(error.ok() && runtime.prepared() &&
+              fs::file_size(corrupt_database) == corrupt_size,
+          "optional corrupt-index failure falls back without rewriting the index");
+    runtime.reset();
+
+    std::error_code ec;
+    fs::remove_all(missing_workspace, ec);
+    ec.clear();
+    fs::remove_all(corrupt_workspace, ec);
 }
 
 void test_agent_token_usage_aggregation_is_bounded() {
@@ -171,10 +236,17 @@ void test_agent_token_usage_aggregation_is_bounded() {
 
     app::AgentGoalResult run;
     run.token_usage = fallback;
+    run.tool_calls = 42;
+    run.failed_tool_calls = 3;
     run.elapsed_ms = 6540;
     check(app::format_agent_run_metrics(run) ==
-              "Agent metrics: input 250 tokens (estimated), output 11 tokens (estimated), time 6.54 s",
-          "one-shot agent metrics format includes input, output, estimate labels, and time");
+              "Agent metrics: tool calls 42 (3 failed), input 250 tokens (estimated), output 11 tokens (estimated), time 6.54 s",
+          "one-shot agent metrics format includes tool failures, tokens, estimate labels, and time");
+    run.tool_calls = 0;
+    run.failed_tool_calls = 0;
+    check(app::format_agent_run_metrics(run).find(
+              "tool calls 0 (0 failed)") != std::string::npos,
+          "one-shot agent metrics always prints zero tool failures");
 }
 
 void test_task_mode_switch_is_session_scoped_and_failure_safe() {
@@ -429,6 +501,7 @@ void run_all() {
     test_prepare_opens_session_db_and_tools();
     test_empty_turn_rejected_when_unprepared();
     test_prepare_with_indexing_disabled_never_touches_index_database();
+    test_optional_index_modes_create_refresh_and_fallback();
     test_agent_token_usage_aggregation_is_bounded();
     test_task_mode_switch_is_session_scoped_and_failure_safe();
     test_prepare_loads_existing_display_history();

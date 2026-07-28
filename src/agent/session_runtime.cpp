@@ -326,7 +326,10 @@ SessionProjectReplaceResult AgentSessionRuntime::replace_project(
     new_options.task_mode = AgentTaskMode::Act;
     new_options.permission_mode = PermissionMode::Smart;
     if (indexing_enabled.has_value())
-        new_options.indexing_enabled = *indexing_enabled;
+        new_options.index_mode =
+            *indexing_enabled
+                ? SessionRuntimeOptions::IndexMode::CreateOrRefresh
+                : SessionRuntimeOptions::IndexMode::Disabled;
     provider::RequestContext quiet_context = context;
     quiet_context.options.quiet = true;
 
@@ -456,6 +459,7 @@ void AgentSessionRuntime::reset() {
     session_id_ = 0;
     session_turns_ = 0;
     session_tool_calls_ = 0;
+    session_failed_tool_calls_ = 0;
     conversation_seeded_ = false;
     prepared_ = false;
     options_ = SessionRuntimeOptions{};
@@ -520,17 +524,45 @@ Error AgentSessionRuntime::prepare(const provider::RequestContext& context,
     index_options.on_progress = options_.on_index_progress;
     index::RefreshStats index_stats;
     Error error = ok_error();
-    if (options_.indexing_enabled)
-        error = index::refresh(index_options, index_stats);
+    bool indexing_enabled = false;
+    const bool indexing_requested =
+        options_.index_mode != SessionRuntimeOptions::IndexMode::Disabled;
+    if (indexing_requested) {
+        index::ProbeResult probe;
+        error = index::probe(index_options, probe);
+        if (error.ok() && probe.state == index::ProbeState::Corrupt)
+            error = probe.error;
+        if (error.ok() &&
+            probe.state == index::ProbeState::MissingOrIncomplete &&
+            options_.index_mode ==
+                SessionRuntimeOptions::IndexMode::UseExisting) {
+            if (!context.options.quiet)
+                std::cerr << "Code index not found; continuing without indexed tools.\n";
+        } else if (error.ok()) {
+            error = index::refresh(index_options, index_stats);
+            indexing_enabled = error.ok();
+        }
+        if (!error.ok()) {
+            if (error.code == ErrorCode::Cancelled) {
+                reset();
+                return error;
+            }
+            if (!context.options.quiet)
+                std::cerr << "Index warning: "
+                          << redact_secrets(error.message, secrets_)
+                          << "; continuing with live filesystem tools.\n";
+            error = ok_error();
+            indexing_enabled = false;
+        }
+    }
     if (logger_) {
         json::Value fields = log_object();
         fields.object["indexing_enabled"] =
-            log_bool(options_.indexing_enabled);
+            log_bool(indexing_enabled);
         fields.object["discovered"] = log_number(index_stats.discovered);
         fields.object["indexed"] = log_number(index_stats.indexed);
         fields.object["unchanged"] = log_number(index_stats.unchanged);
         fields.object["skipped"] = log_number(index_stats.skipped);
-        fields.object["references"] = log_number(index_stats.references);
         if (!error.ok()) {
             fields.object["error_code"] = log_string(error_code_name(error.code));
             fields.object["error_message"] = log_string(error.message);
@@ -538,25 +570,28 @@ Error AgentSessionRuntime::prepare(const provider::RequestContext& context,
         logger_->event("index_result", {"index"}, std::move(fields),
                        error.ok() ? "success" : "failure");
     }
-    if (!error.ok()) {
-        reset();
-        return error;
-    }
-    if (!context.options.quiet && options_.indexing_enabled) {
+    if (!context.options.quiet && indexing_enabled) {
         for (const std::string& diagnostic : index_stats.diagnostics)
             std::cerr << "Index warning: " << redact_secrets(diagnostic, secrets_) << "\n";
         std::cerr << "Code index refreshed: " << index_stats.discovered << " eligible, "
                   << index_stats.indexed << " indexed, " << index_stats.unchanged
-                  << " unchanged, " << index_stats.skipped << " skipped, "
-                  << index_stats.references << " references extracted.\n";
+                  << " unchanged, " << index_stats.skipped << " skipped.\n";
     }
 
     index::Snapshot snapshot;
-    if (options_.indexing_enabled) {
+    if (indexing_enabled) {
         error = index::load_snapshot(index_options, snapshot);
         if (!error.ok()) {
-            reset();
-            return error;
+            if (error.code == ErrorCode::Cancelled) {
+                reset();
+                return error;
+            }
+            if (!context.options.quiet)
+                std::cerr << "Index warning: "
+                          << redact_secrets(error.message, secrets_)
+                          << "; continuing with live filesystem tools.\n";
+            error = ok_error();
+            indexing_enabled = false;
         }
     }
 
@@ -570,7 +605,7 @@ Error AgentSessionRuntime::prepare(const provider::RequestContext& context,
     tool_options.search_options = options_.search_options;
     tool_options.permission_mode = permission_mode_;
     tool_options.permission_controls = options_.interactive;
-    tool_options.indexing_enabled = options_.indexing_enabled;
+    tool_options.indexing_enabled = indexing_enabled;
     // Wrap Ask so every resolution is persisted and optionally surfaced.
     if (options_.on_guard_ask) {
         tool_options.on_guard_ask =
@@ -610,12 +645,12 @@ Error AgentSessionRuntime::prepare(const provider::RequestContext& context,
             return decision;
         };
     }
-    if (options_.indexing_enabled) {
+    if (indexing_enabled) {
         error = ReadToolRegistry::create(index_options, std::move(snapshot),
                                          secrets_, tools_, tool_options);
     } else {
         error = ReadToolRegistry::create_without_index(
-            options_.workspace, secrets_, tools_, tool_options);
+            index_options, secrets_, tools_, tool_options);
     }
     if (!error.ok()) {
         reset();
@@ -822,6 +857,8 @@ Error AgentSessionRuntime::finish_session(const std::string& status,
         fields.object["status"] = log_string(status);
         fields.object["turns"] = log_number(session_turns_);
         fields.object["tool_calls"] = log_number(session_tool_calls_);
+        fields.object["failed_tool_calls"] =
+            log_number(session_failed_tool_calls_);
         logger_->event("session_finish", {"session"}, std::move(fields),
                        error.ok() ? "success" : "failure");
         logger_->finish(log_object(), status == "success" ? "success" : "failure");
@@ -1014,42 +1051,6 @@ SessionTurnResult AgentSessionRuntime::run_user_turn(
         }
     }
 
-    // Local, deterministic orientation for this user turn. It is appended after
-    // the active user message (and prior tool history), remains visible through
-    // all tool rounds, then is erased before this function returns. It is never
-    // written to agent.sqlite or shown in the transcript.
-    const std::string index_hints =
-        tools_.task_hints(text, options_.code_index_hint_max_symbols,
-                          options_.code_index_hint_max_bytes,
-                          options_.code_index_hint_seed_symbols, cancellation);
-    std::size_t index_hint_position = 0;
-    bool index_hint_active = false;
-    if (!index_hints.empty()) {
-        index_hint_position =
-            append_request_only_context(conversation_, index_hints);
-        index_hint_active = true;
-        publish_request_token_estimate();
-        if (logger_) {
-            json::Value fields = log_object();
-            fields.object["bytes"] = log_number(index_hints.size());
-            logger_->event("code_index_hints", {"index"}, std::move(fields),
-                           "success");
-        }
-    }
-    struct RemoveRequestOnlyHint {
-        provider::ToolConversation& conversation;
-        std::size_t position = 0;
-        bool& active;
-        std::function<void()> after_remove;
-        ~RemoveRequestOnlyHint() {
-            if (!active) return;
-            (void)remove_request_only_context(conversation, position);
-            active = false;
-            if (after_remove) after_remove();
-        }
-    } remove_index_hint{conversation_, index_hint_position, index_hint_active,
-                        [this] { publish_request_token_estimate(); }};
-
     const std::size_t log_width = terminal_column_count();
     const std::size_t tool_line_width = log_width > 8 ? log_width : 8;
     std::size_t turn_tool_index = 0;
@@ -1108,8 +1109,33 @@ SessionTurnResult AgentSessionRuntime::run_user_turn(
     };
 
     std::size_t turn_tool_calls = 0;
+    std::size_t turn_failed_tool_calls = 0;
     std::string final_text;
     const std::size_t turns_before = state_.turn;
+    bool counts_committed = false;
+    auto commit_turn_counts = [&]() {
+        if (!counts_committed) {
+            session_turns_ = state_.turn;
+            session_tool_calls_ += turn_tool_calls;
+            session_failed_tool_calls_ += turn_failed_tool_calls;
+            counts_committed = true;
+        }
+        result.turns = state_.turn - turns_before;
+        result.tool_calls = turn_tool_calls;
+        result.failed_tool_calls = turn_failed_tool_calls;
+        result.session_turns = session_turns_;
+        result.session_tool_calls = session_tool_calls_;
+        result.session_failed_tool_calls = session_failed_tool_calls_;
+    };
+    auto log_turn_summary = [&](const std::string& status) {
+        if (!logger_) return;
+        json::Value fields = log_object();
+        fields.object["turns"] = log_number(state_.turn - turns_before);
+        fields.object["tool_calls"] = log_number(turn_tool_calls);
+        fields.object["failed_tool_calls"] =
+            log_number(turn_failed_tool_calls);
+        logger_->event("agent_turn", {"agent"}, std::move(fields), status);
+    };
     // The scripted-round cap is per user-approved task segment. Keep
     // state_.turn cumulative for logs/session statistics.
     for (;;) {
@@ -1118,11 +1144,9 @@ SessionTurnResult AgentSessionRuntime::run_user_turn(
             publish_request_token_estimate();
             result.error = {ErrorCode::Cancelled, "agent run cancelled"};
             result.final_text = final_text;
-            result.turns = state_.turn - turns_before;
-            result.tool_calls = turn_tool_calls;
-            result.session_turns = session_turns_;
-            result.session_tool_calls = session_tool_calls_;
+            commit_turn_counts();
             result.finished_at_ms = now_unix_ms();
+            log_turn_summary("failure");
             log_token_usage();
             return result;
         }
@@ -1197,11 +1221,9 @@ SessionTurnResult AgentSessionRuntime::run_user_turn(
             publish_request_token_estimate();
             result.error = error;
             result.final_text = final_text;
-            result.turns = state_.turn - turns_before;
-            result.tool_calls = turn_tool_calls;
-            result.session_turns = session_turns_;
-            result.session_tool_calls = session_tool_calls_;
+            commit_turn_counts();
             result.finished_at_ms = now_unix_ms();
+            log_turn_summary("failure");
             log_token_usage();
             return result;
         }
@@ -1243,7 +1265,6 @@ SessionTurnResult AgentSessionRuntime::run_user_turn(
                 estimated_round_output_tokens = estimate_tokens_from_text(round.content);
         }
 
-        turn_tool_calls += round.tool_calls.size();
         if (!round.tool_calls.empty()) publish_phase(AgentActivityPhase::Working);
         accumulate_agent_token_usage(round.metrics, result.token_usage,
                                      estimated_round_input_tokens,
@@ -1252,6 +1273,8 @@ SessionTurnResult AgentSessionRuntime::run_user_turn(
         AgentRoundOutcome outcome = handle_agent_tool_round(
             state_, limits_, context, conversation_, std::move(round), known_tools_, executor,
             cancellation);
+        turn_tool_calls += outcome.tool_calls;
+        turn_failed_tool_calls += outcome.failed_tool_calls;
         // Conversation grew (assistant/tool items); publish for TUI chrome.
         publish_request_token_estimate();
 
@@ -1264,6 +1287,9 @@ SessionTurnResult AgentSessionRuntime::run_user_turn(
                 : outcome.kind == AgentRoundOutcome::Kind::NeedsUserContinue ? "needs_user_continue"
                                                                             : "error");
             fields.object["tool_result_count"] = log_number(outcome.tool_results.size());
+            fields.object["tool_calls"] = log_number(outcome.tool_calls);
+            fields.object["failed_tool_calls"] =
+                log_number(outcome.failed_tool_calls);
             fields.object["protocol"] =
                 log_string(state_.protocol == ToolProtocol::Xml ? "xml" : "native");
             fields.object["input_tokens"] = log_number(round_metrics.prompt_tokens);
@@ -1299,7 +1325,12 @@ SessionTurnResult AgentSessionRuntime::run_user_turn(
                 if (i < outcome.tool_results.size())
                     tool_fields.object["result"] =
                         ReviewLogger::payload(outcome.tool_results[i]);
-                logger_->event("tool_result", log_context, std::move(tool_fields), "success");
+                const bool tool_ok =
+                    i < outcome.tool_results.size() &&
+                    normalized_tool_result_ok(outcome.tool_results[i]);
+                logger_->event("tool_result", log_context,
+                               std::move(tool_fields),
+                               tool_ok ? "success" : "failure");
             }
         }
 
@@ -1314,9 +1345,8 @@ SessionTurnResult AgentSessionRuntime::run_user_turn(
             for (std::size_t i = 0; i < outcome.prepared_calls.size(); ++i) {
                 const std::string& result_body =
                     i < outcome.tool_results.size() ? outcome.tool_results[i] : std::string{};
-                const bool tool_ok = result_body.find("\"ok\":true") != std::string::npos ||
-                                     result_body.find("\"ok\": true") != std::string::npos ||
-                                     result_body.empty();
+                const bool tool_ok =
+                    normalized_tool_result_ok(result_body);
                 Error tool_error = session_store_.append_tool_event(
                     session_id_, static_cast<long long>(state_.turn),
                     outcome.prepared_calls[i].id, outcome.prepared_calls[i].name,
@@ -1343,8 +1373,8 @@ SessionTurnResult AgentSessionRuntime::run_user_turn(
                         progress_line << " " << outcome.prepared_calls[i].name;
                         if (i < outcome.tool_results.size()) {
                             const std::string& body = outcome.tool_results[i];
-                            const bool ok = body.find("\"ok\":true") != std::string::npos ||
-                                            body.find("\"ok\": true") != std::string::npos;
+                            const bool ok =
+                                normalized_tool_result_ok(body);
                             progress_line << (ok ? "[ok]" : "[err]");
                         }
                     }
@@ -1370,12 +1400,7 @@ SessionTurnResult AgentSessionRuntime::run_user_turn(
 
         if (outcome.kind == AgentRoundOutcome::Kind::Continue) continue;
 
-        session_turns_ = state_.turn;
-        session_tool_calls_ += turn_tool_calls;
-        result.turns = state_.turn - turns_before;
-        result.tool_calls = turn_tool_calls;
-        result.session_turns = session_turns_;
-        result.session_tool_calls = session_tool_calls_;
+        commit_turn_counts();
 
         if (outcome.kind == AgentRoundOutcome::Kind::FinalText) {
             final_text = outcome.final_text;
@@ -1409,6 +1434,7 @@ SessionTurnResult AgentSessionRuntime::run_user_turn(
                               << redact_secrets(assistant_error.message, secrets_) << "\n";
             }
             publish_request_token_estimate();
+            log_turn_summary("success");
             log_token_usage();
             return result;
         }
@@ -1426,6 +1452,7 @@ SessionTurnResult AgentSessionRuntime::run_user_turn(
                                                     redact_secrets(result.notice, secrets_));
             }
             publish_request_token_estimate();
+            log_turn_summary("success");
             log_token_usage();
             return result;
         }
@@ -1448,6 +1475,7 @@ SessionTurnResult AgentSessionRuntime::run_user_turn(
             (void)session_store_.append_message("notice",
                                                 redact_secrets(result.notice, secrets_));
         }
+        log_turn_summary("failure");
         log_token_usage();
         return result;
     }

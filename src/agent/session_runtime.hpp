@@ -50,8 +50,10 @@ struct SessionTurnResult {
     std::string final_text;
     std::size_t turns = 0;        // model rounds this turn
     std::size_t tool_calls = 0;   // tool calls this turn
+    std::size_t failed_tool_calls = 0;
     std::size_t session_turns = 0;
     std::size_t session_tool_calls = 0;
+    std::size_t session_failed_tool_calls = 0;
     AgentTokenUsage token_usage;
     bool needs_user_continue = false;
     std::string notice;
@@ -89,10 +91,8 @@ struct SessionRuntimeOptions {
     HistoryBackupPolicy history_backup;
     bool auto_compact = true;
     int compact_limit = 0;  // 0 = derive from window
-    std::size_t code_index_hint_max_symbols = 16;
-    std::size_t code_index_hint_max_bytes = 4U * 1024U;
-    std::size_t code_index_hint_seed_symbols = 8;
-    bool indexing_enabled = true;
+    enum class IndexMode { Disabled, UseExisting, CreateOrRefresh };
+    IndexMode index_mode = IndexMode::UseExisting;
     std::function<void(const index::Progress&)> on_index_progress;
     bool show_command_output = false;
     // Headless callers always use Smart and retain Ask→Deny through an empty
@@ -125,6 +125,9 @@ class AgentSessionRuntime {
     PermissionMode permission_mode() const { return permission_mode_; }
     std::size_t session_turns() const { return session_turns_; }
     std::size_t session_tool_calls() const { return session_tool_calls_; }
+    std::size_t session_failed_tool_calls() const {
+        return session_failed_tool_calls_;
+    }
 
     // Thread-safe: returns last published estimate (worker updates only).
     // Never walks conversation_ from the UI thread — that races with run_user_turn.
@@ -225,6 +228,7 @@ class AgentSessionRuntime {
     std::vector<std::string> known_tools_;
     std::size_t session_turns_ = 0;
     std::size_t session_tool_calls_ = 0;
+    std::size_t session_failed_tool_calls_ = 0;
     // Published by the agent worker; read by the TUI render path without locking conversation_.
     mutable std::atomic<long long> cached_request_tokens_{0};
     // Total steady-clock time spent waiting for interactive Guard decisions.

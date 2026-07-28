@@ -37,7 +37,7 @@ error layers should serve:
 | v0.9 | Benchmark calibration, refactor hygiene, TUI/CLI/editor polish | Remaining work continues |
 | v0.90 | Local OpenAI-compatible server | Deferred behind v1.1 |
 | v1.0–v1.10 | Local agent foundation and hardening | Landed through v1.10 |
-| **v1.1** | **Approximate caller graph, smarter indexing, automatic code-index hints, later `/goal`, `/loop`, and sub-agents** | **Next priority** |
+| **v1.1** | **Lightweight definition ranking and index tuning; later `/goal`, `/loop`, and sub-agents** | **Next priority** |
 | **v1.2** | **Image generation across CLI and interactive surfaces** | Planned after v1.1 |
 
 Each milestone must leave ordinary CLI chat and existing interactive modes usable.
@@ -64,11 +64,9 @@ The shipped product includes:
 - OpenRouter, OpenAI, and DeepSeek credit display when the selected key can query it
 - a fast project-local symbol index with incremental discovery and lightweight scanners
 
-The current v1.1 review slice stores files, symbols, and confidence-scored references
-for Python, C, and C++. It resolves common callers/callees, persists distinct caller
-counts plus secondary PageRank, injects bounded request-only task hints, and exposes
-`find_callers` / `find_callees`. JavaScript/TypeScript, Java/C#, Go, Rust, and other
-languages remain definitions-only until this first slice is tested and reviewed.
+The current v1.1 index stores files and definitions for every supported scanner
+language, plus static declaration importance. It intentionally has no reference
+graph or automatic model-context hints.
 
 ## Compact release history
 
@@ -94,354 +92,30 @@ languages remain definitions-only until this first slice is tested and reviewed.
 | v1.07 | Session-scoped Act/Plan modes |
 | v1.08 | Provider reasoning previews and in-place activity rows |
 | v1.09 | Stable prompt caching/accounting, Smart read-only commands, and context polish |
-| v1.10 | Python/C/C++ caller graphs, graph-guided request hints, and incremental index refresh |
+| v1.10 | Lightweight definition importance, optional index startup, mutation-aware refresh, and one-shot tool metrics |
 
 Historical implementation details remain available in Git history and the dated
 notes in `README.md` and `docs/decisions.md`.
 
-# v1.1 - Smarter agent indexing and graph-guided context
+# v1.1 - Lightweight smarter agent indexing
 
-## Implementation checkpoint: Python, C, and C++ review slice
+## Current implementation
 
-Landed for review:
+The project index remains a fast, optional definitions-only navigation aid across every v1.00 scanner language. SQLite stores metadata, files, and symbols with a compact 0–100 static importance score computed during the existing definition scan from declaration kind, visibility, and scope. It stores no references, evidence, call edges, caller counts, or graph scores.
 
-- schema v3 raw/resolved references and per-symbol scores, migrated by normal refresh
-- Python/C/C++ calls, imports/includes, inheritance, instantiation, and simple receiver inference
-- global transactional re-resolution, explicit unresolved/ambiguous rows, caller counts, and deterministic PageRank
-- task-aware ranking plus bounded `[Approximate code-index hints; verify before editing]` request context
-- `find_callers`, `find_callees`, and graph-enriched overview/symbol/task tools
-- immediate live touched-file rescans, a cancellable/coalescing persistence worker, command freshness checks, and final task refresh
-- approximately 75% core use for multi-file discovery/scanning
+Lexical relevance is authoritative: full-name matches rank above exact identifier components, which rank above component-prefix matches. Multi-token coverage is preserved, importance orders only otherwise comparable hits, and path/line/ID ties are deterministic. `project_overview`, `search_symbol`, `get_skeleton`, `read_symbol`, `find_tests`, `inspect_code_task`, index management, and `replace_symbol` remain available; caller/callee tools and automatic provider-context hints are absent.
 
-This checkpoint intentionally stops before adding the remaining acceptance languages
-so the ranking quality, false positives, hint size, and mutation behavior can be tested
-and reviewed first.
+Interactive Agent refreshes a completed index automatically and prompts with Enter/Y as the default before creating a missing one; N/Esc continues unindexed. Headless Run and Plan refresh and use an existing index but never create a missing one. Optional probe, refresh, and load failures warn and fall back to live filesystem tools, while cancellation cancels the operation. `--disable-indexing` performs no index probe or mutation. Direct index commands and security review remain strict.
 
-## Goal
+Schema versions 1–3 migrate transactionally by rescanning definitions, adding importance, and dropping `refs` and `symbol_scores`. Cancellation before commit preserves the previous completed snapshot. A cancellable post-commit SQLite compaction reclaims obsolete graph storage; compaction failure leaves the migrated index valid and emits a warning.
 
-Make the local agent reach useful source code with fewer model rounds, fewer tool
-calls, and less context. Extend the existing fast symbol index with an approximate
-reference graph, then automatically inject a tiny task-aware orientation block before
-the model begins tool work.
+## Next tuning
 
-This is deliberately an 80/20 system. It must remain fast, local, dependency-light,
-and honest about uncertainty. Compiler-grade parsing and complete dynamic-language
-resolution are not required.
-
-## Why this is next
-
-`glob`, `search_text`, and `read_file` are already fast locally. The expensive part is
-often the sequence of model round trips required to discover the same relationships.
-A compact local hint can eliminate several search/read turns, while reverse callers
-provide change-impact information that raw text search does not organize.
-
-Success is not “the model used more index tools.” Success is:
-
-- fewer model/tool rounds before the first relevant read or edit
-- fewer full-file reads and fewer prompt tokens
-- better discovery of callers and likely affected tests
-- no meaningful regression in final correctness
-
-## Current foundation to reuse
-
-Keep and extend the existing `src/agent/index/` scanners, `.ainiux-pr/index.sqlite`,
-`index::Snapshot`, agent runtime, tool registry, cancellation layer, and guarded
-mutation paths.
-
-Current behavior already:
-
-- incrementally refreshes the persistent index at agent startup
-- avoids reopening unchanged size/mtime matches
-- scans changed files through a bounded worker pool
-- commits a completed refresh transactionally
-- rescans a file in the live in-memory snapshot after native agent mutations
-- treats symbol ranges and names as hints that must be verified against current source
-
-Landed diagnostics/A-B controls add foreground phase/file progress, read-only index-state probing, compact reference/caller/PageRank reporting, interactive missing-index confirmation, strict session-scoped `--disable-indexing`, and the 8-seed/16-symbol/4-KiB request-only hint defaults.
-
-Do not introduce a language-server, compiler frontend, embedding service, or model call
-into indexing.
-
-## Reference graph
-
-Extend the index schema with confidence-scored references. A reference should retain:
-
-```text
-source file
-source/enclosing symbol when known
-target spelling
-resolved target symbol when known
-kind
-source line
-confidence
-optional receiver/type/import evidence
-```
-
-Initial edge kinds:
-
-```text
-call
-import
-include
-inherit
-instantiate
-use
-```
-
-Unresolved references remain useful records. Do not force a target when a common name,
-overload, dynamic dispatch, or missing import makes resolution ambiguous.
-
-Suggested confidence interpretation:
-
-- exact qualified or unique imported resolution: high confidence
-- unique same-file or same-scope name: medium/high confidence
-- simple inferred receiver type: medium confidence
-- ambiguous lexical call-like occurrence: low confidence or unresolved
-
-Every graph consumer must expose that the result is approximate.
-
-## Scanner priorities
-
-First acceptance set:
-
-- C and C++
-- Python
-- JavaScript and TypeScript
-- Java and C#
-- Go
-- Rust
-
-Add inexpensive rules for PHP, Perl, Ruby, Bash, and other existing programming
-scanners where they are reliable. Markdown, markup, stylesheet, data, and
-configuration scanners may remain definitions-only unless a relationship is both
-cheap and useful.
-
-Common cases to recognize:
-
-- direct global and namespace-qualified calls
-- imports/includes/use statements and package/module relationships
-- constructors and simple inheritance declarations
-- `this.method()`, `self.method()`, and static `Class.method()` calls
-- simple lexical receiver inference, for example:
-
-```javascript
-const spaceShip = new Sprite(...);
-spaceShip.draw();
-```
-
-The scanner may associate `spaceShip.draw()` with `Sprite::draw` when scope and naming
-make that a reasonable hint. It must not attempt complete dynamic data-flow,
-reflection, prototype-chain, macro, or runtime dependency resolution.
-
-## Resolution and stable graph updates
-
-Separate source extraction from graph resolution:
-
-1. A changed file is read and scanned once.
-2. Its definitions and raw references replace the previous rows atomically.
-3. A resolver uses all stored definitions/import evidence to update affected edges.
-4. Incoming and outgoing graph views are published only as a complete snapshot.
-
-Do not leave dangling references when symbol rows are replaced. Use a stable symbol
-identity/key during resolution or rebuild affected edges in the same committed update;
-database row IDs alone must not be assumed stable across rescans.
-
-Changing a definition can affect references stored in untouched files. Re-resolve the
-affected target-name/import buckets without reparsing those files. A global lightweight
-resolver pass is acceptable when cheaper than maintaining exact dependency buckets.
-
-## Ranking
-
-Keep these concepts distinct:
-
-- **distinct caller count:** transparent change-impact signal
-- **global PageRank:** weak architectural/centrality prior
-- **task match:** symbol, qualified-name, path, and identifier-token relevance
-- **graph proximity:** callers, callees, imports, owners, and likely tests near task seeds
-
-Global PageRank must not be the primary task ranking. It tends to favor low-level
-utilities and framework plumbing while under-ranking entry points and dynamically
-selected code.
-
-Task ranking should combine:
-
-```text
-symbol/path task match
-graph proximity from the strongest task matches
-distinct caller count
-small global PageRank contribution
-entry-point/export/test signals
-recently touched signal
-```
-
-Use PageRank internally; the model-facing result normally needs caller counts and a
-short reason, not an opaque floating-point rank.
-
-## Automatic context hints
-
-Before the first provider request of **every agent user turn**, compute a bounded local
-orientation block:
-
-```text
-[Approximate code-index hints; verify before editing]
-Task matches:
-src/provider/provider.cpp: parse_credit_summary (lines 691-766; 4 callers)
-src/tui/run.cpp: start_credit_lookup (lines 1320-1371; 2 callers)
-
-Related/high-impact:
-tests/unit/provider/test_provider.cpp: test_credit_summary (lines 410-468)
-```
-
-Requirements:
-
-- make no provider/model call to produce the block
-- use the current user request as the task-ranking seed
-- prefer task-relevant symbols, direct graph neighbors, and likely tests
-- fall back to a few global architectural anchors only when task matching is weak
-- use configurable small symbol/byte/graph-seed budgets and deterministic ordering
-- omit the block when the index has no useful result
-- label it exactly as approximate and instruct the model to verify before editing
-- include path, qualified symbol name, line range, and caller count where available
-- never include raw PageRank values merely because they exist
-
-The hint is request-only context for the active turn:
-
-- it is available before the model chooses its first tool
-- it remains available through that turn's tool rounds
-- it is replaced for a later user turn rather than accumulated
-- it is not written as a durable user/assistant transcript message
-- it is excluded from transcript display and compaction history
-- it can be regenerated after reopen or `/compact` from the current index
-
-Do not expand or rewrite the built-in agent system prompt as part of this milestone.
-The user will separately redesign prompt/tool-selection guidance for small local
-models.
-
-## Tool integration
-
-Add:
-
-- `find_callers`
-- `find_callees`
-
-Improve existing tools:
-
-- `search_symbol`: include caller count and graph-aware tie-breaking
-- `read_symbol`: include a bounded caller/callee impact summary
-- `inspect_code_task`: use task matches plus graph proximity rather than token matching alone
-- `project_overview`: include a tiny central/entry-point summary
-- `search_text`: where cheap, identify the enclosing indexed symbol for each match
-
-The automatic hint is the primary delivery mechanism. New tools remain useful for
-deeper inspection but the model must not be required to call them to receive basic
-orientation.
-
-## Freshness and background work
-
-Use mutation-aware refresh rather than checking the filesystem after every pure read:
-
-- Native agent writes/edits/removals immediately update or invalidate the exact touched
-  files in the live snapshot so subsequent tools observe the new content.
-- Queue the persistent definition/reference/graph update for those exact paths through
-  one cancellable, coalescing index job.
-- After a command capable of modifying or generating source, run an incremental
-  filesystem freshness check.
-- Before graph-backed queries, consume a completed newer snapshot when available and
-  otherwise report bounded staleness rather than racing shared mutable state.
-- At task completion, run a full-tree incremental freshness pass and wait for its final
-  transaction; only changed files are reparsed.
-- Keep forced full rebuild for schema/scanner-version changes, corruption recovery, or
-  explicit user action. Do not force a full reparse merely because a project is below a
-  line-count threshold.
-
-Full/multi-file scans may use at most approximately 75% of available hardware threads,
-with at least one worker and a conservative safety cap. Single-file refreshes should
-avoid unnecessary thread creation. Index jobs must be cancellable and owned through
-RAII; shutdown cancels or joins them without leaking workers, SQLite handles, or
-snapshots.
-
-## Measurement and tuning
-
-Create repeatable before/after agent tasks across small, medium, and large repositories.
-Record:
-
-- model rounds before first relevant source read
-- model rounds before first edit
-- number and type of tool calls
-- full-file versus range/symbol reads
-- request bytes and estimated/provider-reported tokens
-- wall time to first useful edit and final result
-- relevant callers/tests missed
-- index startup, touched-file, resolver, PageRank, and final freshness latency
-- false-positive graph hints and fallback use
-- final test/task correctness
-
-Tune output caps and ranking only from representative measurements. A graph feature that
-adds context without reducing navigation work is not successful.
-
-## Tests
-
-Add focused coverage for:
-
-- schema migration from the current files/symbols-only database
-- extraction, resolution confidence, and unresolved references
-- direct calls, imports, inheritance, instantiation, and simple receiver inference
-- duplicate names, overloads, shadowing, ambiguous receivers, and dynamic-call fallback
-- callers/callees across files and likely-test relationships
-- deterministic PageRank and task ranking
-- bounded/deterministic automatic hint formatting
-- one hint per user turn, replacement without transcript persistence, reopen, and compact
-- touched-file updates, removals, renames, command-generated changes, and final freshness
-- cancellation before commit and preservation of the previous complete snapshot
-- concurrency limits, coalescing, shutdown/join, and SQLite/resource cleanup
-- agent comparisons showing fewer navigation calls without correctness regression
-
-Follow the repository slow-test policy. Ordinary implementation slices should run the
-nearest unit coverage; integration, sanitizer, and leak suites remain opt-in unless
-directly relevant or explicitly requested.
-
-## Acceptance criteria
-
-- Common static callers/callees resolve usefully across the first acceptance languages.
-- Ambiguous/dynamic cases remain confidence-scored hints and never masquerade as proof.
-- Every agent user turn can receive a small task-aware index block before its first
-  provider request without an additional model call.
-- Hints are request-only, bounded, deterministic, and do not accumulate in the durable
-  transcript.
-- Native edits reindex only affected files; command/external changes are detected by an
-  incremental pass; task completion leaves SQLite current.
-- Graph publication is atomic and cancellation preserves the last complete snapshot.
-- `find_callers`/`find_callees` and enriched existing tools verify against current source.
-- Representative tasks use fewer navigation rounds/tokens without reducing final
-  correctness.
-- Existing grep/glob/read and compiler/test fallbacks remain available.
-
-## Reserved v1.1 agent tracks
-
-The following names reserve intended v1.1 product work, but their behavior is **not yet
-specified and is not implementation-ready**:
-
-- `/goal`
-- `/loop`
-- sub-agents
-
-Do not infer command syntax, persistence, concurrency, safety, context sharing, budgets,
-permissions, UI, or acceptance criteria from these names. Add their detailed plans only
-after the user supplies the specifications. They must reuse the existing runtime,
-workspace containment, Guard, cancellation, logging, and credential protections.
-
-## Explicit non-goals
-
-- compiler-grade parsing or complete call graphs
-- executing code to discover dynamic edges
-- model-generated summaries during indexing
-- embeddings or a new indexing dependency
-- mandatory index-tool calls in the system prompt
-- automatic edits based only on graph rank
-- concurrent workspace mutations
-- implementing `/goal`, `/loop`, or sub-agents before their specifications exist
-
-# Deferred active tracks
+- benchmark fresh and no-change refresh time and peak memory on representative projects
+- tune declaration visibility inference without adding parser or language-server dependencies
+- enrich text search with enclosing definitions where cheap
+- retain live filesystem, compiler, and test verification because indexed locations are hints
+- keep `/goal`, `/loop`, and sub-agent behavior reserved until separately specified
 
 ## Remaining v0.9 polish
 

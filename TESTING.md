@@ -32,7 +32,9 @@ Useful targets:
 | `make test-sanitize` | AddressSanitizer/UBSan build of the full `make test` path |
 | `make test-leak` | Valgrind on `test_runner`, `test_io_faults`, and `ainiux --version` |
 
-Code-index unit coverage includes scanner/schema behavior, reference resolution and ranking, ordered progress phases and counters, read-only missing/completed/corrupt probing, deterministic graph diagnostics, strict indexing-disabled runtime/tool behavior, incremental refresh, cancellation preservation, and bounded request-only hints.
+Code-index unit coverage includes all definition scanners, static importance across C++, Python, TypeScript, Java/C#, Rust, and Go, lexical tier and multi-token ranking, deterministic tie-breaking, ordered progress phases, read-only missing/completed/corrupt probing, database-free live discovery, indexed/live glob and text-search behavior, strict indexing-disabled runtime/tool behavior, optional create/use-existing/fallback modes, incremental refresh, schema 1–3 migration, graph-table removal, compaction, and cancellation preservation.
+
+Agent-loop/runtime unit coverage includes native/XML prepared-call accounting, strict top-level Boolean `ok` result normalization, failed-call totals across invalid arguments, denials, cancellation, malformed results and early exits, zero-tool runs, and stable one-shot metrics formatting.
 
 Manual CI (`.github/workflows/ci.yml`) runs `make test-full` and
 `make test-leak` on Ubuntu with libcurl, libsqlite3, Python 3, and Valgrind
@@ -60,7 +62,7 @@ transport, filesystem, or PTY boundary is involved.
 **Strong unit coverage**
 
 - CLI parsing and options
-- Full editor-language code-index definition parity: Markdown, Python, C/C++, C#, Java, JavaScript/TypeScript and React/module endings, HTML/HTML-only, CSS, XML, JSON, Bash, PHP, Perl, Ruby, Rust, Go, PowerShell, Assembly, SQL, TOML, YAML, and INI; plus embedded HTML scanning, qualification, ranges, documentation, false-positive masking, incremental refresh, line totals, stale detection, clearing, and Markdown reports. Python/C/C++ additionally cover call/import/include/inherit/instantiate extraction, receiver inference, cross-file resolution, prototype preference, caller counts, PageRank/task ranking, configurable bounded deterministic hints, schema migration, touched-file graph persistence, and snapshot reload after the session-preparation job token is cancelled.
+- Full editor-language code-index definition parity: Markdown, Python, C/C++, C#, Java, JavaScript/TypeScript and React/module endings, HTML/HTML-only, CSS, XML, JSON, Bash, PHP, Perl, Ruby, Rust, Go, PowerShell, Assembly, SQL, TOML, YAML, and INI; plus embedded HTML scanning, qualification, ranges, documentation, false-positive masking, static importance, deterministic lexical ranking, incremental refresh, line totals, stale detection, schema migration, graph-storage removal, clearing, and Markdown reports.
 - Provider registry, every registered reasoning request protocol, ordinary response parsing, and native-tool readable-reasoning extraction for Chat/Responses streams, summaries, details, think tags, and encrypted-state omission
 - Main configuration plus `models.conf` parsing, embedded fallback availability outside the source directory, layering, disabling, regex validation, context-window fallback precedence, and final-component/case-insensitive family matching
 - HTML/Markdown/input/output conversion

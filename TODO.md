@@ -2,13 +2,11 @@
 
 ## Smarter local agent and code index (v1.1)
 
-- Review and tune the landed Python/C/C++ first slice: confidence-scored references, explicit ambiguity, caller counts, secondary PageRank, graph-aware tools/ranking, request-only hints, and mutation-aware persistence.
-- Extend the reviewed extractor/resolver to JavaScript/TypeScript, Java/C#, Go, and Rust without adding compiler, language-server, embedding, or model dependencies.
-- Add inexpensive `use` edges only where they improve navigation without flooding the graph; imports/includes may remain file-oriented unresolved evidence when no honest symbol target exists.
+- Tune static symbol importance and lexical task ranking on larger multilingual projects.
 - Enrich `search_text` with the enclosing indexed symbol where cheap.
 - Add command-generated/rename/removal stress coverage and tune coalescing/shutdown behavior on larger repositories.
-- Benchmark before/after model rounds, tool calls, prompt bytes/tokens, full-file reads, time to first useful edit, missed callers/tests, false hints, and final correctness.
-- Keep `glob`, `search_text`/`grep`, targeted reads, compiler output, and tests as verification/fallback paths. The graph remains a hint.
+- Benchmark index startup, incremental refresh, memory use, model rounds, tool calls, full-file reads, time to first useful edit, and final correctness.
+- Keep `glob`, `search_text`/`grep`, targeted reads, compiler output, and tests as verification/fallback paths. The index remains a hint.
 - Do not rewrite the built-in agent prompt in this milestone; the user will specify a separate prompt-optimization pass for small local models.
 - Reserve `/goal`, `/loop`, and sub-agents for v1.1, but do not implement or infer their syntax, persistence, concurrency, safety, or UI until the user supplies specifications.
 - Continue agent cleanup: load the agent transcript as the sole TUI source of truth, reduce chat-session coupling, strengthen editor↔agent handoff, and retain security-review as strictly read-only.

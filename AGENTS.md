@@ -23,7 +23,7 @@ The program must stay excellent as a scriptable CLI. Keep the core engine indepe
 
 ## Current product snapshot
 
-Status: **v1.10** (see `README.md` and `PLANS.md` implementation notes). One-shot (`run` / `--run` / `-r`) and interactive (`agent` / `--agent` / `-a`) local agent modes are landed with workspace writes, multi-turn project sessions (`.ainiux-pr/`), compact live tool activity, provider-supplied reasoning previews in interactive agent history, transcript-preserving compaction, chat↔editor↔agent cycling, project-persisted Confirm/Smart/Yolo permissions, OpenRouter/OpenAI/DeepSeek credit display, interactive Guard approvals, and session-scoped Act/Plan task modes. Live tool rows update in place, while display-only `notice` and `thinking` rows remain outside provider context. One-shot planning is available through `plan`, `--plan`, and `--plan-file`; Plan retains research tools but code-enforces planning-document-only writes. User profile stays `~/.ainiux/` (chat DB/media). The first review slice of **v1.1** agent improvement is landed for Python, C, and C++: approximate references/callers, graph-aware ranking, request-only task hints, and mutation-aware persistence. Remaining v1.1 languages and tuning follow after review; local server mode is deferred behind v1.1, image generation moves to v1.2, and browser web UI remains postponed.
+Status: **v1.10** (see `README.md` and `PLANS.md` implementation notes). One-shot (`run` / `--run` / `-r`) and interactive (`agent` / `--agent` / `-a`) local agent modes are landed with workspace writes, multi-turn project sessions (`.ainiux-pr/`), compact live tool activity, provider-supplied reasoning previews in interactive agent history, transcript-preserving compaction, chat↔editor↔agent cycling, project-persisted Confirm/Smart/Yolo permissions, OpenRouter/OpenAI/DeepSeek credit display, interactive Guard approvals, and session-scoped Act/Plan task modes. Live tool rows update in place, while display-only `notice` and `thinking` rows remain outside provider context. One-shot planning is available through `plan`, `--plan`, and `--plan-file`; Plan retains research tools but code-enforces planning-document-only writes. User profile stays `~/.ainiux/` (chat DB/media). The **v1.1** code index is a lightweight definitions-only index across all scanner languages, with static declaration importance and mutation-aware persistence. Local server mode is deferred behind v1.1, image generation moves to v1.2, and browser web UI remains postponed.
 
 ### Implemented modes
 
@@ -100,7 +100,7 @@ Work in this order unless the user explicitly changes priorities:
 
 1. Keep script-friendly CLI, provider, HTTP/SSE, and error behavior solid.
 2. Finish remaining v0.9 polish: benchmark cutoff/grade calibration, TUI/CLI polish, refactor hygiene, leak and cancellation hardening (see `TODO.md` / `PLANS.md`).
-3. Implement v1.1 smarter agent indexing: approximate references/callers, graph ranking, automatic bounded task hints, and mutation-aware persistent refresh.
+3. Tune v1.1 lightweight definition importance, lexical ranking, and mutation-aware persistent refresh.
 4. Add `/goal`, `/loop`, and sub-agents only after the user supplies their detailed specifications; reuse the landed Guard, workspace-containment, cancellation, and logging design.
 5. Local OpenAI-compatible **server** mode (v0.90), reusing provider/runtime/security layers.
 6. Image generation (v1.2), then only later consider revived browser UI on the server/runtime foundation.
@@ -230,22 +230,18 @@ Treat LM Studio as a first-class local profile (default `http://localhost:1234/v
 
 The UI must not hard-code the difference between OpenAI Chat Completions, Responses, OpenRouter, Ollama, vLLM, LM Studio, or a custom URL beyond selecting a profile and showing status.
 
-### Code index and v1.1 graph hints
+### Code index and v1.1 ranking
 
-The project-local code index lives at `.ainiux-pr/index.sqlite` and remains a fast hint source, never ground truth. The current v1.1 review slice stores confidence-scored references for Python, C, and C++, resolves common callers/callees, computes distinct caller counts and secondary PageRank, exposes `find_callers` / `find_callees`, and injects bounded request-only task hints. Other indexed languages still store definitions only.
+The project-local code index lives at `.ainiux-pr/index.sqlite` and remains a fast hint source, never ground truth. It stores metadata, files, and definitions with a compact static importance score. It does not store references, evidence, edges, caller counts, graph scores, or automatic request-context hints.
 
 When extending v1.1:
 
 - Extend `src/agent/index/`; do not create a parallel index or use the user chat database.
-- Prefer lightweight lexical extraction and confidence-scored resolution over compiler-grade parsing or new language-server dependencies.
-- Retain unresolved or ambiguous references as such. Never invent a high-confidence edge merely to make the graph complete.
-- Use caller count and task match as primary model-facing signals; PageRank is a secondary ranking prior, not proof of importance or relevance.
-- Before the first model request of each agent user turn, generate a small deterministic `[Approximate code-index hints; verify before editing]` block locally. Make no summarization/model call.
-- Treat that hint as request-only context: replace it on later user turns, do not persist it as transcript history, and exclude it from display and compaction history.
-- Include only bounded task-relevant paths, qualified symbols, line ranges, caller counts, graph neighbors, and likely tests. Fall back to a few global anchors only when task matching is weak.
+- Keep lightweight lexical definition scanners and avoid compiler-grade parsers or new language-server dependencies.
+- Keep full-name, exact-component, and component-prefix relevance ahead of importance; preserve deterministic ties and multi-token coverage.
 - Require the model and tools to verify indexed locations against current source before editing. Preserve `glob`, `search_text`/`grep`, `read_file`, compiler, and test fallbacks.
-- Native mutations must immediately update the live touched-file snapshot. Persist definitions/references for affected files through a cancellable coalescing job; potentially mutating commands trigger an incremental check; task completion performs a full-tree freshness pass that reparses only changed files.
-- Publish graph snapshots atomically. Cancellation or failure preserves the previous completed database state.
+- Native mutations must immediately update the live touched-file snapshot. Persist affected definitions through a cancellable coalescing job; potentially mutating commands trigger an incremental check; task completion performs a full-tree freshness pass that reparses only changed files.
+- Publish snapshots atomically. Cancellation or failure preserves the previous completed database state.
 - Full/multi-file scanning may use at most approximately 75% of available cores with a conservative cap. Single-file refresh should avoid unnecessary worker creation.
 - Do not rewrite the built-in agent system prompt during this milestone; prompt/tool-selection optimization is a separate user-directed pass.
 
@@ -476,7 +472,7 @@ Minimum areas (many already have coverage — extend rather than replace):
 CLI parsing, URL normalization, config loading
 JSON request generation and provider response parsing
 Provider registry / aliases / LM Studio defaults
-Code-index schema migration, reference confidence/resolution, graph ranking, incremental refresh, and bounded request-only hints
+Code-index schema migration, static importance, deterministic lexical ranking, and incremental refresh
 SSE parsing with arbitrary chunk boundaries
 Runtime cancellation and event delivery
 Error formatting and credential redaction

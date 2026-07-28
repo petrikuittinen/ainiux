@@ -13,10 +13,10 @@ const char* index_progress_phase_name(agent::index::ProgressPhase phase) {
             return "discovering";
         case agent::index::ProgressPhase::Scanning:
             return "scanning";
-        case agent::index::ProgressPhase::GraphResolution:
-            return "resolving graph";
         case agent::index::ProgressPhase::SnapshotCommit:
             return "committing snapshot";
+        case agent::index::ProgressPhase::Compaction:
+            return "compacting index";
     }
     return "indexing";
 }

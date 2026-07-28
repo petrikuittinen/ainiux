@@ -40,7 +40,9 @@ class AgentSignalGuard {
 
 std::string format_agent_run_metrics(const AgentGoalResult& result) {
     std::ostringstream out;
-    out << "Agent metrics: input " << result.token_usage.input_tokens << " tokens";
+    out << "Agent metrics: tool calls " << result.tool_calls << " ("
+        << result.failed_tool_calls << " failed), input "
+        << result.token_usage.input_tokens << " tokens";
     if (result.token_usage.input_estimated) out << " (estimated)";
     out << ", output " << result.token_usage.output_tokens << " tokens";
     if (result.token_usage.output_estimated) out << " (estimated)";
@@ -82,17 +84,14 @@ AgentGoalResult run_agent_goal(provider::RequestContext context,
     options.history_backup.ttl_days = context.options.agent_history_backup_ttl_days;
     options.auto_compact = context.options.agent_auto_compact;
     options.compact_limit = context.options.agent_compact_limit;
-    options.code_index_hint_max_symbols =
-        static_cast<std::size_t>(
-            context.options.agent_code_index_hint_max_symbols);
-    options.code_index_hint_max_bytes =
-        context.options.agent_code_index_hint_max_bytes;
-    options.code_index_hint_seed_symbols =
-        static_cast<std::size_t>(
-            context.options.agent_code_index_hint_seed_symbols);
-    options.indexing_enabled = !context.options.disable_indexing;
+    options.index_mode =
+        context.options.disable_indexing
+            ? agent::SessionRuntimeOptions::IndexMode::Disabled
+            : agent::SessionRuntimeOptions::IndexMode::UseExisting;
     IndexProgressPrinter index_progress(
-        !context.options.quiet && options.indexing_enabled);
+        !context.options.quiet &&
+        options.index_mode !=
+            agent::SessionRuntimeOptions::IndexMode::Disabled);
     options.on_index_progress =
         [&index_progress](const agent::index::Progress& update) {
             index_progress.update(update);
@@ -126,6 +125,7 @@ AgentGoalResult run_agent_goal(provider::RequestContext context,
     result.final_text = turn.final_text;
     result.turns = turn.session_turns;
     result.tool_calls = turn.session_tool_calls;
+    result.failed_tool_calls = turn.session_failed_tool_calls;
     result.token_usage = turn.token_usage;
 
     if (write_final_to_stdout && turn.error.ok() && !turn.needs_user_continue) {
