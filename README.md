@@ -659,6 +659,12 @@ OPENROUTER_API_KEY=... ./ainiux openrouter -model "nvidia/nemotron-3-ultra-550b-
 OPENROUTER_API_KEY=... ./ainiux --provider openrouter -m "nvidia/nemotron-3-ultra-550b-a55b:free" -p "Hello"
 ```
 
+REPL, Chat, and Agent conversations send an opaque `session_id` only to
+OpenRouter. The id remains stable across the model rounds in that conversation,
+so OpenRouter can keep routing it to the same upstream provider and improve
+provider-side prompt-cache reuse. A new chat thread, Agent project, or process
+gets a new id; other providers never receive it.
+
 Z.AI and Qwen:
 
 ```sh

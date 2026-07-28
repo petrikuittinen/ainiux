@@ -82,6 +82,8 @@ void run_repl_shell(const std::string& command,
 }  // namespace
 
 int run_repl(provider::RequestContext context, chat::Session session, std::ostream& out) {
+    if (context.routing_session_id.empty())
+        context.routing_session_id = provider::new_routing_session_id();
     refresh_session_metadata(session, context);
     apply_system_prompt(session, context.options.system);
 

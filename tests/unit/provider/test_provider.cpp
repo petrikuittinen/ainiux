@@ -1585,6 +1585,54 @@ void test_provider_unicode_request_serialization() {
           "Unicode chat request preserves Arabic, Chinese, and emoji message text");
 }
 
+void test_openrouter_session_stickiness_serialization() {
+    ainiux::provider::RequestContext context;
+    context.profile.name = "openrouter";
+    context.base_url = "https://openrouter.ai/api/v1";
+    context.options.model = "anthropic/claude-sonnet";
+    context.options.stream = false;
+    context.routing_session_id = "ainiux-test-session";
+    const std::vector<ainiux::provider::Message> messages = {{"user", "hello"}};
+
+    ainiux::json::ParseResult parsed = ainiux::json::parse(
+        ainiux::provider::serialize_chat_request(context, messages));
+    check(parsed.error.ok(), "OpenRouter sticky-session chat request is valid JSON");
+    const ainiux::json::Value* session_id = parsed.value.get("session_id");
+    check(session_id != nullptr && session_id->is_string() &&
+              session_id->string == "ainiux-test-session",
+          "OpenRouter chat request includes its opaque session id");
+
+    ainiux::provider::ToolConversation conversation;
+    conversation.messages = messages;
+    const std::vector<ainiux::provider::FunctionDefinition> tools = {
+        {"read_file", "Read a file", R"({"type":"object","properties":{}})"}};
+    parsed = ainiux::json::parse(
+        ainiux::provider::serialize_tool_request(context, conversation, tools));
+    session_id = parsed.error.ok() ? parsed.value.get("session_id") : nullptr;
+    check(parsed.error.ok() && session_id != nullptr && session_id->is_string() &&
+              session_id->string == "ainiux-test-session",
+          "OpenRouter native tool rounds retain the same session id");
+
+    context.profile.name = "deepseek";
+    parsed = ainiux::json::parse(
+        ainiux::provider::serialize_chat_request(context, messages));
+    check(parsed.error.ok() && parsed.value.get("session_id") == nullptr,
+          "non-OpenRouter requests omit routing session ids");
+
+    context.profile.name = "openrouter";
+    context.base_url = "https://gateway.example/v1";
+    parsed = ainiux::json::parse(
+        ainiux::provider::serialize_chat_request(context, messages));
+    check(parsed.error.ok() && parsed.value.get("session_id") == nullptr,
+          "custom endpoints using the OpenRouter profile omit routing session ids");
+
+    const std::string generated = ainiux::provider::new_routing_session_id();
+    const std::string next = ainiux::provider::new_routing_session_id();
+    check(generated.rfind("ainiux-", 0) == 0 && generated.size() <= 256 &&
+              generated != next,
+          "generated routing session ids are opaque, bounded, and distinct");
+}
+
 void test_native_tool_protocols() {
     ainiux::provider::RequestContext context;
     context.options.model = "mock-model";
@@ -1909,6 +1957,7 @@ void run_all() {
     test_openai_context_allows_missing_model();
     test_openrouter_shortcut_context();
     test_provider_unicode_request_serialization();
+    test_openrouter_session_stickiness_serialization();
     test_provider_capabilities_and_responses_context();
     test_provider_registry_resolves_added_profiles();
     test_provider_responses_unsupported_and_override();

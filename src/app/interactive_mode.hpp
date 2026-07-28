@@ -45,6 +45,10 @@ struct InteractiveSession {
 
     chat::Session chat_session;
     bool chat_session_initialized = false;
+    // Chat and Agent are distinct OpenRouter conversations even though they
+    // share provider settings and can cycle through the editor.
+    std::string chat_routing_session_id;
+    std::string agent_routing_session_id;
 
     std::vector<editor::EditorState> editor_buffers;
     size_t editor_active_buffer = 0;

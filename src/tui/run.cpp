@@ -97,6 +97,26 @@ app::TuiRunResult run(provider::RequestContext context,
                       chat::Session session,
                       app::InteractiveSession* interactive) {
     const provider::RequestContext cli_context = context;
+    std::string* shared_routing_session_id = nullptr;
+    if (interactive != nullptr) {
+        shared_routing_session_id =
+            context.options.agent
+                ? &interactive->agent_routing_session_id
+                : &interactive->chat_routing_session_id;
+    }
+    if (shared_routing_session_id != nullptr &&
+        !shared_routing_session_id->empty()) {
+        context.routing_session_id = *shared_routing_session_id;
+    } else {
+        context.routing_session_id = provider::new_routing_session_id();
+        if (shared_routing_session_id != nullptr)
+            *shared_routing_session_id = context.routing_session_id;
+    }
+    auto rotate_routing_session_id = [&]() {
+        context.routing_session_id = provider::new_routing_session_id();
+        if (shared_routing_session_id != nullptr)
+            *shared_routing_session_id = context.routing_session_id;
+    };
     TerminalSession terminal;
     Error err = terminal.enter();
     if (!err.ok()) {
@@ -550,6 +570,7 @@ app::TuiRunResult run(provider::RequestContext context,
     auto start_new_thread_from_cli = [&]() {
         loaded_thread_requires_provider_selection = false;
         restore_cli_context(context, cli_context);
+        rotate_routing_session_id();
         show_thinking_traces = context.options.show_thinking_traces;
         session = chat::new_session(context);
         pending_images.clear();
@@ -2653,6 +2674,7 @@ app::TuiRunResult run(provider::RequestContext context,
                     file_job.join();
                     completed_file_job = true;
                     if (event.error.ok()) {
+                        rotate_routing_session_id();
                         session = std::move(event.session);
                         app::apply_system_prompt(session, context.options.system);
                         finish_loaded_session("Loaded thread: " +
@@ -2896,6 +2918,7 @@ app::TuiRunResult run(provider::RequestContext context,
                     apply_agent_project_history_handoff(
                         session, project_switch_previous_history,
                         std::move(event.agent_history), true);
+                    rotate_routing_session_id();
                     pending_images.clear();
                     inflight_image_count = 0;
                     chat_attachments.clear();

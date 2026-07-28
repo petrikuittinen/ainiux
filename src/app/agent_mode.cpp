@@ -59,6 +59,8 @@ AgentGoalResult run_agent_goal(provider::RequestContext context,
                                std::function<void(const std::string& status_line)> on_progress) {
     const auto started = std::chrono::steady_clock::now();
     AgentGoalResult result;
+    if (context.routing_session_id.empty())
+        context.routing_session_id = provider::new_routing_session_id();
     const std::string goal = ascii_trim(goal_text);
     if (goal.empty()) {
         result.error = {ErrorCode::BadArgs, "agent goal is empty; pass -r/--run TEXT or --run-file PATH"};

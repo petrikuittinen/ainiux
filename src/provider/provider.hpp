@@ -60,6 +60,9 @@ struct RequestContext {
     std::string models_url;
     std::string api_key;
     std::vector<std::string> headers;
+    // Opaque conversation identifier used only by providers that support
+    // routing stickiness. It is never derived from prompt or workspace text.
+    std::string routing_session_id;
     ApiKind api_kind = ApiKind::ChatCompletions;
     bool suppress_streaming_reasoning = false;
 };
@@ -266,6 +269,7 @@ std::string serialize_chat_request(const RequestContext& context, const std::vec
 std::string serialize_tool_request(const RequestContext& context,
                                    const ToolConversation& conversation,
                                    const std::vector<FunctionDefinition>& tools);
+std::string new_routing_session_id();
 Error parse_tool_response(const RequestContext& context,
                           const std::string& body,
                           ToolRoundResult& result,

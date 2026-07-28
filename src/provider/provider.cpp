@@ -4,6 +4,7 @@
 #include "provider/provider.hpp"
 
 #include <chrono>
+#include <atomic>
 #include <cerrno>
 #include <cmath>
 #include <cctype>
@@ -25,6 +26,35 @@
 namespace ainiux::provider {
 
 namespace {
+
+std::uint64_t mix_session_bits(std::uint64_t value) {
+    value += 0x9e3779b97f4a7c15ULL;
+    value = (value ^ (value >> 30U)) * 0xbf58476d1ce4e5b9ULL;
+    value = (value ^ (value >> 27U)) * 0x94d049bb133111ebULL;
+    return value ^ (value >> 31U);
+}
+
+bool emits_openrouter_session_id(const RequestContext& context) {
+    auto is_official_url = [](std::string value) {
+        while (value.size() > 1 && value.back() == '/') value.pop_back();
+        for (const char* official : {
+                 "https://openrouter.ai/api/v1",
+                 "https://eu.openrouter.ai/api/v1"}) {
+            const std::string base = official;
+            if (value == base ||
+                (value.size() > base.size() &&
+                 value.compare(0, base.size(), base) == 0 &&
+                 value[base.size()] == '/'))
+                return true;
+        }
+        return false;
+    };
+    return normalize_provider_key(context.profile.name) == "openrouter" &&
+           !context.routing_session_id.empty() &&
+           (is_official_url(context.base_url) ||
+            is_official_url(context.chat_url) ||
+            is_official_url(context.responses_url));
+}
 
 Capabilities profile_capabilities(bool requires_key,
                                   bool local,
@@ -449,6 +479,9 @@ std::string build_chat_request_json(const RequestContext& context, const std::ve
     if (!o.model.empty()) {
         json << "\"model\":" << json::quote(o.model) << ",";
     }
+    if (emits_openrouter_session_id(context)) {
+        json << "\"session_id\":" << json::quote(context.routing_session_id) << ",";
+    }
     json << "\"messages\":[";
     for (size_t i = 0; i < messages.size(); ++i) {
         if (i != 0) {
@@ -520,6 +553,10 @@ std::string build_responses_request_json(const RequestContext& context, const st
     if (!o.model.empty()) {
         comma();
         out << "\"model\":" << json::quote(o.model);
+    }
+    if (emits_openrouter_session_id(context)) {
+        comma();
+        out << "\"session_id\":" << json::quote(context.routing_session_id);
     }
     const std::string instructions = responses_instructions_from_messages(messages);
     if (!instructions.empty()) {
@@ -3528,6 +3565,20 @@ Error parse_responses_tool_stream(const std::string& body,
 }
 
 }  // namespace
+
+std::string new_routing_session_id() {
+    static std::atomic<std::uint64_t> sequence{0};
+    const std::uint64_t serial = sequence.fetch_add(1, std::memory_order_relaxed) + 1;
+    const std::uint64_t ticks = static_cast<std::uint64_t>(
+        std::chrono::high_resolution_clock::now().time_since_epoch().count());
+    const std::uint64_t first = mix_session_bits(ticks ^ serial);
+    const std::uint64_t second =
+        mix_session_bits(first ^ (serial * 0xd1342543de82ef95ULL));
+    std::ostringstream out;
+    out << "ainiux-" << std::hex << std::setfill('0')
+        << std::setw(16) << first << std::setw(16) << second;
+    return out.str();
+}
 
 std::string serialize_tool_request(const RequestContext& context,
                                    const ToolConversation& conversation,
