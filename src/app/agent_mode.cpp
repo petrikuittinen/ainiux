@@ -10,6 +10,7 @@
 #include <thread>
 
 #include "agent/session_runtime.hpp"
+#include "app/index_progress.hpp"
 #include "fetch/fetch.hpp"
 #include "search/search.hpp"
 #include "security/redact.hpp"
@@ -89,6 +90,13 @@ AgentGoalResult run_agent_goal(provider::RequestContext context,
     options.code_index_hint_seed_symbols =
         static_cast<std::size_t>(
             context.options.agent_code_index_hint_seed_symbols);
+    options.indexing_enabled = !context.options.disable_indexing;
+    IndexProgressPrinter index_progress(
+        !context.options.quiet && options.indexing_enabled);
+    options.on_index_progress =
+        [&index_progress](const agent::index::Progress& update) {
+            index_progress.update(update);
+        };
     options.show_command_output = context.options.agent_show_command_output;
     options.fetch_options.connect_timeout_seconds = context.options.connect_timeout_seconds;
     options.fetch_options.timeout_seconds =
@@ -103,6 +111,7 @@ AgentGoalResult run_agent_goal(provider::RequestContext context,
 
     agent::AgentSessionRuntime runtime;
     Error error = runtime.prepare(context, cancellation, interrupted, options);
+    index_progress.finish();
     if (!error.ok()) {
         result.error = error;
         result.elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(

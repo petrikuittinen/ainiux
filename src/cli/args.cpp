@@ -269,6 +269,8 @@ ParseResult parse_args(int argc, char** argv, const Options& base_options) {
             opts.print_index = true;
         } else if (arg == "--clear-index") {
             opts.clear_index = true;
+        } else if (arg == "--disable-indexing") {
+            opts.disable_indexing = true;
         } else if (arg == "--security-review") {
             opts.security_review = true;
         } else if (arg == "--security-review-log") {
@@ -696,6 +698,20 @@ Error validate_index_mode_arguments(int argc, char** argv, const Options& option
     return ok_error();
 }
 
+Error validate_disable_indexing_arguments(const Options& options) {
+    if (!options.disable_indexing) return ok_error();
+    if (options.index_code || options.print_index || options.clear_index)
+        return {ErrorCode::BadArgs,
+                "--disable-indexing cannot be combined with direct code-index commands"};
+    if (options.security_review)
+        return {ErrorCode::BadArgs,
+                "--disable-indexing cannot be combined with --security-review"};
+    if (!options.agent && !options.agent_run)
+        return {ErrorCode::BadArgs,
+                "--disable-indexing requires --agent, --run, or --plan"};
+    return ok_error();
+}
+
 Error validate_security_review_arguments(int argc, char** argv, const Options& options) {
     if (!options.security_review) return ok_error();
     if (options.agent || options.agent_run) {
@@ -820,6 +836,7 @@ Error validate_agent_run_arguments(int argc, char** argv, const Options& options
             continue;
         }
         if (option == "run" || option == "--agent-log" || option == "--no-agent-log" ||
+            option == "--disable-indexing" ||
             option == "--responses" || option == "--key-stdin" || option == "--quiet" ||
             option == "--debug" || option == "--no-config" || option == "--trace-http" ||
             option == "--insecure-tls" || option == "--stream" || option == "--no-stream") {
@@ -898,6 +915,7 @@ Error validate_agent_interactive_arguments(int argc, char** argv, const Options&
             continue;
         }
         if (option == "--agent" || option == "-a" || option == "agent" || option == "--agent-log" ||
+            option == "--disable-indexing" ||
             option == "--no-agent-log" || option == "--responses" || option == "--key-stdin" ||
             option == "--quiet" || option == "--debug" || option == "--no-config" ||
             option == "--trace-http" || option == "--insecure-tls" || option == "--stream" ||
@@ -1022,6 +1040,7 @@ Options:
       --index-code              Create or incrementally refresh .ainiux-pr/index.sqlite.
       --print-index             Print the stored project code index as Markdown.
       --clear-index             Remove the project code index database.
+      --disable-indexing        Run Agent/Run/Plan without probing or touching the code index.
       --security-review         Review every eligible indexed workspace file and print Markdown.
       --security-review-log     Enable the local per-run JSONL diagnostic log (default).
       --no-security-review-log  Disable the local per-run JSONL diagnostic log.

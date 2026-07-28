@@ -836,7 +836,7 @@ void test_config_reads_common_template() {
               options.agent_auto_compact &&
               options.agent_code_index_hint_max_symbols == 16 &&
               options.agent_code_index_hint_max_bytes == 4U * 1024U &&
-              options.agent_code_index_hint_seed_symbols == 16 &&
+              options.agent_code_index_hint_seed_symbols == 8 &&
               !options.agent_show_command_output,
           "common config maps to the built-in runtime defaults");
     check(options.model_catalog.models.empty(),

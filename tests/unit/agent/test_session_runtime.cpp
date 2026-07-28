@@ -90,6 +90,40 @@ void test_empty_turn_rejected_when_unprepared() {
     check(!turn.error.ok(), "unprepared runtime rejects turns");
 }
 
+void test_prepare_with_indexing_disabled_never_touches_index_database() {
+    const std::string workspace = temp_workspace("indexing-off");
+    const fs::path database =
+        fs::path(workspace) / ".ainiux-pr" / "index.sqlite";
+    fs::create_directories(database.parent_path());
+    {
+        std::ofstream out(database, std::ios::binary);
+        out << "sentinel-index-bytes";
+    }
+    const auto before_size = fs::file_size(database);
+    const auto before_time = fs::last_write_time(database);
+
+    agent::AgentSessionRuntime runtime;
+    agent::SessionRuntimeOptions options;
+    options.workspace = workspace;
+    options.interactive = true;
+    options.enable_session_db = true;
+    options.enable_agent_log = false;
+    options.indexing_enabled = false;
+    provider::RequestContext context = offline_context(workspace);
+    const Error error = runtime.prepare(context, {}, {}, options);
+    check(error.ok() && runtime.prepared(),
+          "agent runtime prepares without a code index: " + error.message);
+    check(fs::file_size(database) == before_size &&
+              fs::last_write_time(database) == before_time,
+          "disabled preparation leaves a pre-existing index database untouched");
+    check(fs::exists(fs::path(workspace) / ".ainiux-pr" / "agent.sqlite"),
+          "disabled indexing retains project session persistence");
+
+    runtime.reset();
+    std::error_code ec;
+    fs::remove_all(workspace, ec);
+}
+
 void test_agent_token_usage_aggregation_is_bounded() {
     provider::ChatResult absent;
     agent::AgentTokenUsage usage;
@@ -394,6 +428,7 @@ void test_project_replacement_failure_reopens_prior_project() {
 void run_all() {
     test_prepare_opens_session_db_and_tools();
     test_empty_turn_rejected_when_unprepared();
+    test_prepare_with_indexing_disabled_never_touches_index_database();
     test_agent_token_usage_aggregation_is_bounded();
     test_task_mode_switch_is_session_scoped_and_failure_safe();
     test_prepare_loads_existing_display_history();

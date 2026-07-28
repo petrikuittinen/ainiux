@@ -6,6 +6,7 @@
 
 #include "chat/session.hpp"
 #include "agent/activity.hpp"
+#include "agent/index/index.hpp"
 #include "chat/sqlite_store.hpp"
 #include "common.hpp"
 #include "context/context.hpp"
@@ -37,6 +38,9 @@ enum class TuiEventType {
     AgentCompactDone,
     AgentPhase,
     AgentProgress,
+    AgentIndexProbeDone,
+    AgentPrepareDone,
+    AgentIndexProgress,
 };
 
 enum class ActiveJob { None, Chat, Models };
@@ -58,6 +62,7 @@ enum class TuiMode {
     AgentPermissionSelect,
     AgentContinueConfirm,
     AgentNewConfirm,
+    AgentIndexConfirm,
 };
 
 enum class ModelsRequestPurpose { Preview, Picker, ContextRefresh };
@@ -112,6 +117,9 @@ struct TuiEvent {
     bool agent_compact_no_op = false;
     agent::AgentActivityPhase agent_phase = agent::AgentActivityPhase::Thinking;
     agent::AgentProgressUpdate agent_progress;
+    agent::index::ProbeState agent_index_state =
+        agent::index::ProbeState::MissingOrIncomplete;
+    agent::index::Progress agent_index_progress;
 };
 
 enum class EscapeResult {

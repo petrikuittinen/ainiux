@@ -502,6 +502,19 @@ void test_cli_agent_mode_parse() {
                   .ok(),
           "agent subcommand starts interactive agent with provider and model");
 
+    const char* interactive_no_index[] = {
+        "ainiux", "--agent", "--disable-indexing"};
+    parsed = ainiux::cli::parse_args(
+        3, const_cast<char**>(interactive_no_index));
+    check(parsed.error.ok() && parsed.options.agent &&
+              parsed.options.disable_indexing &&
+              ainiux::cli::validate_disable_indexing_arguments(parsed.options)
+                  .ok() &&
+              ainiux::cli::validate_agent_interactive_arguments(
+                  3, const_cast<char**>(interactive_no_index), parsed.options)
+                  .ok(),
+          "interactive agent accepts session-scoped indexing disable");
+
     const char* short_agent[] = {"ainiux", "-a", "lmstudio", "-m", "model"};
     parsed = ainiux::cli::parse_args(5, const_cast<char**>(short_agent));
     check(parsed.error.ok() && parsed.options.agent && !parsed.options.agent_run &&
@@ -606,6 +619,50 @@ void test_cli_agent_mode_parse() {
                    5, const_cast<char**>(mixed_task_modes), parsed.options)
                    .ok(),
           "one-shot Act and Plan entry forms cannot be combined");
+
+    const char* run_no_index[] = {
+        "ainiux", "--run", "goal", "--disable-indexing"};
+    parsed =
+        ainiux::cli::parse_args(4, const_cast<char**>(run_no_index));
+    check(parsed.error.ok() && parsed.options.agent_run &&
+              parsed.options.disable_indexing &&
+              ainiux::cli::validate_disable_indexing_arguments(parsed.options)
+                  .ok() &&
+              ainiux::cli::validate_agent_run_arguments(
+                  4, const_cast<char**>(run_no_index), parsed.options)
+                  .ok(),
+          "one-shot Run accepts indexing disable");
+
+    const char* plan_no_index[] = {
+        "ainiux", "--plan", "goal", "--disable-indexing"};
+    parsed =
+        ainiux::cli::parse_args(4, const_cast<char**>(plan_no_index));
+    check(parsed.error.ok() && parsed.options.agent_plan &&
+              parsed.options.disable_indexing &&
+              ainiux::cli::validate_disable_indexing_arguments(parsed.options)
+                  .ok(),
+          "one-shot Plan accepts indexing disable");
+
+    for (const std::vector<const char*>& rejected : {
+             std::vector<const char*>{"ainiux", "--index-code",
+                                      "--disable-indexing"},
+             std::vector<const char*>{"ainiux", "--security-review",
+                                      "--disable-indexing"},
+             std::vector<const char*>{"ainiux", "--chat",
+                                      "--disable-indexing"},
+             std::vector<const char*>{"ainiux", "-p", "hello",
+                                      "--disable-indexing"}}) {
+        std::vector<char*> mutable_argv;
+        for (const char* value : rejected)
+            mutable_argv.push_back(const_cast<char*>(value));
+        parsed = ainiux::cli::parse_args(
+            static_cast<int>(mutable_argv.size()), mutable_argv.data());
+        check(parsed.error.ok() &&
+                  !ainiux::cli::validate_disable_indexing_arguments(
+                       parsed.options)
+                       .ok(),
+              "--disable-indexing rejects unrelated mode");
+    }
 
     const char* plan_positional_provider[] = {"ainiux", "plan", "goal", "openrouter"};
     parsed = ainiux::cli::parse_args(4, const_cast<char**>(plan_positional_provider));

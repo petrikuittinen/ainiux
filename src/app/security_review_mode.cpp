@@ -15,6 +15,7 @@
 #include "agent/review.hpp"
 #include "agent/review_log.hpp"
 #include "agent/tools.hpp"
+#include "app/index_progress.hpp"
 #include "security/redact.hpp"
 #include "json/json.hpp"
 
@@ -164,8 +165,14 @@ int run_security_review_mode(provider::RequestContext context) {
     index_options.max_source_code_file_size = context.options.max_source_code_file_size;
     index_options.cancellation = cancellation.token();
     index_options.interrupted = [] { return g_review_interrupt != 0; };
+    IndexProgressPrinter index_progress(!context.options.quiet);
+    index_options.on_progress =
+        [&index_progress](const agent::index::Progress& update) {
+            index_progress.update(update);
+        };
     agent::index::RefreshStats index_stats;
     Error error = agent::index::refresh(index_options, index_stats);
+    index_progress.finish();
     if (logger) {
         json::Value fields = log_object();
         fields.object["discovered"] = log_number(index_stats.discovered);

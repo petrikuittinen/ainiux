@@ -32,6 +32,8 @@ Useful targets:
 | `make test-sanitize` | AddressSanitizer/UBSan build of the full `make test` path |
 | `make test-leak` | Valgrind on `test_runner`, `test_io_faults`, and `ainiux --version` |
 
+Code-index unit coverage includes scanner/schema behavior, reference resolution and ranking, ordered progress phases and counters, read-only missing/completed/corrupt probing, deterministic graph diagnostics, strict indexing-disabled runtime/tool behavior, incremental refresh, cancellation preservation, and bounded request-only hints.
+
 Manual CI (`.github/workflows/ci.yml`) runs `make test-full` and
 `make test-leak` on Ubuntu with libcurl, libsqlite3, Python 3, and Valgrind
 installed.

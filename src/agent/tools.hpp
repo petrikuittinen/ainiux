@@ -53,6 +53,7 @@ struct ToolRegistryOptions {
     GuardApprovalCallback on_guard_ask;
     PermissionMode permission_mode = PermissionMode::Smart;
     bool permission_controls = false;
+    bool indexing_enabled = true;
 };
 
 class ReadToolRegistry {
@@ -69,6 +70,10 @@ class ReadToolRegistry {
                         std::vector<std::string> secrets,
                         ReadToolRegistry& registry,
                         ToolRegistryOptions options = {});
+    static Error create_without_index(std::string workspace,
+                                      std::vector<std::string> secrets,
+                                      ReadToolRegistry& registry,
+                                      ToolRegistryOptions options = {});
 
     const index::Snapshot& snapshot() const { return snapshot_; }
     bool allow_mutations() const { return mutation_policy_ != MutationPolicy::Disabled; }
@@ -96,7 +101,7 @@ class ReadToolRegistry {
         const std::string& task,
         std::size_t max_symbols = 16,
         std::size_t max_bytes = 4U * 1024U,
-        std::size_t seed_symbols = 16,
+        std::size_t seed_symbols = 8,
         runtime::CancellationToken cancellation = runtime::CancellationToken()) const;
 
    private:
@@ -218,6 +223,7 @@ class ReadToolRegistry {
     GuardApprovalCallback on_guard_ask_;
     PermissionMode permission_mode_ = PermissionMode::Smart;
     bool permission_controls_ = false;
+    bool indexing_enabled_ = true;
 };
 
 std::string tool_error_result(const std::string& code, const std::string& message);

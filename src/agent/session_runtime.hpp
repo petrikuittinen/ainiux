@@ -3,6 +3,7 @@
 #include <atomic>
 #include <functional>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -90,7 +91,9 @@ struct SessionRuntimeOptions {
     int compact_limit = 0;  // 0 = derive from window
     std::size_t code_index_hint_max_symbols = 16;
     std::size_t code_index_hint_max_bytes = 4U * 1024U;
-    std::size_t code_index_hint_seed_symbols = 16;
+    std::size_t code_index_hint_seed_symbols = 8;
+    bool indexing_enabled = true;
+    std::function<void(const index::Progress&)> on_index_progress;
     bool show_command_output = false;
     // Headless callers always use Smart and retain Ask→Deny through an empty
     // approval callback. Interactive projects restore their persisted value.
@@ -179,7 +182,8 @@ class AgentSessionRuntime {
     SessionProjectReplaceResult replace_project(
         const provider::RequestContext& context,
         const NewProjectTarget& target,
-        runtime::CancellationToken cancellation = runtime::CancellationToken());
+        runtime::CancellationToken cancellation = runtime::CancellationToken(),
+        std::optional<bool> indexing_enabled = std::nullopt);
 
     // Mark session finished in agent.sqlite (success/error/cancelled/aborted).
     Error finish_session(const std::string& status,

@@ -939,7 +939,9 @@ Error ReadToolRegistry::create(index::Options index_options,
     loaded.on_guard_ask_ = std::move(options.on_guard_ask);
     loaded.permission_mode_ = options.permission_mode;
     loaded.permission_controls_ = options.permission_controls;
-    if (loaded.mutation_policy_ != MutationPolicy::Disabled) {
+    loaded.indexing_enabled_ = options.indexing_enabled;
+    if (loaded.mutation_policy_ != MutationPolicy::Disabled &&
+        loaded.indexing_enabled_) {
         // Session preparation runs as its own cancellable job. That job's token
         // is valid only while the initial refresh/snapshot load is running; a
         // long-lived agent registry must use the cancellation token supplied by
@@ -961,6 +963,23 @@ Error ReadToolRegistry::create(index::Options index_options,
     return ok_error();
 }
 
+Error ReadToolRegistry::create_without_index(
+    std::string workspace,
+    std::vector<std::string> secrets,
+    ReadToolRegistry& registry,
+    ToolRegistryOptions options) {
+    if (workspace.empty())
+        return {ErrorCode::Internal,
+                "tool registry requires a canonical workspace"};
+    index::Snapshot empty;
+    empty.workspace = std::move(workspace);
+    index::Options index_options;
+    index_options.workspace = empty.workspace;
+    options.indexing_enabled = false;
+    return create(std::move(index_options), std::move(empty),
+                  std::move(secrets), registry, std::move(options));
+}
+
 void ReadToolRegistry::rebuild_file_map() const {
     files_.clear();
     for (const index::IndexedFile& file : snapshot_.files) files_[file.path] = &file;
@@ -977,7 +996,9 @@ Error ReadToolRegistry::refresh_persistent_index(
     bool full_tree,
     runtime::CancellationToken cancellation) const {
     if (!index_refresh_) {
-        return full_tree
+        return !indexing_enabled_
+                   ? ok_error()
+                   : full_tree
                    ? Error{ErrorCode::UnsupportedFeature,
                            "code-index persistence is disabled for this read-only tool session"}
                    : ok_error();
@@ -1005,6 +1026,7 @@ std::string ReadToolRegistry::task_hints(
     std::size_t max_bytes,
     std::size_t seed_symbols,
     runtime::CancellationToken cancellation) const {
+    if (!indexing_enabled_) return {};
     if (max_symbols == 0 || max_bytes < 96) return {};
     const Error error = refresh_persistent_index(false, cancellation);
     if (!error.ok()) return {};
@@ -1246,6 +1268,7 @@ Error ReadToolRegistry::save_history_copy(const std::string& relative_path,
 
 void ReadToolRegistry::note_written_file(const std::string& relative_path,
                                          const std::string& content) const {
+    if (!indexing_enabled_) return;
     const std::string generic = fs::path(relative_path).generic_string();
     const std::string hash = index::content_hash(content);
     const std::size_t line_count = content.empty()
@@ -1357,6 +1380,7 @@ void ReadToolRegistry::note_written_file(const std::string& relative_path,
 }
 
 void ReadToolRegistry::note_removed_path(const std::string& relative_path) const {
+    if (!indexing_enabled_) return;
     const std::string generic = fs::path(relative_path).generic_string();
     snapshot_.files.erase(
         std::remove_if(snapshot_.files.begin(), snapshot_.files.end(),
@@ -2544,6 +2568,9 @@ Error ReadToolRegistry::edit_workspace_file(const std::string& relative_path,
                     return {ErrorCode::BadArgs, validation_error};
             }
         } else if (type == "replace_symbol") {
+            if (!indexing_enabled_)
+                return {ErrorCode::UnsupportedFeature,
+                        "replace_symbol is unavailable because indexing is disabled"};
             item.type = LineEditOp::Type::ReplaceSymbol;
             std::string validation_error;
             if (!get_size(op, "symbol_id", 0, static_cast<std::size_t>(std::numeric_limits<int>::max()),
@@ -2799,8 +2826,10 @@ std::vector<provider::FunctionDefinition> ReadToolRegistry::definitions() const 
         "\"old_text\":{\"type\":\"string\"},"
         "\"replace_all\":{\"type\":\"boolean\"},"
         "\"fuzzy\":{\"type\":\"boolean\"},"
-        "\"expected_hash\":{\"type\":\"string\"},"
-        "\"symbol_id\":{\"type\":\"integer\",\"minimum\":1}";
+        "\"expected_hash\":{\"type\":\"string\"}" +
+        (indexing_enabled_
+             ? std::string(",\"symbol_id\":{\"type\":\"integer\",\"minimum\":1}")
+             : std::string());
     const std::string edit_nested_object =
         "{\"type\":\"object\",\"properties\":{" + edit_line_fields + "}}";
     const std::string edit_op_item =
@@ -2814,7 +2843,10 @@ std::vector<provider::FunctionDefinition> ReadToolRegistry::definitions() const 
         "\"replace_range\":" +
         edit_nested_object +
         ",\"insert_at\":" + edit_nested_object + ",\"delete_range\":" + edit_nested_object +
-        ",\"replace_text\":" + edit_nested_object + ",\"replace_symbol\":" + edit_nested_object +
+        ",\"replace_text\":" + edit_nested_object +
+        (indexing_enabled_
+             ? ",\"replace_symbol\":" + edit_nested_object
+             : std::string()) +
         ",\"create_file\":" + edit_nested_object +
         "}}";
     std::vector<provider::FunctionDefinition> tools = {
@@ -2921,6 +2953,20 @@ std::vector<provider::FunctionDefinition> ReadToolRegistry::definitions() const 
              "confirm=true; Plan returns policy_denied.",
              schema("\"confirm\":{\"type\":\"boolean\"}", "\"confirm\"")});
     }
+    if (!indexing_enabled_) {
+        static const std::set<std::string> hidden = {
+            "project_overview", "glob", "search_text", "grep", "find",
+            "search_symbol", "get_skeleton", "read_symbol", "find_callers",
+            "find_callees", "index_status", "index_update", "index_rebuild",
+            "find_tests", "inspect_code_task"};
+        tools.erase(
+            std::remove_if(
+                tools.begin(), tools.end(),
+                [&](const provider::FunctionDefinition& definition) {
+                    return hidden.find(definition.name) != hidden.end();
+                }),
+            tools.end());
+    }
     if (allow_network_) {
         tools.push_back(
             {"fetch_url",
@@ -2951,7 +2997,8 @@ std::vector<provider::FunctionDefinition> ReadToolRegistry::definitions() const 
              "{\"type\":\"insert_at\",\"line\":2,\"new_text\":\"...\"}), "
              "replace_range (rewrite line spans; include full old text in "
              "replacement when substituting), delete_range, replace_text (exact then fuzzy), "
-             "replace_symbol, create_file (alone). Line ops apply bottom-to-top.",
+             + std::string(indexing_enabled_ ? "replace_symbol, " : "") +
+             "create_file (alone). Line ops apply bottom-to-top.",
              schema(path + ",\"expected_file_hash\":{\"type\":\"string\"},"
                            "\"create_dirs\":{\"type\":\"boolean\"},"
                            "\"ops\":{\"type\":\"array\",\"minItems\":1,\"maxItems\":100,"
@@ -3322,6 +3369,17 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
             name = repaired;
             if (name == "grep" || name == "find") name = "search_text";
         }
+    }
+    if (!indexing_enabled_) {
+        static const std::set<std::string> disabled = {
+            "project_overview", "glob", "search_text", "search_symbol",
+            "get_skeleton", "read_symbol", "find_callers", "find_callees",
+            "index_status", "index_update", "index_rebuild", "find_tests",
+            "inspect_code_task"};
+        if (disabled.find(name) != disabled.end())
+            return tool_error_result(
+                "indexing_disabled",
+                name + " is unavailable because indexing is disabled for this session");
     }
 
     // Stages 1-5 of the shared argument pipeline (empty -> {}, fence strip,

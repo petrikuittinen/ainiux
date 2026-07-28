@@ -133,6 +133,12 @@ int main(int argc, char** argv) {
         return ainiux::app::exit_code_for(parsed.error.code);
     }
     ainiux::cli::Options options = parsed.options;
+    const ainiux::Error disable_indexing_arguments =
+        ainiux::cli::validate_disable_indexing_arguments(options);
+    if (!disable_indexing_arguments.ok()) {
+        ainiux::app::print_error(disable_indexing_arguments);
+        return ainiux::app::exit_code_for(disable_indexing_arguments.code);
+    }
     if (options.index_code || options.print_index || options.clear_index) {
         const ainiux::Error index_arguments =
             ainiux::cli::validate_index_mode_arguments(argc, argv, options);

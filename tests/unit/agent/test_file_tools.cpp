@@ -1192,6 +1192,68 @@ void test_index_refresh_drops_completed_prepare_cancellation() {
     fs::remove_all(workspace, ec);
 }
 
+void test_indexing_disabled_registry_is_strict_and_live() {
+    const std::string workspace = write_temp_workspace("indexing-disabled");
+    agent::ToolRegistryOptions options;
+    options.mutation_policy = agent::MutationPolicy::Full;
+    options.indexing_enabled = false;
+    agent::ReadToolRegistry tools;
+    Error error = agent::ReadToolRegistry::create_without_index(
+        fs::canonical(workspace).string(), {}, tools, options);
+    check(error.ok(), "create live registry without an index: " + error.message);
+
+    bool has_list = false;
+    bool has_read = false;
+    bool has_edit = false;
+    bool has_index_tool = false;
+    bool advertises_replace_symbol = false;
+    for (const provider::FunctionDefinition& definition :
+         tools.definitions()) {
+        has_list = has_list || definition.name == "list_directory";
+        has_read = has_read || definition.name == "read_file";
+        has_edit = has_edit || definition.name == "edit_file";
+        has_index_tool =
+            has_index_tool || definition.name == "project_overview" ||
+            definition.name == "glob" ||
+            definition.name == "search_text" ||
+            definition.name == "search_symbol" ||
+            definition.name == "index_status" ||
+            definition.name == "inspect_code_task";
+        if (definition.name == "edit_file")
+            advertises_replace_symbol =
+                definition.description.find("replace_symbol") !=
+                    std::string::npos ||
+                definition.parameters_json.find("replace_symbol") !=
+                    std::string::npos;
+    }
+    check(has_list && has_read && has_edit && !has_index_tool &&
+              !advertises_replace_symbol,
+          "indexing-off definitions retain live tools and hide index-backed tools");
+    check(json_ok(tools.execute(
+              "list_directory", R"JSON({"path":"src"})JSON")) &&
+              json_ok(tools.execute(
+                  "read_file", R"JSON({"path":"src/hello.cpp"})JSON")),
+          "indexing-off registry retains live directory and exact-path reads");
+    check(json_ok(tools.execute(
+              "edit_file",
+              R"JSON({"path":"src/hello.cpp","ops":[{"type":"replace_text","old_text":"return 0","new_text":"return 7"}]})JSON")),
+          "indexing-off registry retains ordinary edits");
+    check(!json_ok(tools.execute("search_text",
+                                 R"JSON({"query":"main"})JSON")) &&
+              !json_ok(tools.execute(
+                  "edit_file",
+                  R"JSON({"path":"src/hello.cpp","ops":[{"type":"replace_symbol","symbol_id":1,"replacement":"x"}]})JSON")),
+          "indexing-off registry defensively denies hidden search and replace_symbol");
+    check(tools.task_hints("hello", 16, 4096, 8).empty() &&
+              tools.refresh_persistent_index(true).ok() &&
+              !fs::exists(fs::path(workspace) / ".ainiux-pr" /
+                          "index.sqlite"),
+          "indexing-off registry produces no hints or refresh database");
+
+    std::error_code ec;
+    fs::remove_all(workspace, ec);
+}
+
 void test_index_status_and_update() {
     const std::string workspace = write_temp_workspace("index-tools");
     agent::ReadToolRegistry tools = make_registry(workspace, true);
@@ -1528,6 +1590,7 @@ void run_all() {
     test_agent_command_output_keeps_unindexed_project_paths();
     test_replace_symbol();
     test_index_refresh_drops_completed_prepare_cancellation();
+    test_indexing_disabled_registry_is_strict_and_live();
     test_index_status_and_update();
     test_inspect_and_find_tests();
     test_git_and_network_tools_policy();

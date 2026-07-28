@@ -77,6 +77,17 @@ struct ScanResult {
     std::vector<Reference> references;
 };
 
+enum class ProgressPhase { Discovery, Scanning, GraphResolution, SnapshotCommit };
+
+struct Progress {
+    ProgressPhase phase = ProgressPhase::Discovery;
+    std::size_t completed = 0;
+    std::size_t total = 0;
+    std::size_t discovered = 0;
+    std::size_t changed = 0;
+    long long elapsed_ms = 0;
+};
+
 struct Options {
     std::string workspace = ".";
     std::size_t max_source_code_file_size = 10U * 1024U * 1024U;
@@ -87,6 +98,17 @@ struct Options {
     // When non-empty, only re-scan these workspace-relative paths (others stay
     // unchanged; removal detection still runs for the whole tree).
     std::vector<std::string> update_paths;
+    // Foreground refresh progress. Callbacks may arrive from scanner workers;
+    // consumers must be thread-safe and should rate-limit presentation.
+    std::function<void(const Progress&)> on_progress;
+};
+
+enum class ProbeState { MissingOrIncomplete, Completed, Corrupt };
+
+struct ProbeResult {
+    ProbeState state = ProbeState::MissingOrIncomplete;
+    std::string path;
+    Error error;
 };
 
 struct RefreshStats {
@@ -188,6 +210,7 @@ ScanResult scan_source(const std::string& path, const std::string& source, Langu
 
 std::string database_path(const std::string& workspace);
 Error clear_database(const Options& options, ClearStats& stats);
+Error probe(const Options& options, ProbeResult& result);
 Error refresh(const Options& options, RefreshStats& stats);
 Error check_freshness(const Options& options, Freshness& freshness);
 Error print_markdown(const Options& options, const Freshness& freshness, std::ostream& output);
@@ -203,6 +226,6 @@ std::string format_task_hints(const Snapshot& snapshot,
                               const std::string& task,
                               std::size_t max_symbols = 16,
                               std::size_t max_bytes = 4U * 1024U,
-                              std::size_t seed_maximum = 16);
+                              std::size_t seed_maximum = 8);
 
 }  // namespace ainiux::agent::index

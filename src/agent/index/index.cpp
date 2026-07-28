@@ -482,7 +482,8 @@ Error workspace_root(const std::string& requested, fs::path& root) {
 Error discover(const fs::path& root,
                const IgnoreRules& ignores,
                const Options& options,
-               std::vector<Candidate>& candidates) {
+               std::vector<Candidate>& candidates,
+               const std::chrono::steady_clock::time_point& started) {
     std::deque<fs::path> directories{root};
     std::mutex mutex;
     std::condition_variable ready;
@@ -575,6 +576,17 @@ Error discover(const fs::path& root,
                         candidate.mtime_ns = file_mtime_ns(mtime);
                         std::lock_guard<std::mutex> lock(mutex);
                         candidates.push_back(std::move(candidate));
+                        if (options.on_progress) {
+                            Progress progress;
+                            progress.phase = ProgressPhase::Discovery;
+                            progress.completed = candidates.size();
+                            progress.discovered = candidates.size();
+                            progress.elapsed_ms =
+                                std::chrono::duration_cast<std::chrono::milliseconds>(
+                                    std::chrono::steady_clock::now() - started)
+                                    .count();
+                            options.on_progress(progress);
+                        }
                     }
                 }
                 iterator.increment(filesystem_error);
@@ -844,7 +856,11 @@ struct ResolverReference {
     double lexical_confidence = 0.0;
 };
 
-Error resolve_graph(Database& db, const Options& options) {
+Error resolve_graph(Database& db,
+                    const Options& options,
+                    const std::chrono::steady_clock::time_point& started,
+                    std::size_t discovered,
+                    std::size_t changed) {
     std::vector<ResolverSymbol> symbols;
     std::map<std::string, std::vector<std::size_t>> by_simple;
     {
@@ -915,6 +931,7 @@ Error resolve_graph(Database& db, const Options& options) {
         sqlite3_int64 target_symbol_id = 0;
     };
     std::vector<ResolvedEdge> resolved_edges;
+    std::size_t resolved_progress = 0;
     for (const ResolverReference& reference : references) {
         if (cancelled(options))
             return {ErrorCode::Cancelled,
@@ -1019,6 +1036,20 @@ Error resolve_graph(Database& db, const Options& options) {
             return sqlite_error(db.get(), "could not publish resolved reference",
                                 db.path());
         update.reset();
+        ++resolved_progress;
+        if (options.on_progress) {
+            Progress progress;
+            progress.phase = ProgressPhase::GraphResolution;
+            progress.completed = resolved_progress;
+            progress.total = references.size();
+            progress.discovered = discovered;
+            progress.changed = changed;
+            progress.elapsed_ms =
+                std::chrono::duration_cast<std::chrono::milliseconds>(
+                    std::chrono::steady_clock::now() - started)
+                    .count();
+            options.on_progress(progress);
+        }
     }
 
     std::map<sqlite3_int64, std::set<sqlite3_int64>> callers;
@@ -1199,16 +1230,120 @@ Error clear_database(const Options& options, ClearStats& stats) {
     return ok_error();
 }
 
+Error probe(const Options& options, ProbeResult& result) {
+    result = {};
+    fs::path root;
+    Error error = workspace_root(options.workspace, root);
+    if (!error.ok()) return error;
+    const fs::path path = root / kProjectStateDirName / "index.sqlite";
+    result.path = path.string();
+
+    std::error_code filesystem_error;
+    const fs::file_status status = fs::symlink_status(path, filesystem_error);
+    if (filesystem_error == std::errc::no_such_file_or_directory ||
+        (!filesystem_error && !fs::exists(status))) {
+        result.state = ProbeState::MissingOrIncomplete;
+        return ok_error();
+    }
+    if (filesystem_error) {
+        return {ErrorCode::FileRead,
+                "could not inspect code index " + path.string() + ": " +
+                    filesystem_error.message()};
+    }
+    if (!fs::is_regular_file(status)) {
+        result.state = ProbeState::Corrupt;
+        result.error = {ErrorCode::FileRead,
+                        "code index path is not a regular file: " + path.string() +
+                            "; remove it and rebuild with --index-code"};
+        return ok_error();
+    }
+
+    Database db;
+    error = db.open(path.string(), true);
+    if (!error.ok()) {
+        result.state = ProbeState::Corrupt;
+        result.error = {ErrorCode::FileRead,
+                        "could not read code index " + path.string() + ": " +
+                            error.message + "; rebuild it with --index-code"};
+        return ok_error();
+    }
+    bool found = false;
+    std::string schema;
+    error = metadata(db, "schema_version", schema, found);
+    if (!error.ok()) {
+        result.state = ProbeState::Corrupt;
+        result.error = {ErrorCode::FileRead,
+                        "could not read code index metadata at " + path.string() +
+                            "; rebuild it with --index-code"};
+        return ok_error();
+    }
+    if (!found) {
+        result.state = ProbeState::MissingOrIncomplete;
+        return ok_error();
+    }
+    if (schema != std::to_string(kSchemaVersion)) {
+        result.state = ProbeState::Corrupt;
+        result.error = {
+            ErrorCode::UnsupportedFeature,
+            "code index schema at " + path.string() +
+                " is not supported; rebuild it with --index-code"};
+        return ok_error();
+    }
+    std::string complete;
+    error = metadata(db, "complete", complete, found);
+    if (!error.ok()) {
+        result.state = ProbeState::Corrupt;
+        result.error = {ErrorCode::FileRead,
+                        "could not read completion metadata at " + path.string() +
+                            "; rebuild it with --index-code"};
+        return ok_error();
+    }
+    result.state = found && complete == "1" ? ProbeState::Completed
+                                             : ProbeState::MissingOrIncomplete;
+    return ok_error();
+}
+
 Error refresh(const Options& options, RefreshStats& stats) {
     const auto started = std::chrono::steady_clock::now();
+    std::mutex progress_mutex;
+    ProgressPhase last_progress_phase = ProgressPhase::Discovery;
+    std::size_t last_progress_completed = 0;
+    const auto report = [&](ProgressPhase phase,
+                            std::size_t completed,
+                            std::size_t total,
+                            std::size_t discovered,
+                            std::size_t changed) {
+        if (!options.on_progress) return;
+        std::lock_guard<std::mutex> lock(progress_mutex);
+        if (phase != last_progress_phase) {
+            last_progress_phase = phase;
+            last_progress_completed = 0;
+        }
+        completed = std::max(completed, last_progress_completed);
+        last_progress_completed = completed;
+        Progress progress;
+        progress.phase = phase;
+        progress.completed = completed;
+        progress.total = total;
+        progress.discovered = discovered;
+        progress.changed = changed;
+        progress.elapsed_ms =
+            std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::steady_clock::now() - started)
+                .count();
+        options.on_progress(progress);
+    };
+    report(ProgressPhase::Discovery, 0, 0, 0, 0);
     fs::path root;
     Error error = workspace_root(options.workspace, root);
     if (!error.ok()) return error;
     IgnoreRules ignores;
     if (!(error = load_ignore_rules(root, ignores)).ok()) return error;
     std::vector<Candidate> candidates;
-    if (!(error = discover(root, ignores, options, candidates)).ok()) return error;
+    if (!(error = discover(root, ignores, options, candidates, started)).ok()) return error;
     stats.discovered = candidates.size();
+    report(ProgressPhase::Discovery, stats.discovered, stats.discovered,
+           stats.discovered, 0);
     if (cancelled(options)) return {ErrorCode::Cancelled, "code indexing cancelled"};
 
     const fs::path state_directory = root / kProjectStateDirName;
@@ -1280,6 +1415,8 @@ Error refresh(const Options& options, RefreshStats& stats) {
     }
 
     std::vector<ScannedFile> scanned(changed.size());
+    report(ProgressPhase::Scanning, 0, changed.size(), stats.discovered,
+           changed.size());
     const unsigned hardware = std::thread::hardware_concurrency();
     const std::size_t available = hardware == 0 ? 4 : hardware;
     const std::size_t automatic =
@@ -1289,6 +1426,7 @@ Error refresh(const Options& options, RefreshStats& stats) {
             ? 0
             : std::min<std::size_t>({32, automatic, changed.size()});
     std::atomic<std::size_t> cursor{0};
+    std::atomic<std::size_t> scanned_count{0};
     std::atomic<bool> worker_failed{false};
     std::mutex worker_error_mutex;
     std::string worker_error;
@@ -1302,6 +1440,10 @@ Error refresh(const Options& options, RefreshStats& stats) {
                         const std::size_t index = cursor.fetch_add(1);
                         if (index >= changed.size()) break;
                         scanned[index] = scan_candidate(changed[index], options);
+                        const std::size_t completed =
+                            scanned_count.fetch_add(1) + 1;
+                        report(ProgressPhase::Scanning, completed, changed.size(),
+                               stats.discovered, changed.size());
                     }
                 } catch (const std::exception& exception) {
                     worker_failed.store(true);
@@ -1349,7 +1491,11 @@ Error refresh(const Options& options, RefreshStats& stats) {
     if (cancelled(options)) return {ErrorCode::Cancelled, "code indexing cancelled; previous snapshot preserved"};
     if (schema_changed || scanner_changed || !scanned.empty() ||
         !removed.empty()) {
-        if (!(error = resolve_graph(db, options)).ok()) return error;
+        report(ProgressPhase::GraphResolution, 0, 0, stats.discovered,
+               changed.size());
+        if (!(error = resolve_graph(db, options, started, stats.discovered,
+                                    changed.size())).ok())
+            return error;
     }
     if (cancelled(options)) return {ErrorCode::Cancelled, "code indexing cancelled; previous snapshot preserved"};
     if (!(error = set_metadata(db, "schema_version", std::to_string(kSchemaVersion))).ok() ||
@@ -1360,7 +1506,11 @@ Error refresh(const Options& options, RefreshStats& stats) {
         !(error = set_metadata(db, "updated_at", std::to_string(indexed_at))).ok() ||
         !(error = set_metadata(db, "complete", "1")).ok()) return error;
     if (cancelled(options)) return {ErrorCode::Cancelled, "code indexing cancelled; previous snapshot preserved"};
+    report(ProgressPhase::SnapshotCommit, 0, 1, stats.discovered,
+           changed.size());
     if (!(error = transaction.commit()).ok()) return error;
+    report(ProgressPhase::SnapshotCommit, 1, 1, stats.discovered,
+           changed.size());
     stats.elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
                            std::chrono::steady_clock::now() - started)
                            .count();
@@ -1383,7 +1533,9 @@ Error check_freshness(const Options& options, Freshness& freshness) {
     IgnoreRules ignores;
     if (!(error = load_ignore_rules(root, ignores)).ok()) return error;
     std::vector<Candidate> candidates;
-    if (!(error = discover(root, ignores, options, candidates)).ok()) return error;
+    if (!(error = discover(root, ignores, options, candidates,
+                           std::chrono::steady_clock::now())).ok())
+        return error;
     std::set<std::string> current;
     for (const Candidate& candidate : candidates) {
         current.insert(candidate.path);
@@ -1459,6 +1611,25 @@ Error print_markdown(const Options& options, const Freshness& freshness, std::os
            << "** | **" << total_indexed << "** | **" << total_skipped << "** | **"
            << total_symbols << "** |\n";
     output << "\n";
+
+    Statement graph;
+    if (!(error = graph.prepare(
+              db, "SELECT COUNT(*),"
+                  "COALESCE(SUM(CASE WHEN resolution='resolved' THEN 1 ELSE 0 END),0),"
+                  "COALESCE(SUM(CASE WHEN resolution='ambiguous' THEN 1 ELSE 0 END),0),"
+                  "COALESCE(SUM(CASE WHEN resolution='unresolved' THEN 1 ELSE 0 END),0) "
+                  "FROM refs")).ok())
+        return error;
+    if (graph.step() != SQLITE_ROW)
+        return sqlite_error(db.get(), "could not read reference graph totals",
+                            db.path());
+    output << "## Reference Graph\n\n"
+           << "| References | Resolved | Ambiguous | Unresolved |\n"
+              "| ---: | ---: | ---: | ---: |\n"
+           << "| " << graph.column_int64(0) << " | " << graph.column_int64(1)
+           << " | " << graph.column_int64(2) << " | "
+           << graph.column_int64(3) << " |\n\n";
+
     if (!freshness.fresh) {
         output << "## Stale Snapshot\n\n";
         if (!freshness.reason.empty()) output << "- " << markdown_text(freshness.reason) << "\n";
@@ -1498,8 +1669,11 @@ Error print_markdown(const Options& options, const Freshness& freshness, std::os
                << "; status: " << markdown_text(files.column_text(4)) << ".\n\n";
         Statement symbols;
         if (!(error = symbols.prepare(
-                  db, "SELECT kind,qualified_name,signature,line_start,line_end,documentation FROM symbols "
-                      "WHERE file_id=? ORDER BY line_start,id")).ok() ||
+                  db, "SELECT s.kind,s.qualified_name,s.signature,s.line_start,s.line_end,"
+                      "s.documentation,COALESCE(ss.caller_count,0),"
+                      "COALESCE(ss.page_rank,0.0) FROM symbols s "
+                      "LEFT JOIN symbol_scores ss ON ss.symbol_id=s.id "
+                      "WHERE s.file_id=? ORDER BY s.line_start,s.id")).ok() ||
             !(error = symbols.bind_int64(db, 1, file_id)).ok()) return error;
         bool any = false;
         for (int symbol_rc = symbols.step(); symbol_rc != SQLITE_DONE; symbol_rc = symbols.step()) {
@@ -1509,7 +1683,10 @@ Error print_markdown(const Options& options, const Freshness& freshness, std::os
             output << "- **" << markdown_text(symbols.column_text(0)) << "** "
                    << markdown_code(symbols.column_text(1)) << " (lines " << symbols.column_int64(3)
                    << "-" << symbols.column_int64(4) << ")\n"
-                   << "  - Signature: " << markdown_code(symbols.column_text(2)) << "\n";
+                   << "  - Signature: " << markdown_code(symbols.column_text(2)) << "\n"
+                   << "  - Graph: callers " << symbols.column_int64(6)
+                   << "; PageRank " << std::fixed << std::setprecision(8)
+                   << symbols.column_double(7) << std::defaultfloat << "\n";
             const std::string documentation = symbols.column_text(5);
             if (!documentation.empty()) output << "  - Documentation: " << markdown_text(documentation) << "\n";
         }

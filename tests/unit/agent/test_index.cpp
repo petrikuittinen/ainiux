@@ -7,6 +7,7 @@
 #include <fstream>
 #include <sstream>
 #include <string>
+#include <mutex>
 #include <utility>
 #include <vector>
 
@@ -666,12 +667,50 @@ void test_refresh_incremental_report_and_skips() {
     ainiux::agent::index::Options options;
     options.workspace = root.string();
     options.max_source_code_file_size = 1024;
+    ainiux::agent::index::ProbeResult missing_probe;
+    ainiux::Error error =
+        ainiux::agent::index::probe(options, missing_probe);
+    check(error.ok() &&
+              missing_probe.state ==
+                  ainiux::agent::index::ProbeState::MissingOrIncomplete &&
+              !fs::exists(root / ".ainiux-pr" / "index.sqlite"),
+          "read-only probe recognizes a missing index without creating it");
+    std::mutex progress_mutex;
+    std::vector<ainiux::agent::index::Progress> progress;
+    options.on_progress =
+        [&](const ainiux::agent::index::Progress& update) {
+            std::lock_guard<std::mutex> lock(progress_mutex);
+            progress.push_back(update);
+        };
     ainiux::agent::index::RefreshStats first;
-    ainiux::Error error = ainiux::agent::index::refresh(options, first);
+    error = ainiux::agent::index::refresh(options, first);
     check(error.ok(), "initial project index refresh succeeds");
     check(first.discovered == 5 && first.indexed == 2 && first.skipped == 3,
           "discovery honors ignores and records binary, invalid UTF-8, and oversized skips");
     check(fs::exists(root / ".ainiux-pr" / "index.sqlite"), "project-local SQLite index is created");
+    bool ordered = !progress.empty();
+    int prior_phase = -1;
+    std::size_t prior_completed = 0;
+    for (const auto& update : progress) {
+        const int phase = static_cast<int>(update.phase);
+        if (phase < prior_phase) ordered = false;
+        if (phase != prior_phase) {
+            prior_phase = phase;
+            prior_completed = 0;
+        }
+        if (update.completed < prior_completed) ordered = false;
+        prior_completed = update.completed;
+    }
+    check(ordered && progress.back().phase ==
+                         ainiux::agent::index::ProgressPhase::SnapshotCommit &&
+              progress.back().completed == progress.back().total,
+          "foreground progress phases are ordered, monotonic, and complete");
+
+    ainiux::agent::index::ProbeResult probe;
+    error = ainiux::agent::index::probe(options, probe);
+    check(error.ok() &&
+              probe.state == ainiux::agent::index::ProbeState::Completed,
+          "read-only probe recognizes a completed index");
 
     ainiux::agent::index::RefreshStats second;
     error = ainiux::agent::index::refresh(options, second);
@@ -692,6 +731,8 @@ void test_refresh_incremental_report_and_skips() {
                   std::string::npos &&
               markdown.str().find("Language: Python; lines: 3; status: indexed.") !=
                   std::string::npos &&
+              markdown.str().find("## Reference Graph") != std::string::npos &&
+              markdown.str().find("PageRank 0.") != std::string::npos &&
               markdown.str().find("private.jsonl") == std::string::npos &&
               markdown.str().find("agent.jsonl") == std::string::npos,
           "Markdown report includes symbols, skips, per-language lines, and combined totals");
@@ -851,6 +892,19 @@ void test_reference_graph_ranking_and_hints() {
     check(add != nullptr &&
               ainiux::agent::index::distinct_caller_count(snapshot, add->id) == 2,
           "distinct caller count combines production and test callers");
+    ainiux::agent::index::Freshness graph_freshness;
+    error = ainiux::agent::index::check_freshness(options,
+                                                   graph_freshness);
+    std::ostringstream graph_report;
+    if (error.ok())
+        error = ainiux::agent::index::print_markdown(
+            options, graph_freshness, graph_report);
+    check(error.ok() &&
+              graph_report.str().find("## Reference Graph") !=
+                  std::string::npos &&
+              graph_report.str().find("Graph: callers 2; PageRank 0.") !=
+                  std::string::npos,
+          "index report includes reference totals and deterministic caller/PageRank diagnostics");
 
     const auto ranked =
         ainiux::agent::index::rank_task_symbols(snapshot, "change add behavior", 6);
@@ -938,6 +992,13 @@ void test_corrupt_index_errors() {
     ainiux::agent::index::Options options;
     options.workspace = root.string();
     ainiux::agent::index::Freshness freshness;
+    ainiux::agent::index::ProbeResult probe;
+    ainiux::Error probe_error =
+        ainiux::agent::index::probe(options, probe);
+    check(probe_error.ok() &&
+              probe.state == ainiux::agent::index::ProbeState::Corrupt &&
+              !probe.error.ok(),
+          "read-only probe distinguishes a corrupt index");
     const ainiux::Error error = ainiux::agent::index::check_freshness(options, freshness);
     check(!error.ok() && error.code == ainiux::ErrorCode::FileRead,
           "corrupt project code index produces a read error");

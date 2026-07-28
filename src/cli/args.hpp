@@ -69,6 +69,8 @@ struct Options {
     bool agent_plan = false;
     bool agent_log_enabled = true;
     bool agent_log_cli_explicit = false;
+    // Session-scoped strict A/B control. Never persisted to configuration.
+    bool disable_indexing = false;
 
     std::string positional_url;
     std::string prompt;
@@ -172,7 +174,7 @@ struct Options {
     int agent_compact_limit = 0;
     int agent_code_index_hint_max_symbols = 16;
     size_t agent_code_index_hint_max_bytes = 4U * 1024U;
-    int agent_code_index_hint_seed_symbols = 16;
+    int agent_code_index_hint_seed_symbols = 8;
     bool agent_show_command_output = false;
     long max_image_bytes = 20971520;
     long media_max_size_to_store_to_db = 65536;
@@ -229,6 +231,7 @@ Error validate_security_review_arguments(int argc, char** argv, const Options& o
 Error validate_agent_run_arguments(int argc, char** argv, const Options& options);
 // Interactive agent TUI: --agent / -a / ainiux agent
 Error validate_agent_interactive_arguments(int argc, char** argv, const Options& options);
+Error validate_disable_indexing_arguments(const Options& options);
 std::string help_text();
 const char* format_name(OutputFormat format);
 

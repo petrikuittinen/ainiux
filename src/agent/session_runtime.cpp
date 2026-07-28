@@ -298,7 +298,8 @@ SessionCompactionResult AgentSessionRuntime::compact(
 SessionProjectReplaceResult AgentSessionRuntime::replace_project(
     const provider::RequestContext& context,
     const NewProjectTarget& requested_target,
-    runtime::CancellationToken cancellation) {
+    runtime::CancellationToken cancellation,
+    std::optional<bool> indexing_enabled) {
     namespace fs = std::filesystem;
     SessionProjectReplaceResult result;
     if (!prepared_) {
@@ -324,6 +325,8 @@ SessionProjectReplaceResult AgentSessionRuntime::replace_project(
     new_options.workspace = target.root;
     new_options.task_mode = AgentTaskMode::Act;
     new_options.permission_mode = PermissionMode::Smart;
+    if (indexing_enabled.has_value())
+        new_options.indexing_enabled = *indexing_enabled;
     provider::RequestContext quiet_context = context;
     quiet_context.options.quiet = true;
 
@@ -514,10 +517,15 @@ Error AgentSessionRuntime::prepare(const provider::RequestContext& context,
     index_options.max_source_code_file_size = options_.max_source_code_file_size;
     index_options.cancellation = cancel_copy;
     index_options.interrupted = interrupted_fn;
+    index_options.on_progress = options_.on_index_progress;
     index::RefreshStats index_stats;
-    Error error = index::refresh(index_options, index_stats);
+    Error error = ok_error();
+    if (options_.indexing_enabled)
+        error = index::refresh(index_options, index_stats);
     if (logger_) {
         json::Value fields = log_object();
+        fields.object["indexing_enabled"] =
+            log_bool(options_.indexing_enabled);
         fields.object["discovered"] = log_number(index_stats.discovered);
         fields.object["indexed"] = log_number(index_stats.indexed);
         fields.object["unchanged"] = log_number(index_stats.unchanged);
@@ -534,7 +542,7 @@ Error AgentSessionRuntime::prepare(const provider::RequestContext& context,
         reset();
         return error;
     }
-    if (!context.options.quiet) {
+    if (!context.options.quiet && options_.indexing_enabled) {
         for (const std::string& diagnostic : index_stats.diagnostics)
             std::cerr << "Index warning: " << redact_secrets(diagnostic, secrets_) << "\n";
         std::cerr << "Code index refreshed: " << index_stats.discovered << " eligible, "
@@ -544,10 +552,12 @@ Error AgentSessionRuntime::prepare(const provider::RequestContext& context,
     }
 
     index::Snapshot snapshot;
-    error = index::load_snapshot(index_options, snapshot);
-    if (!error.ok()) {
-        reset();
-        return error;
+    if (options_.indexing_enabled) {
+        error = index::load_snapshot(index_options, snapshot);
+        if (!error.ok()) {
+            reset();
+            return error;
+        }
     }
 
     ToolRegistryOptions tool_options;
@@ -560,6 +570,7 @@ Error AgentSessionRuntime::prepare(const provider::RequestContext& context,
     tool_options.search_options = options_.search_options;
     tool_options.permission_mode = permission_mode_;
     tool_options.permission_controls = options_.interactive;
+    tool_options.indexing_enabled = options_.indexing_enabled;
     // Wrap Ask so every resolution is persisted and optionally surfaced.
     if (options_.on_guard_ask) {
         tool_options.on_guard_ask =
@@ -599,8 +610,13 @@ Error AgentSessionRuntime::prepare(const provider::RequestContext& context,
             return decision;
         };
     }
-    error = ReadToolRegistry::create(index_options, std::move(snapshot), secrets_, tools_,
-                                     tool_options);
+    if (options_.indexing_enabled) {
+        error = ReadToolRegistry::create(index_options, std::move(snapshot),
+                                         secrets_, tools_, tool_options);
+    } else {
+        error = ReadToolRegistry::create_without_index(
+            options_.workspace, secrets_, tools_, tool_options);
+    }
     if (!error.ok()) {
         reset();
         return error;

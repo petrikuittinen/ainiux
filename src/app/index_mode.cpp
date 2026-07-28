@@ -5,6 +5,7 @@
 #include <iostream>
 
 #include "agent/index/index.hpp"
+#include "app/index_progress.hpp"
 
 namespace ainiux::app {
 namespace {
@@ -60,8 +61,14 @@ int run_index_mode(const cli::Options& options) {
     }
 
     if (options.index_code) {
+        IndexProgressPrinter progress(true);
+        index_options.on_progress =
+            [&progress](const agent::index::Progress& update) {
+                progress.update(update);
+            };
         agent::index::RefreshStats stats;
         const Error error = agent::index::refresh(index_options, stats);
+        progress.finish();
         if (!error.ok()) {
             print_error(error);
             return exit_code_for(error.code);

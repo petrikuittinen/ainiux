@@ -157,6 +157,8 @@ Current behavior already:
 - rescans a file in the live in-memory snapshot after native agent mutations
 - treats symbol ranges and names as hints that must be verified against current source
 
+Landed diagnostics/A-B controls add foreground phase/file progress, read-only index-state probing, compact reference/caller/PageRank reporting, interactive missing-index confirmation, strict session-scoped `--disable-indexing`, and the 8-seed/16-symbol/4-KiB request-only hint defaults.
+
 Do not introduce a language-server, compiler frontend, embedding service, or model call
 into indexing.
 
