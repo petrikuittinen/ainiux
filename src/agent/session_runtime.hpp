@@ -114,8 +114,12 @@ struct SessionRuntimeOptions {
     int compact_limit = 0;  // 0 = derive from window
     // Injected by tests and embedders. Empty uses the active provider/model.
     CompactionSummaryCall summary_call;
-    enum class IndexMode { Disabled, UseExisting, CreateOrRefresh };
-    IndexMode index_mode = IndexMode::UseExisting;
+    enum class IndexMode {
+        Disabled,
+        UseExistingLazy,
+        UseExisting = UseExistingLazy,
+    };
+    IndexMode index_mode = IndexMode::UseExistingLazy;
     std::function<void(const index::Progress&)> on_index_progress;
     bool show_command_output = false;
     // Headless callers always use Smart and retain Ask→Deny through an empty
@@ -126,6 +130,7 @@ struct SessionRuntimeOptions {
     std::function<void(const std::string& status_line)> on_progress;
     std::function<void(const AgentProgressUpdate&)> on_structured_progress;
     std::function<void(AgentActivityPhase)> on_phase;
+    std::function<void(const PreparationProgress&)> on_prepare_progress;
     // Interactive Guard Ask (blocks tool worker until resolved). Empty ⇒ headless Deny.
     GuardApprovalCallback on_guard_ask;
 };
@@ -147,6 +152,9 @@ class AgentSessionRuntime {
     MutationPolicy mutation_policy() const { return tools_.mutation_policy(); }
     PermissionMode permission_mode() const { return permission_mode_; }
     bool indexing_enabled() const { return tools_.indexing_enabled(); }
+    // Cheap, non-blocking handoff invoked by surfaces only after they have
+    // published Agent readiness.
+    void begin_background_index_freshness();
     std::size_t session_turns() const { return session_turns_; }
     std::size_t session_tool_calls() const { return session_tool_calls_; }
     std::size_t session_failed_tool_calls() const {

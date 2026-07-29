@@ -3,12 +3,14 @@
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
+#include <cstdint>
 #include <deque>
 #include <functional>
 #include <memory>
 #include <mutex>
 #include <thread>
 #include <utility>
+#include <vector>
 
 namespace ainiux::runtime {
 
@@ -107,6 +109,31 @@ class JobHandle {
     CancellationSource source_;
     std::thread thread_;
     std::atomic<bool> running_{false};
+};
+
+// Owns a latest-wins background job without ever joining superseded work from
+// start(). Call reap_finished() from the owning event loop and shutdown() before
+// destroying resources captured by jobs.
+class BackgroundJobs {
+   public:
+    using Job = JobHandle::Job;
+
+    BackgroundJobs() = default;
+    ~BackgroundJobs();
+    BackgroundJobs(const BackgroundJobs&) = delete;
+    BackgroundJobs& operator=(const BackgroundJobs&) = delete;
+
+    std::uint64_t start(Job job);
+    void reap_finished();
+    void cancel_all();
+    void shutdown();
+    std::uint64_t generation() const { return generation_; }
+    std::size_t job_count() const;
+
+   private:
+    std::uint64_t generation_ = 0;
+    std::shared_ptr<JobHandle> current_;
+    std::vector<std::shared_ptr<JobHandle>> retired_;
 };
 
 }  // namespace ainiux::runtime

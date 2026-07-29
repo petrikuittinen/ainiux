@@ -19,6 +19,12 @@
 namespace ainiux::agent {
 
 struct IndexRefreshState;
+struct IndexOverlayEntry {
+    bool removed = false;
+    index::IndexedFile file;
+    std::vector<index::IndexedSymbol> symbols;
+    std::size_t revision = 0;
+};
 
 struct SourceRange {
     std::string path;
@@ -33,6 +39,11 @@ struct SourceRange {
 };
 
 enum class MutationPolicy { Disabled, PlanningDocuments, Full };
+enum class IndexAccessMode {
+    Disabled,
+    LazyHints,
+    SnapshotAuthorization,
+};
 
 // Snapshot-backed workspace tools. Security review disables mutation, Plan
 // limits writes to approved planning Markdown, and Act enables full mutation.
@@ -54,6 +65,8 @@ struct ToolRegistryOptions {
     PermissionMode permission_mode = PermissionMode::Smart;
     bool permission_controls = false;
     bool indexing_enabled = true;
+    IndexAccessMode index_access_mode =
+        IndexAccessMode::SnapshotAuthorization;
 };
 
 class ReadToolRegistry {
@@ -78,6 +91,10 @@ class ReadToolRegistry {
                                       std::vector<std::string> secrets,
                                       ReadToolRegistry& registry,
                                       ToolRegistryOptions options = {});
+    static Error create_lazy(index::Options index_options,
+                             std::vector<std::string> secrets,
+                             ReadToolRegistry& registry,
+                             ToolRegistryOptions options = {});
 
     const index::Snapshot& snapshot() const { return snapshot_; }
     bool indexing_enabled() const { return indexing_enabled_; }
@@ -85,6 +102,8 @@ class ReadToolRegistry {
     // resetting its permission, mutation, network, or approval state.
     Error enable_persistent_index(index::Options index_options,
                                   index::Snapshot snapshot);
+    Error enable_lazy_index(index::Options index_options);
+    void enqueue_background_freshness() const;
     bool allow_mutations() const { return mutation_policy_ != MutationPolicy::Disabled; }
     MutationPolicy mutation_policy() const { return mutation_policy_; }
     void set_mutation_policy(MutationPolicy policy) { mutation_policy_ = policy; }
@@ -163,8 +182,9 @@ class ReadToolRegistry {
                                 std::vector<std::string>& warnings) const;
     void note_written_file(const std::string& relative_path, const std::string& content) const;
     void note_removed_path(const std::string& relative_path) const;
-    void queue_index_paths(const std::vector<std::string>& paths,
-                           bool full_tree = false) const;
+    std::size_t queue_index_paths(const std::vector<std::string>& paths,
+                                  bool full_tree = false) const;
+    void merge_index_overlay() const;
     void rebuild_file_map() const;
     Error resolve_writable_path(const std::string& relative_path, std::filesystem::path& absolute) const;
     Error normalize_mutation_path(const std::string& input, std::string& relative) const;
@@ -217,6 +237,7 @@ class ReadToolRegistry {
     mutable std::map<std::string, const index::IndexedFile*> files_;
     std::unique_ptr<IndexRefreshState> index_refresh_;
     mutable std::size_t loaded_index_generation_ = 0;
+    mutable std::map<std::string, IndexOverlayEntry> index_overlay_;
     MutationPolicy mutation_policy_ = MutationPolicy::Disabled;
     bool allow_network_ = false;
     HistoryBackupPolicy history_backup_{};
@@ -226,6 +247,8 @@ class ReadToolRegistry {
     PermissionMode permission_mode_ = PermissionMode::Smart;
     bool permission_controls_ = false;
     bool indexing_enabled_ = true;
+    IndexAccessMode index_access_mode_ =
+        IndexAccessMode::SnapshotAuthorization;
 };
 
 std::string tool_error_result(const std::string& code, const std::string& message);

@@ -208,6 +208,28 @@ class Transaction {
     bool active_ = false;
 };
 
+class ReadTransaction {
+   public:
+    explicit ReadTransaction(Database& db) : db_(db) {}
+    ~ReadTransaction() {
+        if (active_) (void)db_.exec("ROLLBACK");
+    }
+    Error begin() {
+        Error error = db_.exec("BEGIN");
+        active_ = error.ok();
+        return error;
+    }
+    Error finish() {
+        Error error = db_.exec("COMMIT");
+        if (error.ok()) active_ = false;
+        return error;
+    }
+
+   private:
+    Database& db_;
+    bool active_ = false;
+};
+
 Language parse_language(const std::string& value) {
     if (value == "Markdown") return Language::Markdown;
     if (value == "C++") return Language::Cpp;
@@ -511,8 +533,7 @@ Error discover(const fs::path& root,
     const std::size_t worker_count =
         options.update_paths.size() == 1
             ? 1
-            : std::min<std::size_t>(
-                  32, std::max<std::size_t>(1, (available * 3) / 4));
+            : std::max<std::size_t>(1, (available * 4) / 5);
     auto fail = [&](Error error) {
         std::lock_guard<std::mutex> lock(mutex);
         if (!failed) {
@@ -819,6 +840,15 @@ std::string database_path(const std::string& workspace) {
     return (fs::path(workspace) / kProjectStateDirName / "index.sqlite").string();
 }
 
+std::size_t worker_count_for(std::size_t online_cores,
+                             std::size_t work_items) {
+    if (work_items == 0) return 0;
+    const std::size_t available = online_cores == 0 ? 4 : online_cores;
+    const std::size_t automatic =
+        std::max<std::size_t>(1, (available * 4) / 5);
+    return std::min(automatic, work_items);
+}
+
 Error discover_source_files(const Options& options,
                             std::vector<DiscoveredFile>& files) {
     files.clear();
@@ -1104,12 +1134,7 @@ Error refresh(const Options& options, RefreshStats& stats) {
            changed.size());
     const unsigned hardware = std::thread::hardware_concurrency();
     const std::size_t available = hardware == 0 ? 4 : hardware;
-    const std::size_t automatic =
-        std::max<std::size_t>(1, (available * 3) / 4);
-    stats.worker_count =
-        changed.empty()
-            ? 0
-            : std::min<std::size_t>({8, automatic, changed.size()});
+    stats.worker_count = worker_count_for(available, changed.size());
 
     Transaction transaction(db);
     if (!(error = transaction.begin()).ok()) return error;
@@ -1143,31 +1168,33 @@ Error refresh(const Options& options, RefreshStats& stats) {
         const std::size_t batch_workers =
             std::min(stats.worker_count, batch_count);
         workers.reserve(batch_workers);
-        try {
-            for (std::size_t worker = 0; worker < batch_workers; ++worker) {
-                workers.emplace_back([&] {
-                    try {
-                        while (!cancelled(options) &&
-                               !worker_failed.load()) {
-                            const std::size_t local = cursor.fetch_add(1);
-                            if (local >= batch_count) break;
-                            scanned[local] = scan_candidate(
-                                changed[batch_begin + local], options);
-                            report(ProgressPhase::Scanning,
-                                   batch_begin + local + 1, changed.size(),
-                                   stats.discovered, changed.size());
-                        }
-                    } catch (const std::exception& exception) {
-                        worker_failed.store(true);
-                        std::lock_guard<std::mutex> lock(worker_error_mutex);
-                        worker_error = exception.what();
-                    } catch (...) {
-                        worker_failed.store(true);
-                        std::lock_guard<std::mutex> lock(worker_error_mutex);
-                        worker_error = "unknown scanner exception";
-                    }
-                });
+        auto scan_worker = [&] {
+            try {
+                while (!cancelled(options) && !worker_failed.load()) {
+                    const std::size_t local = cursor.fetch_add(1);
+                    if (local >= batch_count) break;
+                    scanned[local] =
+                        scan_candidate(changed[batch_begin + local], options);
+                    report(ProgressPhase::Scanning,
+                           batch_begin + local + 1, changed.size(),
+                           stats.discovered, changed.size());
+                }
+            } catch (const std::exception& exception) {
+                worker_failed.store(true);
+                std::lock_guard<std::mutex> lock(worker_error_mutex);
+                worker_error = exception.what();
+            } catch (...) {
+                worker_failed.store(true);
+                std::lock_guard<std::mutex> lock(worker_error_mutex);
+                worker_error = "unknown scanner exception";
             }
+        };
+        try {
+            if (batch_workers == 1)
+                scan_worker();
+            else
+                for (std::size_t worker = 0; worker < batch_workers; ++worker)
+                    workers.emplace_back(scan_worker);
         } catch (const std::exception& exception) {
             worker_failed.store(true);
             std::lock_guard<std::mutex> lock(worker_error_mutex);
@@ -1491,6 +1518,211 @@ Error load_snapshot(const Options& options, Snapshot& snapshot) {
     return ok_error();
 }
 
+namespace {
+
+Error open_query_database(const Options& options, fs::path& root,
+                          Database& db, ReadTransaction& transaction) {
+    Error error = workspace_root(options.workspace, root);
+    if (!error.ok()) return error;
+    const fs::path path = root / kProjectStateDirName / "index.sqlite";
+    if (!(error = db.open(path.string(), true)).ok() ||
+        !(error = validate_read_schema(db)).ok() ||
+        !(error = transaction.begin()).ok())
+        return error;
+    return ok_error();
+}
+
+IndexedFile indexed_file_from_statement(const Statement& row) {
+    IndexedFile file;
+    file.id = row.column_int64(0);
+    file.path = row.column_text(1);
+    file.language = parse_language(row.column_text(2));
+    file.size = static_cast<std::uintmax_t>(row.column_int64(3));
+    file.mtime_ns = row.column_int64(4);
+    file.content_hash = row.column_text(5);
+    file.line_count = static_cast<std::size_t>(row.column_int64(6));
+    file.status = row.column_text(7);
+    file.error = row.column_text(8);
+    return file;
+}
+
+IndexedSymbol indexed_symbol_from_statement(const Statement& row) {
+    IndexedSymbol item;
+    item.id = row.column_int64(0);
+    item.file_id = row.column_int64(1);
+    item.path = row.column_text(2);
+    item.symbol.kind = row.column_text(3);
+    item.symbol.name = row.column_text(4);
+    item.symbol.qualified_name = row.column_text(5);
+    item.symbol.signature = row.column_text(6);
+    item.symbol.parameters = row.column_text(7);
+    item.symbol.return_type = row.column_text(8);
+    item.symbol.line_start = static_cast<int>(row.column_int64(9));
+    item.symbol.line_end = static_cast<int>(row.column_int64(10));
+    item.symbol.documentation = row.column_text(11);
+    const auto parse_hash = [](const std::string& value) -> std::uint64_t {
+        try {
+            return std::stoull(value, nullptr, 16);
+        } catch (...) {
+            return 0;
+        }
+    };
+    item.symbol.signature_hash = parse_hash(row.column_text(12));
+    item.symbol.body_hash = parse_hash(row.column_text(13));
+    item.symbol.importance = static_cast<int>(row.column_int64(14));
+    return item;
+}
+
+constexpr const char* kSymbolColumns =
+    "SELECT s.id,s.file_id,f.path,s.kind,s.name,s.qualified_name,s.signature,"
+    "s.parameters,s.return_type,s.line_start,s.line_end,s.documentation,"
+    "s.signature_hash,s.body_hash,s.importance "
+    "FROM symbols s JOIN files f ON f.id=s.file_id";
+
+}  // namespace
+
+Error query_files(const Options& options, std::vector<IndexedFile>& files) {
+    files.clear();
+    fs::path root;
+    Database db;
+    ReadTransaction transaction(db);
+    Error error = open_query_database(options, root, db, transaction);
+    if (!error.ok()) return error;
+    Statement statement;
+    error = statement.prepare(
+        db, "SELECT id,path,language,size,mtime_ns,content_hash,line_count,"
+            "scan_status,scan_error FROM files ORDER BY path");
+    if (!error.ok()) return error;
+    for (int rc = statement.step(); rc != SQLITE_DONE; rc = statement.step()) {
+        if (cancelled(options))
+            return {ErrorCode::Cancelled, "querying indexed files cancelled"};
+        if (rc != SQLITE_ROW)
+            return sqlite_error(db.get(), "could not query indexed files",
+                                db.path());
+        files.push_back(indexed_file_from_statement(statement));
+    }
+    return transaction.finish();
+}
+
+Error query_symbols(const Options& options,
+                    const std::vector<std::string>& paths,
+                    std::vector<IndexedSymbol>& symbols,
+                    std::size_t maximum) {
+    symbols.clear();
+    fs::path root;
+    Database db;
+    ReadTransaction transaction(db);
+    Error error = open_query_database(options, root, db, transaction);
+    if (!error.ok()) return error;
+    std::string sql = kSymbolColumns;
+    if (!paths.empty()) {
+        sql += " WHERE f.path IN (";
+        for (std::size_t i = 0; i < paths.size(); ++i)
+            sql += i == 0 ? "?" : ",?";
+        sql += ")";
+    }
+    sql += " ORDER BY f.path,s.line_start,s.id";
+    if (maximum > 0) sql += " LIMIT " + std::to_string(maximum);
+    Statement statement;
+    error = statement.prepare(db, sql.c_str());
+    if (!error.ok()) return error;
+    for (std::size_t i = 0; i < paths.size(); ++i) {
+        error = statement.bind_text(db, static_cast<int>(i + 1), paths[i]);
+        if (!error.ok()) return error;
+    }
+    for (int rc = statement.step(); rc != SQLITE_DONE; rc = statement.step()) {
+        if (cancelled(options))
+            return {ErrorCode::Cancelled, "querying indexed symbols cancelled"};
+        if (rc != SQLITE_ROW)
+            return sqlite_error(db.get(), "could not query indexed symbols",
+                                db.path());
+        symbols.push_back(indexed_symbol_from_statement(statement));
+    }
+    return transaction.finish();
+}
+
+Error query_symbol(const Options& options, long long id,
+                   IndexedSymbol& symbol, bool& found) {
+    found = false;
+    fs::path root;
+    Database db;
+    ReadTransaction transaction(db);
+    Error error = open_query_database(options, root, db, transaction);
+    if (!error.ok()) return error;
+    const std::string sql = std::string(kSymbolColumns) + " WHERE s.id=?";
+    Statement statement;
+    if (!(error = statement.prepare(db, sql.c_str())).ok() ||
+        !(error = statement.bind_int64(db, 1, id)).ok())
+        return error;
+    const int rc = statement.step();
+    if (rc == SQLITE_ROW) {
+        symbol = indexed_symbol_from_statement(statement);
+        found = true;
+    } else if (rc != SQLITE_DONE) {
+        return sqlite_error(db.get(), "could not query indexed symbol",
+                            db.path());
+    }
+    if (cancelled(options))
+        return {ErrorCode::Cancelled, "querying indexed symbol cancelled"};
+    return transaction.finish();
+}
+
+Error query_totals(const Options& options, QueryTotals& totals) {
+    totals = QueryTotals{};
+    fs::path root;
+    Database db;
+    ReadTransaction transaction(db);
+    Error error = open_query_database(options, root, db, transaction);
+    if (!error.ok()) return error;
+    std::string updated;
+    bool found = false;
+    if (!(error = metadata(db, "updated_at", updated, found)).ok()) return error;
+    if (found) {
+        try {
+            totals.updated_at = std::stoll(updated);
+        } catch (...) {
+            return {ErrorCode::FileRead,
+                    "invalid updated_at metadata in code index " + db.path()};
+        }
+    }
+    Statement statement;
+    error = statement.prepare(
+        db, "SELECT f.language,COUNT(*),"
+            "SUM(CASE WHEN f.scan_status='indexed' THEN f.line_count ELSE 0 END),"
+            "SUM(f.size),"
+            "SUM(CASE WHEN f.scan_status='indexed' THEN 1 ELSE 0 END),"
+            "SUM(CASE WHEN f.scan_status='indexed' THEN 0 ELSE 1 END),"
+            "(SELECT COUNT(*) FROM symbols s JOIN files sf ON sf.id=s.file_id "
+            " WHERE sf.language=f.language) "
+            "FROM files f GROUP BY f.language ORDER BY f.language");
+    if (!error.ok()) return error;
+    for (int rc = statement.step(); rc != SQLITE_DONE; rc = statement.step()) {
+        if (cancelled(options))
+            return {ErrorCode::Cancelled, "querying code-index totals cancelled"};
+        if (rc != SQLITE_ROW)
+            return sqlite_error(db.get(), "could not query code-index totals",
+                                db.path());
+        LanguageTotal language;
+        language.language = parse_language(statement.column_text(0));
+        language.files = static_cast<std::size_t>(statement.column_int64(1));
+        language.lines = static_cast<std::size_t>(statement.column_int64(2));
+        language.bytes =
+            static_cast<std::uintmax_t>(statement.column_int64(3));
+        language.indexed =
+            static_cast<std::size_t>(statement.column_int64(4));
+        language.skipped =
+            static_cast<std::size_t>(statement.column_int64(5));
+        language.symbols =
+            static_cast<std::size_t>(statement.column_int64(6));
+        totals.files += language.files;
+        totals.indexed += language.indexed;
+        totals.skipped += language.skipped;
+        totals.symbols += language.symbols;
+        totals.languages.push_back(std::move(language));
+    }
+    return transaction.finish();
+}
+
 std::string compact_totals_markdown(const Snapshot& snapshot) {
     struct Totals {
         std::size_t files = 0;
@@ -1536,6 +1768,44 @@ std::string compact_totals_markdown(const Snapshot& snapshot) {
     output << "| **All languages** | **" << all.files << "** | **"
            << all.lines << "** | **" << all.indexed << "** | **"
            << all.skipped << "** | **" << all.symbols << "** |\n";
+    return output.str();
+}
+
+std::string compact_totals_markdown(const QueryTotals& totals) {
+    Snapshot snapshot;
+    snapshot.updated_at = totals.updated_at;
+    snapshot.language_totals = totals.languages;
+    struct Row {
+        std::size_t files = 0;
+        std::size_t lines = 0;
+        std::size_t indexed = 0;
+        std::size_t skipped = 0;
+        std::size_t symbols = 0;
+    };
+    std::map<std::string, Row> rows;
+    for (const LanguageTotal& language : totals.languages) {
+        Row& row = rows[language_name(language.language)];
+        row.files = language.files;
+        row.lines = language.lines;
+        row.indexed = language.indexed;
+        row.skipped = language.skipped;
+        row.symbols = language.symbols;
+    }
+    std::ostringstream output;
+    output << "| Language | Files | Lines of code | Indexed | Skipped/errors | Symbols |\n"
+              "| --- | ---: | ---: | ---: | ---: | ---: |\n";
+    for (const auto& entry : rows) {
+        const Row& row = entry.second;
+        output << "| " << entry.first << " | " << row.files << " | "
+               << row.lines << " | " << row.indexed << " | "
+               << row.skipped << " | " << row.symbols << " |\n";
+    }
+    output << "| **All languages** | **" << totals.files << "** | **";
+    std::size_t lines = 0;
+    for (const LanguageTotal& language : totals.languages)
+        lines += language.lines;
+    output << lines << "** | **" << totals.indexed << "** | **"
+           << totals.skipped << "** | **" << totals.symbols << "** |\n";
     return output.str();
 }
 
@@ -1735,6 +2005,57 @@ std::vector<RankedSymbol> rank_task_symbols(const Snapshot& snapshot,
               });
     if (ranked.size() > maximum) ranked.resize(maximum);
     return ranked;
+}
+
+Error query_ranked_symbols(const Options& options, const std::string& task,
+                           std::size_t maximum,
+                           std::vector<OwnedRankedSymbol>& ranked) {
+    ranked.clear();
+    if (maximum == 0) return ok_error();
+    fs::path root;
+    Database db;
+    ReadTransaction transaction(db);
+    Error error = open_query_database(options, root, db, transaction);
+    if (!error.ok()) return error;
+    const std::string sql =
+        std::string(kSymbolColumns) + " ORDER BY f.path,s.line_start,s.id";
+    Statement statement;
+    if (!(error = statement.prepare(db, sql.c_str())).ok()) return error;
+    auto before = [](const OwnedRankedSymbol& left,
+                     const OwnedRankedSymbol& right) {
+        if (left.score != right.score) return left.score > right.score;
+        if (left.symbol.path != right.symbol.path)
+            return left.symbol.path < right.symbol.path;
+        if (left.symbol.symbol.line_start != right.symbol.symbol.line_start)
+            return left.symbol.symbol.line_start <
+                   right.symbol.symbol.line_start;
+        return left.symbol.id < right.symbol.id;
+    };
+    for (int rc = statement.step(); rc != SQLITE_DONE; rc = statement.step()) {
+        if (cancelled(options))
+            return {ErrorCode::Cancelled,
+                    "ranking indexed symbols cancelled"};
+        if (rc != SQLITE_ROW)
+            return sqlite_error(db.get(), "could not rank indexed symbols",
+                                db.path());
+        Snapshot one;
+        one.symbols.push_back(indexed_symbol_from_statement(statement));
+        const std::vector<RankedSymbol> scored =
+            rank_task_symbols(one, task, 1);
+        if (scored.empty()) continue;
+        OwnedRankedSymbol item;
+        item.symbol = one.symbols.front();
+        item.score = scored.front().score;
+        item.importance = scored.front().importance;
+        item.reason = scored.front().reason;
+        item.direct_task_match = scored.front().direct_task_match;
+        item.matched_task_tokens = scored.front().matched_task_tokens;
+        const auto position =
+            std::lower_bound(ranked.begin(), ranked.end(), item, before);
+        ranked.insert(position, std::move(item));
+        if (ranked.size() > maximum) ranked.pop_back();
+    }
+    return transaction.finish();
 }
 
 std::string content_hash(const std::string& content) {

@@ -151,6 +151,9 @@ struct LanguageTotal {
     std::size_t files = 0;
     std::size_t lines = 0;
     std::uintmax_t bytes = 0;
+    std::size_t indexed = 0;
+    std::size_t skipped = 0;
+    std::size_t symbols = 0;
 };
 
 struct Snapshot {
@@ -170,11 +173,33 @@ struct RankedSymbol {
     std::size_t matched_task_tokens = 0;
 };
 
+// Agent-facing query results own their records. They must remain valid after
+// the short-lived read-only SQLite transaction closes.
+struct OwnedRankedSymbol {
+    IndexedSymbol symbol;
+    double score = 0.0;
+    int importance = 0;
+    std::string reason;
+    bool direct_task_match = false;
+    std::size_t matched_task_tokens = 0;
+};
+
+struct QueryTotals {
+    long long updated_at = 0;
+    std::size_t files = 0;
+    std::size_t indexed = 0;
+    std::size_t skipped = 0;
+    std::size_t symbols = 0;
+    std::vector<LanguageTotal> languages;
+};
+
 const char* language_name(Language language);
 bool language_for_path(const std::string& path, Language& language);
 ScanResult scan_source(const std::string& path, const std::string& source, Language language);
 
 std::string database_path(const std::string& workspace);
+std::size_t worker_count_for(std::size_t online_cores,
+                             std::size_t work_items);
 // Discover the same eligible source paths as refresh(), without probing,
 // opening, creating, or mutating the project index database.
 Error discover_source_files(const Options& options,
@@ -185,9 +210,23 @@ Error refresh(const Options& options, RefreshStats& stats);
 Error check_freshness(const Options& options, Freshness& freshness);
 Error print_markdown(const Options& options, const Freshness& freshness, std::ostream& output);
 Error load_snapshot(const Options& options, Snapshot& snapshot);
+// Short-lived, cancellable, read-only queries used by Agent lazy-hint mode.
+// Security review deliberately continues to use load_snapshot().
+Error query_files(const Options& options, std::vector<IndexedFile>& files);
+Error query_symbols(const Options& options,
+                    const std::vector<std::string>& paths,
+                    std::vector<IndexedSymbol>& symbols,
+                    std::size_t maximum = 0);
+Error query_symbol(const Options& options, long long id,
+                   IndexedSymbol& symbol, bool& found);
+Error query_ranked_symbols(const Options& options, const std::string& task,
+                           std::size_t maximum,
+                           std::vector<OwnedRankedSymbol>& ranked);
+Error query_totals(const Options& options, QueryTotals& totals);
 // The totals table used at the start of --print-index, without headings or
 // per-file details. Suitable for compact interactive Agent history.
 std::string compact_totals_markdown(const Snapshot& snapshot);
+std::string compact_totals_markdown(const QueryTotals& totals);
 std::string content_hash(const std::string& content);
 
 std::vector<RankedSymbol> rank_task_symbols(const Snapshot& snapshot,

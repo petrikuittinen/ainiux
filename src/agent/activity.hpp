@@ -9,6 +9,23 @@ namespace ainiux::agent {
 // the surface hosting the runtime.
 enum class AgentActivityPhase { Thinking, Working };
 
+enum class PreparationPhase {
+    IndexProbe,
+    ToolSetup,
+    SessionDatabase,
+    History,
+    ProjectInstructions,
+};
+
+const char* preparation_phase_name(PreparationPhase phase);
+
+struct PreparationProgress {
+    PreparationPhase phase = PreparationPhase::IndexProbe;
+    bool completed = false;
+    long long phase_elapsed_ms = 0;
+    long long total_elapsed_ms = 0;
+};
+
 enum class AgentProgressAction { Upsert, Commit, Discard };
 enum class AgentProgressKind { Thinking, Tool, Notice };
 

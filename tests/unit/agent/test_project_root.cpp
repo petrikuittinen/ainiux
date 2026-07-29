@@ -246,9 +246,13 @@ void test_compaction_strategies_timeline_and_partition() {
                   "Compacting context using summary.." &&
               agent::format_compaction_progress(CompactionStrategy::Summary, 2) ==
                   "Compacting context using summary..." &&
-              agent::format_compaction_success_notice(57624, 5624) ==
-                  "Compacting context succeeded. ~52000 tokens saved. 5624 tokens in remaining context.",
-          "compaction progress is visible and success reporting stays one line");
+              agent::format_compaction_success_notice(116) ==
+                  "Compacting context succeeded in 1 min 56 seconds" &&
+              agent::format_compaction_success_notice(1) ==
+                  "Compacting context succeeded in 1 second" &&
+              agent::format_compaction_success_notice(0) ==
+                  "Compacting context succeeded in 0 seconds",
+          "compaction progress is visible and success reports elapsed time");
     check(agent::format_compaction_no_op_notice(8900).find(
               "Compacting context skipped.") == 0 &&
               agent::format_compaction_no_op_notice(8900).find(

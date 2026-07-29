@@ -523,7 +523,8 @@ void handle_tui_command(const std::string& text, TuiCommandContext& ctx, TuiComm
                 ctx.status =
                     "Context window: " +
                     std::to_string(ctx.context.options.context_tokens) + " tokens (" +
-                    (ctx.context.options.has_context_tokens ? "override" : "from /v1/models") +
+                    (ctx.context.options.has_context_tokens ? "override"
+                                                           : "catalog/model picker") +
                     ")";
             } else {
                 ctx.status =

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstddef>
+#include <cstdint>
 #include <string>
 #include <vector>
 
@@ -40,8 +41,8 @@ enum class TuiEventType {
     AgentIndexReportDone,
     AgentPhase,
     AgentProgress,
-    AgentIndexProbeDone,
     AgentPrepareDone,
+    AgentPrepareProgress,
     AgentIndexProgress,
 };
 
@@ -64,10 +65,9 @@ enum class TuiMode {
     AgentPermissionSelect,
     AgentContinueConfirm,
     AgentNewConfirm,
-    AgentIndexConfirm,
 };
 
-enum class ModelsRequestPurpose { Preview, Picker, ContextRefresh };
+enum class ModelsRequestPurpose { Preview, Picker };
 
 struct TuiEvent {
     TuiEventType type = TuiEventType::Delta;
@@ -78,6 +78,8 @@ struct TuiEvent {
     std::vector<std::string> models;
     provider::ModelsResult models_result;
     provider::CreditBalanceResult credit_balance;
+    std::uint64_t background_generation = 0;
+    std::string requested_provider;
     provider::Message inserted_message;
     std::string inserted_text;
     provider::ImageInput image;
@@ -123,8 +125,7 @@ struct TuiEvent {
     CompactionStrategy agent_compact_applied = CompactionStrategy::Smart;
     agent::AgentActivityPhase agent_phase = agent::AgentActivityPhase::Thinking;
     agent::AgentProgressUpdate agent_progress;
-    agent::index::ProbeState agent_index_state =
-        agent::index::ProbeState::MissingOrIncomplete;
+    agent::PreparationProgress agent_prepare_progress;
     agent::index::Progress agent_index_progress;
 };
 

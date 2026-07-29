@@ -119,6 +119,24 @@ agent::ReadToolRegistry make_registry(const std::string& workspace,
                                       bool allow_mutations,
                                       bool auto_approve_create_dirs);
 
+agent::ReadToolRegistry make_lazy_registry(const std::string& workspace) {
+    agent::index::Options options;
+    options.workspace = workspace;
+    options.max_source_code_file_size = 1024 * 1024;
+    agent::index::RefreshStats stats;
+    check(agent::index::refresh(options, stats).ok(),
+          "index refresh for lazy registry fixture");
+    agent::ReadToolRegistry tools;
+    agent::ToolRegistryOptions tool_options;
+    tool_options.mutation_policy = agent::MutationPolicy::Full;
+    const Error error = agent::ReadToolRegistry::create_lazy(
+        std::move(options), {}, tools, tool_options);
+    check(error.ok() && tools.snapshot().files.empty() &&
+              tools.snapshot().symbols.empty(),
+          "lazy Agent registry attaches without an eager snapshot");
+    return tools;
+}
+
 void test_external_file_access_requires_one_shot_approval() {
     const std::string workspace = write_temp_workspace("external-project");
     const fs::path outside_dir =
@@ -1589,6 +1607,57 @@ void test_index_status_and_update() {
     fs::remove_all(workspace, ec);
 }
 
+void test_lazy_index_tools_and_touched_overlay() {
+    const std::string workspace = write_temp_workspace("lazy-tools");
+    write_text(fs::path(workspace) / "src" / "symbols.cpp",
+               "int alpha() { return 1; }\n");
+    agent::ReadToolRegistry tools = make_lazy_registry(workspace);
+
+    check(json_ok(tools.execute("project_overview", "{}")) &&
+              json_ok(tools.execute(
+                  "glob", R"JSON({"pattern":"src/*.cpp"})JSON")) &&
+              json_ok(tools.execute(
+                  "search_text", R"JSON({"query":"alpha"})JSON")) &&
+              json_ok(tools.execute(
+                  "search_symbol", R"JSON({"query":"alpha"})JSON")) &&
+              json_ok(tools.execute(
+                  "get_skeleton",
+                  R"JSON({"path":"src/symbols.cpp"})JSON")) &&
+              json_ok(tools.execute(
+                  "inspect_code_task",
+                  R"JSON({"query":"alpha symbol"})JSON")) &&
+              json_ok(tools.execute(
+                  "find_tests",
+                  R"JSON({"path":"src/symbols.cpp"})JSON")) &&
+              json_ok(tools.execute("index_status", "{}")),
+          "lazy Agent queries cover overview, files, symbols, skeletons, tests, and totals");
+
+    const std::string write = tools.execute(
+        "write_file",
+        R"JSON({"path":"src/touched.cpp","content":"int touched_symbol() { return 2; }\n"})JSON");
+    const std::string touched = tools.execute(
+        "search_symbol", R"JSON({"query":"touched_symbol"})JSON");
+    check(json_ok(write) && json_ok(touched) &&
+              touched.find("touched_symbol") != std::string::npos,
+          "touched-path overlay exposes a native write before/through persistence");
+    check(tools.refresh_persistent_index(false).ok(),
+          "lazy touched-path revision flushes to SQLite");
+
+    const std::string removed = tools.execute(
+        "remove",
+        R"JSON({"path":"src/touched.cpp","confirm":true})JSON");
+    const std::string after_remove = tools.execute(
+        "glob", R"JSON({"pattern":"src/touched.cpp"})JSON");
+    check(json_ok(removed) && json_ok(after_remove) &&
+              after_remove.find("src/touched.cpp") == std::string::npos,
+          "touched-path removal overlay hides persisted rows immediately");
+    check(tools.refresh_persistent_index(false).ok(),
+          "lazy removal revision flushes and clears its overlay");
+
+    std::error_code ec;
+    fs::remove_all(workspace, ec);
+}
+
 void test_inspect_and_find_tests() {
     const std::string workspace = write_temp_workspace("inspect");
     write_text(fs::path(workspace) / "src" / "agent_loop.cpp",
@@ -1900,6 +1969,7 @@ void run_all() {
     test_indexing_disabled_registry_is_strict_and_live();
     test_read_many_preference_limits_and_serialization();
     test_index_status_and_update();
+    test_lazy_index_tools_and_touched_overlay();
     test_inspect_and_find_tests();
     test_git_and_network_tools_policy();
     test_plan_document_mutation_policy();

@@ -5,6 +5,7 @@
 #include <fstream>
 #include <limits>
 #include <string>
+#include <vector>
 #include <unistd.h>
 
 #include "agent/session_runtime.hpp"
@@ -62,16 +63,42 @@ void test_prepare_opens_session_db_and_tools() {
     options.history_backup.enabled = true;
     options.history_backup.max_bytes = 1024 * 1024;
     options.history_backup.ttl_days = 7;
+    std::vector<agent::PreparationProgress> preparation;
+    options.on_prepare_progress =
+        [&](const agent::PreparationProgress& progress) {
+            preparation.push_back(progress);
+        };
 
     provider::RequestContext context = offline_context(workspace);
-    // prepare does not need a live model; tool registry + index only.
+    // prepare is local-only and must succeed on the offline "none" profile.
+    // Interactive Agent temporarily uses that profile while the startup
+    // provider picker is open; gating prepare on a live provider leaves the
+    // TUI stuck on "Agent preparing" forever.
     Error error = runtime.prepare(context, {}, {}, options);
-    check(error.ok(), "prepare agent runtime: " + error.message);
+    check(error.ok(), "prepare agent runtime offline: " + error.message);
     check(runtime.prepared(), "runtime reports prepared");
     check(runtime.session_db_path().find("agent.sqlite") != std::string::npos,
           "session db path under .ainiux-pr");
     check(fs::exists(runtime.session_db_path()), "agent.sqlite created on prepare");
     check(runtime.session_id() == 0, "session id deferred until first user turn");
+    std::vector<agent::PreparationPhase> completed_phases;
+    for (const agent::PreparationProgress& progress : preparation) {
+        if (progress.completed) completed_phases.push_back(progress.phase);
+    }
+    check(completed_phases ==
+              std::vector<agent::PreparationPhase>{
+                  agent::PreparationPhase::IndexProbe,
+                  agent::PreparationPhase::ToolSetup,
+                  agent::PreparationPhase::SessionDatabase,
+                  agent::PreparationPhase::History,
+                  agent::PreparationPhase::ProjectInstructions},
+          "prepare publishes every lifecycle phase in order");
+    bool nonnegative_elapsed = true;
+    for (const agent::PreparationProgress& progress : preparation)
+        nonnegative_elapsed =
+            nonnegative_elapsed && progress.phase_elapsed_ms >= 0 &&
+            progress.total_elapsed_ms >= 0;
+    check(nonnegative_elapsed, "prepare phase events include elapsed time");
 
     // Clean finish without a turn.
     error = runtime.finish_session("success");
@@ -213,12 +240,19 @@ void test_index_report_refreshes_and_stays_display_only() {
     options.enable_session_db = true;
     options.enable_agent_log = false;
     options.index_mode =
-        agent::SessionRuntimeOptions::IndexMode::CreateOrRefresh;
+        agent::SessionRuntimeOptions::IndexMode::UseExistingLazy;
     options.on_index_progress =
         [&](const agent::index::Progress&) { ++progress_updates; };
     provider::RequestContext context = offline_context(workspace);
+    agent::index::Options initial_index_options;
+    initial_index_options.workspace = workspace;
+    agent::index::RefreshStats initial_index_stats;
+    Error error = agent::index::refresh(initial_index_options,
+                                        initial_index_stats);
+    check(error.ok(), "create index fixture for compact report");
+    progress_updates.store(0);
     agent::AgentSessionRuntime runtime;
-    Error error = runtime.prepare(context, {}, {}, options);
+    error = runtime.prepare(context, {}, {}, options);
     check(error.ok(), "prepare indexed runtime for compact report: " +
                           error.message);
 
@@ -277,11 +311,11 @@ void test_optional_index_modes_create_refresh_and_fallback() {
           "headless-style use-existing mode continues without creating a missing index");
     runtime.reset();
 
-    options.index_mode =
-        agent::SessionRuntimeOptions::IndexMode::CreateOrRefresh;
     error = runtime.prepare(context, {}, {}, options);
-    check(error.ok() && fs::exists(missing_database),
-          "interactive create/refresh mode creates a missing index");
+    const agent::SessionIndexReportResult created = runtime.index_code();
+    check(error.ok() && created.error.ok() && created.created &&
+              fs::exists(missing_database),
+          "explicit index-code creates a missing index after Agent is ready");
     runtime.reset();
 
     {
@@ -290,15 +324,18 @@ void test_optional_index_modes_create_refresh_and_fallback() {
         out << "int changed() { return 1; }\n";
     }
     options.index_mode =
-        agent::SessionRuntimeOptions::IndexMode::UseExisting;
+        agent::SessionRuntimeOptions::IndexMode::UseExistingLazy;
     error = runtime.prepare(context, {}, {}, options);
+    const agent::SessionIndexReportResult refreshed =
+        runtime.show_index(true);
     ainiux::agent::index::Options index_options;
     index_options.workspace = missing_workspace;
     ainiux::agent::index::Freshness freshness;
     const Error freshness_error =
         ainiux::agent::index::check_freshness(index_options, freshness);
-    check(error.ok() && freshness_error.ok() && freshness.fresh,
-          "use-existing mode refreshes an existing index");
+    check(error.ok() && refreshed.error.ok() && freshness_error.ok() &&
+              freshness.fresh,
+          "use-existing mode refreshes an existing index after readiness");
     runtime.reset();
 
     const std::string corrupt_workspace = temp_workspace("index-corrupt");

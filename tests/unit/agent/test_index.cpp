@@ -952,6 +952,72 @@ void test_static_importance_and_lexical_ranking() {
           "component matching does not match log inside catalog");
 }
 
+void test_lazy_queries_match_snapshot_ranking_and_worker_policy() {
+    const fs::path root = temporary_workspace("lazy-query");
+    write_file(root / "z.cpp", "void log() {}\n");
+    write_file(root / "a.cpp", "void logger() {}\n");
+    write_file(root / "c.cpp", "void log_writer() {}\n");
+    ainiux::agent::index::Options options;
+    options.workspace = root.string();
+    ainiux::agent::index::RefreshStats stats;
+    ainiux::Error error = ainiux::agent::index::refresh(options, stats);
+    check(error.ok(), "lazy-query fixture index refresh succeeds");
+
+    ainiux::agent::index::Snapshot snapshot;
+    error = ainiux::agent::index::load_snapshot(options, snapshot);
+    check(error.ok(), "authorization snapshot loads for ranking comparison");
+    const auto eager =
+        ainiux::agent::index::rank_task_symbols(snapshot, "log", 10);
+    std::vector<ainiux::agent::index::OwnedRankedSymbol> lazy;
+    error = ainiux::agent::index::query_ranked_symbols(
+        options, "log", 10, lazy);
+    bool same = error.ok() && eager.size() == lazy.size();
+    for (std::size_t i = 0; same && i < eager.size(); ++i) {
+        same = eager[i].symbol->id == lazy[i].symbol.id &&
+               eager[i].score == lazy[i].score &&
+               eager[i].reason == lazy[i].reason;
+    }
+    check(same,
+          "bounded lazy SQLite ranking matches eager deterministic ranking");
+
+    std::vector<ainiux::agent::index::IndexedFile> files;
+    error = ainiux::agent::index::query_files(options, files);
+    ainiux::agent::index::QueryTotals totals;
+    const ainiux::Error totals_error =
+        ainiux::agent::index::query_totals(options, totals);
+    check(error.ok() && totals_error.ok() && files.size() == 3 &&
+              totals.files == 3 && totals.indexed == 3 &&
+              totals.symbols == snapshot.symbols.size(),
+          "lazy file and totals queries return owned completed-index records");
+
+    ainiux::agent::index::IndexedSymbol selected;
+    bool found = false;
+    error = ainiux::agent::index::query_symbol(
+        options, lazy.front().symbol.id, selected, found);
+    check(error.ok() && found &&
+              selected.id == lazy.front().symbol.id,
+          "lazy symbol-id query returns an owned record");
+
+    runtime::CancellationSource cancelled;
+    cancelled.cancel();
+    ainiux::agent::index::Options cancelled_options = options;
+    cancelled_options.cancellation = cancelled.token();
+    files.clear();
+    error =
+        ainiux::agent::index::query_files(cancelled_options, files);
+    check(!error.ok() && error.code == ErrorCode::Cancelled,
+          "lazy SQLite queries honor cancellation");
+
+    check(ainiux::agent::index::worker_count_for(20, 100) == 16 &&
+              ainiux::agent::index::worker_count_for(20, 3) == 3 &&
+              ainiux::agent::index::worker_count_for(20, 0) == 0 &&
+              ainiux::agent::index::worker_count_for(1, 1) == 1,
+          "index worker selection uses 80 percent, bounds by work, and handles zero");
+
+    std::error_code cleanup_error;
+    fs::remove_all(root, cleanup_error);
+}
+
 void test_corrupt_index_errors() {
     const fs::path root = temporary_workspace("corrupt");
     write_file(root / "main.c", "int main(void);\n");
@@ -1157,6 +1223,7 @@ void run_all() {
     test_sql_and_configuration_scanners();
     test_refresh_incremental_report_and_skips();
     test_static_importance_and_lexical_ranking();
+    test_lazy_queries_match_snapshot_ranking_and_worker_policy();
     test_corrupt_index_errors();
     test_schema_upgrade_adds_line_counts();
     test_graph_schema_migration_and_cancellation_rollback();

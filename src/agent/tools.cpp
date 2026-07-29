@@ -72,6 +72,11 @@ struct IndexRefreshState {
         return requested_generation;
     }
 
+    std::size_t completed() const {
+        std::lock_guard<std::mutex> lock(mutex);
+        return completed_generation;
+    }
+
     Error wait_for(std::size_t generation,
                    runtime::CancellationToken cancellation) const {
         std::unique_lock<std::mutex> lock(mutex);
@@ -981,6 +986,7 @@ Error ReadToolRegistry::create(index::Options index_options,
     loaded.permission_mode_ = options.permission_mode;
     loaded.permission_controls_ = options.permission_controls;
     loaded.indexing_enabled_ = options.indexing_enabled;
+    loaded.index_access_mode_ = options.index_access_mode;
     if (loaded.mutation_policy_ != MutationPolicy::Disabled &&
         loaded.indexing_enabled_) {
         // Session preparation runs as its own cancellable job. That job's token
@@ -1026,7 +1032,24 @@ Error ReadToolRegistry::create_without_index(
     index::Snapshot empty;
     empty.workspace = index_options.workspace;
     options.indexing_enabled = false;
+    options.index_access_mode = IndexAccessMode::Disabled;
     return create(std::move(index_options), std::move(empty),
+                  std::move(secrets), registry, std::move(options));
+}
+
+Error ReadToolRegistry::create_lazy(
+    index::Options index_options,
+    std::vector<std::string> secrets,
+    ReadToolRegistry& registry,
+    ToolRegistryOptions options) {
+    if (index_options.workspace.empty())
+        return {ErrorCode::Internal,
+                "lazy index registry requires a canonical workspace"};
+    index::Snapshot hints;
+    hints.workspace = index_options.workspace;
+    options.indexing_enabled = true;
+    options.index_access_mode = IndexAccessMode::LazyHints;
+    return create(std::move(index_options), std::move(hints),
                   std::move(secrets), registry, std::move(options));
 }
 
@@ -1065,16 +1088,91 @@ Error ReadToolRegistry::enable_persistent_index(
     return ok_error();
 }
 
+Error ReadToolRegistry::enable_lazy_index(index::Options index_options) {
+    if (indexing_enabled_) return ok_error();
+    if (mutation_policy_ == MutationPolicy::Disabled)
+        return {ErrorCode::UnsupportedFeature,
+                "enabling code indexing requires an Agent session"};
+    if (index_options.workspace.empty() ||
+        index_options.workspace != snapshot_.workspace)
+        return {ErrorCode::Internal,
+                "completed code index does not match the active Agent workspace"};
+    index_options.cancellation = runtime::CancellationToken();
+    index_options.interrupted = {};
+    std::unique_ptr<IndexRefreshState> refresh;
+    try {
+        refresh = std::make_unique<IndexRefreshState>(index_options);
+    } catch (const std::exception& exception) {
+        return {ErrorCode::Internal,
+                "could not start code-index refresh worker: " +
+                    std::string(exception.what())};
+    }
+    index_options_ = std::move(index_options);
+    index_refresh_ = std::move(refresh);
+    loaded_index_generation_ = 0;
+    indexing_enabled_ = true;
+    index_access_mode_ = IndexAccessMode::LazyHints;
+    snapshot_.files.clear();
+    snapshot_.symbols.clear();
+    snapshot_.language_totals.clear();
+    rebuild_file_map();
+    return ok_error();
+}
+
+void ReadToolRegistry::enqueue_background_freshness() const {
+    if (index_refresh_) (void)index_refresh_->enqueue({}, true);
+}
+
 void ReadToolRegistry::rebuild_file_map() const {
     files_.clear();
     for (const index::IndexedFile& file : snapshot_.files) files_[file.path] = &file;
 }
 
-void ReadToolRegistry::queue_index_paths(
+std::size_t ReadToolRegistry::queue_index_paths(
     const std::vector<std::string>& paths,
     bool full_tree) const {
     if (index_refresh_)
-        (void)index_refresh_->enqueue(paths, full_tree);
+        return index_refresh_->enqueue(paths, full_tree);
+    return 0;
+}
+
+void ReadToolRegistry::merge_index_overlay() const {
+    if (index_access_mode_ != IndexAccessMode::LazyHints ||
+        index_overlay_.empty())
+        return;
+    auto covered = [](const std::string& path, const std::string& root) {
+        return path == root ||
+               (path.size() > root.size() &&
+                path.compare(0, root.size(), root) == 0 &&
+                path[root.size()] == '/');
+    };
+    for (const auto& item : index_overlay_) {
+        const std::string& path = item.first;
+        const IndexOverlayEntry& overlay = item.second;
+        snapshot_.files.erase(
+            std::remove_if(snapshot_.files.begin(), snapshot_.files.end(),
+                           [&](const index::IndexedFile& file) {
+                               return covered(file.path, path);
+                           }),
+            snapshot_.files.end());
+        snapshot_.symbols.erase(
+            std::remove_if(snapshot_.symbols.begin(), snapshot_.symbols.end(),
+                           [&](const index::IndexedSymbol& symbol) {
+                               return covered(symbol.path, path);
+                           }),
+            snapshot_.symbols.end());
+        if (!overlay.removed) {
+            snapshot_.files.push_back(overlay.file);
+            snapshot_.symbols.insert(snapshot_.symbols.end(),
+                                     overlay.symbols.begin(),
+                                     overlay.symbols.end());
+        }
+    }
+    std::sort(snapshot_.files.begin(), snapshot_.files.end(),
+              [](const index::IndexedFile& left,
+                 const index::IndexedFile& right) {
+                  return left.path < right.path;
+              });
 }
 
 Error ReadToolRegistry::refresh_persistent_index(
@@ -1094,6 +1192,17 @@ Error ReadToolRegistry::refresh_persistent_index(
     Error error = index_refresh_->wait_for(generation, cancellation);
     if (!error.ok()) return error;
     if (generation <= loaded_index_generation_) return ok_error();
+    if (index_access_mode_ == IndexAccessMode::LazyHints) {
+        loaded_index_generation_ = generation;
+        for (auto item = index_overlay_.begin();
+             item != index_overlay_.end();) {
+            if (item->second.revision <= generation)
+                item = index_overlay_.erase(item);
+            else
+                ++item;
+        }
+        return ok_error();
+    }
     index::Options options = index_options_;
     options.cancellation = cancellation;
     index::Snapshot next;
@@ -1406,7 +1515,17 @@ void ReadToolRegistry::note_written_file(const std::string& relative_path,
         snapshot_.symbols.push_back(std::move(entry));
     }
     rebuild_file_map();
-    queue_index_paths({generic});
+    IndexOverlayEntry overlay;
+    for (const index::IndexedFile& file : snapshot_.files) {
+        if (file.path == generic) {
+            overlay.file = file;
+            break;
+        }
+    }
+    for (const index::IndexedSymbol& symbol : snapshot_.symbols)
+        if (symbol.path == generic) overlay.symbols.push_back(symbol);
+    overlay.revision = queue_index_paths({generic});
+    index_overlay_[generic] = std::move(overlay);
 }
 
 void ReadToolRegistry::note_removed_path(const std::string& relative_path) const {
@@ -1431,7 +1550,10 @@ void ReadToolRegistry::note_removed_path(const std::string& relative_path) const
                        }),
         snapshot_.symbols.end());
     rebuild_file_map();
-    queue_index_paths({generic});
+    IndexOverlayEntry overlay;
+    overlay.removed = true;
+    overlay.revision = queue_index_paths({generic});
+    index_overlay_[generic] = std::move(overlay);
 }
 
 namespace {
@@ -3431,16 +3553,163 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
     }
 
     std::string validation_error;
+    bool lazy_live_fallback = false;
     static const std::set<std::string> snapshot_tools = {
         "project_overview", "glob",          "search_text",
         "search_symbol",    "get_skeleton",  "read_symbol",
         "find_tests", "inspect_code_task", "index_status", "edit_file"};
     if (snapshot_tools.find(name) != snapshot_tools.end()) {
-        const Error refresh_error =
-            refresh_persistent_index(false, cancellation);
-        if (!refresh_error.ok())
-            return tool_error_result(error_code_string(refresh_error.code),
-                                     refresh_error.message);
+        if (index_access_mode_ == IndexAccessMode::LazyHints &&
+            index_refresh_) {
+            const std::size_t completed = index_refresh_->completed();
+            if (completed > loaded_index_generation_) {
+                loaded_index_generation_ = completed;
+                for (auto item = index_overlay_.begin();
+                     item != index_overlay_.end();) {
+                    if (item->second.revision <= completed)
+                        item = index_overlay_.erase(item);
+                    else
+                        ++item;
+                }
+            }
+        } else {
+            const Error refresh_error =
+                refresh_persistent_index(false, cancellation);
+            if (!refresh_error.ok())
+                return tool_error_result(
+                    error_code_string(refresh_error.code),
+                    refresh_error.message);
+        }
+    }
+    if (index_access_mode_ == IndexAccessMode::LazyHints &&
+        indexing_enabled_ &&
+        snapshot_tools.find(name) != snapshot_tools.end()) {
+        index::Options query_options = index_options_;
+        query_options.cancellation = cancellation;
+        snapshot_.files.clear();
+        snapshot_.symbols.clear();
+        snapshot_.language_totals.clear();
+        snapshot_.updated_at = 0;
+        const bool need_files =
+            name == "project_overview" || name == "glob" ||
+            name == "search_text" || name == "get_skeleton" ||
+            name == "find_tests" || name == "inspect_code_task" ||
+            name == "index_status" || name == "edit_file";
+        Error query_error = ok_error();
+        if (need_files)
+            query_error =
+                index::query_files(query_options, snapshot_.files);
+        if (query_error.ok() &&
+            (name == "project_overview" || name == "index_status")) {
+            index::QueryTotals totals;
+            query_error = index::query_totals(query_options, totals);
+            if (query_error.ok()) {
+                snapshot_.updated_at = totals.updated_at;
+                snapshot_.language_totals = std::move(totals.languages);
+            }
+        }
+        if (query_error.ok() && name == "get_skeleton") {
+            std::string path;
+            if (get_string(args, "path", path, true, validation_error))
+                query_error = index::query_symbols(
+                    query_options,
+                    {fs::path(path).generic_string()},
+                    snapshot_.symbols);
+        } else if (query_error.ok() && name == "read_symbol") {
+            std::size_t id = 0;
+            if (get_size(args, "symbol_id", 0,
+                         static_cast<std::size_t>(
+                             std::numeric_limits<int>::max()),
+                         id, validation_error) &&
+                id > 0) {
+                index::IndexedSymbol symbol;
+                bool found = false;
+                query_error = index::query_symbol(
+                    query_options, static_cast<long long>(id), symbol,
+                    found);
+                if (query_error.ok() && found)
+                    snapshot_.symbols.push_back(std::move(symbol));
+            }
+        } else if (query_error.ok() &&
+                   (name == "search_symbol" ||
+                    name == "inspect_code_task")) {
+            std::string query;
+            std::size_t maximum = name == "search_symbol" ? 50 : 20;
+            (void)get_string(args, "query", query, true,
+                             validation_error);
+            if (name == "search_symbol")
+                (void)get_size(args, "max_results", 50, 200, maximum,
+                               validation_error);
+            else {
+                std::size_t files_maximum = 20;
+                (void)get_size(args, "max_symbols", 20, 100, maximum,
+                               validation_error);
+                (void)get_size(args, "max_files", 20, 100,
+                               files_maximum, validation_error);
+                maximum = std::max(maximum, files_maximum) * 4;
+            }
+            std::vector<index::OwnedRankedSymbol> ranked;
+            query_error = index::query_ranked_symbols(
+                query_options, query, maximum + 1, ranked);
+            if (query_error.ok()) {
+                snapshot_.symbols.reserve(ranked.size());
+                for (index::OwnedRankedSymbol& item : ranked)
+                    snapshot_.symbols.push_back(std::move(item.symbol));
+            }
+        } else if (query_error.ok() &&
+                   (name == "project_overview" ||
+                    name == "find_tests")) {
+            query_error = index::query_symbols(
+                query_options, {}, snapshot_.symbols,
+                name == "project_overview" ? 4096 : 10000);
+        } else if (query_error.ok() && name == "edit_file") {
+            const json::Value* ops = args.get("ops");
+            if (ops != nullptr && ops->is_array()) {
+                for (const json::Value& op : ops->array) {
+                    if (!op.is_object()) continue;
+                    const json::Value* id = op.get("symbol_id");
+                    if (id == nullptr ||
+                        id->type != json::Value::Type::Number)
+                        continue;
+                    index::IndexedSymbol symbol;
+                    bool found = false;
+                    query_error = index::query_symbol(
+                        query_options, static_cast<long long>(id->number),
+                        symbol, found);
+                    if (!query_error.ok()) break;
+                    if (found)
+                        snapshot_.symbols.push_back(std::move(symbol));
+                }
+            }
+        }
+        if (!query_error.ok() &&
+            (name == "glob" || name == "search_text")) {
+            index::Options discovery_options = query_options;
+            discovery_options.on_progress = {};
+            std::vector<index::DiscoveredFile> discovered;
+            const Error discovery_error = index::discover_source_files(
+                discovery_options, discovered);
+            if (!discovery_error.ok())
+                return tool_error_result(
+                    error_code_string(discovery_error.code),
+                    discovery_error.message);
+            snapshot_.files.clear();
+            for (const index::DiscoveredFile& file : discovered) {
+                index::IndexedFile item;
+                item.path = file.path;
+                item.language = file.language;
+                item.size = file.size;
+                item.status = "indexed";
+                snapshot_.files.push_back(std::move(item));
+            }
+            lazy_live_fallback = true;
+            query_error = ok_error();
+        }
+        if (!query_error.ok())
+            return tool_error_result(error_code_string(query_error.code),
+                                     query_error.message);
+        merge_index_overlay();
+        rebuild_file_map();
     }
 
     if (name == "project_overview") {
@@ -3675,7 +3944,7 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
         json::Value data = array_value(); bool truncated = false;
         try {
             std::vector<std::string> paths;
-            if (indexing_enabled_) {
+            if (indexing_enabled_ && !lazy_live_fallback) {
                 paths.reserve(snapshot_.files.size());
                 for (const index::IndexedFile& file : snapshot_.files)
                     paths.push_back(file.path);
@@ -3995,7 +4264,7 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
             std::uintmax_t size = 0;
         };
         std::vector<SearchFile> candidates;
-        if (indexing_enabled_) {
+        if (indexing_enabled_ && !lazy_live_fallback) {
             candidates.reserve(snapshot_.files.size());
             for (const index::IndexedFile& file : snapshot_.files) {
                 if (file.status == "indexed")
@@ -4041,7 +4310,7 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
                 std::max<std::size_t>(
                     1, index_options_.max_source_code_file_size);
             const Error read_error =
-                indexing_enabled_
+                indexing_enabled_ && !lazy_live_fallback
                     ? read_source(file.path, 1, 0, read_cap, source)
                     : read_workspace_source(file.path, 1, 0, read_cap,
                                             source);
@@ -5169,14 +5438,33 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
             return tool_error_result("invalid_arguments", validation_error);
         json::Value data = object_value();
         const std::string db_path = index::database_path(snapshot_.workspace);
+        index::QueryTotals totals;
+        index::Options totals_options = index_options_;
+        totals_options.cancellation = cancellation;
+        const Error totals_error =
+            index_access_mode_ == IndexAccessMode::LazyHints
+                ? index::query_totals(totals_options, totals)
+                : ok_error();
+        if (!totals_error.ok())
+            return tool_error_result(error_code_string(totals_error.code),
+                                     totals_error.message);
         std::error_code ec;
         const bool exists = fs::exists(db_path, ec) && !ec;
         data.object["index_exists"] = bool_value(exists);
         data.object["path"] = string_value(db_path);
-        data.object["files_indexed"] = number_value(static_cast<double>(snapshot_.files.size()));
+        data.object["files_indexed"] = number_value(static_cast<double>(
+            index_access_mode_ == IndexAccessMode::LazyHints
+                ? totals.files
+                : snapshot_.files.size()));
         data.object["symbols_indexed"] =
-            number_value(static_cast<double>(snapshot_.symbols.size()));
-        data.object["last_updated"] = number_value(static_cast<double>(snapshot_.updated_at));
+            number_value(static_cast<double>(
+                index_access_mode_ == IndexAccessMode::LazyHints
+                    ? totals.symbols
+                    : snapshot_.symbols.size()));
+        data.object["last_updated"] = number_value(static_cast<double>(
+            index_access_mode_ == IndexAccessMode::LazyHints
+                ? totals.updated_at
+                : snapshot_.updated_at));
         data.object["workspace"] = string_value(snapshot_.workspace);
         bool fresh = true;
         json::Value changed = array_value();
@@ -5249,12 +5537,11 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
         const Error error = index::refresh(opts, stats);
         if (!error.ok())
             return tool_error_result(error_code_string(error.code), error.message);
-        index::Snapshot next;
-        const Error load_error = index::load_snapshot(opts, next);
-        if (!load_error.ok())
-            return tool_error_result(error_code_string(load_error.code), load_error.message);
-        snapshot_ = std::move(next);
-        rebuild_file_map();
+        index::QueryTotals totals;
+        const Error totals_error = index::query_totals(opts, totals);
+        if (!totals_error.ok())
+            return tool_error_result(error_code_string(totals_error.code),
+                                     totals_error.message);
         json::Value data = object_value();
         data.object["discovered"] = number_value(static_cast<double>(stats.discovered));
         data.object["indexed"] = number_value(static_cast<double>(stats.indexed));
@@ -5263,10 +5550,12 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
         data.object["removed"] = number_value(static_cast<double>(stats.removed));
         data.object["symbols"] = number_value(static_cast<double>(stats.symbols));
         data.object["elapsed_ms"] = number_value(static_cast<double>(stats.elapsed_ms));
-        data.object["files_indexed"] = number_value(static_cast<double>(snapshot_.files.size()));
+        data.object["files_indexed"] =
+            number_value(static_cast<double>(totals.files));
         data.object["symbols_indexed"] =
-            number_value(static_cast<double>(snapshot_.symbols.size()));
-        data.object["last_updated"] = number_value(static_cast<double>(snapshot_.updated_at));
+            number_value(static_cast<double>(totals.symbols));
+        data.object["last_updated"] =
+            number_value(static_cast<double>(totals.updated_at));
         data.object["force"] = bool_value(force);
         json::Value path_array = array_value();
         for (const std::string& path : paths) path_array.array.push_back(string_value(path));
@@ -5300,22 +5589,23 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
         error = index::refresh(opts, stats);
         if (!error.ok())
             return tool_error_result(error_code_string(error.code), error.message);
-        index::Snapshot next;
-        error = index::load_snapshot(opts, next);
+        index::QueryTotals totals;
+        error = index::query_totals(opts, totals);
         if (!error.ok())
-            return tool_error_result(error_code_string(error.code), error.message);
-        snapshot_ = std::move(next);
-        rebuild_file_map();
+            return tool_error_result(error_code_string(error.code),
+                                     error.message);
         json::Value data = object_value();
         data.object["cleared_files"] = number_value(static_cast<double>(clear_stats.removed_files));
         data.object["discovered"] = number_value(static_cast<double>(stats.discovered));
         data.object["indexed"] = number_value(static_cast<double>(stats.indexed));
         data.object["symbols"] = number_value(static_cast<double>(stats.symbols));
         data.object["elapsed_ms"] = number_value(static_cast<double>(stats.elapsed_ms));
-        data.object["files_indexed"] = number_value(static_cast<double>(snapshot_.files.size()));
+        data.object["files_indexed"] =
+            number_value(static_cast<double>(totals.files));
         data.object["symbols_indexed"] =
-            number_value(static_cast<double>(snapshot_.symbols.size()));
-        data.object["last_updated"] = number_value(static_cast<double>(snapshot_.updated_at));
+            number_value(static_cast<double>(totals.symbols));
+        data.object["last_updated"] =
+            number_value(static_cast<double>(totals.updated_at));
         return envelope(true, std::move(data), "", "", stats.diagnostics, false);
     }
 

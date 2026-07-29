@@ -20,6 +20,22 @@
 #include "security/redact.hpp"
 
 namespace ainiux::agent {
+
+const char* preparation_phase_name(PreparationPhase phase) {
+    switch (phase) {
+        case PreparationPhase::IndexProbe:
+            return "index probe";
+        case PreparationPhase::ToolSetup:
+            return "tool setup";
+        case PreparationPhase::SessionDatabase:
+            return "session DB";
+        case PreparationPhase::History:
+            return "history";
+        case PreparationPhase::ProjectInstructions:
+            return "project instructions";
+    }
+    return "preparation";
+}
 namespace {
 
 json::Value log_object() {
@@ -265,6 +281,7 @@ SessionCompactionResult AgentSessionRuntime::compact_impl(
     runtime::CancellationToken cancellation,
     std::optional<CompactionStrategy> strategy_override,
     bool forced_summary) {
+    const auto started = std::chrono::steady_clock::now();
     SessionCompactionResult result;
     result.requested_strategy =
         strategy_override.value_or(options_.compact_strategy);
@@ -557,9 +574,11 @@ SessionCompactionResult AgentSessionRuntime::compact_impl(
     result.compacted = true;
     last_auto_compact_failure_ms_ = 0;
     last_auto_compact_failure_seq_ = 0;
-    result.notice =
-        format_compaction_success_notice(result.tokens_before,
-                                         result.tokens_after);
+    const long long elapsed_seconds =
+        std::chrono::duration_cast<std::chrono::seconds>(
+            std::chrono::steady_clock::now() - started)
+            .count();
+    result.notice = format_compaction_success_notice(elapsed_seconds);
     return result;
 }
 
@@ -614,7 +633,7 @@ SessionProjectReplaceResult AgentSessionRuntime::replace_project(
     if (indexing_enabled.has_value())
         new_options.index_mode =
             *indexing_enabled
-                ? SessionRuntimeOptions::IndexMode::CreateOrRefresh
+                ? SessionRuntimeOptions::IndexMode::UseExistingLazy
                 : SessionRuntimeOptions::IndexMode::Disabled;
     provider::RequestContext quiet_context = context;
     quiet_context.options.quiet = true;
@@ -760,6 +779,7 @@ Error AgentSessionRuntime::prepare(const provider::RequestContext& context,
                                    runtime::CancellationToken cancellation,
                                    std::function<bool()> interrupted,
                                    SessionRuntimeOptions options) {
+    const auto preparation_started = std::chrono::steady_clock::now();
     reset();
     options_ = std::move(options);
     task_mode_ = options_.task_mode;
@@ -801,6 +821,37 @@ Error AgentSessionRuntime::prepare(const provider::RequestContext& context,
                       << logger_->final_path() << " on completion\n";
         }
     }
+    auto publish_preparation =
+        [&](PreparationPhase phase, bool completed,
+            std::chrono::steady_clock::time_point phase_started) {
+            const auto now = std::chrono::steady_clock::now();
+            PreparationProgress progress;
+            progress.phase = phase;
+            progress.completed = completed;
+            if (completed) {
+                progress.phase_elapsed_ms =
+                    std::chrono::duration_cast<std::chrono::milliseconds>(
+                        now - phase_started)
+                        .count();
+            }
+            progress.total_elapsed_ms =
+                std::chrono::duration_cast<std::chrono::milliseconds>(
+                    now - preparation_started)
+                    .count();
+            if (options_.on_prepare_progress)
+                options_.on_prepare_progress(progress);
+            if (completed && logger_) {
+                json::Value fields = log_object();
+                fields.object["phase"] =
+                    log_string(preparation_phase_name(phase));
+                fields.object["phase_elapsed_ms"] =
+                    log_number(progress.phase_elapsed_ms);
+                fields.object["total_elapsed_ms"] =
+                    log_number(progress.total_elapsed_ms);
+                logger_->event("preparation_phase", {"prepare"},
+                               std::move(fields), "success");
+            }
+        };
 
     index::Options index_options;
     index_options.workspace = options_.workspace;
@@ -808,26 +859,19 @@ Error AgentSessionRuntime::prepare(const provider::RequestContext& context,
     index_options.cancellation = cancel_copy;
     index_options.interrupted = interrupted_fn;
     index_options.on_progress = options_.on_index_progress;
-    index::RefreshStats index_stats;
     Error error = ok_error();
     bool indexing_enabled = false;
+    auto phase_started = std::chrono::steady_clock::now();
+    publish_preparation(PreparationPhase::IndexProbe, false, phase_started);
     const bool indexing_requested =
         options_.index_mode != SessionRuntimeOptions::IndexMode::Disabled;
     if (indexing_requested) {
         index::ProbeResult probe;
         error = index::probe(index_options, probe);
-        if (error.ok() && probe.state == index::ProbeState::Corrupt)
+        if (error.ok() && probe.state == index::ProbeState::Completed)
+            indexing_enabled = true;
+        else if (error.ok() && probe.state == index::ProbeState::Corrupt)
             error = probe.error;
-        if (error.ok() &&
-            probe.state == index::ProbeState::MissingOrIncomplete &&
-            options_.index_mode ==
-                SessionRuntimeOptions::IndexMode::UseExisting) {
-            if (!context.options.quiet)
-                std::cerr << "Code index not found; continuing without indexed tools.\n";
-        } else if (error.ok()) {
-            error = index::refresh(index_options, index_stats);
-            indexing_enabled = error.ok();
-        }
         if (!error.ok()) {
             if (error.code == ErrorCode::Cancelled) {
                 reset();
@@ -839,48 +883,23 @@ Error AgentSessionRuntime::prepare(const provider::RequestContext& context,
                           << "; continuing with live filesystem tools.\n";
             error = ok_error();
             indexing_enabled = false;
+        } else if (!indexing_enabled && !context.options.quiet) {
+            std::cerr
+                << "Code index not found; Agent is ready with live filesystem "
+                   "tools. Run /index-code to create it.\n";
         }
     }
+    publish_preparation(PreparationPhase::IndexProbe, true, phase_started);
     if (logger_) {
         json::Value fields = log_object();
         fields.object["indexing_enabled"] =
             log_bool(indexing_enabled);
-        fields.object["discovered"] = log_number(index_stats.discovered);
-        fields.object["indexed"] = log_number(index_stats.indexed);
-        fields.object["unchanged"] = log_number(index_stats.unchanged);
-        fields.object["skipped"] = log_number(index_stats.skipped);
-        if (!error.ok()) {
-            fields.object["error_code"] = log_string(error_code_name(error.code));
-            fields.object["error_message"] = log_string(error.message);
-        }
         logger_->event("index_result", {"index"}, std::move(fields),
-                       error.ok() ? "success" : "failure");
-    }
-    if (!context.options.quiet && indexing_enabled) {
-        for (const std::string& diagnostic : index_stats.diagnostics)
-            std::cerr << "Index warning: " << redact_secrets(diagnostic, secrets_) << "\n";
-        std::cerr << "Code index refreshed: " << index_stats.discovered << " eligible, "
-                  << index_stats.indexed << " indexed, " << index_stats.unchanged
-                  << " unchanged, " << index_stats.skipped << " skipped.\n";
+                       "success");
     }
 
-    index::Snapshot snapshot;
-    if (indexing_enabled) {
-        error = index::load_snapshot(index_options, snapshot);
-        if (!error.ok()) {
-            if (error.code == ErrorCode::Cancelled) {
-                reset();
-                return error;
-            }
-            if (!context.options.quiet)
-                std::cerr << "Index warning: "
-                          << redact_secrets(error.message, secrets_)
-                          << "; continuing with live filesystem tools.\n";
-            error = ok_error();
-            indexing_enabled = false;
-        }
-    }
-
+    phase_started = std::chrono::steady_clock::now();
+    publish_preparation(PreparationPhase::ToolSetup, false, phase_started);
     ToolRegistryOptions tool_options;
     tool_options.mutation_policy = task_mode_ == AgentTaskMode::Plan
                                        ? MutationPolicy::PlanningDocuments
@@ -932,8 +951,8 @@ Error AgentSessionRuntime::prepare(const provider::RequestContext& context,
         };
     }
     if (indexing_enabled) {
-        error = ReadToolRegistry::create(index_options, std::move(snapshot),
-                                         secrets_, tools_, tool_options);
+        error = ReadToolRegistry::create_lazy(
+            index_options, secrets_, tools_, tool_options);
     } else {
         error = ReadToolRegistry::create_without_index(
             index_options, secrets_, tools_, tool_options);
@@ -954,7 +973,10 @@ Error AgentSessionRuntime::prepare(const provider::RequestContext& context,
     limits_.interactive = options_.interactive;
     limits_.max_scripted_turns = 50;
     known_tools_ = known_tool_names(tools_);
+    publish_preparation(PreparationPhase::ToolSetup, true, phase_started);
 
+    phase_started = std::chrono::steady_clock::now();
+    publish_preparation(PreparationPhase::SessionDatabase, false, phase_started);
     if (options_.enable_session_db) {
         error = session_store_.open(options_.workspace);
         if (!error.ok()) {
@@ -980,7 +1002,23 @@ Error AgentSessionRuntime::prepare(const provider::RequestContext& context,
             tools_.set_permission_mode(permission_mode_);
         }
     }
+    publish_preparation(PreparationPhase::SessionDatabase, true, phase_started);
 
+    phase_started = std::chrono::steady_clock::now();
+    publish_preparation(PreparationPhase::History, false, phase_started);
+    if (options_.interactive && session_store_.is_open()) {
+        std::vector<AgentMessageRecord> history;
+        error = session_store_.load_messages(history);
+        if (!error.ok()) {
+            reset();
+            return error;
+        }
+    }
+    publish_preparation(PreparationPhase::History, true, phase_started);
+
+    phase_started = std::chrono::steady_clock::now();
+    publish_preparation(PreparationPhase::ProjectInstructions, false,
+                        phase_started);
     error = load_root_agents_md(options_.workspace, kDefaultAgentsMdMaxBytes, agents_md_);
     if (!error.ok()) {
         if (!context.options.quiet)
@@ -1001,10 +1039,17 @@ Error AgentSessionRuntime::prepare(const provider::RequestContext& context,
         fields.object["truncated"] = log_bool(agents_md_.truncated);
         logger_->event("agents_md", {"agents_md"}, std::move(fields), "success");
     }
+    publish_preparation(PreparationPhase::ProjectInstructions, true,
+                        phase_started);
 
     prepared_ = true;
     publish_request_token_estimate();
     return ok_error();
+}
+
+void AgentSessionRuntime::begin_background_index_freshness() {
+    if (prepared_ && tools_.indexing_enabled())
+        tools_.enqueue_background_freshness();
 }
 
 Error AgentSessionRuntime::load_display_messages(std::vector<provider::Message>& out) const {
@@ -1078,7 +1123,15 @@ SessionIndexReportResult AgentSessionRuntime::show_index(
         result.error = tools_.refresh_persistent_index(true, cancellation);
         if (!result.error.ok()) return result;
     }
-    result.markdown = index::compact_totals_markdown(tools_.snapshot());
+    index::Options totals_options;
+    totals_options.workspace = options_.workspace;
+    totals_options.max_source_code_file_size =
+        options_.max_source_code_file_size;
+    totals_options.cancellation = cancellation;
+    index::QueryTotals totals;
+    result.error = index::query_totals(totals_options, totals);
+    if (!result.error.ok()) return result;
+    result.markdown = index::compact_totals_markdown(totals);
     if (session_store_.is_open()) {
         result.error =
             session_store_.append_message("index", result.markdown);
@@ -1127,21 +1180,26 @@ SessionIndexReportResult AgentSessionRuntime::index_code(
         index::RefreshStats stats;
         result.error = index::refresh(index_options, stats);
         if (!result.error.ok()) return result;
-        index::Snapshot snapshot;
-        result.error = index::load_snapshot(index_options, snapshot);
-        if (!result.error.ok()) return result;
-        result.error = tools_.enable_persistent_index(
-            std::move(index_options), std::move(snapshot));
+        result.error =
+            tools_.enable_lazy_index(std::move(index_options));
         if (!result.error.ok()) return result;
 
         options_.index_mode =
-            SessionRuntimeOptions::IndexMode::CreateOrRefresh;
+            SessionRuntimeOptions::IndexMode::UseExistingLazy;
         known_tools_ = known_tool_names(tools_);
         result.created = true;
     }
 
     result.indexing_enabled = true;
-    result.markdown = index::compact_totals_markdown(tools_.snapshot());
+    index::Options totals_options;
+    totals_options.workspace = options_.workspace;
+    totals_options.max_source_code_file_size =
+        options_.max_source_code_file_size;
+    totals_options.cancellation = cancellation;
+    index::QueryTotals totals;
+    result.error = index::query_totals(totals_options, totals);
+    if (!result.error.ok()) return result;
+    result.markdown = index::compact_totals_markdown(totals);
     if (session_store_.is_open()) {
         result.error =
             session_store_.append_message("index", result.markdown);
@@ -1595,10 +1653,24 @@ SessionTurnResult AgentSessionRuntime::run_user_turn(
                 ctx.cumulative_tool_calls = log_context.cumulative_tool_calls;
                 return ctx;
             }();
+        bool retry_notice_active = false;
         auto on_retry = [&](const Error& retry_error, int attempt,
                             int backoff_seconds) {
                 round_reasoning.clear();
                 round_preview.clear();
+                retry_notice_active = true;
+                std::string retry_notice =
+                    "Waiting for provider · retry " +
+                    std::to_string(attempt) + " in " +
+                    std::to_string(backoff_seconds) + "s";
+                if (!retry_error.message.empty())
+                    retry_notice += " · " +
+                                    redact_secrets(retry_error.message, secrets_);
+                structured_progress(
+                    {AgentProgressAction::Upsert,
+                     AgentProgressKind::Notice, active_round_id,
+                     std::numeric_limits<std::size_t>::max(),
+                     retry_notice, now_unix_ms()});
                 if (!logger_) return;
                 json::Value fields = log_object();
                 fields.object["error_code"] = log_string(error_code_name(retry_error.code));
@@ -1607,6 +1679,14 @@ SessionTurnResult AgentSessionRuntime::run_user_turn(
                 fields.object["backoff_ms"] = log_number(backoff_seconds * 1000);
                 logger_->event("retry_scheduled", log_context, std::move(fields), "failure");
             };
+        auto clear_retry_notice = [&]() {
+            if (!retry_notice_active) return;
+            structured_progress(
+                {AgentProgressAction::Discard,
+                 AgentProgressKind::Notice, active_round_id,
+                 std::numeric_limits<std::size_t>::max(), {}, 0});
+            retry_notice_active = false;
+        };
         auto on_reasoning = [&](const std::string& delta) -> Error {
                 if (!options_.interactive) return ok_error();
                 round_reasoning += delta;
@@ -1631,6 +1711,7 @@ SessionTurnResult AgentSessionRuntime::run_user_turn(
             context, conversation_, definitions, round, cancellation,
             limits_.transport_attempts, observer_pointer, observation_context,
             on_retry, on_reasoning);
+        clear_retry_notice();
         if (!error.ok() && options_.auto_compact &&
             options_.compact_strategy != CompactionStrategy::Fast &&
             !context_recovery_used && context_length_error(error)) {
@@ -1647,6 +1728,7 @@ SessionTurnResult AgentSessionRuntime::run_user_turn(
                     context, conversation_, definitions, round, cancellation,
                     limits_.transport_attempts, observer_pointer,
                     observation_context, on_retry, on_reasoning);
+                clear_retry_notice();
             } else if (!recovered.error.ok()) {
                 error = recovered.error;
             }

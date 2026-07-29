@@ -52,6 +52,8 @@ std::string status_core(const std::string& provider_model_label,
 
 std::string state_text(AgentActivityState state) {
     switch (state) {
+        case AgentActivityState::Preparing:
+            return "Agent preparing";
         case AgentActivityState::Thinking:
             return "Agent thinking";
         case AgentActivityState::Working:
@@ -60,8 +62,10 @@ std::string state_text(AgentActivityState state) {
             return "Agent compacting";
         case AgentActivityState::Ready:
             return "Agent ready";
+        case AgentActivityState::Unavailable:
+            return "Agent unavailable";
     }
-    return "Agent ready";
+    return "Agent unavailable";
 }
 
 }  // namespace
@@ -302,6 +306,9 @@ std::string agent_activity_line(AgentActivityState state,
         } else {
             out << "/help /quit";
         }
+    } else if (state == AgentActivityState::Unavailable) {
+        out << state_text(state)
+            << ". Check the notice above or switch provider/model.";
     } else {
         elapsed_seconds = std::max(0LL, elapsed_seconds);
         out << state_text(state);

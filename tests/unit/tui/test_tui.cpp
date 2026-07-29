@@ -1,5 +1,7 @@
 #include "tui/test_tui.hpp"
+#include "tui/background_metadata.hpp"
 #include "support/test_support.hpp"
+#include "app/user_shell.hpp"
 #include "output/thinking.hpp"
 #include "ainiux/version.hpp"
 #include "provider/provider.hpp"
@@ -467,6 +469,26 @@ void test_tui_agent_chrome_formatters() {
           "agent ready status is a short idle hint");
 }
 
+void test_tui_background_metadata_refresh_policy() {
+    using namespace ainiux::tui;
+    ainiux::provider::RequestContext context;
+    context.profile.name = "openai";
+    context.options.model = "current-model";
+    context.options.timeout_seconds = 0;
+    const ainiux::provider::RequestContext automatic =
+        automatic_metadata_request(context);
+    check(automatic.options.timeout_seconds ==
+              kAutomaticMetadataTimeoutSeconds,
+          "automatic metadata refresh bounds an unlimited request at 15 seconds");
+    context.options.timeout_seconds = 41;
+    check(automatic_metadata_request(context).options.timeout_seconds == 41,
+          "automatic metadata refresh preserves an explicit request timeout");
+    context.options.context_tokens = 999;
+    apply_automatic_context_catalog(context);
+    check(context.options.context_tokens == 0,
+          "automatic context refresh uses catalog/token-only fallback without /models");
+}
+
 void test_agent_widgets_and_dynamic_geometry() {
     using namespace ainiux::tui;
     const std::string status = agent_status_line(
@@ -483,6 +505,12 @@ void test_agent_widgets_and_dynamic_geometry() {
         agent_activity_line(AgentActivityState::Ready, false, 0, -1, 80);
     check(ready == "Agent ready. /help /quit",
           "initial agent activity line includes idle commands");
+    check(agent_activity_line(AgentActivityState::Preparing, true, 3, -1, 80) ==
+              "Agent preparing (ESC to abort) 0:03",
+          "agent preparation never renders as ready");
+    check(agent_activity_line(AgentActivityState::Unavailable, false, 0, -1, 80) ==
+              "Agent unavailable. Check the notice above or switch provider/model.",
+          "failed preparation renders an explicit unavailable state");
     const std::string thinking =
         agent_activity_line(AgentActivityState::Thinking, true, 131, -1, 80);
     check(thinking == "Agent thinking (ESC to abort) 2:11",
@@ -1795,6 +1823,18 @@ void test_agent_progress_replaces_rows_in_place() {
 
     ainiux::tui::apply_agent_progress_update(
         session, rows,
+        {agent::AgentProgressAction::Upsert, agent::AgentProgressKind::Notice,
+         1, 99, "Waiting for provider · retry 1 in 1s", 0});
+    check(session.messages.back().role == "notice" &&
+              app::provider_chat_messages(session.messages).empty(),
+          "live retry notice is display-only and excluded from provider context");
+    ainiux::tui::apply_agent_progress_update(
+        session, rows,
+        {agent::AgentProgressAction::Discard, agent::AgentProgressKind::Notice,
+         1, 99, {}, 0});
+
+    ainiux::tui::apply_agent_progress_update(
+        session, rows,
         {agent::AgentProgressAction::Discard, agent::AgentProgressKind::Thinking,
          1, 0, {}, 0});
     check(session.messages.size() == 2 && session.messages[0].role == "tool",
@@ -1828,6 +1868,7 @@ void run_all() {
     test_configured_assist_slash_command_detection();
     test_tui_ready_and_generation_status();
     test_tui_agent_chrome_formatters();
+    test_tui_background_metadata_refresh_policy();
     test_agent_widgets_and_dynamic_geometry();
     test_agent_inline_choices();
     test_tui_ctrl_chat_history_scroll_shortcuts();

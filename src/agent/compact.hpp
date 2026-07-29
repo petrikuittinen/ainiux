@@ -81,8 +81,7 @@ long long compaction_summary_output_budget(long long source_tokens,
 ReasoningSelection compaction_summary_reasoning(
     const std::vector<ReasoningSelection>& catalog_options);
 
-std::string format_compaction_success_notice(long long tokens_before,
-                                             long long tokens_after);
+std::string format_compaction_success_notice(long long elapsed_seconds);
 std::string format_compaction_no_op_notice(long long remaining_tokens);
 std::string format_compaction_failure_notice(const std::string& error_message);
 std::string format_compaction_progress(CompactionStrategy strategy,

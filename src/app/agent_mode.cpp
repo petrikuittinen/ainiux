@@ -90,7 +90,7 @@ AgentGoalResult run_agent_goal(provider::RequestContext context,
     options.index_mode =
         context.options.disable_indexing
             ? agent::SessionRuntimeOptions::IndexMode::Disabled
-            : agent::SessionRuntimeOptions::IndexMode::UseExisting;
+            : agent::SessionRuntimeOptions::IndexMode::UseExistingLazy;
     IndexProgressPrinter index_progress(
         !context.options.quiet &&
         options.index_mode !=
@@ -121,6 +121,7 @@ AgentGoalResult run_agent_goal(provider::RequestContext context,
                                 .count();
         return result;
     }
+    runtime.begin_background_index_freshness();
 
     agent::SessionTurnResult turn =
         runtime.run_user_turn(context, goal, cancellation, interrupted);

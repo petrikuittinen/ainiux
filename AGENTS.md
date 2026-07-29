@@ -242,7 +242,7 @@ When extending v1.1:
 - Require the model and tools to verify indexed locations against current source before editing. Preserve `glob`, `search_text`/`grep`, `read_file`, compiler, and test fallbacks.
 - Native mutations must immediately update the live touched-file snapshot. Persist affected definitions through a cancellable coalescing job; potentially mutating commands trigger an incremental check; task completion performs a full-tree freshness pass that reparses only changed files.
 - Publish snapshots atomically. Cancellation or failure preserves the previous completed database state.
-- Full/multi-file scanning may use at most approximately 75% of available cores with a conservative cap. Single-file refresh should avoid unnecessary worker creation.
+- Full/multi-file discovery and scanning use `floor(online_cores × 0.80)`, bounded by available work and with at least one worker when work exists. Zero work uses zero workers, and a single-file scan runs inline without creating a scanner worker thread.
 - Do not rewrite the built-in agent system prompt during this milestone; prompt/tool-selection optimization is a separate user-directed pass.
 
 ### HTTP and streaming

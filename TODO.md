@@ -6,6 +6,7 @@
 - Enrich `search_text` with the enclosing indexed symbol where cheap.
 - Add command-generated/rename/removal stress coverage and tune coalescing/shutdown behavior on larger repositories.
 - Benchmark index startup, incremental refresh, memory use, model rounds, tool calls, full-file reads, time to first useful edit, and final correctness.
+- Benchmark and design lazy SQLite-backed Agent symbol queries before replacing the eager in-memory snapshot; preserve security-review snapshot authorization and atomic refresh publication.
 - Keep `glob`, `search_text`/`grep`, targeted reads, compiler output, and tests as verification/fallback paths. The index remains a hint.
 - Do not rewrite the built-in agent prompt in this milestone; the user will specify a separate prompt-optimization pass for small local models.
 - Reserve `/goal`, `/loop`, and sub-agents for v1.1, but do not implement or infer their syntax, persistence, concurrency, safety, or UI until the user supplies specifications.
