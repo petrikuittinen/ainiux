@@ -200,6 +200,7 @@ void test_index_code_enables_a_skipped_index_in_place() {
     check(created.error.ok() && created.created &&
               created.indexing_enabled && runtime.indexing_enabled() &&
               fs::exists(database) && progress_updates.load() > 0 &&
+              created.elapsed_ms >= 0 &&
               created.markdown.find(
                   "| **All languages** | **1** |") !=
                   std::string::npos,
@@ -807,6 +808,70 @@ void test_project_replacement_failure_reopens_prior_project() {
     fs::remove_all(workspace, ec);
 }
 
+void test_display_notices_dedupe_consecutive_duplicates() {
+    const std::string workspace = temp_workspace("notice-dedupe");
+    const std::string previous = fs::current_path().string();
+    fs::current_path(workspace);
+
+    agent::AgentSessionRuntime runtime;
+    agent::SessionRuntimeOptions options;
+    options.workspace = workspace;
+    options.interactive = true;
+    options.enable_session_db = true;
+    options.enable_agent_log = false;
+    options.index_mode = agent::SessionRuntimeOptions::IndexMode::Disabled;
+    provider::RequestContext context = offline_context(workspace);
+    Error error = runtime.prepare(context, {}, {}, options);
+    check(error.ok(), "prepare for notice dedupe: " + error.message);
+
+    const std::string notice =
+        "Code indexing is off; run /index-code to create and enable it. "
+        "Code indexing can speed up certain lookup calls.";
+    check(runtime.append_display_notice(notice).ok(), "first indexing-off notice");
+    check(runtime.append_display_notice(notice).ok(),
+          "duplicate indexing-off notice is a no-op");
+    check(runtime.append_display_notice(notice).ok(),
+          "third identical indexing-off notice is still a no-op");
+
+    auto count_indexing_off_notices =
+        [](const std::vector<provider::Message>& messages) {
+            std::size_t count = 0;
+            for (const provider::Message& message : messages) {
+                // Display load may clip notice width; match the stable prefix.
+                if (message.role == "notice" &&
+                    message.content.find("Code indexing is off") !=
+                        std::string::npos)
+                    ++count;
+            }
+            return count;
+        };
+
+    std::vector<provider::Message> display;
+    check(runtime.load_display_messages(display).ok(), "load after notice dedupe");
+    check(count_indexing_off_notices(display) == 1,
+          "identical consecutive indexing-off notices appear once in history");
+
+    // Pre-existing stacked rows from earlier agent versions collapse on load.
+    {
+        agent::AgentSessionStore store;
+        check(store.open(workspace).ok(), "reopen store to inject stacked notices");
+        check(store.append_message("notice", notice).ok(), "inject stacked notice 1");
+        check(store.append_message("notice", notice).ok(), "inject stacked notice 2");
+        check(store.append_message("notice", notice).ok(), "inject stacked notice 3");
+        store.close();
+    }
+    display.clear();
+    check(runtime.load_display_messages(display).ok(),
+          "load collapses already-stacked notices");
+    check(count_indexing_off_notices(display) == 1,
+          "load_display_messages collapses consecutive identical notices");
+
+    runtime.reset();
+    fs::current_path(previous);
+    std::error_code ec;
+    fs::remove_all(workspace, ec);
+}
+
 }  // namespace
 
 void run_all() {
@@ -823,6 +888,7 @@ void run_all() {
     test_summary_compaction_is_transactional_and_uses_active_api_context();
     test_project_replacement_resets_exact_state_and_switches_workspace();
     test_project_replacement_failure_reopens_prior_project();
+    test_display_notices_dedupe_consecutive_duplicates();
 }
 
 }  // namespace ainiux::test::agent_session_runtime

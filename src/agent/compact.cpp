@@ -377,15 +377,22 @@ ReasoningSelection compaction_summary_reasoning(
     return ReasoningSelection::automatic();
 }
 
-std::string format_compaction_success_notice(long long elapsed_seconds) {
+std::string format_compaction_success_notice(long long elapsed_seconds,
+                                             long long tokens_before,
+                                             long long tokens_after) {
     const long long elapsed = std::max(0LL, elapsed_seconds);
     const long long minutes = elapsed / 60;
     const long long seconds = elapsed % 60;
+    const long long before = std::max(0LL, tokens_before);
+    const long long after = std::max(0LL, tokens_after);
+    const long long saved = std::max(0LL, before - after);
     std::ostringstream notice;
     notice << "Compacting context succeeded in ";
     if (minutes > 0)
         notice << minutes << " min ";
-    notice << seconds << (seconds == 1 ? " second" : " seconds");
+    notice << seconds << (seconds == 1 ? " second" : " seconds")
+           << ". ~" << saved << " tokens saved. " << after
+           << " tokens in remaining context.";
     return notice.str();
 }
 

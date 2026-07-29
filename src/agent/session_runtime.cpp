@@ -578,7 +578,8 @@ SessionCompactionResult AgentSessionRuntime::compact_impl(
         std::chrono::duration_cast<std::chrono::seconds>(
             std::chrono::steady_clock::now() - started)
             .count();
-    result.notice = format_compaction_success_notice(elapsed_seconds);
+    result.notice = format_compaction_success_notice(
+        elapsed_seconds, result.tokens_before, result.tokens_after);
     return result;
 }
 
@@ -1080,6 +1081,12 @@ Error AgentSessionRuntime::load_display_messages(std::vector<provider::Message>&
             message.content = row.content;
         }
         message.created_at_ms = normalize_timestamp_ms(row.created_at);
+        // Collapse consecutive identical notices so repeated prepare runs (for
+        // example "Code indexing is off…") do not stack in the Agent history.
+        if (message.role == "notice" && !out.empty() &&
+            out.back().role == "notice" && out.back().content == message.content) {
+            continue;
+        }
         out.push_back(std::move(message));
     }
     return ok_error();
@@ -1088,7 +1095,16 @@ Error AgentSessionRuntime::load_display_messages(std::vector<provider::Message>&
 Error AgentSessionRuntime::append_display_notice(const std::string& content) {
     if (!session_store_.is_open()) return ok_error();
     if (content.empty()) return ok_error();
-    return session_store_.append_message("notice", redact_secrets(content, secrets_));
+    const std::string redacted = redact_secrets(content, secrets_);
+    // Avoid stacking the same startup notice across agent restarts.
+    AgentMessageRecord last;
+    bool found = false;
+    Error error = session_store_.peek_last_message(last, found);
+    if (!error.ok()) return error;
+    if (found && last.role == "notice" && last.content == redacted) {
+        return ok_error();
+    }
+    return session_store_.append_message("notice", redacted);
 }
 
 SessionIndexReportResult AgentSessionRuntime::show_index(
@@ -1115,7 +1131,8 @@ SessionIndexReportResult AgentSessionRuntime::show_index(
         result.error = {
             ErrorCode::UnsupportedFeature,
             "Code indexing is off for this Agent session; run /index-code to "
-            "create and enable it."};
+            "create and enable it. Code indexing can speed up certain lookup "
+            "calls."};
         return result;
     }
     result.indexing_enabled = true;
@@ -1144,15 +1161,24 @@ SessionIndexReportResult AgentSessionRuntime::show_index(
 SessionIndexReportResult AgentSessionRuntime::index_code(
     runtime::CancellationToken cancellation) {
     SessionIndexReportResult result;
+    const auto started = std::chrono::steady_clock::now();
+    auto stamp_elapsed = [&]() {
+        result.elapsed_ms =
+            std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::steady_clock::now() - started)
+                .count();
+    };
     if (!prepared_) {
         result.error = {ErrorCode::Internal,
                         "agent session runtime is not prepared"};
+        stamp_elapsed();
         return result;
     }
     bool expected = false;
     if (!operation_active_.compare_exchange_strong(expected, true)) {
         result.error = {ErrorCode::BadArgs,
                         "an agent operation is already active"};
+        stamp_elapsed();
         return result;
     }
     struct Release {
@@ -1165,6 +1191,7 @@ SessionIndexReportResult AgentSessionRuntime::index_code(
         result.error = tools_.refresh_persistent_index(true, cancellation);
         if (!result.error.ok()) {
             result.indexing_enabled = true;
+            stamp_elapsed();
             return result;
         }
     } else {
@@ -1179,10 +1206,16 @@ SessionIndexReportResult AgentSessionRuntime::index_code(
 
         index::RefreshStats stats;
         result.error = index::refresh(index_options, stats);
-        if (!result.error.ok()) return result;
+        if (!result.error.ok()) {
+            stamp_elapsed();
+            return result;
+        }
         result.error =
             tools_.enable_lazy_index(std::move(index_options));
-        if (!result.error.ok()) return result;
+        if (!result.error.ok()) {
+            stamp_elapsed();
+            return result;
+        }
 
         options_.index_mode =
             SessionRuntimeOptions::IndexMode::UseExistingLazy;
@@ -1198,14 +1231,21 @@ SessionIndexReportResult AgentSessionRuntime::index_code(
     totals_options.cancellation = cancellation;
     index::QueryTotals totals;
     result.error = index::query_totals(totals_options, totals);
-    if (!result.error.ok()) return result;
+    if (!result.error.ok()) {
+        stamp_elapsed();
+        return result;
+    }
     result.markdown = index::compact_totals_markdown(totals);
     if (session_store_.is_open()) {
         result.error =
             session_store_.append_message("index", result.markdown);
-        if (!result.error.ok()) return result;
+        if (!result.error.ok()) {
+            stamp_elapsed();
+            return result;
+        }
     }
     result.error = ok_error();
+    stamp_elapsed();
     return result;
 }
 

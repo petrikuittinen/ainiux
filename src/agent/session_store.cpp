@@ -552,6 +552,30 @@ Error AgentSessionStore::append_tool_event(long long /*session_id*/,
     return touch();
 }
 
+Error AgentSessionStore::peek_last_message(AgentMessageRecord& message,
+                                           bool& found) const {
+    message = {};
+    found = false;
+    if (!is_open()) return {ErrorCode::Internal, "agent session store is not open"};
+    Statement statement;
+    Error error = statement.prepare(
+        db_, path_,
+        "SELECT id, seq, created_at, role, content, tool_name, tool_ok, args_preview "
+        "FROM messages ORDER BY seq DESC LIMIT 1");
+    if (!error.ok()) return error;
+    if (statement.step() != SQLITE_ROW) return ok_error();
+    message.id = statement.column_int64(0);
+    message.seq = statement.column_int64(1);
+    message.created_at = statement.column_int64(2);
+    message.role = statement.column_text(3);
+    message.content = statement.column_text(4);
+    message.tool_name = statement.column_text(5);
+    message.tool_ok = statement.column_int(6) != 0;
+    message.args_preview = statement.column_text(7);
+    found = true;
+    return ok_error();
+}
+
 Error AgentSessionStore::load_messages(std::vector<AgentMessageRecord>& messages, int limit) const {
     messages.clear();
     std::string sql =

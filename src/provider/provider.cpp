@@ -2383,7 +2383,10 @@ ContextResult build_context(const cli::Options& input_options) {
             return {{}, err};
         }
     }
-    if (changed && !options.quiet && !options.repl) {
+    // Full-screen Chat/Agent alternate-screen UIs must not write status to
+    // stderr: it lands under the input cursor and looks like editor content.
+    if (changed && !options.quiet && !options.repl && !options.tui &&
+        !options.agent) {
         std::cerr << "Using base URL: " << base << "\n";
     }
 

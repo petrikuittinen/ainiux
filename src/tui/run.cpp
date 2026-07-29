@@ -1623,7 +1623,8 @@ app::TuiRunResult run(provider::RequestContext context,
                         !runtime->indexing_enabled()) {
                         event.error = runtime->append_display_notice(
                             "Code indexing is off; run /index-code to create "
-                            "and enable it.");
+                            "and enable it. Code indexing can speed up certain "
+                            "lookup calls.");
                     }
                     if (event.error.ok())
                         event.error = runtime->load_display_messages(
@@ -1765,8 +1766,11 @@ app::TuiRunResult run(provider::RequestContext context,
                     event.error =
                         runtime->load_display_messages(event.agent_history);
                     event.agent_history_loaded = event.error.ok();
-                    event.text = report.created ? "Code index created"
-                                                : "Code index refreshed";
+                    event.text =
+                        (report.created ? "Code index created in "
+                                        : "Code index refreshed in ") +
+                        std::to_string(std::max(0LL, report.elapsed_ms)) +
+                        " ms";
                 }
                 events.push(std::move(event));
             });
@@ -2398,7 +2402,8 @@ app::TuiRunResult run(provider::RequestContext context,
                 !agent_runtime->indexing_enabled()) {
                 event.error = agent_runtime->append_display_notice(
                     "Code indexing is off; run /index-code to create and "
-                    "enable it.");
+                    "enable it. Code indexing can speed up certain lookup "
+                    "calls.");
             }
             if (event.error.ok())
                 event.error =

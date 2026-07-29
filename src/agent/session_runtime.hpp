@@ -96,6 +96,8 @@ struct SessionIndexReportResult {
     std::string markdown;
     bool indexing_enabled = false;
     bool created = false;
+    // Wall time for the whole /index-code or /show-index operation.
+    long long elapsed_ms = 0;
 };
 
 struct SessionRuntimeOptions {

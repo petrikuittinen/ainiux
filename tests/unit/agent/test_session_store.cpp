@@ -198,6 +198,26 @@ void test_record_and_load_approvals() {
     fs::remove_all(workspace, ec);
 }
 
+void test_peek_last_message() {
+    const std::string workspace = temp_workspace("peek-last");
+    agent::AgentSessionStore store;
+    Error error = store.open(workspace);
+    check(error.ok(), "open store for peek: " + error.message);
+    agent::AgentMessageRecord last;
+    bool found = true;
+    error = store.peek_last_message(last, found);
+    check(error.ok() && !found, "empty transcript peeks as not found");
+    check(store.append_message("notice", "first").ok(), "append first");
+    check(store.append_message("user", "hello").ok(), "append user");
+    check(store.append_message("notice", "second").ok(), "append second notice");
+    error = store.peek_last_message(last, found);
+    check(error.ok() && found && last.role == "notice" && last.content == "second",
+          "peek returns newest message by seq");
+    store.close();
+    std::error_code ec;
+    fs::remove_all(workspace, ec);
+}
+
 void test_permission_settings_json() {
     agent::PermissionMode mode = agent::PermissionMode::Yolo;
     Error error = agent::permission_mode_from_settings_json("{}", mode);
@@ -232,6 +252,7 @@ void run_all() {
     test_open_singleton_append_compact_load();
     test_restore_does_not_create_new_project_state();
     test_record_and_load_approvals();
+    test_peek_last_message();
     test_permission_settings_json();
 }
 

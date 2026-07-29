@@ -105,6 +105,8 @@ class AgentSessionStore {
                             bool ok);
 
     Error load_messages(std::vector<AgentMessageRecord>& messages, int limit = 0) const;
+    // Newest transcript row by seq, if any. found is false when the table is empty.
+    Error peek_last_message(AgentMessageRecord& message, bool& found) const;
 
     // Atomically persist a compaction summary event and project summary metadata.
     // Original transcript rows are retained. keep_recent describes the request
