@@ -37,6 +37,8 @@ struct TuiPickerCallbacks {
     std::function<void()> on_agent_new_accepted;
     std::function<void()> on_agent_new_rejected;
     std::function<void(const std::string&)> on_agent_new_retry;
+    std::function<void()> on_agent_index_build_accepted;
+    std::function<void()> on_agent_index_build_rejected;
 };
 
 struct TuiPickerInputState {

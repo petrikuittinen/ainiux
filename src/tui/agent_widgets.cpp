@@ -12,6 +12,7 @@
 #include <filesystem>
 #include <iomanip>
 #include <sstream>
+#include <vector>
 
 namespace ainiux::tui {
 namespace {
@@ -149,6 +150,8 @@ InlineChoiceModel agent_inline_choices_for_mode(TuiMode mode) {
             return {{{"Continue", 'c'}, {"Stop", 's'}}, 1};
         case TuiMode::AgentNewConfirm:
             return {{{"Reset", 'r'}, {"Cancel", 'c'}}, 1};
+        case TuiMode::AgentIndexBuildConfirm:
+            return {{{"Yes", 'y'}, {"No", 'n'}}, 1};
         case TuiMode::ReasoningConfirm:
             return {{{"Proceed", 'p'}, {"Cancel", 'c'}}, 1};
         case TuiMode::ModelConfirm:
@@ -224,19 +227,28 @@ std::string agent_input_top_border(const AgentInputFrame& frame, int cols) {
     const std::string permission =
         frame.permission_label.empty() ? "smart" : frame.permission_label;
     const int right_budget = std::max(0, cols - 6);
+    // Right-side tokens, highest priority first: permission, optional "index", credits.
+    std::vector<std::string> right_tokens;
+    right_tokens.push_back(permission);
+    if (frame.index_enabled) right_tokens.push_back("index");
+    if (!frame.credit_label.empty()) right_tokens.push_back(frame.credit_label);
     std::string right_label;
-    const int permission_cells = static_cast<int>(text_cells(permission));
-    if (permission_cells >= right_budget) {
-        right_label = shorten_end(permission, static_cast<std::size_t>(right_budget));
-    } else if (frame.credit_label.empty()) {
-        right_label = permission;
-    } else {
-        const int credit_budget = right_budget - permission_cells - 1;
-        right_label = permission;
-        if (credit_budget > 0)
-            right_label +=
-                " " + shorten_end(frame.credit_label,
-                                  static_cast<std::size_t>(credit_budget));
+    int used_cells = 0;
+    for (std::size_t i = 0; i < right_tokens.size(); ++i) {
+        const int sep = right_label.empty() ? 0 : 1;
+        const int token_cells = static_cast<int>(text_cells(right_tokens[i]));
+        if (used_cells + sep + token_cells <= right_budget) {
+            if (sep) right_label += " ";
+            right_label += right_tokens[i];
+            used_cells += sep + token_cells;
+            continue;
+        }
+        if (right_label.empty()) {
+            right_label =
+                shorten_end(right_tokens[i], static_cast<std::size_t>(right_budget));
+            used_cells = static_cast<int>(text_cells(right_label));
+        }
+        break;
     }
     const int right_label_cells = static_cast<int>(text_cells(right_label));
     // Corners (2), leading/trailing dashes (2), spaces around both labels (4).

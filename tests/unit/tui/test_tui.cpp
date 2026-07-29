@@ -580,6 +580,19 @@ void test_agent_widgets_and_dynamic_geometry() {
               ainiux::editor::detail::display_width_for_range(
                   credit_border, 0, credit_border.size()) == 48,
           "agent frame shows formatted credits after permission at exact width");
+    frame.index_enabled = true;
+    frame.credit_label = "8.93 USD";
+    const std::string index_border = agent_input_top_border(frame, 64);
+    check(index_border.find(" smart index 8.93 USD ") != std::string::npos &&
+              index_border.find("index") != std::string::npos &&
+              ainiux::editor::detail::display_width_for_range(
+                  index_border, 0, index_border.size()) == 64,
+          "agent frame shows index marker between permission and credits");
+    frame.index_enabled = false;
+    const std::string no_index_border = agent_input_top_border(frame, 64);
+    check(no_index_border.find(" index ") == std::string::npos &&
+              no_index_border.find(" smart 8.93 USD ") != std::string::npos,
+          "agent frame omits index marker when indexing is off");
 
     ainiux::editor::EditorState draft =
         ainiux::editor::EditorState::from_text(u8"ab界d\nsecond\nthird");
@@ -612,6 +625,13 @@ void test_agent_inline_choices() {
               parse_inline_choice_key(continuation, 'c').index == 0 &&
               parse_inline_choice_key(continuation, 27).index == 1,
           "agent turn cap renders Continue/Stop with Stop as the safe default");
+    InlineChoiceModel index_build = agent_inline_choices_for_mode(
+        TuiMode::AgentIndexBuildConfirm);
+    check(render_inline_choices(index_build) == "(1) [Y]es  (2) [N]o" &&
+              parse_inline_choice_key(index_build, 'y').index == 0 &&
+              parse_inline_choice_key(index_build, 'n').index == 1 &&
+              parse_inline_choice_key(index_build, 27).index == 1,
+          "agent missing-index offer renders Yes/No with No as the safe default");
     InlineChoiceModel four{{{"Alpha", 'a'}, {"Beta", 'b'}, {"Gamma", 'g'}, {"Delta", 'd'}}, 3};
     check(valid_inline_choices(four) && parse_inline_choice_key(four, '4').index == 3,
           "inline choice widget supports four choices");

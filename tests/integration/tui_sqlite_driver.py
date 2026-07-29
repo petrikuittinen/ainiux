@@ -8,6 +8,7 @@ import shutil
 import sqlite3
 import subprocess
 import sys
+import tempfile
 import time
 
 
@@ -677,8 +678,11 @@ def scenario_corrupt_database(binary, base, model, home_dir):
 
 
 def scenario_agent_deferred_startup_prompt(binary, base, model, home_dir):
-    agent_home = home_dir + "-agent-startup"
-    shutil.rmtree(agent_home, ignore_errors=True)
+    # Keep the agent workspace outside the source tree: a parent .ainiux-pr
+    # (for example the developer's repo project) makes nested build/ paths
+    # ambiguous and prepare() fails before the deferred -p turn can run.
+    del home_dir  # scenario isolates HOME; shared sqlite home is unused
+    agent_home = tempfile.mkdtemp(prefix="ainiux-agent-startup-")
     workspace = os.path.join(agent_home, "workspace")
     os.makedirs(workspace, exist_ok=True)
 
@@ -721,20 +725,27 @@ def scenario_agent_deferred_startup_prompt(binary, base, model, home_dir):
             process.wait(timeout=3)
         os.close(master)
 
-    if b"Task complete" not in transcript:
-        raise RuntimeError("agent launch-time prompt was dropped during asynchronous preparation")
-
-    project_db = os.path.join(workspace, ".ainiux-pr", "agent.sqlite")
-    conn = query_db(project_db)
     try:
-        row = conn.execute(
-            "SELECT COUNT(*) AS count FROM messages "
-            "WHERE role = 'user' AND content = 'deferred startup prompt marker'"
-        ).fetchone()
-        if row is None or row["count"] != 1:
-            raise RuntimeError("deferred agent prompt was not persisted exactly once")
+        if b"Task complete" not in transcript:
+            raise RuntimeError(
+                "agent launch-time prompt was dropped during asynchronous preparation"
+            )
+
+        project_db = os.path.join(workspace, ".ainiux-pr", "agent.sqlite")
+        conn = query_db(project_db)
+        try:
+            row = conn.execute(
+                "SELECT COUNT(*) AS count FROM messages "
+                "WHERE role = 'user' AND content = 'deferred startup prompt marker'"
+            ).fetchone()
+            if row is None or row["count"] != 1:
+                raise RuntimeError(
+                    "deferred agent prompt was not persisted exactly once"
+                )
+        finally:
+            conn.close()
     finally:
-        conn.close()
+        shutil.rmtree(agent_home, ignore_errors=True)
 
 
 def main():

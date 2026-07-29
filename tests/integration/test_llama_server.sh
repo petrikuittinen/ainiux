@@ -40,6 +40,8 @@ grep 'context: ' "$verbose_err" | grep '%)' >/dev/null
 wrong_verbose_err="$ROOT/build/llama-server-wrong-model.err"
 wrong_verbose_out=$("$ROOT/ainiux" "$BASE" -v --stream -m "definitely-not-a-model" -p "hello" 2>"$wrong_verbose_err")
 test -n "$wrong_verbose_out"
-grep 'context: ' "$wrong_verbose_err" | grep '%)' >/dev/null
+# Unknown model ids still report used tokens; percentage is only present when a
+# context window is known from catalog or /models metadata.
+grep 'context: ' "$wrong_verbose_err" >/dev/null
 
 echo "llama-server integration tests passed (model: $MODEL)"

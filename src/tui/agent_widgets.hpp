@@ -35,6 +35,8 @@ struct AgentInputFrame {
     std::string mode_label = "act";
     std::string permission_label = "smart";
     std::string credit_label;
+    // When true, the top-right chrome shows "index" between permission and credits.
+    bool index_enabled = false;
 };
 
 struct AgentInputGeometry {

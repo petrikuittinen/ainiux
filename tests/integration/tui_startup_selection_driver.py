@@ -172,7 +172,15 @@ def check_agent_permission_persistence(binary, base_url):
         return bytes(output)
 
     try:
-        changed = run([("/permissions yolo\r", 0.6), ("/quit\r", 0.4)])
+        # Fresh projects without an index open a Yes/No index-build offer first.
+        # Decline it so subsequent slash commands reach Chat mode.
+        changed = run(
+            [
+                ("n", 0.5),
+                ("/permissions yolo\r", 0.6),
+                ("/quit\r", 0.4),
+            ]
+        )
         require(changed, " yolo ", "switching agent permissions")
         database = os.path.join(workspace, ".ainiux-pr", "agent.sqlite")
         with sqlite3.connect(database) as connection:
@@ -181,7 +189,9 @@ def check_agent_permission_persistence(binary, base_url):
             ).fetchone()[0]
         if '"permission_mode":"yolo"' not in settings:
             raise RuntimeError(f"permission mode was not persisted: {settings!r}")
-        restored = run([("/quit\r", 0.4)])
+        # Missing index still opens the build offer on each launch; decline it so
+        # /quit reaches Chat mode. Permission chrome should already show yolo.
+        restored = run([("n", 0.5), ("/quit\r", 0.4)])
         require(restored, " yolo ", "restoring persisted agent permissions")
     finally:
         shutil.rmtree(workspace, ignore_errors=True)

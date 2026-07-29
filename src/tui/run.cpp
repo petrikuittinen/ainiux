@@ -303,6 +303,9 @@ app::TuiRunResult run(provider::RequestContext context,
             agent_runtime && agent_runtime->prepared()
                 ? agent::permission_mode_name(agent_runtime->permission_mode())
                 : "smart";
+        chrome.index_enabled =
+            agent_runtime && agent_runtime->prepared() &&
+            agent_runtime->indexing_enabled();
         chrome.credit_label = credit_balance_label;
         chrome.input_max_height_percent =
             context.options.agent_input_max_height_percent;
@@ -679,6 +682,11 @@ app::TuiRunResult run(provider::RequestContext context,
                    pending_new_project.state_dir +
                    "\n\nThis removes project history, index, approvals, and logs. "
                    "Other files in the project directory are preserved.";
+        }
+        if (mode == TuiMode::AgentIndexBuildConfirm) {
+            return std::string(
+                "No code index found. Code indexing can speed up some "
+                "queries. Do you want to build code index?");
         }
         if (mode == TuiMode::SystemEdit) {
             return system_edit_text();
@@ -1619,16 +1627,9 @@ app::TuiRunResult run(provider::RequestContext context,
                 if (!replaced.workspace.empty())
                     event.agent_workspace = replaced.workspace;
                 if (replaced.error.ok()) {
-                    if (indexing_enabled &&
-                        !runtime->indexing_enabled()) {
-                        event.error = runtime->append_display_notice(
-                            "Code indexing is off; run /index-code to create "
-                            "and enable it. Code indexing can speed up certain "
-                            "lookup calls.");
-                    }
-                    if (event.error.ok())
-                        event.error = runtime->load_display_messages(
-                            event.agent_history);
+                    event.agent_index_enabled = runtime->indexing_enabled();
+                    event.error = runtime->load_display_messages(
+                        event.agent_history);
                     if (!event.error.ok())
                         event.error.message =
                             "fresh project initialized at " + event.agent_workspace +
@@ -1774,6 +1775,33 @@ app::TuiRunResult run(provider::RequestContext context,
                 }
                 events.push(std::move(event));
             });
+    };
+
+    // Offer a one-shot Yes/No to create the project index when prepare finds none.
+    // Deferred while provider/model setup pickers are open so the prompt is not lost.
+    bool pending_index_build_offer = false;
+    auto open_index_build_offer = [&]() {
+        if (!context.options.agent || !agent_runtime ||
+            !agent_runtime->prepared())
+            return;
+        if (context.options.disable_indexing) return;
+        if (agent_runtime->indexing_enabled()) return;
+        if (active_job != ActiveJob::None || file_job.joinable()) return;
+        if (mode != TuiMode::Chat) {
+            pending_index_build_offer = true;
+            return;
+        }
+        pending_index_build_offer = false;
+        help_text.clear();
+        settings_text.clear();
+        mode = TuiMode::AgentIndexBuildConfirm;
+        status = "Build code index? Default is No · y/n";
+    };
+    auto flush_pending_index_build_offer = [&]() {
+        if (!pending_index_build_offer) return;
+        if (mode != TuiMode::Chat) return;
+        if (active_job != ActiveJob::None || file_job.joinable()) return;
+        open_index_build_offer();
     };
 
     auto start_agent_show_index = [&]() {
@@ -2094,6 +2122,7 @@ app::TuiRunResult run(provider::RequestContext context,
             const Error error = agent_runtime->update_project_settings(context);
             if (!error.ok()) status = "Agent settings save failed: " + error.message;
         }
+        flush_pending_index_build_offer();
     };
     picker_callbacks.on_reasoning_selected = [&](const std::string& reasoning) {
         commit_reasoning_selection(reasoning);
@@ -2192,9 +2221,20 @@ app::TuiRunResult run(provider::RequestContext context,
         have_pending_new_project = false;
         mode = TuiMode::Chat;
         status = "New agent project cancelled; current project unchanged";
+        flush_pending_index_build_offer();
     };
     picker_callbacks.on_agent_new_retry =
         [&](const std::string& message) { status = message; };
+    picker_callbacks.on_agent_index_build_accepted = [&]() {
+        mode = TuiMode::Chat;
+        pending_index_build_offer = false;
+        start_agent_index_code();
+    };
+    picker_callbacks.on_agent_index_build_rejected = [&]() {
+        mode = TuiMode::Chat;
+        pending_index_build_offer = false;
+        status = agent_ready_with_index_controls();
+    };
     picker_callbacks.on_thread_delete_accepted = [&]() {
         if (pending_thread_delete < thread_picker_threads.size()) {
             const long long tid = thread_picker_threads[pending_thread_delete].id;
@@ -2392,22 +2432,16 @@ app::TuiRunResult run(provider::RequestContext context,
             };
         file_job.start([prep_context = std::move(prep_context),
                         prep_options = std::move(prep_options), agent_runtime,
-                        indexing_enabled,
                         &events](runtime::CancellationToken token) mutable {
             TuiEvent event;
             event.type = TuiEventType::AgentPrepareDone;
             event.error =
                 agent_runtime->prepare(prep_context, token, {}, prep_options);
-            if (event.error.ok() && indexing_enabled &&
-                !agent_runtime->indexing_enabled()) {
-                event.error = agent_runtime->append_display_notice(
-                    "Code indexing is off; run /index-code to create and "
-                    "enable it. Code indexing can speed up certain lookup "
-                    "calls.");
-            }
-            if (event.error.ok())
+            if (event.error.ok()) {
+                event.agent_index_enabled = agent_runtime->indexing_enabled();
                 event.error =
                     agent_runtime->load_display_messages(event.agent_history);
+            }
             events.push(std::move(event));
         });
     };
@@ -2506,7 +2540,16 @@ app::TuiRunResult run(provider::RequestContext context,
                         status = agent_ready_with_index_controls();
                     }
                     agent_runtime->begin_background_index_freshness();
-                    if (preserve_setup_picker) status = setup_status;
+                    if (preserve_setup_picker) {
+                        status = setup_status;
+                        // Offer after provider/model setup returns to Chat.
+                        if (event.error.ok() && !event.agent_index_enabled &&
+                            !context.options.disable_indexing)
+                            pending_index_build_offer = true;
+                    } else if (event.error.ok() && !event.agent_index_enabled &&
+                               !context.options.disable_indexing) {
+                        open_index_build_offer();
+                    }
                     break;
                     }
                 case TuiEventType::AgentPrepareProgress: {
@@ -3068,6 +3111,10 @@ app::TuiRunResult run(provider::RequestContext context,
                                  ? "Fresh agent project · " + event.agent_workspace
                                  : event.text;
                     agent_runtime->begin_background_index_freshness();
+                    if (!event.agent_index_enabled &&
+                        !context.options.disable_indexing) {
+                        open_index_build_offer();
+                    }
                     break;
                 }
                 case TuiEventType::AgentCompactDone:
@@ -3137,9 +3184,15 @@ app::TuiRunResult run(provider::RequestContext context,
             }
         }
 
+        // After setup pickers or other modal work returns to Chat, show the
+        // deferred first-run index offer once the UI is free.
+        flush_pending_index_build_offer();
+
         if (deferred_agent_prompt.has_value() &&
             mode == TuiMode::Chat &&
             active_job == ActiveJob::None &&
+            !file_job.joinable() &&
+            !pending_index_build_offer &&
             agent_runtime && agent_runtime->prepared() &&
             chat_provider_model_ready(context)) {
             std::string prompt = std::move(*deferred_agent_prompt);

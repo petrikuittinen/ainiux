@@ -244,13 +244,22 @@ class Handler(BaseHTTPRequestHandler):
                 "deepseek",
             )
         if last == "expect-qwen-thinking":
-            if request.get("enable_thinking") is not True:
-                return self._fail_validation("qwen: expected enable_thinking=true")
-            if request.get("thinking_budget") != "high":
-                return self._fail_validation("qwen: expected unmodified thinking_budget=high")
+            # Qwen Chat Completions use chat_template_kwargs.enable_thinking only
+            # (not top-level enable_thinking / thinking_budget).
+            kwargs = request.get("chat_template_kwargs") or {}
+            if kwargs.get("enable_thinking") is not True:
+                return self._fail_validation(
+                    "qwen: expected chat_template_kwargs.enable_thinking=true"
+                )
             return self._forbid_fields(
                 request,
-                ["reasoning", "reasoning_effort", "thinking"],
+                [
+                    "reasoning",
+                    "reasoning_effort",
+                    "thinking",
+                    "enable_thinking",
+                    "thinking_budget",
+                ],
                 "qwen",
             )
         if last == "expect-glm-thinking":

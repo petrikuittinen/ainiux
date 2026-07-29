@@ -576,6 +576,8 @@ const char* panel_title_for_mode(TuiMode mode) {
             return "Continue agent task";
         case TuiMode::AgentNewConfirm:
             return "Reset agent project";
+        case TuiMode::AgentIndexBuildConfirm:
+            return "Build code index";
         case TuiMode::ModelConfirm:
             return "Model";
         case TuiMode::SystemEdit:

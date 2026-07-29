@@ -126,6 +126,7 @@ struct AgentChrome {
     std::string workspace;
     std::string mode_label = "act";
     std::string permission_label = "smart";
+    bool index_enabled = false;
     std::string credit_label;
     int input_max_height_percent = 25;
     bool cancellable = false;

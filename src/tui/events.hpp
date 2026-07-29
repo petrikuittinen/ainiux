@@ -65,6 +65,7 @@ enum class TuiMode {
     AgentPermissionSelect,
     AgentContinueConfirm,
     AgentNewConfirm,
+    AgentIndexBuildConfirm,
 };
 
 enum class ModelsRequestPurpose { Preview, Picker };

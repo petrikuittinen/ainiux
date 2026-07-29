@@ -166,6 +166,10 @@ def main():
                 environment,
                 str(root),
             )
+            if mode == "--agent":
+                # Decline the first-run index-build offer so paste reaches Chat input.
+                time.sleep(0.8)
+                output.extend(send(master, b"n", 0.3))
             output.extend(send(master, b"\x16", 0.6))
             rendered = finish(pid, master, output)
             if b"external" not in rendered:

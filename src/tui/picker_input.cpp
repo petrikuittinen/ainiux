@@ -257,6 +257,22 @@ bool handle_tui_picker_input(unsigned char ch,
                 return true;
         }
     }
+    if (state.mode == TuiMode::AgentIndexBuildConfirm) {
+        if (ch == 17) {
+            state.quit = true;
+            return true;
+        }
+        const InlineChoiceResult choice =
+            parse_inline_choice_key(agent_inline_choices_for_mode(state.mode), ch);
+        if (!choice.matched) return true;
+        if (choice.index == 0) {
+            if (callbacks.on_agent_index_build_accepted)
+                callbacks.on_agent_index_build_accepted();
+        } else if (callbacks.on_agent_index_build_rejected) {
+            callbacks.on_agent_index_build_rejected();
+        }
+        return true;
+    }
     return false;
 }
 
