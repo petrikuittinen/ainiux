@@ -19,10 +19,13 @@
 #include "editor/path_completion.hpp"
 #include "tui/chat_assist.hpp"
 #include "tui/commands.hpp"
+#include "tui/detail/frame_buffer.hpp"
 #include "tui/tui.hpp"
 #include "tui/detail/render.hpp"
 #include <algorithm>
 #include <chrono>
+#include <iostream>
+#include <sstream>
 #include <string>
 #include <thread>
 #include <vector>
@@ -40,6 +43,83 @@ void test_tui_history_jump_helpers() {
           "TUI Home jump requests a clamped scrollback maximum");
     check(ainiux::tui::history_scroll_for_thread_end() == 0,
           "TUI End jump returns to the live chat bottom");
+}
+
+void test_terminal_frame_renderer_updates_only_changed_rows() {
+    ainiux::tui::detail::TerminalFrameRenderer renderer;
+    ainiux::tui::detail::TerminalFrame first(3, 20);
+    first.set_row(1, "\x1b[1;1Hfirst row");
+    first.set_row(2, "\x1b[2;1Hsecond row");
+    first.set_row(3, "\x1b[3;1Hthird row");
+    first.cursor_row = 2;
+    first.cursor_col = 4;
+
+    std::ostringstream output;
+    check(renderer.present(first, output) == 3 &&
+              output.str().find("first row") != std::string::npos &&
+              output.str().find("second row") != std::string::npos &&
+              output.str().find("\x1b[?25l") != std::string::npos &&
+              output.str().find("\x1b[?25h") != std::string::npos,
+          "first retained TUI frame draws every row and brackets repaint with cursor visibility");
+
+    output.str("");
+    output.clear();
+    check(renderer.present(first, output) == 0 && output.str().empty(),
+          "identical retained TUI frame emits no terminal output");
+
+    ainiux::tui::detail::TerminalFrame changed = first;
+    changed.set_row(2, "\x1b[2;1Hchanged row");
+    output.str("");
+    output.clear();
+    check(renderer.present(changed, output) == 1 &&
+              output.str().find("changed row") != std::string::npos &&
+              output.str().find("first row") == std::string::npos &&
+              output.str().find("third row") == std::string::npos &&
+              output.str().find("\x1b[?25l") == std::string::npos &&
+              output.str().find("\x1b[?25h") == std::string::npos,
+          "retained TUI frame emits only a changed row without toggling cursor visibility");
+
+    changed.cursor_row = 3;
+    changed.cursor_col = 2;
+    output.str("");
+    output.clear();
+    check(renderer.present(changed, output) == 0 &&
+              output.str() == "\x1b[3;2H",
+          "cursor-only TUI update moves the cursor without hiding or showing it");
+
+    ainiux::tui::detail::TerminalFrame resized(4, 24);
+    output.str("");
+    output.clear();
+    check(renderer.present(resized, output) == 4,
+          "terminal resize invalidates every retained row");
+}
+
+void test_shared_tui_render_skips_identical_frame() {
+    ainiux::chat::Session session;
+    ainiux::editor::EditorState input =
+        ainiux::tui::detail::empty_input_editor(10);
+    std::string status = "Ready";
+    int history_scroll = 0;
+    ainiux::tui::detail::TerminalFrameRenderer renderer;
+    std::ostringstream output;
+    std::streambuf* previous = std::cout.rdbuf(output.rdbuf());
+
+    ainiux::tui::detail::render(
+        session, input, status, history_scroll, false,
+        ainiux::tui::TuiMode::Chat, "", ainiux::tui::ActivityKind::None,
+        0, false, {nullptr, "dark", false}, renderer);
+    const std::string first = output.str();
+    output.str("");
+    output.clear();
+    ainiux::tui::detail::render(
+        session, input, status, history_scroll, false,
+        ainiux::tui::TuiMode::Chat, "", ainiux::tui::ActivityKind::None,
+        0, false, {nullptr, "dark", false}, renderer);
+    const std::string second = output.str();
+    std::cout.rdbuf(previous);
+
+    check(!first.empty() && second.empty(),
+          "shared chat/agent TUI renderer emits nothing for an identical idle frame");
 }
 
 void test_tui_provider_change_resets_only_on_actual_change() {
@@ -925,6 +1005,36 @@ void test_tui_markdown_history_highlighting() {
           "TUI thinking-trace style keeps priority while visible Markdown remains highlighted");
 
     session.messages.clear();
+    session.messages.push_back(
+        {"assistant", "> user prompt\nAnswer...\nwindow_width_max\n**Bold here:**"});
+    lines = ainiux::tui::detail::history_lines_for_session(
+        session, 100, false, ainiux::tui::ActivityKind::None, 0, true, true);
+    std::vector<std::string> rendered_text;
+    bool snake_case_emphasis = false;
+    bool punctuation_bold = false;
+    for (const ainiux::tui::StyledLine& line : lines) {
+        std::string text;
+        for (const ainiux::tui::StyledSegment& segment : line.segments) {
+            text += segment.text;
+            if (segment.text.find("window_width_max") != std::string::npos) {
+                snake_case_emphasis =
+                    snake_case_emphasis || segment.attributes.italic ||
+                    segment.attributes.bold;
+            }
+            if (segment.text.find("**Bold here:**") != std::string::npos) {
+                punctuation_bold = punctuation_bold || segment.attributes.bold;
+            }
+        }
+        rendered_text.push_back(std::move(text));
+    }
+    check(rendered_text ==
+              std::vector<std::string>{
+                  "> user prompt", "Answer...", "window_width_max", "**Bold here:**"},
+          "TUI Markdown styling preserves blockquote, answer, identifier, and bold text bytes");
+    check(!snake_case_emphasis && punctuation_bold,
+          "TUI Markdown keeps snake_case plain and bolds punctuation inside strong delimiters");
+
+    session.messages.clear();
     session.messages.push_back({"assistant", "```python\ndef greet(name: str):\n    return 17\n```"});
     lines = ainiux::tui::detail::history_lines_for_session(
         session, 100, false, ainiux::tui::ActivityKind::None, 0, true);
@@ -1652,6 +1762,8 @@ void test_agent_progress_replaces_rows_in_place() {
 
 void run_all() {
     test_agent_progress_replaces_rows_in_place();
+    test_terminal_frame_renderer_updates_only_changed_rows();
+    test_shared_tui_render_skips_identical_frame();
     test_tui_history_jump_helpers();
     test_tui_provider_change_resets_only_on_actual_change();
     test_tui_reasoning_picker_input();

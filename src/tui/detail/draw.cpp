@@ -72,15 +72,15 @@ int displayed_cells(const std::string& text) {
     return cells;
 }
 
-void write_style(const RenderStyle& style, StyleRole role) {
+void append_style(std::string& output, const RenderStyle& style, StyleRole role) {
     if (style.colors && style.themes != nullptr) {
-        std::cout << style_sequence_for(*style.themes, style.theme_name, role);
+        output += style_sequence_for(*style.themes, style.theme_name, role);
     }
 }
 
-void reset_style(const RenderStyle& style) {
+void append_style_reset(std::string& output, const RenderStyle& style) {
     if (style.colors) {
-        std::cout << "\x1b[0m";
+        output += "\x1b[0m";
     }
 }
 
@@ -211,8 +211,13 @@ std::string error_line(const Error& error) {
     return std::string(error_code_name(error.code)) + ": " + error.message;
 }
 
-void draw_line(int row, int cols, const std::vector<StyledSegment>& segments, StyleRole fill_role, const RenderStyle& style) {
-    std::cout << "\x1b[" << row << ";1H";
+std::string format_line(int row,
+                        int cols,
+                        const std::vector<StyledSegment>& segments,
+                        StyleRole fill_role,
+                        const RenderStyle& style) {
+    std::string output =
+        "\x1b[" + std::to_string(row) + ";1H";
     int used = 0;
     for (const StyledSegment& segment : segments) {
         if (used >= cols) {
@@ -222,31 +227,44 @@ void draw_line(int row, int cols, const std::vector<StyledSegment>& segments, St
         if (clipped.empty()) {
             continue;
         }
-        write_style(style, segment.role);
+        append_style(output, style, segment.role);
         if (style.colors) {
-            std::cout << ansi_text_attributes_sequence(segment.attributes);
+            output += ansi_text_attributes_sequence(segment.attributes);
         }
         if (segment.reverse) {
-            std::cout << "\x1b[7m";
+            output += "\x1b[7m";
         }
-        std::cout << clipped;
+        output += clipped;
         if (segment.reverse || (style.colors &&
                                 (segment.attributes.bold || segment.attributes.italic ||
                                  segment.attributes.underline))) {
-            std::cout << "\x1b[0m";
+            output += "\x1b[0m";
         }
         used += displayed_cells(clipped);
     }
     if (used < cols) {
-        write_style(style, fill_role);
-        std::cout << std::string(static_cast<size_t>(cols - used), ' ');
+        append_style(output, style, fill_role);
+        output += std::string(static_cast<size_t>(cols - used), ' ');
     }
-    reset_style(style);
-    std::cout << "\x1b[K";
+    append_style_reset(output, style);
+    output += "\x1b[K";
+    return output;
+}
+
+std::string format_line(int row,
+                        int cols,
+                        const std::string& text,
+                        StyleRole role,
+                        const RenderStyle& style) {
+    return format_line(row, cols, std::vector<StyledSegment>{{text, role}}, role, style);
+}
+
+void draw_line(int row, int cols, const std::vector<StyledSegment>& segments, StyleRole fill_role, const RenderStyle& style) {
+    std::cout << format_line(row, cols, segments, fill_role, style);
 }
 
 void draw_line(int row, int cols, const std::string& text, StyleRole role, const RenderStyle& style) {
-    draw_line(row, cols, std::vector<StyledSegment>{{text, role}}, role, style);
+    std::cout << format_line(row, cols, text, role, style);
 }
 
 void append_wrapped_segments(std::vector<std::vector<StyledSegment>>& lines,

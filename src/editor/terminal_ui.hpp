@@ -15,6 +15,9 @@
 namespace ainiux::tui {
 class ThemeRegistry;
 enum class TuiMode;
+namespace detail {
+class TerminalFrameRenderer;
+}
 }
 
 namespace ainiux::editor {
@@ -114,6 +117,7 @@ struct TerminalThemeStyle {
 
 void render_terminal(EditorState& state,
                      const MinibufferState& minibuffer,
+                     tui::detail::TerminalFrameRenderer& frame_renderer,
                      const TerminalThemeStyle& theme_style = {},
                      bool help_view = false,
                      const EditorAssistDisplay* assist_display = nullptr);
@@ -126,6 +130,7 @@ void render_terminal_splits(
     const std::function<const EditorState&(size_t buffer_index)>& buffer_at,
     EditorState& focused_state,
     const MinibufferState& minibuffer,
+    tui::detail::TerminalFrameRenderer& frame_renderer,
     const TerminalThemeStyle& theme_style = {},
     bool help_view = false,
     const EditorAssistDisplay* assist_display = nullptr,
@@ -133,6 +138,7 @@ void render_terminal_splits(
 
 void render_terminal_panel(EditorState& state,
                            const MinibufferState& minibuffer,
+                           tui::detail::TerminalFrameRenderer& frame_renderer,
                            const TerminalThemeStyle& theme_style,
                            tui::TuiMode mode,
                            int& panel_scroll,

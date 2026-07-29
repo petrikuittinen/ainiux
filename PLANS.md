@@ -36,7 +36,7 @@ error layers should serve:
 | v0.0–v0.8 | CLI, persistence, runtime/TUI, providers, context, config, benchmarks, editor | Landed |
 | v0.9 | Benchmark calibration, refactor hygiene, TUI/CLI/editor polish | Remaining work continues |
 | v0.90 | Local OpenAI-compatible server | Deferred behind v1.1 |
-| v1.0–v1.11 | Local agent foundation and hardening | Landed through v1.11 |
+| v1.0–v1.12 | Local agent foundation and hardening | Landed through v1.12 |
 | **v1.1** | **Lightweight definition ranking and index tuning; later `/goal`, `/loop`, and sub-agents** | **Next priority** |
 | **v1.2** | **Image generation across CLI and interactive surfaces** | Planned after v1.1 |
 
@@ -46,7 +46,7 @@ ready.
 
 ## Current baseline
 
-Implementation status (2026-07-29): **v1.11**.
+Implementation status (2026-07-29): **v1.12**.
 
 The shipped product includes:
 
@@ -54,6 +54,7 @@ The shipped product includes:
 - built-in provider profiles and OpenAI-compatible custom/local endpoints
 - cancellable SSE/HTTP runtime jobs and provider/model selection
 - REPL, chat TUI, standalone editor, benchmark, grade, and document conversion
+- retained row-diff rendering across chat, agent, and editor terminal surfaces
 - SQLite chat persistence plus JSON import/export
 - text/Markdown/HTML attachments and supported image input
 - safe URL fetch and web search
@@ -96,6 +97,7 @@ graph or automatic model-context hints.
 | v1.09 | Stable prompt caching/accounting, Smart read-only commands, and context polish |
 | v1.10 | Lightweight definition importance, optional index startup, mutation-aware refresh, and one-shot tool metrics |
 | v1.11 | Three-strategy agent context compaction with visible progress and result reporting |
+| v1.12 | Retained terminal row rendering and punctuation-aware Markdown highlighting |
 
 Historical implementation details remain available in Git history and the dated
 notes in `README.md` and `docs/decisions.md`.

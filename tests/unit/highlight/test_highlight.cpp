@@ -33,6 +33,13 @@ bool has_role_at(const std::vector<Span>& spans, size_t byte, TokenRole role) {
     });
 }
 
+bool has_emphasis_role(const std::vector<Span>& spans) {
+    return has_role(spans, TokenRole::Emphasis) ||
+           has_role(spans, TokenRole::Strong) ||
+           has_role(spans, TokenRole::StrongEmphasis) ||
+           has_role(spans, TokenRole::Strikethrough);
+}
+
 void test_mode_parsing_and_detection() {
     const std::vector<std::pair<const char*, Language>> aliases = {
         {"text", Language::Text},       {"markdown", Language::Markdown}, {"MD", Language::Markdown},
@@ -497,6 +504,62 @@ void test_markdown_emphasis_delimiters_are_complete() {
           "Markdown cache includes the final asterisk after incremental typing");
 }
 
+void test_markdown_emphasis_boundaries_and_punctuation() {
+    const std::vector<std::pair<std::string, TokenRole>> valid = {
+        {"**Bold here:**", TokenRole::Strong},
+        {"**Bold here**:", TokenRole::Strong},
+        {"(**Bold here:**)", TokenRole::Strong},
+        {"_emphasis_:", TokenRole::Emphasis},
+        {"(_emphasis_)", TokenRole::Emphasis},
+        {"~~removed:~~", TokenRole::Strikethrough},
+    };
+    for (const auto& item : valid) {
+        const auto lines =
+            ainiux::highlight::highlight_document(Language::Markdown, item.first);
+        const size_t expected_start = item.first.find(item.second == TokenRole::Emphasis
+                                                          ? "_"
+                                                          : item.second == TokenRole::Strikethrough
+                                                                ? "~~"
+                                                                : "**");
+        const size_t expected_end =
+            item.first.rfind(item.second == TokenRole::Emphasis
+                                 ? "_"
+                                 : item.second == TokenRole::Strikethrough ? "~~" : "**") +
+            (item.second == TokenRole::Emphasis ? 1U : 2U);
+        check(lines.size() == 1 &&
+                  has_exact_span(lines[0].spans, expected_start, expected_end, item.second),
+              "Markdown emphasis accepts adjacent punctuation: " + item.first);
+    }
+
+    const std::vector<std::string> literals = {
+        "window_width_max",
+        "snake_case and CONSTANT_VALUE",
+        "foo__bar__baz",
+        "trailing_underscore_",
+        "_ leading whitespace_",
+        "_trailing whitespace _",
+        R"(escaped \_marker_)",
+        "`window_width_max`",
+        "[window_width_max](https://example.test/a_b)",
+        "https://example.test/a_b_c",
+    };
+    for (const std::string& text : literals) {
+        const auto lines =
+            ainiux::highlight::highlight_document(Language::Markdown, text);
+        check(lines.size() == 1 && !has_emphasis_role(lines[0].spans),
+              "Markdown leaves non-delimiter underscores literal: " + text);
+    }
+
+    const auto quote =
+        ainiux::highlight::highlight_document(
+            Language::Markdown, "> user prompt\nAnswer...\na > b");
+    check(quote.size() == 3 &&
+              has_role_at(quote[0].spans, 0, TokenRole::Operator) &&
+              !has_role(quote[1].spans, TokenRole::Operator) &&
+              !has_role(quote[2].spans, TokenRole::Operator),
+          "Markdown recognizes only a leading greater-than sign as a blockquote marker");
+}
+
 void test_markdown_multiline_state_and_precedence() {
     const std::string text =
         "before <!-- *not emphasis*\n"
@@ -613,6 +676,7 @@ void run_all() {
     test_multiline_language_states();
     test_markdown_inline_and_structure();
     test_markdown_emphasis_delimiters_are_complete();
+    test_markdown_emphasis_boundaries_and_punctuation();
     test_markdown_multiline_state_and_precedence();
     test_setext_unicode_invalid_bytes_and_budget();
     test_incremental_cache_invalidation();

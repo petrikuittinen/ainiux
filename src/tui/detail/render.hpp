@@ -7,6 +7,7 @@
 #include "common.hpp"
 #include "editor/editor.hpp"
 #include "tui/events.hpp"
+#include "tui/detail/frame_buffer.hpp"
 #include "tui/theme_registry.hpp"
 #include "tui/tui.hpp"
 
@@ -27,6 +28,16 @@ TuiSize terminal_size();
 
 void draw_line(int row, int cols, const std::vector<StyledSegment>& segments, StyleRole fill_role, const RenderStyle& style);
 void draw_line(int row, int cols, const std::string& text, StyleRole role, const RenderStyle& style);
+std::string format_line(int row,
+                        int cols,
+                        const std::vector<StyledSegment>& segments,
+                        StyleRole fill_role,
+                        const RenderStyle& style);
+std::string format_line(int row,
+                        int cols,
+                        const std::string& text,
+                        StyleRole role,
+                        const RenderStyle& style);
 
 std::string error_line(const Error& error);
 StyleRole status_role_for_text(const std::string& status);
@@ -57,6 +68,7 @@ void render(const chat::Session& session,
             size_t activity_frame,
             bool syntax_highlight,
             const RenderStyle& style,
+            TerminalFrameRenderer& frame_renderer,
             const char* panel_title_override = nullptr,
             bool agent_mode = false,
             const AgentChrome& agent_chrome = AgentChrome{});

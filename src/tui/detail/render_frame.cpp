@@ -41,6 +41,7 @@ void render(const chat::Session& session,
             size_t activity_frame,
             bool syntax_highlight,
             const RenderStyle& style,
+            TerminalFrameRenderer& frame_renderer,
             const char* panel_title_override,
             bool agent_mode,
             const AgentChrome& agent_chrome) {
@@ -61,6 +62,7 @@ void render(const chat::Session& session,
             terminal.rows, terminal.cols, geometry.box_height);
     }
     const int cols = layout.cols;
+    TerminalFrame frame(layout.rows, cols);
 
     input.ensure_cursor_visible(layout.input_rect);
     const editor::RenderedPanel input_panel = input.render(layout.input_rect);
@@ -104,8 +106,6 @@ void render(const chat::Session& session,
         history_scroll = std::min(std::max(0, history_scroll), max_history_scroll);
     }
 
-    std::cout << "\x1b[?25l";
-
     const int history_start =
         picker_top_aligned
             ? history_scroll
@@ -113,57 +113,77 @@ void render(const chat::Session& session,
     int printed = 0;
     const StyleRole history_fill_role = panel_active ? StyleRole::PanelBorder : StyleRole::Text;
     for (int i = history_start; i < static_cast<int>(history.size()) && printed < layout.history_rows; ++i, ++printed) {
-        draw_line(layout.history_row + printed, cols, history[static_cast<size_t>(i)].segments, history_fill_role, style);
+        const int row = layout.history_row + printed;
+        frame.set_row(
+            row,
+            format_line(row, cols, history[static_cast<size_t>(i)].segments,
+                        history_fill_role, style));
     }
     while (printed < layout.history_rows) {
-        draw_line(layout.history_row + printed, cols, "", history_fill_role, style);
+        const int row = layout.history_row + printed;
+        frame.set_row(row, format_line(row, cols, "", history_fill_role, style));
         ++printed;
     }
 
     if (agent_mode) {
-        draw_line(layout.activity_row, cols,
-                  agent_activity_line(agent_chrome.activity_state,
-                                      agent_chrome.cancellable,
-                                      agent_chrome.task_elapsed_seconds,
-                                      agent_chrome.completed_task_ms,
-                                      cols),
-                  StyleRole::Status, style);
+        frame.set_row(
+            layout.activity_row,
+            format_line(layout.activity_row, cols,
+                        agent_activity_line(agent_chrome.activity_state,
+                                            agent_chrome.cancellable,
+                                            agent_chrome.task_elapsed_seconds,
+                                            agent_chrome.completed_task_ms,
+                                            cols),
+                        StyleRole::Status, style));
         if (agent_choice_active) {
-            draw_line(layout.status_row, cols, render_inline_choices(inline_choices),
-                      StyleRole::Status, style);
+            frame.set_row(
+                layout.status_row,
+                format_line(layout.status_row, cols, render_inline_choices(inline_choices),
+                            StyleRole::Status, style));
         } else {
-            draw_line(layout.status_row, cols,
-                      agent_status_line(agent_chrome.model,
-                                        agent_chrome.reasoning,
-                                        agent_chrome.used_tokens,
-                                        agent_chrome.window_tokens,
-                                        cols),
-                      status_role_for_text(status), style);
+            frame.set_row(
+                layout.status_row,
+                format_line(layout.status_row, cols,
+                            agent_status_line(agent_chrome.model,
+                                              agent_chrome.reasoning,
+                                              agent_chrome.used_tokens,
+                                              agent_chrome.window_tokens,
+                                              cols),
+                            status_role_for_text(status), style));
         }
     } else if (show_activity_on_status_row(activity_kind, agent_mode) &&
         mode == TuiMode::Chat && !panel_active) {
         const std::string label = session_status_label(session);
         const std::string suffix =
             activity_kind == ActivityKind::Thinking ? "thinking..." : "streaming response ...";
-        draw_line(layout.status_row, cols,
-                  activity_status_segments(label, activity_kind, activity_frame, suffix),
-                  StyleRole::Status, style);
+        frame.set_row(
+            layout.status_row,
+            format_line(layout.status_row, cols,
+                        activity_status_segments(label, activity_kind, activity_frame, suffix),
+                        StyleRole::Status, style));
     } else {
         const std::string displayed_status = session.read_only ? "[RO] " + status : status;
-        draw_line(layout.status_row, cols, displayed_status,
-                  status_role_for_text(displayed_status), style);
+        frame.set_row(
+            layout.status_row,
+            format_line(layout.status_row, cols, displayed_status,
+                        status_role_for_text(displayed_status), style));
     }
     if (agent_mode) {
-        draw_line(layout.input_label_row, cols,
-                  agent_input_top_border(
-                      {agent_chrome.workspace, agent_chrome.mode_label,
-                       agent_chrome.permission_label, agent_chrome.credit_label},
-                      cols),
-                  StyleRole::PanelBorder, style);
+        frame.set_row(
+            layout.input_label_row,
+            format_line(
+                layout.input_label_row, cols,
+                agent_input_top_border(
+                    {agent_chrome.workspace, agent_chrome.mode_label,
+                     agent_chrome.permission_label, agent_chrome.credit_label},
+                    cols),
+                StyleRole::PanelBorder, style));
     } else {
-        draw_line(layout.input_label_row, cols,
-                  input_label_segments_for_mode(false, agent_chrome),
-                  StyleRole::InputLabel, style);
+        frame.set_row(
+            layout.input_label_row,
+            format_line(layout.input_label_row, cols,
+                        input_label_segments_for_mode(false, agent_chrome),
+                        StyleRole::InputLabel, style));
     }
 
     for (int row = 0; row < layout.input_rect.height; ++row) {
@@ -198,21 +218,30 @@ void render(const chat::Session& session,
             framed.push_back({u8"│", StyleRole::PanelBorder});
             framed.insert(framed.end(), segments.begin(), segments.end());
             framed.push_back({u8"│", StyleRole::PanelBorder});
-            draw_line(layout.input_rect.row + row, cols, framed, StyleRole::Text, style);
+            const int terminal_row = layout.input_rect.row + row;
+            frame.set_row(
+                terminal_row,
+                format_line(terminal_row, cols, framed, StyleRole::Text, style));
         } else {
-            draw_line(layout.input_rect.row + row, cols, segments, StyleRole::Text, style);
+            const int terminal_row = layout.input_rect.row + row;
+            frame.set_row(
+                terminal_row,
+                format_line(terminal_row, cols, segments, StyleRole::Text, style));
         }
     }
     if (agent_mode) {
-        draw_line(layout.input_rect.row + layout.input_rect.height, cols,
-                  agent_input_bottom_border(cols), StyleRole::PanelBorder, style);
+        const int bottom_row = layout.input_rect.row + layout.input_rect.height;
+        frame.set_row(
+            bottom_row,
+            format_line(bottom_row, cols, agent_input_bottom_border(cols),
+                        StyleRole::PanelBorder, style));
     }
 
     const int cursor_row = input_panel.cursor.visible ? layout.input_rect.row + input_panel.cursor.row : layout.input_rect.row;
     const int cursor_col = input_panel.cursor.visible ? layout.input_rect.col + input_panel.cursor.col : layout.input_rect.col;
-    std::cout << "\x1b[" << std::min(layout.rows, std::max(1, cursor_row)) << ";"
-              << std::min(cols, std::max(1, cursor_col)) << "H\x1b[?25h";
-    std::cout.flush();
+    frame.cursor_row = cursor_row;
+    frame.cursor_col = cursor_col;
+    frame_renderer.present(frame, std::cout);
 }
 
 }  // namespace ainiux::tui::detail

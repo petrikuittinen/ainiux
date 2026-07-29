@@ -2341,11 +2341,14 @@ app::TuiRunResult run(provider::RequestContext context,
 
     std::string visible_panel = panel_text();
     size_t render_frame = 0;
+    const auto render_animation_started = std::chrono::steady_clock::now();
+    detail::TerminalFrameRenderer terminal_frame_renderer;
     ActivityKind activity_kind = ActivityKind::None;
     detail::render(session, input, status, history_scroll, show_thinking_traces, mode, visible_panel,
                    activity_kind, render_frame, syntax_highlight,
-                   detail::RenderStyle{&context.options.tui_themes, theme, use_colors}, panel_title(),
-                   context.options.agent, build_agent_chrome());
+                   detail::RenderStyle{&context.options.tui_themes, theme, use_colors},
+                   terminal_frame_renderer, panel_title(), context.options.agent,
+                   build_agent_chrome());
     while (!quit) {
         process_clipboard_events();
         TuiEvent event;
@@ -3406,11 +3409,16 @@ app::TuiRunResult run(provider::RequestContext context,
                             ? activity_kind_for_pending_assistant(session, pending_assistant,
                                                                   show_thinking_traces)
                             : ActivityKind::None;
-        ++render_frame;
+        render_frame = static_cast<size_t>(
+            std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::steady_clock::now() - render_animation_started)
+                .count() /
+            200);
         detail::render(session, input, status, history_scroll, show_thinking_traces, mode, visible_panel,
                        activity_kind, render_frame, syntax_highlight,
                        detail::RenderStyle{&context.options.tui_themes, theme, use_colors},
-                       panel_title(), context.options.agent, build_agent_chrome());
+                       terminal_frame_renderer, panel_title(), context.options.agent,
+                       build_agent_chrome());
     }
 
     model_job.cancel();

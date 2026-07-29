@@ -4320,6 +4320,41 @@ void test_editor_markdown_mode_and_structured_highlighting() {
     check(saw_selected_heading,
           "editor rendering overlays selection independently on Markdown syntax spans");
 
+    ainiux::editor::EditorState markdown_edges =
+        ainiux::editor::EditorState::from_text(
+            "window_width_max\n**Bold here:**\n> user prompt");
+    markdown_edges.set_language(ainiux::highlight::Language::Markdown, false);
+    markdown_edges.highlight_enabled = true;
+    const ainiux::editor::RenderedPanel edge_rendered =
+        markdown_edges.render({1, 1, 3, 80});
+    bool identifier_emphasis = false;
+    bool punctuation_strong = false;
+    if (edge_rendered.line_spans.size() >= 2) {
+        for (const ainiux::editor::RenderedPanel::Span& span :
+             edge_rendered.line_spans[0]) {
+            identifier_emphasis =
+                identifier_emphasis ||
+                (span.syntax &&
+                 (span.role == ainiux::highlight::TokenRole::Emphasis ||
+                  span.role == ainiux::highlight::TokenRole::Strong ||
+                  span.role == ainiux::highlight::TokenRole::StrongEmphasis));
+        }
+        for (const ainiux::editor::RenderedPanel::Span& span :
+             edge_rendered.line_spans[1]) {
+            punctuation_strong =
+                punctuation_strong ||
+                (span.syntax &&
+                 span.role == ainiux::highlight::TokenRole::Strong);
+        }
+    }
+    check(edge_rendered.lines.size() == 3 &&
+              edge_rendered.lines[0].rfind("window_width_max", 0) == 0 &&
+              edge_rendered.lines[1].rfind("**Bold here:**", 0) == 0 &&
+              edge_rendered.lines[2].rfind("> user prompt", 0) == 0,
+          "editor Markdown highlighting preserves identifier, strong, and blockquote text");
+    check(!identifier_emphasis && punctuation_strong,
+          "editor Markdown keeps snake_case plain and accepts punctuation inside strong text");
+
     ainiux::editor::EditorState python_state =
         ainiux::editor::EditorState::from_text("def greet(name: str): return 17");
     python_state.set_language(ainiux::highlight::Language::Python, false);

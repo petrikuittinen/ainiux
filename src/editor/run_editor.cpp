@@ -25,6 +25,7 @@
 #include "provider/model_selection.hpp"
 #include "search/search.hpp"
 #include "tui/activity.hpp"
+#include "tui/detail/frame_buffer.hpp"
 #include "tui/events.hpp"
 #include "tui/theme_registry.hpp"
 #include "tui/tui.hpp"
@@ -289,6 +290,7 @@ app::EditorRunResult run_editor(const std::string& path,
     size_t pending_close_index = static_cast<size_t>(-1);
     TerminalSize last_size = terminal_size();
     size_t activity_frame = 0;
+    const auto activity_animation_started = std::chrono::steady_clock::now();
     std::string theme_name = settings.theme_name;
     input::InsertSourceOptions insert_options;
     const cli::Options* runtime_options = nullptr;
@@ -427,12 +429,14 @@ app::EditorRunResult run_editor(const std::string& path,
         buffer_list_view.clear_undo_history();
     };
 
+    tui::detail::TerminalFrameRenderer terminal_frame_renderer;
     auto render_editor = [&]() {
         const TerminalThemeStyle theme_style = terminal_theme_style();
         if (picker.active) {
             picker.refresh_view();
             render_terminal_panel(picker.view,
                                   minibuffer,
+                                  terminal_frame_renderer,
                                   theme_style,
                                   picker.for_provider ? tui::TuiMode::ProviderList
                                       : picker.for_reasoning ? tui::TuiMode::ReasoningList
@@ -444,6 +448,7 @@ app::EditorRunResult run_editor(const std::string& path,
             refresh_buffer_list_view();
             render_terminal_panel(buffer_list_view,
                                   minibuffer,
+                                  terminal_frame_renderer,
                                   theme_style,
                                   // The editor buffer selector uses the same panel widget as chat /list.
                                   tui::TuiMode::ThreadList,
@@ -453,7 +458,8 @@ app::EditorRunResult run_editor(const std::string& path,
         }
         state.highlight_enabled = highlight_enabled;
         if (help_view.active || !split_layout.has_split()) {
-            render_terminal(state, minibuffer, theme_style, help_view.active, refresh_assist_display());
+            render_terminal(state, minibuffer, terminal_frame_renderer, theme_style,
+                            help_view.active, refresh_assist_display());
             return;
         }
         const std::vector<SplitPaneRect> panes = split_layout.layout_panes(editor_main_area());
@@ -470,6 +476,7 @@ app::EditorRunResult run_editor(const std::string& path,
             },
             state,
             minibuffer,
+            terminal_frame_renderer,
             theme_style,
             help_view.active,
             refresh_assist_display(),
@@ -3314,8 +3321,15 @@ app::EditorRunResult run_editor(const std::string& path,
         const bool clipboard_updated = process_clipboard_events();
         const bool assist_animating =
             assist_session.active && assist_session.activity_kind != tui::ActivityKind::None;
+        bool assist_animation_updated = false;
         if (assist_animating) {
-            ++activity_frame;
+            const size_t next_frame = static_cast<size_t>(
+                std::chrono::duration_cast<std::chrono::milliseconds>(
+                    std::chrono::steady_clock::now() - activity_animation_started)
+                    .count() /
+                200);
+            assist_animation_updated = next_frame != activity_frame;
+            activity_frame = next_frame;
         }
         if (assist_updated) {
             try_autosave(SteadyClock::now() - last_activity);
@@ -3330,7 +3344,7 @@ app::EditorRunResult run_editor(const std::string& path,
                 assist_session.job.running() || model_list.job.running() || assist_updated ||
                 reformat_session.job.running() || reformat_updated || insert_session.job.running() ||
                 insert_updated || shell_session.job.running() || shell_updated || model_updated ||
-                selection_updated || clipboard_updated || assist_animating ||
+                selection_updated || clipboard_updated || assist_animation_updated ||
                 clipboard_runtime.read_running()) {
                 last_size = current_size;
                 render_editor();

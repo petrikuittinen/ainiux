@@ -88,6 +88,88 @@ bool delimiter_is_escaped(const std::string& line, size_t pos) {
     return backslashes % 2 != 0;
 }
 
+enum class MarkdownCharacterClass {
+    Whitespace,
+    Punctuation,
+    Other,
+};
+
+MarkdownCharacterClass markdown_character_class(const std::string& line, size_t pos) {
+    if (pos >= line.size()) {
+        return MarkdownCharacterClass::Whitespace;
+    }
+    const unsigned char ch = static_cast<unsigned char>(line[pos]);
+    if (ch < 0x80U && std::isspace(ch) != 0) {
+        return MarkdownCharacterClass::Whitespace;
+    }
+    if (ch < 0x80U && std::ispunct(ch) != 0) {
+        return MarkdownCharacterClass::Punctuation;
+    }
+    return MarkdownCharacterClass::Other;
+}
+
+struct MarkdownDelimiterRun {
+    size_t start = 0;
+    size_t length = 0;
+    bool can_open = false;
+    bool can_close = false;
+};
+
+MarkdownDelimiterRun markdown_delimiter_run(const std::string& line,
+                                            size_t start,
+                                            char marker) {
+    MarkdownDelimiterRun run;
+    run.start = start;
+    run.length = repeated_run(line, start, marker);
+    if (run.length == 0 || delimiter_is_escaped(line, start)) {
+        return run;
+    }
+
+    const MarkdownCharacterClass before =
+        start == 0 ? MarkdownCharacterClass::Whitespace
+                   : markdown_character_class(line, start - 1);
+    const MarkdownCharacterClass after =
+        markdown_character_class(line, start + run.length);
+    const bool before_whitespace = before == MarkdownCharacterClass::Whitespace;
+    const bool after_whitespace = after == MarkdownCharacterClass::Whitespace;
+    const bool before_punctuation = before == MarkdownCharacterClass::Punctuation;
+    const bool after_punctuation = after == MarkdownCharacterClass::Punctuation;
+    const bool left_flanking =
+        !after_whitespace &&
+        (!after_punctuation || before_whitespace || before_punctuation);
+    const bool right_flanking =
+        !before_whitespace &&
+        (!before_punctuation || after_whitespace || after_punctuation);
+
+    if (marker == '_') {
+        // CommonMark deliberately forbids intraword underscore emphasis, while
+        // still allowing punctuation next to a real delimiter.
+        run.can_open =
+            left_flanking && (!right_flanking || before_punctuation);
+        run.can_close =
+            right_flanking && (!left_flanking || after_punctuation);
+    } else {
+        run.can_open = left_flanking;
+        run.can_close = right_flanking;
+    }
+    return run;
+}
+
+bool markdown_delimiter_pair_allowed(const MarkdownDelimiterRun& opening,
+                                     const MarkdownDelimiterRun& closing) {
+    if (!opening.can_open || !closing.can_close) {
+        return false;
+    }
+    // CommonMark's multiple-of-three rule prevents ambiguous runs that can
+    // simultaneously open and close from consuming unrelated punctuation.
+    if ((opening.can_close || closing.can_open) &&
+        (opening.length + closing.length) % 3 == 0 &&
+        (opening.length % 3 != 0 || closing.length % 3 != 0)) {
+        return false;
+    }
+    return true;
+}
+
 void add_emphasis(const std::string& line, std::vector<Candidate>& inline_tokens) {
     size_t pos = 0;
     while (pos < line.size()) {
@@ -98,47 +180,57 @@ void add_emphasis(const std::string& line, std::vector<Candidate>& inline_tokens
             continue;
         }
 
-        const size_t opening_run = repeated_run(line, pos, marker);
-        if (marker == '~' && opening_run < 2) {
-            pos += opening_run;
+        const MarkdownDelimiterRun opening =
+            markdown_delimiter_run(line, pos, marker);
+        if (!opening.can_open || (marker == '~' && opening.length < 2)) {
+            pos += std::max(size_t{1}, opening.length);
             continue;
         }
-        const size_t delimiter_length = marker == '~' ? size_t{2}
-                                                       : std::min(opening_run, size_t{3});
-        const std::string delimiter(delimiter_length, marker);
-        size_t search = pos + delimiter_length;
+        size_t search = pos + opening.length;
         bool matched = false;
         while (search < line.size()) {
-            const size_t close = line.find(delimiter, search);
+            const size_t close = line.find(marker, search);
             if (close == std::string::npos) {
                 break;
             }
-            if (close == pos + delimiter_length || delimiter_is_escaped(line, close)) {
-                search = close + 1;
+            const MarkdownDelimiterRun closing =
+                markdown_delimiter_run(line, close, marker);
+            if ((marker == '~' && closing.length < 2) ||
+                !markdown_delimiter_pair_allowed(opening, closing)) {
+                search = close + std::max(size_t{1}, closing.length);
                 continue;
             }
 
-            size_t close_end = close + delimiter_length;
-            // A longer closing run can close nested emphasis (for example
-            // **bold *text***). Keep the complete run in the semantic span.
-            while (close_end < line.size() && line[close_end] == marker) {
-                ++close_end;
+            const size_t paired_length =
+                marker == '~'
+                    ? size_t{2}
+                    : std::min(size_t{3},
+                               std::min(opening.length, closing.length));
+            // Be conservative around mismatched single/double runs. Fully
+            // parsing nested inline nodes is outside a syntax highlighter's
+            // scope, and a false negative is preferable to coloring prose or
+            // identifiers that are not Markdown.
+            if (marker != '~' &&
+                ((opening.length == 1) != (closing.length == 1))) {
+                search = close + closing.length;
+                continue;
             }
             TokenRole role = TokenRole::Emphasis;
             if (marker == '~') {
                 role = TokenRole::Strikethrough;
-            } else if (delimiter_length == 2) {
+            } else if (paired_length == 2) {
                 role = TokenRole::Strong;
-            } else if (delimiter_length == 3) {
+            } else if (paired_length == 3) {
                 role = TokenRole::StrongEmphasis;
             }
+            const size_t close_end = close + closing.length;
             append_candidate(inline_tokens, pos, close_end, role);
             pos = close_end;
             matched = true;
             break;
         }
         if (!matched) {
-            pos += opening_run;
+            pos += opening.length;
         }
     }
 }
@@ -265,11 +357,27 @@ void add_inline_code(const std::string& line, std::vector<Candidate>& high_prior
         if (open == std::string::npos) {
             break;
         }
+        if (delimiter_is_escaped(line, open)) {
+            pos = open + 1;
+            continue;
+        }
         const size_t run = repeated_run(line, open, '`');
-        const std::string delimiter(run, '`');
-        const size_t close = line.find(delimiter, open + run);
+        size_t search = open + run;
+        size_t close = std::string::npos;
+        while (search < line.size()) {
+            const size_t candidate = line.find('`', search);
+            if (candidate == std::string::npos) {
+                break;
+            }
+            const size_t closing_run = repeated_run(line, candidate, '`');
+            if (!delimiter_is_escaped(line, candidate) && closing_run == run) {
+                close = candidate;
+                break;
+            }
+            search = candidate + closing_run;
+        }
         if (close == std::string::npos) {
-            ++pos;
+            pos = open + run;
             continue;
         }
         append_candidate(high_priority, open, close + run, TokenRole::String);
@@ -307,11 +415,12 @@ void add_markdown_structure(const std::string& line, std::vector<Candidate>& str
         }
     }
 
-    if (pos < line.size() && line[pos] == '>') {
+    while (pos < line.size() && line[pos] == '>') {
         append_candidate(structural, pos, pos + 1, TokenRole::Operator);
         ++pos;
         if (pos < line.size() && line[pos] == ' ') {
             append_candidate(structural, pos, pos + 1, TokenRole::Operator);
+            ++pos;
         }
     }
 

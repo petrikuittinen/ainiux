@@ -33,6 +33,11 @@ bool minibuffer_supports_path_completion(MinibufferAction action) {
            action == MinibufferAction::LoadFile;
 }
 
+std::string terminal_position(int row, int col) {
+    return "\x1b[" + std::to_string(std::max(1, row)) + ";" +
+           std::to_string(std::max(1, col)) + "H";
+}
+
 }  // namespace
 
 using detail::pad_or_clip_ascii;
@@ -147,50 +152,48 @@ std::string activity_color_sequence(const TerminalThemeStyle& theme_style, tui::
         tui::style_pair_for(*theme_style.themes, theme_style.theme_name, role).foreground);
 }
 
-void write_editor_rendered_line(const std::string& line,
-                                const std::vector<RenderedPanel::Span>& spans,
-                                const TerminalThemeStyle& theme_style) {
+void append_editor_rendered_line(std::string& output,
+                                 const std::string& line,
+                                 const std::vector<RenderedPanel::Span>& spans,
+                                 const TerminalThemeStyle& theme_style) {
     size_t pos = 0;
-    auto write_base_style = [&]() {
+    auto append_base_style = [&]() {
         if (theme_style.use_colors && theme_style.themes != nullptr) {
-            std::cout << tui::style_sequence_for(
+            output += tui::style_sequence_for(
                 *theme_style.themes, theme_style.theme_name, tui::StyleRole::Text);
         }
     };
-    write_base_style();
+    append_base_style();
     for (const RenderedPanel::Span& span : spans) {
         const size_t start = std::min(span.start, line.size());
         const size_t end = std::min(span.end, line.size());
         if (start > pos) {
-            std::cout.write(line.data() + static_cast<std::ptrdiff_t>(pos),
-                            static_cast<std::streamsize>(start - pos));
+            output.append(line, pos, start - pos);
         }
         if (span.syntax && theme_style.use_colors && theme_style.themes != nullptr) {
-            std::cout << tui::style_sequence_for(*theme_style.themes,
-                                                 theme_style.theme_name,
-                                                 tui::style_role_for_token(span.role));
-            std::cout << tui::ansi_text_attributes_sequence(
+            output += tui::style_sequence_for(*theme_style.themes,
+                                              theme_style.theme_name,
+                                              tui::style_role_for_token(span.role));
+            output += tui::ansi_text_attributes_sequence(
                 tui::text_attributes_for_token(span.role));
         } else {
-            write_base_style();
+            append_base_style();
         }
         if (span.selected) {
-            std::cout << "\x1b[7m";
+            output += "\x1b[7m";
         }
         if (end > start) {
-            std::cout.write(line.data() + static_cast<std::ptrdiff_t>(start),
-                            static_cast<std::streamsize>(end - start));
+            output.append(line, start, end - start);
         }
-        std::cout << "\x1b[0m";
-        write_base_style();
+        output += "\x1b[0m";
+        append_base_style();
         pos = std::max(pos, end);
     }
     if (pos < line.size()) {
-        std::cout.write(line.data() + static_cast<std::ptrdiff_t>(pos),
-                        static_cast<std::streamsize>(line.size() - pos));
+        output.append(line, pos, line.size() - pos);
     }
     if (!spans.empty() || (theme_style.use_colors && theme_style.themes != nullptr)) {
-        std::cout << "\x1b[0m";
+        output += "\x1b[0m";
     }
 }
 
@@ -1144,6 +1147,7 @@ bool handle_replace_key(EditorState& state,
 
 void render_terminal(EditorState& state,
                      const MinibufferState& minibuffer,
+                     tui::detail::TerminalFrameRenderer& frame_renderer,
                      const TerminalThemeStyle& theme_style,
                      bool help_view,
                      const EditorAssistDisplay* assist_display) {
@@ -1157,6 +1161,7 @@ void render_terminal(EditorState& state,
         [&](size_t) -> const EditorState& { return state; },
         state,
         minibuffer,
+        frame_renderer,
         theme_style,
         help_view,
         assist_display,
@@ -1168,6 +1173,7 @@ void render_terminal_splits(
     const std::function<const EditorState&(size_t buffer_index)>& buffer_at,
     EditorState& focused_state,
     const MinibufferState& minibuffer,
+    tui::detail::TerminalFrameRenderer& frame_renderer,
     const TerminalThemeStyle& theme_style,
     bool help_view,
     const EditorAssistDisplay* assist_display,
@@ -1178,12 +1184,7 @@ void render_terminal_splits(
     const int width = std::max(1, cols - 1);
     const Rect main_area = editor_main_area();
     const size_t pane_count = pane_count_hint > 0 ? pane_count_hint : panes.size();
-
-    std::cout << "\x1b[?25l";
-    // Clear the main content area once so separators and unused cells are blank.
-    for (int row = 0; row < main_area.height; ++row) {
-        std::cout << "\x1b[" << (main_area.row + row) << ";" << main_area.col << "H\x1b[K";
-    }
+    tui::detail::TerminalFrame frame(rows, cols);
 
     int cursor_row = main_area.row;
     int cursor_col = main_area.col;
@@ -1198,15 +1199,17 @@ void render_terminal_splits(
         }
         const RenderedPanel panel = source->render(pane.rect);
         for (int row = 0; row < pane.rect.height; ++row) {
-            std::cout << "\x1b[" << (pane.rect.row + row) << ";" << pane.rect.col << "H";
+            const int terminal_row = pane.rect.row + row;
+            std::string command = terminal_position(terminal_row, pane.rect.col);
             if (row < static_cast<int>(panel.lines.size())) {
                 const size_t index = static_cast<size_t>(row);
                 const std::vector<RenderedPanel::Span> empty_spans;
                 const std::vector<RenderedPanel::Span>& spans =
                     index < panel.line_spans.size() ? panel.line_spans[index] : empty_spans;
                 // Clip to pane width; render() already sizes lines to rect.width.
-                write_editor_rendered_line(panel.lines[index], spans, theme_style);
+                append_editor_rendered_line(command, panel.lines[index], spans, theme_style);
             }
+            frame.append_to_row(terminal_row, std::move(command));
         }
         // Dim vertical/horizontal edge marker on focused pane border via reverse on last
         // column of non-focused is intentionally skipped; empty cleared gaps act as dividers.
@@ -1226,29 +1229,37 @@ void render_terminal_splits(
                 if (a.row == b.row && a.height == b.height && b.col == a.col + a.width + 1) {
                     const int sep_col = a.col + a.width;
                     for (int row = 0; row < a.height; ++row) {
-                        std::cout << "\x1b[" << (a.row + row) << ";" << sep_col << "H│";
+                        const int terminal_row = a.row + row;
+                        frame.append_to_row(
+                            terminal_row,
+                            terminal_position(terminal_row, sep_col) + u8"│");
                     }
                 }
                 if (b.row == a.row && b.height == a.height && a.col == b.col + b.width + 1) {
                     const int sep_col = b.col + b.width;
                     for (int row = 0; row < b.height; ++row) {
-                        std::cout << "\x1b[" << (b.row + row) << ";" << sep_col << "H│";
+                        const int terminal_row = b.row + row;
+                        frame.append_to_row(
+                            terminal_row,
+                            terminal_position(terminal_row, sep_col) + u8"│");
                     }
                 }
                 // Horizontal separator.
                 if (a.col == b.col && a.width == b.width && b.row == a.row + a.height + 1) {
                     const int sep_row = a.row + a.height;
-                    std::cout << "\x1b[" << sep_row << ";" << a.col << "H";
+                    std::string separator = terminal_position(sep_row, a.col);
                     for (int col = 0; col < a.width; ++col) {
-                        std::cout << "─";
+                        separator += u8"─";
                     }
+                    frame.append_to_row(sep_row, std::move(separator));
                 }
                 if (b.col == a.col && b.width == a.width && a.row == b.row + b.height + 1) {
                     const int sep_row = b.row + b.height;
-                    std::cout << "\x1b[" << sep_row << ";" << b.col << "H";
+                    std::string separator = terminal_position(sep_row, b.col);
                     for (int col = 0; col < b.width; ++col) {
-                        std::cout << "─";
+                        separator += u8"─";
                     }
+                    frame.append_to_row(sep_row, std::move(separator));
                 }
             }
         }
@@ -1258,28 +1269,32 @@ void render_terminal_splits(
     const int minibuffer_row = rows;
     const std::string status_text =
         pad_or_clip_ascii(editor_status_line(focused_state, help_view, pane_count), width);
-    std::cout << "\x1b[" << status_row << ";1H";
+    std::string status_command = terminal_position(status_row, 1);
     if (theme_style.use_colors && theme_style.themes != nullptr) {
-        std::cout << tui::style_sequence_for(*theme_style.themes, theme_style.theme_name, tui::StyleRole::Status);
+        status_command += tui::style_sequence_for(
+            *theme_style.themes, theme_style.theme_name, tui::StyleRole::Status);
     } else {
-        std::cout << "\x1b[7m";
+        status_command += "\x1b[7m";
     }
-    std::cout << status_text << "\x1b[0m\x1b[K";
+    status_command += status_text + "\x1b[0m\x1b[K";
+    frame.set_row(status_row, std::move(status_command));
     const bool show_assist_activity = assist_display != nullptr && assist_display->active &&
                                         assist_display->kind != tui::ActivityKind::None &&
                                         !minibuffer.active;
     const std::string minibuffer_line =
         show_assist_activity ? editor_assist_minibuffer_line(*assist_display, theme_style, width)
                              : pad_or_clip_ascii(minibuffer_text(minibuffer), width);
-    std::cout << "\x1b[" << minibuffer_row << ";1H";
+    std::string minibuffer_command = terminal_position(minibuffer_row, 1);
     if (theme_style.use_colors && theme_style.themes != nullptr && !show_assist_activity) {
-        std::cout << tui::style_sequence_for(*theme_style.themes, theme_style.theme_name, tui::StyleRole::Text);
+        minibuffer_command += tui::style_sequence_for(
+            *theme_style.themes, theme_style.theme_name, tui::StyleRole::Text);
     }
-    std::cout << minibuffer_line;
+    minibuffer_command += minibuffer_line;
     if (theme_style.use_colors && theme_style.themes != nullptr && !show_assist_activity) {
-        std::cout << "\x1b[0m";
+        minibuffer_command += "\x1b[0m";
     }
-    std::cout << "\x1b[K";
+    minibuffer_command += "\x1b[K";
+    frame.set_row(minibuffer_row, std::move(minibuffer_command));
 
     if (minibuffer.active) {
         cursor_row = minibuffer_row;
@@ -1288,12 +1303,14 @@ void render_terminal_splits(
         cursor_col = 1 + static_cast<int>(std::min<size_t>(
             static_cast<size_t>(std::max(0, width - 1)), prompt_width + input_width));
     }
-    std::cout << "\x1b[" << cursor_row << ";" << cursor_col << "H\x1b[?25h";
-    std::cout.flush();
+    frame.cursor_row = cursor_row;
+    frame.cursor_col = cursor_col;
+    frame_renderer.present(frame, std::cout);
 }
 
 void render_terminal_panel(EditorState& state,
                            const MinibufferState& minibuffer,
+                           tui::detail::TerminalFrameRenderer& frame_renderer,
                            const TerminalThemeStyle& theme_style,
                            tui::TuiMode mode,
                            int& panel_scroll,
@@ -1303,6 +1320,7 @@ void render_terminal_panel(EditorState& state,
     const int cols = std::max(20, size.cols);
     const int width = std::max(1, cols - 1);
     const int panel_height = std::max(1, rows - 2);
+    tui::detail::TerminalFrame frame(rows, cols);
     const tui::detail::RenderStyle render_style{theme_style.themes,
                                                  theme_style.theme_name,
                                                  theme_style.use_colors};
@@ -1329,23 +1347,25 @@ void render_terminal_panel(EditorState& state,
         panel_scroll = std::min(std::max(0, panel_scroll), max_scroll);
     }
 
-    std::cout << "\x1b[?25l";
     int printed = 0;
     for (int index = panel_scroll;
          index < static_cast<int>(lines.size()) && printed < panel_height;
          ++index, ++printed) {
-        tui::detail::draw_line(1 + printed,
-                               width,
-                               lines[static_cast<size_t>(index)].segments,
-                               tui::StyleRole::PanelBorder,
-                               render_style);
+        const int terminal_row = 1 + printed;
+        frame.set_row(
+            terminal_row,
+            tui::detail::format_line(
+                terminal_row, width,
+                lines[static_cast<size_t>(index)].segments,
+                tui::StyleRole::PanelBorder, render_style));
     }
     while (printed < panel_height) {
-        tui::detail::draw_line(1 + printed,
-                               width,
-                               "",
-                               tui::StyleRole::PanelBorder,
-                               render_style);
+        const int terminal_row = 1 + printed;
+        frame.set_row(
+            terminal_row,
+            tui::detail::format_line(
+                terminal_row, width, "", tui::StyleRole::PanelBorder,
+                render_style));
         ++printed;
     }
 
@@ -1357,28 +1377,30 @@ void render_terminal_panel(EditorState& state,
     const int status_row = rows - 1;
     const int minibuffer_row = rows;
     const std::string status_text = pad_or_clip_ascii(editor_status_line(state, false), width);
-    std::cout << "\x1b[" << status_row << ";1H";
+    std::string status_command = terminal_position(status_row, 1);
     if (theme_style.use_colors && theme_style.themes != nullptr) {
-        std::cout << tui::style_sequence_for(*theme_style.themes,
-                                             theme_style.theme_name,
-                                             tui::StyleRole::Status);
+        status_command += tui::style_sequence_for(*theme_style.themes,
+                                                  theme_style.theme_name,
+                                                  tui::StyleRole::Status);
     } else {
-        std::cout << "\x1b[7m";
+        status_command += "\x1b[7m";
     }
-    std::cout << status_text << "\x1b[0m\x1b[K";
+    status_command += status_text + "\x1b[0m\x1b[K";
+    frame.set_row(status_row, std::move(status_command));
 
     const std::string minibuffer_line = pad_or_clip_ascii(minibuffer_text(minibuffer), width);
-    std::cout << "\x1b[" << minibuffer_row << ";1H";
+    std::string minibuffer_command = terminal_position(minibuffer_row, 1);
     if (theme_style.use_colors && theme_style.themes != nullptr) {
-        std::cout << tui::style_sequence_for(*theme_style.themes,
-                                             theme_style.theme_name,
-                                             tui::StyleRole::Text);
+        minibuffer_command += tui::style_sequence_for(*theme_style.themes,
+                                                      theme_style.theme_name,
+                                                      tui::StyleRole::Text);
     }
-    std::cout << minibuffer_line;
+    minibuffer_command += minibuffer_line;
     if (theme_style.use_colors && theme_style.themes != nullptr) {
-        std::cout << "\x1b[0m";
+        minibuffer_command += "\x1b[0m";
     }
-    std::cout << "\x1b[K";
+    minibuffer_command += "\x1b[K";
+    frame.set_row(minibuffer_row, std::move(minibuffer_command));
 
     if (minibuffer.active) {
         cursor_row = minibuffer_row;
@@ -1387,8 +1409,9 @@ void render_terminal_panel(EditorState& state,
         cursor_col = 1 + static_cast<int>(std::min<size_t>(
             static_cast<size_t>(std::max(0, width - 1)), prompt_width + input_width));
     }
-    std::cout << "\x1b[" << cursor_row << ";" << cursor_col << "H\x1b[?25h";
-    std::cout.flush();
+    frame.cursor_row = cursor_row;
+    frame.cursor_col = cursor_col;
+    frame_renderer.present(frame, std::cout);
 }
 
 std::string read_escape_suffix() {
