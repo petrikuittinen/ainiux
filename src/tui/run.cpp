@@ -1767,11 +1767,21 @@ app::TuiRunResult run(provider::RequestContext context,
                     event.error =
                         runtime->load_display_messages(event.agent_history);
                     event.agent_history_loaded = event.error.ok();
-                    event.text =
-                        (report.created ? "Code index created in "
-                                        : "Code index refreshed in ") +
-                        std::to_string(std::max(0LL, report.elapsed_ms)) +
-                        " ms";
+                    // Prefer the history intro line (includes fractional seconds);
+                    // fall back if the report did not carry markdown.
+                    if (!report.markdown.empty()) {
+                        const std::size_t newline =
+                            report.markdown.find('\n');
+                        event.text = newline == std::string::npos
+                                         ? report.markdown
+                                         : report.markdown.substr(0, newline);
+                    } else {
+                        event.text =
+                            (report.created ? "Code index created in "
+                                            : "Code index refreshed in ") +
+                            std::to_string(std::max(0LL, report.elapsed_ms)) +
+                            " ms";
+                    }
                 }
                 events.push(std::move(event));
             });

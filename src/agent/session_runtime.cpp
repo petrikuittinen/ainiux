@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <chrono>
 #include <filesystem>
+#include <iomanip>
 #include <iostream>
 #include <limits>
 #include <sstream>
@@ -84,6 +85,15 @@ std::vector<std::string> known_tool_names(const ReadToolRegistry& tools) {
     for (const provider::FunctionDefinition& definition : tools.definitions())
         names.push_back(definition.name);
     return names;
+}
+
+// One-line history preface before the compact totals table after /index-code.
+std::string format_index_completion_intro(long long elapsed_ms) {
+    std::ostringstream out;
+    out << "Code indexing completed in " << std::fixed << std::setprecision(2)
+        << (static_cast<double>(std::max(0LL, elapsed_ms)) / 1000.0)
+        << " seconds. Here is the summary:";
+    return out.str();
 }
 
 Error default_compaction_summary_call(
@@ -1235,17 +1245,16 @@ SessionIndexReportResult AgentSessionRuntime::index_code(
         stamp_elapsed();
         return result;
     }
-    result.markdown = index::compact_totals_markdown(totals);
+    stamp_elapsed();
+    // History row: timing line, then the compact language totals table.
+    result.markdown = format_index_completion_intro(result.elapsed_ms) + "\n\n" +
+                      index::compact_totals_markdown(totals);
     if (session_store_.is_open()) {
         result.error =
             session_store_.append_message("index", result.markdown);
-        if (!result.error.ok()) {
-            stamp_elapsed();
-            return result;
-        }
+        if (!result.error.ok()) return result;
     }
     result.error = ok_error();
-    stamp_elapsed();
     return result;
 }
 

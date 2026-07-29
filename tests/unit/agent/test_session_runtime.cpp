@@ -201,6 +201,9 @@ void test_index_code_enables_a_skipped_index_in_place() {
               created.indexing_enabled && runtime.indexing_enabled() &&
               fs::exists(database) && progress_updates.load() > 0 &&
               created.elapsed_ms >= 0 &&
+              created.markdown.find("Code indexing completed in") == 0 &&
+              created.markdown.find(" seconds. Here is the summary:\n\n|") !=
+                  std::string::npos &&
               created.markdown.find(
                   "| **All languages** | **1** |") !=
                   std::string::npos,

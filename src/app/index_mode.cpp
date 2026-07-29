@@ -69,6 +69,10 @@ int run_index_mode(const cli::Options& options) {
         agent::index::RefreshStats stats;
         const Error error = agent::index::refresh(index_options, stats);
         progress.finish();
+        // Drop the stack-capturing callback before leaving this scope so a
+        // following --print-index freshness discover cannot use a dangling
+        // IndexProgressPrinter (stack-use-after-scope under ASan).
+        index_options.on_progress = {};
         if (!error.ok()) {
             print_error(error);
             return exit_code_for(error.code);
