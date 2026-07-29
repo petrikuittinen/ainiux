@@ -17,7 +17,8 @@ constexpr std::size_t kMinimumTailItems = 3;
 constexpr std::size_t kMaximumTailItems = 20;
 
 bool model_projection_role(const std::string& role) {
-    return role != "system" && role != "notice" && role != "thinking";
+    return role != "system" && role != "notice" && role != "thinking" &&
+           role != "index";
 }
 
 long long item_tokens(const CompactionLogicalItem& item) {

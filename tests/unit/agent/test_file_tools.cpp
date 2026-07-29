@@ -1007,6 +1007,7 @@ void test_smart_act_native_tools_accept_unindexed_project_paths() {
 
     // Create these after the snapshot so they are certainly absent from it.
     write_text(fs::path(workspace) / "names.txt", "Ada\nLinus\n");
+    write_text(fs::path(workspace) / "languages.txt", "C++\nPython\n");
     write_text(fs::path(workspace) / "remove-me.txt", "temporary\n");
     fs::create_directory(fs::path(workspace) / "unindexed-dir");
 
@@ -1017,9 +1018,23 @@ void test_smart_act_native_tools_accept_unindexed_project_paths() {
           "Smart Act read_file reads an unindexed project file: " + read);
     const std::string many = tools.execute(
         "read_many",
-        R"JSON({"items":[{"path":"names.txt","start_line":1,"end_line":20}],"max_bytes":4096})JSON");
-    check(json_ok(many) && many.find("Linus") != std::string::npos,
-          "Smart Act read_many reads unindexed project files: " + many);
+        R"JSON({"items":[{"path":"names.txt","start_line":1,"end_line":20},{"path":"languages.txt","start_line":1,"end_line":20}],"max_bytes":4096})JSON");
+    const json::ParseResult many_parsed = json::parse(many);
+    const json::Value* many_data =
+        many_parsed.error.ok() ? many_parsed.value.get("data") : nullptr;
+    const json::Value* many_metadata =
+        many_parsed.error.ok() ? many_parsed.value.get("metadata") : nullptr;
+    check(json_ok(many) && many.find("Linus") != std::string::npos &&
+              many.find("Python") != std::string::npos &&
+              many_data != nullptr && many_data->is_array() &&
+              many_data->array.size() == 2 &&
+              many_metadata != nullptr && many_metadata->is_object() &&
+              many_metadata->get("requested_items") != nullptr &&
+              many_metadata->get("requested_items")->number == 2 &&
+              many_metadata->get("returned_items") != nullptr &&
+              many_metadata->get("returned_items")->number == 2,
+          "Smart Act read_many returns two unindexed project files in one tool call: " +
+              many);
 
     const std::string edited = tools.execute(
         "edit_file",
@@ -1199,6 +1214,8 @@ void test_indexing_disabled_registry_is_strict_and_live() {
                "def ignored_marker():\n    pass\n");
     write_text(fs::path(workspace) / "src" / "live.py",
                "def LiveMarker():\n    return 'Needle'\n");
+    write_text(fs::path(workspace) / "src" / "other.py",
+               "def OtherMarker():\n    return 'Needle'\n");
     agent::ToolRegistryOptions options;
     options.mutation_policy = agent::MutationPolicy::Full;
     options.indexing_enabled = false;
@@ -1272,6 +1289,51 @@ void test_indexing_disabled_registry_is_strict_and_live() {
               regex_search.find("LiveMarker") != std::string::npos,
           "indexing-off grep alias retains regex behavior: " +
               regex_search);
+    const std::string inferred_regex_search = tools.execute(
+        "search_text",
+        R"JSON({"query":"LiveMarker|MissingMarker","path":"src/live.py"})JSON");
+    check(json_ok(inferred_regex_search) &&
+              inferred_regex_search.find("LiveMarker") != std::string::npos &&
+              inferred_regex_search.find("regex=true inferred") !=
+                  std::string::npos,
+          "search_text infers alternation only when regex is omitted and honors exact path: " +
+              inferred_regex_search);
+    const std::string explicit_literal_search = tools.execute(
+        "search_text",
+        R"JSON({"query":"LiveMarker|MissingMarker","regex":false,"path":"src/live.py"})JSON");
+    check(json_ok(explicit_literal_search) &&
+              explicit_literal_search.find("\"data\":[]") != std::string::npos &&
+              explicit_literal_search.find("searched literally") !=
+                  std::string::npos,
+          "explicit regex=false preserves literal pipe behavior: " +
+              explicit_literal_search);
+    const std::string pattern_alias_search = tools.execute(
+        "grep",
+        R"JSON({"pattern":"Needle","path":"src/live.py","max_results":5})JSON");
+    check(json_ok(pattern_alias_search) &&
+              pattern_alias_search.find("Needle") != std::string::npos &&
+              pattern_alias_search.find("src/other.py") == std::string::npos,
+          "grep accepts pattern as an unambiguous query alias: " +
+              pattern_alias_search);
+    const std::string logical_or_search = tools.execute(
+        "search_text",
+        R"JSON({"query":"||","path":"src/live.py"})JSON");
+    check(json_ok(logical_or_search) &&
+              logical_or_search.find("regex=true inferred") ==
+                  std::string::npos,
+          "search_text does not infer alternation for a logical-or token: " +
+              logical_or_search);
+    check(!json_ok(tools.execute(
+              "search_text",
+              R"JSON({"query":"Needle","path":"src/live.py","glob":"*.py"})JSON")),
+          "search_text rejects ambiguous exact-path and glob filters");
+    const std::string repaired_glob_search = tools.execute(
+        "search_text",
+        R"JSON({"query":"Needle","glob": *.py,"max_results":5})JSON");
+    check(json_ok(repaired_glob_search) &&
+              repaired_glob_search.find("Needle") != std::string::npos,
+          "search_text repairs an unquoted path-like glob value: " +
+              repaired_glob_search);
     check(!json_ok(tools.execute(
               "search_text", R"JSON({"query":"(","regex":true})JSON")),
           "indexing-off search returns structured invalid-regex errors");
@@ -1290,6 +1352,205 @@ void test_indexing_disabled_registry_is_strict_and_live() {
               !fs::exists(fs::path(workspace) / ".ainiux-pr" /
                           "index.sqlite"),
           "indexing-off registry does not create a refresh database");
+
+    agent::index::RefreshStats enable_stats;
+    agent::index::Snapshot enabled_snapshot;
+    check(agent::index::refresh(index_options, enable_stats).ok() &&
+              agent::index::load_snapshot(index_options, enabled_snapshot).ok() &&
+              tools.enable_persistent_index(index_options,
+                                            std::move(enabled_snapshot)).ok(),
+          "live registry can enable a completed persistent index in place");
+    bool has_index_status = false;
+    bool has_replace_symbol = false;
+    for (const provider::FunctionDefinition& definition : tools.definitions()) {
+        has_index_status =
+            has_index_status || definition.name == "index_status";
+        if (definition.name != "edit_file") continue;
+        has_replace_symbol =
+            definition.parameters_json.find("replace_symbol") !=
+            std::string::npos;
+    }
+    check(tools.indexing_enabled() && has_index_status &&
+              has_replace_symbol,
+          "in-place index enablement immediately publishes index-aware tool schemas");
+
+    std::error_code ec;
+    fs::remove_all(workspace, ec);
+}
+
+void test_read_many_preference_limits_and_serialization() {
+    const std::string workspace = write_temp_workspace("read-many");
+    write_text(fs::path(workspace) / "src" / "large.txt",
+               std::string(70000, 'x') + "\n");
+    write_text(fs::path(workspace) / "src" / "lines.txt",
+               "alpha\nbeta\ngamma\n");
+    agent::ReadToolRegistry tools =
+        make_registry(workspace, agent::MutationPolicy::Full);
+
+    const std::vector<provider::FunctionDefinition> definitions =
+        tools.definitions();
+    std::size_t read_many_index = definitions.size();
+    std::size_t read_file_index = definitions.size();
+    for (std::size_t index = 0; index < definitions.size(); ++index) {
+        if (definitions[index].name == "read_many") read_many_index = index;
+        if (definitions[index].name == "read_file") read_file_index = index;
+    }
+    check(read_many_index < read_file_index &&
+              definitions[read_many_index].description.find(
+                  "Preferred file reader") != std::string::npos &&
+              definitions[read_many_index].description.find(
+                  "native parallel tool calls") != std::string::npos &&
+              definitions[read_file_index].description.find(
+                  "Single-target fallback") != std::string::npos &&
+              definitions[read_file_index].description.find(
+                  "Do not issue multiple parallel read_file") !=
+                  std::string::npos,
+          "indexed Agent definitions advertise read_many before the read_file fallback");
+
+    const std::string limited = tools.execute(
+        "read_many",
+        R"JSON({"items":[{"path":"src/lines.txt","start_line":2,"end_line":3,"max_bytes":5},{"path":"src/large.txt"}]})JSON");
+    const json::ParseResult limited_json = json::parse(limited);
+    const json::Value* limited_data =
+        limited_json.error.ok() ? limited_json.value.get("data") : nullptr;
+    const json::Value* first =
+        limited_data != nullptr && limited_data->is_array()
+            ? limited_data->at(0)
+            : nullptr;
+    const json::Value* second =
+        limited_data != nullptr && limited_data->is_array()
+            ? limited_data->at(1)
+            : nullptr;
+    check(json_ok(limited) && limited_data != nullptr &&
+              limited_data->is_array() && limited_data->array.size() == 2 &&
+              first != nullptr && first->get("content") != nullptr &&
+              first->get("content")->is_string() &&
+              first->get("content")->string.rfind("2: ", 0) == 0 &&
+              first->get("bytes") != nullptr &&
+              first->get("bytes")->number <= 5 &&
+              first->get("file_hash") != nullptr &&
+              first->get("range_hash") != nullptr &&
+              first->get("line_start") != nullptr &&
+              first->get("line_end") != nullptr &&
+              second != nullptr && second->get("bytes") != nullptr &&
+              second->get("bytes")->number == 65536 &&
+              second->get("truncated") != nullptr &&
+              second->get("truncated")->boolean,
+          "read_many honors item max_bytes, defaults each item to 64 KiB, and returns numbered hash/range metadata: " +
+              limited);
+
+    const std::string aggregate = tools.execute(
+        "read_many",
+        R"JSON({"items":[{"path":"src/lines.txt","max_bytes":10},{"path":"src/large.txt","max_bytes":10}],"max_bytes":12})JSON");
+    const json::ParseResult aggregate_json = json::parse(aggregate);
+    const json::Value* aggregate_data =
+        aggregate_json.error.ok() ? aggregate_json.value.get("data") : nullptr;
+    double aggregate_bytes = 0;
+    if (aggregate_data != nullptr && aggregate_data->is_array()) {
+        for (const json::Value& item : aggregate_data->array) {
+            const json::Value* bytes = item.get("bytes");
+            if (bytes != nullptr &&
+                bytes->type == json::Value::Type::Number)
+                aggregate_bytes += bytes->number;
+        }
+    }
+    check(json_ok(aggregate) && aggregate_bytes <= 12 &&
+              aggregate.find("\"truncated\":true") != std::string::npos,
+          "read_many retains the aggregate cap in addition to item limits: " +
+              aggregate);
+
+    const std::string partial = tools.execute(
+        "read_many",
+        R"JSON({"items":[{"path":"src/lines.txt"},{"path":"src/missing.txt"}]})JSON");
+    const json::ParseResult partial_json = json::parse(partial);
+    const json::Value* partial_data =
+        partial_json.error.ok() ? partial_json.value.get("data") : nullptr;
+    check(json_ok(partial) && partial_data != nullptr &&
+              partial_data->is_array() && partial_data->array.size() == 1 &&
+              partial.find("omitted src/missing.txt") != std::string::npos &&
+              partial.find("\"truncated\":true") != std::string::npos,
+          "read_many preserves successful items and warnings after a partial failure: " +
+              partial);
+    check(!json_ok(tools.execute("read_many", R"JSON({"items":[]})JSON")),
+          "read_many rejects an empty batch");
+    std::string oversized_batch = R"JSON({"items":[)JSON";
+    for (std::size_t index = 0; index < 101; ++index) {
+        if (index != 0) oversized_batch += ',';
+        oversized_batch += R"JSON({"path":"src/lines.txt"})JSON";
+    }
+    oversized_batch += "]}";
+    check(!json_ok(tools.execute("read_many", oversized_batch)),
+          "read_many rejects more than 100 items");
+
+    provider::RequestContext context;
+    context.options.model = "test-model";
+    provider::ToolConversation conversation;
+    conversation.messages.push_back({"user", "inspect"});
+    for (provider::ApiKind api : {provider::ApiKind::ChatCompletions,
+                                  provider::ApiKind::Responses}) {
+        context.api_kind = api;
+        const json::ParseResult request = json::parse(
+            provider::serialize_tool_request(context, conversation, definitions));
+        const json::Value* serialized_tools =
+            request.error.ok() ? request.value.get("tools") : nullptr;
+        const json::Value* serialized_many =
+            serialized_tools != nullptr ? serialized_tools->at(read_many_index)
+                                        : nullptr;
+        const json::Value* serialized_file =
+            serialized_tools != nullptr ? serialized_tools->at(read_file_index)
+                                        : nullptr;
+        const json::Value* many_name =
+            serialized_many == nullptr
+                ? nullptr
+                : (api == provider::ApiKind::Responses
+                       ? serialized_many->get("name")
+                       : (serialized_many->get("function") == nullptr
+                              ? nullptr
+                              : serialized_many->get("function")->get("name")));
+        const json::Value* file_name =
+            serialized_file == nullptr
+                ? nullptr
+                : (api == provider::ApiKind::Responses
+                       ? serialized_file->get("name")
+                       : (serialized_file->get("function") == nullptr
+                              ? nullptr
+                              : serialized_file->get("function")->get("name")));
+        check(request.error.ok() && serialized_tools != nullptr &&
+                  serialized_tools->is_array() &&
+                  many_name != nullptr && many_name->is_string() &&
+                  many_name->string == "read_many" &&
+                  file_name != nullptr && file_name->is_string() &&
+                  file_name->string == "read_file",
+              std::string(api == provider::ApiKind::Responses ? "Responses"
+                                                              : "Chat Completions") +
+                  " serializes read_many before read_file");
+    }
+
+    agent::ToolRegistryOptions live_options;
+    live_options.mutation_policy = agent::MutationPolicy::Full;
+    live_options.indexing_enabled = false;
+    agent::index::Options index_options;
+    index_options.workspace = fs::canonical(workspace).string();
+    index_options.max_source_code_file_size = 1024 * 1024;
+    agent::ReadToolRegistry live_tools;
+    check(agent::ReadToolRegistry::create_without_index(
+              index_options, {}, live_tools, live_options)
+              .ok(),
+          "create indexing-disabled registry for read tool ordering");
+    const std::vector<provider::FunctionDefinition> live_definitions =
+        live_tools.definitions();
+    std::size_t live_many = live_definitions.size();
+    std::size_t live_file = live_definitions.size();
+    for (std::size_t index = 0; index < live_definitions.size(); ++index) {
+        if (live_definitions[index].name == "read_many") live_many = index;
+        if (live_definitions[index].name == "read_file") live_file = index;
+    }
+    check(live_many < live_file &&
+              live_definitions[live_many].description.find(
+                  "Preferred file reader") != std::string::npos &&
+              live_definitions[live_file].description.find(
+                  "Single-target fallback") != std::string::npos,
+          "indexing-disabled Agent definitions retain read_many preference and order");
 
     std::error_code ec;
     fs::remove_all(workspace, ec);
@@ -1637,6 +1898,7 @@ void run_all() {
     test_replace_symbol();
     test_index_refresh_drops_completed_prepare_cancellation();
     test_indexing_disabled_registry_is_strict_and_live();
+    test_read_many_preference_limits_and_serialization();
     test_index_status_and_update();
     test_inspect_and_find_tests();
     test_git_and_network_tools_policy();

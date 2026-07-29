@@ -1,5 +1,6 @@
 #include "agent/test_session_runtime.hpp"
 
+#include <atomic>
 #include <filesystem>
 #include <fstream>
 #include <limits>
@@ -119,6 +120,140 @@ void test_prepare_with_indexing_disabled_never_touches_index_database() {
           "disabled preparation leaves a pre-existing index database untouched");
     check(fs::exists(fs::path(workspace) / ".ainiux-pr" / "agent.sqlite"),
           "disabled indexing retains project session persistence");
+    const agent::SessionIndexReportResult disabled_report =
+        runtime.show_index(true);
+    check(!disabled_report.error.ok() &&
+              disabled_report.error.code == ErrorCode::UnsupportedFeature &&
+              disabled_report.error.message.find("/index-code") !=
+                  std::string::npos,
+          "show-index explains that this Agent session has indexing disabled");
+
+    runtime.reset();
+    std::error_code ec;
+    fs::remove_all(workspace, ec);
+}
+
+void test_index_code_enables_a_skipped_index_in_place() {
+    const std::string workspace = temp_workspace("index-code");
+    const fs::path database =
+        fs::path(workspace) / ".ainiux-pr" / "index.sqlite";
+    std::atomic<int> progress_updates{0};
+    agent::SessionRuntimeOptions options;
+    options.workspace = workspace;
+    options.interactive = true;
+    options.enable_session_db = true;
+    options.enable_agent_log = false;
+    options.index_mode =
+        agent::SessionRuntimeOptions::IndexMode::Disabled;
+    options.on_index_progress =
+        [&](const agent::index::Progress&) { ++progress_updates; };
+    provider::RequestContext context = offline_context(workspace);
+    agent::AgentSessionRuntime runtime;
+    Error error = runtime.prepare(context, {}, {}, options);
+    check(error.ok() && !runtime.indexing_enabled() &&
+              !fs::exists(database),
+          "skipping startup indexing keeps the live Agent session unindexed");
+
+    ainiux::runtime::CancellationSource cancellation;
+    cancellation.cancel();
+    const agent::SessionIndexReportResult cancelled =
+        runtime.index_code(cancellation.token());
+    agent::index::Options probe_options;
+    probe_options.workspace = workspace;
+    agent::index::ProbeResult probe;
+    const Error probe_error = agent::index::probe(probe_options, probe);
+    check(!cancelled.error.ok() &&
+              cancelled.error.code == ErrorCode::Cancelled &&
+              !runtime.indexing_enabled() && probe_error.ok() &&
+              probe.state != agent::index::ProbeState::Completed,
+          "cancelled index-code leaves the live registry and completed snapshot unchanged");
+
+    const agent::SessionIndexReportResult created =
+        runtime.index_code();
+    check(created.error.ok() && created.created &&
+              created.indexing_enabled && runtime.indexing_enabled() &&
+              fs::exists(database) && progress_updates.load() > 0 &&
+              created.markdown.find(
+                  "| **All languages** | **1** |") !=
+                  std::string::npos,
+          "index-code creates and enables the index without restarting Agent");
+
+    {
+        std::ofstream out(fs::path(workspace) / "src" / "later.py");
+        out << "def later():\n    return 1\n";
+    }
+    const int progress_before = progress_updates.load();
+    const agent::SessionIndexReportResult refreshed =
+        runtime.show_index(true);
+    check(refreshed.error.ok() && !refreshed.created &&
+              refreshed.indexing_enabled &&
+              refreshed.markdown.find(
+                  "| **All languages** | **2** |") !=
+                  std::string::npos &&
+              progress_updates.load() > progress_before,
+          "enabled session uses the task-end incremental refresh path for new files");
+
+    std::vector<provider::Message> display;
+    check(runtime.load_display_messages(display).ok() &&
+              display.size() == 2 && display.front().role == "index" &&
+              display.back().role == "index",
+          "index-code and later refresh reports persist in display-only history");
+
+    runtime.reset();
+    std::error_code ec;
+    fs::remove_all(workspace, ec);
+}
+
+void test_index_report_refreshes_and_stays_display_only() {
+    const std::string workspace = temp_workspace("index-report");
+    std::atomic<int> progress_updates{0};
+    agent::SessionRuntimeOptions options;
+    options.workspace = workspace;
+    options.interactive = true;
+    options.enable_session_db = true;
+    options.enable_agent_log = false;
+    options.index_mode =
+        agent::SessionRuntimeOptions::IndexMode::CreateOrRefresh;
+    options.on_index_progress =
+        [&](const agent::index::Progress&) { ++progress_updates; };
+    provider::RequestContext context = offline_context(workspace);
+    agent::AgentSessionRuntime runtime;
+    Error error = runtime.prepare(context, {}, {}, options);
+    check(error.ok(), "prepare indexed runtime for compact report: " +
+                          error.message);
+
+    const agent::SessionIndexReportResult initial =
+        runtime.show_index(false);
+    check(initial.error.ok() &&
+              initial.markdown.find("| Language | Files | Lines of code |") ==
+                  0 &&
+              initial.markdown.find("# ainiux Code Index") ==
+                  std::string::npos,
+          "startup index report contains only the compact totals table");
+    std::vector<provider::Message> display;
+    check(runtime.load_display_messages(display).ok() &&
+              display.size() == 1 && display.front().role == "index" &&
+              display.front().content == initial.markdown,
+          "index table persists as an unclipped display-only Agent history row");
+
+    {
+        std::ofstream out(fs::path(workspace) / "src" / "later.py");
+        out << "def later():\n    return 1\n";
+    }
+    const int progress_before = progress_updates.load();
+    const agent::SessionIndexReportResult refreshed =
+        runtime.show_index(true);
+    check(refreshed.error.ok() &&
+              refreshed.markdown.find(
+                  "| **All languages** | **2** |") !=
+                  std::string::npos &&
+              progress_updates.load() > progress_before,
+          "show-index refreshes changed files with progress before formatting");
+    display.clear();
+    check(runtime.load_display_messages(display).ok() &&
+              display.size() == 2 && display.back().role == "index" &&
+              display.back().content == refreshed.markdown,
+          "each explicit show-index appends the current table to Agent history");
 
     runtime.reset();
     std::error_code ec;
@@ -641,6 +776,8 @@ void run_all() {
     test_prepare_opens_session_db_and_tools();
     test_empty_turn_rejected_when_unprepared();
     test_prepare_with_indexing_disabled_never_touches_index_database();
+    test_index_code_enables_a_skipped_index_in_place();
+    test_index_report_refreshes_and_stays_display_only();
     test_optional_index_modes_create_refresh_and_fallback();
     test_agent_token_usage_aggregation_is_bounded();
     test_task_mode_switch_is_session_scoped_and_failure_safe();

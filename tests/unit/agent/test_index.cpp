@@ -799,6 +799,30 @@ void test_refresh_incremental_report_and_skips() {
               markdown.str().find("private.jsonl") == std::string::npos &&
               markdown.str().find("agent.jsonl") == std::string::npos,
           "Markdown report includes symbols, skips, per-language lines, and combined totals");
+    ainiux::agent::index::Snapshot compact_snapshot;
+    error = ainiux::agent::index::load_snapshot(options, compact_snapshot);
+    const std::string compact_totals =
+        ainiux::agent::index::compact_totals_markdown(compact_snapshot);
+    const std::size_t full_table_start = markdown.str().find("| Language | Files |");
+    const std::size_t full_table_end =
+        markdown.str().find("\n\n", full_table_start);
+    const std::string full_totals =
+        full_table_start == std::string::npos ||
+                full_table_end == std::string::npos
+            ? std::string()
+            : markdown.str().substr(
+                  full_table_start, full_table_end - full_table_start + 1);
+    check(error.ok() &&
+              compact_totals.find(
+                  "| Language | Files | Lines of code | Indexed | Skipped/errors | Symbols |") ==
+                  0 &&
+              compact_totals.find(
+                  "| **All languages** | **5** | **4** | **2** | **3** |") !=
+                  std::string::npos &&
+              compact_totals.find("# ainiux Code Index") == std::string::npos &&
+              compact_totals.find("hello") == std::string::npos &&
+              compact_totals == full_totals,
+          "compact index report exactly matches the totals table without per-file detail");
 
     write_file(root / ".hidden" / "later.cpp", "int hidden_later(void);\n");
     freshness = {};

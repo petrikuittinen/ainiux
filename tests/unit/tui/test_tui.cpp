@@ -366,6 +366,31 @@ void test_chat_slash_command_tab_completion_matches_assist_commands() {
           "chat tab completion completes a unique assist prefix in one press");
     check(chinese.text.str() == "/Chinese",
           "chat tab completion resolves /Chi to /Chinese");
+
+    completer.reset();
+    completer.set_agent_mode(true);
+    ainiux::editor::EditorState show_index =
+        ainiux::editor::EditorState::from_text("/show-i");
+    show_index.mode = ainiux::editor::EditorMode::Chat;
+    show_index.cursor = show_index.text.size();
+    const ainiux::editor::PathCompletionResult show_index_result =
+        completer.complete(show_index);
+    check(show_index_result.handled && show_index_result.changed &&
+              show_index_result.match_count == 1 &&
+              show_index.text.str() == "/show-index",
+          "agent tab completion exposes /show-index");
+
+    completer.reset();
+    ainiux::editor::EditorState index_code =
+        ainiux::editor::EditorState::from_text("/index-c");
+    index_code.mode = ainiux::editor::EditorMode::Chat;
+    index_code.cursor = index_code.text.size();
+    const ainiux::editor::PathCompletionResult index_code_result =
+        completer.complete(index_code);
+    check(index_code_result.handled && index_code_result.changed &&
+              index_code_result.match_count == 1 &&
+              index_code.text.str() == "/index-code",
+          "agent tab completion exposes /index-code");
 }
 
 void test_configured_assist_slash_command_detection() {
@@ -1675,6 +1700,24 @@ void test_agent_project_slash_command_parsing() {
     check(invalid.action == ainiux::tui::AgentSlashAction::Invalid &&
               invalid.error == "Usage: /compact [fast|smart|summary]",
           "agent /compact rejects arguments");
+    check(ainiux::tui::parse_agent_slash_command("/show-index").action ==
+              ainiux::tui::AgentSlashAction::ShowIndex,
+          "agent /show-index parses");
+    const auto invalid_show_index =
+        ainiux::tui::parse_agent_slash_command("/show-index now");
+    check(invalid_show_index.action ==
+                  ainiux::tui::AgentSlashAction::Invalid &&
+              invalid_show_index.error == "Usage: /show-index",
+          "agent /show-index rejects arguments");
+    check(ainiux::tui::parse_agent_slash_command("/index-code").action ==
+              ainiux::tui::AgentSlashAction::IndexCode,
+          "agent /index-code parses");
+    const auto invalid_index_code =
+        ainiux::tui::parse_agent_slash_command("/index-code now");
+    check(invalid_index_code.action ==
+                  ainiux::tui::AgentSlashAction::Invalid &&
+              invalid_index_code.error == "Usage: /index-code",
+          "agent /index-code rejects arguments");
     check(ainiux::tui::parse_agent_slash_command("/plan").action ==
               ainiux::tui::AgentSlashAction::Plan,
           "agent /plan parses as a task-mode switch");

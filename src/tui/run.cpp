@@ -1600,6 +1600,16 @@ app::TuiRunResult run(provider::RequestContext context,
                 if (!replaced.workspace.empty())
                     event.agent_workspace = replaced.workspace;
                 if (replaced.error.ok()) {
+                    if (indexing_enabled) {
+                        const agent::SessionIndexReportResult report =
+                            runtime->show_index(false, token);
+                        if (!report.error.ok()) {
+                            event.text =
+                                "Fresh project created, but the index report "
+                                "could not be shown: " +
+                                report.error.message;
+                        }
+                    }
                     event.error = runtime->load_display_messages(event.agent_history);
                     if (!event.error.ok())
                         event.error.message =
@@ -1703,6 +1713,81 @@ app::TuiRunResult run(provider::RequestContext context,
             });
     };
 
+    auto start_agent_index_code = [&]() {
+        if (!context.options.agent || !agent_runtime ||
+            !agent_runtime->prepared()) {
+            report_agent_error("Agent project runtime is unavailable");
+            return;
+        }
+        if (active_job != ActiveJob::None) {
+            status =
+                "Cannot index code while an agent job is running; wait or cancel it first";
+            return;
+        }
+        if (file_job.joinable()) {
+            status =
+                "Cannot index code while an agent file job is running; wait or cancel it first";
+            return;
+        }
+        status = agent_runtime->indexing_enabled()
+                     ? "Refreshing code index..."
+                     : "Creating code index...";
+        file_job.start(
+            [runtime = agent_runtime,
+             &events](runtime::CancellationToken token) {
+                TuiEvent event;
+                event.type = TuiEventType::AgentIndexReportDone;
+                const agent::SessionIndexReportResult report =
+                    runtime->index_code(token);
+                event.error = report.error;
+                event.agent_index_enabled = report.indexing_enabled;
+                if (event.error.ok()) {
+                    event.error =
+                        runtime->load_display_messages(event.agent_history);
+                    event.agent_history_loaded = event.error.ok();
+                    event.text = report.created ? "Code index created"
+                                                : "Code index refreshed";
+                }
+                events.push(std::move(event));
+            });
+    };
+
+    auto start_agent_show_index = [&]() {
+        if (!context.options.agent || !agent_runtime ||
+            !agent_runtime->prepared()) {
+            report_agent_error("Agent project runtime is unavailable");
+            return;
+        }
+        if (active_job != ActiveJob::None) {
+            status =
+                "Cannot show the index while an agent job is running; wait or cancel it first";
+            return;
+        }
+        if (file_job.joinable()) {
+            status =
+                "Cannot show the index while an agent file job is running; wait or cancel it first";
+            return;
+        }
+        status = "Refreshing code index...";
+        file_job.start(
+            [runtime = agent_runtime,
+             &events](runtime::CancellationToken token) {
+                TuiEvent event;
+                event.type = TuiEventType::AgentIndexReportDone;
+                const agent::SessionIndexReportResult report =
+                    runtime->show_index(true, token);
+                event.error = report.error;
+                event.agent_index_enabled = report.indexing_enabled;
+                if (event.error.ok()) {
+                    event.error =
+                        runtime->load_display_messages(event.agent_history);
+                    event.agent_history_loaded = event.error.ok();
+                    event.text = "Code index refreshed";
+                }
+                events.push(std::move(event));
+            });
+    };
+
     TuiCommandHandlers command_handlers;
     command_handlers.quit = [&]() { quit = true; };
     command_handlers.start_history_edit = start_history_edit;
@@ -1710,6 +1795,8 @@ app::TuiRunResult run(provider::RequestContext context,
     command_handlers.start_new_chat_thread = [&](const std::string& name) { start_new_chat_thread(name); };
     command_handlers.start_new_agent_project = start_new_agent_project;
     command_handlers.start_agent_compaction = start_agent_compaction;
+    command_handlers.start_agent_index_code = start_agent_index_code;
+    command_handlers.start_agent_show_index = start_agent_show_index;
     command_handlers.switch_agent_task_mode = [&](agent::AgentTaskMode mode) {
         if (!agent_runtime || !agent_runtime->prepared()) {
             status = "Agent session runtime is not ready";
@@ -2252,7 +2339,8 @@ app::TuiRunResult run(provider::RequestContext context,
     }
     refresh_credit_balance();
 
-    auto start_agent_prepare = [&](bool indexing_enabled) {
+    auto start_agent_prepare = [&](bool indexing_enabled,
+                                   bool show_index_report = false) {
         remember_index_choice(initial_agent_workspace, indexing_enabled);
         context.options.disable_indexing = !indexing_enabled;
         status = indexing_enabled ? "Preparing code index..."
@@ -2274,11 +2362,18 @@ app::TuiRunResult run(provider::RequestContext context,
             };
         file_job.start([prep_context = std::move(prep_context),
                         prep_options = std::move(prep_options), agent_runtime,
+                        show_index_report,
                         &events](runtime::CancellationToken token) mutable {
             TuiEvent event;
             event.type = TuiEventType::AgentPrepareDone;
             event.error =
                 agent_runtime->prepare(prep_context, token, {}, prep_options);
+            if (event.error.ok() && show_index_report) {
+                const agent::SessionIndexReportResult report =
+                    agent_runtime->show_index(false, token);
+                event.error = report.error;
+                if (event.error.ok()) event.text = "Code index created";
+            }
             if (event.error.ok())
                 event.error =
                     agent_runtime->load_display_messages(event.agent_history);
@@ -2399,9 +2494,11 @@ app::TuiRunResult run(provider::RequestContext context,
                     } else if (!event.agent_history.empty()) {
                         session.messages = std::move(event.agent_history);
                         history_scroll = history_scroll_for_thread_end();
-                        status = "agent · resumed · " +
-                                 std::to_string(session.messages.size()) +
-                                 " message(s)";
+                        status = event.text.empty()
+                                     ? "agent · resumed · " +
+                                           std::to_string(session.messages.size()) +
+                                           " message(s)"
+                                     : event.text;
                         if (context.options.disable_indexing)
                             status += " · indexing off";
                     } else {
@@ -2991,6 +3088,23 @@ app::TuiRunResult run(provider::RequestContext context,
                         status = event.text.empty() ? "Nothing new to compact" : event.text;
                     }
                     break;
+                case TuiEventType::AgentIndexReportDone:
+                    file_job.join();
+                    if (event.agent_index_enabled) {
+                        context.options.disable_indexing = false;
+                        remember_index_choice(initial_agent_workspace, true);
+                    }
+                    if (!event.error.ok()) {
+                        report_agent_error(event.error.message);
+                    } else {
+                        if (event.agent_history_loaded) {
+                            session.messages = std::move(event.agent_history);
+                            history_scroll = history_scroll_for_thread_end();
+                        }
+                        status = event.text.empty() ? "Code index refreshed"
+                                                    : event.text;
+                    }
+                    break;
                 case TuiEventType::GuardApproval:
                     agent_activity_state = AgentActivityState::Working;
                     pending_guard_request = {};
@@ -3205,7 +3319,7 @@ app::TuiRunResult run(provider::RequestContext context,
                             launch_agent_project_new(std::move(target),
                                                      accepted);
                         } else {
-                            start_agent_prepare(accepted);
+                            start_agent_prepare(accepted, accepted);
                         }
                     } else {
                         status =

@@ -148,6 +148,27 @@ std::string compact_tool_args_preview(const std::string& arguments_json, std::si
         }
     };
 
+    // read_many carries paths inside an items array rather than at the top
+    // level. Show the batch size and first two paths so one batched call is
+    // obvious in compact agent activity without dumping the full JSON.
+    const json::Value* items = parsed.value.get("items");
+    if (items != nullptr && items->is_array()) {
+        std::ostringstream piece;
+        piece << items->array.size()
+              << (items->array.size() == 1 ? " read" : " reads");
+        std::size_t shown = 0;
+        for (const json::Value& item : items->array) {
+            if (!item.is_object()) continue;
+            const json::Value* path = item.get("path");
+            if (path == nullptr || !path->is_string()) continue;
+            piece << (shown == 0 ? ": " : ", ");
+            append_quoted(piece, path->string, 32);
+            if (++shown == 2) break;
+        }
+        if (shown < items->array.size() && shown != 0) piece << ", ...";
+        emit(piece.str());
+    }
+
     // Prefer path-like keys first.
     for (const auto& entry : parsed.value.object) {
         if (!looks_like_path_key(entry.first)) continue;

@@ -68,8 +68,8 @@ This session does not use provider-native tool calling. Prefer native filesystem
 Example:
 
 <tool_call>
-<name>read_file</name>
-<args>{"path":"src/main.cpp","max_bytes":65536}</args>
+<name>read_many</name>
+<args>{"items":[{"path":"src/main.cpp"},{"path":"src/main.hpp","start_line":1,"end_line":120}]}</args>
 </tool_call>
 )AINIUX_XML";
 }

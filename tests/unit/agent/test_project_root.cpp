@@ -172,6 +172,7 @@ void test_compaction_strategies_timeline_and_partition() {
         row.tool_name = tool;
         messages.push_back(std::move(row));
     };
+    message(0, "index", "| Language | Files |\n| --- | ---: |");
     message(1, "user", "goal");
     message(2, "notice", "display only");
     message(3, "assistant", "inspect");
@@ -192,7 +193,7 @@ void test_compaction_strategies_timeline_and_partition() {
     int tool_items = 0;
     for (const auto& item : timeline) {
         saw_display = saw_display || item.role == "notice" ||
-                      item.role == "thinking";
+                      item.role == "thinking" || item.role == "index";
         if (item.role == "tool") ++tool_items;
     }
     check(!saw_display && tool_items == 1,
@@ -265,6 +266,15 @@ void test_tool_display_format() {
     check(line.find("example.txt") != std::string::npos, "path preview");
     check(line.find("→ ok") != std::string::npos || line.find("ok") != std::string::npos, "ok status");
     check(line.find("in 150 ms") != std::string::npos, "independent tool duration");
+
+    const std::string many = agent::format_compact_tool_line(
+        2, "read_many",
+        R"({"items":[{"path":"README.md"},{"path":"AGENTS.md"}],"max_bytes":131072})",
+        R"({"ok":true})", 240, 120);
+    check(many.find("read_many(2 reads:") != std::string::npos &&
+              many.find("README.md") != std::string::npos &&
+              many.find("AGENTS.md") != std::string::npos,
+          "read_many compact activity shows one batch with its paths: " + many);
 }
 
 void test_tool_display_clips_to_width() {
@@ -331,6 +341,10 @@ void test_prior_session_context_includes_recent_work() {
     notice.role = "notice";
     notice.content = "display only";
     messages.push_back(notice);
+    agent::AgentMessageRecord index_report;
+    index_report.role = "index";
+    index_report.content = "| Language | Files |\n| --- | ---: |";
+    messages.push_back(index_report);
     const std::string context = agent::build_prior_session_context(messages, 4000);
     check(!context.empty(), "prior context non-empty");
     check(context.find("write a game") != std::string::npos, "includes prior user goal");
@@ -340,6 +354,8 @@ void test_prior_session_context_includes_recent_work() {
           "skips thinking previews");
     check(context.find("display only") == std::string::npos,
           "skips every display notice");
+    check(context.find("Language") == std::string::npos,
+          "skips display-only index reports");
     check(agent::estimate_transcript_tokens(messages) <
               agent::estimate_transcript_tokens(
                   {messages[0], messages[1], messages[2]}) + 8,

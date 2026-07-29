@@ -37,6 +37,7 @@ enum class TuiEventType {
     GuardApproval,  // agent Guard Ask pending (worker blocked)
     AgentProjectNewDone,
     AgentCompactDone,
+    AgentIndexReportDone,
     AgentPhase,
     AgentProgress,
     AgentIndexProbeDone,
@@ -117,6 +118,7 @@ struct TuiEvent {
     bool agent_history_loaded = false;
     bool agent_compacted = false;
     bool agent_compact_no_op = false;
+    bool agent_index_enabled = false;
     CompactionStrategy agent_compact_requested = CompactionStrategy::Smart;
     CompactionStrategy agent_compact_applied = CompactionStrategy::Smart;
     agent::AgentActivityPhase agent_phase = agent::AgentActivityPhase::Thinking;

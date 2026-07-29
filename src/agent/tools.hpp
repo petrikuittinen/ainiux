@@ -80,6 +80,11 @@ class ReadToolRegistry {
                                       ToolRegistryOptions options = {});
 
     const index::Snapshot& snapshot() const { return snapshot_; }
+    bool indexing_enabled() const { return indexing_enabled_; }
+    // Promote a live-filesystem Agent registry into an indexed registry without
+    // resetting its permission, mutation, network, or approval state.
+    Error enable_persistent_index(index::Options index_options,
+                                  index::Snapshot snapshot);
     bool allow_mutations() const { return mutation_policy_ != MutationPolicy::Disabled; }
     MutationPolicy mutation_policy() const { return mutation_policy_; }
     void set_mutation_policy(MutationPolicy policy) { mutation_policy_ = policy; }

@@ -69,12 +69,12 @@ const std::vector<std::string>& agent_command_completions() {
         "/clear",        "/cmd-out ",     "/compact",       "/compact fast",
         "/compact smart", "/compact summary", "/context ",
         "/cycle",        "/edit",         "/editor",        "/exit",
-        "/fetch ",       "/help",         "/highlight ",    "/insert ",
-        "/model ",       "/models",       "/mode ",         "/new ",
+        "/fetch ",       "/help",         "/highlight ",    "/index-code",
+        "/insert ",      "/model ",       "/models",        "/mode ",         "/new ",
         "/permissions ", "/plan",         "/provider ",     "/quit",
         "/reasoning ",   "/search ",      "/setting",       "/setting ",
-        "/shell ",       "/shell-stdout ", "/system",       "/theme ",
-        "/thinking ",
+        "/shell ",       "/shell-stdout ", "/show-index",    "/system",
+        "/theme ",       "/thinking ",
     };
     return commands;
 }

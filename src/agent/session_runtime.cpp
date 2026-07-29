@@ -1023,7 +1023,7 @@ Error AgentSessionRuntime::load_display_messages(std::vector<provider::Message>&
         provider::Message message;
         if (row.role == "user" || row.role == "assistant" || row.role == "system" ||
             row.role == "tool" || row.role == "notice" || row.role == "thinking" ||
-            row.role == "summary") {
+            row.role == "summary" || row.role == "index") {
             message.role = row.role;
         } else {
             message.role = "notice";
@@ -1044,6 +1044,111 @@ Error AgentSessionRuntime::append_display_notice(const std::string& content) {
     if (!session_store_.is_open()) return ok_error();
     if (content.empty()) return ok_error();
     return session_store_.append_message("notice", redact_secrets(content, secrets_));
+}
+
+SessionIndexReportResult AgentSessionRuntime::show_index(
+    bool refresh,
+    runtime::CancellationToken cancellation) {
+    SessionIndexReportResult result;
+    if (!prepared_) {
+        result.error = {ErrorCode::Internal,
+                        "agent session runtime is not prepared"};
+        return result;
+    }
+    bool expected = false;
+    if (!operation_active_.compare_exchange_strong(expected, true)) {
+        result.error = {ErrorCode::BadArgs,
+                        "an agent operation is already active"};
+        return result;
+    }
+    struct Release {
+        std::atomic<bool>& active;
+        ~Release() { active.store(false); }
+    } release{operation_active_};
+
+    if (!tools_.indexing_enabled()) {
+        result.error = {
+            ErrorCode::UnsupportedFeature,
+            "Code indexing is off for this Agent session; run /index-code to "
+            "create and enable it."};
+        return result;
+    }
+    result.indexing_enabled = true;
+    if (refresh) {
+        result.error = tools_.refresh_persistent_index(true, cancellation);
+        if (!result.error.ok()) return result;
+    }
+    result.markdown = index::compact_totals_markdown(tools_.snapshot());
+    if (session_store_.is_open()) {
+        result.error =
+            session_store_.append_message("index", result.markdown);
+        if (!result.error.ok()) return result;
+    }
+    result.error = ok_error();
+    return result;
+}
+
+SessionIndexReportResult AgentSessionRuntime::index_code(
+    runtime::CancellationToken cancellation) {
+    SessionIndexReportResult result;
+    if (!prepared_) {
+        result.error = {ErrorCode::Internal,
+                        "agent session runtime is not prepared"};
+        return result;
+    }
+    bool expected = false;
+    if (!operation_active_.compare_exchange_strong(expected, true)) {
+        result.error = {ErrorCode::BadArgs,
+                        "an agent operation is already active"};
+        return result;
+    }
+    struct Release {
+        std::atomic<bool>& active;
+        ~Release() { active.store(false); }
+    } release{operation_active_};
+
+    const bool was_enabled = tools_.indexing_enabled();
+    if (was_enabled) {
+        result.error = tools_.refresh_persistent_index(true, cancellation);
+        if (!result.error.ok()) {
+            result.indexing_enabled = true;
+            return result;
+        }
+    } else {
+        index::Options index_options;
+        index_options.workspace = options_.workspace;
+        index_options.max_source_code_file_size =
+            options_.max_source_code_file_size;
+        index_options.cancellation = cancellation;
+        index_options.interrupted =
+            [cancellation] { return cancellation.cancelled(); };
+        index_options.on_progress = options_.on_index_progress;
+
+        index::RefreshStats stats;
+        result.error = index::refresh(index_options, stats);
+        if (!result.error.ok()) return result;
+        index::Snapshot snapshot;
+        result.error = index::load_snapshot(index_options, snapshot);
+        if (!result.error.ok()) return result;
+        result.error = tools_.enable_persistent_index(
+            std::move(index_options), std::move(snapshot));
+        if (!result.error.ok()) return result;
+
+        options_.index_mode =
+            SessionRuntimeOptions::IndexMode::CreateOrRefresh;
+        known_tools_ = known_tool_names(tools_);
+        result.created = true;
+    }
+
+    result.indexing_enabled = true;
+    result.markdown = index::compact_totals_markdown(tools_.snapshot());
+    if (session_store_.is_open()) {
+        result.error =
+            session_store_.append_message("index", result.markdown);
+        if (!result.error.ok()) return result;
+    }
+    result.error = ok_error();
+    return result;
 }
 
 Error AgentSessionRuntime::switch_task_mode(AgentTaskMode mode) {

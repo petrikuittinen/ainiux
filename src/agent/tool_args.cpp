@@ -189,6 +189,52 @@ std::string repair_json_once(const std::string& input) {
             continue;
         }
 
+        // A common model error is leaving a path or glob value unquoted:
+        // {"glob": *.py}. Repair only a single whitespace-free, path-like
+        // scalar. JSON literals and numbers remain untouched, and arbitrary
+        // prose is not guessed into a string.
+        if (ch == ':') {
+            out.push_back(ch);
+            std::size_t start = i + 1;
+            while (start < input.size() &&
+                   (input[start] == ' ' || input[start] == '\t' ||
+                    input[start] == '\n' || input[start] == '\r')) {
+                out.push_back(input[start]);
+                ++start;
+            }
+            std::size_t end = start;
+            while (end < input.size() && input[end] != ',' &&
+                   input[end] != '}' && input[end] != ']' &&
+                   !std::isspace(static_cast<unsigned char>(input[end])))
+                ++end;
+            const std::string token = input.substr(start, end - start);
+            char* number_end = nullptr;
+            if (!token.empty()) std::strtod(token.c_str(), &number_end);
+            const bool is_number =
+                !token.empty() && number_end == token.c_str() + token.size();
+            const bool is_json_literal =
+                token == "true" || token == "false" || token == "null";
+            const bool path_like =
+                token.find('/') != std::string::npos ||
+                token.find('.') != std::string::npos ||
+                token.find('*') != std::string::npos ||
+                token.find('?') != std::string::npos;
+            const bool already_structured =
+                !token.empty() &&
+                (token.front() == '"' || token.front() == '\'' ||
+                 token.front() == '{' || token.front() == '[');
+            if (path_like && !is_number && !is_json_literal &&
+                !already_structured) {
+                out.push_back('"');
+                out.append(token);
+                out.push_back('"');
+                i = end - 1;
+                continue;
+            }
+            i = start - 1;
+            continue;
+        }
+
         // Unquoted keys: identifier followed by optional space and ':'.
         if ((std::isalpha(static_cast<unsigned char>(ch)) || ch == '_' || ch == '$') &&
             (out.empty() || out.back() == '{' || out.back() == ',' || out.back() == ' ' ||

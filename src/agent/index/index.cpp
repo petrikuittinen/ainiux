@@ -1491,6 +1491,54 @@ Error load_snapshot(const Options& options, Snapshot& snapshot) {
     return ok_error();
 }
 
+std::string compact_totals_markdown(const Snapshot& snapshot) {
+    struct Totals {
+        std::size_t files = 0;
+        std::size_t lines = 0;
+        std::size_t indexed = 0;
+        std::size_t skipped = 0;
+        std::size_t symbols = 0;
+    };
+    std::map<std::string, Totals> by_language;
+    std::map<std::string, std::string> file_languages;
+    for (const IndexedFile& file : snapshot.files) {
+        const std::string language = language_name(file.language);
+        Totals& total = by_language[language];
+        ++total.files;
+        file_languages[file.path] = language;
+        if (file.status == "indexed") {
+            ++total.indexed;
+            total.lines += file.line_count;
+        } else {
+            ++total.skipped;
+        }
+    }
+    for (const IndexedSymbol& symbol : snapshot.symbols) {
+        const auto found = file_languages.find(symbol.path);
+        if (found != file_languages.end()) ++by_language[found->second].symbols;
+    }
+
+    Totals all;
+    std::ostringstream output;
+    output << "| Language | Files | Lines of code | Indexed | Skipped/errors | Symbols |\n"
+              "| --- | ---: | ---: | ---: | ---: | ---: |\n";
+    for (const auto& item : by_language) {
+        const Totals& total = item.second;
+        all.files += total.files;
+        all.lines += total.lines;
+        all.indexed += total.indexed;
+        all.skipped += total.skipped;
+        all.symbols += total.symbols;
+        output << "| " << item.first << " | " << total.files << " | "
+               << total.lines << " | " << total.indexed << " | "
+               << total.skipped << " | " << total.symbols << " |\n";
+    }
+    output << "| **All languages** | **" << all.files << "** | **"
+           << all.lines << "** | **" << all.indexed << "** | **"
+           << all.skipped << "** | **" << all.symbols << "** |\n";
+    return output.str();
+}
+
 std::vector<std::string> identifier_components(const std::string& text) {
     std::vector<std::string> components;
     std::string component;

@@ -185,6 +185,9 @@ Error refresh(const Options& options, RefreshStats& stats);
 Error check_freshness(const Options& options, Freshness& freshness);
 Error print_markdown(const Options& options, const Freshness& freshness, std::ostream& output);
 Error load_snapshot(const Options& options, Snapshot& snapshot);
+// The totals table used at the start of --print-index, without headings or
+// per-file details. Suitable for compact interactive Agent history.
+std::string compact_totals_markdown(const Snapshot& snapshot);
 std::string content_hash(const std::string& content);
 
 std::vector<RankedSymbol> rank_task_symbols(const Snapshot& snapshot,

@@ -568,6 +568,14 @@ std::vector<std::string> split_lines(const std::string& source) {
     return lines;
 }
 
+std::string number_source_lines(const SourceRange& range) {
+    std::ostringstream numbered;
+    const std::vector<std::string> lines = split_lines(range.content);
+    for (std::size_t index = 0; index < lines.size(); ++index)
+        numbered << (range.start_line + index) << ": " << lines[index];
+    return numbered.str();
+}
+
 std::string regex_escape(const std::string& text) {
     std::string output;
     for (char ch : text) {
@@ -665,6 +673,39 @@ bool glob_matches(const std::string& path, const std::string& pattern) {
         } catch (const std::regex_error&) {
             return false;
         }
+    }
+    return false;
+}
+
+bool has_unescaped_alternation(const std::string& query) {
+    bool escaped = false;
+    for (std::size_t index = 0; index < query.size(); ++index) {
+        const char ch = query[index];
+        if (escaped) {
+            escaped = false;
+            continue;
+        }
+        if (ch == '\\') {
+            escaped = true;
+            continue;
+        }
+        if (ch != '|' || index == 0 || index + 1 >= query.size() ||
+            query[index - 1] == '|' || query[index + 1] == '|')
+            continue;
+        bool left_content = false;
+        for (std::size_t left = index; left > 0;) {
+            --left;
+            if (query[left] == '|') break;
+            if (!std::isspace(static_cast<unsigned char>(query[left])))
+                left_content = true;
+        }
+        bool right_content = false;
+        for (std::size_t right = index + 1; right < query.size(); ++right) {
+            if (query[right] == '|') break;
+            if (!std::isspace(static_cast<unsigned char>(query[right])))
+                right_content = true;
+        }
+        if (left_content && right_content) return true;
     }
     return false;
 }
@@ -987,6 +1028,41 @@ Error ReadToolRegistry::create_without_index(
     options.indexing_enabled = false;
     return create(std::move(index_options), std::move(empty),
                   std::move(secrets), registry, std::move(options));
+}
+
+Error ReadToolRegistry::enable_persistent_index(
+    index::Options index_options,
+    index::Snapshot snapshot) {
+    if (indexing_enabled_) return ok_error();
+    if (mutation_policy_ == MutationPolicy::Disabled)
+        return {ErrorCode::UnsupportedFeature,
+                "enabling code indexing requires an Agent session"};
+    if (index_options.workspace.empty() || snapshot.workspace.empty() ||
+        index_options.workspace != snapshot.workspace ||
+        snapshot.workspace != snapshot_.workspace)
+        return {ErrorCode::Internal,
+                "completed code index does not match the active Agent workspace"};
+
+    // The foreground slash-command token is valid only while creation runs.
+    // Later mutation/task refreshes receive their own cancellation tokens.
+    index_options.cancellation = runtime::CancellationToken();
+    index_options.interrupted = {};
+    std::unique_ptr<IndexRefreshState> refresh;
+    try {
+        refresh = std::make_unique<IndexRefreshState>(index_options);
+    } catch (const std::exception& exception) {
+        return {ErrorCode::Internal,
+                "could not start code-index refresh worker: " +
+                    std::string(exception.what())};
+    }
+
+    index_options_ = std::move(index_options);
+    snapshot_ = std::move(snapshot);
+    index_refresh_ = std::move(refresh);
+    loaded_index_generation_ = 0;
+    indexing_enabled_ = true;
+    rebuild_file_map();
+    return ok_error();
 }
 
 void ReadToolRegistry::rebuild_file_map() const {
@@ -2790,6 +2866,16 @@ std::vector<provider::FunctionDefinition> ReadToolRegistry::definitions() const 
              : std::string()) +
         ",\"create_file\":" + edit_nested_object +
         "}}";
+    const std::string search_fields =
+        "\"query\":{\"type\":\"string\"},"
+        "\"pattern\":{\"type\":\"string\"},"
+        "\"regex\":{\"type\":\"boolean\"},"
+        "\"case_sensitive\":{\"type\":\"boolean\"},"
+        "\"word\":{\"type\":\"boolean\"},"
+        "\"path\":{\"type\":\"string\"},"
+        "\"glob\":{\"type\":\"string\"},"
+        "\"context\":{\"type\":\"integer\",\"minimum\":0,\"maximum\":10},"
+        "\"max_results\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":500}";
     std::vector<provider::FunctionDefinition> tools = {
         {"project_overview",
          "Summarize the code index (languages, indexed files, symbols hints, freshness). "
@@ -2802,27 +2888,34 @@ std::vector<provider::FunctionDefinition> ReadToolRegistry::definitions() const 
          "empty directories and non-code files—prefer this for layout questions and before remove.",
          schema(path + ",\"max_entries\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":500}")},
         {"glob", "Match eligible workspace source paths using *, ?, **, and brace alternatives.", schema("\"pattern\":{\"type\":\"string\"},\"max_results\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":1000}", "\"pattern\"")},
-        {"search_text", "Search eligible workspace UTF-8 source files using bounded literal or line-oriented regex matching. Set regex=true for alternation such as foo|bar.", schema("\"query\":{\"type\":\"string\"},\"regex\":{\"type\":\"boolean\"},\"case_sensitive\":{\"type\":\"boolean\"},\"word\":{\"type\":\"boolean\"},\"glob\":{\"type\":\"string\"},\"context\":{\"type\":\"integer\",\"minimum\":0,\"maximum\":10},\"max_results\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":500}", "\"query\"")},
-        {"grep", "Alias for search_text.", schema("\"query\":{\"type\":\"string\"},\"regex\":{\"type\":\"boolean\"},\"case_sensitive\":{\"type\":\"boolean\"},\"word\":{\"type\":\"boolean\"},\"glob\":{\"type\":\"string\"},\"context\":{\"type\":\"integer\",\"minimum\":0,\"maximum\":10},\"max_results\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":500}", "\"query\"")},
-        {"find", "Validated alias for search_text.", schema("\"query\":{\"type\":\"string\"},\"regex\":{\"type\":\"boolean\"},\"case_sensitive\":{\"type\":\"boolean\"},\"word\":{\"type\":\"boolean\"},\"glob\":{\"type\":\"string\"},\"context\":{\"type\":\"integer\",\"minimum\":0,\"maximum\":10},\"max_results\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":500}", "\"query\"")},
+        {"search_text", "Search eligible workspace UTF-8 source files. query is literal unless regex=true; an unescaped | infers regex only when regex is omitted. Use path for one exact file or glob for a wildcard set (not both). pattern is accepted as a compatibility alias for query.", schema(search_fields, "\"query\"")},
+        {"grep", "Alias for search_text; use query (pattern is accepted as an alias), path for one exact file, or glob for wildcard files.", schema(search_fields, "\"query\"")},
+        {"find", "Validated alias for search_text; use query (pattern is accepted as an alias), path for one exact file, or glob for wildcard files.", schema(search_fields, "\"query\"")},
         {"search_symbol", "Rank indexed symbol names by lexical match, then static declaration importance.", schema("\"query\":{\"type\":\"string\"},\"max_results\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":200}", "\"query\"")},
         {"get_skeleton", "Return ordered indexed declarations, signatures, ranges, and documentation for one file.", schema(path, "\"path\"")},
         {"read_symbol", "Fingerprint-verify and read the actual indexed source range for a symbol id.", schema("\"symbol_id\":{\"type\":\"integer\",\"minimum\":1}", "\"symbol_id\"")},
-        {"read_file",
-         !agent_session
-             ? "Fingerprint-verify and read a bounded indexed UTF-8 line range with hashes and "
-               "line numbers."
-             : "Read any exact-path regular UTF-8 file in the live project filesystem; the file "
-               "does not need to be indexed. Returns bounded line-numbered text and hashes. "
-               "Exact outside-project paths follow the active interactive permission mode; "
-               "headless Ask decisions are denied.",
-         schema(range, "\"path\"")},
         {"read_many",
          !agent_session
-             ? "Read multiple indexed bounded line ranges under one aggregate byte cap."
-             : "Read multiple exact-path live project files under one aggregate byte cap; "
-               "project files do not need to be indexed.",
-         schema("\"items\":{\"type\":\"array\",\"items\":" + schema(range, "\"path\"") + ",\"maxItems\":100},\"max_bytes\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":262144}", "\"items\"")},
+             ? "Preferred file reader whenever two or more independent paths or ranges are "
+               "known, including when native parallel tool calls are available. Reads 1–100 "
+               "indexed bounded line ranges with per-item limits, line numbers, and hashes "
+               "under one aggregate byte cap."
+             : "Preferred file reader whenever two or more independent paths or ranges are "
+               "known, including when native parallel tool calls are available. Reads 1–100 "
+               "exact-path live files with per-item limits, line numbers, and hashes under one "
+               "aggregate byte cap; project files do not need to be indexed.",
+         schema("\"items\":{\"type\":\"array\",\"minItems\":1,\"maxItems\":100,\"items\":" + schema(range, "\"path\"") + "},\"max_bytes\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":262144}", "\"items\"")},
+        {"read_file",
+         !agent_session
+             ? "Single-target fallback: fingerprint-verify and read one bounded indexed UTF-8 "
+               "line range with hashes and line numbers. Do not issue multiple parallel "
+               "read_file calls when the known reads can be batched with read_many."
+             : "Single-target fallback: read one exact-path regular UTF-8 file in the live "
+               "project filesystem; the file does not need to be indexed. Returns bounded "
+               "line-numbered text and hashes. Do not issue multiple parallel read_file calls "
+               "when the known reads can be batched with read_many. Exact outside-project paths "
+               "follow the active interactive permission mode; headless Ask decisions are denied.",
+         schema(range, "\"path\"")},
         {"run_command",
          agent_session
              ? "Run a workspace command without a shell (argv exec, fixed PATH). Give the "
@@ -3733,12 +3826,9 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
                                                             : error_code_string(error.code);
             return tool_error_result(code, error.message);
         }
-        std::ostringstream numbered;
-        const std::vector<std::string> lines = split_lines(range.content);
-        for (std::size_t index = 0; index < lines.size(); ++index) numbered << (range.start_line + index) << ": " << lines[index];
         json::Value data = object_value(); data.object["path"] = string_value(range.path);
         data.object["line_start"] = number_value(range.start_line); data.object["line_end"] = number_value(range.end_line);
-        data.object["content"] = string_value(numbered.str()); data.object["file_hash"] = string_value(range.file_hash);
+        data.object["content"] = string_value(number_source_lines(range)); data.object["file_hash"] = string_value(range.file_hash);
         data.object["range_hash"] = string_value(range.range_hash); data.object["bytes"] = number_value(range.bytes);
         std::vector<std::string> warnings; if (range.redacted) warnings.push_back("configured credential value was redacted");
         return envelope(true, std::move(data), "", "", warnings, range.truncated);
@@ -3747,9 +3837,14 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
     if (name == "read_many") {
         const json::Value* items = args.get("items");
         std::size_t maximum = 262144;
-        if (items == nullptr || !items->is_array() || items->array.size() > 100 ||
+        if (items == nullptr || !items->is_array() || items->array.empty() ||
+            items->array.size() > 100 ||
             !get_size(args, "max_bytes", 262144, 262144, maximum, validation_error) || maximum == 0)
-            return tool_error_result("invalid_arguments", validation_error.empty() ? "items must be an array of at most 100 ranges" : validation_error);
+            return tool_error_result(
+                "invalid_arguments",
+                validation_error.empty()
+                    ? "items must be an array containing 1 to 100 ranges"
+                    : validation_error);
         std::map<std::size_t, fs::path> external_paths;
         bool all_external_under_temp = true;
         for (std::size_t index = 0; index < items->array.size(); ++index) {
@@ -3793,46 +3888,85 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
         json::Value data = array_value(); std::vector<std::string> warnings; std::size_t remaining = maximum;
         bool truncated = false;
         for (std::size_t index = 0; index < items->array.size(); ++index) {
+            if (cancellation.cancelled())
+                return tool_error_result("cancelled", "read_many cancelled");
             if (remaining == 0) { warnings.push_back("omitted item " + std::to_string(index) + " because the aggregate cap was reached"); truncated = true; continue; }
             const json::Value& item = items->array[index];
             if (!item.is_object()) { warnings.push_back("omitted item " + std::to_string(index) + ": range must be an object"); truncated = true; continue; }
-            std::string path; std::size_t start = 1, end = 0;
+            std::string path;
+            std::size_t start = 1, end = 0, item_maximum = 65536;
             if (!get_string(item, "path", path, true, validation_error) ||
                 !get_size(item, "start_line", 1, 100000000, start, validation_error) ||
-                !get_size(item, "end_line", 0, 100000000, end, validation_error)) {
+                !get_size(item, "end_line", 0, 100000000, end, validation_error) ||
+                !get_size(item, "max_bytes", 65536, 262144, item_maximum,
+                          validation_error) ||
+                item_maximum == 0) {
                 warnings.push_back("omitted item " + std::to_string(index) + ": " + validation_error); truncated = true; continue;
             }
+            const std::size_t effective_maximum =
+                std::min(remaining, item_maximum);
             SourceRange range;
             Error error;
             const auto external = external_paths.find(index);
             if (external == external_paths.end()) {
                 error = mutation_policy_ == MutationPolicy::Disabled
-                            ? read_source(path, start, end, remaining, range)
-                            : read_workspace_source(path, start, end, remaining, range);
+                            ? read_source(path, start, end, effective_maximum, range)
+                            : read_workspace_source(path, start, end, effective_maximum, range);
             } else {
-                error = read_external_source(external->second, start, end, remaining, range);
+                error = read_external_source(external->second, start, end,
+                                             effective_maximum, range);
             }
             if (!error.ok()) { warnings.push_back("omitted " + path + ": " + error.message); truncated = true; continue; }
             json::Value output = object_value(); output.object["path"] = string_value(range.path);
             output.object["line_start"] = number_value(range.start_line); output.object["line_end"] = number_value(range.end_line);
-            output.object["content"] = string_value(range.content); output.object["file_hash"] = string_value(range.file_hash);
-            output.object["range_hash"] = string_value(range.range_hash); output.object["truncated"] = bool_value(range.truncated);
+            output.object["content"] = string_value(number_source_lines(range)); output.object["file_hash"] = string_value(range.file_hash);
+            output.object["range_hash"] = string_value(range.range_hash);
+            output.object["bytes"] = number_value(range.bytes);
+            output.object["truncated"] = bool_value(range.truncated);
             data.array.push_back(std::move(output)); remaining -= std::min(remaining, range.bytes);
             truncated = truncated || range.truncated; if (range.redacted) warnings.push_back(path + ": configured credential value was redacted");
         }
-        json::Value metadata = object_value(); metadata.object["byte_cap"] = number_value(maximum); metadata.object["bytes_remaining"] = number_value(remaining);
+        json::Value metadata = object_value();
+        metadata.object["requested_items"] = number_value(items->array.size());
+        metadata.object["returned_items"] = number_value(data.array.size());
+        metadata.object["byte_cap"] = number_value(maximum);
+        metadata.object["bytes_remaining"] = number_value(remaining);
         return envelope(true, std::move(data), "", "", warnings, truncated, std::move(metadata));
     }
 
     if (name == "search_text") {
-        std::string query, glob;
+        std::string query, pattern, path, glob;
         bool regex_mode = false, case_sensitive = false, word = false;
         std::size_t context = 0, maximum = 50;
-        if (!get_string(args, "query", query, true, validation_error) || !get_string(args, "glob", glob, false, validation_error) ||
+        if (!get_string(args, "query", query, false, validation_error) ||
+            !get_string(args, "pattern", pattern, false, validation_error) ||
+            !get_string(args, "path", path, false, validation_error) ||
+            !get_string(args, "glob", glob, false, validation_error) ||
             !get_bool(args, "regex", false, regex_mode, validation_error) || !get_bool(args, "case_sensitive", false, case_sensitive, validation_error) ||
             !get_bool(args, "word", false, word, validation_error) || !get_size(args, "context", 0, 10, context, validation_error) ||
             !get_size(args, "max_results", 50, 500, maximum, validation_error))
             return tool_error_result("invalid_arguments", validation_error);
+        if (!query.empty() && !pattern.empty() && query != pattern)
+            return tool_error_result(
+                "invalid_arguments",
+                "query and pattern disagree; provide only query or use the same value");
+        if (query.empty()) query = pattern;
+        if (query.empty())
+            return tool_error_result(
+                "invalid_arguments",
+                "missing required non-empty string argument: query (pattern is accepted as an alias)");
+        if (!path.empty() && !glob.empty())
+            return tool_error_result(
+                "invalid_arguments",
+                "path and glob cannot be combined; use path for one exact file or glob for a wildcard set");
+        if (!path.empty() && !safe_relative_path(path))
+            return tool_error_result("policy_denied",
+                                     unsafe_path_message(path, "search"));
+        const std::string exact_path = normalize_glob_path(path);
+        const bool regex_was_supplied = args.get("regex") != nullptr;
+        const bool inferred_regex =
+            !regex_was_supplied && has_unescaped_alternation(query);
+        if (inferred_regex) regex_mode = true;
         std::regex expression;
         const bool use_regex = regex_mode || word;
         if (use_regex) {
@@ -3886,10 +4020,21 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
             }
         }
         json::Value data = array_value(); std::vector<std::string> warnings; bool truncated = false;
+        if (inferred_regex)
+            warnings.push_back(
+                "regex=true inferred because query contains an unescaped '|'");
+        else if (!regex_mode && has_unescaped_alternation(query))
+            warnings.push_back(
+                "regex=false was explicit; query was searched literally, including '|'");
+        bool exact_path_seen = exact_path.empty();
         for (const SearchFile& file : candidates) {
             if (cancellation.cancelled())
                 return tool_error_result("cancelled",
                                          "text search cancelled");
+            if (!exact_path.empty() &&
+                normalize_glob_path(file.path) != exact_path)
+                continue;
+            exact_path_seen = true;
             if (!glob.empty() && !glob_matches(file.path, glob)) continue;
             SourceRange source;
             const std::size_t read_cap =
@@ -3922,6 +4067,10 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
             }
             if (truncated) break;
         }
+        if (!exact_path_seen)
+            warnings.push_back(
+                "exact path is not an eligible source file in the current workspace: " +
+                exact_path);
         return envelope(true, std::move(data), "", "", warnings, truncated);
     }
 

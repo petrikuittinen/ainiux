@@ -91,6 +91,13 @@ struct SessionProjectReplaceResult {
     std::string warning;
 };
 
+struct SessionIndexReportResult {
+    Error error;
+    std::string markdown;
+    bool indexing_enabled = false;
+    bool created = false;
+};
+
 struct SessionRuntimeOptions {
     std::string workspace = ".";
     AgentTaskMode task_mode = AgentTaskMode::Act;
@@ -139,6 +146,7 @@ class AgentSessionRuntime {
     AgentTaskMode task_mode() const { return task_mode_; }
     MutationPolicy mutation_policy() const { return tools_.mutation_policy(); }
     PermissionMode permission_mode() const { return permission_mode_; }
+    bool indexing_enabled() const { return tools_.indexing_enabled(); }
     std::size_t session_turns() const { return session_turns_; }
     std::size_t session_tool_calls() const { return session_tool_calls_; }
     std::size_t session_failed_tool_calls() const {
@@ -195,6 +203,16 @@ class AgentSessionRuntime {
         CompactionReason reason,
         runtime::CancellationToken cancellation = runtime::CancellationToken(),
         std::optional<CompactionStrategy> strategy_override = std::nullopt);
+
+    // Optionally refresh the live project index, persist a display-only totals
+    // table, and return it for immediate Agent-history rendering.
+    SessionIndexReportResult show_index(
+        bool refresh,
+        runtime::CancellationToken cancellation = runtime::CancellationToken());
+    // Create and enable a skipped/missing index in the live Agent session.
+    // If indexing is already enabled, this behaves as an incremental refresh.
+    SessionIndexReportResult index_code(
+        runtime::CancellationToken cancellation = runtime::CancellationToken());
 
     // Close the current project, initialize a fresh target, and restore the old
     // project on failure. target.state_dir_exists means the caller already

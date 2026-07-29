@@ -18,6 +18,7 @@ bool allowed_for_read_only_thread(const std::string& text) {
            text == "/list" || text == "/models" || text == "/remove" ||
            text == "/remove-empty" || text == "/cleanup" ||
            text == "/new" || text.rfind("/new ", 0) == 0 ||
+           text == "/index-code" || text == "/show-index" ||
            text == "/save" || text.rfind("/save ", 0) == 0 ||
            text.rfind("/load ", 0) == 0 || text == "/theme" ||
            text.rfind("/theme ", 0) == 0 || text == "/highlight" ||
@@ -72,6 +73,24 @@ AgentSlashCommand parse_agent_slash_command(const std::string& text) {
         }
         return command;
     }
+    if (text == "/show-index") {
+        command.action = AgentSlashAction::ShowIndex;
+        return command;
+    }
+    if (text.rfind("/show-index ", 0) == 0) {
+        command.action = AgentSlashAction::Invalid;
+        command.error = "Usage: /show-index";
+        return command;
+    }
+    if (text == "/index-code") {
+        command.action = AgentSlashAction::IndexCode;
+        return command;
+    }
+    if (text.rfind("/index-code ", 0) == 0) {
+        command.action = AgentSlashAction::Invalid;
+        command.error = "Usage: /index-code";
+        return command;
+    }
     if (text == "/plan") {
         command.action = AgentSlashAction::Plan;
         return command;
@@ -114,6 +133,8 @@ void handle_tui_command(const std::string& text, TuiCommandContext& ctx, TuiComm
                 + std::string(ctx.context.options.agent
                                   ? "/new [PATH] (fresh agent project)\n"
                                     "/compact [fast|smart|summary] (preserve transcript)\n"
+                                    "/index-code (create/enable code index)\n"
+                                    "/show-index (refresh compact index report)\n"
                                     "/plan (planning task mode)\n"
                                     "/act (full coding task mode)\n"
                                     "/permissions [confirm|smart|yolo]\n"
@@ -392,6 +413,24 @@ void handle_tui_command(const std::string& text, TuiCommandContext& ctx, TuiComm
         handlers.start_agent_compaction(strategy);
         return;
     }
+    if (agent_command.action == AgentSlashAction::ShowIndex) {
+        if (ctx.active_job != ActiveJob::None) {
+            ctx.status =
+                "Cannot show the index while an agent job is running; wait or cancel it first";
+            return;
+        }
+        handlers.start_agent_show_index();
+        return;
+    }
+    if (agent_command.action == AgentSlashAction::IndexCode) {
+        if (ctx.active_job != ActiveJob::None) {
+            ctx.status =
+                "Cannot index code while an agent job is running; wait or cancel it first";
+            return;
+        }
+        handlers.start_agent_index_code();
+        return;
+    }
     if (agent_command.action == AgentSlashAction::Plan ||
         agent_command.action == AgentSlashAction::Act) {
         if (ctx.active_job != ActiveJob::None) {
@@ -421,6 +460,14 @@ void handle_tui_command(const std::string& text, TuiCommandContext& ctx, TuiComm
     }
     if (text == "/compact" || text.rfind("/compact ", 0) == 0) {
         ctx.status = "/compact is for interactive agent mode only";
+        return;
+    }
+    if (text == "/show-index" || text.rfind("/show-index ", 0) == 0) {
+        ctx.status = "/show-index is for interactive agent mode only";
+        return;
+    }
+    if (text == "/index-code" || text.rfind("/index-code ", 0) == 0) {
+        ctx.status = "/index-code is for interactive agent mode only";
         return;
     }
     if (text == "/new" || text.rfind("/new ", 0) == 0) {

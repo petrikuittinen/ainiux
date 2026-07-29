@@ -252,6 +252,17 @@ void test_prompts_and_report() {
               prompts.agent.size() <= 4096 && word_count <= 450 &&
               prompts.agent.find("## Trust") != std::string::npos &&
               prompts.agent.find("read_many") != std::string::npos &&
+              prompts.agent.find("two or more independent paths") !=
+                  std::string::npos &&
+              prompts.agent.find("native parallel calls") !=
+                  std::string::npos &&
+              prompts.agent.find("not serial or parallel read_file calls") !=
+                  std::string::npos &&
+              prompts.agent.find(
+                  R"({"items":[{"path":"src/a.cpp")") !=
+                  std::string::npos &&
+              prompts.agent.find("JSON strings") != std::string::npos &&
+              prompts.agent.find("regex:true") != std::string::npos &&
               prompts.agent.find("Plan:") != std::string::npos &&
               prompts.agent.find("edit_file") != std::string::npos &&
               prompts.agent.find("tests") != std::string::npos &&
@@ -268,12 +279,18 @@ void test_prompts_and_report() {
               agent_native.find("4.5:1") != std::string::npos &&
               agent_native.find("Active channel: native tools") != std::string::npos &&
               agent_native.find("submit_security_review") == std::string::npos &&
+              agent_native.find("not serial or parallel read_file calls") !=
+                  std::string::npos &&
               agent_native.find("Do not create commits") != std::string::npos,
           "agent native system prompt is merged base plus native protocol");
     check(agent_xml.find("Active channel: XML tool markup") != std::string::npos &&
               agent_xml.find("<tool_call>") != std::string::npos &&
+              agent_xml.find("<name>read_many</name>") != std::string::npos &&
+              agent_xml.find("<name>read_file</name>") == std::string::npos &&
+              agent_xml.find("not serial or parallel read_file calls") !=
+                  std::string::npos &&
               agent_xml.find("exactly one") != std::string::npos,
-          "agent XML system prompt retains the one-block JSON/XML contract");
+          "agent XML prompt anchors the one-block contract with read_many");
     ainiux::provider::ToolConversation seeded;
     ainiux::agent::seed_agent_conversation(seeded, prompts,
                                            ainiux::agent::AgentTaskMode::Act,
@@ -500,6 +517,15 @@ void test_tool_argument_pipeline() {
               repaired.value.get("max_bytes") != nullptr &&
               repaired.value.get("max_bytes")->number == 32,
           "one-pass repair handles single quotes, trailing commas, and unquoted keys");
+
+    auto unquoted_glob = parse_tool_arguments(
+        R"({"max_results":20,"glob": *.py,"query":"needle"})");
+    check(unquoted_glob.error.ok() &&
+              unquoted_glob.stage == ToolArgStage::RepairedJson &&
+              unquoted_glob.value.get("glob") != nullptr &&
+              unquoted_glob.value.get("glob")->is_string() &&
+              unquoted_glob.value.get("glob")->string == "*.py",
+          "one-pass repair quotes a whitespace-free path-like glob value");
 
     auto invalid = parse_tool_arguments("not-json-at-all");
     check(!invalid.error.ok(), "unrecoverable argument text remains invalid");
