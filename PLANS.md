@@ -36,7 +36,7 @@ error layers should serve:
 | v0.0–v0.8 | CLI, persistence, runtime/TUI, providers, context, config, benchmarks, editor | Landed |
 | v0.9 | Benchmark calibration, refactor hygiene, TUI/CLI/editor polish | Remaining work continues |
 | v0.90 | Local OpenAI-compatible server | Deferred behind v1.1 |
-| v1.0–v1.10 | Local agent foundation and hardening | Landed through v1.10 |
+| v1.0–v1.11 | Local agent foundation and hardening | Landed through v1.11 |
 | **v1.1** | **Lightweight definition ranking and index tuning; later `/goal`, `/loop`, and sub-agents** | **Next priority** |
 | **v1.2** | **Image generation across CLI and interactive surfaces** | Planned after v1.1 |
 
@@ -46,7 +46,7 @@ ready.
 
 ## Current baseline
 
-Implementation status (2026-07-27): **v1.10**.
+Implementation status (2026-07-29): **v1.11**.
 
 The shipped product includes:
 
@@ -60,7 +60,9 @@ The shipped product includes:
 - syntax highlighting, grapheme-aware editing, multiple editor buffers, and AI assist
 - one-shot and interactive local agents with project-local `.ainiux-pr/` state
 - Act/Plan task modes, Guard approvals, project-contained writes, and tool logging
-- compact live tool rows, bounded reasoning previews, and transcript-preserving `/compact`
+- compact live tool rows, bounded reasoning previews, and transcript-preserving
+  three-strategy `/compact`: local-only `fast`, loss-aware default `smart`, and
+  active-model `summary`, with a universal 75% automatic threshold
 - OpenRouter, OpenAI, and DeepSeek credit display when the selected key can query it
 - a fast project-local symbol index with incremental discovery and lightweight scanners
 
@@ -93,6 +95,7 @@ graph or automatic model-context hints.
 | v1.08 | Provider reasoning previews and in-place activity rows |
 | v1.09 | Stable prompt caching/accounting, Smart read-only commands, and context polish |
 | v1.10 | Lightweight definition importance, optional index startup, mutation-aware refresh, and one-shot tool metrics |
+| v1.11 | Three-strategy agent context compaction with visible progress and result reporting |
 
 Historical implementation details remain available in Git history and the dated
 notes in `README.md` and `docs/decisions.md`.

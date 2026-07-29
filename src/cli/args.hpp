@@ -9,6 +9,7 @@
 #include "editor/editor_prompts.hpp"
 #include "markdown/markdown.hpp"
 #include "ainiux/model_setting.hpp"
+#include "ainiux/compaction_strategy.hpp"
 #include "tui/theme_registry.hpp"
 
 namespace ainiux::cli {
@@ -170,7 +171,8 @@ struct Options {
     size_t agent_history_backup_max_bytes = 1024U * 1024U;  // 1M
     int agent_history_backup_ttl_days = 7;
     bool agent_auto_compact = true;
-    // 0 = derive from context window (75% if >64k tokens, else 100%).
+    CompactionStrategy agent_compact_strategy = CompactionStrategy::Smart;
+    // 0 = derive from context window (75%).
     int agent_compact_limit = 0;
     bool agent_show_command_output = false;
     long max_image_bytes = 20971520;

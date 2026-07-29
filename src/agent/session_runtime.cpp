@@ -16,6 +16,7 @@
 #include "agent/reasoning_preview.hpp"
 #include "agent/tool_display.hpp"
 #include "chat/settings.hpp"
+#include "config/model_catalog.hpp"
 #include "security/redact.hpp"
 
 namespace ainiux::agent {
@@ -67,6 +68,77 @@ std::vector<std::string> known_tool_names(const ReadToolRegistry& tools) {
     for (const provider::FunctionDefinition& definition : tools.definitions())
         names.push_back(definition.name);
     return names;
+}
+
+Error default_compaction_summary_call(
+    const provider::RequestContext& context,
+    const std::vector<provider::Message>& messages,
+    int max_output_tokens,
+    runtime::CancellationToken cancellation,
+    std::string& summary) {
+    provider::RequestContext request = context;
+    request.options.stream = false;
+    request.options.max_output_tokens = max_output_tokens;
+    request.options.has_max_output_tokens = true;
+    request.suppress_streaming_reasoning = true;
+    if (const ModelCapability* capability =
+            provider::matched_model_capability(request);
+        capability != nullptr) {
+        request.options.reasoning =
+            compaction_summary_reasoning(capability->reasoning_options);
+    } else {
+        request.options.reasoning = ReasoningSelection::automatic();
+    }
+    request.options.reasoning_explicit = true;
+    provider::ChatResult result;
+    Error error = provider::send_chat_messages(
+        request, messages, [](const std::string&) { return ok_error(); }, result,
+        cancellation);
+    if (!error.ok()) return error;
+    summary = result.content;
+    return ok_error();
+}
+
+bool context_length_error(const Error& error) {
+    if (error.ok()) return false;
+    const std::string lower = ascii_lower(error.message);
+    return (error.code == ErrorCode::HttpStatus &&
+            lower.find("413") != std::string::npos) ||
+           lower.find("context length") != std::string::npos ||
+           lower.find("context_length") != std::string::npos ||
+           lower.find("maximum context") != std::string::npos ||
+           lower.find("too many tokens") != std::string::npos ||
+           lower.find("request is too large") != std::string::npos;
+}
+
+std::vector<std::string> utf8_chunks(const std::string& source,
+                                     long long token_budget) {
+    const std::size_t byte_budget = static_cast<std::size_t>(
+        std::max<long long>(256, token_budget * 4));
+    std::vector<std::string> chunks;
+    std::size_t begin = 0;
+    while (begin < source.size()) {
+        std::size_t end = std::min(source.size(), begin + byte_budget);
+        while (end > begin && end < source.size() &&
+               (static_cast<unsigned char>(source[end]) & 0xc0U) == 0x80U)
+            --end;
+        if (end == begin) end = std::min(source.size(), begin + byte_budget);
+        chunks.push_back(source.substr(begin, end - begin));
+        begin = end;
+    }
+    return chunks;
+}
+
+std::string utf8_bounded_extract(const std::string& text,
+                                 long long token_budget) {
+    const std::size_t byte_budget = static_cast<std::size_t>(
+        std::max<long long>(64, token_budget * 4));
+    if (text.size() <= byte_budget) return text;
+    std::size_t end = byte_budget > 4 ? byte_budget - 4 : byte_budget;
+    while (end > 0 &&
+           (static_cast<unsigned char>(text[end]) & 0xc0U) == 0x80U)
+        --end;
+    return text.substr(0, end) + " ...";
 }
 
 }  // namespace
@@ -165,22 +237,24 @@ void AgentSessionRuntime::publish_request_token_estimate() {
 }
 
 void AgentSessionRuntime::rebuild_compacted_conversation(
-    const std::vector<AgentMessageRecord>& stored,
-    const std::string& summary,
-    std::size_t keep_recent) {
+    const CompactionPartition& partition, const std::string& checkpoint) {
     seed_agent_conversation(conversation_, prompts_, task_mode_, state_.protocol, "",
                             agents_md_.injection_text);
     conversation_.messages.push_back(
-        {"user", "[Compacted earlier agent context]\n" + summary});
-    const std::size_t begin = stored.size() > keep_recent ? stored.size() - keep_recent : 0;
-    for (std::size_t index = begin; index < stored.size(); ++index) {
-        const AgentMessageRecord& row = stored[index];
-        if (row.role == "user" || row.role == "assistant")
-            conversation_.messages.push_back({row.role, row.content});
-        else if (row.role == "tool")
+        {"user", compaction_checkpoint_wrapper(checkpoint)});
+    auto append_plain = [&](const CompactionLogicalItem& item) {
+        if (item.role == "user" || item.role == "assistant") {
+            conversation_.messages.push_back({item.role, item.content});
+        } else if (item.role == "tool") {
             conversation_.messages.push_back(
-                {"user", "[Recent agent tool activity]\n" + row.content});
-    }
+                {"user", "[Retained agent tool activity]\n" + item.content});
+        }
+    };
+    for (const CompactionLogicalItem& item : partition.head) append_plain(item);
+    for (const CompactionLogicalItem& item : partition.tail) append_plain(item);
+    // Opaque Responses/Chat continuation state is intentionally discarded at
+    // the compaction boundary. Retained tool units are plain, protocol-safe context.
+    conversation_.continuation_items_json.clear();
     conversation_seeded_ = true;
     publish_request_token_estimate();
 }
@@ -188,8 +262,13 @@ void AgentSessionRuntime::rebuild_compacted_conversation(
 SessionCompactionResult AgentSessionRuntime::compact_impl(
     const provider::RequestContext& context,
     CompactionReason reason,
-    runtime::CancellationToken cancellation) {
+    runtime::CancellationToken cancellation,
+    std::optional<CompactionStrategy> strategy_override,
+    bool forced_summary) {
     SessionCompactionResult result;
+    result.requested_strategy =
+        strategy_override.value_or(options_.compact_strategy);
+    result.applied_strategy = result.requested_strategy;
     if (!prepared_) {
         result.error = {ErrorCode::Internal, "agent session runtime is not prepared"};
         return result;
@@ -204,27 +283,42 @@ SessionCompactionResult AgentSessionRuntime::compact_impl(
         return result;
     }
 
+    AgentProjectRecord project;
     std::vector<AgentMessageRecord> stored;
-    result.error = session_store_.load_messages(stored);
+    std::vector<AgentToolEventRecord> tool_events;
+    result.error =
+        session_store_.load_session(1, project, stored, tool_events);
     if (!result.error.ok()) return result;
 
-    constexpr std::size_t keep_recent = 12;
-    std::size_t projection_begin = 0;
-    for (std::size_t index = 0; index < stored.size(); ++index) {
-        if (stored[index].role == "summary") projection_begin = index;
-    }
-    const std::size_t projection_size = stored.size() - projection_begin;
-    if (projection_size <= keep_recent) {
-        result.error = ok_error();
-        result.no_op = true;
-        result.notice = "Nothing new to compact";
+    const long long window = context.options.context_tokens > 0
+                                 ? static_cast<long long>(
+                                       context.options.context_tokens)
+                                 : 0LL;
+    result.tokens_before = estimated_request_tokens();
+    const long long newest_seq =
+        stored.empty() ? 0 : stored.back().seq;
+    auto failed_result = [&]() {
+        if (reason == CompactionReason::Automatic) {
+            last_auto_compact_failure_ms_ = now_unix_ms();
+            last_auto_compact_failure_seq_ = newest_seq;
+        }
         return result;
-    }
-
-    if (reason == CompactionReason::Automatic) {
-        const long long window = context.options.context_tokens > 0
-                                     ? static_cast<long long>(context.options.context_tokens)
-                                     : 0LL;
+    };
+    if (reason == CompactionReason::Automatic && !forced_summary) {
+        if (!options_.auto_compact) {
+            result.error = ok_error();
+            result.no_op = true;
+            return result;
+        }
+        const long long now = now_unix_ms();
+        if (last_auto_compact_failure_ms_ > 0 &&
+            newest_seq <= last_auto_compact_failure_seq_ &&
+            now - last_auto_compact_failure_ms_ < 60000) {
+            result.error = ok_error();
+            result.no_op = true;
+            result.reason = "automatic compaction cooldown after a failed attempt";
+            return result;
+        }
         if (!should_auto_compact(options_.auto_compact, options_.compact_limit, window,
                                  estimated_request_tokens())) {
             result.error = ok_error();
@@ -233,55 +327,247 @@ SessionCompactionResult AgentSessionRuntime::compact_impl(
         }
     }
 
-    std::vector<AgentMessageRecord> projection;
-    for (std::size_t index = projection_begin; index < stored.size(); ++index) {
-        if (stored[index].role != "notice" && stored[index].role != "thinking")
-            projection.push_back(stored[index]);
-    }
-    if (projection.size() <= keep_recent) {
+    const std::vector<CompactionLogicalItem> timeline =
+        build_compaction_timeline(stored, tool_events);
+    CompactionPartition partition =
+        partition_compaction_timeline(timeline, window);
+    if (partition.middle.empty()) {
         result.error = ok_error();
         result.no_op = true;
-        result.notice = "Nothing new to compact";
+        result.tokens_after = result.tokens_before;
+        result.notice =
+            format_compaction_no_op_notice(result.tokens_after);
         return result;
     }
-    const std::size_t drop = projection.size() - keep_recent;
-    const std::string summary = build_local_compact_summary(projection, drop);
-    if (summary.empty()) {
-        result.error = {ErrorCode::ProviderSchema,
-                        "agent compaction produced an empty summary"};
-        return result;
+    std::string first_head_carry;
+    std::string summary_preamble;
+    for (const CompactionLogicalItem& item : timeline) {
+        if (item.role == "user") {
+            summary_preamble = redact_secrets(item.content, secrets_);
+            break;
+        }
     }
+    if (summary_preamble.empty() && !partition.head.empty())
+        summary_preamble =
+            redact_secrets(partition.head.front().content, secrets_);
+    if (partition.prior_summary.empty() && !partition.head.empty()) {
+        std::ostringstream carry;
+        carry << "\n\nProtected Initial Context\n";
+        for (const CompactionLogicalItem& item : partition.head) {
+            carry << "[" << item.role << "] "
+                  << (item.estimated_tokens > partition.tail_budget_tokens
+                          ? utf8_bounded_extract(
+                                item.content, partition.tail_budget_tokens)
+                          : item.content)
+                  << "\n";
+        }
+        first_head_carry = carry.str();
+    }
+
+    const long long trigger =
+        window > 0
+            ? (window *
+                   effective_compact_limit_percent(options_.compact_limit, window) +
+               99) /
+                  100
+            : 0;
+    FastCompactionCandidate fast = build_fast_compaction_candidate(
+        partition, window > 0 ? std::max<long long>(512, window * 10 / 100)
+                              : 1000);
+    auto has_oversized_protected = [&](const auto& items) {
+        return std::any_of(
+            items.begin(), items.end(), [&](const CompactionLogicalItem& item) {
+                return item.estimated_tokens > partition.tail_budget_tokens;
+            });
+    };
+    if (has_oversized_protected(partition.head) ||
+        has_oversized_protected(partition.tail)) {
+        fast.protected_content_truncated = true;
+        if (result.requested_strategy == CompactionStrategy::Fast)
+            result.reason =
+                "oversized protected content used a bounded local extract";
+    }
+    std::string checkpoint = fast.checkpoint;
+    CompactionStrategy applied = result.requested_strategy;
+    bool use_model = result.requested_strategy == CompactionStrategy::Summary ||
+                     forced_summary;
+    if (result.requested_strategy == CompactionStrategy::Smart && !use_model) {
+        use_model = smart_compaction_should_escalate(
+            fast, window, trigger, partition.tail_budget_tokens, result.reason);
+        if (use_model) applied = CompactionStrategy::Summary;
+    }
+
+    if (use_model) {
+        auto move_oversized_to_middle = [&](auto& protected_items) {
+            auto first = std::stable_partition(
+                protected_items.begin(), protected_items.end(),
+                [&](const CompactionLogicalItem& item) {
+                    return item.estimated_tokens <=
+                           partition.tail_budget_tokens;
+                });
+            partition.middle.insert(partition.middle.end(), first,
+                                    protected_items.end());
+            protected_items.erase(first, protected_items.end());
+        };
+        move_oversized_to_middle(partition.head);
+        move_oversized_to_middle(partition.tail);
+        std::stable_sort(
+            partition.middle.begin(), partition.middle.end(),
+            [](const CompactionLogicalItem& left,
+               const CompactionLogicalItem& right) {
+                return left.seq < right.seq;
+            });
+    } else {
+        // Fast remains model-free: retain a bounded deterministic UTF-8 extract
+        // in place of any protected item that alone exceeds the tail budget.
+        auto bound_protected = [&](auto& items) {
+            for (CompactionLogicalItem& item : items) {
+                if (item.estimated_tokens <= partition.tail_budget_tokens)
+                    continue;
+                item.content = utf8_bounded_extract(
+                    item.content, partition.tail_budget_tokens);
+                item.estimated_tokens = estimate_tokens_from_text(item.content);
+            }
+        };
+        bound_protected(partition.head);
+        bound_protected(partition.tail);
+    }
+
+    if (use_model) {
+        applied = CompactionStrategy::Summary;
+        const CompactionSummaryCall summary_call =
+            options_.summary_call ? options_.summary_call
+                                  : default_compaction_summary_call;
+        std::string source =
+            redact_secrets(render_compaction_source(partition), secrets_);
+        const std::string system =
+            compaction_summary_schema_prompt(summary_preamble);
+        const long long input_budget = compaction_summary_input_budget(window);
+        std::vector<std::string> chunks = utf8_chunks(source, input_budget);
+        if (chunks.empty()) chunks.push_back(source);
+        std::vector<std::string> summaries;
+        for (const std::string& chunk : chunks) {
+            if (cancellation.cancelled()) {
+                result.error = {ErrorCode::Cancelled,
+                                "agent compaction cancelled"};
+                return result;
+            }
+            std::string summary;
+            const int output_budget = static_cast<int>(
+                compaction_summary_output_budget(
+                    estimate_tokens_from_text(chunk), window));
+            result.error = summary_call(
+                context,
+                {{"system", system},
+                 {"user", "Chronological history to summarize:\n" + chunk}},
+                output_budget, cancellation, summary);
+            if (!result.error.ok()) return failed_result();
+            summary = ascii_trim(redact_secrets(summary, secrets_));
+            if (summary.empty()) {
+                result.error = {ErrorCode::ProviderSchema,
+                                "agent compaction summarizer returned an empty checkpoint"};
+                return failed_result();
+            }
+            summaries.push_back(std::move(summary));
+        }
+        while (summaries.size() > 1) {
+            std::ostringstream combined;
+            for (const std::string& summary : summaries)
+                combined << "[Chunk checkpoint]\n" << summary << "\n";
+            std::vector<std::string> consolidation_chunks =
+                utf8_chunks(combined.str(), input_budget);
+            std::vector<std::string> next;
+            for (const std::string& chunk : consolidation_chunks) {
+                if (cancellation.cancelled()) {
+                    result.error = {ErrorCode::Cancelled,
+                                    "agent compaction cancelled"};
+                    return failed_result();
+                }
+                std::string summary;
+                result.error = summary_call(
+                    context,
+                    {{"system", system},
+                     {"user", "Consolidate these chunk checkpoints without losing "
+                              "unfinished work:\n" +
+                                  chunk}},
+                    static_cast<int>(compaction_summary_output_budget(
+                        estimate_tokens_from_text(chunk), window)),
+                    cancellation, summary);
+                if (!result.error.ok()) return failed_result();
+                summary = ascii_trim(redact_secrets(summary, secrets_));
+                if (summary.empty()) {
+                    result.error = {
+                        ErrorCode::ProviderSchema,
+                        "agent compaction consolidation returned an empty checkpoint"};
+                    return failed_result();
+                }
+                next.push_back(std::move(summary));
+            }
+            if (next.size() >= summaries.size() && next.size() > 1) {
+                result.error = {
+                    ErrorCode::ProviderSchema,
+                    "agent compaction could not consolidate the oversized history"};
+                return failed_result();
+            }
+            summaries = std::move(next);
+        }
+        checkpoint = summaries.front();
+    }
+
     if (cancellation.cancelled()) {
         result.error = {ErrorCode::Cancelled, "agent compaction cancelled"};
         return result;
     }
 
+    result.applied_strategy = applied;
+    // Project the replacement before committing; ineffective LLM output is not
+    // allowed to alter SQLite or the live request.
+    const provider::ToolConversation old_conversation = conversation_;
+    rebuild_compacted_conversation(partition, checkpoint);
+    result.tokens_after = estimated_request_tokens();
+    conversation_ = old_conversation;
+    publish_request_token_estimate();
+    if (result.tokens_before > 0 &&
+        result.tokens_after >= result.tokens_before) {
+        result.error = {ErrorCode::ProviderSchema,
+                        "agent compaction did not reduce the model-visible context"};
+        return failed_result();
+    }
+    if (applied == CompactionStrategy::Summary && window > 0) {
+        const long long fit_limit =
+            std::min<long long>(window * 60 / 100,
+                                trigger > 0 ? trigger : window);
+        if (result.tokens_after > fit_limit) {
+            result.error = {
+                ErrorCode::ProviderSchema,
+                "agent summary compaction projection still exceeds its context budget"};
+            return failed_result();
+        }
+    }
+
     // Commit durable state first. Only after this succeeds may request context change.
-    result.error =
-        session_store_.compact_with_summary(summary, static_cast<int>(keep_recent));
+    result.error = session_store_.compact_with_summary(
+        redact_secrets(checkpoint + first_head_carry, secrets_),
+        static_cast<int>(partition.tail.size()));
     if (!result.error.ok()) return result;
 
-    rebuild_compacted_conversation(projection, summary, keep_recent);
+    rebuild_compacted_conversation(partition, checkpoint);
+    result.tokens_after = estimated_request_tokens();
     result.error = ok_error();
     result.compacted = true;
-    if (reason == CompactionReason::Manual) {
-        result.notice = "Agent context compacted; full project transcript preserved";
-    } else {
-        const long long window = context.options.context_tokens > 0
-                                     ? static_cast<long long>(context.options.context_tokens)
-                                     : 0LL;
-        result.notice =
-            "auto-compact at ~" +
-            std::to_string(effective_compact_limit_percent(options_.compact_limit, window)) +
-            "% of context window";
-    }
+    last_auto_compact_failure_ms_ = 0;
+    last_auto_compact_failure_seq_ = 0;
+    result.notice =
+        format_compaction_success_notice(result.tokens_before,
+                                         result.tokens_after);
     return result;
 }
 
 SessionCompactionResult AgentSessionRuntime::compact(
     const provider::RequestContext& context,
     CompactionReason reason,
-    runtime::CancellationToken cancellation) {
+    runtime::CancellationToken cancellation,
+    std::optional<CompactionStrategy> strategy_override) {
     SessionCompactionResult result;
     bool expected = false;
     if (!operation_active_.compare_exchange_strong(expected, true)) {
@@ -292,7 +578,7 @@ SessionCompactionResult AgentSessionRuntime::compact(
         std::atomic<bool>& active;
         ~Release() { active.store(false); }
     } release{operation_active_};
-    return compact_impl(context, reason, cancellation);
+    return compact_impl(context, reason, cancellation, strategy_override);
 }
 
 SessionProjectReplaceResult AgentSessionRuntime::replace_project(
@@ -730,6 +1016,10 @@ Error AgentSessionRuntime::load_display_messages(std::vector<provider::Message>&
     out.reserve(rows.size());
     const std::size_t cols = terminal_column_count();
     for (const AgentMessageRecord& row : rows) {
+        // Summary rows contain the internal model checkpoint, potentially with
+        // large structured tool results. The completion status reports the
+        // compaction to the user; replaying this payload would flood the TUI.
+        if (row.role == "summary") continue;
         provider::Message message;
         if (row.role == "user" || row.role == "assistant" || row.role == "system" ||
             row.role == "tool" || row.role == "notice" || row.role == "thinking" ||
@@ -1136,6 +1426,7 @@ SessionTurnResult AgentSessionRuntime::run_user_turn(
             log_number(turn_failed_tool_calls);
         logger_->event("agent_turn", {"agent"}, std::move(fields), status);
     };
+    bool context_recovery_used = false;
     // The scripted-round cap is per user-approved task segment. Keep
     // state_.turn cumulative for logs/session statistics.
     for (;;) {
@@ -1149,6 +1440,26 @@ SessionTurnResult AgentSessionRuntime::run_user_turn(
             log_turn_summary("failure");
             log_token_usage();
             return result;
+        }
+
+        // Recheck before every provider request, including the round following
+        // completed tools. This keeps automatic compaction aligned with actual
+        // request growth rather than only user-message boundaries.
+        if (options_.auto_compact && session_store_.is_open()) {
+            SessionCompactionResult compact_result =
+                compact_impl(context, CompactionReason::Automatic, cancellation);
+            if (!compact_result.error.ok()) {
+                result.error = compact_result.error;
+                commit_turn_counts();
+                result.finished_at_ms = now_unix_ms();
+                log_turn_summary("failure");
+                log_token_usage();
+                return result;
+            }
+            if (compact_result.compacted) {
+                progress(compact_result.notice);
+                result.notice = compact_result.notice;
+            }
         }
 
         // Native tools when protocol allows; empty definitions on pure XML channel.
@@ -1172,17 +1483,15 @@ SessionTurnResult AgentSessionRuntime::run_user_turn(
             observer_pointer = &observer;
         }
 
-        Error error = send_tool_round_with_transport_retries(
-            context, conversation_, definitions, round, cancellation, limits_.transport_attempts,
-            observer_pointer,
-            [&]() {
+        const provider::ToolRoundContext observation_context = [&]() {
                 provider::ToolRoundContext ctx;
                 ctx.stage = log_context.stage;
                 ctx.round = log_context.round;
                 ctx.cumulative_tool_calls = log_context.cumulative_tool_calls;
                 return ctx;
-            }(),
-            [&](const Error& retry_error, int attempt, int backoff_seconds) {
+            }();
+        auto on_retry = [&](const Error& retry_error, int attempt,
+                            int backoff_seconds) {
                 round_reasoning.clear();
                 round_preview.clear();
                 if (!logger_) return;
@@ -1192,8 +1501,8 @@ SessionTurnResult AgentSessionRuntime::run_user_turn(
                 fields.object["attempt"] = log_number(attempt);
                 fields.object["backoff_ms"] = log_number(backoff_seconds * 1000);
                 logger_->event("retry_scheduled", log_context, std::move(fields), "failure");
-            },
-            [&](const std::string& delta) -> Error {
+            };
+        auto on_reasoning = [&](const std::string& delta) -> Error {
                 if (!options_.interactive) return ok_error();
                 round_reasoning += delta;
                 const std::string preview = clip_to_cells(format_reasoning_preview(
@@ -1212,7 +1521,31 @@ SessionTurnResult AgentSessionRuntime::run_user_turn(
                            ? Error{ErrorCode::Cancelled,
                                    "agent reasoning preview cancelled"}
                            : ok_error();
-            });
+            };
+        Error error = send_tool_round_with_transport_retries(
+            context, conversation_, definitions, round, cancellation,
+            limits_.transport_attempts, observer_pointer, observation_context,
+            on_retry, on_reasoning);
+        if (!error.ok() && options_.auto_compact &&
+            options_.compact_strategy != CompactionStrategy::Fast &&
+            !context_recovery_used && context_length_error(error)) {
+            context_recovery_used = true;
+            SessionCompactionResult recovered = compact_impl(
+                context, CompactionReason::Automatic, cancellation,
+                options_.compact_strategy, true);
+            if (recovered.error.ok() && recovered.compacted) {
+                progress(recovered.notice + "; retrying rejected model round once");
+                round = provider::ToolRoundResult{};
+                round_reasoning.clear();
+                round_preview.clear();
+                error = send_tool_round_with_transport_retries(
+                    context, conversation_, definitions, round, cancellation,
+                    limits_.transport_attempts, observer_pointer,
+                    observation_context, on_retry, on_reasoning);
+            } else if (!recovered.error.ok()) {
+                error = recovered.error;
+            }
+        }
         if (!error.ok()) {
             if (reasoning_row_started)
                 structured_progress({AgentProgressAction::Discard,

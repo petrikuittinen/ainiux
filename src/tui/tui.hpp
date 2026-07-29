@@ -18,7 +18,7 @@ struct InteractiveSession;
 namespace ainiux::tui {
 
 enum class ActivityKind { None, Thinking, Streaming };
-enum class AgentActivityState { Ready, Thinking, Working };
+enum class AgentActivityState { Ready, Thinking, Working, Compacting };
 
 struct ChatAttachment {
     std::string source;  // original path or URL string for display in ---marker---

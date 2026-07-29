@@ -4,6 +4,7 @@
 #include <string>
 #include <vector>
 
+#include "ainiux/compaction_strategy.hpp"
 #include "chat/session.hpp"
 #include "agent/activity.hpp"
 #include "agent/index/index.hpp"
@@ -113,8 +114,11 @@ struct TuiEvent {
     std::string guard_message;
     std::string agent_workspace;
     std::vector<provider::Message> agent_history;
+    bool agent_history_loaded = false;
     bool agent_compacted = false;
     bool agent_compact_no_op = false;
+    CompactionStrategy agent_compact_requested = CompactionStrategy::Smart;
+    CompactionStrategy agent_compact_applied = CompactionStrategy::Smart;
     agent::AgentActivityPhase agent_phase = agent::AgentActivityPhase::Thinking;
     agent::AgentProgressUpdate agent_progress;
     agent::index::ProbeState agent_index_state =

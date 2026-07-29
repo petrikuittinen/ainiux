@@ -66,7 +66,8 @@ const std::vector<std::string>& chat_command_completions() {
 const std::vector<std::string>& agent_command_completions() {
     static const std::vector<std::string> commands = {
         "/act",          "/agent",        "/attach ",       "/chat",
-        "/clear",        "/cmd-out ",     "/compact",       "/context ",
+        "/clear",        "/cmd-out ",     "/compact",       "/compact fast",
+        "/compact smart", "/compact summary", "/context ",
         "/cycle",        "/edit",         "/editor",        "/exit",
         "/fetch ",       "/help",         "/highlight ",    "/insert ",
         "/model ",       "/models",       "/mode ",         "/new ",

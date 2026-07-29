@@ -58,8 +58,18 @@ AgentSlashCommand parse_agent_slash_command(const std::string& text) {
             text.size() <= 4 ? std::string() : app::detail::trim_ascii(text.substr(4));
         return command;
     }
-    if (text == "/compact") {
+    if (text == "/compact" || text.rfind("/compact ", 0) == 0) {
         command.action = AgentSlashAction::Compact;
+        command.argument =
+            text.size() <= 8 ? std::string()
+                             : app::detail::trim_ascii(text.substr(8));
+        if (!command.argument.empty()) {
+            CompactionStrategy ignored;
+            if (!agent::parse_compaction_strategy(command.argument, ignored)) {
+                command.action = AgentSlashAction::Invalid;
+                command.error = "Usage: /compact [fast|smart|summary]";
+            }
+        }
         return command;
     }
     if (text == "/plan") {
@@ -84,10 +94,6 @@ AgentSlashCommand parse_agent_slash_command(const std::string& text) {
         }
         return command;
     }
-    if (text.rfind("/compact ", 0) == 0) {
-        command.action = AgentSlashAction::Invalid;
-        command.error = "Usage: /compact";
-    }
     return command;
 }
 
@@ -107,7 +113,7 @@ void handle_tui_command(const std::string& text, TuiCommandContext& ctx, TuiComm
                 "/list (Ctrl+L; N new thread)\n"
                 + std::string(ctx.context.options.agent
                                   ? "/new [PATH] (fresh agent project)\n"
-                                    "/compact (compact model context; preserve transcript)\n"
+                                    "/compact [fast|smart|summary] (preserve transcript)\n"
                                     "/plan (planning task mode)\n"
                                     "/act (full coding task mode)\n"
                                     "/permissions [confirm|smart|yolo]\n"
@@ -377,7 +383,13 @@ void handle_tui_command(const std::string& text, TuiCommandContext& ctx, TuiComm
             ctx.status = "Cannot compact while an agent job is running; wait or cancel it first";
             return;
         }
-        handlers.start_agent_compaction();
+        std::optional<CompactionStrategy> strategy;
+        if (!agent_command.argument.empty()) {
+            CompactionStrategy parsed;
+            if (agent::parse_compaction_strategy(agent_command.argument, parsed))
+                strategy = parsed;
+        }
+        handlers.start_agent_compaction(strategy);
         return;
     }
     if (agent_command.action == AgentSlashAction::Plan ||

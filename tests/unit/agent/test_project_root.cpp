@@ -144,12 +144,118 @@ void test_new_project_target_resolution_and_validation() {
 
 void test_compact_threshold_defaults() {
     check(agent::effective_compact_limit_percent(0, 128000) == 75, "large window default 75");
-    check(agent::effective_compact_limit_percent(0, 65536) == 100, "64k window default 100");
-    check(agent::effective_compact_limit_percent(0, 8000) == 100, "small window default 100");
+    check(agent::effective_compact_limit_percent(0, 65536) == 75, "64k window default 75");
+    check(agent::effective_compact_limit_percent(0, 8000) == 75, "small window default 75");
     check(agent::effective_compact_limit_percent(60, 128000) == 60, "explicit override");
     check(!agent::should_auto_compact(false, 75, 100000, 90000), "auto off never compact");
     check(agent::should_auto_compact(true, 75, 100000, 80000), "at 80% of 100k with 75% limit");
     check(!agent::should_auto_compact(true, 75, 100000, 70000), "below 75% threshold");
+}
+
+void test_compaction_strategies_timeline_and_partition() {
+    CompactionStrategy strategy = CompactionStrategy::Fast;
+    check(agent::parse_compaction_strategy("SMART", strategy) &&
+              strategy == CompactionStrategy::Smart &&
+              std::string(agent::compaction_strategy_name(strategy)) == "smart",
+          "compaction strategy parsing is strict and case-insensitive");
+    check(!agent::parse_compaction_strategy("automatic", strategy),
+          "unknown compaction strategy is rejected");
+
+    std::vector<agent::AgentMessageRecord> messages;
+    auto message = [&](long long seq, const std::string& role,
+                       const std::string& content,
+                       const std::string& tool = std::string()) {
+        agent::AgentMessageRecord row;
+        row.seq = seq;
+        row.role = role;
+        row.content = content;
+        row.tool_name = tool;
+        messages.push_back(std::move(row));
+    };
+    message(1, "user", "goal");
+    message(2, "notice", "display only");
+    message(3, "assistant", "inspect");
+    message(4, "thinking", "hidden thought");
+    message(5, "tool", "compact duplicate", "read_file");
+    for (long long seq = 7; seq <= 14; ++seq)
+        message(seq, seq % 2 ? "user" : "assistant",
+                "message " + std::to_string(seq));
+    agent::AgentToolEventRecord tool;
+    tool.seq = 6;
+    tool.tool_name = "read_file";
+    tool.arguments = R"({"path":"src/main.cpp"})";
+    tool.result = R"({"ok":true,"content":"main"})";
+
+    const auto timeline =
+        agent::build_compaction_timeline(messages, {tool});
+    bool saw_display = false;
+    int tool_items = 0;
+    for (const auto& item : timeline) {
+        saw_display = saw_display || item.role == "notice" ||
+                      item.role == "thinking";
+        if (item.role == "tool") ++tool_items;
+    }
+    check(!saw_display && tool_items == 1,
+          "timeline excludes display roles and keeps one full logical tool unit");
+    const auto partition =
+        agent::partition_compaction_timeline(timeline, 200);
+    check(partition.head.size() == 3 && partition.tail.size() >= 3 &&
+              partition.tail.size() <= 20 && !partition.middle.empty(),
+          "first compaction retains three head items and a bounded whole-item tail");
+
+    message(15, "summary", "prior structured checkpoint");
+    message(16, "user", "new follow-up");
+    message(17, "assistant", "new work");
+    message(18, "user", "more work");
+    message(19, "assistant", "latest");
+    const auto repeated = agent::partition_compaction_timeline(
+        agent::build_compaction_timeline(messages, {}), 100);
+    check(repeated.head.empty() &&
+              repeated.prior_summary == "prior structured checkpoint",
+          "repeated compaction carries the previous summary instead of duplicating head");
+
+    const auto fast = agent::build_fast_compaction_candidate(partition, 1000);
+    std::string reason;
+    check(!fast.checkpoint.empty() &&
+              !agent::smart_compaction_should_escalate(
+                  fast, 10000, 7500, partition.tail_budget_tokens, reason),
+          "small lossless fast checkpoint does not escalate");
+    agent::FastCompactionCandidate lossy = fast;
+    lossy.omitted_substantive_tokens = 2000;
+    check(agent::smart_compaction_should_escalate(
+              lossy, 10000, 7500, 1500, reason) &&
+              !reason.empty(),
+          "smart strategy escalates when substantive history is omitted");
+    check(agent::compaction_summary_input_budget(10000) == 6000 &&
+              agent::compaction_summary_input_budget(0) == 8000 &&
+              agent::compaction_summary_output_budget(8000, 10000) == 1000,
+          "summary input and output budgets follow context clamps");
+    check(agent::compaction_summary_reasoning(
+              {ReasoningSelection::named("low"),
+               ReasoningSelection::named("disabled")}) ==
+              ReasoningSelection::named("disabled") &&
+              agent::compaction_summary_reasoning(
+                  {ReasoningSelection::named("high"),
+                   ReasoningSelection::named("minimal")}) ==
+                  ReasoningSelection::named("minimal"),
+          "summary reasoning prefers disabling then minimal catalogue values");
+    check(agent::format_compaction_progress(CompactionStrategy::Summary, 0) ==
+              "Compacting context using summary." &&
+              agent::format_compaction_progress(CompactionStrategy::Summary, 1) ==
+                  "Compacting context using summary.." &&
+              agent::format_compaction_progress(CompactionStrategy::Summary, 2) ==
+                  "Compacting context using summary..." &&
+              agent::format_compaction_success_notice(57624, 5624) ==
+                  "Compacting context succeeded. ~52000 tokens saved. 5624 tokens in remaining context.",
+          "compaction progress is visible and success reporting stays one line");
+    check(agent::format_compaction_no_op_notice(8900).find(
+              "Compacting context skipped.") == 0 &&
+              agent::format_compaction_no_op_notice(8900).find(
+                  "~8900 tokens remain.") != std::string::npos &&
+              agent::format_compaction_failure_notice(
+                  "provider\nreturned an error")
+                      .find('\n') == std::string::npos,
+          "no-op and failure outcomes are explicit one-line notices");
 }
 
 void test_tool_display_format() {
@@ -266,6 +372,7 @@ void run_all() {
     test_reject_nested_child_ainiux();
     test_new_project_target_resolution_and_validation();
     test_compact_threshold_defaults();
+    test_compaction_strategies_timeline_and_partition();
     test_tool_display_format();
     test_tool_display_clips_to_width();
     test_elapsed_seconds_format();

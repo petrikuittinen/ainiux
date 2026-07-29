@@ -85,6 +85,7 @@ AgentGoalResult run_agent_goal(provider::RequestContext context,
     options.history_backup.max_bytes = context.options.agent_history_backup_max_bytes;
     options.history_backup.ttl_days = context.options.agent_history_backup_ttl_days;
     options.auto_compact = context.options.agent_auto_compact;
+    options.compact_strategy = context.options.agent_compact_strategy;
     options.compact_limit = context.options.agent_compact_limit;
     options.index_mode =
         context.options.disable_indexing

@@ -11,6 +11,7 @@
 #include "agent/activity.hpp"
 #include "agent/agents_md.hpp"
 #include "agent/approval.hpp"
+#include "agent/compact.hpp"
 #include "agent/prompts.hpp"
 #include "agent/project_root.hpp"
 #include "agent/review_log.hpp"
@@ -69,8 +70,20 @@ struct SessionCompactionResult {
     Error error;
     bool compacted = false;
     bool no_op = false;
+    CompactionStrategy requested_strategy = CompactionStrategy::Smart;
+    CompactionStrategy applied_strategy = CompactionStrategy::Smart;
+    long long tokens_before = 0;
+    long long tokens_after = 0;
+    std::string reason;
     std::string notice;
 };
+
+using CompactionSummaryCall = std::function<Error(
+    const provider::RequestContext& context,
+    const std::vector<provider::Message>& messages,
+    int max_output_tokens,
+    runtime::CancellationToken cancellation,
+    std::string& summary)>;
 
 struct SessionProjectReplaceResult {
     Error error;
@@ -90,7 +103,10 @@ struct SessionRuntimeOptions {
     std::size_t max_source_code_file_size = 10 * 1024 * 1024;
     HistoryBackupPolicy history_backup;
     bool auto_compact = true;
+    CompactionStrategy compact_strategy = CompactionStrategy::Smart;
     int compact_limit = 0;  // 0 = derive from window
+    // Injected by tests and embedders. Empty uses the active provider/model.
+    CompactionSummaryCall summary_call;
     enum class IndexMode { Disabled, UseExisting, CreateOrRefresh };
     IndexMode index_mode = IndexMode::UseExisting;
     std::function<void(const index::Progress&)> on_index_progress;
@@ -140,8 +156,8 @@ class AgentSessionRuntime {
                   std::function<bool()> interrupted = {},
                   SessionRuntimeOptions options = {});
 
-    // After prepare: load the project transcript for TUI display (roles
-    // user/assistant/tool/notice/thinking/summary). Empty when the DB has no messages.
+    // After prepare: load the project transcript for TUI display. Internal
+    // summary/checkpoint rows stay durable but are omitted from visible history.
     Error load_display_messages(std::vector<provider::Message>& out) const;
 
     // Append a display-only notice to the project agent transcript (e.g. user /shell).
@@ -177,7 +193,8 @@ class AgentSessionRuntime {
     SessionCompactionResult compact(
         const provider::RequestContext& context,
         CompactionReason reason,
-        runtime::CancellationToken cancellation = runtime::CancellationToken());
+        runtime::CancellationToken cancellation = runtime::CancellationToken(),
+        std::optional<CompactionStrategy> strategy_override = std::nullopt);
 
     // Close the current project, initialize a fresh target, and restore the old
     // project on failure. target.state_dir_exists means the caller already
@@ -202,13 +219,14 @@ class AgentSessionRuntime {
                         const std::function<bool()>& interrupted) const;
     // Worker-only: recompute from conversation_ and publish for UI chrome.
     void publish_request_token_estimate();
-    void rebuild_compacted_conversation(const std::vector<AgentMessageRecord>& stored,
-                                        const std::string& summary,
-                                        std::size_t keep_recent);
+    void rebuild_compacted_conversation(const CompactionPartition& partition,
+                                        const std::string& checkpoint);
     SessionCompactionResult compact_impl(
         const provider::RequestContext& context,
         CompactionReason reason,
-        runtime::CancellationToken cancellation);
+        runtime::CancellationToken cancellation,
+        std::optional<CompactionStrategy> strategy_override = std::nullopt,
+        bool forced_summary = false);
 
     SessionRuntimeOptions options_;
     AgentTaskMode task_mode_ = AgentTaskMode::Act;
@@ -235,6 +253,8 @@ class AgentSessionRuntime {
     // The tool executor snapshots this counter to exclude approval waits.
     std::atomic<long long> guard_approval_wait_ms_{0};
     std::atomic<bool> operation_active_{false};
+    long long last_auto_compact_failure_ms_ = 0;
+    long long last_auto_compact_failure_seq_ = 0;
 };
 
 }  // namespace ainiux::agent

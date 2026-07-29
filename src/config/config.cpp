@@ -1,5 +1,6 @@
 #include "config/config.hpp"
 
+#include "agent/compact.hpp"
 #include "chat/generation_settings.hpp"
 #include "cli/option_values.hpp"
 #include "context/policy.hpp"
@@ -2026,6 +2027,13 @@ Error apply_document(const Document& document, cli::Options& options) {
         } else if (name == "agent.auto_compact") {
             err = require_type(entry, Value::Type::Boolean);
             if (err.ok()) candidate.agent_auto_compact = entry.value.boolean;
+        } else if (name == "agent.compact_strategy") {
+            err = require_type(entry, Value::Type::String);
+            if (err.ok() &&
+                !agent::parse_compaction_strategy(entry.value.string,
+                                                  candidate.agent_compact_strategy)) {
+                err = schema_error(entry, "expected fast, smart, or summary");
+            }
         } else if (name == "agent.compact_limit") {
             err = nonnegative_int(entry, candidate.agent_compact_limit);
             if (err.ok() && candidate.agent_compact_limit > 100)

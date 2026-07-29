@@ -2,12 +2,14 @@
 
 #include <cstddef>
 #include <functional>
+#include <optional>
 #include <string>
 #include <vector>
 
 #include "chat/session.hpp"
 #include "chat/sqlite_store.hpp"
 #include "agent/prompts.hpp"
+#include "agent/compact.hpp"
 #include "agent/approval.hpp"
 #include "editor/editor.hpp"
 #include "provider/provider.hpp"
@@ -41,7 +43,8 @@ struct TuiCommandHandlers {
     std::function<void()> start_thread_list;
     std::function<void(const std::string&)> start_new_chat_thread;
     std::function<void(const std::string&)> start_new_agent_project;
-    std::function<void()> start_agent_compaction;
+    std::function<void(std::optional<CompactionStrategy>)>
+        start_agent_compaction;
     std::function<void(agent::AgentTaskMode)> switch_agent_task_mode;
     std::function<void(const std::string&)> switch_agent_permission_mode;
     std::function<void()> open_agent_permission_picker;

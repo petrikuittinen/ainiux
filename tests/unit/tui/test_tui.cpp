@@ -386,6 +386,10 @@ void test_agent_widgets_and_dynamic_geometry() {
         agent_activity_line(AgentActivityState::Working, true, 7, -1, 80);
     check(working == "Agent working (ESC to abort) 0:07",
           "working activity includes zero-padded elapsed seconds");
+    const std::string compacting =
+        agent_activity_line(AgentActivityState::Compacting, true, 2, -1, 80);
+    check(compacting == "Agent compacting... (ESC to abort) 0:02",
+          "compacting activity has its own label and animated dots");
     const std::string completed =
         agent_activity_line(AgentActivityState::Ready, false, 0, 4960, 80);
     check(completed == "Agent ready. Task completed in 4.96 seconds.",
@@ -1551,10 +1555,15 @@ void test_agent_project_slash_command_parsing() {
     const auto compact = ainiux::tui::parse_agent_slash_command("/compact");
     check(compact.action == ainiux::tui::AgentSlashAction::Compact,
           "agent /compact parses");
+    const auto summary =
+        ainiux::tui::parse_agent_slash_command("/compact summary");
+    check(summary.action == ainiux::tui::AgentSlashAction::Compact &&
+              summary.argument == "summary",
+          "agent /compact accepts a one-shot strategy override");
     const auto invalid =
         ainiux::tui::parse_agent_slash_command("/compact now");
     check(invalid.action == ainiux::tui::AgentSlashAction::Invalid &&
-              invalid.error == "Usage: /compact",
+              invalid.error == "Usage: /compact [fast|smart|summary]",
           "agent /compact rejects arguments");
     check(ainiux::tui::parse_agent_slash_command("/plan").action ==
               ainiux::tui::AgentSlashAction::Plan,

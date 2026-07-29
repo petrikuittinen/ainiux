@@ -177,6 +177,8 @@ app::TuiRunResult run(provider::RequestContext context,
     std::chrono::steady_clock::time_point agent_task_started;
     bool agent_task_active = false;
     long long agent_completed_task_ms = -1;
+    bool agent_compaction_active = false;
+    CompactionStrategy agent_compaction_strategy = CompactionStrategy::Smart;
     if (context.options.agent) {
         status = agent_ready_with_index_controls();
     }
@@ -234,6 +236,7 @@ app::TuiRunResult run(provider::RequestContext context,
         options.history_backup.max_bytes = context.options.agent_history_backup_max_bytes;
         options.history_backup.ttl_days = context.options.agent_history_backup_ttl_days;
         options.auto_compact = context.options.agent_auto_compact;
+        options.compact_strategy = context.options.agent_compact_strategy;
         options.compact_limit = context.options.agent_compact_limit;
         options.index_mode =
             context.options.disable_indexing
@@ -1638,7 +1641,8 @@ app::TuiRunResult run(provider::RequestContext context,
         status = "Create code index for the new project? Enter/Y yes · N/Esc no";
     };
 
-    auto start_agent_compaction = [&]() {
+    auto start_agent_compaction =
+        [&](std::optional<CompactionStrategy> strategy) {
         if (!context.options.agent || !agent_runtime || !agent_runtime->prepared()) {
             report_agent_error("Agent project runtime is unavailable");
             return;
@@ -1653,23 +1657,50 @@ app::TuiRunResult run(provider::RequestContext context,
         }
         provider::RequestContext job_context = context;
         job_context.options.quiet = true;
+        const CompactionStrategy requested_strategy =
+            strategy.value_or(context.options.agent_compact_strategy);
+        agent_compaction_strategy = requested_strategy;
+        const std::string starting_notice =
+            "Compacting context using " +
+            std::string(agent::compaction_strategy_name(requested_strategy)) +
+            "...";
+        append_agent_history_notice(starting_notice);
+        agent_compaction_active = true;
+        agent_activity_state = AgentActivityState::Compacting;
+        agent_task_started = std::chrono::steady_clock::now();
+        agent_task_active = true;
+        agent_completed_task_ms = -1;
+        status = agent::format_compaction_progress(requested_strategy, 0);
         active_job = ActiveJob::Chat;
         model_job.start(
-            [runtime = agent_runtime, job_context = std::move(job_context),
+            [runtime = agent_runtime, job_context = std::move(job_context), strategy,
              &events](runtime::CancellationToken token) mutable {
                 TuiEvent event;
                 event.type = TuiEventType::AgentCompactDone;
                 const agent::SessionCompactionResult compacted =
-                    runtime->compact(job_context, agent::CompactionReason::Manual, token);
+                    runtime->compact(job_context, agent::CompactionReason::Manual,
+                                     token, strategy);
                 event.error = compacted.error;
                 event.agent_compacted = compacted.compacted;
                 event.agent_compact_no_op = compacted.no_op;
-                event.text = compacted.notice;
-                if (event.error.ok() && compacted.compacted)
-                    event.error = runtime->load_display_messages(event.agent_history);
+                event.agent_compact_requested = compacted.requested_strategy;
+                event.agent_compact_applied = compacted.applied_strategy;
+                event.text =
+                    compacted.error.ok()
+                        ? compacted.notice
+                        : agent::format_compaction_failure_notice(
+                              compacted.error.message);
+                const Error notice_error =
+                    runtime->append_display_notice(event.text);
+                if (event.error.ok() && !notice_error.ok())
+                    event.error = notice_error;
+                const Error history_error =
+                    runtime->load_display_messages(event.agent_history);
+                event.agent_history_loaded = history_error.ok();
+                if (event.error.ok() && !history_error.ok())
+                    event.error = history_error;
                 events.push(std::move(event));
             });
-        status = "Compacting agent context...";
     };
 
     TuiCommandHandlers command_handlers;
@@ -2933,11 +2964,23 @@ app::TuiRunResult run(provider::RequestContext context,
                 case TuiEventType::AgentCompactDone:
                     model_job.join();
                     active_job = ActiveJob::None;
-                    if (!event.error.ok()) {
-                        report_agent_error(event.error.message);
-                    } else if (event.agent_compacted) {
+                    agent_compaction_active = false;
+                    agent_task_active = false;
+                    agent_activity_state = AgentActivityState::Ready;
+                    agent_completed_task_ms = -1;
+                    if (event.agent_history_loaded) {
                         session.messages = std::move(event.agent_history);
                         history_scroll = history_scroll_for_thread_end();
+                    }
+                    if (!event.text.empty() &&
+                        (session.messages.empty() ||
+                         session.messages.back().role != "notice" ||
+                         session.messages.back().content != event.text)) {
+                        append_agent_history_notice(event.text);
+                    }
+                    if (!event.error.ok()) {
+                        status = agent_ready_with_index_controls();
+                    } else if (event.agent_compacted) {
                         status = event.text.empty()
                                      ? "Agent context compacted"
                                      : event.text;
@@ -3349,6 +3392,14 @@ app::TuiRunResult run(provider::RequestContext context,
                     detail::insert_input(input, std::string(1, static_cast<char>(ch)), status);
                 }
             }
+        }
+        if (agent_compaction_active) {
+            const long long seconds =
+                std::chrono::duration_cast<std::chrono::seconds>(
+                    std::chrono::steady_clock::now() - agent_task_started)
+                    .count();
+            status = agent::format_compaction_progress(
+                agent_compaction_strategy, seconds);
         }
         visible_panel = panel_text();
         activity_kind = active_job == ActiveJob::Chat

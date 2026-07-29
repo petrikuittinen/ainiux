@@ -366,7 +366,8 @@ void test_manual_compaction_preserves_transcript_and_noops_until_new_history() {
         check(store.open_project(project).ok(), "compact seed project");
         for (int index = 0; index < 15; ++index) {
             check(store.append_message(index % 2 == 0 ? "user" : "assistant",
-                                       "stored message " + std::to_string(index))
+                                       "stored message " + std::to_string(index) +
+                                           std::string(1000, 'x'))
                       .ok(),
                   "compact seed message");
         }
@@ -378,18 +379,45 @@ void test_manual_compaction_preserves_transcript_and_noops_until_new_history() {
     options.enable_session_db = true;
     options.enable_agent_log = false;
     options.auto_compact = true;
+    int summary_calls = 0;
+    options.summary_call =
+        [&](const provider::RequestContext&,
+            const std::vector<provider::Message>&, int,
+            runtime::CancellationToken, std::string& summary) {
+            ++summary_calls;
+            summary = "should not be called";
+            return ok_error();
+        };
     provider::RequestContext context = offline_context(workspace);
     check(runtime.prepare(context, {}, {}, options).ok(), "prepare manual compact runtime");
 
     const agent::SessionCompactionResult compacted =
-        runtime.compact(context, agent::CompactionReason::Manual);
+        runtime.compact(context, agent::CompactionReason::Manual, {},
+                        CompactionStrategy::Fast);
     check(compacted.error.ok() && compacted.compacted && !compacted.no_op,
           "manual compact runs below automatic threshold");
+    check(summary_calls == 0 &&
+              compacted.applied_strategy == CompactionStrategy::Fast,
+          "fast compaction never calls the model seam");
 
     std::vector<provider::Message> display;
     check(runtime.load_display_messages(display).ok(), "load transcript after manual compact");
-    check(display.size() == 16, "manual compact preserves 15 rows and appends one summary event");
-    check(display.back().role == "summary", "manual compact persists summary event");
+    check(display.size() == 15,
+          "manual compact keeps the internal checkpoint out of visible history");
+    bool visible_summary = false;
+    for (const provider::Message& message : display)
+        visible_summary = visible_summary || message.role == "summary";
+    check(!visible_summary,
+          "raw compaction checkpoint payload is never replayed in the TUI transcript");
+    {
+        agent::AgentSessionStore stored;
+        check(stored.open(workspace).ok(), "inspect durable compact checkpoint");
+        std::vector<agent::AgentMessageRecord> rows;
+        check(stored.load_messages(rows).ok() && rows.size() == 16 &&
+                  rows.back().role == "summary" &&
+                  rows.back().content.find("stored message 0") != std::string::npos,
+              "checkpoint remains durable and carries the protected initial head");
+    }
 
     const agent::SessionCompactionResult repeated =
         runtime.compact(context, agent::CompactionReason::Manual);
@@ -406,6 +434,118 @@ void test_manual_compaction_preserves_transcript_and_noops_until_new_history() {
     runtime.reset();
     std::error_code ec;
     fs::remove_all(workspace, ec);
+}
+
+void test_summary_compaction_is_transactional_and_uses_active_api_context() {
+    const std::string workspace = temp_workspace("summary-compact");
+    {
+        agent::AgentSessionStore store;
+        check(store.open(workspace).ok(), "summary seed open");
+        agent::AgentProjectRecord project;
+        project.workspace = workspace;
+        check(store.open_project(project).ok(), "summary seed project");
+        for (int index = 0; index < 50; ++index)
+            check(store.append_message(index % 2 == 0 ? "user" : "assistant",
+                                       std::string(1000,
+                                                   static_cast<char>('a' + index % 20)))
+                      .ok(),
+                  "summary seed message");
+    }
+
+    agent::SessionRuntimeOptions options;
+    options.workspace = workspace;
+    options.enable_session_db = true;
+    options.enable_agent_log = false;
+    options.compact_strategy = CompactionStrategy::Summary;
+    int calls = 0;
+    provider::ApiKind seen_api = provider::ApiKind::ChatCompletions;
+    options.summary_call =
+        [&](const provider::RequestContext& request,
+            const std::vector<provider::Message>& messages, int max_output,
+            runtime::CancellationToken, std::string& summary) {
+            ++calls;
+            seen_api = request.api_kind;
+            check(messages.size() == 2 && messages[0].role == "system" &&
+                      messages[0].content.find("Active Task") != std::string::npos &&
+                      max_output >= 512,
+                  "summary seam receives schema-only, non-tool request context");
+            summary =
+                "Active Task\nContinue\nGoal\nFinish\nConstraints\nNone\n"
+                "Decisions\nKeep tests\nCompleted Work\nSeeded\nActive State\nReady\n"
+                "Relevant Files/Evidence\nsrc/main.cpp\nBlockers\nNone\n"
+                "Remaining Work\nVerify";
+            return ok_error();
+        };
+    provider::RequestContext context = offline_context(workspace);
+    context.api_kind = provider::ApiKind::Responses;
+    agent::AgentSessionRuntime runtime;
+    check(runtime.prepare(context, {}, {}, options).ok(),
+          "prepare summary compaction runtime");
+    const auto compacted =
+        runtime.compact(context, agent::CompactionReason::Manual);
+    check(compacted.error.ok() && compacted.compacted && calls >= 3 &&
+              seen_api == provider::ApiKind::Responses &&
+              compacted.requested_strategy == CompactionStrategy::Summary &&
+              compacted.applied_strategy == CompactionStrategy::Summary,
+          "summary compaction uses the active Responses context, chunks, consolidates, and commits once");
+
+    runtime.reset();
+
+    // A failed summarizer must not append a summary row.
+    const std::string failed_workspace = temp_workspace("summary-failure");
+    {
+        agent::AgentSessionStore store;
+        check(store.open(failed_workspace).ok(), "failed summary seed open");
+        agent::AgentProjectRecord project;
+        project.workspace = failed_workspace;
+        check(store.open_project(project).ok(), "failed summary seed project");
+        for (int index = 0; index < 10; ++index)
+            check(store.append_message(index % 2 ? "assistant" : "user",
+                                       "failure row " + std::to_string(index) +
+                                           std::string(1000, 'z'))
+                      .ok(),
+                  "failed summary seed message");
+    }
+    options.workspace = failed_workspace;
+    options.summary_call =
+        [](const provider::RequestContext&,
+           const std::vector<provider::Message>&, int,
+           runtime::CancellationToken, std::string& summary) {
+            summary.clear();
+            return ok_error();
+        };
+    context = offline_context(failed_workspace);
+    check(runtime.prepare(context, {}, {}, options).ok(),
+          "prepare failed summary runtime");
+    const auto empty =
+        runtime.compact(context, agent::CompactionReason::Manual);
+    check(empty.error.code == ErrorCode::ProviderSchema && !empty.compacted,
+          "empty summary is rejected without a fallback commit");
+    std::vector<provider::Message> display;
+    check(runtime.load_display_messages(display).ok() && display.size() == 10,
+          "empty summary preserves every SQLite row transactionally");
+    runtime.reset();
+
+    options.summary_call =
+        [](const provider::RequestContext&,
+           const std::vector<provider::Message>&, int,
+           runtime::CancellationToken, std::string&) {
+            return Error{ErrorCode::Timeout, "injected summary timeout"};
+        };
+    check(runtime.prepare(context, {}, {}, options).ok(),
+          "prepare failed summary runtime");
+    const auto failed =
+        runtime.compact(context, agent::CompactionReason::Manual);
+    check(failed.error.code == ErrorCode::Timeout && !failed.compacted,
+          "summary failure is returned without a fallback commit");
+    display.clear();
+    check(runtime.load_display_messages(display).ok() && display.size() == 10,
+          "summary failure preserves every SQLite row transactionally");
+    runtime.reset();
+
+    std::error_code ec;
+    fs::remove_all(workspace, ec);
+    fs::remove_all(failed_workspace, ec);
 }
 
 void test_project_replacement_resets_exact_state_and_switches_workspace() {
@@ -506,6 +646,7 @@ void run_all() {
     test_task_mode_switch_is_session_scoped_and_failure_safe();
     test_prepare_loads_existing_display_history();
     test_manual_compaction_preserves_transcript_and_noops_until_new_history();
+    test_summary_compaction_is_transactional_and_uses_active_api_context();
     test_project_replacement_resets_exact_state_and_switches_workspace();
     test_project_replacement_failure_reopens_prior_project();
 }

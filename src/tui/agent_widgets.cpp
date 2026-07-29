@@ -56,6 +56,8 @@ std::string state_text(AgentActivityState state) {
             return "Agent thinking";
         case AgentActivityState::Working:
             return "Agent working";
+        case AgentActivityState::Compacting:
+            return "Agent compacting";
         case AgentActivityState::Ready:
             return "Agent ready";
     }
@@ -301,9 +303,12 @@ std::string agent_activity_line(AgentActivityState state,
             out << "/help /quit";
         }
     } else {
-        out << state_text(state);
-        if (cancellable) out << " (ESC to abort)";
         elapsed_seconds = std::max(0LL, elapsed_seconds);
+        out << state_text(state);
+        if (state == AgentActivityState::Compacting)
+            out << std::string(
+                static_cast<std::size_t>(elapsed_seconds % 3 + 1), '.');
+        if (cancellable) out << " (ESC to abort)";
         out << " " << elapsed_seconds / 60 << ":" << std::setw(2)
             << std::setfill('0') << elapsed_seconds % 60;
     }

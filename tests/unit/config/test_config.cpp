@@ -780,7 +780,7 @@ void test_config_reads_models_template() {
 void test_config_reads_common_template() {
     ainiux::config::ParseResult parsed = ainiux::config::read_file("config/ainiux.conf");
     check(parsed.error.ok(), "common config file parses");
-    check(parsed.document.entries.size() == 68, "common config has every expected setting");
+    check(parsed.document.entries.size() == 69, "common config has every expected setting");
     ainiux::cli::Options highlight_options;
     ainiux::Error apply_error = ainiux::config::apply_document(parsed.document, highlight_options);
     check(apply_error.ok() && highlight_options.tui_highlight,
@@ -834,6 +834,7 @@ void test_config_reads_common_template() {
               options.agent_history_backup_max_bytes == 1024U * 1024U &&
               options.agent_history_backup_ttl_days == 7 &&
               options.agent_auto_compact &&
+              options.agent_compact_strategy == CompactionStrategy::Smart &&
               !options.agent_show_command_output,
           "common config maps to the built-in runtime defaults");
     check(options.model_catalog.models.empty(),
@@ -852,6 +853,16 @@ void test_config_rejects_invalid_input() {
     parsed = ainiux::config::parse("value = \"bad\\q\"\n", "escape.conf");
     check(!parsed.error.ok() && parsed.error.message.find("escape.conf:1:") != std::string::npos,
           "unsupported config string escape is rejected with location");
+
+    parsed = ainiux::config::parse(
+        "[agent]\ncompact_strategy = turbo\n", "compact-strategy.conf");
+    ainiux::cli::Options compact_options;
+    Error compact_error =
+        ainiux::config::apply_document(parsed.document, compact_options);
+    check(!compact_error.ok() &&
+              compact_error.message.find("fast, smart, or summary") !=
+                  std::string::npos,
+          "agent compact_strategy rejects unknown values");
 
     parsed = ainiux::config::parse("number = 999999999999999999999999999\n", "overflow.conf");
     check(!parsed.error.ok() && parsed.error.message.find("signed 64-bit") != std::string::npos,
