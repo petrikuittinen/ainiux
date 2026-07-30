@@ -41,8 +41,10 @@ Copy and selection-delete (Backspace/Delete on a range) publish to native deskto
 | `Ctrl+E` | Copy last user/assistant message into input for editing (`/edit`) |
 | `Ctrl+R` | Regenerate last answer (resend last user prompt) |
 | `Ctrl+T` | Toggle thinking-trace display (`/thinking trace` / `notrace`) |
-| `Ctrl+L` | Open saved-thread picker (`/list`) |
+| `Ctrl+L` | Open saved-thread picker (`/list`; also shown on chat startup) |
 | `Ctrl+P` | Toggle chat → editor; the next Ctrl+P returns editor → chat |
+
+Chat mode opens the **thread selector** on startup (same UI as `Ctrl+L` / `/list`). Choose an existing thread or press **N** for a new one. If the CLI did not set a provider/model and the selected thread has them saved, those values are restored.
 
 Use `/pop` to remove the last user or assistant message.
 
@@ -181,7 +183,7 @@ slash. Chat and agent modes use `/chat`, `/agent`, and `/editor`.
 
 ### Slash commands (via `Esc` → command minibuffer, `Tab` completes)
 
-Built-in AI: `/spell`, `/grammar`, `/continue`, `/fact`, `/comment`, `/rewrite`, `/English`, `/Chinese`, `/Finnish`, `/German`, `/French`, `/Italian`, `/Spanish`, `/Portuguese`, `/Arabic`, `/Hindi`, `/Japanese`, `/Korean`, `/Swedish`, `/Polish`, `/Russian`, `/prompt`, `/regenerate`
+Built-in AI: `/spell`, `/grammar`, `/continue`, `/fact`, `/comment`, `/rewrite`, `/style-formal`, `/style-casual`, `/style-humor`, `/marketing`, `/English`, `/Chinese`, `/Finnish`, `/German`, `/French`, `/Italian`, `/Spanish`, `/Portuguese`, `/Arabic`, `/Hindi`, `/Japanese`, `/Korean`, `/Swedish`, `/Polish`, `/Russian`, `/prompt`, `/regenerate` (and many more from `editor-commands.conf`)
 
 File/editor: `/save`, `/saveas`, `/find`, `/replace` (`replace-string`), `/open`, `/new`, `/list`, `/close`, `/vsplit`, `/hsplit`, `/closesplit`, `/maximize` (`/nosplit`), `/chat`, `/agent`, `/editor`, `/help`, `/quit`
 

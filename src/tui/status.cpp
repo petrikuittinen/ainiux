@@ -76,7 +76,7 @@ std::string chat_provider_model_required_status(const provider::RequestContext& 
 
 std::string chat_startup_status(const provider::RequestContext& context) {
     if (context.profile.offline) {
-        return "Offline · /list browse · /provider then /model to enable sending";
+        return "Offline · /list or Ctrl+L · /provider then /model to enable sending";
     }
     if (context.options.model.empty()) {
         return "Choose a model with /model · Change provider with /provider";

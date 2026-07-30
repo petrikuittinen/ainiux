@@ -977,45 +977,30 @@ Usage:
   ainiux [BASE_URL|PROFILE] -m MODEL --plan-file PATH
 
 Examples:
-  ainiux http://localhost:8000 -p "What is the capital of Norway?"
-  ainiux --base-url http://localhost:8000/v1 -p "Hello"
+  ainiux lmstudio -p "Hello"
   ainiux --provider openai -m MODEL -p "Hello"
-  ainiux --provider lm_studio -m MODEL -p "Hello from local LM Studio"
-  ainiux --provider lmstudio --list-models
+  ainiux http://localhost:8000/v1 -p "Hello"
+  ainiux lmstudio --list-models
   ainiux --prompt-file prompt.txt --system-file system.txt --format json
-  ainiux http://localhost:8000 -p "Write a report" --output-format html --output report.html
-  ainiux openrouter -model MODEL -i
-  ainiux lmstudio -i
+  ainiux lmstudio -p "Write a report" --output-format html --output report.html
   ainiux -c lmstudio
-  ainiux --chat lmstudio
+  ainiux -i openrouter -m MODEL
   ainiux --repl --load-chat chat.json --save-chat chat.json
   ainiux -e notes.txt
-  ainiux --editor
-  ainiux --provider none -e notes.txt
-  ainiux lmstudio -e notes.txt
-  ainiux openrouter --editor notes.txt
-  ainiux http://localhost:1234/v1 --editor draft.md
-  ainiux --provider none --input page.html --output-format md
-  ainiux --provider none --fetch-url https://example.com --output-format md
-  ainiux --provider none --search "web scraping" --output-format plaintext
-  ainiux http://localhost:8000 -p "Summarize" --search "latest news"
-  ainiux --input page.html --output-format plaintext
+  ainiux --input page.html --output-format md
+  ainiux --fetch-url https://example.com --output-format md
+  ainiux --search "web scraping" --output-format plaintext
+  ainiux lmstudio -p "Summarize" --attach notes.md --search "latest news"
   printf 'piped text' | ainiux --input stdin --output stdout
-  command | ainiux http://localhost:8000 -p "Summarize" --attach stdin
-  ainiux http://localhost:8000 -p "Compare these" --attach one.md --attach two.txt
-  ainiux http://localhost:30000 -p "Describe this image" --input photo.png
+  ainiux lmstudio -p "Describe this" --input photo.png
   ainiux -a lmstudio -m MODEL
-  ainiux --agent openrouter -m MODEL
-  ainiux agent http://localhost:30000 -m MODEL
-  ainiux http://localhost:30000 -m MODEL -r "remove all empty files and folders"
-  ainiux run openrouter -m MODEL --run "add unit tests to compute.py"
-  ainiux run lmstudio -m MODEL --run-file goal.txt
+  ainiux lmstudio -m MODEL -r "add unit tests to compute.py"
   ainiux plan "design server mode" --provider openai -m MODEL
-  ainiux benchmark --validate-dataset
-  ainiux benchmark --category reasoning --limit 2 --provider lm_studio -m MODEL
-  ainiux --benchmark --dataset prompts.jsonl --mode speed --concurrency 4 --duration 60s
-  ainiux --benchmark --dataset eval.jsonl --mode quality,refusals --output results/
+  ainiux benchmark --category reasoning --limit 2 --provider lmstudio -m MODEL
+  ainiux --benchmark --dataset eval.jsonl --mode quality --output results/
   ainiux --grade --category reasoning --output results/ --provider openai -m JUDGE_MODEL
+  ainiux --index-code
+  ainiux lmstudio -m MODEL --security-review
 
 Options:
   Mode:

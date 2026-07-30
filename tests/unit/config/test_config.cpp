@@ -164,13 +164,14 @@ void test_config_applies_user_settings() {
         ainiux::editor::find_assist_command(loaded.options.editor_assist_config, "/spell");
     check(loaded_spell != nullptr && loaded_spell->prompt.find("spelling") != std::string::npos,
           "automatic loading includes built-in editor assist commands");
-    const std::array<const char*, 32> added_assist_commands = {
+    const std::array<const char*, 36> added_assist_commands = {
         "expand",      "shorten",   "summarize", "simplify",  "variations",
         "checklist",   "table",     "keypoints", "sentiment", "quiz",
         "questions",   "risk",      "entities",  "brainstorm", "outline",
-        "hooks",       "title",     "explain",   "transliterate", "readability",
-        "speech",      "fiction",   "blog",      "article",   "joke",
-        "roast",       "grumpyman", "Trump",
+        "hooks",       "title",     "marketing", "explain",   "transliterate",
+        "readability", "speech",    "fiction",   "blog",      "article",
+        "joke",        "roast",     "grumpyman", "Trump",
+        "style-formal", "style-casual", "style-humor",
         "fix",         "refactor",  "tests",     "plan",
     };
     for (const char* command_name : added_assist_commands) {
@@ -183,9 +184,9 @@ void test_config_applies_user_settings() {
                   !editor_command->prompt.empty(),
               std::string("bundled AI command supports editor and chat naming: ") + command_name);
     }
-    const std::array<const char*, 12> multiline_assist_commands = {
+    const std::array<const char*, 13> multiline_assist_commands = {
         "speech", "fiction", "blog", "article", "joke", "roast", "grumpyman", "Trump",
-        "fix", "refactor", "tests", "plan",
+        "marketing", "fix", "refactor", "tests", "plan",
     };
     for (const char* command_name : multiline_assist_commands) {
         const ainiux::editor::EditorAssistCommand* command =
@@ -1051,6 +1052,22 @@ void test_editor_commands_config() {
         ainiux::editor::find_assist_command(options.editor_assist_config, "/continue");
     check(spell != nullptr && continue_command != nullptr,
           "editor-commands.conf defines built-in assist commands");
+    const ainiux::editor::EditorAssistCommand* style_formal =
+        ainiux::editor::find_assist_command(options.editor_assist_config, "/style-formal");
+    const ainiux::editor::EditorAssistCommand* style_casual =
+        ainiux::editor::find_assist_command(options.editor_assist_config, "/style-casual");
+    const ainiux::editor::EditorAssistCommand* style_humor =
+        ainiux::editor::find_assist_command(options.editor_assist_config, "/style-humor");
+    const ainiux::editor::EditorAssistCommand* marketing =
+        ainiux::editor::find_assist_command(options.editor_assist_config, "/marketing");
+    check(style_formal != nullptr && style_formal->prompt.find("formal") != std::string::npos,
+          "editor-commands.conf defines style-formal");
+    check(style_casual != nullptr && style_casual->prompt.find("casual") != std::string::npos,
+          "editor-commands.conf defines style-casual");
+    check(style_humor != nullptr && style_humor->prompt.find("humoristic") != std::string::npos,
+          "editor-commands.conf defines style-humor");
+    check(marketing != nullptr && marketing->prompt.find("marketing materials") != std::string::npos,
+          "editor-commands.conf defines marketing");
     check(options.editor_assist_config.behavior_rules.find("one-shot") != std::string::npos,
           "editor-commands.conf defines assist behavior rules");
 
@@ -1089,6 +1106,12 @@ void test_editor_commands_config() {
         ainiux::editor::find_assist_command(loaded.options.editor_assist_config, "/spell");
     check(overridden_spell != nullptr && overridden_spell->prompt == "User spell override",
           "user editor-commands.conf overrides system editor-commands.conf");
+    const ainiux::editor::EditorAssistCommand* kept_style =
+        ainiux::editor::find_assist_command(loaded.options.editor_assist_config, "/style-formal");
+    const ainiux::editor::EditorAssistCommand* kept_marketing =
+        ainiux::editor::find_assist_command(loaded.options.editor_assist_config, "/marketing");
+    check(kept_style != nullptr && kept_marketing != nullptr,
+          "partial system/user editor-commands overrides keep bundled built-in commands");
 
     ainiux::config::ParseResult config_override = ainiux::config::parse(
         "[editor]\nassist_spell = \"Config spell override\"\n", "config-spell.conf");

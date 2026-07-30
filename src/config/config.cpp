@@ -7,6 +7,7 @@
 #include "config/model_catalog.hpp"
 #include "editor/autosave.hpp"
 #include "editor/editor_prompts.hpp"
+#include "embedded_editor_commands.hpp"
 #include "embedded_models_config.hpp"
 #include "ainiux/model_setting.hpp"
 #include "tui/theme_registry.hpp"
@@ -2619,9 +2620,7 @@ LoadResult load_automatic(const cli::Options& base_options,
         result.options.tui_themes = tui::default_theme_registry();
     }
 
-    auto load_editor_commands_path = [&](const std::string& path,
-                                         ConfigScope scope,
-                                         bool& any_loaded) -> Error {
+    auto load_editor_commands_path = [&](const std::string& path, ConfigScope scope) -> Error {
         std::error_code filesystem_error;
         const bool exists = std::filesystem::exists(path, filesystem_error);
         if (filesystem_error) {
@@ -2646,16 +2645,55 @@ LoadResult load_automatic(const cli::Options& base_options,
                 {scope, ConfigFileKind::EditorCommands, ConfigFileState::Error, path});
             return err;
         }
-        any_loaded = true;
         result.loaded_paths.push_back(path);
         result.diagnostics.push_back(
             {scope, ConfigFileKind::EditorCommands, ConfigFileState::Loaded, path});
         return ok_error();
     };
 
-    bool editor_commands_loaded = false;
+    // Load order matches models.conf: bundled (or embedded) first so the full
+    // built-in command set is always available, then system/user overrides merge
+    // on top. Previously a missing/outdated cwd or XDG file fell back to a
+    // minimal C++ subset and dropped commands like /style-formal and /marketing.
+    bool bundled_editor_commands_loaded = false;
+    for (const std::string& path : bundled_editor_commands_paths()) {
+        std::error_code filesystem_error;
+        if (!std::filesystem::exists(path, filesystem_error) || filesystem_error) {
+            continue;
+        }
+        Error err = load_editor_commands_path(path, ConfigScope::Bundled);
+        if (!err.ok()) {
+            result.error = std::move(err);
+            return result;
+        }
+        bundled_editor_commands_loaded = true;
+        break;
+    }
+    if (!bundled_editor_commands_loaded) {
+        ParseResult parsed =
+            parse(kEmbeddedEditorCommandsConfig, "embedded editor-commands.conf");
+        if (!parsed.error.ok()) {
+            result.diagnostics.push_back(
+                {ConfigScope::Bundled, ConfigFileKind::EditorCommands, ConfigFileState::Error,
+                 "embedded editor-commands.conf"});
+            result.error = std::move(parsed.error);
+            return result;
+        }
+        Error err = apply_editor_commands_document(parsed.document, result.options);
+        if (!err.ok()) {
+            result.diagnostics.push_back(
+                {ConfigScope::Bundled, ConfigFileKind::EditorCommands, ConfigFileState::Error,
+                 "embedded editor-commands.conf"});
+            result.error = std::move(err);
+            return result;
+        }
+        result.loaded_paths.push_back("embedded editor-commands.conf");
+        result.diagnostics.push_back(
+            {ConfigScope::Bundled, ConfigFileKind::EditorCommands, ConfigFileState::Loaded,
+             "embedded editor-commands.conf"});
+    }
     for (const std::string& path : system_editor_commands_paths(environment)) {
-        Error err = load_editor_commands_path(path, ConfigScope::System, editor_commands_loaded);
+        Error err = load_editor_commands_path(path, ConfigScope::System);
         if (!err.ok()) {
             result.error = std::move(err);
             return result;
@@ -2672,34 +2710,11 @@ LoadResult load_automatic(const cli::Options& base_options,
                                       ConfigFileState::Skipped,
                                       user_editor_commands});
     } else {
-        Error err = load_editor_commands_path(user_editor_commands,
-                                              ConfigScope::User,
-                                              editor_commands_loaded);
+        Error err = load_editor_commands_path(user_editor_commands, ConfigScope::User);
         if (!err.ok()) {
             result.error = std::move(err);
             return result;
         }
-    }
-
-    if (!editor_commands_loaded) {
-        for (const std::string& path : bundled_editor_commands_paths()) {
-            std::error_code filesystem_error;
-            if (!std::filesystem::exists(path, filesystem_error) || filesystem_error) {
-                continue;
-            }
-            Error err = load_editor_commands_path(path, ConfigScope::System, editor_commands_loaded);
-            if (!err.ok()) {
-                result.error = std::move(err);
-                return result;
-            }
-            if (editor_commands_loaded) {
-                break;
-            }
-        }
-    }
-
-    if (!editor_commands_loaded) {
-        result.options.editor_assist_config = ainiux::editor::default_editor_assist_config();
     }
 
     const std::vector<std::string> paths = system_config_paths(environment);

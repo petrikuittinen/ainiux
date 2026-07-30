@@ -19,6 +19,7 @@ struct TuiPickerCallbacks {
     std::function<void(const std::string&)> on_reasoning_confirm_retry;
     std::function<void(long long)> on_thread_selected;
     std::function<void()> on_thread_new;
+    std::function<void()> on_thread_list_cancelled;
     std::function<void()> on_remove_accepted;
     std::function<void()> on_remove_rejected;
     std::function<void(const std::string&)> on_remove_retry;

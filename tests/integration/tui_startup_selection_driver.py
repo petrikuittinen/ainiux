@@ -89,15 +89,22 @@ def check_missing_provider(binary, mode, model=None):
     args = ["--quiet", mode]
     if model is not None:
         args.extend(["--model", model])
+    # Chat opens the thread selector first (Ctrl+L UI); N starts a new thread
+    # and then the provider picker. Agent still opens the provider picker first.
+    actions = [("\x11", 0.3)]
+    if mode == "--chat":
+        actions = [("n", 0.5), ("\x11", 0.3)]
     output = run_case(
         binary,
         args,
-        [("\x11", 0.3)],
+        actions,
         isolated_workspace=mode == "--agent",
     )
     context = f"starting {mode} without a provider"
     if model is not None:
         context += " even though a model name was supplied"
+    if mode == "--chat":
+        require(output, "Newest first", "showing chat startup thread selector")
     require(output, "── Provider", context)
     require(output, "openai", "showing providers during required startup setup")
 
@@ -106,8 +113,10 @@ def check_single_model_chat(binary, base_url, model):
     output = run_case(
         binary,
         [base_url, "--quiet", "--chat"],
-        [("\x11", 0.3)],
+        # Thread selector first, then new thread so model discovery can run.
+        [("n", 0.5), ("\x11", 0.3)],
     )
+    require(output, "Newest first", "showing chat startup thread selector")
     require(output, "only model auto-selected", "discovering one startup chat model")
     require(output, model, "auto-selecting the sole startup chat model")
     if "── Model" in plain(output):
@@ -115,6 +124,16 @@ def check_single_model_chat(binary, base_url, model):
 
 
 def check_multiple_model_surface(binary, base_url, model, mode):
+    actions = [
+        ("\r", 0.6),
+        ("\x11", 0.3),
+    ]
+    if mode == "--chat":
+        actions = [
+            ("n", 0.5),
+            ("\r", 0.6),
+            ("\x11", 0.3),
+        ]
     output = run_case(
         binary,
         [
@@ -124,12 +143,11 @@ def check_multiple_model_surface(binary, base_url, model, mode):
             "--quiet",
             mode,
         ],
-        [
-            ("\r", 0.6),
-            ("\x11", 0.3),
-        ],
+        actions,
         isolated_workspace=mode == "--agent",
     )
+    if mode == "--chat":
+        require(output, "Newest first", "showing chat startup thread selector")
     require(output, "── Model", f"opening startup {mode} model selection")
     require(output, model, f"showing the first startup {mode} model")
     require(output, model + "-second", f"showing the second startup {mode} model")

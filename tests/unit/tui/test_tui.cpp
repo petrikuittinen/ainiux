@@ -1420,6 +1420,11 @@ void test_tui_incomplete_thread_labels() {
     check(!ainiux::tui::saved_provider_model_complete("none", "model-id"),
           "TUI treats the offline profile as a missing saved provider");
 
+    const std::string empty_list = ainiux::tui::thread_picker_text({}, 0);
+    check(empty_list.find("Newest first") != std::string::npos &&
+              empty_list.find("N new") != std::string::npos,
+          "TUI thread picker renders the header when there are no saved threads");
+
     ainiux::chat::ThreadSummary missing_model;
     missing_model.id = 1;
     missing_model.name = "What kills trolls";

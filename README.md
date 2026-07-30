@@ -43,9 +43,38 @@ The project started as **pkchat**—a private short name for a personal chat cli
 
 Tested on **Ubuntu** for **x86-64** and **ARM64** (including machines such as NVIDIA DGX Spark-class ARM systems).
 
-### 1. Install build dependencies
+Ainiux needs **libsqlite3** and **libcurl** at runtime (and their development packages to build).
+
+### Quick install (recommended)
+
+From a clone of this repository:
 
 ```sh
+git clone https://github.com/petrikuittinen/ainiux.git
+cd ainiux
+./scripts/install.sh --with-deps -y
+ainiux --version
+```
+
+That installs apt dependencies (with `sudo` when needed), builds Ainiux, and runs `make install` into `/usr/local` (also elevating with `sudo` when the prefix is not writable).
+
+Useful variants:
+
+```sh
+./scripts/install-deps.sh -y          # packages only
+./scripts/install.sh                  # build + install (deps already present)
+./scripts/install.sh --optimized      # release-style binary (-O3 -DNDEBUG, stripped)
+./scripts/install.sh --user           # install to ~/.local (no root if home is writable)
+./scripts/uninstall.sh                # remove PREFIX install; keeps /etc/xdg/ainiux
+sudo ./scripts/uninstall.sh --purge   # also remove system config templates
+```
+
+### Manual steps
+
+#### 1. Install build dependencies
+
+```sh
+# Or: ./scripts/install-deps.sh -y
 sudo apt update
 sudo apt install -y build-essential pkg-config git
 sudo apt install -y libsqlite3-0 libsqlite3-dev
@@ -54,10 +83,10 @@ sudo apt install -y libcurl4t64 libcurl4-openssl-dev
 
 Notes:
 
-- On some older Ubuntu releases the curl runtime package may be named `libcurl4` instead of `libcurl4t64`; install the matching `-dev` package either way.
+- On some older Ubuntu releases the curl runtime package may be named `libcurl4` instead of `libcurl4t64`; `install-deps.sh` picks the available package automatically.
 - You need a C++17 compiler (`g++` from `build-essential` is fine).
 
-### 2. Get the source and build
+#### 2. Get the source and build
 
 ```sh
 git clone https://github.com/petrikuittinen/ainiux.git
@@ -72,23 +101,25 @@ Optional release-style binary (`-O3`, `-DNDEBUG`, stripped):
 make optimized
 ```
 
-### 3. Install system-wide (optional)
+#### 3. Install system-wide (optional)
 
 ```sh
+# Or: ./scripts/install.sh
 sudo make install PREFIX=/usr/local
 ```
 
 This installs the `ainiux` binary, configuration templates, themes, editor-command prompts, and benchmark files. Existing administrator config under `/etc/xdg/ainiux/` is not overwritten.
 
-### 4. Quick smoke test
+### Quick smoke test
 
 ```sh
 # Offline editor (no model endpoint required)
-./ainiux --provider none --editor
+ainiux --provider none --editor
+# or from the build tree: ./ainiux --provider none --editor
 
 # Local OpenAI-compatible server (example)
-./ainiux http://localhost:1234/v1 --list-models
-./ainiux lmstudio -p "Hello from Ainiux"
+ainiux http://localhost:1234/v1 --list-models
+ainiux lmstudio -p "Hello from Ainiux"
 ```
 
 Set cloud keys only when needed, for example:
@@ -116,6 +147,8 @@ make test-sanitize
 make leak-check
 make clean
 make install PREFIX=/usr/local
+./scripts/install.sh --with-deps -y   # deps + build + install (Ubuntu/Debian)
+./scripts/uninstall.sh                # reverse make install (keeps /etc/xdg/ainiux)
 ```
 
 Plain Make invocations default to 10 parallel jobs. An explicit setting such
@@ -434,9 +467,10 @@ With a configured provider and model, the editor can run one-shot AI tasks from 
 Built-in AI commands include:
 
 - Editing: `/spell`, `/grammar`, `/continue`, `/comment`, `/rewrite`, `/expand`, `/shorten`, `/simplify`, and `/variations`.
+- Style rewrites: `/style-formal`, `/style-casual`, and `/style-humor`.
 - Summaries and structure: `/summarize`, `/checklist`, `/table`, `/keypoints`, and `/outline`.
 - Analysis and extraction: `/fact`, `/sentiment`, `/risk`, `/entities`, `/readability`, `/quiz`, and `/questions`.
-- Ideation: `/brainstorm`, `/hooks`, and `/title`.
+- Ideation and marketing: `/brainstorm`, `/hooks`, `/title`, and `/marketing`.
 - Long-form and creative writing: `/speech`, `/fiction`, `/blog`, `/article`, `/joke`, and `/roast`.
 - Opinion and parody voices: `/grumpyman` and `/Trump`.
 - Coding: `/explain`, `/fix`, `/refactor`, `/tests`, and `/plan`.
@@ -838,7 +872,7 @@ Full-screen chat TUI foundation (`-c` is short for `--chat`):
 
 The TUI also runs `/insert`, `/attach`, `/fetch`, `/search`, `/shell`, and managed-media cleanup through cancellable runtime jobs. `/insert FILE_OR_URL` places text in the chat input at its cursor; `/attach PATH` prepares durable canonical Markdown or supported image context with the thread. `/shell COMMAND` and bang form `!COMMAND` (for example `!ls -laFg`) run a user-initiated `/bin/sh -c` command in the process working directory, show a local **Notice** with stdout/stderr (bounded, timed, Esc-cancellable), and never send that output to the model or treat it as an agent goal. In agent mode the notice is also appended to `.ainiux-pr/agent.sqlite` for session history. `/shell-stdout COMMAND` and `!!COMMAND` run the same shell but put **pure stdout** (no stderr/timing) into the **editable input draft** instead of history—you can edit or clear it; only Enter/Ctrl+S sends it as a normal user message. If the command fails (non-zero exit, timeout, cancel, or spawn error), a display-only diagnostic notice is added to history; the draft still holds pure stdout only. `/cleanup` expires file-backed managed media unused past `[media] expiration_days`, except media referenced by the currently open thread; inline Markdown is not eligible. `/help` toggles a persistent, scrollable command panel that is not sent to the provider or saved. Agent mode uses a workspace-titled framed prompt that grows with explicit and soft-wrapped lines. Its status line omits the provider and shows `Ainiux vVERSION [model reasoning] usage`. The separate line above it reads `Agent ready. /help /quit` before the first task, updates `Agent thinking` or `Agent working` with `(ESC to abort)` and live `M:SS` elapsed time during a task, then reports `Agent ready. Task completed in X.XX seconds.` after success. When the provider supplies readable reasoning, each model round gets one live, single-row `Thinking: …` preview; encrypted reasoning is ignored, only the clipped preview is stored, and display-only thinking/notices are never replayed to the provider. `[tui] agent_thinking_preview_max_chars` defaults to 100 and accepts 0 (disabled) through 1000; agent `/setting thinking_preview_max_chars=N` stores a project override for subsequent rounds. Live tool calls similarly update one row from `…` to their final status. `[tui] agent_input_max_height_percent` caps the complete frame at 25% of terminal height by default and accepts integers from 10 through 80; chat and standalone editor sizing are unchanged.
 
-Starting chat with a named online provider but no model, such as `ainiux openrouter -c`, immediately discovers models. One result is selected automatically; multiple results open the shared model selector. Plain `ainiux -c` stays offline without opening either selector: its status points to `/list` for browsing saved threads and to `/provider` then `/model` for setup, and sending remains disabled until both are selected. A complete saved thread supplies its own provider and model when loaded.
+Chat mode opens the saved-thread selector on startup (same UI as `Ctrl+L` / `/list`): choose an existing thread or press **N** for a new one. If the CLI did not set a provider/model and the selected thread has them saved, those values are restored. Starting chat with a named online provider but no model, such as `ainiux openrouter -c`, discovers models after the thread choice (one result is selected automatically; multiple results open the model selector). Plain `ainiux -c` stays offline until you pick a thread that has provider/model metadata or choose a provider and model yourself; sending remains disabled until both are set.
 
 In chat and agent mode, `/context` reports the current window, `/context TOKENS` overrides it, and `/context auto` resumes per-model discovery. Bare `/reasoning` opens the catalog-backed selector and `/reasoning VALUE` applies a direct value. If the model family matches but the value is not listed, chat asks whether to proceed; rejecting the prompt leaves the current value unchanged. Reasoning is stored per thread and resets to Auto only when the actual provider or model changes. `/setting reasoning=VALUE` is equivalent for settings-panel workflows.
 

@@ -42,6 +42,7 @@ THEMES_CONFIG := config/themes.conf
 BENCHMARKS_CONFIG := config/benchmarks.conf
 MODELS_CONFIG := config/models.conf
 MODELS_CONFIG_HEADER := $(GENERATED_DIR)/embedded_models_config.hpp
+EDITOR_COMMANDS_CONFIG_HEADER := $(GENERATED_DIR)/embedded_editor_commands.hpp
 COMMON_CONFIG_DIR := $(DESTDIR)$(SYSCONFDIR)/xdg/ainiux
 COMMON_CONFIG_PATH := $(COMMON_CONFIG_DIR)/config.conf
 EDITOR_COMMANDS_CONFIG_PATH := $(COMMON_CONFIG_DIR)/editor-commands.conf
@@ -129,7 +130,17 @@ $(MODELS_CONFIG_HEADER): $(MODELS_CONFIG)
 	} >$@.tmp
 	@mv $@.tmp $@
 
-$(OBJ_DIR)/src/config/config.o: $(MODELS_CONFIG_HEADER)
+$(EDITOR_COMMANDS_CONFIG_HEADER): $(EDITOR_COMMANDS_CONFIG)
+	@mkdir -p $(dir $@)
+	@{ \
+		printf '%s\n' '#pragma once' 'namespace ainiux::config {' \
+			'inline constexpr char kEmbeddedEditorCommandsConfig[] = R"AINIUX_EDCMD('; \
+		cat $<; \
+		printf '%s\n' ')AINIUX_EDCMD";' '}  // namespace ainiux::config'; \
+	} >$@.tmp
+	@mv $@.tmp $@
+
+$(OBJ_DIR)/src/config/config.o: $(MODELS_CONFIG_HEADER) $(EDITOR_COMMANDS_CONFIG_HEADER)
 
 $(EDITOR_HELP_HEADER): $(EDITOR_HELP_SRC)
 	@mkdir -p $(dir $@)

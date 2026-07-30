@@ -77,10 +77,15 @@ def stop_tui(master, process, timeout=10):
         raise RuntimeError(f"TUI exited with status {process.returncode}")
 
 
-def run_tui(binary, base, model, home_dir, script, timeout=45):
+def run_tui(binary, base, model, home_dir, script, timeout=45,
+            dismiss_startup_thread_list=True):
     master, process, startup = start_tui(binary, base, model, home_dir)
     transcript = bytearray(startup)
     try:
+        # Chat opens the thread selector on startup (same as Ctrl+L). Most
+        # scenarios expect normal chat input next, so N starts a new thread.
+        if dismiss_startup_thread_list:
+            transcript.extend(send(master, "n", 0.4))
         for item in script:
             if isinstance(item, tuple):
                 text, delay = item
@@ -202,11 +207,13 @@ def scenario_fresh_start(binary, base, model, home_dir):
         model,
         home_dir,
         [("/quit\r", 0.2)],
+        dismiss_startup_thread_list=False,
     )
     if b"Loaded last thread" in transcript:
         raise RuntimeError("expected TUI startup to begin a fresh thread instead of reloading the last one")
-    if b"/list" not in transcript:
-        raise RuntimeError("expected configured startup status to mention /list")
+    rendered = transcript.decode("utf-8", errors="replace")
+    if "Newest first" not in rendered and b"/list" not in transcript:
+        raise RuntimeError("expected chat startup thread selector or /list hint")
 
 
 def scenario_beta_and_list_load(binary, base, model, home_dir):
@@ -424,6 +431,8 @@ def scenario_media_restart(binary, base, model, home_dir):
         conn.close()
     master, process, _ = start_tui(binary, base, model, media_home)
     try:
+        # Dismiss startup thread selector before slash commands.
+        send(master, "n", 0.4)
         send(master, "/cleanup\r", 0.05)
         wait_for_thread_field(path, thread_id, "read_only", 1)
         send(master, "/quit\r", 0.1)

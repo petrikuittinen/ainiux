@@ -1,0 +1,101 @@
+#!/usr/bin/env bash
+# Install Ainiux build and runtime dependencies (Debian/Ubuntu apt).
+#
+# Requires libsqlite3 and libcurl at runtime; their -dev packages are needed
+# to build. Elevates with sudo when not already root.
+#
+# Usage:
+#   ./scripts/install-deps.sh
+#   ./scripts/install-deps.sh -y          # non-interactive apt
+#   SKIP_APT_UPDATE=1 ./scripts/install-deps.sh
+
+set -euo pipefail
+
+usage() {
+    cat <<'EOF'
+Install Ainiux build and runtime dependencies (Debian/Ubuntu).
+
+Usage: install-deps.sh [options]
+
+Options:
+  -y, --yes     Pass -y to apt (non-interactive)
+  -h, --help    Show this help
+
+Environment:
+  SKIP_APT_UPDATE=1   Do not run apt update
+
+Packages:
+  build-essential, pkg-config, git
+  libsqlite3-0, libsqlite3-dev
+  libcurl4t64 or libcurl4 (runtime), libcurl4-openssl-dev
+EOF
+}
+
+YES_FLAG=()
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        -y|--yes)
+            YES_FLAG=(-y)
+            shift
+            ;;
+        -h|--help)
+            usage
+            exit 0
+            ;;
+        *)
+            echo "Unknown option: $1" >&2
+            usage >&2
+            exit 2
+            ;;
+    esac
+done
+
+if ! command -v apt-get >/dev/null 2>&1; then
+    echo "install-deps.sh supports Debian/Ubuntu systems with apt-get." >&2
+    echo "Install a C++17 toolchain, pkg-config, libsqlite3, and libcurl yourself," >&2
+    echo "then build with: make && sudo make install" >&2
+    exit 1
+fi
+
+run_root() {
+    if [ "$(id -u)" -eq 0 ]; then
+        "$@"
+    elif command -v sudo >/dev/null 2>&1; then
+        sudo "$@"
+    else
+        echo "Root privileges are required to install packages (sudo or root)." >&2
+        exit 1
+    fi
+}
+
+# Prefer the Ubuntu 24.04+ t64 curl package; fall back on older releases.
+curl_runtime_package() {
+    if apt-cache show libcurl4t64 >/dev/null 2>&1; then
+        printf '%s\n' libcurl4t64
+    else
+        printf '%s\n' libcurl4
+    fi
+}
+
+CURL_RT="$(curl_runtime_package)"
+PACKAGES=(
+    build-essential
+    pkg-config
+    git
+    libsqlite3-0
+    libsqlite3-dev
+    "${CURL_RT}"
+    libcurl4-openssl-dev
+)
+
+echo "Ainiux dependency install (apt)"
+echo "  packages: ${PACKAGES[*]}"
+
+if [ "${SKIP_APT_UPDATE:-0}" != "1" ]; then
+    run_root apt-get update
+fi
+
+run_root apt-get install "${YES_FLAG[@]}" -- "${PACKAGES[@]}"
+
+echo "Dependencies installed."
+echo "Next: ./scripts/install.sh   (or: make && sudo make install)"

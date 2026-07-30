@@ -171,6 +171,9 @@ Press **`Esc`** to open the command minibuffer (`Command:`). Type a command with
 | `/fact` | Check factual accuracy |
 | `/comment` | Suggest improvements |
 | `/rewrite` | Rewrite for spelling, grammar, facts, and style |
+| `/style-formal` | Rewrite in a formal, professional style |
+| `/style-casual` | Rewrite in a casual, conversational style |
+| `/style-humor` | Rewrite in a humoristic style (may be edgy) |
 | `/expand` | Add relevant detail, examples, and elaboration |
 | `/shorten` | Tighten text without losing important meaning or details |
 | `/summarize` | Produce a high-information one-to-three-paragraph summary |
@@ -188,6 +191,7 @@ Press **`Esc`** to open the command minibuffer (`Command:`). Type a command with
 | `/outline` | Create a structured outline |
 | `/hooks` | Generate 10 opening hooks |
 | `/title` | Suggest 10 titles |
+| `/marketing` | Produce marketing materials (slogan, meme, social posts) |
 | `/explain` | Explain code or technical concepts |
 | `/fix` | Fix code errors and improve fault tolerance |
 | `/refactor` | Simplify and improve code without changing behavior |

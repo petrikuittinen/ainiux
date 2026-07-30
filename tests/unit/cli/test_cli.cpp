@@ -142,10 +142,12 @@ void test_cli_help_displays_version() {
         ainiux::app_version_label() + " - script-friendly OpenAI-compatible chat CLI";
     check(help.rfind(expected_heading, 0) == 0,
           "CLI help heading displays the current app version");
-    check(help.find("openrouter --editor") != std::string::npos,
-          "CLI help documents openrouter editor startup without model");
+    check(help.find("ainiux -e notes.txt") != std::string::npos,
+          "CLI help shows a short editor example without an explicit model");
     check(help.find("choose a model inside the editor with /model") != std::string::npos,
           "CLI help documents deferred editor model selection");
+    check(help.find("ainiux lmstudio -m MODEL -r ") != std::string::npos,
+          "CLI help shows a short one-shot agent -r example");
     check(help.find("-c, --chat") != std::string::npos,
           "CLI help documents -c short option for --chat");
     check(help.find("-e, --editor") != std::string::npos,

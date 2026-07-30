@@ -1439,6 +1439,13 @@ app::TuiRunResult run(provider::RequestContext context,
         start_store_save();
     };
 
+    // True while chat startup is waiting for the user to pick New or a saved
+    // thread (Ctrl+L-style selector). Cleared once that choice is finished.
+    bool thread_list_from_startup = false;
+    // Assigned after provider/model startup helpers exist; used by thread-list
+    // callbacks that are wired earlier in this function.
+    std::function<void()> continue_after_startup_thread_choice;
+
     auto start_thread_list = [&]() {
         if (!sqlite_available) {
             status = sqlite_unavailable_message();
@@ -1453,16 +1460,18 @@ app::TuiRunResult run(provider::RequestContext context,
             set_status_maybe_agent_error(detail::error_line(list_error), true);
             return;
         }
-        if (thread_picker_threads.empty()) {
-            status = "No saved chat threads";
-            return;
-        }
         thread_picker_selected = 0;
         pending_thread_delete = static_cast<size_t>(-1);
         mode = TuiMode::ThreadList;
         history_scroll = 0;
-        status = ui::text_selector_status("Selected thread", thread_picker_selected,
-                                          thread_picker_threads.size());
+        help_text.clear();
+        settings_text.clear();
+        if (thread_picker_threads.empty()) {
+            status = "No saved threads · N new · Esc continues";
+        } else {
+            status = ui::text_selector_status("Selected thread", thread_picker_selected,
+                                              thread_picker_threads.size());
+        }
     };
 
     auto start_new_chat_thread = [&](const std::string& name = "") -> bool {
@@ -2172,6 +2181,8 @@ app::TuiRunResult run(provider::RequestContext context,
         thread_picker_threads.clear();
         thread_picker_selected = 0;
         pending_thread_delete = static_cast<size_t>(-1);
+        // Keep thread_list_from_startup until StoreLoadDone so a loaded
+        // thread can supply provider/model before any CLI setup pickers.
         start_store_load(thread_id);
     };
     picker_callbacks.on_thread_new = [&]() {
@@ -2181,6 +2192,14 @@ app::TuiRunResult run(provider::RequestContext context,
             thread_picker_selected = 0;
             pending_thread_delete = static_cast<size_t>(-1);
             history_scroll = 0;
+            if (continue_after_startup_thread_choice) {
+                continue_after_startup_thread_choice();
+            }
+        }
+    };
+    picker_callbacks.on_thread_list_cancelled = [&]() {
+        if (continue_after_startup_thread_choice) {
+            continue_after_startup_thread_choice();
         }
     };
     picker_callbacks.on_remove_accepted = [&]() {
@@ -2483,6 +2502,46 @@ app::TuiRunResult run(provider::RequestContext context,
         if (file_job.joinable()) return;
         start_agent_prepare(!context.options.disable_indexing);
     };
+
+    auto begin_chat_provider_model_startup = [&]() {
+        if (context.options.agent) {
+            return;
+        }
+        // Prefer an already-ready context (for example a loaded thread that
+        // restored provider+model while the CLI left both unset).
+        if (chat_provider_model_ready(context)) {
+            if (!app::detail::trim_ascii(context.options.prompt).empty()) {
+                start_turn(context.options.prompt);
+                return;
+            }
+            refresh_startup_status();
+            return;
+        }
+        if (provider::tui_needs_startup_provider_selection(context.options) ||
+            !active_context_has_provider_selection(context) || context.profile.offline) {
+            open_provider_picker(true);
+            return;
+        }
+        if (provider::needs_interactive_model_selection(context) ||
+            context.options.model.empty()) {
+            start_models(ModelsRequestPurpose::Picker);
+            return;
+        }
+        if (!app::detail::trim_ascii(context.options.prompt).empty()) {
+            start_turn(context.options.prompt);
+            return;
+        }
+        refresh_startup_status();
+    };
+
+    continue_after_startup_thread_choice = [&]() {
+        if (!thread_list_from_startup) {
+            return;
+        }
+        thread_list_from_startup = false;
+        begin_chat_provider_model_startup();
+    };
+
     // Agent preparation is fully asynchronous so discovery, SQLite, and history
     // I/O never block terminal input/rendering.
     if (context.options.agent && agent_runtime) {
@@ -2494,16 +2553,35 @@ app::TuiRunResult run(provider::RequestContext context,
     file_jobs.start_media_cleanup(context.options.media_auto_expiration_days,
                                   session.thread_id, true);
 
-    if (provider::tui_needs_startup_provider_selection(context.options)) {
-        open_provider_picker(true);
-    } else if (provider::needs_interactive_model_selection(context)) {
-        start_models(ModelsRequestPurpose::Picker);
-    } else if (!app::detail::trim_ascii(context.options.prompt).empty()) {
-        if (context.options.agent &&
-            (!agent_runtime || !agent_runtime->prepared())) {
-            deferred_agent_prompt = context.options.prompt;
+    if (context.options.agent) {
+        if (provider::tui_needs_startup_provider_selection(context.options)) {
+            open_provider_picker(true);
+        } else if (provider::needs_interactive_model_selection(context)) {
+            start_models(ModelsRequestPurpose::Picker);
+        } else if (!app::detail::trim_ascii(context.options.prompt).empty()) {
+            if (!agent_runtime || !agent_runtime->prepared()) {
+                deferred_agent_prompt = context.options.prompt;
+            } else {
+                start_turn(context.options.prompt);
+            }
+        }
+    } else {
+        // Chat starts on the thread selector (same as Ctrl+L / /list) so the
+        // user can open a saved thread or press N for a new one. Provider/model
+        // pickers run after that choice. Returning from editor with an existing
+        // thread skips this; mid-session /list still uses start_thread_list.
+        const bool fresh_chat_session =
+            session.thread_id <= 0 && !chat::session_has_chat_messages(session);
+        if (sqlite_available && fresh_chat_session) {
+            thread_list_from_startup = true;
+            start_thread_list();
+            if (mode != TuiMode::ThreadList) {
+                // SQLite list failed after open; continue normal setup.
+                thread_list_from_startup = false;
+                begin_chat_provider_model_startup();
+            }
         } else {
-            start_turn(context.options.prompt);
+            begin_chat_provider_model_startup();
         }
     }
 
@@ -2905,8 +2983,25 @@ app::TuiRunResult run(provider::RequestContext context,
                             active_job == ActiveJob::None) {
                             refresh_model_context();
                         }
+                        // After startup thread selection, finish provider/model
+                        // setup only when still in chat (not ModelConfirm /
+                        // ProviderList opened by finish_loaded_session).
+                        if (thread_list_from_startup && mode == TuiMode::Chat) {
+                            if (continue_after_startup_thread_choice) {
+                                continue_after_startup_thread_choice();
+                            }
+                        } else if (thread_list_from_startup) {
+                            // ModelConfirm / incomplete-thread ProviderList own
+                            // the next step; do not force another startup picker.
+                            thread_list_from_startup = false;
+                        }
                     } else {
                         set_status_maybe_agent_error(detail::error_line(event.error), true);
+                        if (thread_list_from_startup) {
+                            if (continue_after_startup_thread_choice) {
+                                continue_after_startup_thread_choice();
+                            }
+                        }
                     }
                     break;
                 case TuiEventType::MediaCleanupDone:

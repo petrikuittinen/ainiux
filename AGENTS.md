@@ -120,6 +120,7 @@ This is the **authoritative** layout. Put new code in the matching module. Do no
 ├── TESTING.md
 ├── Makefile
 ├── LICENSE
+├── scripts/                     # install-deps.sh, install.sh, uninstall.sh
 ├── config/                      # bundled install templates
 │   ├── ainiux.conf
 │   ├── themes.conf

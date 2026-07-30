@@ -136,7 +136,7 @@ void handle_tui_command(const std::string& text, TuiCommandContext& ctx, TuiComm
                 "/quit or /exit\n"
                 "/clear\n"
                 "/edit\n"
-                "/list (Ctrl+L; N new thread)\n"
+                "/list (Ctrl+L; also shown on chat startup; N new thread)\n"
                 + std::string(ctx.context.options.agent
                                   ? "/new [PATH] (fresh agent project)\n"
                                     "/compact [fast|smart|summary] (preserve transcript)\n"

@@ -69,6 +69,9 @@ bool handle_tui_picker_input(unsigned char ch,
             if (res == PickerEscapeResult::Cancelled) {
                 state.mode = TuiMode::Chat;
                 state.status = "Thread list cancelled";
+                if (callbacks.on_thread_list_cancelled) {
+                    callbacks.on_thread_list_cancelled();
+                }
             }
             return true;
         }
