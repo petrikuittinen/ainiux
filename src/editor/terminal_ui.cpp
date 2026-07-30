@@ -118,11 +118,11 @@ std::string editor_status_line(const EditorState& state, bool help_view, size_t 
     const size_t column = state.text.display_column_for_offset(state.cursor, state.tab_width) + 1;
     out << "  Ln " << line << ", Col " << column;
     if (help_view) {
-        out << "  Esc /help or Ctrl+Q to return";
+        out << "  Ctrl+H / Esc /help / Ctrl+Q to return";
     } else if (split_pane_count > 1) {
-        out << "  Ctrl+G o other  Ctrl+Q quit";
+        out << "  Ctrl+X o other  Ctrl+Q quit";
     } else {
-        out << "  Ctrl+Q quit  Esc /help for help";
+        out << "  Ctrl+Q quit  Ctrl+H help";
     }
     return out.str();
 }
@@ -1446,9 +1446,14 @@ void dispatch_escape_sequence(EditorState& state,
     }
 
     if (sequence == "[3~") {
+        const bool had_selection = state.selection.has_range();
         Error err = state.erase_at_cursor();
         if (!err.ok()) {
             status = err.message;
+        } else if (had_selection) {
+            // Selection delete acts as cut; publish for terminal clipboard clients.
+            publish_terminal_clipboard(shared_clipboard().text());
+            status = "Cut selection";
         }
     } else if (sequence == "OR" || sequence == "[13~" || sequence == "[[C") {
         if (last_search.empty()) {

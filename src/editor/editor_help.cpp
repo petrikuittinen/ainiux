@@ -35,7 +35,7 @@ EditorSlashCommand command_from_token(const std::string& command_token) {
     if (command_token == "find") {
         return EditorSlashCommand::Find;
     }
-    if (command_token == "replace") {
+    if (command_token == "replace" || command_token == "replace-string") {
         return EditorSlashCommand::Replace;
     }
     if (command_token == "open") {

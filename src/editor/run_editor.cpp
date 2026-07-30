@@ -542,7 +542,7 @@ app::EditorRunResult run_editor(const std::string& path,
         state.set_language(highlight::Language::Markdown, false);
         state.clear_selection();
         state.clear_undo_history();
-        minibuffer_message(minibuffer, "Help (read-only) — Esc /help or Ctrl+Q to return");
+        minibuffer_message(minibuffer, "Help (read-only) — Ctrl+H, Esc /help, or Ctrl+Q to return");
     };
 
     auto activate_buffer = [&](size_t index) {
@@ -1975,7 +1975,7 @@ app::EditorRunResult run_editor(const std::string& path,
     auto apply_vsplit = [&]() {
         const Rect area = editor_main_area();
         if (split_layout.split_focused(SplitKind::Vertical, area)) {
-            minibuffer_message(minibuffer, "Vertical split (Ctrl+G o other pane)");
+            minibuffer_message(minibuffer, "Vertical split (Ctrl+X o other pane)");
         } else {
             minibuffer_message(minibuffer, "Window too small for vertical split");
         }
@@ -1984,7 +1984,7 @@ app::EditorRunResult run_editor(const std::string& path,
     auto apply_hsplit = [&]() {
         const Rect area = editor_main_area();
         if (split_layout.split_focused(SplitKind::Horizontal, area)) {
-            minibuffer_message(minibuffer, "Horizontal split (Ctrl+G o other pane)");
+            minibuffer_message(minibuffer, "Horizontal split (Ctrl+X o other pane)");
         } else {
             minibuffer_message(minibuffer, "Window too small for horizontal split");
         }
@@ -2705,7 +2705,12 @@ app::EditorRunResult run_editor(const std::string& path,
                 start_assist_command_mode(minibuffer, assist_completer);
                 return;
             }
-            if (ch == 6 || ch == 8) {
+            if (ch == 8) {
+                // Ctrl+H toggles help closed while the help view is active.
+                exit_help_view();
+                return;
+            }
+            if (ch == 6) {
                 start_minibuffer(minibuffer, MinibufferAction::Search, "Search: ", last_search);
                 return;
             }
@@ -2938,7 +2943,7 @@ app::EditorRunResult run_editor(const std::string& path,
             return;
         }
 
-        // Ctrl+G window-command prefix (Emacs-style): v/h/2/3/o/0/1.
+        // Ctrl+X window-command prefix (Emacs-style): v/h/2/3/o/0/1.
         if (window_prefix_active) {
             const std::string action = window_prefix_action(ch);
             window_prefix_active = false;
@@ -2971,7 +2976,7 @@ app::EditorRunResult run_editor(const std::string& path,
             }
             return;
         }
-        if (ch == 7) {
+        if (ch == 24) {
             if (help_view.active || picker.active || buffer_list_active || pending_close_confirm ||
                 assist_session.active || reformat_session.active || insert_session.active ||
                 shell_session.active) {
@@ -3064,10 +3069,6 @@ app::EditorRunResult run_editor(const std::string& path,
             Error copy_error = state.copy_selection(shared_clipboard());
             if (copy_error.ok()) publish_internal_clipboard();
             minibuffer_message(minibuffer, copy_error.ok() ? "Copied selection" : copy_error.message);
-        } else if (ch == 24) {
-            Error cut_error = state.cut_selection(shared_clipboard());
-            if (cut_error.ok()) publish_internal_clipboard();
-            minibuffer_message(minibuffer, cut_error.ok() ? "Cut selection" : cut_error.message);
         } else if (ch == 22) {
             if (shared_clipboard().empty()) {
                 begin_external_clipboard_paste();
@@ -3081,7 +3082,8 @@ app::EditorRunResult run_editor(const std::string& path,
         } else if (ch == 6) {
             start_minibuffer(minibuffer, MinibufferAction::Search, "Search: ", last_search);
         } else if (ch == 8) {
-            start_minibuffer(minibuffer, MinibufferAction::ReplaceSearch, "Replace search: ", last_search);
+            // Ctrl+H: mode-dependent help (standalone editor help view).
+            enter_help_view();
         } else if (is_editor_undo_key(ch)) {
             minibuffer_message(minibuffer, state.undo() ? "Undone" : "Nothing to undo");
         } else if (is_editor_redo_key(ch)) {
@@ -3176,9 +3178,13 @@ app::EditorRunResult run_editor(const std::string& path,
                 minibuffer_message(minibuffer, escape_status);
             }
         } else if (ch == 127) {
+            const bool had_selection = state.selection.has_range();
             Error erase_error = state.erase_before_cursor();
             if (!erase_error.ok()) {
                 minibuffer_message(minibuffer, erase_error.message);
+            } else if (had_selection) {
+                publish_internal_clipboard();
+                minibuffer_message(minibuffer, "Cut selection");
             }
         } else if (ch == '\r' || ch == '\n') {
             Error insert_error = state.insert("\n");

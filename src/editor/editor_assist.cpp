@@ -944,6 +944,8 @@ std::vector<std::string> assist_command_completions(const EditorAssistConfig& co
     commands.push_back("/saveas ");
     commands.push_back("/find");
     commands.push_back("/replace");
+    commands.push_back("/replace-string");
+    commands.push_back("replace-string");
     commands.push_back("/open ");
     commands.push_back("/new");
     commands.push_back("/list");

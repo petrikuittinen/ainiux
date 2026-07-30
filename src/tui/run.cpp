@@ -3318,13 +3318,17 @@ app::TuiRunResult run(provider::RequestContext context,
                         }
                         continue;
                     }
-                    // DEL key: 127 or [3~ forward delete, or sometimes 8
-                    if (ch == 127 || ch == 8) {
+                    // DEL key: 127 or [3~ forward delete (Ctrl+H is help, not delete).
+                    if (ch == 127) {
                         if (attachment_picker_selected < chat_attachments.size()) {
                             pending_attachment_delete = attachment_picker_selected;
                             mode = TuiMode::AttachmentDeleteConfirm;
                             status = "Delete attachment? y/n (Esc cancels)";
                         }
+                        continue;
+                    }
+                    if (ch == 8) {
+                        handle_command("/help");
                         continue;
                     }
                     // Also support Delete via escape sequence detection for [3~
@@ -3457,10 +3461,9 @@ app::TuiRunResult run(provider::RequestContext context,
                     status = copy_error.ok() ? "Copied selection" : copy_error.message;
                     continue;
                 }
-                if (ch == 24) {
-                    Error cut_error = input.cut_selection(editor::shared_clipboard());
-                    if (cut_error.ok()) publish_internal_clipboard();
-                    status = cut_error.ok() ? "Cut selection" : cut_error.message;
+                if (ch == 8) {
+                    // Ctrl+H: mode-dependent help (chat/agent panel).
+                    handle_command("/help");
                     continue;
                 }
                 if (ch == 22) {
@@ -3543,8 +3546,15 @@ app::TuiRunResult run(provider::RequestContext context,
                         publish_internal_clipboard();
                     continue;
                 }
-                if (ch == 127 || ch == 8) {
-                    detail::set_status_from_error(input.erase_before_cursor(), status);
+                if (ch == 127) {
+                    const bool had_selection = input.selection.has_range();
+                    const Error erase_error = input.erase_before_cursor();
+                    if (!erase_error.ok()) {
+                        detail::set_status_from_error(erase_error, status);
+                    } else if (had_selection) {
+                        publish_internal_clipboard();
+                        status = "Cut selection";
+                    }
                     continue;
                 }
                 if (ch == '\r' || ch == '\n') {

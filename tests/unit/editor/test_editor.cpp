@@ -2888,6 +2888,27 @@ void test_editor_selection_and_clipboard() {
     check(state.undo(), "cut is undoable");
     check(state.text.str() == "alpha beta gammaalpha", "undo restores cut text");
 
+    // Backspace / Delete on a selection cut into the process clipboard.
+    ainiux::editor::shared_clipboard().clear();
+    state.selection.anchor = 0;
+    state.selection.active = 5;
+    check(state.erase_before_cursor().ok(), "backspace on selection succeeds");
+    check(ainiux::editor::shared_clipboard().text() == "alpha",
+          "backspace on selection cuts into shared clipboard");
+    check(state.text.str() == " beta gammaalpha", "backspace on selection removes text");
+    check(state.undo(), "selection backspace is undoable");
+    check(state.text.str() == "alpha beta gammaalpha", "undo restores backspace-cut text");
+
+    ainiux::editor::shared_clipboard().clear();
+    state.selection.anchor = 6;
+    state.selection.active = 10;
+    check(state.erase_at_cursor().ok(), "delete on selection succeeds");
+    check(ainiux::editor::shared_clipboard().text() == "beta",
+          "delete on selection cuts into shared clipboard");
+    check(state.text.str() == "alpha  gammaalpha", "delete on selection removes text");
+    check(state.undo(), "selection delete is undoable");
+    check(state.text.str() == "alpha beta gammaalpha", "undo restores delete-cut text");
+
     state.selection.anchor = 6;
     state.selection.active = 10;
     check(state.paste(clipboard).ok(), "paste replaces active selection");
@@ -3059,7 +3080,8 @@ void test_editor_split_layout() {
     check(window_prefix_action('0') == "close", "window prefix 0 closes pane");
     check(window_prefix_action('1') == "maximize", "window prefix 1 maximizes pane");
     check(window_prefix_action(27) == "cancel", "Esc cancels window prefix");
-    check(window_prefix_action(7) == "cancel", "Ctrl+G cancels window prefix");
+    check(window_prefix_action(24) == "cancel", "Ctrl+X cancels window prefix");
+    check(window_prefix_action(7).empty(), "Ctrl+G is not a window-prefix cancel key");
     check(window_prefix_action('x').empty(), "unknown window prefix is rejected");
 
     SplitLayout layout(0);
@@ -4061,6 +4083,12 @@ void test_editor_help_document_and_command() {
     slash = ainiux::editor::parse_editor_slash_command("/replace");
     check(slash.command == ainiux::editor::EditorSlashCommand::Replace,
           "editor /replace slash command is recognized");
+    slash = ainiux::editor::parse_editor_slash_command("replace-string");
+    check(slash.command == ainiux::editor::EditorSlashCommand::Replace,
+          "editor replace-string slash command is recognized");
+    slash = ainiux::editor::parse_editor_slash_command("/replace-string");
+    check(slash.command == ainiux::editor::EditorSlashCommand::Replace,
+          "editor /replace-string slash command is recognized");
     slash = ainiux::editor::parse_editor_slash_command("/open");
     check(slash.command == ainiux::editor::EditorSlashCommand::Open && slash.path.empty(),
           "editor bare /open slash command is recognized");

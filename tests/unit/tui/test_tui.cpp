@@ -1260,7 +1260,7 @@ void test_tui_input_label_and_activity_indicators() {
     check(label == ainiux::tui::input_label_text_for_mode(false),
           "TUI input label concatenates app version branding with helper text");
     check(label.find(ainiux::versionNumber) != std::string::npos, "TUI input label includes the current version");
-    check(label.find("/help") != std::string::npos &&
+    check(label.find("Ctrl+H help") != std::string::npos &&
               label.find(u8"history Ctrl+B ↑ Ctrl+D ↓") != std::string::npos,
           "TUI input label shows compact help and history navigation hints");
     check(label.size() <= 80, "TUI input label fits an 80-column terminal");

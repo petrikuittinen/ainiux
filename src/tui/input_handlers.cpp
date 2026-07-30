@@ -209,7 +209,15 @@ EscapeResult handle_escape(editor::EditorState& input,
         return EscapeResult::Handled;
     }
     if (sequence == "[3~") {
-        detail::set_status_from_error(input.erase_at_cursor(), status);
+        const bool had_selection = input.selection.has_range();
+        const Error erase_error = input.erase_at_cursor();
+        if (!erase_error.ok()) {
+            detail::set_status_from_error(erase_error, status);
+        } else if (had_selection) {
+            // Selection delete acts as cut into the process clipboard.
+            editor::publish_terminal_clipboard(editor::shared_clipboard().text());
+            status = "Cut selection";
+        }
         return EscapeResult::Handled;
     }
     return EscapeResult::Handled;

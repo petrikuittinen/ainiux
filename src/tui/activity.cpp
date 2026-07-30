@@ -48,7 +48,7 @@ void append_segment(std::vector<StyledSegment>& segments, std::string text, Styl
 }
 
 constexpr const char kInputLabelStatusMessage[] =
-    " | /help | history Ctrl+B ↑ Ctrl+D ↓";
+    " | Ctrl+H help | history Ctrl+B ↑ Ctrl+D ↓";
 
 // Short mode tags (user-facing chrome). Keep compact for narrow terminals.
 constexpr const char kChatModeTag[] = " Chat";

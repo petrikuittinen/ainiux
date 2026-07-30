@@ -8,9 +8,9 @@ Standalone editor mode (`ainiux --editor [PATH]`) is a multiline text editor wit
 - **Status line** (reverse video) — path, dirty flag, cursor position, quick hints
 - **Minibuffer** (bottom line) — commands, prompts, AI status, and messages
 
-### Window splits (`Ctrl+G` prefix)
+### Window splits (`Ctrl+X` prefix)
 
-Splits use an Emacs-style two-key sequence. Press **Ctrl+G**, then one of:
+Splits use an Emacs-style two-key sequence. Press **Ctrl+X**, then one of:
 
 | Second key | Action |
 |------------|--------|
@@ -19,7 +19,7 @@ Splits use an Emacs-style two-key sequence. Press **Ctrl+G**, then one of:
 | `o` | Focus other / next pane |
 | `0` | Close the focused pane |
 | `1` | Maximize the focused pane (close others) |
-| `Esc` or `Ctrl+G` | Cancel the window command |
+| `Esc` or `Ctrl+X` | Cancel the window command |
 | `Ctrl+B` | Page up in the **other** pane (last focused, without moving focus) |
 | `Ctrl+D` | Page down in the **other** pane (same target as Ctrl+B) |
 
@@ -27,22 +27,23 @@ Slash commands (via `Esc` then the command):
 
 | Command | Action |
 |---------|--------|
-| `/vsplit` | Vertical split (side by side); same as `Ctrl+G v` |
-| `/hsplit` | Horizontal split (stacked); same as `Ctrl+G h` |
-| `/closesplit` | Close the focused pane; same as `Ctrl+G 0` |
-| `/maximize` | Keep only the focused pane; same as `Ctrl+G 1` |
+| `/vsplit` | Vertical split (side by side); same as `Ctrl+X v` |
+| `/hsplit` | Horizontal split (stacked); same as `Ctrl+X h` |
+| `/closesplit` | Close the focused pane; same as `Ctrl+X 0` |
+| `/maximize` | Keep only the focused pane; same as `Ctrl+X 1` |
 | `/nosplit` | Alias for `/maximize` |
 
 Both panes of a new split show the same buffer at first. Open another file in one pane (`Ctrl+O`) or switch buffers (`Ctrl+L`) to compare two files. Status shows `[N panes]` while more than one pane is open.
 
-**Other-pane scrolling:** after a split, `Ctrl+B`/`Ctrl+D` page the new sibling. After `Ctrl+G o`, they page the pane you left. With three or more panes, the target is always the last pane you left (not every non-focused pane). Cancel for minibuffers and replace mode is **Esc** only (not Ctrl+G).
+**Other-pane scrolling:** after a split, `Ctrl+B`/`Ctrl+D` page the new sibling. After `Ctrl+X o`, they page the pane you left. With three or more panes, the target is always the last pane you left (not every non-focused pane). Cancel for minibuffers and replace mode is **Esc** only (not Ctrl+X).
 
 ## Getting help
 
 | Action | Effect |
 |--------|--------|
-| `Esc` then `/help` | Open this help in read-only view |
-| `Esc` then `/help` again | Close help and return to your file |
+| `Ctrl+H` | Open this help in read-only view |
+| `Ctrl+H` again | Close help and return to your file |
+| `Esc` then `/help` | Same as `Ctrl+H` |
 | `Ctrl+Q` while help is open | Close help and return to your file |
 | `Ctrl+Q` while editing | Quit (with save prompts when needed) |
 
@@ -59,10 +60,10 @@ Arrow keys, `Page Up`/`Page Down`, `Home`, and `End` scroll the help document.
 | `Ctrl+L` | List open buffers; Enter chooses and Esc cancels |
 | `Ctrl+W` | Close the active buffer; prompts before discarding modifications |
 | `Ctrl+F` | Search (exact substring) |
-| `Ctrl+H` | Replace (search, then replace each match) |
+| `Esc` then `replace-string` or `/replace` | Replace (search, then replace each match) |
 | `Ctrl+Q` | Quit |
 
-Replace mode after `Ctrl+H`: `Space` replaces match, `s` skips, `a` replaces all remaining, `Esc` ends replace.
+Replace mode after `replace-string` / `/replace`: `Space` replaces match, `s` skips, `a` replaces all remaining, `Esc` ends replace.
 
 ## File locking and external changes
 
@@ -77,7 +78,6 @@ Dead same-host lock owners are recovered automatically. Remote, live, malformed,
 | Key | Action |
 |-----|--------|
 | `Ctrl+C` | Copy selection |
-| `Ctrl+X` | Cut selection |
 | `Ctrl+V` | Paste (internal clipboard first, then desktop/OSC 52 clipboard) |
 | `Ctrl+K` | Kill to end of line |
 | `Ctrl+Z` or `Ctrl+U` | Undo |
@@ -87,19 +87,22 @@ Dead same-host lock owners are recovered automatically. Remote, live, malformed,
 | `End` | End of line |
 | `Ctrl+Home` | Beginning of buffer |
 | `Ctrl+End` | End of buffer |
-| `Backspace` | Delete before cursor |
-| `Delete` (`Esc [3~`) | Delete at cursor |
+| `Backspace` | Delete before cursor; with a selection, cut to the clipboard |
+| `Delete` (`Esc [3~`) | Delete at cursor; with a selection, cut to the clipboard |
 | `Enter` | New line |
 | `Tab` | Complete a word/symbol from open buffers; if none matches, insert indentation; with a selection, indent every touched line |
 | `Shift+Tab` | Outdent the current line, or every touched line in a selection |
 
-Copy, cut, and line kill retain text in Ainiux's process-wide clipboard and
-also publish it through a native desktop helper and OSC 52 when available.
-With an empty internal clipboard, `Ctrl+V` reads text asynchronously from
-`pbpaste`, `wl-paste`, `xclip`, `xsel`, Termux, or WSL. SSH sessions query the
-terminal first. Reads are limited to 16 MiB and are applied only if the buffer,
-cursor, selection, and input mode have not changed. Terminal bracketed paste
-remains the fallback when clipboard access is unavailable or denied.
+There is no dedicated cut key (`Ctrl+X` is the window-command prefix). Delete a
+selection with Backspace or Delete to place it on the clipboard, then paste with
+`Ctrl+V`. Copy, selection-delete, and line kill retain text in Ainiux's
+process-wide clipboard and also publish it through a native desktop helper and
+OSC 52 when available. With an empty internal clipboard, `Ctrl+V` reads text
+asynchronously from `pbpaste`, `wl-paste`, `xclip`, `xsel`, Termux, or WSL. SSH
+sessions query the terminal first. Reads are limited to 16 MiB and are applied
+only if the buffer, cursor, selection, and input mode have not changed. Terminal
+bracketed paste remains the fallback when clipboard access is unavailable or
+denied.
 
 ## Selection
 
@@ -220,15 +223,15 @@ Press **`Esc`** to open the command minibuffer (`Command:`). Type a command with
 | `/save` | Save (same as `Ctrl+S`) |
 | `/saveas [PATH]` | Save as (same as `Ctrl+Shift+S`; `Tab` completes paths after the command) |
 | `/find` | Search (same as `Ctrl+F`) |
-| `/replace` | Replace (same as `Ctrl+H`) |
+| `/replace` or `replace-string` | Replace (search, then interactive replace) |
 | `/open [PATH]` | Open file (same as `Ctrl+O`; `Tab` completes paths after the command) |
 | `/new` | Open a new empty editor buffer (same as `Ctrl+N`) |
 | `/list` | List open editor buffers (same as `Ctrl+L`; Enter chooses, N new, DEL closes selected with y/n prompt, Esc cancels) |
 | `/close` | Close the active editor buffer (same as `Ctrl+W`; prompts if modified) |
-| `/vsplit` | Vertical split (side by side; same as `Ctrl+G v`) |
-| `/hsplit` | Horizontal split (stacked; same as `Ctrl+G h`) |
-| `/closesplit` | Close the focused pane (same as `Ctrl+G 0`) |
-| `/maximize` | Keep only the focused pane (same as `Ctrl+G 1`) |
+| `/vsplit` | Vertical split (side by side; same as `Ctrl+X v`) |
+| `/hsplit` | Horizontal split (stacked; same as `Ctrl+X h`) |
+| `/closesplit` | Close the focused pane (same as `Ctrl+X 0`) |
+| `/maximize` | Keep only the focused pane (same as `Ctrl+X 1`) |
 | `/nosplit` | Alias for `/maximize` |
 | `/highlight [on|off]` | Show or toggle syntax highlighting for editor and chat |
 | `/mode [MODE|auto]` | Show or set this buffer's syntax mode |

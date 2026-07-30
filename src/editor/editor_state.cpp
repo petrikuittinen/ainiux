@@ -378,14 +378,10 @@ Error EditorState::replace_completion(size_t pos,
 Error EditorState::erase_before_cursor() {
     Error writable = mutation_allowed();
     if (!writable.ok()) return writable;
+    // Backspace on a selection cuts it into the process clipboard so Ctrl+V
+    // can restore it (dedicated Ctrl+X cut is reserved for window commands).
     if (selection.has_range()) {
-        const size_t start = selection.start();
-        Error err = replace(start, selection_end_exclusive() - start, "");
-        if (err.ok()) {
-            cursor = start;
-            selection.clear(cursor);
-        }
-        return err;
+        return cut_selection(shared_clipboard());
     }
     if (cursor == 0) {
         return ok_error();
@@ -410,6 +406,10 @@ Error EditorState::erase_before_cursor() {
 Error EditorState::erase_at_cursor() {
     Error writable = mutation_allowed();
     if (!writable.ok()) return writable;
+    // Delete on a selection cuts it into the process clipboard (same as Backspace).
+    if (selection.has_range()) {
+        return cut_selection(shared_clipboard());
+    }
     if (cursor >= text.size()) {
         return ok_error();
     }

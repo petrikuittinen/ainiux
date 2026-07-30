@@ -82,13 +82,17 @@ bool handle_tui_picker_input(unsigned char ch,
             callbacks.on_thread_new();
             return true;
         }
-        if (ch == 127 || ch == 8) {
+        // DEL deletes the selected thread. Ctrl+H is help (handled by the TUI loop).
+        if (ch == 127) {
             if (state.thread_picker_selected < state.thread_picker_threads.size()) {
                 state.pending_thread_delete = state.thread_picker_selected;
                 state.mode = TuiMode::ThreadDeleteConfirm;
                 state.status = "Delete thread? y/n (Esc cancels)";
             }
             return true;
+        }
+        if (ch == 8) {
+            return false;
         }
         return true;
     }

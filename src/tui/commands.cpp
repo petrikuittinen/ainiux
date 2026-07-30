@@ -125,7 +125,7 @@ void handle_tui_command(const std::string& text, TuiCommandContext& ctx, TuiComm
         if (ctx.help_text.empty()) {
             ctx.settings_text.clear();
             ctx.help_text =
-                "/help (hide/show this panel)\n"
+                "/help or Ctrl+H (hide/show this panel)\n"
                 "/quit or /exit\n"
                 "/clear\n"
                 "/edit\n"
@@ -179,7 +179,7 @@ void handle_tui_command(const std::string& text, TuiCommandContext& ctx, TuiComm
                                   : "AI commands from editor-commands.conf (/spell, /grammar, "
                                     "/continue,\n/Chinese, /German, /Japanese, /prompt, "
                                     "/regenerate, and custom commands)");
-            ctx.status = "Help shown; /help hides it";
+            ctx.status = "Help shown; Ctrl+H or /help hides it";
         } else {
             ctx.help_text.clear();
             ctx.status = "Help hidden";

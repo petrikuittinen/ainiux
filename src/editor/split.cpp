@@ -386,7 +386,8 @@ void SplitLayout::clamp_buffers(size_t buffer_count) {
 }
 
 std::string window_prefix_action(unsigned char ch) {
-    if (ch == 27 || ch == 7) {
+    // Esc or a second Ctrl+X cancels the window-command prefix.
+    if (ch == 27 || ch == 24) {
         return "cancel";
     }
     if (ch == 'v' || ch == 'V' || ch == '3') {

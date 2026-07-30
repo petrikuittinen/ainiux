@@ -119,7 +119,7 @@ class SplitLayout {
     Node* close_leaf_in(Node* node, size_t target_leaf, size_t& counter, bool& removed);
 };
 
-// Parse the second key of a Ctrl+G window command sequence.
+// Parse the second key of a Ctrl+X window command sequence.
 // Returns an action name: "split-v", "split-h", "other", "close", "maximize",
 // "cancel", or empty for unknown.
 std::string window_prefix_action(unsigned char ch);

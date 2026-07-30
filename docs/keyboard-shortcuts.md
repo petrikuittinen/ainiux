@@ -23,21 +23,21 @@ Current bindings for chat, agent, and editor modes.
 |----------|--------|
 | `Ctrl+A` | Select entire input buffer |
 | `Ctrl+C` | Copy selection |
-| `Ctrl+X` | Cut selection |
 | `Ctrl+V` | Paste (internal clipboard first, then desktop/OSC 52 clipboard) |
 | `Ctrl+K` | Kill from cursor to end of line |
 | `Ctrl+Z` or `Ctrl+U` | Undo last edit (typing, delete, cut, paste) |
 | `Ctrl+Y` | Redo |
-| `Backspace` | Delete before cursor |
-| `Delete` | Delete at cursor |
+| `Backspace` | Delete before cursor (with a selection: cut to clipboard) |
+| `Delete` | Delete at cursor (with a selection: cut to clipboard) |
 | `Tab` | Slash-command completion (start of first line) or path completion after `/insert`, `/attach`, `/save`, `/load` |
 
-Copy/cut publishes to native desktop helpers and OSC 52 when available. With an empty internal clipboard, `Ctrl+V` reads external text asynchronously; SSH prefers a terminal OSC 52 query. Bracketed terminal paste (middle-click or Shift+Insert in many terminals) remains the fallback and is also undoable with `Ctrl+Z` / `Ctrl+U`.
+Copy and selection-delete (Backspace/Delete on a range) publish to native desktop helpers and OSC 52 when available. With an empty internal clipboard, `Ctrl+V` reads external text asynchronously; SSH prefers a terminal OSC 52 query. Bracketed terminal paste (middle-click or Shift+Insert in many terminals) remains the fallback and is also undoable with `Ctrl+Z` / `Ctrl+U`. There is no dedicated cut key; delete the selection with Backspace or Delete, then paste with `Ctrl+V`.
 
 ### Chat-specific actions
 
 | Shortcut | Action |
 |----------|--------|
+| `Ctrl+H` | Toggle mode help panel (same as `/help`) |
 | `Ctrl+E` | Copy last user/assistant message into input for editing (`/edit`) |
 | `Ctrl+R` | Regenerate last answer (resend last user prompt) |
 | `Ctrl+T` | Toggle thinking-trace display (`/thinking trace` / `notrace`) |
@@ -68,7 +68,7 @@ Use `/pop` to remove the last user or assistant message.
 - `Enter` or `Ctrl+S` — save
 - Bare `Esc` — cancel
 - Arrow/`Home`/`End`/etc. — edit the buffer (not history scroll)
-- `Ctrl+Z`/`Ctrl+U`, `Ctrl+Y`, copy/cut/paste — same as normal input editing
+- `Ctrl+Z`/`Ctrl+U`, `Ctrl+Y`, copy/paste — same as normal input editing
 
 **Thread list** (`Ctrl+L` / `/list`):
 
@@ -76,6 +76,7 @@ Use `/pop` to remove the last user or assistant message.
 - `Enter` — open thread
 - `N` — new thread
 - `DEL` — delete selected thread (prompts y/n)
+- `Ctrl+H` — toggle help
 - `Esc` — cancel
 - `Ctrl+Q` — quit
 
@@ -106,7 +107,7 @@ Use `/pop` to remove the last user or assistant message.
 | Shortcut | Action |
 |----------|--------|
 | `Ctrl+F` | Search |
-| `Ctrl+H` | Replace |
+| `Esc` then `replace-string` / `/replace` | Replace (search, then replace each match) |
 | `F3` | Search next |
 | `Shift+F3` | Search previous |
 | In replace mode: `Space` | Replace current match |
@@ -114,34 +115,34 @@ Use `/pop` to remove the last user or assistant message.
 | In replace mode: `a` | Replace all remaining |
 | In replace mode: `Esc` | End replace |
 
-### Window splits (`Ctrl+G` prefix)
+### Window splits (`Ctrl+X` prefix)
 
 | Shortcut | Action |
 |----------|--------|
-| `Ctrl+G` `v` or `Ctrl+G` `3` | Vertical split (left/right) |
-| `Ctrl+G` `h` or `Ctrl+G` `2` | Horizontal split (top/bottom) |
-| `Ctrl+G` `o` | Focus next pane |
-| `Ctrl+G` `0` | Close focused pane |
-| `Ctrl+G` `1` | Maximize focused pane |
-| `Esc` or `Ctrl+G` after prefix | Cancel window command |
+| `Ctrl+X` `v` or `Ctrl+X` `3` | Vertical split (left/right) |
+| `Ctrl+X` `h` or `Ctrl+X` `2` | Horizontal split (top/bottom) |
+| `Ctrl+X` `o` | Focus next pane |
+| `Ctrl+X` `0` | Close focused pane |
+| `Ctrl+X` `1` | Maximize focused pane |
+| `Esc` or `Ctrl+X` after prefix | Cancel window command |
 | `Ctrl+B` | Page up in the other pane (last focused; does not move focus) |
 | `Ctrl+D` | Page down in the other pane (same target as Ctrl+B) |
-| `/vsplit` | Vertical split (same as `Ctrl+G v`) |
-| `/hsplit` | Horizontal split (same as `Ctrl+G h`) |
-| `/closesplit` | Close focused pane (same as `Ctrl+G 0`) |
-| `/maximize` or `/nosplit` | Maximize focused pane (same as `Ctrl+G 1`) |
+| `/vsplit` | Vertical split (same as `Ctrl+X v`) |
+| `/hsplit` | Horizontal split (same as `Ctrl+X h`) |
+| `/closesplit` | Close focused pane (same as `Ctrl+X 0`) |
+| `/maximize` or `/nosplit` | Maximize focused pane (same as `Ctrl+X 1`) |
 
 ### Editing
 
 | Shortcut | Action |
 |----------|--------|
-| `Ctrl+C` / `Ctrl+X` / `Ctrl+V` | Copy / cut / paste |
+| `Ctrl+C` / `Ctrl+V` | Copy / paste |
 | `Ctrl+K` | Kill to end of line |
 | `Ctrl+Z` or `Ctrl+U` | Undo last edit (typing, delete, cut, paste) |
 | `Ctrl+Y` | Redo |
 | `Ctrl+A` | Select all |
-| `Backspace` | Delete before cursor |
-| `Delete` | Delete at cursor |
+| `Backspace` | Delete before cursor (with a selection: cut to clipboard) |
+| `Delete` | Delete at cursor (with a selection: cut to clipboard) |
 | `Enter` | Insert newline |
 | `Tab` | Complete a word/path/command where applicable; otherwise insert indentation |
 
@@ -154,6 +155,7 @@ Bracketed terminal paste is undoable with `Ctrl+Z` / `Ctrl+U`.
 | `Ctrl+Space` | Run mode-aware `/continue`: prose in text/Markdown, gap completion in code modes |
 | `Esc` (during generation) | Cancel AI request (keeps streamed text) |
 | `Esc` (idle) | Open command minibuffer (`Command:`) |
+| `Ctrl+H` | Toggle read-only help view (same as `Esc` `/help`) |
 | `Esc` `/help` | Toggle read-only help view |
 | `Esc` | Cancel minibuffer / command entry |
 
@@ -181,7 +183,7 @@ slash. Chat and agent modes use `/chat`, `/agent`, and `/editor`.
 
 Built-in AI: `/spell`, `/grammar`, `/continue`, `/fact`, `/comment`, `/rewrite`, `/English`, `/Chinese`, `/Finnish`, `/German`, `/French`, `/Italian`, `/Spanish`, `/Portuguese`, `/Arabic`, `/Hindi`, `/Japanese`, `/Korean`, `/Swedish`, `/Polish`, `/Russian`, `/prompt`, `/regenerate`
 
-File/editor: `/save`, `/saveas`, `/find`, `/replace`, `/open`, `/new`, `/list`, `/close`, `/vsplit`, `/hsplit`, `/closesplit`, `/maximize` (`/nosplit`), `/chat`, `/agent`, `/editor`, `/help`, `/quit`
+File/editor: `/save`, `/saveas`, `/find`, `/replace` (`replace-string`), `/open`, `/new`, `/list`, `/close`, `/vsplit`, `/hsplit`, `/closesplit`, `/maximize` (`/nosplit`), `/chat`, `/agent`, `/editor`, `/help`, `/quit`
 
 Also: `/provider`, `/model`, `/search QUERY`
 
@@ -198,6 +200,7 @@ session management.
 |----------|--------|
 | `Enter` / `Ctrl+S` | Submit the next agent goal or follow-up |
 | `Esc` | Cancel the active model/tool job |
+| `Ctrl+H` | Toggle mode help panel (same as `/help`) |
 | `Ctrl+P` | Toggle agent → editor; the next Ctrl+P returns editor → agent |
 | `Ctrl+Q` | Finish the project session and quit |
 | `y` / `n` | Allow or deny an active Guard Ask confirmation |
@@ -218,7 +221,8 @@ Use `/chat`, `/editor`, `/agent`, or `/mode` for explicit mode handoffs.
 | `Ctrl+Home` / `Ctrl+End` | Beginning / end of buffer |
 | `PageUp` / `PageDown` | Page up / down in input or document |
 | `Ctrl+Q` | Quit |
-| `Ctrl+C` / `Ctrl+X` / `Ctrl+V` / `Ctrl+K` / `Ctrl+A` | Copy / cut / paste / kill line / select all |
+| `Ctrl+C` / `Ctrl+V` / `Ctrl+K` / `Ctrl+A` | Copy / paste / kill line / select all |
+| `Backspace` / `Delete` on a selection | Cut selection to clipboard |
 | `Shift` + movement keys | Extend selection |
 
 ## Shortcuts that differ between modes
@@ -228,6 +232,8 @@ Use `/chat`, `/editor`, `/agent`, or `/mode` for explicit mode handoffs.
 | `Enter` | Send message | Insert newline |
 | `Ctrl+S` | Send message | Save file |
 | `Ctrl+L` | Thread list (`/list`) | Buffer list (`/list`) |
+| `Ctrl+H` | Toggle chat help panel | Toggle editor help view |
+| `Ctrl+X` | **Unused** (no dedicated cut) | Window-command prefix (splits) |
 | `Ctrl+E` | Edit last chat message | **Unused** |
 | `Ctrl+R` | Regenerate last answer | **Unused** (redo is `Ctrl+Y` only) |
 | `Esc` (idle) | Cancel in-flight job | Open slash-command minibuffer |
