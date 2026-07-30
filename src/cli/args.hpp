@@ -191,6 +191,7 @@ struct Options {
     size_t editor_tab_width = ainiux::editor::kDefaultTabWidth;
     ainiux::editor::TabStyle editor_tab_style = ainiux::editor::TabStyle::Spaces;
     ainiux::editor::LineBreak editor_linebreak = ainiux::editor::LineBreak::Lf;
+    size_t editor_text_align_width = ainiux::editor::kDefaultTextAlignWidth;
     size_t editor_ai_continue_prefix_max_chars =
         ainiux::editor::kDefaultAiContinuePrefixMaxChars;
     size_t editor_ai_continue_postfix_max_chars =

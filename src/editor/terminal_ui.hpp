@@ -45,6 +45,7 @@ enum class MinibufferAction {
     AssistCommand,
     AssistScopeChoice,
     AssistPromptMode,
+    TextAlignWidth,
 };
 
 struct PendingSaveRequest {
@@ -68,6 +69,9 @@ struct MinibufferState {
     std::string prompt;
     std::string input;
     std::string message = "Ready";
+    // Used when action == TextAlignWidth (pending /left-align etc.).
+    int text_align_mode = 0;
+    size_t text_align_default_width = kDefaultTextAlignWidth;
 };
 
 struct ReplaceSession {

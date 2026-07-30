@@ -2087,6 +2087,18 @@ Error apply_document(const Document& document, cli::Options& options) {
             if (err.ok()) {
                 candidate.editor_tab_width = static_cast<size_t>(width);
             }
+        } else if (name == "editor.alignment-width" || name == "editor.text-align-width") {
+            int width = 0;
+            err = nonnegative_int(entry, width);
+            if (err.ok() &&
+                (width <= static_cast<int>(editor::kMinTextAlignWidthExclusive) ||
+                 width > static_cast<int>(editor::kMaxTextAlignWidth))) {
+                err = schema_error(entry,
+                                   "expected an integer greater than 20 and at most 1000");
+            }
+            if (err.ok()) {
+                candidate.editor_text_align_width = static_cast<size_t>(width);
+            }
         } else if (name == "editor.tab-style") {
             err = require_type(entry, Value::Type::String);
             if (err.ok() &&

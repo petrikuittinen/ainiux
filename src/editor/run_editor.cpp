@@ -18,6 +18,7 @@
 #include "editor/path_completion.hpp"
 #include "editor/reformat.hpp"
 #include "editor/split.hpp"
+#include "editor/text_layout.hpp"
 #include "editor/terminal_input.hpp"
 #include "editor/terminal_ui.hpp"
 #include "input/input.hpp"
@@ -139,6 +140,10 @@ app::EditorRunResult run_editor(const std::string& path,
     state.tab_width = settings.tab_width;
     state.tab_style = settings.tab_style;
     state.linebreak = settings.linebreak;
+    size_t text_align_width_default = settings.text_align_width;
+    if (!valid_text_align_width(text_align_width_default)) {
+        text_align_width_default = kDefaultTextAlignWidth;
+    }
     bool highlight_enabled = interactive != nullptr ? interactive->highlight_enabled
                                                     : settings.highlight_enabled;
     state.highlight_enabled = highlight_enabled;
@@ -2192,6 +2197,154 @@ app::EditorRunResult run_editor(const std::string& path,
             pending_assist = PendingAssist{};
             exit_assist_command_mode(minibuffer, assist_completer);
             minibuffer_message(minibuffer, "Usage: /reformat or /reformat-all");
+            return;
+        }
+        {
+            auto try_text_align_command = [&](const char* name, TextAlignMode mode) -> bool {
+                const std::string prefix = std::string("/") + name;
+                if (command_line != prefix && command_line.rfind(prefix + " ", 0) != 0) {
+                    return false;
+                }
+                pending_assist = PendingAssist{};
+                exit_assist_command_mode(minibuffer, assist_completer);
+                const std::string arg =
+                    command_line.size() <= prefix.size()
+                        ? std::string()
+                        : trim_ascii_copy(command_line.substr(prefix.size()));
+                auto apply_width = [&](size_t width) {
+                    Error writable = state.mutation_allowed();
+                    if (!writable.ok()) {
+                        minibuffer_message(minibuffer, writable.message);
+                        return;
+                    }
+                    size_t start = 0;
+                    size_t end = 0;
+                    bool had_selection = false;
+                    text_layout_scope(state, start, end, had_selection);
+                    const std::string scope = state.text.range_text(start, end - start);
+                    TextLayoutResult layout = reflow_align(scope, mode, width);
+                    if (!layout.error.ok()) {
+                        minibuffer_message(minibuffer, layout.error.message);
+                        return;
+                    }
+                    Error apply_error =
+                        apply_text_layout_result(state, start, end, had_selection, layout);
+                    if (!apply_error.ok()) {
+                        minibuffer_message(minibuffer, apply_error.message);
+                        return;
+                    }
+                    if (!layout.changed) {
+                        minibuffer_message(minibuffer, "No changes");
+                        return;
+                    }
+                    minibuffer_message(minibuffer,
+                                       std::string(text_align_mode_name(mode)) + " to " +
+                                           std::to_string(width) + " columns");
+                };
+                if (arg.empty()) {
+                    start_minibuffer(
+                        minibuffer,
+                        MinibufferAction::TextAlignWidth,
+                        "Enter width for the text-alignment (" +
+                            std::to_string(text_align_width_default) + " default): ",
+                        std::to_string(text_align_width_default));
+                    minibuffer.text_align_mode = static_cast<int>(mode);
+                    minibuffer.text_align_default_width = text_align_width_default;
+                    return true;
+                }
+                size_t width = 0;
+                const char* begin = arg.data();
+                const char* endp = begin + arg.size();
+                const std::from_chars_result parsed = std::from_chars(begin, endp, width);
+                if (parsed.ec != std::errc{} || parsed.ptr != endp ||
+                    !valid_text_align_width(width)) {
+                    minibuffer_message(
+                        minibuffer,
+                        std::string("Usage: /") + name +
+                            " [WIDTH]  (WIDTH > 20 and ≤ 1000; omit for default)");
+                    return true;
+                }
+                apply_width(width);
+                return true;
+            };
+            if (try_text_align_command("left-align", TextAlignMode::Left) ||
+                try_text_align_command("right-align", TextAlignMode::Right) ||
+                try_text_align_command("center-align", TextAlignMode::Center) ||
+                try_text_align_command("justify", TextAlignMode::Justify)) {
+                return;
+            }
+        }
+        auto run_line_cleanup = [&](const char* command_name,
+                                    TextLayoutResult (*fn)(const std::string&)) -> bool {
+            if (command_line != std::string("/") + command_name &&
+                command_line.rfind(std::string("/") + command_name + " ", 0) != 0) {
+                return false;
+            }
+            pending_assist = PendingAssist{};
+            exit_assist_command_mode(minibuffer, assist_completer);
+            if (command_line.rfind(std::string("/") + command_name + " ", 0) == 0) {
+                minibuffer_message(minibuffer, std::string("Usage: /") + command_name);
+                return true;
+            }
+            Error writable = state.mutation_allowed();
+            if (!writable.ok()) {
+                minibuffer_message(minibuffer, writable.message);
+                return true;
+            }
+            size_t start = 0;
+            size_t end = 0;
+            bool had_selection = false;
+            text_layout_scope(state, start, end, had_selection);
+            const std::string scope = state.text.range_text(start, end - start);
+            TextLayoutResult layout = fn(scope);
+            if (!layout.error.ok()) {
+                minibuffer_message(minibuffer, layout.error.message);
+                return true;
+            }
+            Error apply_error =
+                apply_text_layout_result(state, start, end, had_selection, layout);
+            if (!apply_error.ok()) {
+                minibuffer_message(minibuffer, apply_error.message);
+                return true;
+            }
+            if (!layout.changed) {
+                minibuffer_message(minibuffer, "No changes");
+                return true;
+            }
+            minibuffer_message(minibuffer, std::string(command_name) + " applied");
+            return true;
+        };
+        if (run_line_cleanup("remove-blank-lines", remove_blank_lines) ||
+            run_line_cleanup("remove-duplicate-blank-lines", remove_duplicate_blank_lines) ||
+            run_line_cleanup("remove-duplicate-lines", remove_duplicate_lines)) {
+            return;
+        }
+        if (command_line == "/alignment-width" ||
+            command_line.rfind("/alignment-width ", 0) == 0) {
+            pending_assist = PendingAssist{};
+            exit_assist_command_mode(minibuffer, assist_completer);
+            const std::string requested =
+                command_line.size() <= 16 ? "" : trim_ascii_copy(command_line.substr(16));
+            if (requested.empty()) {
+                minibuffer_message(minibuffer,
+                                   "Alignment width default: " +
+                                       std::to_string(text_align_width_default));
+                return;
+            }
+            size_t width = 0;
+            const char* begin = requested.data();
+            const char* endp = begin + requested.size();
+            const std::from_chars_result parsed = std::from_chars(begin, endp, width);
+            if (parsed.ec != std::errc{} || parsed.ptr != endp ||
+                !valid_text_align_width(width)) {
+                minibuffer_message(minibuffer,
+                                   "Usage: /alignment-width [WIDTH]  (WIDTH > 20 and ≤ 1000)");
+                return;
+            }
+            text_align_width_default = width;
+            minibuffer_message(minibuffer,
+                               "Alignment width default: " +
+                                   std::to_string(text_align_width_default));
             return;
         }
         if (command_line == "/chat") {

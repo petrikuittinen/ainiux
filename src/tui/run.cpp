@@ -38,6 +38,7 @@
 #include "editor/clipboard.hpp"
 #include "editor/path_completion.hpp"
 #include "editor/terminal_input.hpp"
+#include "editor/text_layout.hpp"
 #include "fetch/fetch.hpp"
 #include "search/search.hpp"
 #include "input/input.hpp"
@@ -121,6 +122,19 @@ app::TuiRunResult run(provider::RequestContext context,
     const size_t input_undo_limit = static_cast<size_t>(std::max(0, context.options.editor_undo_limit));
     bool syntax_highlight = interactive != nullptr ? interactive->highlight_enabled
                                                    : context.options.tui_highlight;
+    // History prose reflow: default from [editor] alignment-width (78); -1 = unlimited.
+    long long history_align_width =
+        static_cast<long long>(context.options.editor_text_align_width);
+    if (!editor::valid_chat_align_width(history_align_width)) {
+        history_align_width = static_cast<long long>(editor::kDefaultTextAlignWidth);
+    }
+    editor::TextAlignMode history_align_mode = editor::TextAlignMode::Left;
+    auto history_text_layout = [&]() {
+        detail::HistoryTextLayout layout;
+        layout.width = history_align_width;
+        layout.mode = history_align_mode;
+        return layout;
+    };
     auto new_input_editor = [&]() {
         editor::EditorState editor = detail::empty_input_editor(input_undo_limit);
         editor.set_language(highlight::Language::Markdown, false);
@@ -2034,6 +2048,8 @@ app::TuiRunResult run(provider::RequestContext context,
                                       history_scroll,
                                       show_thinking_traces,
                                       syntax_highlight,
+                                      history_align_width,
+                                      history_align_mode,
                                       context.options.tui_themes,
                                       theme,
                                       use_colors,
@@ -2500,7 +2516,7 @@ app::TuiRunResult run(provider::RequestContext context,
                    activity_kind, render_frame, syntax_highlight,
                    detail::RenderStyle{&context.options.tui_themes, theme, use_colors},
                    terminal_frame_renderer, panel_title(), context.options.agent,
-                   build_agent_chrome());
+                   build_agent_chrome(), history_text_layout());
     while (!quit) {
         credit_jobs.reap_finished();
         process_clipboard_events();
@@ -3588,7 +3604,7 @@ app::TuiRunResult run(provider::RequestContext context,
                        activity_kind, render_frame, syntax_highlight,
                        detail::RenderStyle{&context.options.tui_themes, theme, use_colors},
                        terminal_frame_renderer, panel_title(), context.options.agent,
-                       build_agent_chrome());
+                       build_agent_chrome(), history_text_layout());
     }
 
     model_job.cancel();

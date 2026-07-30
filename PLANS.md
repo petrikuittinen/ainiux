@@ -36,7 +36,7 @@ error layers should serve:
 | v0.0–v0.8 | CLI, persistence, runtime/TUI, providers, context, config, benchmarks, editor | Landed |
 | v0.9 | Benchmark calibration, refactor hygiene, TUI/CLI/editor polish | Remaining work continues |
 | v0.90 | Local OpenAI-compatible server | Deferred behind v1.1 |
-| v1.0–v1.13 | Local agent foundation and hardening | Landed through v1.13 |
+| v1.0–v1.14 | Local agent foundation and hardening | Landed through v1.14 |
 | **v1.1** | **Lightweight definition ranking and index tuning; later `/goal`, `/loop`, and sub-agents** | **Next priority** |
 | **v1.2** | **Image generation across CLI and interactive surfaces** | Planned after v1.1 |
 
@@ -46,7 +46,7 @@ ready.
 
 ## Current baseline
 
-Implementation status (2026-07-30): **v1.13**.
+Implementation status (2026-07-30): **v1.14**.
 
 The shipped product includes:
 
@@ -99,6 +99,7 @@ graph or automatic model-context hints.
 | v1.11 | Three-strategy agent context compaction with visible progress and result reporting |
 | v1.12 | Retained terminal row rendering and punctuation-aware Markdown highlighting |
 | v1.13 | First-run index build offer, index chrome marker, timed index summary preface, and index progress lifetime fix |
+| v1.14 | Editor text layout commands; chat/agent history width and align modes; width-capped pretty tables |
 
 Historical implementation details remain available in Git history and the dated
 notes in `README.md` and `docs/decisions.md`.

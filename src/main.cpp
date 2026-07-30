@@ -38,6 +38,7 @@ ainiux::editor::EditorSettings editor_settings_from_options(const ainiux::cli::O
     settings.tab_width = options.editor_tab_width;
     settings.tab_style = options.editor_tab_style;
     settings.linebreak = options.editor_linebreak;
+    settings.text_align_width = options.editor_text_align_width;
     settings.themes = &options.tui_themes;
     settings.theme_name = options.tui_theme;
     settings.use_colors = !options.no_colors;

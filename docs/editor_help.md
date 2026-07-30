@@ -237,6 +237,14 @@ Press **`Esc`** to open the command minibuffer (`Command:`). Type a command with
 | `/mode [MODE|auto]` | Show or set this buffer's syntax mode |
 | `/reformat` | Reformat leading indentation in the selected lines |
 | `/reformat-all` | Reformat leading indentation in the entire buffer |
+| `/left-align [WIDTH]` | Word-wrap and left-align (selection or whole buffer); omit WIDTH to prompt (default from config) |
+| `/right-align [WIDTH]` | Word-wrap and right-align to WIDTH columns |
+| `/center-align [WIDTH]` | Word-wrap and center-align to WIDTH columns |
+| `/justify [WIDTH]` | Word-wrap and justify lines (last line of each paragraph left-aligned) |
+| `/alignment-width [WIDTH]` | Show or set this session's default WIDTH for alignment commands |
+| `/remove-blank-lines` | Remove empty and whitespace-only lines |
+| `/remove-duplicate-blank-lines` | Collapse consecutive blank lines to one |
+| `/remove-duplicate-lines` | Collapse consecutive identical lines (`uniq`-style) |
 | `/tab-width [1..32]` | Show or set this buffer's tab width |
 | `/tab-style [spaces|tab]` | Show or set this buffer's indentation style |
 | `/linebreak [lf|cr|crlf]` | Show or set this buffer's save line endings |
@@ -298,6 +306,26 @@ Highlighting is enabled by default. The editor detects Markdown, Python, C, C++,
 The status line shows the current language and line-ending mode compactly in parentheses, such as `(html LF)`, `(python CRLF)`, or `(text CR)`. `/mode text` disables syntax styling for the current buffer. `/mode markdown|python|c|cpp|csharp|java|javascript|typescript|html|htmlonly|css|xml|json|bash|php|perl|ruby|rust|go|powershell|assembly|sql|toml|yaml|ini` selects a manual mode. Short aliases include `md`, `py`, `c++`, `c#`, `js`, `ts`, `html-multi`, `htmlmulti`, `html-only`, `jsonl`, `sh`, `pl`, `rb`, `rs`, `golang`, `pwsh`, `ps1`, `asm`, `yml`, and `dosini`. The default `html` mode highlights JavaScript in `<script>` blocks and `on*` attributes, and CSS in `<style>` blocks and `style` attributes. Use `htmlonly` for markup-only highlighting with embedded code kept string-colored. `/mode auto` resumes filename detection. Bare `/mode` reports whether the current mode is automatic or manual. Manual mode survives buffer switches and save-as operations. `/highlight off` disables highlighting across editor/chat switches for the current process; it does not change configuration.
 
 `/reformat` requires a selection and expands it to complete touched lines. `/reformat-all` reformats the complete buffer and keeps the cursor on its logical line. Both commands change leading indentation only, preserve blank lines and all other bytes, and are one undo step. They use the active language mode and current tab width/style; YAML always uses spaces. Comments, strings, heredocs, Markdown fences, YAML block scalars, and other multiline protected regions do not influence nesting. Reformatting runs in a cancellable background job: press `Esc` to cancel. You may continue editing or switch buffers; stale results are discarded safely.
+
+### Text alignment and line cleanup
+
+`/left-align`, `/right-align`, `/center-align`, and `/justify` reflow text so lines fit a maximum display width (cells, not bytes). They apply to the **selection if present** (expanded to complete physical lines), otherwise the **whole buffer**. Blank lines separate paragraphs and are preserved; words are packed with ordinary spaces. **WIDTH** must be greater than 20 and at most 1000. If any word is wider than WIDTH, the command fails without changing the buffer. Omitting WIDTH opens a minibuffer prompt: `Enter width for the text-alignment (N default):` with the current default prefilled—press Enter to accept it. The default comes from `[editor] alignment-width` in config (78) and can be changed for the session with `/alignment-width WIDTH`. Justify stretches spaces between words on non-final paragraph lines (Word/CSS-like); the last line of each paragraph stays left-aligned. Each successful run is one undo step and works offline (`--provider none`).
+
+`/remove-blank-lines` drops empty and whitespace-only lines. `/remove-duplicate-blank-lines` collapses runs of consecutive blank lines to a single blank line. `/remove-duplicate-lines` keeps the first of each run of consecutive identical lines. All three use the same selection-or-whole-buffer scope and one undo step.
+
+### Chat and agent history display alignment
+
+In **chat** and **agent** TUI history (not the editor buffer), the same config default drives **display-only** reflow of every message role (user and assistant, and other history rows). Stored transcripts are not rewritten.
+
+| Command | Purpose |
+|---------|---------|
+| `/width [N\|-1]` | Show or set history/table column width. **`-1`** disables prose reflow (unlimited). Positive N must be > 20 and ≤ 1000. Alias: `/alignment-width`. |
+| `/left-align` | History align mode: left |
+| `/right-align` | History align mode: right (useful for Arabic and other RTL-leaning layouts) |
+| `/center-align` | History align mode: center |
+| `/justify-align` or `/justify` | History align mode: justify |
+
+Default mode is left-align; default width is `[editor] alignment-width` (78). On a wide terminal, prose wraps near that column so lines stay readable. Pretty Markdown tables are also capped to the effective width (session `/width` or the terminal content width, whichever is smaller): columns shrink and cell text word-wraps onto following lines so the table never runs past the margin. Fenced code is left intact; overlong prose words occupy their own line instead of failing.
 
 ## Configuration
 

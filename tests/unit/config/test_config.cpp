@@ -47,6 +47,7 @@ void test_config_applies_user_settings() {
     ainiux::config::ParseResult editor_config =
         ainiux::config::parse("[editor]\nundo_limit = 7\nhuge_file_size_warning = 2048\nfile_size_limit = -1\n"
                               "tab-width = 8\ntab-style = tab\nlinebreak = crlf\n"
+                              "alignment-width = 72\n"
                               "continue_prefix_max_chars = 8192\n"
                               "continue_postfix_max_chars = 1024\n"
                               "continue_prose_prefix_max_chars = 16300\n"
@@ -61,6 +62,7 @@ void test_config_applies_user_settings() {
               options.editor_tab_width == 8 &&
               options.editor_tab_style == ainiux::editor::TabStyle::Tab &&
               options.editor_linebreak == ainiux::editor::LineBreak::Crlf &&
+              options.editor_text_align_width == 72 &&
               options.editor_ai_continue_prefix_max_chars == 8192 &&
               options.editor_ai_continue_postfix_max_chars == 1024 &&
               options.editor_ai_continue_prose_prefix_max_chars == 16300 &&
@@ -780,7 +782,7 @@ void test_config_reads_models_template() {
 void test_config_reads_common_template() {
     ainiux::config::ParseResult parsed = ainiux::config::read_file("config/ainiux.conf");
     check(parsed.error.ok(), "common config file parses");
-    check(parsed.document.entries.size() == 69, "common config has every expected setting");
+    check(parsed.document.entries.size() == 70, "common config has every expected setting");
     ainiux::cli::Options highlight_options;
     ainiux::Error apply_error = ainiux::config::apply_document(parsed.document, highlight_options);
     check(apply_error.ok() && highlight_options.tui_highlight,
@@ -815,6 +817,7 @@ void test_config_reads_common_template() {
               options.editor_auto_save_postfix == "~" && options.editor_auto_save_threshold == 300 &&
               options.editor_auto_save_timeout_seconds == 30 &&
               options.editor_auto_save_size_limit == 10LL * 1024LL * 1024LL &&
+              options.editor_text_align_width == ainiux::editor::kDefaultTextAlignWidth &&
               options.media_max_size_to_store_to_db == 65536 &&
               options.media_expiration_days == 7 && options.media_auto_expiration_days == 30 &&
               options.editor_ai_continue_prefix_max_chars ==

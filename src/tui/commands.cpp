@@ -6,8 +6,11 @@
 #include "chat/settings.hpp"
 #include "cli/args.hpp"
 #include "ainiux/model_setting.hpp"
+#include "editor/text_layout.hpp"
 #include "tui/detail/render.hpp"
 #include "tui/theme_registry.hpp"
+
+#include <charconv>
 
 namespace ainiux::tui {
 
@@ -23,6 +26,10 @@ bool allowed_for_read_only_thread(const std::string& text) {
            text.rfind("/load ", 0) == 0 || text == "/theme" ||
            text.rfind("/theme ", 0) == 0 || text == "/highlight" ||
            text.rfind("/highlight ", 0) == 0 ||
+           text == "/width" || text.rfind("/width ", 0) == 0 ||
+           text == "/alignment-width" || text.rfind("/alignment-width ", 0) == 0 ||
+           text == "/left-align" || text == "/right-align" || text == "/center-align" ||
+           text == "/justify" || text == "/justify-align" ||
            text == "/shell" || text.rfind("/shell ", 0) == 0 ||
            text == "/shell-stdout" || text.rfind("/shell-stdout ", 0) == 0;
 }
@@ -167,6 +174,8 @@ void handle_tui_command(const std::string& text, TuiCommandContext& ctx, TuiComm
                 "/shell-stdout COMMAND  or  !!COMMAND (stdout → editable input draft)\n"
                 "/theme [THEME]\n"
                 "/highlight [on|off]\n"
+                "/width [N|-1] (history/table width; -1 unlimited; alias /alignment-width)\n"
+                "/left-align /right-align /center-align /justify-align (history align mode)\n"
                 "/thinking [trace|notrace]\n"
                 "/editor (switch to editor mode)\n"
                 "/chat (switch to ordinary chat mode)\n"
@@ -232,6 +241,76 @@ void handle_tui_command(const std::string& text, TuiCommandContext& ctx, TuiComm
             return;
         }
         ctx.status = "Usage: /thinking trace|notrace";
+        return;
+    }
+    if (text == "/width" || text.rfind("/width ", 0) == 0 || text == "/alignment-width" ||
+        text.rfind("/alignment-width ", 0) == 0) {
+        std::string requested;
+        if (text == "/width" || text.rfind("/width ", 0) == 0) {
+            requested = text.size() <= 6 ? "" : app::detail::trim_ascii(text.substr(6));
+        } else {
+            requested = text.size() <= 16 ? "" : app::detail::trim_ascii(text.substr(16));
+        }
+        if (requested.empty()) {
+            if (ctx.history_align_width < 0) {
+                ctx.status = "History width: unlimited (-1)";
+            } else {
+                ctx.status =
+                    "History width: " + std::to_string(ctx.history_align_width);
+            }
+            return;
+        }
+        long long width = 0;
+        const char* begin = requested.data();
+        const char* end = begin + requested.size();
+        const std::from_chars_result parsed = std::from_chars(begin, end, width);
+        if (parsed.ec != std::errc{} || parsed.ptr != end ||
+            !editor::valid_chat_align_width(width)) {
+            ctx.status =
+                "Usage: /width [N|-1]  (N > 20 and ≤ 1000, or -1 unlimited; "
+                "alias /alignment-width)";
+            return;
+        }
+        ctx.history_align_width = width;
+        if (width < 0) {
+            ctx.status = "History width: unlimited (no prose reflow; tables still fit the screen)";
+        } else {
+            ctx.status = "History width: " + std::to_string(width);
+        }
+        return;
+    }
+    auto set_history_align_mode = [&](editor::TextAlignMode mode, const char* label) {
+        ctx.history_align_mode = mode;
+        std::string status = std::string("History align mode: ") + label;
+        if (ctx.history_align_width < 0) {
+            status += " (width unlimited; set /width to apply prose reflow)";
+        } else {
+            status += " at " + std::to_string(ctx.history_align_width) + " columns";
+        }
+        ctx.status = std::move(status);
+    };
+    if (text == "/left-align") {
+        set_history_align_mode(editor::TextAlignMode::Left, "left-align");
+        return;
+    }
+    if (text == "/right-align") {
+        set_history_align_mode(editor::TextAlignMode::Right, "right-align");
+        return;
+    }
+    if (text == "/center-align") {
+        set_history_align_mode(editor::TextAlignMode::Center, "center-align");
+        return;
+    }
+    if (text == "/justify" || text == "/justify-align") {
+        set_history_align_mode(editor::TextAlignMode::Justify, "justify");
+        return;
+    }
+    if (text.rfind("/left-align ", 0) == 0 || text.rfind("/right-align ", 0) == 0 ||
+        text.rfind("/center-align ", 0) == 0 || text.rfind("/justify ", 0) == 0 ||
+        text.rfind("/justify-align ", 0) == 0) {
+        ctx.status =
+            "Usage: /left-align | /right-align | /center-align | /justify-align  "
+            "(mode only; set column width with /width)";
         return;
     }
     if (text == "/highlight" || text.rfind("/highlight ", 0) == 0) {

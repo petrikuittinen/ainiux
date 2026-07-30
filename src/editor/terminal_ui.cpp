@@ -10,12 +10,14 @@
 #include "editor/editor_assist.hpp"
 #include "editor/selection.hpp"
 #include "editor/terminal_input.hpp"
+#include "editor/text_layout.hpp"
 #include "tui/activity.hpp"
 #include "tui/detail/render.hpp"
 #include "tui/theme_registry.hpp"
 #include "ui/confirmation.hpp"
 
 #include <cerrno>
+#include <charconv>
 #include <cstring>
 #include <filesystem>
 #include <iostream>
@@ -294,6 +296,7 @@ Error paste_into_minibuffer(MinibufferState& minibuffer, const std::string& text
         case MinibufferAction::ReplaceSearch:
         case MinibufferAction::ReplaceWith:
         case MinibufferAction::AssistCommand:
+        case MinibufferAction::TextAlignWidth:
             break;
         case MinibufferAction::None:
         case MinibufferAction::ConfirmLoad:
@@ -756,6 +759,59 @@ void submit_minibuffer(EditorState& state,
     if (action == MinibufferAction::ReplaceWith) {
         replace.replacement = raw_value;
         begin_replace_choices(state, minibuffer, replace);
+        return;
+    }
+    if (action == MinibufferAction::TextAlignWidth) {
+        size_t width = minibuffer.text_align_default_width;
+        if (!value.empty()) {
+            size_t parsed = 0;
+            const char* begin = value.data();
+            const char* end = begin + value.size();
+            const std::from_chars_result fc = std::from_chars(begin, end, parsed);
+            if (fc.ec != std::errc{} || fc.ptr != end || !valid_text_align_width(parsed)) {
+                minibuffer.prompt =
+                    "Enter width for the text-alignment (" +
+                    std::to_string(minibuffer.text_align_default_width) +
+                    " default); width must be 21–1000: ";
+                minibuffer.input.clear();
+                return;
+            }
+            width = parsed;
+        } else if (!valid_text_align_width(width)) {
+            minibuffer_message(minibuffer,
+                               "Invalid default alignment width; set [editor] alignment-width "
+                               "greater than 20");
+            return;
+        }
+        TextAlignMode mode = static_cast<TextAlignMode>(minibuffer.text_align_mode);
+        Error writable = state.mutation_allowed();
+        if (!writable.ok()) {
+            minibuffer_message(minibuffer, writable.message);
+            return;
+        }
+        size_t start = 0;
+        size_t end = 0;
+        bool had_selection = false;
+        text_layout_scope(state, start, end, had_selection);
+        const std::string scope = state.text.range_text(start, end - start);
+        TextLayoutResult layout = reflow_align(scope, mode, width);
+        if (!layout.error.ok()) {
+            minibuffer_message(minibuffer, layout.error.message);
+            return;
+        }
+        Error apply_error =
+            apply_text_layout_result(state, start, end, had_selection, layout);
+        if (!apply_error.ok()) {
+            minibuffer_message(minibuffer, apply_error.message);
+            return;
+        }
+        if (!layout.changed) {
+            minibuffer_message(minibuffer, "No changes");
+            return;
+        }
+        minibuffer_message(minibuffer,
+                           std::string(text_align_mode_name(mode)) + " to " +
+                               std::to_string(width) + " columns");
         return;
     }
     if (action == MinibufferAction::ConfirmLoad) {

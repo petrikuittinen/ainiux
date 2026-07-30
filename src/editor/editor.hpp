@@ -75,6 +75,9 @@ constexpr size_t kDefaultAiContinueProsePostfixMaxChars = 4096;
 constexpr int kDefaultAiContinueMaxTokens = 32768;
 constexpr size_t kDefaultTabWidth = 4;
 constexpr size_t kMaxTabWidth = 32;
+constexpr size_t kDefaultTextAlignWidth = 78;
+constexpr size_t kMinTextAlignWidthExclusive = 20;
+constexpr size_t kMaxTextAlignWidth = 1000;
 
 enum class TabStyle {
     Spaces,
@@ -108,6 +111,9 @@ struct EditorSettings {
     size_t tab_width = kDefaultTabWidth;
     TabStyle tab_style = TabStyle::Spaces;
     LineBreak linebreak = LineBreak::Lf;
+    // Default column width for /left-align, /right-align, /center-align, /justify
+    // when the user omits WIDTH (must be greater than 20).
+    size_t text_align_width = kDefaultTextAlignWidth;
 };
 
 struct AiContinueContext;

@@ -17,6 +17,7 @@
 #include "editor/reformat.hpp"
 #include "editor/selection.hpp"
 #include "editor/split.hpp"
+#include "editor/text_layout.hpp"
 #include "editor/terminal_input.hpp"
 #include "editor/terminal_ui.hpp"
 #include <algorithm>
@@ -4427,6 +4428,113 @@ void test_editor_markdown_mode_and_structured_highlighting() {
           "editor status line displays CR mode");
 }
 
+
+void test_editor_text_layout_align_and_cleanup() {
+    using ainiux::editor::TextAlignMode;
+    using ainiux::editor::TextLayoutResult;
+    using ainiux::editor::reflow_align;
+    using ainiux::editor::remove_blank_lines;
+    using ainiux::editor::remove_duplicate_blank_lines;
+    using ainiux::editor::remove_duplicate_lines;
+    using ainiux::editor::valid_text_align_width;
+
+    check(!valid_text_align_width(20) && !valid_text_align_width(0) && valid_text_align_width(21) &&
+              valid_text_align_width(78),
+          "alignment width must be greater than 20");
+
+    TextLayoutResult bad = reflow_align("hello world", TextAlignMode::Left, 20);
+    check(!bad.error.ok(), "width 20 is rejected");
+
+    const std::string sample =
+        "The quick brown fox jumps over the lazy dog near the river bank today.\n\n"
+        "Second paragraph stays separate.\n";
+    TextLayoutResult left = reflow_align(sample, TextAlignMode::Left, 40);
+    check(left.error.ok() && left.changed && left.replacement.find("\n\n") != std::string::npos,
+          "left-align reflows and keeps blank paragraph separators");
+    check(left.replacement.find("Second paragraph") != std::string::npos,
+          "left-align preserves later paragraphs");
+
+    const std::string short_para = "one two three four five six seven eight nine ten\n";
+    TextLayoutResult right = reflow_align(short_para, TextAlignMode::Right, 40);
+    check(right.error.ok() && right.changed, "right-align succeeds");
+    const size_t first_nl = right.replacement.find('\n');
+    const std::string first_line =
+        right.replacement.substr(0, first_nl == std::string::npos ? right.replacement.size()
+                                                                  : first_nl);
+    check(!first_line.empty() && first_line.front() == ' ',
+          "right-align pads leading spaces on short lines");
+
+    TextLayoutResult center = reflow_align("hello world\n", TextAlignMode::Center, 40);
+    check(center.error.ok() && center.changed &&
+              center.replacement.find("hello world") != std::string::npos,
+          "center-align keeps words");
+
+    TextLayoutResult just = reflow_align(
+        "alpha beta gamma delta epsilon zeta eta theta iota kappa\n", TextAlignMode::Justify, 40);
+    check(just.error.ok() && just.changed, "justify reflows multi-word lines");
+    check(just.replacement.find('\n') != std::string::npos ||
+              just.replacement.find("  ") != std::string::npos,
+          "justify produces wrapped or stretched output");
+
+    TextLayoutResult long_word =
+        reflow_align("short supercalifragilisticexpialidocious word\n", TextAlignMode::Left, 21);
+    check(!long_word.error.ok() && long_word.error.message.find("wider") != std::string::npos,
+          "word longer than width fails without rewrite");
+
+    TextLayoutResult blanks = remove_blank_lines("a\n\n  \nb\n\n");
+    check(blanks.error.ok() && blanks.changed && blanks.replacement.find("\n\n") == std::string::npos &&
+              blanks.replacement.find("a\nb") != std::string::npos,
+          "remove-blank-lines drops empty and whitespace-only lines");
+
+    TextLayoutResult dup_blank = remove_duplicate_blank_lines("a\n\n\n\nb\n");
+    check(dup_blank.error.ok() && dup_blank.changed &&
+              dup_blank.replacement.find("a\n\nb") != std::string::npos,
+          "remove-duplicate-blank-lines collapses consecutive blanks");
+
+    TextLayoutResult uniq = remove_duplicate_lines("a\na\nb\na\n");
+    check(uniq.error.ok() && uniq.changed && uniq.replacement.find("a\nb\na") != std::string::npos,
+          "remove-duplicate-lines is consecutive-only");
+
+    ainiux::editor::EditorState state;
+    check(state.insert("line one two three four five six seven\nsecond\n").ok(),
+          "layout apply fixture inserts");
+    size_t start = 0;
+    size_t end = 0;
+    bool had_selection = false;
+    ainiux::editor::text_layout_scope(state, start, end, had_selection);
+    check(!had_selection && start == 0 && end == state.text.size(),
+          "layout scope uses whole buffer without selection");
+    TextLayoutResult applied =
+        reflow_align(state.text.range_text(start, end - start), TextAlignMode::Left, 30);
+    check(applied.error.ok(), "layout apply reflow succeeds");
+    check(ainiux::editor::apply_text_layout_result(state, start, end, had_selection, applied).ok(),
+          "layout apply mutates buffer");
+        check(state.can_undo(), "layout apply records undo");
+
+    check(ainiux::editor::valid_chat_align_width(-1) &&
+              !ainiux::editor::valid_chat_align_width(20) &&
+              ainiux::editor::valid_chat_align_width(78),
+          "chat alignment width accepts -1 unlimited and widths > 20");
+    const std::string with_code =
+        "Prose that should wrap when the line is fairly long indeed.\n"
+        "```\n"
+        "code line stays intact even if very long xxxxxxxxxxxxxxxxxxxxxxxx\n"
+        "```\n"
+        "More prose after the fence continues normally here.\n";
+    TextLayoutResult display =
+        ainiux::editor::reflow_align_display(with_code, TextAlignMode::Left, 40);
+    check(display.error.ok() && display.replacement.find("```") != std::string::npos &&
+              display.replacement.find("code line stays intact") != std::string::npos,
+          "display reflow preserves fenced code blocks");
+    TextLayoutResult overlong =
+        ainiux::editor::reflow_align_display("short supercalifragilisticexpialidocious\n",
+                                             TextAlignMode::Left, 21);
+    check(overlong.error.ok() &&
+              overlong.replacement.find("supercalifragilisticexpialidocious") != std::string::npos,
+          "display reflow keeps overlong words on their own line");
+}
+
+
 void run_all() {
     test_system_clipboard_helpers();
     test_system_clipboard_cancellation_and_limits();
@@ -4486,6 +4594,7 @@ void run_all() {
     test_editor_vertical_navigation_modes();
     test_editor_word_wrap_breaks_on_spaces();
     test_editor_word_wrap_rendering();
+    test_editor_text_layout_align_and_cleanup();
 }
 
 }  // namespace ainiux::test::editor

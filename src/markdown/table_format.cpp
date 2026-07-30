@@ -402,7 +402,7 @@ void compute_widths(const std::vector<std::string>& headers,
                     const std::vector<std::vector<std::string>>& body_rows,
                     size_t columns,
                     std::vector<size_t>& widths) {
-    widths.assign(columns, 3);
+    widths.assign(columns, 1);
     for (size_t i = 0; i < columns; ++i) {
         if (i < headers.size()) {
             widths[i] = std::max(widths[i], table_display_width(headers[i]));
@@ -415,6 +415,200 @@ void compute_widths(const std::vector<std::string>& headers,
             }
         }
     }
+}
+
+// Border overhead in display cells for a table with `columns` data columns.
+// Unicode and GFM both use: left edge + (pad + content + pad + edge) * columns.
+// Content padding is one space on each side → +2 per column, +1 border char per
+// column, plus one final edge → overhead = 3 * columns + 1.
+size_t table_border_overhead(size_t columns) {
+    if (columns == 0) {
+        return 0;
+    }
+    return 3 * columns + 1;
+}
+
+// Shrink natural column widths so sum(widths) + overhead <= max_width.
+// Always shrink the current widest column first so narrow headers keep more room.
+void constrain_column_widths(std::vector<size_t>& widths, size_t max_width) {
+    if (max_width == 0 || widths.empty()) {
+        return;
+    }
+    const size_t overhead = table_border_overhead(widths.size());
+    if (overhead >= max_width) {
+        for (size_t& w : widths) {
+            w = 1;
+        }
+        return;
+    }
+    const size_t budget = max_width - overhead;
+    auto sum_widths = [&]() {
+        size_t sum = 0;
+        for (size_t w : widths) {
+            sum += w;
+        }
+        return sum;
+    };
+    while (sum_widths() > budget) {
+        size_t best = 0;
+        for (size_t i = 1; i < widths.size(); ++i) {
+            if (widths[i] > widths[best]) {
+                best = i;
+            }
+        }
+        if (widths[best] <= 1) {
+            break;
+        }
+        --widths[best];
+    }
+}
+
+// Word-wrap (then hard-break overlong tokens) to at most `width` display cells.
+std::vector<std::string> wrap_cell_to_width(const std::string& cell, size_t width) {
+    std::vector<std::string> lines;
+    if (width == 0) {
+        lines.push_back(cell);
+        return lines;
+    }
+    if (cell.empty()) {
+        lines.push_back("");
+        return lines;
+    }
+
+    auto hard_break = [&](const std::string& token) {
+        size_t pos = 0;
+        while (pos < token.size()) {
+            size_t start = pos;
+            size_t used = 0;
+            while (pos < token.size()) {
+                size_t len = 1;
+                uint32_t cp = 0;
+                decode_utf8(token, pos, len, cp);
+                size_t cw = 1;
+                if (is_zero_width(cp)) {
+                    cw = 0;
+                } else if (is_wide_codepoint(cp)) {
+                    cw = 2;
+                }
+                if (used > 0 && used + cw > width) {
+                    break;
+                }
+                if (cw > width && used == 0) {
+                    // Single wide glyph wider than column: still emit it.
+                    pos += len;
+                    used += cw;
+                    break;
+                }
+                pos += len;
+                used += cw;
+            }
+            lines.push_back(token.substr(start, pos - start));
+        }
+    };
+
+    size_t i = 0;
+    std::string current;
+    size_t current_w = 0;
+    auto flush = [&]() {
+        lines.push_back(current);
+        current.clear();
+        current_w = 0;
+    };
+    while (i < cell.size()) {
+        while (i < cell.size() && is_space(cell[i]) && cell[i] != '\n') {
+            ++i;
+        }
+        if (i >= cell.size()) {
+            break;
+        }
+        if (cell[i] == '\n') {
+            flush();
+            ++i;
+            continue;
+        }
+        const size_t begin = i;
+        while (i < cell.size() && !is_space(cell[i]) && cell[i] != '\n') {
+            ++i;
+        }
+        const std::string word = cell.substr(begin, i - begin);
+        const size_t word_w = table_display_width(word);
+        if (word_w > width) {
+            if (!current.empty()) {
+                flush();
+            }
+            hard_break(word);
+            continue;
+        }
+        if (current.empty()) {
+            current = word;
+            current_w = word_w;
+        } else if (current_w + 1 + word_w <= width) {
+            current.push_back(' ');
+            current += word;
+            current_w += 1 + word_w;
+        } else {
+            flush();
+            current = word;
+            current_w = word_w;
+        }
+    }
+    if (!current.empty() || lines.empty()) {
+        flush();
+    }
+    return lines;
+}
+
+std::vector<std::string> format_wrapped_unicode_row(
+    const std::vector<std::string>& cells,
+    const std::vector<size_t>& widths,
+    const std::vector<TableAlign>& aligns) {
+    std::vector<std::vector<std::string>> wrapped;
+    size_t max_lines = 1;
+    wrapped.reserve(widths.size());
+    for (size_t i = 0; i < widths.size(); ++i) {
+        const std::string cell = i < cells.size() ? cells[i] : "";
+        auto lines = wrap_cell_to_width(cell, widths[i]);
+        max_lines = std::max(max_lines, lines.size());
+        wrapped.push_back(std::move(lines));
+    }
+    std::vector<std::string> out;
+    out.reserve(max_lines);
+    for (size_t line = 0; line < max_lines; ++line) {
+        std::vector<std::string> row_cells(widths.size());
+        for (size_t c = 0; c < widths.size(); ++c) {
+            if (line < wrapped[c].size()) {
+                row_cells[c] = wrapped[c][line];
+            }
+        }
+        out.push_back(format_unicode_row(row_cells, widths, aligns, u8"│", u8"│", u8"│"));
+    }
+    return out;
+}
+
+std::vector<std::string> format_wrapped_gfm_row(const std::vector<std::string>& cells,
+                                                 const std::vector<size_t>& widths,
+                                                 const std::vector<TableAlign>& aligns) {
+    std::vector<std::vector<std::string>> wrapped;
+    size_t max_lines = 1;
+    wrapped.reserve(widths.size());
+    for (size_t i = 0; i < widths.size(); ++i) {
+        const std::string cell = i < cells.size() ? cells[i] : "";
+        auto lines = wrap_cell_to_width(cell, widths[i]);
+        max_lines = std::max(max_lines, lines.size());
+        wrapped.push_back(std::move(lines));
+    }
+    std::vector<std::string> out;
+    out.reserve(max_lines);
+    for (size_t line = 0; line < max_lines; ++line) {
+        std::vector<std::string> row_cells(widths.size());
+        for (size_t c = 0; c < widths.size(); ++c) {
+            if (line < wrapped[c].size()) {
+                row_cells[c] = wrapped[c][line];
+            }
+        }
+        out.push_back(format_gfm_row(row_cells, widths, aligns));
+    }
+    return out;
 }
 
 std::vector<TableAlign> normalize_aligns(const std::vector<TableAlign>& aligns, size_t columns) {
@@ -464,7 +658,8 @@ std::size_t table_display_width(const std::string& text) {
 std::string format_table(const std::vector<std::string>& headers,
                          const std::vector<TableAlign>& aligns,
                          const std::vector<std::vector<std::string>>& body_rows,
-                         TableStyle style) {
+                         TableStyle style,
+                         std::size_t max_width) {
     size_t columns = headers.size();
     for (const auto& row : body_rows) {
         columns = std::max(columns, row.size());
@@ -477,23 +672,46 @@ std::string format_table(const std::vector<std::string>& headers,
     const std::vector<TableAlign> use_aligns = normalize_aligns(aligns, columns);
     std::vector<size_t> widths;
     compute_widths(head, body_rows, columns, widths);
+    constrain_column_widths(widths, max_width);
+    // Wrap cells when constrained so overlong text moves to following lines.
+    const bool use_wrap = max_width > 0;
 
     std::vector<std::string> lines;
     if (style == TableStyle::PaddedGfm) {
-        lines.push_back(format_gfm_row(head, widths, use_aligns));
+        if (use_wrap) {
+            auto head_lines = format_wrapped_gfm_row(head, widths, use_aligns);
+            lines.insert(lines.end(), head_lines.begin(), head_lines.end());
+        } else {
+            lines.push_back(format_gfm_row(head, widths, use_aligns));
+        }
         lines.push_back(format_gfm_separator(widths, use_aligns));
         for (const auto& row : body_rows) {
-            lines.push_back(format_gfm_row(normalize_row(row, columns), widths, use_aligns));
+            if (use_wrap) {
+                auto body_lines =
+                    format_wrapped_gfm_row(normalize_row(row, columns), widths, use_aligns);
+                lines.insert(lines.end(), body_lines.begin(), body_lines.end());
+            } else {
+                lines.push_back(format_gfm_row(normalize_row(row, columns), widths, use_aligns));
+            }
         }
     } else {
-        // Unicode box
         lines.push_back(format_unicode_rule(widths, u8"┌", u8"┬", u8"┐", u8"─"));
-        lines.push_back(format_unicode_row(head, widths, use_aligns, u8"│", u8"│", u8"│"));
+        if (use_wrap) {
+            auto head_lines = format_wrapped_unicode_row(head, widths, use_aligns);
+            lines.insert(lines.end(), head_lines.begin(), head_lines.end());
+        } else {
+            lines.push_back(format_unicode_row(head, widths, use_aligns, u8"│", u8"│", u8"│"));
+        }
         lines.push_back(format_unicode_rule(widths, u8"├", u8"┼", u8"┤", u8"─"));
         for (const auto& row : body_rows) {
-            lines.push_back(
-                format_unicode_row(normalize_row(row, columns), widths, use_aligns, u8"│", u8"│",
-                                   u8"│"));
+            if (use_wrap) {
+                auto body_lines =
+                    format_wrapped_unicode_row(normalize_row(row, columns), widths, use_aligns);
+                lines.insert(lines.end(), body_lines.begin(), body_lines.end());
+            } else {
+                lines.push_back(format_unicode_row(normalize_row(row, columns), widths, use_aligns,
+                                                   u8"│", u8"│", u8"│"));
+            }
         }
         lines.push_back(format_unicode_rule(widths, u8"└", u8"┴", u8"┘", u8"─"));
     }
@@ -565,7 +783,7 @@ std::string pretty_format_tables(const std::string& text, const TableFormatOptio
                 }
             } else {
                 const std::string formatted =
-                    format_table(headers, aligns, body, options.style);
+                    format_table(headers, aligns, body, options.style, options.max_width);
                 std::vector<std::string> formatted_lines = split_lines_keep_last_empty(formatted);
                 if (!formatted_lines.empty() && formatted_lines.back().empty()) {
                     formatted_lines.pop_back();
@@ -589,6 +807,14 @@ std::string pretty_format_tables(const std::string& text) {
     TableFormatOptions options;
     options.style = default_table_style();
     options.reformat_open_tables = true;
+    return pretty_format_tables(text, options);
+}
+
+std::string pretty_format_tables(const std::string& text, std::size_t max_width) {
+    TableFormatOptions options;
+    options.style = default_table_style();
+    options.reformat_open_tables = true;
+    options.max_width = max_width;
     return pretty_format_tables(text, options);
 }
 

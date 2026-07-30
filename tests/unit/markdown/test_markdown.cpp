@@ -254,6 +254,39 @@ void test_pretty_format_tables_streaming_and_fences() {
 
 }  // namespace
 
+
+void test_pretty_table_max_width_wraps_cells() {
+    const std::string input =
+        "| Language | Description |\n"
+        "| --- | --- |\n"
+        "| JSON | A compact data format used widely on the web and in APIs |\n"
+        "| Markdown | A lightweight markup language for readable plain text |\n";
+    ainiux::markdown::TableFormatOptions options;
+    options.style = ainiux::markdown::TableStyle::UnicodeBox;
+    options.max_width = 40;
+    const std::string pretty = ainiux::markdown::pretty_format_tables(input, options);
+    check(pretty.find(u8"┌") != std::string::npos, "max-width tables still use Unicode boxes");
+    bool any_too_wide = false;
+    size_t start = 0;
+    while (start < pretty.size()) {
+        size_t end = pretty.find('\n', start);
+        if (end == std::string::npos) end = pretty.size();
+        const std::string line = pretty.substr(start, end - start);
+        if (ainiux::markdown::table_display_width(line) > 40) {
+            any_too_wide = true;
+            break;
+        }
+        start = end + (end < pretty.size() ? 1 : 0);
+        if (end == pretty.size()) break;
+    }
+    check(!any_too_wide, "max_width constrains every rendered table line to 40 cells");
+    check(pretty.find("JSON") != std::string::npos &&
+              (pretty.find("Markdown") != std::string::npos ||
+               pretty.find("Mark") != std::string::npos) &&
+              pretty.find("compact") != std::string::npos,
+          "max-width wrap keeps cell content (words may wrap within columns)");
+}
+
 void run_all() {
     test_llm_typical_markdown_to_html_fixture();
     test_comprehensive_markdown_to_html_fixture();
@@ -262,6 +295,7 @@ void run_all() {
     test_markdown_plaintext_and_document_rendering();
     test_pretty_table_unicode_and_gfm();
     test_pretty_format_tables_streaming_and_fences();
+    test_pretty_table_max_width_wraps_cells();
 }
 
 }  // namespace ainiux::test::markdown

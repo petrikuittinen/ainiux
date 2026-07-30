@@ -6,6 +6,7 @@
 
 #include "agent/tool_display.hpp"
 #include "app/detail.hpp"
+#include "editor/text_layout.hpp"
 #include "markdown/table_format.hpp"
 #include "provider/provider.hpp"
 
@@ -416,7 +417,8 @@ std::vector<StyledLine> history_lines_for_session(const chat::Session& session,
                                                   ActivityKind activity_kind,
                                                   size_t activity_frame,
                                                   bool markdown_highlight,
-                                                  bool agent_mode) {
+                                                  bool agent_mode,
+                                                  HistoryTextLayout text_layout) {
     std::vector<StyledLine> history;
     const int min_content_width = 8;
     // Agent total task time is relative to the most recent user message timestamp.
@@ -487,10 +489,32 @@ std::vector<StyledLine> history_lines_for_session(const chat::Session& session,
                                               activity_frame,
                                               "working...");
         } else {
-            // Display-only: pad/box GFM tables without rewriting stored transcripts.
-            // Live streaming reformats open tables as new rows arrive.
+            // Display-only table pretty-print and prose reflow. Cap tables at the
+            // effective history width so they do not exceed the screen / /width.
+            const int prefix_cells = static_cast<int>(prefix.size());
+            const int content_cols =
+                std::max(min_content_width, cols - prefix_cells);
+            size_t table_max = static_cast<size_t>(content_cols);
+            if (text_layout.width > 0) {
+                table_max = std::min(table_max, static_cast<size_t>(text_layout.width));
+            }
             if (!content.empty()) {
-                content = markdown::pretty_format_tables(content);
+                content = markdown::pretty_format_tables(content, table_max);
+            }
+            // Display-only prose reflow to a fixed column width (wide terminals).
+            // -1 / non-positive: unlimited. Fences and tables are preserved.
+            if (!content.empty() && text_layout.width > 0) {
+                size_t target = static_cast<size_t>(text_layout.width);
+                if (static_cast<size_t>(content_cols) < target) {
+                    target = static_cast<size_t>(content_cols);
+                }
+                if (target > 0) {
+                    const editor::TextLayoutResult laid = editor::reflow_align_display(
+                        content, text_layout.mode, target);
+                    if (laid.error.ok()) {
+                        content = laid.replacement;
+                    }
+                }
             }
             content_segments = markdown_highlight ? markdown_segments(content) : plain_text_segments(content);
             if (message.role == "assistant" && show_thinking_traces) {

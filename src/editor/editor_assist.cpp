@@ -936,6 +936,14 @@ std::vector<std::string> assist_command_completions(const EditorAssistConfig& co
     commands.push_back("/auto-convert-html-to-md no");
     commands.push_back("/reformat");
     commands.push_back("/reformat-all");
+    commands.push_back("/left-align ");
+    commands.push_back("/right-align ");
+    commands.push_back("/center-align ");
+    commands.push_back("/justify ");
+    commands.push_back("/alignment-width ");
+    commands.push_back("/remove-blank-lines");
+    commands.push_back("/remove-duplicate-blank-lines");
+    commands.push_back("/remove-duplicate-lines");
     commands.push_back("/provider ");
     commands.push_back("/model ");
     commands.push_back("/context ");
