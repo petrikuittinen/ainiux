@@ -188,6 +188,21 @@ void append_scrollbar_cell(std::string& output,
     }
 }
 
+// Pane chrome separators must use theme colors: unstyled box-drawing inherits the
+// terminal default (often near-black), which disappears on dark backgrounds.
+void append_pane_separator_glyph(std::string& output,
+                                 const TerminalThemeStyle& theme_style,
+                                 const char* glyph) {
+    if (theme_style.use_colors && theme_style.themes != nullptr) {
+        output += tui::style_sequence_for(
+            *theme_style.themes, theme_style.theme_name, tui::StyleRole::PanelBorder);
+    }
+    output += glyph;
+    if (theme_style.use_colors && theme_style.themes != nullptr) {
+        output += "\x1b[0m";
+    }
+}
+
 }  // namespace
 
 std::string minibuffer_text(const MinibufferState& minibuffer) {
@@ -1355,7 +1370,7 @@ void render_terminal_splits(
         }
     }
 
-    // Draw simple separator glyphs between adjacent panes when multiple exist.
+    // Draw themed separator glyphs between adjacent panes when multiple exist.
     if (panes.size() > 1) {
         for (size_t i = 0; i < panes.size(); ++i) {
             for (size_t j = i + 1; j < panes.size(); ++j) {
@@ -1366,34 +1381,50 @@ void render_terminal_splits(
                     const int sep_col = a.col + a.width;
                     for (int row = 0; row < a.height; ++row) {
                         const int terminal_row = a.row + row;
-                        frame.append_to_row(
-                            terminal_row,
-                            terminal_position(terminal_row, sep_col) + u8"│");
+                        std::string sep = terminal_position(terminal_row, sep_col);
+                        append_pane_separator_glyph(sep, theme_style, u8"│");
+                        frame.append_to_row(terminal_row, std::move(sep));
                     }
                 }
                 if (b.row == a.row && b.height == a.height && a.col == b.col + b.width + 1) {
                     const int sep_col = b.col + b.width;
                     for (int row = 0; row < b.height; ++row) {
                         const int terminal_row = b.row + row;
-                        frame.append_to_row(
-                            terminal_row,
-                            terminal_position(terminal_row, sep_col) + u8"│");
+                        std::string sep = terminal_position(terminal_row, sep_col);
+                        append_pane_separator_glyph(sep, theme_style, u8"│");
+                        frame.append_to_row(terminal_row, std::move(sep));
                     }
                 }
                 // Horizontal separator.
                 if (a.col == b.col && a.width == b.width && b.row == a.row + a.height + 1) {
                     const int sep_row = a.row + a.height;
                     std::string separator = terminal_position(sep_row, a.col);
+                    if (theme_style.use_colors && theme_style.themes != nullptr) {
+                        separator += tui::style_sequence_for(*theme_style.themes,
+                                                             theme_style.theme_name,
+                                                             tui::StyleRole::PanelBorder);
+                    }
                     for (int col = 0; col < a.width; ++col) {
                         separator += u8"─";
+                    }
+                    if (theme_style.use_colors && theme_style.themes != nullptr) {
+                        separator += "\x1b[0m";
                     }
                     frame.append_to_row(sep_row, std::move(separator));
                 }
                 if (b.col == a.col && b.width == a.width && a.row == b.row + b.height + 1) {
                     const int sep_row = b.row + b.height;
                     std::string separator = terminal_position(sep_row, b.col);
+                    if (theme_style.use_colors && theme_style.themes != nullptr) {
+                        separator += tui::style_sequence_for(*theme_style.themes,
+                                                             theme_style.theme_name,
+                                                             tui::StyleRole::PanelBorder);
+                    }
                     for (int col = 0; col < b.width; ++col) {
                         separator += u8"─";
+                    }
+                    if (theme_style.use_colors && theme_style.themes != nullptr) {
+                        separator += "\x1b[0m";
                     }
                     frame.append_to_row(sep_row, std::move(separator));
                 }
