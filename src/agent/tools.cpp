@@ -12,11 +12,13 @@
 #include <iomanip>
 #include <iterator>
 #include <limits>
+#include <map>
 #include <mutex>
 #include <regex>
 #include <set>
 #include <sstream>
 #include <thread>
+#include <utility>
 #include <sys/stat.h>
 #include <unistd.h>
 
@@ -713,6 +715,71 @@ bool has_unescaped_alternation(const std::string& query) {
         if (left_content && right_content) return true;
     }
     return false;
+}
+
+// Parse one ripgrep line-oriented hit: "path:line:text" (match) or
+// "path-line-text" (context with -C). Paths are expected not to contain ':'.
+bool parse_rg_output_line(const std::string& line,
+                          std::string& path,
+                          std::size_t& line_number,
+                          std::string& text,
+                          bool& is_match) {
+    path.clear();
+    text.clear();
+    line_number = 0;
+    is_match = false;
+    if (line.empty() || line == "--") return false;
+    // Prefer match form path:line:text (first colon after path, second after line).
+    const std::size_t first = line.find(':');
+    if (first != std::string::npos && first > 0) {
+        const std::size_t second = line.find(':', first + 1);
+        if (second != std::string::npos && second > first + 1) {
+            bool digits = true;
+            for (std::size_t i = first + 1; i < second; ++i) {
+                if (line[i] < '0' || line[i] > '9') {
+                    digits = false;
+                    break;
+                }
+            }
+            if (digits) {
+                path = normalize_glob_path(line.substr(0, first));
+                try {
+                    line_number = static_cast<std::size_t>(std::stoul(line.substr(
+                        first + 1, second - first - 1)));
+                } catch (...) {
+                    return false;
+                }
+                if (line_number == 0) return false;
+                text = line.substr(second + 1);
+                is_match = true;
+                return true;
+            }
+        }
+    }
+    // Context form path-line-text (hyphen separators).
+    const std::size_t hyphen = line.find('-');
+    if (hyphen == std::string::npos || hyphen == 0) return false;
+    const std::size_t hyphen2 = line.find('-', hyphen + 1);
+    if (hyphen2 == std::string::npos || hyphen2 <= hyphen + 1) return false;
+    bool digits = true;
+    for (std::size_t i = hyphen + 1; i < hyphen2; ++i) {
+        if (line[i] < '0' || line[i] > '9') {
+            digits = false;
+            break;
+        }
+    }
+    if (!digits) return false;
+    path = normalize_glob_path(line.substr(0, hyphen));
+    try {
+        line_number = static_cast<std::size_t>(
+            std::stoul(line.substr(hyphen + 1, hyphen2 - hyphen - 1)));
+    } catch (...) {
+        return false;
+    }
+    if (line_number == 0) return false;
+    text = line.substr(hyphen2 + 1);
+    is_match = false;
+    return true;
 }
 
 std::string lowercase(std::string text) {
@@ -3010,7 +3077,13 @@ std::vector<provider::FunctionDefinition> ReadToolRegistry::definitions() const 
          "empty directories and non-code files—prefer this for layout questions and before remove.",
          schema(path + ",\"max_entries\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":500}")},
         {"glob", "Match eligible workspace source paths using *, ?, **, and brace alternatives.", schema("\"pattern\":{\"type\":\"string\"},\"max_results\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":1000}", "\"pattern\"")},
-        {"search_text", "Search eligible workspace UTF-8 source files. query is literal unless regex=true; an unescaped | infers regex only when regex is omitted. Use path for one exact file or glob for a wildcard set (not both). pattern is accepted as a compatibility alias for query.", schema(search_fields, "\"query\"")},
+        {"search_text",
+         "Search eligible workspace UTF-8 source files. Uses system ripgrep (rg) when present on "
+         "the fixed tool PATH for speed; otherwise scans via the code index when available, else "
+         "live source discovery. query is literal unless regex=true; an unescaped | infers regex "
+         "only when regex is omitted. Use path for one exact file or glob for a wildcard set "
+         "(not both). pattern is accepted as a compatibility alias for query.",
+         schema(search_fields, "\"query\"")},
         {"grep", "Alias for search_text; use query (pattern is accepted as an alias), path for one exact file, or glob for wildcard files.", schema(search_fields, "\"query\"")},
         {"find", "Validated alias for search_text; use query (pattern is accepted as an alias), path for one exact file, or glob for wildcard files.", schema(search_fields, "\"query\"")},
         {"search_symbol", "Rank indexed symbol names by lexical match, then static declaration importance.", schema("\"query\":{\"type\":\"string\"},\"max_results\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":200}", "\"query\"")},
@@ -4211,8 +4284,11 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
             !get_string(args, "pattern", pattern, false, validation_error) ||
             !get_string(args, "path", path, false, validation_error) ||
             !get_string(args, "glob", glob, false, validation_error) ||
-            !get_bool(args, "regex", false, regex_mode, validation_error) || !get_bool(args, "case_sensitive", false, case_sensitive, validation_error) ||
-            !get_bool(args, "word", false, word, validation_error) || !get_size(args, "context", 0, 10, context, validation_error) ||
+            !get_bool(args, "regex", false, regex_mode, validation_error) ||
+            !get_bool(args, "case_sensitive", false, case_sensitive,
+                      validation_error) ||
+            !get_bool(args, "word", false, word, validation_error) ||
+            !get_size(args, "context", 0, 10, context, validation_error) ||
             !get_size(args, "max_results", 50, 500, maximum, validation_error))
             return tool_error_result("invalid_arguments", validation_error);
         if (!query.empty() && !pattern.empty() && query != pattern)
@@ -4238,12 +4314,14 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
         if (inferred_regex) regex_mode = true;
         std::regex expression;
         const bool use_regex = regex_mode || word;
+        // Validate ECMAScript patterns even when ripgrep will run, so invalid
+        // regex still returns a structured error and portable fallback stays ready.
         if (use_regex) {
             try {
-                std::string pattern = regex_mode ? query : regex_escape(query);
-                if (word) pattern = "\\b(?:" + pattern + ")\\b";
+                std::string built = regex_mode ? query : regex_escape(query);
+                if (word) built = "\\b(?:" + built + ")\\b";
                 expression = std::regex(
-                    pattern,
+                    built,
                     std::regex::ECMAScript |
                         (case_sensitive ? std::regex::flag_type{}
                                         : std::regex::icase));
@@ -4253,7 +4331,7 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
         }
         const std::string literal_query =
             case_sensitive ? query : lowercase(query);
-        auto matches = [&](const std::string& line) {
+        auto matches_line = [&](const std::string& line) {
             if (use_regex) return std::regex_search(line, expression);
             if (case_sensitive)
                 return line.find(literal_query) != std::string::npos;
@@ -4263,8 +4341,12 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
             std::string path;
             std::uintmax_t size = 0;
         };
+        // Candidate universe: indexed files when available, else live discovery.
+        // Order: rg (if present) → this candidate list with built-in scan.
         std::vector<SearchFile> candidates;
-        if (indexing_enabled_ && !lazy_live_fallback) {
+        const bool use_index_candidates =
+            indexing_enabled_ && !lazy_live_fallback;
+        if (use_index_candidates) {
             candidates.reserve(snapshot_.files.size());
             for (const index::IndexedFile& file : snapshot_.files) {
                 if (file.status == "indexed")
@@ -4288,47 +4370,294 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
                     candidates.push_back({file.path, file.size});
             }
         }
-        json::Value data = array_value(); std::vector<std::string> warnings; bool truncated = false;
+        std::set<std::string> eligible_paths;
+        for (const SearchFile& file : candidates)
+            eligible_paths.insert(normalize_glob_path(file.path));
+
+        json::Value data = array_value();
+        std::vector<std::string> warnings;
+        bool truncated = false;
         if (inferred_regex)
             warnings.push_back(
                 "regex=true inferred because query contains an unescaped '|'");
         else if (!regex_mode && has_unescaped_alternation(query))
             warnings.push_back(
                 "regex=false was explicit; query was searched literally, including '|'");
+
+        auto finish_search = [&](const char* backend) {
+            json::Value metadata = object_value();
+            metadata.object["search_backend"] = string_value(backend);
+            if (!exact_path.empty() &&
+                eligible_paths.find(exact_path) == eligible_paths.end())
+                warnings.push_back(
+                    "exact path is not an eligible source file in the current "
+                    "workspace: " +
+                    exact_path);
+            return envelope(true, std::move(data), "", "", warnings, truncated,
+                            std::move(metadata));
+        };
+
+        // --- Prefer system ripgrep when present (soft dependency; Windows often
+        // lacks it). Failures fall through to the portable built-in scanner. ---
+        if (ripgrep_available() && !cancellation.cancelled()) {
+            std::vector<std::string> argv = {
+                "rg",          "--with-filename", "--line-number",
+                "--no-heading", "--color=never",  "--no-config"};
+            if (!case_sensitive) argv.push_back("-i");
+            if (word) argv.push_back("-w");
+            if (!regex_mode) argv.push_back("-F");
+            if (context > 0) {
+                argv.push_back("-C");
+                argv.push_back(std::to_string(context));
+            }
+            // Per-file cap; we also enforce a global max_results while parsing.
+            argv.push_back("--max-count");
+            argv.push_back(std::to_string(maximum));
+            if (!glob.empty()) {
+                std::vector<std::string> alternatives;
+                expand_braces(normalize_glob_path(glob), alternatives);
+                for (const std::string& alternative : alternatives) {
+                    argv.push_back("--glob");
+                    argv.push_back(alternative);
+                }
+            }
+            argv.push_back("--");
+            argv.push_back(query);
+            if (!exact_path.empty())
+                argv.push_back(exact_path);
+            else
+                argv.push_back(".");
+
+            ProcessOptions process_options;
+            process_options.workspace = snapshot_.workspace;
+            process_options.timeout_ms = 60000;
+            // Bound stdout generously so max_results hits are not truncated mid-line.
+            process_options.stdout_limit =
+                std::max<std::size_t>(256 * 1024, maximum * 8192);
+            process_options.stderr_limit = 65536;
+            process_options.cancellation = cancellation;
+
+            ProcessResult process;
+            const Error rg_error =
+                run_argv(std::move(argv), process_options, process,
+                         CommandPolicy::InspectionOnly);
+            // exit 0 = matches, 1 = no matches; both are successful searches.
+            const bool rg_ok =
+                rg_error.ok() &&
+                (process.exit_status == 0 || process.exit_status == 1) &&
+                !process.cancelled && !process.timed_out;
+            if (rg_error.code == ErrorCode::Cancelled || process.cancelled)
+                return tool_error_result("cancelled", "text search cancelled");
+            if (rg_ok) {
+                // Group context lines that precede each match within a -C block.
+                struct PendingContext {
+                    std::size_t line = 0;
+                    std::string text;
+                };
+                std::vector<PendingContext> pending_context;
+                std::string current_path;
+                std::istringstream stream(process.stdout_text);
+                std::string line;
+                while (std::getline(stream, line)) {
+                    if (cancellation.cancelled())
+                        return tool_error_result("cancelled",
+                                                 "text search cancelled");
+                    if (!line.empty() && line.back() == '\r') line.pop_back();
+                    if (line == "--") {
+                        pending_context.clear();
+                        continue;
+                    }
+                    std::string hit_path;
+                    std::size_t hit_line = 0;
+                    std::string hit_text;
+                    bool is_match = false;
+                    if (!parse_rg_output_line(line, hit_path, hit_line, hit_text,
+                                             is_match))
+                        continue;
+                    if (!exact_path.empty() && hit_path != exact_path) continue;
+                    if (!glob.empty() && !glob_matches(hit_path, glob)) continue;
+                    // Keep results inside the eligible index/discovery universe so
+                    // security-review and agent semantics match the built-in path.
+                    if (eligible_paths.find(hit_path) == eligible_paths.end())
+                        continue;
+                    if (!is_match) {
+                        if (hit_path != current_path) {
+                            pending_context.clear();
+                            current_path = hit_path;
+                        }
+                        pending_context.push_back({hit_line, hit_text});
+                        continue;
+                    }
+                    if (data.array.size() >= maximum) {
+                        truncated = true;
+                        break;
+                    }
+                    json::Value match = object_value();
+                    match.object["path"] = string_value(hit_path);
+                    match.object["line"] = number_value(hit_line);
+                    match.object["text"] = string_value(hit_text);
+                    if (context > 0) {
+                        json::Value nearby = array_value();
+                        for (const PendingContext& item : pending_context) {
+                            if (item.line == hit_line) continue;
+                            json::Value row = object_value();
+                            row.object["line"] = number_value(item.line);
+                            row.object["text"] = string_value(item.text);
+                            nearby.array.push_back(std::move(row));
+                        }
+                        // Following context lines arrive after the match until `--`.
+                        match.object["context"] = std::move(nearby);
+                    }
+                    data.array.push_back(std::move(match));
+                    pending_context.clear();
+                    current_path = hit_path;
+                }
+                // Attach trailing context lines that appear after each match.
+                // Re-parse is expensive; for context>0 do a second pass only if needed.
+                if (context > 0 && !data.array.empty()) {
+                    // Rebuild context with both before and after lines from full parse.
+                    std::vector<std::pair<std::string, std::size_t>> match_keys;
+                    match_keys.reserve(data.array.size());
+                    for (const json::Value& item : data.array) {
+                        const json::Value* p = item.get("path");
+                        const json::Value* l = item.get("line");
+                        if (p != nullptr && p->is_string() && l != nullptr &&
+                            l->type == json::Value::Type::Number)
+                            match_keys.push_back(
+                                {p->string,
+                                 static_cast<std::size_t>(l->number)});
+                    }
+                    std::map<std::pair<std::string, std::size_t>,
+                             std::vector<std::pair<std::size_t, std::string>>>
+                        context_by_match;
+                    std::string block_path;
+                    std::vector<std::pair<std::size_t, std::string>> block_lines;
+                    std::vector<std::size_t> block_match_lines;
+                    auto flush_block = [&]() {
+                        for (std::size_t match_line : block_match_lines) {
+                            auto& bucket =
+                                context_by_match[{block_path, match_line}];
+                            for (const auto& row : block_lines) {
+                                if (row.first == match_line) continue;
+                                bucket.push_back(row);
+                            }
+                        }
+                        block_lines.clear();
+                        block_match_lines.clear();
+                    };
+                    std::istringstream again(process.stdout_text);
+                    while (std::getline(again, line)) {
+                        if (!line.empty() && line.back() == '\r') line.pop_back();
+                        if (line == "--") {
+                            flush_block();
+                            block_path.clear();
+                            continue;
+                        }
+                        std::string hit_path;
+                        std::size_t hit_line = 0;
+                        std::string hit_text;
+                        bool is_match = false;
+                        if (!parse_rg_output_line(line, hit_path, hit_line,
+                                                 hit_text, is_match))
+                            continue;
+                        if (block_path.empty()) block_path = hit_path;
+                        if (hit_path != block_path) {
+                            flush_block();
+                            block_path = hit_path;
+                        }
+                        block_lines.push_back({hit_line, hit_text});
+                        if (is_match) block_match_lines.push_back(hit_line);
+                    }
+                    flush_block();
+                    for (json::Value& item : data.array) {
+                        const json::Value* p = item.get("path");
+                        const json::Value* l = item.get("line");
+                        if (p == nullptr || !p->is_string() || l == nullptr ||
+                            l->type != json::Value::Type::Number)
+                            continue;
+                        const auto key = std::make_pair(
+                            p->string, static_cast<std::size_t>(l->number));
+                        const auto found = context_by_match.find(key);
+                        if (found == context_by_match.end()) continue;
+                        json::Value nearby = array_value();
+                        for (const auto& row : found->second) {
+                            json::Value entry = object_value();
+                            entry.object["line"] = number_value(row.first);
+                            entry.object["text"] = string_value(row.second);
+                            nearby.array.push_back(std::move(entry));
+                        }
+                        item.object["context"] = std::move(nearby);
+                    }
+                }
+                if (process.stdout_truncated)
+                    warnings.push_back(
+                        "ripgrep output hit the internal capture limit; results "
+                        "may be incomplete");
+                return finish_search("rg");
+            }
+            // Soft failure: missing binary race, timeout, or unexpected exit →
+            // portable built-in path.
+            if (!rg_error.ok() && rg_error.code != ErrorCode::FileRead)
+                warnings.push_back("ripgrep unavailable or failed (" +
+                                   rg_error.message +
+                                   "); used built-in text search");
+            else if (process.exit_status > 1)
+                warnings.push_back(
+                    "ripgrep exited with status " +
+                    std::to_string(process.exit_status) +
+                    "; used built-in text search");
+            data = array_value();
+            truncated = false;
+        }
+
+        // --- Built-in portable scanner (index candidates, else live discovery). ---
         bool exact_path_seen = exact_path.empty();
         for (const SearchFile& file : candidates) {
             if (cancellation.cancelled())
-                return tool_error_result("cancelled",
-                                         "text search cancelled");
+                return tool_error_result("cancelled", "text search cancelled");
             if (!exact_path.empty() &&
                 normalize_glob_path(file.path) != exact_path)
                 continue;
             exact_path_seen = true;
             if (!glob.empty() && !glob_matches(file.path, glob)) continue;
             SourceRange source;
-            const std::size_t read_cap =
-                std::max<std::size_t>(
-                    1, index_options_.max_source_code_file_size);
+            const std::size_t read_cap = std::max<std::size_t>(
+                1, index_options_.max_source_code_file_size);
             const Error read_error =
-                indexing_enabled_ && !lazy_live_fallback
+                use_index_candidates
                     ? read_source(file.path, 1, 0, read_cap, source)
-                    : read_workspace_source(file.path, 1, 0, read_cap,
-                                            source);
-            if (!read_error.ok()) { warnings.push_back(read_error.message); continue; }
+                    : read_workspace_source(file.path, 1, 0, read_cap, source);
+            if (!read_error.ok()) {
+                warnings.push_back(read_error.message);
+                continue;
+            }
             const std::vector<std::string> lines = split_lines(source.content);
             for (std::size_t line = 0; line < lines.size(); ++line) {
                 if (cancellation.cancelled())
                     return tool_error_result("cancelled",
                                              "text search cancelled");
-                if (!matches(lines[line])) continue;
-                if (data.array.size() >= maximum) { truncated = true; break; }
-                json::Value match = object_value(); match.object["path"] = string_value(file.path); match.object["line"] = number_value(line + 1);
+                if (!matches_line(lines[line])) continue;
+                if (data.array.size() >= maximum) {
+                    truncated = true;
+                    break;
+                }
+                json::Value match = object_value();
+                match.object["path"] = string_value(file.path);
+                match.object["line"] = number_value(line + 1);
                 match.object["text"] = string_value(lines[line]);
                 if (context > 0) {
-                    json::Value nearby = array_value(); const std::size_t begin = line > context ? line - context : 0;
-                    const std::size_t finish = std::min(lines.size(), line + context + 1);
-                    for (std::size_t adjacent = begin; adjacent < finish; ++adjacent) if (adjacent != line) {
-                        json::Value item = object_value(); item.object["line"] = number_value(adjacent + 1); item.object["text"] = string_value(lines[adjacent]); nearby.array.push_back(std::move(item));
+                    json::Value nearby = array_value();
+                    const std::size_t begin =
+                        line > context ? line - context : 0;
+                    const std::size_t finish =
+                        std::min(lines.size(), line + context + 1);
+                    for (std::size_t adjacent = begin; adjacent < finish;
+                         ++adjacent) {
+                        if (adjacent == line) continue;
+                        json::Value item = object_value();
+                        item.object["line"] = number_value(adjacent + 1);
+                        item.object["text"] = string_value(lines[adjacent]);
+                        nearby.array.push_back(std::move(item));
                     }
                     match.object["context"] = std::move(nearby);
                 }
@@ -4336,11 +4665,12 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
             }
             if (truncated) break;
         }
-        if (!exact_path_seen)
-            warnings.push_back(
-                "exact path is not an eligible source file in the current workspace: " +
-                exact_path);
-        return envelope(true, std::move(data), "", "", warnings, truncated);
+        if (!exact_path_seen && !exact_path.empty() &&
+            eligible_paths.find(exact_path) == eligible_paths.end()) {
+            // finish_search also warns; avoid duplicate when path missing.
+        }
+        return finish_search(use_index_candidates ? "builtin_index"
+                                                  : "builtin_live");
     }
 
     if (name == "run_command") {

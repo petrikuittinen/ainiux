@@ -9,6 +9,7 @@
 #include <vector>
 
 #include "agent/index/index.hpp"
+#include "agent/process.hpp"
 #include "agent/tools.hpp"
 #include "json/json.hpp"
 #include "provider/provider.hpp"
@@ -1825,6 +1826,73 @@ void test_git_and_network_tools_policy() {
     fs::remove_all(workspace, ec);
 }
 
+void test_search_text_uses_rg_when_available_else_builtin() {
+    const std::string workspace = write_temp_workspace("search-backend");
+    write_text(fs::path(workspace) / "src" / "needle.cpp",
+               "int alpha_marker = 1;\n"
+               "int beta_marker = 2;\n"
+               "int gamma_unique_xyz = 3;\n");
+    write_text(fs::path(workspace) / "src" / "other.cpp",
+               "int delta_marker = 4;\n");
+    agent::index::Options index_options;
+    index_options.workspace = fs::canonical(workspace).string();
+    agent::index::RefreshStats stats;
+    check(agent::index::refresh(index_options, stats).ok(),
+          "search backend fixture indexes");
+    agent::index::Snapshot snapshot;
+    check(agent::index::load_snapshot(index_options, snapshot).ok(),
+          "search backend fixture snapshot loads");
+    agent::ToolRegistryOptions tool_options;
+    tool_options.mutation_policy = agent::MutationPolicy::Full;
+    agent::ReadToolRegistry tools;
+    check(agent::ReadToolRegistry::create(index_options, std::move(snapshot), {},
+                                          tools, tool_options)
+              .ok(),
+          "search backend registry creates");
+
+    const std::string result = tools.execute(
+        "search_text",
+        R"JSON({"query":"gamma_unique_xyz","max_results":10,"context":1})JSON");
+    check(json_ok(result) &&
+              result.find("src/needle.cpp") != std::string::npos &&
+              result.find("gamma_unique_xyz") != std::string::npos,
+          "search_text finds the rare needle: " + result);
+    check(result.find("\"search_backend\"") != std::string::npos,
+          "search_text reports search_backend metadata: " + result);
+    if (agent::ripgrep_available()) {
+        check(result.find("\"search_backend\":\"rg\"") != std::string::npos ||
+                  result.find("\"search_backend\": \"rg\"") != std::string::npos,
+              "search_text uses rg backend when ripgrep is on the fixed PATH: " +
+                  result);
+        // Context lines should be present when context>0.
+        check(result.find("\"context\"") != std::string::npos,
+              "rg search_text includes context when requested: " + result);
+    } else {
+        check(result.find("builtin") != std::string::npos,
+              "search_text falls back to builtin when rg is absent: " + result);
+    }
+
+    // Live / no-index path must still work (rg or builtin_live).
+    agent::ToolRegistryOptions live_options;
+    live_options.mutation_policy = agent::MutationPolicy::Full;
+    live_options.indexing_enabled = false;
+    agent::ReadToolRegistry live;
+    check(agent::ReadToolRegistry::create_without_index(index_options, {}, live,
+                                                        live_options)
+              .ok(),
+          "live registry for search backend");
+    const std::string live_result = live.execute(
+        "search_text",
+        R"JSON({"query":"delta_marker","glob":"src/*.cpp","max_results":5})JSON");
+    check(json_ok(live_result) &&
+              live_result.find("src/other.cpp") != std::string::npos &&
+              live_result.find("delta_marker") != std::string::npos,
+          "indexing-off search_text still works with rg/builtin: " + live_result);
+
+    std::error_code ec;
+    fs::remove_all(workspace, ec);
+}
+
 void test_plan_document_mutation_policy() {
     const std::string workspace = write_temp_workspace("plan-policy");
     std::error_code ec;
@@ -1967,6 +2035,7 @@ void run_all() {
     test_replace_symbol();
     test_index_refresh_drops_completed_prepare_cancellation();
     test_indexing_disabled_registry_is_strict_and_live();
+    test_search_text_uses_rg_when_available_else_builtin();
     test_read_many_preference_limits_and_serialization();
     test_index_status_and_update();
     test_lazy_index_tools_and_touched_overlay();

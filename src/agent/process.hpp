@@ -76,5 +76,14 @@ Error run_command(const std::string& command,
                   const ProcessOptions& options,
                   ProcessResult& result,
                   CommandPolicy policy = CommandPolicy::InspectionOnly);
+// Direct argv execution without shell tokenization. Same fixed PATH, Guard, and
+// policy checks as run_command. Prefer this when arguments may contain spaces
+// or quotes (e.g. search_text ripgrep backend).
+Error run_argv(std::vector<std::string> arguments,
+               const ProcessOptions& options,
+               ProcessResult& result,
+               CommandPolicy policy = CommandPolicy::InspectionOnly);
+// True when a trusted system `rg` binary is on the fixed process PATH.
+bool ripgrep_available();
 
 }  // namespace ainiux::agent

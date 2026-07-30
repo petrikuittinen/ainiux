@@ -70,12 +70,18 @@ Error resolve_cwd(const ProcessOptions& options, fs::path& root, fs::path& cwd) 
     return ok_error();
 }
 
+// Fixed trusted PATH only. Includes Homebrew on macOS; never the caller's PATH
+// or workspace-controlled directories (Windows ports can extend this list).
+const char* fixed_command_path() {
+    return "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin";
+}
+
 Error resolve_executable(const std::string& name, std::string& resolved) {
     if (name.find('/') != std::string::npos)
         return {ErrorCode::BadArgs,
                 "run_command requires a bare command name (no path); binaries resolve from a fixed PATH"};
     // Never resolve a workspace-controlled executable through the caller's PATH.
-    const std::string path = "/usr/local/bin:/usr/bin:/bin";
+    const std::string path = fixed_command_path();
     std::size_t start = 0;
     while (start <= path.size()) {
         const std::size_t colon = path.find(':', start);
@@ -89,7 +95,9 @@ Error resolve_executable(const std::string& name, std::string& resolved) {
         if (colon == std::string::npos) break;
         start = colon + 1;
     }
-    return {ErrorCode::FileRead, "command not found on fixed PATH (/usr/local/bin:/usr/bin:/bin): " + name};
+    return {ErrorCode::FileRead,
+            std::string("command not found on fixed PATH (") + fixed_command_path() +
+                "): " + name};
 }
 
 bool dangerous_argument(const std::string& argument) {
@@ -587,36 +595,16 @@ Error run_inspection_command(const std::string& command,
     return run_command(command, options, result, CommandPolicy::InspectionOnly);
 }
 
-Error run_command(const std::string& command,
-                  const ProcessOptions& options,
-                  ProcessResult& result,
-                  CommandPolicy policy) {
-    ProcessResult output;
-    const GuardAskHandling ask_handling =
-        policy == CommandPolicy::Agent
-            ? (options.on_guard_ask ? GuardAskHandling::PromptAsk : GuardAskHandling::DenyAsk)
-            : GuardAskHandling::DenyAsk;
-    const GuardApprovalCallback* ask_ptr =
-        options.on_guard_ask ? &options.on_guard_ask : nullptr;
-    Error error = parse_command(command, output.arguments, policy, output.guard_rule_id,
-                                ask_handling, ask_ptr, options.cancellation,
-                                options.allow_external_paths);
-    // Re-run with decision capture for agent policy (parse_command dropped it).
-    if (policy == CommandPolicy::Agent && error.ok()) {
-        // parse already applied guard; leave decision as allow when ok.
-        output.guard_decision = "allow";
-    } else if (policy == CommandPolicy::Agent && !error.ok()) {
-        output.guard_decision =
-            error.code == ErrorCode::Cancelled ? "cancelled" : "deny";
-    }
-    if (!error.ok()) {
-        result = std::move(output);
-        return error;
-    }
+Error execute_resolved_command(ProcessResult& output,
+                               const ProcessOptions& options,
+                               CommandPolicy policy) {
+    Error error = ok_error();
     fs::path root;
     fs::path cwd;
-    if (!(error = resolve_cwd(options, root, cwd)).ok()) { result = std::move(output); return error; }
+    if (!(error = resolve_cwd(options, root, cwd)).ok()) return error;
     output.cwd = cwd.string();
+    if (output.arguments.empty())
+        return {ErrorCode::BadArgs, "run_command command is empty"};
     if (output.arguments.front() == "command") {
         const auto started = std::chrono::steady_clock::now();
         bool found_all = true;
@@ -634,11 +622,11 @@ Error run_command(const std::string& command,
         output.policy =
             policy == CommandPolicy::Agent ? "allowed-agent" : "allowed-read-only";
         if (output.guard_decision.empty()) output.guard_decision = "allow";
-        result = std::move(output);
         return ok_error();
     }
     std::string executable;
-    if (!(error = resolve_executable(output.arguments.front(), executable)).ok()) { result = std::move(output); return error; }
+    if (!(error = resolve_executable(output.arguments.front(), executable)).ok())
+        return error;
 
     // Prepare every allocation before fork. Security review may have several
     // worker threads; the child must call only async-signal-safe functions
@@ -648,8 +636,13 @@ Error run_command(const std::string& command,
     for (std::string& item : output.arguments) argv.push_back(item.data());
     argv.push_back(nullptr);
     std::vector<std::string> environment_storage = {
-        "PATH=/usr/local/bin:/usr/bin:/bin", "LC_ALL=C.UTF-8", "LANG=C.UTF-8",
-        "PAGER=cat", "GIT_PAGER=cat", "GIT_EXTERNAL_DIFF=", "GIT_OPTIONAL_LOCKS=0",
+        std::string("PATH=") + fixed_command_path(),
+        "LC_ALL=C.UTF-8",
+        "LANG=C.UTF-8",
+        "PAGER=cat",
+        "GIT_PAGER=cat",
+        "GIT_EXTERNAL_DIFF=",
+        "GIT_OPTIONAL_LOCKS=0",
         "RIPGREP_CONFIG_PATH=/dev/null"};
     std::vector<char*> environment;
     environment.reserve(environment_storage.size() + 1);
@@ -658,16 +651,22 @@ Error run_command(const std::string& command,
 
     Pipe stdout_pipe;
     Pipe stderr_pipe;
-    if (!(error = stdout_pipe.open()).ok() || !(error = stderr_pipe.open()).ok()) return error;
+    if (!(error = stdout_pipe.open()).ok() || !(error = stderr_pipe.open()).ok())
+        return error;
     const auto started = std::chrono::steady_clock::now();
     const pid_t pid = ::fork();
-    if (pid < 0) return {ErrorCode::Internal, "could not fork inspection command: " + std::string(std::strerror(errno))};
+    if (pid < 0)
+        return {ErrorCode::Internal,
+                "could not fork inspection command: " + std::string(std::strerror(errno))};
     if (pid == 0) {
         ::setpgid(0, 0);
         stdout_pipe.close_read();
         stderr_pipe.close_read();
         const int null_fd = ::open("/dev/null", O_RDONLY);
-        if (null_fd >= 0) { ::dup2(null_fd, STDIN_FILENO); ::close(null_fd); }
+        if (null_fd >= 0) {
+            ::dup2(null_fd, STDIN_FILENO);
+            ::close(null_fd);
+        }
         ::dup2(stdout_pipe.write_fd(), STDOUT_FILENO);
         ::dup2(stderr_pipe.write_fd(), STDERR_FILENO);
         stdout_pipe.close_write();
@@ -680,8 +679,10 @@ Error run_command(const std::string& command,
     ::setpgid(pid, pid);
     stdout_pipe.close_write();
     stderr_pipe.close_write();
-    ::fcntl(stdout_pipe.read_fd(), F_SETFL, ::fcntl(stdout_pipe.read_fd(), F_GETFL) | O_NONBLOCK);
-    ::fcntl(stderr_pipe.read_fd(), F_SETFL, ::fcntl(stderr_pipe.read_fd(), F_GETFL) | O_NONBLOCK);
+    ::fcntl(stdout_pipe.read_fd(), F_SETFL,
+            ::fcntl(stdout_pipe.read_fd(), F_GETFL) | O_NONBLOCK);
+    ::fcntl(stderr_pipe.read_fd(), F_SETFL,
+            ::fcntl(stderr_pipe.read_fd(), F_GETFL) | O_NONBLOCK);
     int stdout_fd = stdout_pipe.release_read();
     int stderr_fd = stderr_pipe.release_read();
     bool stdout_open = true;
@@ -692,8 +693,10 @@ Error run_command(const std::string& command,
     long long terminated_at = 0;
     while (!reaped || stdout_open || stderr_open) {
         const auto now = std::chrono::steady_clock::now();
-        const long long elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - started).count();
-        if (!terminated && (options.cancellation.cancelled() || elapsed > options.timeout_ms)) {
+        const long long elapsed =
+            std::chrono::duration_cast<std::chrono::milliseconds>(now - started).count();
+        if (!terminated &&
+            (options.cancellation.cancelled() || elapsed > options.timeout_ms)) {
             output.cancelled = options.cancellation.cancelled();
             output.timed_out = !output.cancelled;
             ::kill(-pid, SIGTERM);
@@ -701,28 +704,108 @@ Error run_command(const std::string& command,
             terminated_at = elapsed;
         }
         if (terminated && elapsed > terminated_at + 250) ::kill(-pid, SIGKILL);
-        pollfd fds[2] = {{stdout_fd, static_cast<short>(stdout_open ? POLLIN | POLLHUP : 0), 0},
-                         {stderr_fd, static_cast<short>(stderr_open ? POLLIN | POLLHUP : 0), 0}};
+        pollfd fds[2] = {
+            {stdout_fd, static_cast<short>(stdout_open ? POLLIN | POLLHUP : 0), 0},
+            {stderr_fd, static_cast<short>(stderr_open ? POLLIN | POLLHUP : 0), 0}};
         ::poll(fds, 2, 25);
-        if (stdout_open) drain_fd(stdout_fd, output.stdout_text, options.stdout_limit, output.stdout_truncated, stdout_open);
-        if (stderr_open) drain_fd(stderr_fd, output.stderr_text, options.stderr_limit, output.stderr_truncated, stderr_open);
+        if (stdout_open)
+            drain_fd(stdout_fd, output.stdout_text, options.stdout_limit,
+                     output.stdout_truncated, stdout_open);
+        if (stderr_open)
+            drain_fd(stderr_fd, output.stderr_text, options.stderr_limit,
+                     output.stderr_truncated, stderr_open);
         if (!reaped) {
             const pid_t waited = ::waitpid(pid, &wait_status, WNOHANG);
             if (waited == pid) reaped = true;
-            else if (waited < 0 && errno != EINTR) reaped = true;
+            else if (waited < 0 && errno != EINTR)
+                reaped = true;
         }
     }
     output.duration_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
-                             std::chrono::steady_clock::now() - started).count();
+                             std::chrono::steady_clock::now() - started)
+                             .count();
     if (WIFEXITED(wait_status)) output.exit_status = WEXITSTATUS(wait_status);
     if (WIFSIGNALED(wait_status)) output.signal = WTERMSIG(wait_status);
     output.policy =
         policy == CommandPolicy::Agent ? "allowed-agent" : "allowed-read-only";
     if (output.guard_decision.empty()) output.guard_decision = "allow";
-    result = std::move(output);
-    if (result.cancelled) return {ErrorCode::Cancelled, "run_command cancelled"};
-    if (result.timed_out) return {ErrorCode::Timeout, "run_command exceeded its timeout"};
+    if (output.cancelled) return {ErrorCode::Cancelled, "run_command cancelled"};
+    if (output.timed_out) return {ErrorCode::Timeout, "run_command exceeded its timeout"};
     return ok_error();
+}
+
+Error run_command(const std::string& command,
+                  const ProcessOptions& options,
+                  ProcessResult& result,
+                  CommandPolicy policy) {
+    ProcessResult output;
+    const GuardAskHandling ask_handling =
+        policy == CommandPolicy::Agent
+            ? (options.on_guard_ask ? GuardAskHandling::PromptAsk
+                                    : GuardAskHandling::DenyAsk)
+            : GuardAskHandling::DenyAsk;
+    const GuardApprovalCallback* ask_ptr =
+        options.on_guard_ask ? &options.on_guard_ask : nullptr;
+    Error error = parse_command(command, output.arguments, policy, output.guard_rule_id,
+                                ask_handling, ask_ptr, options.cancellation,
+                                options.allow_external_paths);
+    if (policy == CommandPolicy::Agent && error.ok()) {
+        output.guard_decision = "allow";
+    } else if (policy == CommandPolicy::Agent && !error.ok()) {
+        output.guard_decision =
+            error.code == ErrorCode::Cancelled ? "cancelled" : "deny";
+    }
+    if (!error.ok()) {
+        result = std::move(output);
+        return error;
+    }
+    error = execute_resolved_command(output, options, policy);
+    result = std::move(output);
+    return error;
+}
+
+Error run_argv(std::vector<std::string> arguments,
+               const ProcessOptions& options,
+               ProcessResult& result,
+               CommandPolicy policy) {
+    ProcessResult output;
+    output.arguments = std::move(arguments);
+    const GuardAskHandling ask_handling =
+        policy == CommandPolicy::Agent
+            ? (options.on_guard_ask ? GuardAskHandling::PromptAsk
+                                    : GuardAskHandling::DenyAsk)
+            : GuardAskHandling::DenyAsk;
+    const GuardApprovalCallback* ask_ptr =
+        options.on_guard_ask ? &options.on_guard_ask : nullptr;
+    std::string unused_decision;
+    Error error = ok_error();
+    if (policy == CommandPolicy::Agent) {
+        error = enforce_agent_policy(output.arguments, output.guard_rule_id,
+                                     ask_handling, ask_ptr, options.cancellation,
+                                     unused_decision, options.allow_external_paths);
+        if (error.ok())
+            output.guard_decision = "allow";
+        else
+            output.guard_decision =
+                error.code == ErrorCode::Cancelled ? "cancelled" : "deny";
+    } else if (policy == CommandPolicy::PlanReadOnly) {
+        error = enforce_plan_read_only_policy(output.arguments,
+                                              options.allow_external_paths);
+    } else {
+        error = enforce_inspection_policy(output.arguments);
+    }
+    if (!error.ok()) {
+        result = std::move(output);
+        return error;
+    }
+    error = execute_resolved_command(output, options, policy);
+    result = std::move(output);
+    return error;
+}
+
+bool ripgrep_available() {
+    std::string resolved;
+    return resolve_executable("rg", resolved).ok();
 }
 
 }  // namespace ainiux::agent
