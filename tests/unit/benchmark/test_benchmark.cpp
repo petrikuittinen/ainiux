@@ -340,9 +340,11 @@ void test_benchmark_cli_and_jsonl_dataset() {
     check(report_error.ok() &&
               report_text.find("# ainiux Benchmark Report") != std::string::npos &&
               report_text.find("## Summary") != std::string::npos &&
-              report_text.find("| completed_case_runs | 1 |") != std::string::npos &&
+              report_text.find(u8"┌") != std::string::npos &&
+              report_text.find("completed_case_runs") != std::string::npos &&
               report_text.find("### case\\|one - Run 1, Turn 2") != std::string::npos &&
-              report_text.find("| model | &lt;unsafe&gt;&amp; |") != std::string::npos &&
+              report_text.find("model") != std::string::npos &&
+              report_text.find("&lt;unsafe&gt;&amp;") != std::string::npos &&
               report_text.find("#### Prompt") != std::string::npos &&
               report_text.find("Judge this answer.") != std::string::npos &&
               report_text.find("#### External File") != std::string::npos &&

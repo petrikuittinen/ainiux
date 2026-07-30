@@ -10,6 +10,7 @@
 #include <sstream>
 
 #include "json/json.hpp"
+#include "markdown/table_format.hpp"
 
 namespace ainiux::benchmark {
 namespace {
@@ -137,7 +138,10 @@ void write_fenced_block(std::ostream& output,
 void write_markdown_table(std::ostream& output,
                           const json::Value& record,
                           const std::set<std::string>& excluded = {}) {
-    output << "| Field | Value |\n|---|---|\n";
+    const std::vector<std::string> headers = {"Field", "Value"};
+    const std::vector<markdown::TableAlign> aligns = {markdown::TableAlign::Left,
+                                                      markdown::TableAlign::Left};
+    std::vector<std::vector<std::string>> body;
     for (const auto& entry : record.object) {
         if (excluded.count(entry.first) != 0) {
             continue;
@@ -145,9 +149,9 @@ void write_markdown_table(std::ostream& output,
         std::string value = entry.second.is_string()
                                 ? entry.second.string
                                 : json_compact(entry.second);
-        output << "| " << markdown_table_cell(entry.first) << " | "
-               << markdown_table_cell(value) << " |\n";
+        body.push_back({markdown_table_cell(entry.first), markdown_table_cell(value)});
     }
+    output << markdown::format_table(headers, aligns, body, markdown::TableStyle::UnicodeBox);
     output << "\n";
 }
 
@@ -301,13 +305,15 @@ void write_grade_evaluation_basis(std::ostream& output,
     if (safety != nullptr) {
         output << "##### Safety Rating\n\n";
         if (safety->is_object()) {
-            output << "| Classification | Expected Action |\n"
-                   << "|---|---|\n"
-                   << "| "
-                   << markdown_table_cell(record_string(*safety, "classification"))
-                   << " | "
-                   << markdown_table_cell(record_string(*safety, "expected_action"))
-                   << " |\n\n";
+            const std::vector<std::string> headers = {"Classification", "Expected Action"};
+            const std::vector<markdown::TableAlign> aligns = {markdown::TableAlign::Left,
+                                                              markdown::TableAlign::Left};
+            const std::vector<std::vector<std::string>> body = {
+                {markdown_table_cell(record_string(*safety, "classification")),
+                 markdown_table_cell(record_string(*safety, "expected_action"))}};
+            output << markdown::format_table(headers, aligns, body,
+                                             markdown::TableStyle::UnicodeBox)
+                   << "\n";
         } else {
             write_fenced_block(output, "json", json_compact(*safety));
         }
@@ -342,18 +348,20 @@ void write_grade_findings(std::ostream& output, const json::Value& record) {
     if (findings == nullptr || !findings->is_array()) {
         return;
     }
-    output << "#### Criterion Findings\n\n"
-           << "| Index | Verdict | Reason |\n|---:|---|---|\n";
+    output << "#### Criterion Findings\n\n";
+    const std::vector<std::string> headers = {"Index", "Verdict", "Reason"};
+    const std::vector<markdown::TableAlign> aligns = {
+        markdown::TableAlign::Right, markdown::TableAlign::Left, markdown::TableAlign::Left};
+    std::vector<std::vector<std::string>> body;
     for (const json::Value& finding : findings->array) {
         const json::Value* index = finding.is_object() ? finding.get("index") : nullptr;
-        output << "| "
-               << markdown_table_cell(index == nullptr ? std::string()
-                                                        : json_compact(*index))
-               << " | " << markdown_table_cell(record_string(finding, "verdict"))
-               << " | " << markdown_table_cell(record_string(finding, "reason"))
-               << " |\n";
+        body.push_back({markdown_table_cell(index == nullptr ? std::string()
+                                                             : json_compact(*index)),
+                        markdown_table_cell(record_string(finding, "verdict")),
+                        markdown_table_cell(record_string(finding, "reason"))});
     }
-    output << "\n";
+    output << markdown::format_table(headers, aligns, body, markdown::TableStyle::UnicodeBox)
+           << "\n";
 }
 
 }  // namespace

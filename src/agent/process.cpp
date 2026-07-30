@@ -153,13 +153,6 @@ bool scan_unquoted_shell_syntax(const std::string& command,
     return false;
 }
 
-bool has_unquoted_shell_substitution(const std::string& command) {
-    bool control = false;
-    bool substitution = false;
-    scan_unquoted_shell_syntax(command, control, substitution);
-    return substitution;
-}
-
 bool option_or_assignment(const std::string& argument, const std::string& option) {
     return argument == option || argument.rfind(option + "=", 0) == 0;
 }

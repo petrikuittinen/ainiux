@@ -202,11 +202,11 @@ void test_index_code_enables_a_skipped_index_in_place() {
               fs::exists(database) && progress_updates.load() > 0 &&
               created.elapsed_ms >= 0 &&
               created.markdown.find("Code indexing completed in") == 0 &&
-              created.markdown.find(" seconds. Here is the summary:\n\n|") !=
+              created.markdown.find(" seconds. Here is the summary:\n\n") !=
                   std::string::npos &&
-              created.markdown.find(
-                  "| **All languages** | **1** |") !=
-                  std::string::npos,
+              created.markdown.find(u8"┌") != std::string::npos &&
+              created.markdown.find("**All languages**") != std::string::npos &&
+              created.markdown.find("**1**") != std::string::npos,
           "index-code creates and enables the index without restarting Agent");
 
     {
@@ -218,9 +218,8 @@ void test_index_code_enables_a_skipped_index_in_place() {
         runtime.show_index(true);
     check(refreshed.error.ok() && !refreshed.created &&
               refreshed.indexing_enabled &&
-              refreshed.markdown.find(
-                  "| **All languages** | **2** |") !=
-                  std::string::npos &&
+              refreshed.markdown.find("**All languages**") != std::string::npos &&
+              refreshed.markdown.find("**2**") != std::string::npos &&
               progress_updates.load() > progress_before,
           "enabled session uses the task-end incremental refresh path for new files");
 
@@ -263,8 +262,10 @@ void test_index_report_refreshes_and_stays_display_only() {
     const agent::SessionIndexReportResult initial =
         runtime.show_index(false);
     check(initial.error.ok() &&
-              initial.markdown.find("| Language | Files | Lines of code |") ==
-                  0 &&
+              initial.markdown.find(u8"┌") == 0 &&
+              initial.markdown.find("│ Language") != std::string::npos &&
+              initial.markdown.find("Files") != std::string::npos &&
+              initial.markdown.find("Lines of code") != std::string::npos &&
               initial.markdown.find("# ainiux Code Index") ==
                   std::string::npos,
           "startup index report contains only the compact totals table");
@@ -282,9 +283,8 @@ void test_index_report_refreshes_and_stays_display_only() {
     const agent::SessionIndexReportResult refreshed =
         runtime.show_index(true);
     check(refreshed.error.ok() &&
-              refreshed.markdown.find(
-                  "| **All languages** | **2** |") !=
-                  std::string::npos &&
+              refreshed.markdown.find("**All languages**") != std::string::npos &&
+              refreshed.markdown.find("**2**") != std::string::npos &&
               progress_updates.load() > progress_before,
           "show-index refreshes changed files with progress before formatting");
     display.clear();

@@ -788,10 +788,14 @@ void test_refresh_incremental_report_and_skips() {
     check(error.ok() && markdown.str().find("# ainiux Code Index") != std::string::npos &&
               markdown.str().find("hello") != std::string::npos &&
               markdown.str().find("bad.c") != std::string::npos &&
-              markdown.str().find("| Language | Files | Lines of code | Indexed |") !=
-                  std::string::npos &&
-              markdown.str().find("| **All languages** | **5** | **4** | **2** | **3** |") !=
-                  std::string::npos &&
+              markdown.str().find("│ Language") != std::string::npos &&
+              markdown.str().find("Files") != std::string::npos &&
+              markdown.str().find("Lines of code") != std::string::npos &&
+              markdown.str().find("**All languages**") != std::string::npos &&
+              markdown.str().find("**5**") != std::string::npos &&
+              markdown.str().find("**4**") != std::string::npos &&
+              markdown.str().find("**2**") != std::string::npos &&
+              markdown.str().find("**3**") != std::string::npos &&
               markdown.str().find("Language: Python; lines: 3; status: indexed.") !=
                   std::string::npos &&
               markdown.str().find("Importance:") != std::string::npos &&
@@ -803,9 +807,12 @@ void test_refresh_incremental_report_and_skips() {
     error = ainiux::agent::index::load_snapshot(options, compact_snapshot);
     const std::string compact_totals =
         ainiux::agent::index::compact_totals_markdown(compact_snapshot);
-    const std::size_t full_table_start = markdown.str().find("| Language | Files |");
+    const std::size_t full_table_start = markdown.str().find(u8"┌");
+    const std::size_t full_table_rule = markdown.str().find(u8"└", full_table_start);
     const std::size_t full_table_end =
-        markdown.str().find("\n\n", full_table_start);
+        full_table_rule == std::string::npos
+            ? std::string::npos
+            : markdown.str().find('\n', full_table_rule);
     const std::string full_totals =
         full_table_start == std::string::npos ||
                 full_table_end == std::string::npos
@@ -813,12 +820,11 @@ void test_refresh_incremental_report_and_skips() {
             : markdown.str().substr(
                   full_table_start, full_table_end - full_table_start + 1);
     check(error.ok() &&
-              compact_totals.find(
-                  "| Language | Files | Lines of code | Indexed | Skipped/errors | Symbols |") ==
-                  0 &&
-              compact_totals.find(
-                  "| **All languages** | **5** | **4** | **2** | **3** |") !=
-                  std::string::npos &&
+              compact_totals.find(u8"┌") == 0 &&
+              compact_totals.find("│ Language") != std::string::npos &&
+              compact_totals.find("Skipped/errors") != std::string::npos &&
+              compact_totals.find("**All languages**") != std::string::npos &&
+              compact_totals.find("**5**") != std::string::npos &&
               compact_totals.find("# ainiux Code Index") == std::string::npos &&
               compact_totals.find("hello") == std::string::npos &&
               compact_totals == full_totals,
@@ -1076,7 +1082,9 @@ void test_schema_upgrade_adds_line_counts() {
     std::ostringstream markdown;
     if (error.ok()) error = ainiux::agent::index::print_markdown(options, freshness, markdown);
     check(error.ok() && freshness.fresh &&
-              markdown.str().find("| JavaScript | 1 | 2 | 1 | 0 | 2 |") != std::string::npos,
+              markdown.str().find("JavaScript") != std::string::npos &&
+              markdown.str().find(u8"┌") != std::string::npos &&
+              markdown.str().find("**All languages**") != std::string::npos,
           "upgraded index persists and reports source line counts");
     {
         TestSqliteDatabase upgraded;

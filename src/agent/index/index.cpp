@@ -29,6 +29,7 @@
 
 #include "agent/project_paths.hpp"
 #include "html/html.hpp"
+#include "markdown/table_format.hpp"
 
 namespace ainiux::agent::index {
 namespace {
@@ -1342,13 +1343,13 @@ Error print_markdown(const Options& options, const Freshness& freshness, std::os
                   "SUM(CASE WHEN scan_status!='indexed' THEN 1 ELSE 0 END),"
                   "(SELECT COUNT(*) FROM symbols s JOIN files sf ON sf.id=s.file_id WHERE sf.language=f.language) "
                   "FROM files f GROUP BY language ORDER BY language")).ok()) return error;
-    output << "## Totals\n\n| Language | Files | Lines of code | Indexed | Skipped/errors | Symbols |\n"
-              "| --- | ---: | ---: | ---: | ---: | ---: |\n";
+    output << "## Totals\n\n";
     sqlite3_int64 total_files = 0;
     sqlite3_int64 total_lines = 0;
     sqlite3_int64 total_indexed = 0;
     sqlite3_int64 total_skipped = 0;
     sqlite3_int64 total_symbols = 0;
+    std::vector<std::vector<std::string>> body;
     for (int rc = totals.step(); rc != SQLITE_DONE; rc = totals.step()) {
         if (cancelled(options)) return {ErrorCode::Cancelled, "printing code index cancelled"};
         if (rc != SQLITE_ROW) return sqlite_error(db.get(), "could not read index totals", db.path());
@@ -1357,13 +1358,24 @@ Error print_markdown(const Options& options, const Freshness& freshness, std::os
         total_indexed += totals.column_int64(3);
         total_skipped += totals.column_int64(4);
         total_symbols += totals.column_int64(5);
-        output << "| " << markdown_text(totals.column_text(0)) << " | " << totals.column_int64(1)
-               << " | " << totals.column_int64(2) << " | " << totals.column_int64(3)
-               << " | " << totals.column_int64(4) << " | " << totals.column_int64(5) << " |\n";
+        body.push_back({markdown_text(totals.column_text(0)),
+                        std::to_string(totals.column_int64(1)),
+                        std::to_string(totals.column_int64(2)),
+                        std::to_string(totals.column_int64(3)),
+                        std::to_string(totals.column_int64(4)),
+                        std::to_string(totals.column_int64(5))});
     }
-    output << "| **All languages** | **" << total_files << "** | **" << total_lines
-           << "** | **" << total_indexed << "** | **" << total_skipped << "** | **"
-           << total_symbols << "** |\n";
+    body.push_back({"**All languages**", "**" + std::to_string(total_files) + "**",
+                    "**" + std::to_string(total_lines) + "**",
+                    "**" + std::to_string(total_indexed) + "**",
+                    "**" + std::to_string(total_skipped) + "**",
+                    "**" + std::to_string(total_symbols) + "**"});
+    const std::vector<std::string> headers = {
+        "Language", "Files", "Lines of code", "Indexed", "Skipped/errors", "Symbols"};
+    const std::vector<markdown::TableAlign> aligns = {
+        markdown::TableAlign::Left,  markdown::TableAlign::Right, markdown::TableAlign::Right,
+        markdown::TableAlign::Right, markdown::TableAlign::Right, markdown::TableAlign::Right};
+    output << markdown::format_table(headers, aligns, body, markdown::TableStyle::UnicodeBox);
     output << "\n";
 
     if (!freshness.fresh) {
@@ -1751,9 +1763,12 @@ std::string compact_totals_markdown(const Snapshot& snapshot) {
     }
 
     Totals all;
-    std::ostringstream output;
-    output << "| Language | Files | Lines of code | Indexed | Skipped/errors | Symbols |\n"
-              "| --- | ---: | ---: | ---: | ---: | ---: |\n";
+    const std::vector<std::string> headers = {
+        "Language", "Files", "Lines of code", "Indexed", "Skipped/errors", "Symbols"};
+    const std::vector<markdown::TableAlign> aligns = {
+        markdown::TableAlign::Left,  markdown::TableAlign::Right, markdown::TableAlign::Right,
+        markdown::TableAlign::Right, markdown::TableAlign::Right, markdown::TableAlign::Right};
+    std::vector<std::vector<std::string>> body;
     for (const auto& item : by_language) {
         const Totals& total = item.second;
         all.files += total.files;
@@ -1761,20 +1776,19 @@ std::string compact_totals_markdown(const Snapshot& snapshot) {
         all.indexed += total.indexed;
         all.skipped += total.skipped;
         all.symbols += total.symbols;
-        output << "| " << item.first << " | " << total.files << " | "
-               << total.lines << " | " << total.indexed << " | "
-               << total.skipped << " | " << total.symbols << " |\n";
+        body.push_back({item.first, std::to_string(total.files), std::to_string(total.lines),
+                        std::to_string(total.indexed), std::to_string(total.skipped),
+                        std::to_string(total.symbols)});
     }
-    output << "| **All languages** | **" << all.files << "** | **"
-           << all.lines << "** | **" << all.indexed << "** | **"
-           << all.skipped << "** | **" << all.symbols << "** |\n";
-    return output.str();
+    body.push_back({"**All languages**", "**" + std::to_string(all.files) + "**",
+                    "**" + std::to_string(all.lines) + "**",
+                    "**" + std::to_string(all.indexed) + "**",
+                    "**" + std::to_string(all.skipped) + "**",
+                    "**" + std::to_string(all.symbols) + "**"});
+    return markdown::format_table(headers, aligns, body, markdown::TableStyle::UnicodeBox);
 }
 
 std::string compact_totals_markdown(const QueryTotals& totals) {
-    Snapshot snapshot;
-    snapshot.updated_at = totals.updated_at;
-    snapshot.language_totals = totals.languages;
     struct Row {
         std::size_t files = 0;
         std::size_t lines = 0;
@@ -1791,22 +1805,28 @@ std::string compact_totals_markdown(const QueryTotals& totals) {
         row.skipped = language.skipped;
         row.symbols = language.symbols;
     }
-    std::ostringstream output;
-    output << "| Language | Files | Lines of code | Indexed | Skipped/errors | Symbols |\n"
-              "| --- | ---: | ---: | ---: | ---: | ---: |\n";
+    const std::vector<std::string> headers = {
+        "Language", "Files", "Lines of code", "Indexed", "Skipped/errors", "Symbols"};
+    const std::vector<markdown::TableAlign> aligns = {
+        markdown::TableAlign::Left,  markdown::TableAlign::Right, markdown::TableAlign::Right,
+        markdown::TableAlign::Right, markdown::TableAlign::Right, markdown::TableAlign::Right};
+    std::vector<std::vector<std::string>> body;
     for (const auto& entry : rows) {
         const Row& row = entry.second;
-        output << "| " << entry.first << " | " << row.files << " | "
-               << row.lines << " | " << row.indexed << " | "
-               << row.skipped << " | " << row.symbols << " |\n";
+        body.push_back({entry.first, std::to_string(row.files), std::to_string(row.lines),
+                        std::to_string(row.indexed), std::to_string(row.skipped),
+                        std::to_string(row.symbols)});
     }
-    output << "| **All languages** | **" << totals.files << "** | **";
     std::size_t lines = 0;
-    for (const LanguageTotal& language : totals.languages)
+    for (const LanguageTotal& language : totals.languages) {
         lines += language.lines;
-    output << lines << "** | **" << totals.indexed << "** | **"
-           << totals.skipped << "** | **" << totals.symbols << "** |\n";
-    return output.str();
+    }
+    body.push_back({"**All languages**", "**" + std::to_string(totals.files) + "**",
+                    "**" + std::to_string(lines) + "**",
+                    "**" + std::to_string(totals.indexed) + "**",
+                    "**" + std::to_string(totals.skipped) + "**",
+                    "**" + std::to_string(totals.symbols) + "**"});
+    return markdown::format_table(headers, aligns, body, markdown::TableStyle::UnicodeBox);
 }
 
 std::vector<std::string> identifier_components(const std::string& text) {

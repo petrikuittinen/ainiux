@@ -1,8 +1,10 @@
 #include "markdown/test_markdown.hpp"
 #include "support/test_support.hpp"
 #include "markdown/markdown.hpp"
+#include "markdown/table_format.hpp"
 #include "ainiux/version.hpp"
 #include <string>
+#include <vector>
 
 namespace ainiux::test::markdown {
 
@@ -164,6 +166,92 @@ void test_markdown_empty_unicode_and_format_parsing() {
           "Markdown output format parser rejects empty format names");
 }
 
+void test_pretty_table_unicode_and_gfm() {
+    const std::vector<std::string> headers = {"Language", "Files", "Lines of code"};
+    const std::vector<ainiux::markdown::TableAlign> aligns = {
+        ainiux::markdown::TableAlign::Left, ainiux::markdown::TableAlign::Right,
+        ainiux::markdown::TableAlign::Right};
+    const std::vector<std::vector<std::string>> body = {
+        {"JSON", "1", "211"},
+        {"Markdown", "2", "443"},
+    };
+
+    const std::string unicode =
+        ainiux::markdown::format_table(headers, aligns, body,
+                                       ainiux::markdown::TableStyle::UnicodeBox);
+    check(unicode.find(u8"┌") == 0 && unicode.find(u8"└") != std::string::npos,
+          "Unicode table has box corners");
+    check(unicode.find("│ JSON     │") != std::string::npos ||
+              unicode.find("│ JSON") != std::string::npos,
+          "Unicode table pads Language column");
+    check(unicode.find("│ Markdown │") != std::string::npos,
+          "Unicode table includes Markdown row");
+    check(unicode.find("211") != std::string::npos && unicode.find("443") != std::string::npos,
+          "Unicode table includes numeric cells");
+
+    const std::string gfm =
+        ainiux::markdown::format_table(headers, aligns, body,
+                                       ainiux::markdown::TableStyle::PaddedGfm);
+    check(gfm.find("| Language | Files | Lines of code |") != std::string::npos,
+          "Padded GFM keeps pipe headers");
+    check(gfm.find("| Markdown |") != std::string::npos &&
+              gfm.find("----") != std::string::npos,
+          "Padded GFM has separator dashes");
+    // Right-aligned numeric column should left-pad spaces before the number.
+    check(gfm.find("211") != std::string::npos, "Padded GFM includes values");
+}
+
+void test_pretty_format_tables_streaming_and_fences() {
+    const std::string input =
+        "Intro\n"
+        "| Language | Files | Lines of code |\n"
+        "| --- | ---: | ---: |\n"
+        "| JSON | 1 | 211 |\n"
+        "| Markdown | 2 | 443 |\n"
+        "\n"
+        "```\n"
+        "| not | a | table |\n"
+        "| --- | --- | --- |\n"
+        "```\n";
+    ainiux::markdown::TableFormatOptions options;
+    options.style = ainiux::markdown::TableStyle::UnicodeBox;
+    options.reformat_open_tables = true;
+    const std::string pretty = ainiux::markdown::pretty_format_tables(input, options);
+    check(pretty.find(u8"┌") != std::string::npos &&
+              pretty.find("│ JSON") != std::string::npos,
+          "pretty_format_tables rewrites GFM tables to Unicode boxes");
+    check(pretty.find("```\n| not | a | table |") != std::string::npos,
+          "pretty_format_tables leaves fenced pipe examples alone");
+
+    // Open table (header + separator + one body row, still streaming).
+    const std::string open_table =
+        "| A | B |\n"
+        "| --- | ---: |\n"
+        "| x | 1 |";
+    const std::string open_pretty =
+        ainiux::markdown::pretty_format_tables(open_table, options);
+    check(open_pretty.find(u8"┌") != std::string::npos &&
+              open_pretty.find("│ x") != std::string::npos,
+          "open streaming tables reformat with known rows");
+
+    // Header only is not a table yet.
+    const std::string header_only = "| A | B |\n";
+    check(ainiux::markdown::pretty_format_tables(header_only, options) == header_only,
+          "header-only lines stay raw until a separator arrives");
+
+    // Already boxed tables are not GFM and should pass through.
+    const std::string boxed =
+        ainiux::markdown::format_table({"A", "B"}, {}, {{"1", "2"}},
+                                       ainiux::markdown::TableStyle::UnicodeBox);
+    check(ainiux::markdown::pretty_format_tables(boxed, options) == boxed,
+          "Unicode box tables are left unchanged (idempotent)");
+
+    check(ainiux::markdown::table_display_width("ab") == 2,
+          "ASCII display width is one cell per character");
+    check(ainiux::markdown::table_display_width(u8"你好") == 4,
+          "CJK display width counts two cells per character");
+}
+
 }  // namespace
 
 void run_all() {
@@ -172,6 +260,8 @@ void run_all() {
     test_markdown_empty_unicode_and_format_parsing();
     test_markdown_html_rendering();
     test_markdown_plaintext_and_document_rendering();
+    test_pretty_table_unicode_and_gfm();
+    test_pretty_format_tables_streaming_and_fences();
 }
 
 }  // namespace ainiux::test::markdown

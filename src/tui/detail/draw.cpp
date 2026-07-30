@@ -6,6 +6,7 @@
 
 #include "agent/tool_display.hpp"
 #include "app/detail.hpp"
+#include "markdown/table_format.hpp"
 #include "provider/provider.hpp"
 
 #include <iostream>
@@ -486,6 +487,11 @@ std::vector<StyledLine> history_lines_for_session(const chat::Session& session,
                                               activity_frame,
                                               "working...");
         } else {
+            // Display-only: pad/box GFM tables without rewriting stored transcripts.
+            // Live streaming reformats open tables as new rows arrive.
+            if (!content.empty()) {
+                content = markdown::pretty_format_tables(content);
+            }
             content_segments = markdown_highlight ? markdown_segments(content) : plain_text_segments(content);
             if (message.role == "assistant" && show_thinking_traces) {
                 content_segments = visible_thinking_trace_segments(content);

@@ -66,8 +66,10 @@ transport, filesystem, or PTY boundary is involved.
 - Provider registry, every registered reasoning request protocol, ordinary response parsing, and native-tool readable-reasoning extraction for Chat/Responses streams, summaries, details, think tags, and encrypted-state omission
 - Main configuration plus `models.conf` parsing, embedded fallback availability outside the source directory, layering, disabling, regex validation, context-window fallback precedence, and final-component/case-insensitive family matching
 - HTML/Markdown/input/output conversion, including punctuation-adjacent emphasis,
-  literal intraword underscores, exact inline-code delimiter runs, and blockquote
-  text preservation across editor and TUI styling
+  literal intraword underscores, exact inline-code delimiter runs, blockquote
+  text preservation across editor and TUI styling, and pretty table layout
+  (Unicode box / padded GFM, streaming open tables, fenced-code exemption,
+  display-width padding, and index/benchmark report generators)
 - Editor piece table, panels, selection, and file I/O
 - Chat JSON save/load, including named/numeric/Auto per-thread reasoning
 - SQLite store round-trip, editor model-selection app state, listing, soft delete, corrupt DB, and missing-thread handling
