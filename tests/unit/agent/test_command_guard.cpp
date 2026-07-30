@@ -91,6 +91,16 @@ void test_parse_policies() {
     check(!error.ok() && error.message.find("unquoted shell substitutions") != std::string::npos,
           "agent still rejects unquoted shell substitutions");
 
+    error = agent::parse_command(
+        R"CMD(python3 -c "import readline; print('readline available')")CMD",
+        args, agent::CommandPolicy::Agent, rule);
+    check(error.ok() && args.size() == 3 && args[2].find(';') != std::string::npos,
+          "agent accepts quoted python -c multi-statement payload: " + error.message);
+
+    error = agent::parse_command("echo hi | wc -l", args, agent::CommandPolicy::Agent, rule);
+    check(!error.ok() && error.message.find("shell-free") != std::string::npos,
+          "agent rejects unquoted pipe as shell syntax: " + error.message);
+
     error = agent::parse_command("bash -c echo", args, agent::CommandPolicy::Agent, rule);
     check(!error.ok(), "agent still denylists shell wrappers: " + error.message);
 

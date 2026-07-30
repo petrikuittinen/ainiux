@@ -3122,8 +3122,9 @@ std::vector<provider::FunctionDefinition> ReadToolRegistry::definitions() const 
                "other commands, and external paths require approval. Confirm always asks and "
                "Yolo retains validated no-prompt execution. Shells/sudo/package installs/disk "
                "destroyers and destructive forms (rm -rf, git reset --hard) are denied or need "
-               "approval. No pipes, redirects, substitutions, or shell metacharacters. Prefer "
-               "native tools and dedicated Git tools."
+               "approval. Shell-free argv exec: no unquoted pipes/redirects/chaining; quoted "
+               "payload data may contain ';' (e.g. python3 -c \"a; b\"). Prefer native tools "
+               "and dedicated Git tools."
              : "Run one read-only inspection command without a shell "
                "(pwd/ls/rg/grep/find/git allowlist).",
          schema("\"command\":{\"type\":\"string\"},\"cwd\":{\"type\":\"string\"},"

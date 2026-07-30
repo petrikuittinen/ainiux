@@ -422,16 +422,29 @@ void test_command_guard_adversarial() {
 
     std::vector<std::string> args;
     std::string rule;
-    // Shell metacharacters rejected at parse.
+    // Unquoted shell operators rejected at parse (model meant a real shell).
     check(!agent::parse_command("python3 hello.py; rm -rf /", args, agent::CommandPolicy::Agent, rule)
                .ok(),
-          "shell metacharacters rejected");
+          "unquoted shell chaining rejected");
     check(!agent::parse_command("python3 $(whoami)", args, agent::CommandPolicy::Agent, rule).ok(),
           "command substitution rejected");
     check(!agent::parse_command("python3 ${HOME}", args, agent::CommandPolicy::Agent, rule).ok(),
           "parameter substitution rejected when unquoted");
     check(!agent::parse_command("python3 `id`", args, agent::CommandPolicy::Agent, rule).ok(),
           "backticks rejected");
+    // Quoted payload data may contain shell-looking characters: no shell is run.
+    Error quoted_semi = agent::parse_command(
+        R"CMD(python3 -c "import readline; print('ok')")CMD", args,
+        agent::CommandPolicy::Agent, rule);
+    check(quoted_semi.ok() && args.size() == 3 && args[0] == "python3" && args[1] == "-c" &&
+              args[2].find("import readline;") != std::string::npos,
+          "quoted python -c payload with ';' is allowed: " + quoted_semi.message);
+    Error quoted_pipe = agent::parse_command(
+        R"CMD(python3 -c "print('a|b')")CMD", args, agent::CommandPolicy::Agent,
+        rule);
+    check(quoted_pipe.ok() && args.size() == 3 &&
+              args[2].find("a|b") != std::string::npos,
+          "quoted payload with '|' is allowed: " + quoted_pipe.message);
     check(!agent::parse_command("cat /etc/passwd", args, agent::CommandPolicy::Agent, rule).ok(),
           "absolute path arg rejected");
     check(!agent::parse_command("python3 ../../etc/passwd", args, agent::CommandPolicy::Agent, rule)

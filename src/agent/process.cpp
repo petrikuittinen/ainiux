@@ -100,11 +100,21 @@ Error resolve_executable(const std::string& name, std::string& resolved) {
                 "): " + name};
 }
 
+// True when an argv element still looks like a shell operator token (used for
+// git pathspecs / revisions). After shell-free tokenization, ordinary program
+// data may legally contain ';' '|' etc. (e.g. python3 -c "a; b").
 bool dangerous_argument(const std::string& argument) {
     return argument.find_first_of("|;&<>\r\n`") != std::string::npos;
 }
 
-bool has_unquoted_shell_substitution(const std::string& command) {
+// Walk the raw command string with shell-ish quote rules. run_command never
+// invokes a shell, so unquoted control operators are rejected as "model meant
+// shell syntax", while the same characters inside quotes are payload data.
+bool scan_unquoted_shell_syntax(const std::string& command,
+                                bool& saw_control_operator,
+                                bool& saw_substitution) {
+    saw_control_operator = false;
+    saw_substitution = false;
     char quote = 0;
     bool escaping = false;
     for (std::size_t index = 0; index < command.size(); ++index) {
@@ -130,10 +140,24 @@ bool has_unquoted_shell_substitution(const std::string& command) {
             continue;
         }
         if (ch == '$' && index + 1 < command.size() &&
-            (command[index + 1] == '(' || command[index + 1] == '{'))
+            (command[index + 1] == '(' || command[index + 1] == '{')) {
+            saw_substitution = true;
             return true;
+        }
+        if (ch == '`' || ch == '|' || ch == '&' || ch == ';' || ch == '<' ||
+            ch == '>' || ch == '\n' || ch == '\r') {
+            saw_control_operator = true;
+            return true;
+        }
     }
     return false;
+}
+
+bool has_unquoted_shell_substitution(const std::string& command) {
+    bool control = false;
+    bool substitution = false;
+    scan_unquoted_shell_syntax(command, control, substitution);
+    return substitution;
 }
 
 bool option_or_assignment(const std::string& argument, const std::string& option) {
@@ -244,9 +268,11 @@ Error enforce_git_policy(const std::vector<std::string>& args) {
 Error enforce_common_safety(const std::vector<std::string>& args,
                             bool allow_absolute_paths = false) {
     if (args.empty()) return {ErrorCode::BadArgs, "run_command command is empty"};
+    // Shell-free execve: after tokenization, argv elements are program data, not
+    // shell syntax. Do not reject ';' '|' etc. here — that blocked legitimate
+    // payloads such as python3 -c "import x; print(1)". Unquoted operators in
+    // the raw command string are rejected in parse_command instead.
     for (const std::string& arg : args) {
-        if (dangerous_argument(arg))
-            return {ErrorCode::BadArgs, "run_command rejected shell metacharacters or substitutions"};
         const fs::path possible_path(arg);
         if (possible_path.is_absolute() && !allow_absolute_paths)
             return {ErrorCode::BadArgs, "run_command rejects absolute path arguments"};
@@ -574,9 +600,21 @@ Error parse_command(const std::string& command,
                     bool allow_absolute_paths) {
     guard_rule_id.clear();
     arguments.clear();
-    if (has_unquoted_shell_substitution(command))
-        return {ErrorCode::BadArgs,
-                "run_command rejected unquoted shell substitutions"};
+    {
+        bool control = false;
+        bool substitution = false;
+        if (scan_unquoted_shell_syntax(command, control, substitution)) {
+            if (substitution)
+                return {ErrorCode::BadArgs,
+                        "run_command rejected unquoted shell substitutions "
+                        "($... / `...`); it never runs a shell"};
+            return {ErrorCode::BadArgs,
+                    "run_command is shell-free and rejects unquoted shell control "
+                    "operators (| & ; < > ` and newlines). Quote them when they are "
+                    "program data (example: python3 -c \"import x; print(1)\"), or "
+                    "run a script file instead of chaining commands"};
+        }
+    }
     Error error = tokenize_command(command, arguments);
     if (!error.ok()) return error;
     if (policy == CommandPolicy::Agent) {
