@@ -191,18 +191,112 @@ void test_compaction_strategies_timeline_and_partition() {
         agent::build_compaction_timeline(messages, {tool});
     bool saw_display = false;
     int tool_items = 0;
+    std::string read_file_body;
     for (const auto& item : timeline) {
         saw_display = saw_display || item.role == "notice" ||
                       item.role == "thinking" || item.role == "index";
-        if (item.role == "tool") ++tool_items;
+        if (item.role == "tool") {
+            ++tool_items;
+            if (item.tool_name == "read_file") read_file_body = item.content;
+        }
     }
     check(!saw_display && tool_items == 1,
           "timeline excludes display roles and keeps one full logical tool unit");
+    check(agent::is_reloadable_file_read_tool("read_file") &&
+              agent::is_reloadable_file_read_tool("read_many") &&
+              !agent::is_reloadable_file_read_tool("run_command"),
+          "reloadable file-read tools are named exactly");
+    check(read_file_body.find("src/main.cpp") != std::string::npos &&
+              read_file_body.find("reloadable") != std::string::npos &&
+              read_file_body.find("\"content\":\"main\"") == std::string::npos &&
+              read_file_body.find("\nmain\n") == std::string::npos,
+          "successful read_file timeline items keep the path and omit the body");
+
+    const std::string large_body(8000, 'x');
+    agent::AgentToolEventRecord large_read;
+    large_read.seq = 100;
+    large_read.tool_name = "read_file";
+    large_read.arguments = R"({"path":"src/big.cpp","start_line":1,"end_line":400})";
+    large_read.result =
+        std::string(R"({"ok":true,"content":")") + large_body + "\"}";
+    large_read.ok = true;
+    agent::AgentToolEventRecord many_read;
+    many_read.seq = 101;
+    many_read.tool_name = "read_many";
+    many_read.arguments =
+        R"({"items":[{"path":"a.cpp"},{"path":"b.cpp"}]})";
+    many_read.result =
+        R"({"ok":true,"results":[{"path":"a.cpp","content":"aaa"},{"path":"b.cpp","content":"bbb"}]})";
+    many_read.ok = true;
+    agent::AgentToolEventRecord failed_read;
+    failed_read.seq = 102;
+    failed_read.tool_name = "read_file";
+    failed_read.arguments = R"({"path":"missing.cpp"})";
+    failed_read.result =
+        R"({"ok":false,"error":{"code":"not_found","message":"file not found: missing.cpp"}})";
+    failed_read.ok = false;
+    agent::AgentToolEventRecord command;
+    command.seq = 103;
+    command.tool_name = "run_command";
+    command.arguments = R"({"argv":["echo","hi"]})";
+    command.result = R"({"ok":true,"stdout":"hi\n","exit_code":0})";
+    command.ok = true;
+
+    const auto stubbed = agent::build_compaction_timeline(
+        {}, {large_read, many_read, failed_read, command});
+    check(stubbed.size() == 4, "four tool events become four timeline items");
+    for (const auto& item : stubbed) {
+        if (item.tool_name == "read_file" && item.tool_ok) {
+            check(item.content.find(large_body) == std::string::npos &&
+                      item.content.find("src/big.cpp") != std::string::npos &&
+                      item.content.find("Status: ok") != std::string::npos,
+                  "large successful read_file is stubbed without body");
+        } else if (item.tool_name == "read_many") {
+            check(item.content.find("\"content\":\"aaa\"") == std::string::npos &&
+                      item.content.find("a.cpp") != std::string::npos &&
+                      item.content.find("reloadable") != std::string::npos,
+                  "read_many keeps paths and drops result bodies");
+        } else if (item.tool_name == "read_file" && !item.tool_ok) {
+            check(item.content.find("file not found: missing.cpp") !=
+                      std::string::npos &&
+                      item.content.find("Status: failed") != std::string::npos &&
+                      item.content.find(large_body) == std::string::npos,
+                  "failed read_file keeps a bounded error and omits file body");
+        } else if (item.tool_name == "run_command") {
+            check(item.content.find("hi") != std::string::npos,
+                  "non-reloadable tools still carry their result payload");
+        }
+    }
+    // render_compaction_source only emits middle history; feed stubbed tools
+    // there directly so a large window cannot absorb them into the tail.
+    agent::CompactionPartition render_partition;
+    for (const auto& item : stubbed) {
+        if (agent::is_reloadable_file_read_tool(item.tool_name) ||
+            item.tool_name == "run_command")
+            render_partition.middle.push_back(item);
+    }
+    const std::string source = agent::render_compaction_source(render_partition);
+    check(!source.empty() && source.find(large_body) == std::string::npos &&
+              source.find("src/big.cpp") != std::string::npos &&
+              source.find("reloadable") != std::string::npos &&
+              source.find("\"content\":\"aaa\"") == std::string::npos,
+          "summarizer source omits reloadable file bodies");
+    const std::string direct_stub = agent::stub_reloadable_tool_item_content(
+        "read_file", R"({"path":"src/big.cpp"})", large_read.result, true);
+    check(direct_stub.find(large_body) == std::string::npos &&
+              direct_stub.find("src/big.cpp") != std::string::npos,
+          "stub helper itself never copies successful file content");
+
     const auto partition =
         agent::partition_compaction_timeline(timeline, 200);
     check(partition.head.size() == 3 && partition.tail.size() >= 3 &&
               partition.tail.size() <= 20 && !partition.middle.empty(),
           "first compaction retains three head items and a bounded whole-item tail");
+    check(partition.tail_budget_tokens == 16,
+          "tail budget uses 8% of the context window");
+    check(agent::partition_compaction_timeline(timeline, 100000)
+                  .tail_budget_tokens == 8000,
+          "tail budget scales to 8% of a large window");
 
     message(15, "summary", "prior structured checkpoint");
     message(16, "user", "new follow-up");
@@ -215,11 +309,17 @@ void test_compaction_strategies_timeline_and_partition() {
               repeated.prior_summary == "prior structured checkpoint",
           "repeated compaction carries the previous summary instead of duplicating head");
 
-    const auto fast = agent::build_fast_compaction_candidate(partition, 1000);
+    // Use a larger window so the partition's tail budget is not tiny; the
+    // "does not escalate" check should not fire just because the toy window
+    // was 200 tokens.
+    const auto roomy_partition =
+        agent::partition_compaction_timeline(timeline, 100000);
+    const auto fast =
+        agent::build_fast_compaction_candidate(roomy_partition, 1000);
     std::string reason;
     check(!fast.checkpoint.empty() &&
               !agent::smart_compaction_should_escalate(
-                  fast, 10000, 7500, partition.tail_budget_tokens, reason),
+                  fast, 10000, 7500, roomy_partition.tail_budget_tokens, reason),
           "small lossless fast checkpoint does not escalate");
     agent::FastCompactionCandidate lossy = fast;
     lossy.omitted_substantive_tokens = 2000;
@@ -229,7 +329,8 @@ void test_compaction_strategies_timeline_and_partition() {
           "smart strategy escalates when substantive history is omitted");
     check(agent::compaction_summary_input_budget(10000) == 6000 &&
               agent::compaction_summary_input_budget(0) == 8000 &&
-              agent::compaction_summary_output_budget(8000, 10000) == 1000,
+              agent::compaction_summary_output_budget(8000, 10000) == 512 &&
+              agent::compaction_summary_output_budget(80000, 128000) == 4000,
           "summary input and output budgets follow context clamps");
     check(agent::compaction_summary_reasoning(
               {ReasoningSelection::named("low"),
@@ -240,6 +341,16 @@ void test_compaction_strategies_timeline_and_partition() {
                    ReasoningSelection::named("minimal")}) ==
                   ReasoningSelection::named("minimal"),
           "summary reasoning prefers disabling then minimal catalogue values");
+    const std::string schema =
+        agent::compaction_summary_schema_prompt("user goal");
+    check(schema.find("read_file") != std::string::npos &&
+              schema.find("read_many") != std::string::npos &&
+              schema.find("Never paste source") != std::string::npos &&
+              schema.find("Active Task") != std::string::npos,
+          "summary schema forbids retaining reloadable file bodies");
+    check(agent::compaction_checkpoint_wrapper("checkpoint text")
+                  .find("re-read workspace files") != std::string::npos,
+          "checkpoint wrapper tells the model to re-read files");
     check(agent::format_compaction_progress(CompactionStrategy::Summary, 0) ==
               "Compacting context using summary." &&
               agent::format_compaction_progress(CompactionStrategy::Summary, 1) ==

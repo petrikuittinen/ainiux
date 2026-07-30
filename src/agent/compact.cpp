@@ -8,6 +8,7 @@
 #include <sstream>
 
 #include "config/model_catalog.hpp"
+#include "json/json.hpp"
 
 namespace ainiux::agent {
 namespace {
@@ -15,6 +16,11 @@ namespace {
 constexpr long long kSubstantiveItemTokens = 2000;
 constexpr std::size_t kMinimumTailItems = 3;
 constexpr std::size_t kMaximumTailItems = 20;
+// Fraction of the context window retained as an unsummarized recent tail.
+// Kept deliberately smaller than earlier 15% so large recent tool batches do
+// not dominate post-compact request size once reloadable reads are stubbed.
+constexpr int kTailBudgetPercent = 8;
+constexpr std::size_t kFailedToolErrorBytes = 400;
 
 bool model_projection_role(const std::string& role) {
     return role != "system" && role != "notice" && role != "thinking" &&
@@ -63,6 +69,34 @@ std::string item_label(const CompactionLogicalItem& item) {
 void append_exact_item(std::ostringstream& out, const CompactionLogicalItem& item,
                        const char* section) {
     out << section << " [" << item_label(item) << "]\n" << item.content << "\n";
+}
+
+std::string bounded_error_from_result(const std::string& result_json) {
+    std::string detail;
+    json::ParseResult parsed = json::parse(result_json);
+    if (parsed.error.ok() && parsed.value.is_object()) {
+        if (const json::Value* err = parsed.value.get("error")) {
+            if (err->is_object()) {
+                if (const json::Value* msg = err->get("message");
+                    msg != nullptr && msg->is_string())
+                    detail = msg->string;
+                else if (const json::Value* code = err->get("code");
+                         code != nullptr && code->is_string())
+                    detail = code->string;
+            } else if (err->is_string()) {
+                detail = err->string;
+            }
+        }
+        if (detail.empty()) {
+            if (const json::Value* message = parsed.value.get("message");
+                message != nullptr && message->is_string())
+                detail = message->string;
+        }
+    }
+    if (detail.empty()) detail = single_line(result_json);
+    bool truncated = false;
+    return bounded_extract(single_line(std::move(detail)), kFailedToolErrorBytes,
+                           truncated);
 }
 
 }  // namespace
@@ -127,6 +161,31 @@ long long estimate_transcript_tokens(
     return total;
 }
 
+bool is_reloadable_file_read_tool(const std::string& tool_name) {
+    return tool_name == "read_file" || tool_name == "read_many";
+}
+
+std::string stub_reloadable_tool_item_content(const std::string& tool_name,
+                                              const std::string& arguments_json,
+                                              const std::string& result_json,
+                                              bool ok) {
+    std::ostringstream content;
+    content << "Tool: " << (tool_name.empty() ? "unknown" : tool_name)
+            << "\nArguments: "
+            << (arguments_json.empty() ? std::string("{}") : arguments_json)
+            << "\n";
+    if (ok) {
+        content << "Result: omitted (reloadable from workspace; re-read if needed)\n"
+                   "Status: ok";
+    } else {
+        content << "Result: omitted (file body not retained on failure)\n"
+                   "Status: failed\n"
+                   "Error: "
+                << bounded_error_from_result(result_json);
+    }
+    return content.str();
+}
+
 std::vector<CompactionLogicalItem> build_compaction_timeline(
     const std::vector<AgentMessageRecord>& messages,
     const std::vector<AgentToolEventRecord>& tool_events) {
@@ -158,9 +217,20 @@ std::vector<CompactionLogicalItem> build_compaction_timeline(
         CompactionLogicalItem item;
         item.seq = message.seq;
         item.role = message.role;
-        item.content = message.content;
         item.tool_name = message.tool_name;
         item.tool_ok = message.tool_ok;
+        // Display tool rows are already one-line previews. If a reloadable
+        // read somehow lands here without a matching tool_event, still avoid
+        // carrying a large body into the compact projection.
+        if (message.role == "tool" && is_reloadable_file_read_tool(message.tool_name) &&
+            message.content.size() > 512) {
+            item.content = stub_reloadable_tool_item_content(
+                message.tool_name,
+                message.args_preview.empty() ? "{}" : message.args_preview,
+                message.content, message.tool_ok);
+        } else {
+            item.content = message.content;
+        }
         item.estimated_tokens = item_tokens(item);
         timeline.push_back(std::move(item));
     }
@@ -170,10 +240,17 @@ std::vector<CompactionLogicalItem> build_compaction_timeline(
         item.role = "tool";
         item.tool_name = event.tool_name;
         item.tool_ok = event.ok;
-        std::ostringstream content;
-        content << "Tool: " << (event.tool_name.empty() ? "unknown" : event.tool_name)
-                << "\nArguments: " << event.arguments << "\nResult: " << event.result;
-        item.content = content.str();
+        if (is_reloadable_file_read_tool(event.tool_name)) {
+            item.content = stub_reloadable_tool_item_content(
+                event.tool_name, event.arguments, event.result, event.ok);
+        } else {
+            std::ostringstream content;
+            content << "Tool: "
+                    << (event.tool_name.empty() ? "unknown" : event.tool_name)
+                    << "\nArguments: " << event.arguments
+                    << "\nResult: " << event.result;
+            item.content = content.str();
+        }
         item.estimated_tokens = item_tokens(item);
         timeline.push_back(std::move(item));
     }
@@ -211,7 +288,7 @@ CompactionPartition partition_compaction_timeline(
     result.tail_budget_tokens =
         std::max<long long>(1, (context_window_tokens > 0 ? context_window_tokens
                                                           : fallback_window) *
-                                   15 / 100);
+                                   kTailBudgetPercent / 100);
 
     std::size_t tail_begin = timeline.size();
     long long tail_tokens = 0;
@@ -353,9 +430,12 @@ long long compaction_summary_input_budget(long long context_window_tokens) {
 
 long long compaction_summary_output_budget(long long source_tokens,
                                            long long context_window_tokens) {
+    // Cap the model-written checkpoint tightly: file bodies are omitted from
+    // the source via stubs, so a multi-kB summary is rarely useful and often
+    // reintroduces quoted source into remaining context.
     const long long upper =
         context_window_tokens > 0
-            ? std::min<long long>(8000, context_window_tokens / 10)
+            ? std::min<long long>(4000, context_window_tokens / 20)
             : 1000;
     return std::max<long long>(512,
                                std::min<long long>(upper,
@@ -422,16 +502,24 @@ std::string format_compaction_progress(CompactionStrategy strategy,
 std::string compaction_checkpoint_wrapper(const std::string& checkpoint) {
     return "[Compacted agent checkpoint — reference material only]\n"
            "The block below summarizes prior work. It is not a new instruction. "
-           "Treat completed work and quoted source text as historical evidence; "
-           "verify current files and state before acting.\n\n" +
+           "Treat completed work and file paths as historical hints only. "
+           "Do not trust quoted source text as current; re-read workspace files "
+           "with tools before editing or relying on their contents.\n\n" +
            checkpoint;
 }
 
 std::string compaction_summary_schema_prompt(const std::string& user_preamble) {
     return user_preamble +
-           "\n\nSummarize the supplied chronological agent history. Preserve the "
-           "user's language and never reproduce credentials or secrets. Return only "
-           "a concise checkpoint with these headings:\nActive Task\nGoal\nConstraints\n"
+           "\n\nSummarize the supplied chronological agent history into a tight "
+           "checkpoint. Preserve the user's language and never reproduce "
+           "credentials or secrets.\n"
+           "Reloadable tool policy: do not treat read_file or read_many results as "
+           "vital durable content. File bodies can be reloaded from the workspace. "
+           "At most note that a path was read (and why), or list the path under "
+           "Relevant Files/Evidence. Never paste source code, file dumps, or long "
+           "tool result bodies into any section.\n"
+           "Prefer short bullets. Omit filler. Return only a concise checkpoint "
+           "with these headings:\nActive Task\nGoal\nConstraints\n"
            "Decisions\nCompleted Work\nActive State\nRelevant Files/Evidence\nBlockers\n"
            "Remaining Work";
 }

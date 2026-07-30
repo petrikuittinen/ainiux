@@ -56,6 +56,17 @@ struct FastCompactionCandidate {
     bool omitted_item_at_least_2k = false;
 };
 
+// True for tools whose successful payloads are cheap to re-fetch from the
+// workspace (file bodies must not bloat compacted model context).
+bool is_reloadable_file_read_tool(const std::string& tool_name);
+
+// Build a short timeline body for read_file / read_many: keep arguments and
+// status, omit successful file content. Failures keep a bounded error snippet.
+std::string stub_reloadable_tool_item_content(const std::string& tool_name,
+                                              const std::string& arguments_json,
+                                              const std::string& result_json,
+                                              bool ok);
+
 std::vector<CompactionLogicalItem> build_compaction_timeline(
     const std::vector<AgentMessageRecord>& messages,
     const std::vector<AgentToolEventRecord>& tool_events);
