@@ -5,6 +5,22 @@
 
 namespace ainiux::editor {
 
+PaneViewState pane_view_from_state(const EditorState& state) {
+    PaneViewState view;
+    view.cursor = state.cursor;
+    view.preferred_column = state.preferred_column;
+    view.scroll_line = state.scroll_line;
+    view.scroll_column = state.scroll_column;
+    return view;
+}
+
+void apply_pane_view_to_state(EditorState& state, const PaneViewState& view) {
+    state.cursor = std::min(view.cursor, state.text.size());
+    state.preferred_column = view.preferred_column;
+    state.scroll_line = view.scroll_line;
+    state.scroll_column = view.scroll_column;
+}
+
 SplitLayout::SplitLayout() {
     reset(0);
 }
@@ -180,6 +196,7 @@ void SplitLayout::layout_node(const Node* node,
         pane.leaf_index = leaf_counter;
         pane.rect = area;
         pane.focused = (leaf_counter == focused_leaf());
+        pane.view = node->view;
         ++leaf_counter;
         out.push_back(pane);
         return;
@@ -221,13 +238,17 @@ bool SplitLayout::split_focused(SplitKind kind, const Rect& outer_area) {
     }
     Node* target = leaves[focused_leaf_];
     const size_t buffer = target->buffer_index;
+    const PaneViewState inherited = target->view;
     Node* left = make_leaf(buffer);
     Node* right = make_leaf(buffer);
+    left->view = inherited;
+    right->view = inherited;
     // Replace target leaf in place by converting it into a split node.
     target->is_leaf = false;
     target->kind = kind;
     target->ratio = 0.5;
     target->buffer_index = 0;
+    target->view = PaneViewState{};
     target->first = left;
     target->second = right;
     // Keep focus on the first child of the new split (original content).
@@ -343,7 +364,33 @@ bool SplitLayout::close_focused() {
 
 void SplitLayout::maximize_focused() {
     const size_t buffer = focused_buffer();
+    const PaneViewState view = focused_view();
     reset(buffer);
+    set_focused_view(view);
+}
+
+PaneViewState SplitLayout::leaf_view(size_t leaf_index) const {
+    const Node* node = leaf_at(leaf_index);
+    if (node == nullptr || !node->is_leaf) {
+        return PaneViewState{};
+    }
+    return node->view;
+}
+
+void SplitLayout::set_leaf_view(size_t leaf_index, const PaneViewState& view) {
+    Node* node = leaf_at(leaf_index);
+    if (node == nullptr || !node->is_leaf) {
+        return;
+    }
+    node->view = view;
+}
+
+PaneViewState SplitLayout::focused_view() const {
+    return leaf_view(focused_leaf());
+}
+
+void SplitLayout::set_focused_view(const PaneViewState& view) {
+    set_leaf_view(focused_leaf(), view);
 }
 
 void SplitLayout::set_focused_buffer(size_t buffer_index) {

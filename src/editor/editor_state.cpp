@@ -1095,13 +1095,20 @@ void EditorState::ensure_cursor_visible(const Rect& rect) {
 }
 
 RenderedPanel EditorState::render(const Rect& rect) const {
+    return render(rect, cursor, scroll_line, scroll_column);
+}
+
+RenderedPanel EditorState::render(const Rect& rect,
+                                  size_t view_cursor,
+                                  size_t view_scroll_line,
+                                  size_t view_scroll_column) const {
     const std::optional<Selection> active_selection =
         selection.has_range() ? std::optional<Selection>(selection) : std::nullopt;
     return render_panel(text,
                         rect,
-                        cursor,
-                        scroll_line,
-                        scroll_column,
+                        std::min(view_cursor, text.size()),
+                        view_scroll_line,
+                        view_scroll_column,
                         active_selection,
                         language,
                         highlight_enabled,

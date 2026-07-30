@@ -3089,10 +3089,36 @@ void test_editor_split_layout() {
     const Rect large{1, 1, 40, 80};
     check(layout.leaf_count() == 1, "new layout starts with one pane");
     check(!layout.has_split(), "new layout is not split");
+    {
+        ainiux::editor::PaneViewState start_view;
+        start_view.cursor = 42;
+        start_view.preferred_column = 7;
+        start_view.scroll_line = 3;
+        start_view.scroll_column = 1;
+        layout.set_focused_view(start_view);
+    }
     check(layout.split_focused(SplitKind::Vertical, large), "vertical split succeeds on large area");
     check(layout.leaf_count() == 2, "vertical split creates two panes");
     check(layout.has_split(), "layout reports split after vertical split");
     check(layout.focused_leaf() == 0, "focus stays on first pane after split");
+    {
+        const ainiux::editor::PaneViewState left = layout.leaf_view(0);
+        const ainiux::editor::PaneViewState right = layout.leaf_view(1);
+        check(left.cursor == 42 && right.cursor == 42 && left.scroll_line == 3 &&
+                  right.scroll_line == 3,
+              "split inherits the same initial view on both leaves");
+    }
+    {
+        ainiux::editor::PaneViewState other_view;
+        other_view.cursor = 100;
+        other_view.scroll_line = 20;
+        layout.set_leaf_view(1, other_view);
+        check(layout.leaf_view(0).cursor == 42 && layout.leaf_view(1).cursor == 100 &&
+                  layout.leaf_view(1).scroll_line == 20,
+              "same-buffer leaves keep independent cursor and scroll");
+        layout.set_focused_view(layout.leaf_view(0));
+        check(layout.focused_view().cursor == 42, "focused_view reads the focused leaf");
+    }
     {
         const std::optional<size_t> other = layout.other_scroll_leaf();
         check(other.has_value() && *other == 1,

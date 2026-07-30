@@ -33,7 +33,7 @@ Slash commands (via `Esc` then the command):
 | `/maximize` | Keep only the focused pane; same as `Ctrl+X 1` |
 | `/nosplit` | Alias for `/maximize` |
 
-Both panes of a new split show the same buffer at first. Open another file in one pane (`Ctrl+O`) or switch buffers (`Ctrl+L`) to compare two files. Status shows `[N panes]` while more than one pane is open.
+Both panes of a new split show the same buffer at first and start with the same cursor and scroll position. After that, each pane keeps its own point and window scroll (Emacs-style), even when both panes show the same buffer—moving or scrolling in one pane does not move the other. Open another file in one pane (`Ctrl+O`) or switch buffers (`Ctrl+L`) to compare two files. Status shows `[N panes]` while more than one pane is open.
 
 **Other-pane scrolling:** after a split, `Ctrl+B`/`Ctrl+D` page the new sibling. After `Ctrl+X o`, they page the pane you left. With three or more panes, the target is always the last pane you left (not every non-focused pane). Cancel for minibuffers and replace mode is **Esc** only (not Ctrl+X).
 

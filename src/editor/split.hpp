@@ -17,15 +17,28 @@ enum class SplitKind {
     Vertical,
 };
 
+// Per-window point and scroll (Emacs-style). Independent of shared buffer text.
+struct PaneViewState {
+    size_t cursor = 0;
+    size_t preferred_column = 0;
+    size_t scroll_line = 0;
+    size_t scroll_column = 0;
+};
+
+PaneViewState pane_view_from_state(const EditorState& state);
+void apply_pane_view_to_state(EditorState& state, const PaneViewState& view);
+
 struct SplitPaneRect {
     size_t buffer_index = 0;
     size_t leaf_index = 0;
     Rect rect;
     bool focused = false;
+    PaneViewState view;
 };
 
 // Binary-tree window layout for the standalone editor (Emacs-style).
 // Leaves point at buffer indices; the tree is independent of buffer content.
+// Each leaf also stores its own cursor/scroll view for that window.
 class SplitLayout {
    public:
     SplitLayout();
@@ -43,8 +56,9 @@ class SplitLayout {
     size_t focused_buffer() const;
     bool has_split() const { return leaf_count() > 1; }
 
-    // Split the focused leaf; both panes show the same buffer initially.
-    // Returns false if the focused pane is too small to split.
+    // Split the focused leaf; both panes show the same buffer initially and
+    // inherit the focused pane's view (cursor/scroll). Returns false if the
+    // focused pane is too small to split.
     bool split_focused(SplitKind kind, const Rect& outer_area);
 
     // Split the focused leaf, put new_buffer_index in the new sibling pane, and
@@ -59,10 +73,15 @@ class SplitLayout {
     // Close the focused leaf. Returns false when only one leaf remains.
     bool close_focused();
 
-    // Collapse the tree to a single leaf (the current focus).
+    // Collapse the tree to a single leaf (the current focus), keeping its view.
     void maximize_focused();
 
     void set_focused_buffer(size_t buffer_index);
+
+    PaneViewState leaf_view(size_t leaf_index) const;
+    void set_leaf_view(size_t leaf_index, const PaneViewState& view);
+    PaneViewState focused_view() const;
+    void set_focused_view(const PaneViewState& view);
 
     // Leaf to scroll with Ctrl+B/Ctrl+D without moving focus: the last pane the
     // user left (via focus_next or after a split). Falls back to the next pane
@@ -89,6 +108,7 @@ class SplitLayout {
         size_t buffer_index = 0;
         SplitKind kind = SplitKind::Vertical;
         double ratio = 0.5;
+        PaneViewState view;
         Node* first = nullptr;
         Node* second = nullptr;
     };

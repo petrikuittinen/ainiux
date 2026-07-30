@@ -15,6 +15,7 @@
 #include "tui/detail/render.hpp"
 #include "tui/theme_registry.hpp"
 #include "ui/confirmation.hpp"
+#include "ui/scrollbar.hpp"
 
 #include <cerrno>
 #include <charconv>
@@ -135,6 +136,59 @@ Rect editor_main_area() {
     const int cols = std::max(20, size.cols);
     return Rect{1, 1, std::max(1, rows - 2), std::max(1, cols - 1)};
 }
+
+Rect editor_content_rect(const Rect& pane_rect) {
+    if (pane_rect.width <= 1) {
+        return pane_rect;
+    }
+    return Rect{pane_rect.row, pane_rect.col, pane_rect.height, pane_rect.width - 1};
+}
+
+namespace {
+
+size_t editor_total_visual_rows(const EditorState& state, size_t width) {
+    width = std::max<size_t>(1, width);
+    size_t rows = 0;
+    const size_t line_count = state.text.line_count();
+    for (size_t line = 0; line < line_count; ++line) {
+        rows += detail::wrapped_row_count(state.text.line_text(line), width, state.tab_width);
+    }
+    return rows;
+}
+
+// Ensure an unfocused pane's scroll still makes sense if its stored view is stale.
+void clamp_pane_scroll(size_t& scroll_line, size_t content_rows, size_t viewport_rows) {
+    if (viewport_rows == 0) {
+        scroll_line = 0;
+        return;
+    }
+    if (content_rows <= viewport_rows) {
+        scroll_line = 0;
+        return;
+    }
+    const size_t max_scroll = content_rows - viewport_rows;
+    if (scroll_line > max_scroll) {
+        scroll_line = max_scroll;
+    }
+}
+
+void append_scrollbar_cell(std::string& output,
+                           const TerminalThemeStyle& theme_style,
+                           const std::string& glyph) {
+    if (glyph.empty()) {
+        return;
+    }
+    if (theme_style.use_colors && theme_style.themes != nullptr) {
+        output += tui::style_sequence_for(
+            *theme_style.themes, theme_style.theme_name, tui::StyleRole::Muted);
+    }
+    output += glyph;
+    if (theme_style.use_colors && theme_style.themes != nullptr) {
+        output += "\x1b[0m";
+    }
+}
+
+}  // namespace
 
 std::string minibuffer_text(const MinibufferState& minibuffer) {
     if (minibuffer.active) {
@@ -1248,12 +1302,31 @@ void render_terminal_splits(
         if (pane.rect.width <= 0 || pane.rect.height <= 0) {
             continue;
         }
+        const Rect content_rect = editor_content_rect(pane.rect);
+        const bool show_scrollbar = pane.rect.width >= 2;
         const EditorState* source = &buffer_at(pane.buffer_index);
         if (pane.focused) {
-            focused_state.ensure_cursor_visible(pane.rect);
             source = &focused_state;
+            focused_state.ensure_cursor_visible(content_rect);
         }
-        const RenderedPanel panel = source->render(pane.rect);
+        // Per-pane view: focused uses live state; unfocused uses leaf-stored view.
+        PaneViewState view =
+            pane.focused ? pane_view_from_state(focused_state) : pane.view;
+        view.cursor = std::min(view.cursor, source->text.size());
+        const size_t content_rows = editor_total_visual_rows(
+            *source, static_cast<size_t>(std::max(1, content_rect.width)));
+        clamp_pane_scroll(view.scroll_line,
+                          content_rows,
+                          static_cast<size_t>(std::max(0, content_rect.height)));
+        const RenderedPanel panel =
+            source->render(content_rect, view.cursor, view.scroll_line, view.scroll_column);
+        ui::ScrollbarMetrics bar_metrics;
+        if (show_scrollbar) {
+            bar_metrics = ui::compute_vertical_scrollbar(
+                static_cast<size_t>(std::max(0, pane.rect.height)),
+                content_rows,
+                view.scroll_line);
+        }
         for (int row = 0; row < pane.rect.height; ++row) {
             const int terminal_row = pane.rect.row + row;
             std::string command = terminal_position(terminal_row, pane.rect.col);
@@ -1262,8 +1335,15 @@ void render_terminal_splits(
                 const std::vector<RenderedPanel::Span> empty_spans;
                 const std::vector<RenderedPanel::Span>& spans =
                     index < panel.line_spans.size() ? panel.line_spans[index] : empty_spans;
-                // Clip to pane width; render() already sizes lines to rect.width.
+                // Clip to content width; render() already sizes lines to content_rect.width.
                 append_editor_rendered_line(command, panel.lines[index], spans, theme_style);
+            }
+            if (show_scrollbar) {
+                // Position the scrollbar on the pane's rightmost column.
+                command += terminal_position(terminal_row,
+                                             pane.rect.col + pane.rect.width - 1);
+                append_scrollbar_cell(
+                    command, theme_style, ui::scrollbar_glyph_at(bar_metrics, row));
             }
             frame.append_to_row(terminal_row, std::move(command));
         }
@@ -1496,7 +1576,8 @@ void dispatch_escape_sequence(EditorState& state,
 
     MovementKeyEvent movement;
     if (parse_movement_sequence(sequence, movement)) {
-        const Rect rect = panel_rect != nullptr ? *panel_rect : editor_main_area();
+        const Rect rect =
+            panel_rect != nullptr ? *panel_rect : editor_content_rect(editor_main_area());
         state.apply_movement(movement.key, rect, movement.shift, movement.alt, movement.ctrl);
         return;
     }

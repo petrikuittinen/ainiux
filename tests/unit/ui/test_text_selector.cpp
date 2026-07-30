@@ -5,6 +5,7 @@
 #include "ui/confirmation.hpp"
 #include "ui/provider_model_display.hpp"
 #include "ui/provider_model_selector.hpp"
+#include "ui/test_scrollbar.hpp"
 #include "ui/text_selector.hpp"
 
 #include <algorithm>
@@ -167,6 +168,7 @@ void run_all() {
     test_text_selector_status();
     test_provider_model_selectors();
     test_provider_model_display();
+    run_scrollbar_tests();
 }
 
 }  // namespace ainiux::test::ui

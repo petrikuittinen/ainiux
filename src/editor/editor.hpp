@@ -279,6 +279,12 @@ struct EditorState {
     Error kill_to_line_end(Clipboard& clipboard);
     void ensure_cursor_visible(const Rect& rect);
     RenderedPanel render(const Rect& rect) const;
+    // Render using an explicit window view (per-pane cursor/scroll) while
+    // keeping this buffer's text, selection, and highlight cache.
+    RenderedPanel render(const Rect& rect,
+                         size_t view_cursor,
+                         size_t view_scroll_line,
+                         size_t view_scroll_column) const;
     // Counts visual rows only until limit is reached. This is intended for
     // responsive UI sizing and avoids scanning the rest of a large draft.
     size_t visual_row_count_bounded(size_t width, size_t limit) const;

@@ -152,6 +152,8 @@ std::string editor_status_line(const EditorState& state,
                                size_t split_pane_count = 1);
 // Content area above status and minibuffer lines.
 Rect editor_main_area();
+// Pane area used for text layout/cursor (full pane minus right scrollbar column).
+Rect editor_content_rect(const Rect& pane_rect);
 void dispatch_escape_sequence(EditorState& state,
                               const std::string& sequence,
                               std::string& status,

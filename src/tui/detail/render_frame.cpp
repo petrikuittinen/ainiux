@@ -2,9 +2,9 @@
 #include "tui/agent_widgets.hpp"
 #include "tui/detail/render.hpp"
 #include "tui/tui.hpp"
+#include "ui/scrollbar.hpp"
 
-
-
+#include <algorithm>
 #include <iostream>
 #include <iterator>
 #include <utility>
@@ -63,6 +63,9 @@ void render(const chat::Session& session,
             terminal.rows, terminal.cols, geometry.box_height);
     }
     const int cols = layout.cols;
+    // Reserve the rightmost column of the history band for a vertical scrollbar.
+    const bool history_scrollbar = cols >= 2;
+    const int history_cols = history_scrollbar ? cols - 1 : cols;
     TerminalFrame frame(layout.rows, cols);
 
     input.ensure_cursor_visible(layout.input_rect);
@@ -73,13 +76,14 @@ void render(const chat::Session& session,
     const bool panel_active =
         (mode != TuiMode::Chat || !panel_text.empty()) && !agent_choice_active;
     std::vector<StyledLine> history =
-        panel_active ? panel_lines_for_text(panel_text, mode, cols, panel_title_override)
-                     : history_lines_for_session(session, cols, show_thinking_traces, activity_kind,
-                                                 activity_frame, syntax_highlight, agent_mode,
-                                                 text_layout);
+        panel_active
+            ? panel_lines_for_text(panel_text, mode, history_cols, panel_title_override)
+            : history_lines_for_session(session, history_cols, show_thinking_traces, activity_kind,
+                                        activity_frame, syntax_highlight, agent_mode,
+                                        text_layout);
     if (agent_choice_active && !panel_text.empty()) {
         std::vector<StyledLine> details =
-            panel_lines_for_text(panel_text, mode, cols, panel_title_override);
+            panel_lines_for_text(panel_text, mode, history_cols, panel_title_override);
         history.insert(history.end(),
                        std::make_move_iterator(details.begin()),
                        std::make_move_iterator(details.end()));
@@ -112,18 +116,50 @@ void render(const chat::Session& session,
         picker_top_aligned
             ? history_scroll
             : std::max(0, static_cast<int>(history.size()) - layout.history_rows - history_scroll);
+    const ui::ScrollbarMetrics history_bar =
+        history_scrollbar
+            ? ui::compute_vertical_scrollbar(
+                  static_cast<size_t>(std::max(0, layout.history_rows)),
+                  history.size(),
+                  static_cast<size_t>(std::max(0, history_start)))
+            : ui::ScrollbarMetrics{};
     int printed = 0;
     const StyleRole history_fill_role = panel_active ? StyleRole::PanelBorder : StyleRole::Text;
-    for (int i = history_start; i < static_cast<int>(history.size()) && printed < layout.history_rows; ++i, ++printed) {
+    auto history_row_command = [&](int row,
+                                   int track_row,
+                                   const std::vector<StyledSegment>& segments) {
+        std::string command =
+            format_line(row, history_cols, segments, history_fill_role, style);
+        if (!history_scrollbar) {
+            return command;
+        }
+        // format_line clears to EOL; strip that so we can paint the scrollbar cell.
+        constexpr const char kClearEol[] = "\x1b[K";
+        constexpr size_t kClearEolLen = 3;
+        if (command.size() >= kClearEolLen &&
+            command.compare(command.size() - kClearEolLen, kClearEolLen, kClearEol) == 0) {
+            command.resize(command.size() - kClearEolLen);
+        }
+        if (style.colors && style.themes != nullptr) {
+            command += style_sequence_for(*style.themes, style.theme_name, StyleRole::Muted);
+        }
+        command += ui::scrollbar_glyph_at(history_bar, track_row);
+        if (style.colors) {
+            command += "\x1b[0m";
+        }
+        command += kClearEol;
+        return command;
+    };
+    for (int i = history_start; i < static_cast<int>(history.size()) && printed < layout.history_rows;
+         ++i, ++printed) {
         const int row = layout.history_row + printed;
         frame.set_row(
             row,
-            format_line(row, cols, history[static_cast<size_t>(i)].segments,
-                        history_fill_role, style));
+            history_row_command(row, printed, history[static_cast<size_t>(i)].segments));
     }
     while (printed < layout.history_rows) {
         const int row = layout.history_row + printed;
-        frame.set_row(row, format_line(row, cols, "", history_fill_role, style));
+        frame.set_row(row, history_row_command(row, printed, {}));
         ++printed;
     }
 

@@ -344,20 +344,28 @@ app::EditorRunResult run_editor(const std::string& path,
         }
     };
 
+    auto save_focused_pane_view = [&]() {
+        if (!help_view.active) {
+            split_layout.set_focused_view(pane_view_from_state(state));
+        }
+    };
+
     auto focus_buffer_from_split = [&]() {
         if (buffers.empty()) {
             return;
         }
         const size_t next = std::min(split_layout.focused_buffer(), buffers.size() - 1);
-        if (next == active_buffer) {
+        if (next != active_buffer) {
+            sync_active_buffer();
+            active_buffer = next;
+            state = buffers[active_buffer];
+            state.highlight_enabled = highlight_enabled;
             split_layout.set_focused_buffer(active_buffer);
-            return;
+        } else {
+            split_layout.set_focused_buffer(active_buffer);
         }
-        sync_active_buffer();
-        active_buffer = next;
-        state = buffers[active_buffer];
-        state.highlight_enabled = highlight_enabled;
-        split_layout.set_focused_buffer(active_buffer);
+        // Always apply the leaf's own cursor/scroll, even when the buffer is unchanged.
+        apply_pane_view_to_state(state, split_layout.focused_view());
     };
 
     auto can_leave_editor_for_mode_switch = [&]() {
@@ -436,6 +444,10 @@ app::EditorRunResult run_editor(const std::string& path,
 
     tui::detail::TerminalFrameRenderer terminal_frame_renderer;
     auto render_editor = [&]() {
+        // Keep the focused leaf's view in sync so unfocused panes stay independent.
+        if (!help_view.active && !picker.active && !buffer_list_active) {
+            split_layout.set_focused_view(pane_view_from_state(state));
+        }
         const TerminalThemeStyle theme_style = terminal_theme_style();
         if (picker.active) {
             picker.refresh_view();
@@ -491,9 +503,9 @@ app::EditorRunResult run_editor(const std::string& path,
 
     auto assist_panel_rect = [&]() {
         if (split_layout.has_split()) {
-            return split_layout.focused_rect(editor_main_area());
+            return editor_content_rect(split_layout.focused_rect(editor_main_area()));
         }
-        return editor_main_area();
+        return editor_content_rect(editor_main_area());
     };
 
     auto exit_help_view = [&]() {
@@ -554,11 +566,14 @@ app::EditorRunResult run_editor(const std::string& path,
         if (index >= buffers.size()) {
             return;
         }
+        save_focused_pane_view();
         sync_active_buffer();
         active_buffer = index;
         state = buffers[active_buffer];
         state.highlight_enabled = highlight_enabled;
         split_layout.set_focused_buffer(active_buffer);
+        // Buffer switch on this pane: adopt the buffer's stored point as the pane view.
+        split_layout.set_focused_view(pane_view_from_state(state));
         buffer_list_active = false;
         buffer_list_selected = active_buffer;
         pending_close_confirm = false;
@@ -623,6 +638,7 @@ app::EditorRunResult run_editor(const std::string& path,
         active_buffer = buffers.size() - 1;
         state = next;
         split_layout.set_focused_buffer(active_buffer);
+        split_layout.set_focused_view(pane_view_from_state(state));
         buffer_list_selected = active_buffer;
         if (!lock_error.ok()) {
             minibuffer_message(minibuffer, lock_error.message);
@@ -689,6 +705,7 @@ app::EditorRunResult run_editor(const std::string& path,
         active_buffer = buffers.size() - 1;
         state = next;
         split_layout.set_focused_buffer(active_buffer);
+        split_layout.set_focused_view(pane_view_from_state(state));
         buffer_list_active = false;
         buffer_list_selected = active_buffer;
         pending_close_confirm = false;
@@ -1536,6 +1553,7 @@ app::EditorRunResult run_editor(const std::string& path,
         clear_assist_session(assist_session);
         if (execution.edit_kind == AssistEditKind::NewBuffer) {
             const size_t source_buffer_index = active_buffer;
+            save_focused_pane_view();
             sync_active_buffer();
             // Keep the focused split leaf on the source buffer while we create the target.
             split_layout.set_focused_buffer(source_buffer_index);
@@ -1563,15 +1581,19 @@ app::EditorRunResult run_editor(const std::string& path,
                                            : SplitKind::Horizontal;
                 if (split_layout.split_and_open_buffer(kind, editor_main_area(), new_buffer_index)) {
                     assist_session.opened_split_for_assist = true;
+                    // New sibling inherits source view; replace with empty-buffer point.
+                    split_layout.set_focused_view(pane_view_from_state(state));
                 } else {
                     // Fall back to a plain new buffer when the window is too small.
                     split_layout.set_focused_buffer(new_buffer_index);
+                    split_layout.set_focused_view(pane_view_from_state(state));
                     minibuffer_message(
                         minibuffer,
                         "Window too small to split; opened a new buffer instead");
                 }
             } else {
                 split_layout.set_focused_buffer(new_buffer_index);
+                split_layout.set_focused_view(pane_view_from_state(state));
             }
             buffer_list_active = false;
             buffer_list_selected = active_buffer;
@@ -1831,6 +1853,7 @@ app::EditorRunResult run_editor(const std::string& path,
         active_buffer = buffers.size() - 1;
         state = next;
         split_layout.set_focused_buffer(active_buffer);
+        split_layout.set_focused_view(pane_view_from_state(state));
         buffer_list_active = false;
         buffer_list_selected = active_buffer;
         pending_close_confirm = false;
@@ -1978,8 +2001,11 @@ app::EditorRunResult run_editor(const std::string& path,
     };
 
     auto apply_vsplit = [&]() {
+        save_focused_pane_view();
         const Rect area = editor_main_area();
         if (split_layout.split_focused(SplitKind::Vertical, area)) {
+            // Both new leaves inherited the view; keep live state aligned with focus.
+            apply_pane_view_to_state(state, split_layout.focused_view());
             minibuffer_message(minibuffer, "Vertical split (Ctrl+X o other pane)");
         } else {
             minibuffer_message(minibuffer, "Window too small for vertical split");
@@ -1987,8 +2013,10 @@ app::EditorRunResult run_editor(const std::string& path,
     };
 
     auto apply_hsplit = [&]() {
+        save_focused_pane_view();
         const Rect area = editor_main_area();
         if (split_layout.split_focused(SplitKind::Horizontal, area)) {
+            apply_pane_view_to_state(state, split_layout.focused_view());
             minibuffer_message(minibuffer, "Horizontal split (Ctrl+X o other pane)");
         } else {
             minibuffer_message(minibuffer, "Window too small for horizontal split");
@@ -1996,6 +2024,7 @@ app::EditorRunResult run_editor(const std::string& path,
     };
 
     auto apply_closesplit = [&]() {
+        save_focused_pane_view();
         if (!split_layout.close_focused()) {
             minibuffer_message(minibuffer, "Only one pane");
         } else {
@@ -2005,6 +2034,7 @@ app::EditorRunResult run_editor(const std::string& path,
     };
 
     auto apply_maximize_split = [&]() {
+        save_focused_pane_view();
         split_layout.maximize_focused();
         focus_buffer_from_split();
         minibuffer_message(minibuffer, "Maximized pane");
@@ -3114,6 +3144,7 @@ app::EditorRunResult run_editor(const std::string& path,
                 if (!split_layout.has_split()) {
                     minibuffer_message(minibuffer, "No other pane");
                 } else {
+                    save_focused_pane_view();
                     sync_active_buffer();
                     split_layout.focus_next();
                     focus_buffer_from_split();
@@ -3142,6 +3173,8 @@ app::EditorRunResult run_editor(const std::string& path,
         }
 
         // Ctrl+B / Ctrl+D: PageUp / PageDown in the previously focused other pane.
+        // Mutate only that leaf's view so the focused pane (and same-buffer siblings)
+        // keep their independent cursors/scrolls.
         if ((ch == 2 || ch == 4) && split_layout.has_split() && !help_view.active &&
             !picker.active && !buffer_list_active) {
             const std::optional<size_t> other_leaf = split_layout.other_scroll_leaf();
@@ -3172,9 +3205,18 @@ app::EditorRunResult run_editor(const std::string& path,
                 minibuffer_message(minibuffer, "No other pane to scroll");
                 return;
             }
+            save_focused_pane_view();
+            const PaneViewState focused_view = split_layout.focused_view();
+            const bool shares_live_state = target_state == &state;
+            apply_pane_view_to_state(*target_state, split_layout.leaf_view(*other_leaf));
             const MovementKey key =
                 ch == 2 ? MovementKey::PageUp : MovementKey::PageDown;
-            target_state->apply_movement(key, target_pane->rect, false, false, false);
+            target_state->apply_movement(
+                key, editor_content_rect(target_pane->rect), false, false, false);
+            split_layout.set_leaf_view(*other_leaf, pane_view_from_state(*target_state));
+            if (shares_live_state) {
+                apply_pane_view_to_state(state, focused_view);
+            }
             minibuffer_message(minibuffer,
                                std::string(ch == 2 ? "Scrolled other pane up" : "Scrolled other pane down") +
                                    " (pane " + std::to_string(*other_leaf + 1) + "/" +
