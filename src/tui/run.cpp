@@ -309,10 +309,16 @@ app::TuiRunResult run(provider::RequestContext context,
             agent_runtime && agent_runtime->prepared()
                 ? agent_runtime->workspace()
                 : initial_agent_workspace;
-        chrome.mode_label =
-            agent_runtime && agent_runtime->prepared()
-                ? agent::agent_task_mode_name(agent_runtime->task_mode())
-                : "act";
+        // Active /goal overrides the task-mode tag (act/plan) until the goal
+        // completes, is cleared/paused, or otherwise becomes inactive.
+        if (agent_runtime && agent_runtime->prepared() &&
+            agent::goal_is_active(agent_runtime->goal())) {
+            chrome.mode_label = "goal";
+        } else if (agent_runtime && agent_runtime->prepared()) {
+            chrome.mode_label = agent::agent_task_mode_name(agent_runtime->task_mode());
+        } else {
+            chrome.mode_label = "act";
+        }
         chrome.permission_label =
             agent_runtime && agent_runtime->prepared()
                 ? agent::permission_mode_name(agent_runtime->permission_mode())
@@ -1939,6 +1945,77 @@ app::TuiRunResult run(provider::RequestContext context,
     command_handlers.open_agent_permission_picker = [&]() {
         mode = TuiMode::AgentPermissionSelect;
         status = "Select permissions";
+    };
+    command_handlers.show_agent_goal_status = [&]() {
+        if (!agent_runtime || !agent_runtime->prepared()) {
+            status = "Agent session runtime is not ready";
+            return;
+        }
+        status = agent::format_goal_status(agent_runtime->goal());
+    };
+    command_handlers.set_agent_goal = [&](const std::string& condition) {
+        if (!agent_runtime || !agent_runtime->prepared()) {
+            status = "Agent session runtime is not ready";
+            return;
+        }
+        if (file_job.joinable()) {
+            status =
+                "Cannot set a goal while an agent file job is running; wait or cancel it first";
+            return;
+        }
+        if (active_job != ActiveJob::None) {
+            status = "Cannot set a goal while an agent job is running; wait or cancel it first";
+            return;
+        }
+        if (!require_provider_model_for_send()) return;
+        const Error error = agent_runtime->set_goal(condition);
+        if (!error.ok()) {
+            status = error.message;
+            return;
+        }
+        status = agent::format_goal_status(agent_runtime->goal());
+        // Setting a goal is the directive for the current turn.
+        if (!start_turn(condition)) {
+            status = "Goal saved but could not start the agent turn";
+        }
+    };
+    command_handlers.clear_agent_goal = [&]() {
+        if (!agent_runtime || !agent_runtime->prepared()) {
+            status = "Agent session runtime is not ready";
+            return;
+        }
+        const Error error = agent_runtime->clear_goal();
+        status = error.ok() ? "Goal cleared" : error.message;
+    };
+    command_handlers.pause_agent_goal = [&]() {
+        if (!agent_runtime || !agent_runtime->prepared()) {
+            status = "Agent session runtime is not ready";
+            return;
+        }
+        const Error error = agent_runtime->pause_goal();
+        status = error.ok() ? agent::format_goal_status(agent_runtime->goal())
+                            : error.message;
+    };
+    command_handlers.resume_agent_goal = [&]() {
+        if (!agent_runtime || !agent_runtime->prepared()) {
+            status = "Agent session runtime is not ready";
+            return;
+        }
+        if (file_job.joinable() || active_job != ActiveJob::None) {
+            status =
+                "Cannot resume the goal while an agent job is running; wait or cancel it first";
+            return;
+        }
+        if (!require_provider_model_for_send()) return;
+        const Error error = agent_runtime->resume_goal();
+        if (!error.ok()) {
+            status = error.message;
+            return;
+        }
+        status = agent::format_goal_status(agent_runtime->goal());
+        if (!start_turn("Continue the active goal.")) {
+            status = "Goal resumed but could not start the agent turn";
+        }
     };
     command_handlers.open_provider_picker = open_provider_picker;
     command_handlers.apply_selected_provider = [&](const std::string& provider_target) {

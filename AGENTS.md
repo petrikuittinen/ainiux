@@ -37,7 +37,7 @@ Status: **v1.14** (see `README.md` and `PLANS.md` implementation notes). One-sho
 | Standalone editor | `--editor [path]` | multi-buffer piece-table editor; optional AI assist |
 | Benchmark | `benchmark` / `--benchmark` | concurrent JSONL dataset runner |
 | Grade | `--grade` | second-pass judge scoring of benchmark results (not combined with `--benchmark`) |
-| Interactive agent | `agent` / `--agent` / `-a` | **Separate mode from `--chat`**. Project-local `.ainiux-pr/`; Act by default; `/plan` and `/act` switch session task policy; shared TUI shell + selectors |
+| Interactive agent | `agent` / `--agent` / `-a` | **Separate mode from `--chat`**. Project-local `.ainiux-pr/`; Act by default; `/plan` and `/act` switch session task policy; `/goal` sets a persistent completion condition (`goal_met`); shared TUI shell + selectors |
 | One-shot agent | `run` / `--run` / `-r` / `--run-file` | headless Act mode; compact tool lines on stderr; stdout = final answer |
 | One-shot plan | `plan` / `--plan` / `--plan-file` | headless Plan mode; read/research tools plus planning-document-only writes |
 | Security review | `--security-review` | headless read-only whole-project review |
@@ -64,7 +64,7 @@ Status: **v1.14** (see `README.md` and `PLANS.md` implementation notes). One-sho
 - Local OpenAI-compatible **server** mode (`--server` in `PLANS.md` v0.90)
 - Browser local web UI (`src/web/` reserved; `docs/web-mode.md` is still a stub plan)
 - Reference extraction beyond the landed Python/C/C++ v1.1 review slice; JavaScript/TypeScript, Java/C#, Go, Rust, and other languages still have definitions-only indexes
-- `/goal`, `/loop`, and sub-agents. Their names are reserved for v1.1, but their behavior is not specified or implementation-ready
+- `/loop` and sub-agents. Their names are reserved for later; do not infer behavior. Interactive `/goal` + `goal_met` is implemented (see README agent section)
 - Image generation (`ainiux image` / `/image`; moved to v1.2)
 - Agent session resume/list UI and richer tool-call transcript chrome; Guard Ask y/n in interactive agent is landed (headless Ask still denies); one-shot `ainiux run` / `--run` and interactive `ainiux agent` / `--agent` with multi-turn tools + mode cycling are landed
 - PDF / DOCX conversion modules
@@ -101,11 +101,11 @@ Work in this order unless the user explicitly changes priorities:
 1. Keep script-friendly CLI, provider, HTTP/SSE, and error behavior solid.
 2. Finish remaining v0.9 polish: benchmark cutoff/grade calibration, TUI/CLI polish, refactor hygiene, leak and cancellation hardening (see `TODO.md` / `PLANS.md`).
 3. Tune v1.1 lightweight definition importance, lexical ranking, and mutation-aware persistent refresh.
-4. Add `/goal`, `/loop`, and sub-agents only after the user supplies their detailed specifications; reuse the landed Guard, workspace-containment, cancellation, and logging design.
+4. `/goal` is landed for interactive agent; add `/loop` and sub-agents only after the user supplies detailed specifications; reuse Guard, workspace-containment, cancellation, and logging.
 5. Local OpenAI-compatible **server** mode (v0.90), reusing provider/runtime/security layers.
 6. Image generation (v1.2), then only later consider revived browser UI on the server/runtime foundation.
 
-Do not infer `/goal`, `/loop`, or sub-agent semantics from their names. Do not rewrite or expand the built-in agent system prompt as part of v1.1 indexing work; the user plans a separate prompt-optimization pass for small local models. Do not treat postponed browser web UI as the next major surface.
+Do not infer `/loop` or sub-agent semantics from their names. Do not rewrite or expand the built-in agent system prompt as part of v1.1 indexing work; the user plans a separate prompt-optimization pass for small local models. Do not treat postponed browser web UI as the next major surface.
 
 ## Repository layout
 

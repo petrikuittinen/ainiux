@@ -489,6 +489,13 @@ std::vector<StyledLine> history_lines_for_session(const chat::Session& session,
                                               activity_frame,
                                               "working...");
         } else {
+            // Tool rows, shell notices, and thinking traces are preformatted
+            // (ls listings, command output, activity). Prose reflow joins
+            // consecutive non-blank lines into paragraphs and turns them into
+            // an unreadable word soup — never reflow those roles.
+            const bool preformatted =
+                message.role == "tool" || message.role == "notice" ||
+                message.role == "thinking";
             // Display-only table pretty-print and prose reflow. Cap tables at the
             // effective history width so they do not exceed the screen / /width.
             const int prefix_cells = static_cast<int>(prefix.size());
@@ -498,12 +505,12 @@ std::vector<StyledLine> history_lines_for_session(const chat::Session& session,
             if (text_layout.width > 0) {
                 table_max = std::min(table_max, static_cast<size_t>(text_layout.width));
             }
-            if (!content.empty()) {
+            if (!content.empty() && !preformatted) {
                 content = markdown::pretty_format_tables(content, table_max);
             }
             // Display-only prose reflow to a fixed column width (wide terminals).
             // -1 / non-positive: unlimited. Fences and tables are preserved.
-            if (!content.empty() && text_layout.width > 0) {
+            if (!content.empty() && !preformatted && text_layout.width > 0) {
                 size_t target = static_cast<size_t>(text_layout.width);
                 if (static_cast<size_t>(content_cols) < target) {
                     target = static_cast<size_t>(content_cols);
@@ -516,7 +523,11 @@ std::vector<StyledLine> history_lines_for_session(const chat::Session& session,
                     }
                 }
             }
-            content_segments = markdown_highlight ? markdown_segments(content) : plain_text_segments(content);
+            // Preformatted agent/shell output: keep monospace-ish plain text so
+            // highlight rules do not restyle path names mid-listing.
+            content_segments =
+                (markdown_highlight && !preformatted) ? markdown_segments(content)
+                                                      : plain_text_segments(content);
             if (message.role == "assistant" && show_thinking_traces) {
                 content_segments = visible_thinking_trace_segments(content);
                 if (markdown_highlight) {

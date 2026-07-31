@@ -5,6 +5,7 @@
 #include <unistd.h>
 #include <vector>
 
+#include "agent/goal.hpp"
 #include "agent/project_settings.hpp"
 #include "agent/session_store.hpp"
 #include "support/test_support.hpp"
@@ -246,6 +247,48 @@ void test_permission_settings_json() {
           "permission mode settings JSON round trip");
 }
 
+void test_goal_settings_json_and_control() {
+    agent::SessionGoal goal;
+    Error error = agent::goal_from_settings_json("{}", goal);
+    check(error.ok() && goal.status == agent::GoalStatus::Cleared &&
+              goal.condition.empty(),
+          "missing goal defaults to cleared");
+    check(!agent::goal_is_active(goal), "cleared goal is not active");
+    check(agent::agent_goal_control(goal).empty(),
+          "inactive goal injects no control fragment");
+
+    goal.condition = "create file X containing Y";
+    goal.status = agent::GoalStatus::Active;
+    goal.turns = 2;
+    goal.last_reason = "partial";
+    std::string encoded;
+    error = agent::settings_json_with_goal(R"({"permission_mode":"smart"})", goal,
+                                           encoded);
+    check(error.ok() && encoded.find("\"status\":\"active\"") != std::string::npos &&
+              encoded.find("create file X") != std::string::npos &&
+              encoded.find("\"permission_mode\":\"smart\"") != std::string::npos,
+          "goal merges into existing settings JSON");
+
+    agent::SessionGoal loaded;
+    error = agent::goal_from_settings_json(encoded, loaded);
+    check(error.ok() && loaded.status == agent::GoalStatus::Active &&
+              loaded.condition == goal.condition && loaded.turns == 2 &&
+              loaded.last_reason == "partial",
+          "goal settings JSON round trip");
+    check(agent::goal_is_active(loaded), "active goal with condition is active");
+    const std::string control = agent::agent_goal_control(loaded);
+    check(control.find("ACTIVE GOAL: create file X containing Y") != std::string::npos &&
+              control.find("goal_met") != std::string::npos &&
+              control.find("Do not invent evidence") != std::string::npos,
+          "active goal control fragment matches the v1 prompt contract");
+    check(agent::format_goal_status(loaded).find("active") != std::string::npos,
+          "format_goal_status reports active status");
+
+    loaded.status = agent::GoalStatus::Paused;
+    check(!agent::goal_is_active(loaded) && agent::agent_goal_control(loaded).empty(),
+          "paused goal strips the active control fragment");
+}
+
 }  // namespace
 
 void run_all() {
@@ -254,6 +297,7 @@ void run_all() {
     test_record_and_load_approvals();
     test_peek_last_message();
     test_permission_settings_json();
+    test_goal_settings_json_and_control();
 }
 
 }  // namespace ainiux::test::agent_session_store

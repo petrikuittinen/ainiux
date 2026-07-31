@@ -919,6 +919,57 @@ void test_display_notices_dedupe_consecutive_duplicates() {
     fs::remove_all(workspace, ec);
 }
 
+void test_session_goal_set_pause_resume_complete_and_persist() {
+    const std::string workspace = temp_workspace("session-goal");
+    agent::AgentSessionRuntime runtime;
+    agent::SessionRuntimeOptions options;
+    options.workspace = workspace;
+    options.interactive = true;
+    options.enable_session_db = true;
+    options.enable_agent_log = false;
+    options.index_mode = agent::SessionRuntimeOptions::IndexMode::Disabled;
+    provider::RequestContext context = offline_context(workspace);
+    Error error = runtime.prepare(context, {}, {}, options);
+    check(error.ok() && runtime.prepared(),
+          "prepare for session goal: " + error.message);
+
+    check(runtime.goal().status == agent::GoalStatus::Cleared,
+          "fresh session has no goal");
+    check(!runtime.set_goal("").ok(), "empty goal condition is rejected");
+    error = runtime.set_goal("create file notes.txt containing hello");
+    check(error.ok() && agent::goal_is_active(runtime.goal()) &&
+              runtime.goal().condition.find("notes.txt") != std::string::npos,
+          "set_goal activates the condition");
+
+    error = runtime.pause_goal("waiting for user");
+    check(error.ok() && runtime.goal().status == agent::GoalStatus::Paused &&
+              !agent::goal_is_active(runtime.goal()),
+          "pause_goal strips active status");
+    error = runtime.resume_goal();
+    check(error.ok() && agent::goal_is_active(runtime.goal()),
+          "resume_goal restores Active");
+
+    error = runtime.mark_goal_complete("notes.txt contains hello");
+    check(error.ok() && runtime.goal().status == agent::GoalStatus::Complete &&
+              runtime.goal().last_reason.find("hello") != std::string::npos &&
+              !agent::goal_is_active(runtime.goal()),
+          "mark_goal_complete finishes the goal with evidence");
+
+    // Persist across prepare() reload via settings_json.
+    runtime.reset();
+    error = runtime.prepare(context, {}, {}, options);
+    check(error.ok() && runtime.goal().status == agent::GoalStatus::Complete &&
+              runtime.goal().condition.find("notes.txt") != std::string::npos,
+          "completed goal reloads from project settings");
+
+    error = runtime.clear_goal();
+    check(error.ok() && runtime.goal().status == agent::GoalStatus::Cleared,
+          "clear_goal resets status");
+    runtime.reset();
+    std::error_code ec;
+    fs::remove_all(workspace, ec);
+}
+
 }  // namespace
 
 void run_all() {
@@ -936,6 +987,7 @@ void run_all() {
     test_project_replacement_resets_exact_state_and_switches_workspace();
     test_project_replacement_failure_reopens_prior_project();
     test_display_notices_dedupe_consecutive_duplicates();
+    test_session_goal_set_pause_resume_complete_and_persist();
 }
 
 }  // namespace ainiux::test::agent_session_runtime

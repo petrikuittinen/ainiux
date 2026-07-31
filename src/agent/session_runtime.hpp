@@ -12,6 +12,7 @@
 #include "agent/agents_md.hpp"
 #include "agent/approval.hpp"
 #include "agent/compact.hpp"
+#include "agent/goal.hpp"
 #include "agent/prompts.hpp"
 #include "agent/project_root.hpp"
 #include "agent/review_log.hpp"
@@ -57,6 +58,8 @@ struct SessionTurnResult {
     std::size_t session_failed_tool_calls = 0;
     AgentTokenUsage token_usage;
     bool needs_user_continue = false;
+    bool goal_completed = false;
+    bool goal_stalled = false;
     std::string notice;
     std::vector<std::string> compact_tool_lines;  // timed rows, ready to persist/render
     // Wall-clock completion ms for transcript ordering only.
@@ -114,6 +117,8 @@ struct SessionRuntimeOptions {
     bool auto_compact = true;
     CompactionStrategy compact_strategy = CompactionStrategy::Smart;
     int compact_limit = 0;  // 0 = derive from window
+    // Auto-continuations while a session goal is Active (tool-less FinalText).
+    int max_goal_turns = 20;
     // Injected by tests and embedders. Empty uses the active provider/model.
     CompactionSummaryCall summary_call;
     enum class IndexMode {
@@ -153,6 +158,13 @@ class AgentSessionRuntime {
     AgentTaskMode task_mode() const { return task_mode_; }
     MutationPolicy mutation_policy() const { return tools_.mutation_policy(); }
     PermissionMode permission_mode() const { return permission_mode_; }
+    const SessionGoal& goal() const { return goal_; }
+    // Set/replace Active goal (turns reset). Persists when the session DB is open.
+    Error set_goal(const std::string& condition);
+    Error clear_goal(const std::string& reason = {});
+    Error pause_goal(const std::string& reason = {});
+    Error resume_goal();
+    Error mark_goal_complete(const std::string& evidence);
     bool indexing_enabled() const { return tools_.indexing_enabled(); }
     // Cheap, non-blocking handoff invoked by surfaces only after they have
     // published Agent readiness.
@@ -256,9 +268,13 @@ class AgentSessionRuntime {
         std::optional<CompactionStrategy> strategy_override = std::nullopt,
         bool forced_summary = false);
 
+    Error persist_goal_settings();
+    void inject_active_goal_control(bool continue_nudge);
+
     SessionRuntimeOptions options_;
     AgentTaskMode task_mode_ = AgentTaskMode::Act;
     PermissionMode permission_mode_ = PermissionMode::Smart;
+    SessionGoal goal_;
     bool prepared_ = false;
     bool conversation_seeded_ = false;
     std::vector<std::string> secrets_;

@@ -557,6 +557,10 @@ void test_agent_widgets_and_dynamic_geometry() {
     check(agent_input_title(frame, 40) == "~/my_code_project act",
           "agent frame title includes workspace and mode");
     check(agent_input_title(
+              {"/home/eye/escape_prison", "goal", "smart", ""}, 40) ==
+              "~/escape_prison goal",
+          "agent frame title shows goal while a session goal is active");
+    check(agent_input_title(
               {"/a/very/long/leading/path/project", "plan", "smart", ""}, 18)
               .find("project plan") !=
               std::string::npos,
@@ -1255,6 +1259,42 @@ void test_tui_agent_history_chrome() {
     check(!repeated_model, "agent history animation does not repeat the model from agent chrome");
 }
 
+void test_agent_shell_notice_preserves_listing_newlines() {
+    // Prose reflow joins consecutive non-blank lines into paragraphs. Shell
+    // notices (and other preformatted agent rows) must keep physical newlines
+    // so `ls -la` stays readable under /width and justify modes.
+    ainiux::chat::Session session;
+    const std::string listing =
+        "$ ls -laFg\n"
+        "exit=0  3ms  cwd=/home/eye/escape_prison\n"
+        "total 124\n"
+        "drwxrwxr-x 4 eye 4096 Jul 31 17:40 ./\n"
+        "drwxr-x--- 48 eye 4096 Jul 31 15:54 ../\n"
+        "-rwxrwxr-x 1 eye 2122 Jul 31 17:30 server.sh*\n";
+    session.messages.push_back({"notice", listing});
+
+    ainiux::tui::detail::HistoryTextLayout layout;
+    layout.width = 48;
+    layout.mode = ainiux::editor::TextAlignMode::Justify;
+    const std::vector<ainiux::tui::StyledLine> lines =
+        ainiux::tui::detail::history_lines_for_session(
+            session, 80, false, ainiux::tui::ActivityKind::None, 0, true, true, layout);
+
+    std::string joined;
+    for (const auto& line : lines) {
+        for (const auto& segment : line.segments) joined += segment.text;
+        joined.push_back('\n');
+    }
+    check(joined.find("total 124") != std::string::npos &&
+              joined.find("server.sh") != std::string::npos,
+          "shell notice still contains listing rows");
+    check(joined.find("total 124 drwxrwxr-x") == std::string::npos &&
+              joined.find("total 124\n") != std::string::npos,
+          "shell notice keeps listing newlines instead of reflowing into one paragraph");
+    check(joined.find("exit=0  3ms  cwd=") != std::string::npos,
+          "shell notice metadata line is preserved");
+}
+
 void test_tui_input_label_and_activity_indicators() {
     const std::string label = ainiux::tui::input_label_text();
     check(label == ainiux::tui::input_label_text_for_mode(false),
@@ -1791,6 +1831,29 @@ void test_agent_project_slash_command_parsing() {
               invalid_permissions.error ==
                   "Usage: /permissions [confirm|smart|yolo]",
           "agent permission command rejects unknown modes");
+    check(ainiux::tui::parse_agent_slash_command("/goal").action ==
+              ainiux::tui::AgentSlashAction::GoalStatus,
+          "agent /goal with no args is status");
+    const auto goal_set =
+        ainiux::tui::parse_agent_slash_command("/goal create file X containing Y");
+    check(goal_set.action == ainiux::tui::AgentSlashAction::GoalSet &&
+              goal_set.argument == "create file X containing Y",
+          "agent /goal <condition> sets the goal");
+    check(ainiux::tui::parse_agent_slash_command("/goal clear").action ==
+              ainiux::tui::AgentSlashAction::GoalClear,
+          "agent /goal clear parses");
+    check(ainiux::tui::parse_agent_slash_command("/goal stop").action ==
+              ainiux::tui::AgentSlashAction::GoalClear,
+          "agent /goal stop aliases clear");
+    check(ainiux::tui::parse_agent_slash_command("/goal pause").action ==
+              ainiux::tui::AgentSlashAction::GoalPause,
+          "agent /goal pause parses");
+    check(ainiux::tui::parse_agent_slash_command("/goal resume").action ==
+              ainiux::tui::AgentSlashAction::GoalResume,
+          "agent /goal resume parses");
+    check(ainiux::tui::parse_agent_slash_command("/goal clear now").action ==
+              ainiux::tui::AgentSlashAction::Invalid,
+          "agent /goal clear rejects extra args");
 }
 
 void test_agent_project_history_handoff_clears_successful_empty_project() {
@@ -1911,6 +1974,7 @@ void run_all() {
     test_tui_thinking_trace_display();
     test_tui_markdown_history_highlighting();
     test_tui_agent_history_chrome();
+    test_agent_shell_notice_preserves_listing_newlines();
     test_agent_project_slash_command_parsing();
     test_agent_project_history_handoff_clears_successful_empty_project();
 }

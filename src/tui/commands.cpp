@@ -120,6 +120,58 @@ AgentSlashCommand parse_agent_slash_command(const std::string& text) {
         }
         return command;
     }
+    if (text == "/goal" || text.rfind("/goal ", 0) == 0) {
+        const std::string argument =
+            text.size() <= 5 ? std::string()
+                             : app::detail::trim_ascii(text.substr(5));
+        if (argument.empty()) {
+            command.action = AgentSlashAction::GoalStatus;
+            return command;
+        }
+        // First token is a subcommand only for exact clear/stop/off/cancel/pause/resume.
+        std::string token = argument;
+        std::string rest;
+        const std::size_t space = argument.find(' ');
+        if (space != std::string::npos) {
+            token = argument.substr(0, space);
+            rest = app::detail::trim_ascii(argument.substr(space + 1));
+        }
+        std::string lower = token;
+        for (char& ch : lower) {
+            if (ch >= 'A' && ch <= 'Z') ch = static_cast<char>(ch - 'A' + 'a');
+        }
+        if (lower == "clear" || lower == "stop" || lower == "off" ||
+            lower == "cancel") {
+            if (!rest.empty()) {
+                command.action = AgentSlashAction::Invalid;
+                command.error = "Usage: /goal clear";
+                return command;
+            }
+            command.action = AgentSlashAction::GoalClear;
+            return command;
+        }
+        if (lower == "pause") {
+            if (!rest.empty()) {
+                command.action = AgentSlashAction::Invalid;
+                command.error = "Usage: /goal pause";
+                return command;
+            }
+            command.action = AgentSlashAction::GoalPause;
+            return command;
+        }
+        if (lower == "resume") {
+            if (!rest.empty()) {
+                command.action = AgentSlashAction::Invalid;
+                command.error = "Usage: /goal resume";
+                return command;
+            }
+            command.action = AgentSlashAction::GoalResume;
+            return command;
+        }
+        command.action = AgentSlashAction::GoalSet;
+        command.argument = argument;
+        return command;
+    }
     return command;
 }
 
@@ -144,6 +196,7 @@ void handle_tui_command(const std::string& text, TuiCommandContext& ctx, TuiComm
                                     "/show-index (refresh compact index report)\n"
                                     "/plan (planning task mode)\n"
                                     "/act (full coding task mode)\n"
+                                    "/goal [condition|clear|pause|resume]\n"
                                     "/permissions [confirm|smart|yolo]\n"
                                     "/setting thinking_preview_max_chars=N (0 disables)\n"
                                   : "/new [NAME]\n") +
@@ -535,6 +588,46 @@ void handle_tui_command(const std::string& text, TuiCommandContext& ctx, TuiComm
             return;
         }
         handlers.switch_agent_permission_mode(agent_command.argument);
+        return;
+    }
+    if (agent_command.action == AgentSlashAction::GoalStatus) {
+        if (handlers.show_agent_goal_status) handlers.show_agent_goal_status();
+        return;
+    }
+    if (agent_command.action == AgentSlashAction::GoalSet) {
+        if (ctx.active_job != ActiveJob::None) {
+            ctx.status =
+                "Cannot set a goal while an agent job is running; wait or cancel it first";
+            return;
+        }
+        if (handlers.set_agent_goal) handlers.set_agent_goal(agent_command.argument);
+        return;
+    }
+    if (agent_command.action == AgentSlashAction::GoalClear) {
+        if (ctx.active_job != ActiveJob::None) {
+            ctx.status =
+                "Cannot clear the goal while an agent job is running; wait or cancel it first";
+            return;
+        }
+        if (handlers.clear_agent_goal) handlers.clear_agent_goal();
+        return;
+    }
+    if (agent_command.action == AgentSlashAction::GoalPause) {
+        if (ctx.active_job != ActiveJob::None) {
+            ctx.status =
+                "Cannot pause the goal while an agent job is running; wait or cancel it first";
+            return;
+        }
+        if (handlers.pause_agent_goal) handlers.pause_agent_goal();
+        return;
+    }
+    if (agent_command.action == AgentSlashAction::GoalResume) {
+        if (ctx.active_job != ActiveJob::None) {
+            ctx.status =
+                "Cannot resume the goal while an agent job is running; wait or cancel it first";
+            return;
+        }
+        if (handlers.resume_agent_goal) handlers.resume_agent_goal();
         return;
     }
     if (text == "/compact" || text.rfind("/compact ", 0) == 0) {

@@ -157,12 +157,39 @@ GuardResult evaluate_command_guard(const std::vector<std::string>& arguments) {
         }
     }
 
-    // Shell wrappers are high risk (arbitrary composition).
+    // Shell *interpreters* used as free-form code runners (sh -c / bash -c) are
+    // high risk. Running a concrete script file is normal project work and is
+    // allowed: e.g. `bash server.sh start`, `sh ./scripts/setup.sh`.
     if (command == "sh" || command == "bash" || command == "zsh" || command == "dash" ||
         command == "csh" || command == "tcsh" || command == "fish" || command == "ksh" ||
         command == "busybox") {
-        return deny("forbid_shell_wrapper",
-                    "shell wrappers are not allowed; pass a direct command (no sh -c)");
+        bool freeform = false;
+        bool has_script = false;
+        for (std::size_t i = 1; i < arguments.size(); ++i) {
+            const std::string& arg = arguments[i];
+            if (arg == "-c" || arg == "--command" || arg == "-s" ||
+                (arg.rfind("-c", 0) == 0 && arg.size() > 2)) {
+                // bash -ce '…' / -c'…' and plain -c are free-form code.
+                freeform = true;
+                break;
+            }
+            if (arg == "--") {
+                if (i + 1 < arguments.size()) has_script = true;
+                break;
+            }
+            // Skip shell flags; first non-option is the script path/name.
+            if (!arg.empty() && arg.front() == '-') continue;
+            has_script = true;
+            break;
+        }
+        if (freeform || !has_script)
+            return deny("forbid_shell_wrapper",
+                        "shell free-form code is not allowed (no sh -c / bash -c); "
+                        "run a workspace script path instead (example: ./server.sh start "
+                        "or bash server.sh start)");
+        // Script-file form: allow; permission mode / Guard Ask still apply at the
+        // tool layer for Smart/Confirm.
+        return {};
     }
     if (command == "sudo" || command == "doas" || command == "su" || command == "pkexec" ||
         command == "runuser")

@@ -29,6 +29,11 @@ enum class AgentSlashAction {
     Plan,
     Act,
     Permissions,
+    GoalStatus,
+    GoalSet,
+    GoalClear,
+    GoalPause,
+    GoalResume,
     Invalid
 };
 
@@ -53,6 +58,11 @@ struct TuiCommandHandlers {
     std::function<void(agent::AgentTaskMode)> switch_agent_task_mode;
     std::function<void(const std::string&)> switch_agent_permission_mode;
     std::function<void()> open_agent_permission_picker;
+    std::function<void()> show_agent_goal_status;
+    std::function<void(const std::string& condition)> set_agent_goal;
+    std::function<void()> clear_agent_goal;
+    std::function<void()> pause_agent_goal;
+    std::function<void()> resume_agent_goal;
     std::function<void(bool)> open_provider_picker;
     std::function<bool(const std::string&)> apply_selected_provider;
     std::function<void()> start_store_save;

@@ -1050,6 +1050,7 @@ Error ReadToolRegistry::create(index::Options index_options,
     loaded.fetch_options_ = options.fetch_options;
     loaded.search_options_ = options.search_options;
     loaded.on_guard_ask_ = std::move(options.on_guard_ask);
+    loaded.goal_hooks_ = std::move(options.goal_hooks);
     loaded.permission_mode_ = options.permission_mode;
     loaded.permission_controls_ = options.permission_controls;
     loaded.indexing_enabled_ = options.indexing_enabled;
@@ -3113,18 +3114,17 @@ std::vector<provider::FunctionDefinition> ReadToolRegistry::definitions() const 
          schema(range, "\"path\"")},
         {"run_command",
          agent_session
-             ? "Run a workspace command without a shell (argv exec, fixed PATH). Give the "
-               "executable as a bare name, never /usr/bin/NAME; use `command -v NAME` to test "
-               "whether one is installed. Act permits "
-               "ordinary Guard-controlled commands; Plan permits only conservatively vetted "
-               "read-only argv forms. In Smart mode, vetted read-only commands whose cwd and "
-               "path inputs resolve inside the project run without a prompt; unknown options, "
-               "other commands, and external paths require approval. Confirm always asks and "
-               "Yolo retains validated no-prompt execution. Shells/sudo/package installs/disk "
-               "destroyers and destructive forms (rm -rf, git reset --hard) are denied or need "
-               "approval. Shell-free argv exec: no unquoted pipes/redirects/chaining; quoted "
-               "payload data may contain ';' (e.g. python3 -c \"a; b\"). Prefer native tools "
-               "and dedicated Git tools."
+             ? "Run a workspace command without a real shell (argv exec). Prefer a bare system "
+               "name from the fixed PATH (`ls`, `python3`, `make`); use `command -v NAME` to "
+               "test install. Project scripts are first-class: `./server.sh start`, bare "
+               "`server.sh` under the project cwd/root, or `bash server.sh …` / "
+               "`sh ./script.sh` (script-file form). Free-form `bash -c` / `sh -c` is denied "
+               "in Confirm/Smart. Act uses Guard; Plan only conservatively vetted read-only "
+               "argv forms. Smart auto-runs vetted project-contained read-only commands and "
+               "asks for others; Confirm asks for every command; Yolo skips prompts and hard "
+               "Guard denials at user risk. Still shell-free: no unquoted pipes/redirects/"
+               "chaining; quoted payload may contain ';' (e.g. python3 -c \"a; b\"). Prefer "
+               "native tools and dedicated Git tools."
              : "Run one read-only inspection command without a shell "
                "(pwd/ls/rg/grep/find/git allowlist).",
          schema("\"command\":{\"type\":\"string\"},\"cwd\":{\"type\":\"string\"},"
@@ -3207,6 +3207,17 @@ std::vector<provider::FunctionDefinition> ReadToolRegistry::definitions() const 
                     "\"timeout_ms\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":120000},"
                     "\"site\":{\"type\":\"string\"}",
                     "\"term\"")});
+    }
+    if (agent_session) {
+        // Always advertised in Act/Plan so tool-definition cache stays stable
+        // whether or not a session goal is currently active.
+        tools.push_back(
+            {"goal_met",
+             "Call ONLY when the active session goal condition is verifiably satisfied by "
+             "evidence already present in the conversation or tool results. Do not call "
+             "optimistically. Requires non-empty evidence (command output, file state, test "
+             "result, etc.). Rejected when no goal is active.",
+             schema("\"evidence\":{\"type\":\"string\"}", "\"evidence\"")});
     }
     if (allow_mutations()) {
         tools.push_back(
@@ -4699,9 +4710,11 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
         const GuardAskHandling preview_ask =
             policy == CommandPolicy::Agent ? GuardAskHandling::DeferAsk
                                            : GuardAskHandling::DenyAsk;
+        const bool unrestricted_yolo =
+            permission_controls_ && permission_mode_ == PermissionMode::Yolo && full;
         Error policy_error =
             parse_command(command, parsed_arguments, policy, guard_rule_id, preview_ask,
-                          nullptr, cancellation, agent_session);
+                          nullptr, cancellation, agent_session, unrestricted_yolo);
         if (!policy_error.ok()) {
             const std::string code =
                 policy_error.message.find("refusing") != std::string::npos ||
@@ -4762,12 +4775,16 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
         ProcessOptions options;
         options.workspace = snapshot_.workspace;
         options.cwd = cwd;
-        options.allow_external_cwd = uses_external;
-        options.allow_external_paths = agent_session;
+        options.allow_external_cwd = uses_external || unrestricted_yolo;
+        options.allow_external_paths = agent_session || unrestricted_yolo;
+        // Act/Plan: resolve ./script.sh and bare project scripts under cwd/root.
+        options.allow_workspace_executables = full;
+        options.unrestricted = unrestricted_yolo;
         options.timeout_ms = static_cast<long>(timeout);
         options.cancellation = cancellation;
-        // The complete call was approved above (or Yolo allowed it). Guard hard
-        // denials were already enforced by parse_command and remain non-elevatable.
+        // The complete call was approved above (or Yolo allowed it). Confirm/Smart
+        // still fail closed on hard Guard denials; Yolo skips those denials via
+        // unrestricted.
         if (permission_controls_) {
             options.on_guard_ask =
                 [](const GuardApprovalRequest&, runtime::CancellationToken) {
@@ -6420,6 +6437,41 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
         }
         data.object["results"] = std::move(results);
         data.object["result_count"] = number_value(static_cast<double>(response.results.size()));
+        return envelope(true, std::move(data), "", "", {}, false);
+    }
+
+    if (name == "goal_met") {
+        if (mutation_policy_ == MutationPolicy::Disabled)
+            return tool_error_result("policy_denied",
+                                    "goal_met is only available in agent sessions");
+        std::string evidence;
+        if (!get_string(args, "evidence", evidence, true, validation_error))
+            return tool_error_result("invalid_arguments", validation_error);
+        evidence = ascii_trim(evidence);
+        if (evidence.empty())
+            return tool_error_result(
+                "invalid_arguments",
+                "goal_met requires non-empty evidence that the goal condition holds");
+        if (!goal_hooks_.has_active_goal || !goal_hooks_.has_active_goal())
+            return tool_error_result(
+                "no_active_goal",
+                "no active session goal; set one with /goal <condition> before calling goal_met");
+        if (!goal_hooks_.mark_complete)
+            return tool_error_result("no_active_goal",
+                                    "goal completion is not available in this session");
+        const Error complete_error = goal_hooks_.mark_complete(evidence);
+        if (!complete_error.ok()) {
+            const std::string code =
+                complete_error.code == ErrorCode::BadArgs ? "invalid_arguments"
+                : complete_error.code == ErrorCode::UnsupportedFeature
+                    ? "no_active_goal"
+                    : error_code_string(complete_error.code);
+            return tool_error_result(code, complete_error.message);
+        }
+        json::Value data = object_value();
+        data.object["evidence"] =
+            string_value(redact_secrets(evidence, secrets_));
+        data.object["status"] = string_value("complete");
         return envelope(true, std::move(data), "", "", {}, false);
     }
 

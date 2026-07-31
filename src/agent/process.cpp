@@ -71,26 +71,27 @@ Error resolve_cwd(const ProcessOptions& options, fs::path& root, fs::path& cwd) 
 }
 
 // Fixed trusted PATH only. Includes Homebrew on macOS; never the caller's PATH
-// or workspace-controlled directories (Windows ports can extend this list).
+// (Windows ports can extend this list). Agent mode may additionally resolve
+// workspace-relative executables via resolve_executable.
 const char* fixed_command_path() {
     return "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin";
 }
 
-Error resolve_executable(const std::string& name, std::string& resolved) {
-    if (name.find('/') != std::string::npos)
-        return {ErrorCode::BadArgs,
-                "run_command requires a bare command name (no path); binaries resolve from a fixed PATH"};
-    // Never resolve a workspace-controlled executable through the caller's PATH.
+Error resolve_fixed_path_executable(const std::string& name, std::string& resolved) {
     const std::string path = fixed_command_path();
     std::size_t start = 0;
     while (start <= path.size()) {
         const std::size_t colon = path.find(':', start);
-        const std::string directory = path.substr(start, colon == std::string::npos ? std::string::npos : colon - start);
+        const std::string directory =
+            path.substr(start, colon == std::string::npos ? std::string::npos : colon - start);
         const fs::path candidate = fs::path(directory.empty() ? "." : directory) / name;
         if (::access(candidate.c_str(), X_OK) == 0) {
             std::error_code ec;
             const fs::path canonical = fs::canonical(candidate, ec);
-            if (!ec) { resolved = canonical.string(); return ok_error(); }
+            if (!ec) {
+                resolved = canonical.string();
+                return ok_error();
+            }
         }
         if (colon == std::string::npos) break;
         start = colon + 1;
@@ -98,6 +99,69 @@ Error resolve_executable(const std::string& name, std::string& resolved) {
     return {ErrorCode::FileRead,
             std::string("command not found on fixed PATH (") + fixed_command_path() +
                 "): " + name};
+}
+
+// Accept an on-disk executable. When unrestricted is false, require it to live
+// under the workspace root (after symlink canonicalization).
+Error accept_executable_file(const fs::path& candidate,
+                             const fs::path& workspace_root,
+                             bool unrestricted,
+                             std::string& resolved) {
+    std::error_code ec;
+    if (!fs::exists(candidate, ec) || ec)
+        return {ErrorCode::FileRead, "executable not found: " + candidate.string()};
+    if (::access(candidate.c_str(), X_OK) != 0)
+        return {ErrorCode::BadArgs,
+                "path is not executable (chmod +x?): " + candidate.string()};
+    const fs::path canonical = fs::weakly_canonical(candidate, ec);
+    if (ec)
+        return {ErrorCode::FileRead,
+                "could not resolve executable path: " + candidate.string() + ": " +
+                    ec.message()};
+    if (!unrestricted && !inside_root(workspace_root, canonical))
+        return {ErrorCode::BadArgs,
+                "executable path must stay inside the workspace: " + canonical.string()};
+    resolved = canonical.string();
+    return ok_error();
+}
+
+Error resolve_executable(const std::string& name,
+                         std::string& resolved,
+                         const fs::path* workspace_root = nullptr,
+                         const fs::path* cwd = nullptr,
+                         bool allow_workspace_executables = false,
+                         bool unrestricted = false) {
+    if (name.empty())
+        return {ErrorCode::BadArgs, "run_command command is empty"};
+
+    // Path form: ./script, scripts/run.sh, /abs/path (Yolo/external only).
+    if (name.find('/') != std::string::npos) {
+        if (!allow_workspace_executables || workspace_root == nullptr || cwd == nullptr)
+            return {ErrorCode::BadArgs,
+                    "run_command requires a bare command name (no path); binaries resolve "
+                    "from a fixed PATH, or use Agent workspace scripts (./script.sh)"};
+        const fs::path supplied(name);
+        const fs::path candidate =
+            supplied.is_absolute() ? supplied : (*cwd / supplied);
+        return accept_executable_file(candidate, *workspace_root, unrestricted, resolved);
+    }
+
+    // Bare name: fixed trusted PATH first (never the caller's PATH).
+    Error path_error = resolve_fixed_path_executable(name, resolved);
+    if (path_error.ok()) return ok_error();
+
+    // Agent: bare project scripts (server.sh) that live in cwd or workspace root.
+    if (allow_workspace_executables && workspace_root != nullptr && cwd != nullptr) {
+        Error local = accept_executable_file(*cwd / name, *workspace_root, unrestricted,
+                                             resolved);
+        if (local.ok()) return ok_error();
+        if (*cwd != *workspace_root) {
+            local = accept_executable_file(*workspace_root / name, *workspace_root,
+                                           unrestricted, resolved);
+            if (local.ok()) return ok_error();
+        }
+    }
+    return path_error;
 }
 
 // True when an argv element still looks like a shell operator token (used for
@@ -463,18 +527,26 @@ Error enforce_agent_policy(std::vector<std::string>& args,
                            const GuardApprovalCallback* on_guard_ask,
                            runtime::CancellationToken cancellation,
                            std::string& guard_decision_out,
-                           bool allow_absolute_paths) {
+                           bool allow_absolute_paths,
+                           bool unrestricted = false) {
     guard_rule_id.clear();
     guard_decision_out = "allow";
-    Error error = enforce_common_safety(args, allow_absolute_paths);
+    Error error = enforce_common_safety(args, allow_absolute_paths || unrestricted);
     if (!error.ok()) return error;
 
-    // Denylist / Ask first: shells, privilege escalation, disk destroyers, rm -rf, etc.
-    // Agent mode intentionally does NOT maintain a command/option allowlist — Linux has
-    // thousands of mostly harmless tools; structural safety + Guard scales better.
-    error = apply_guard_decision(args, ask_handling, on_guard_ask, cancellation, guard_rule_id,
-                                 guard_decision_out);
-    if (!error.ok()) return error;
+    // Denylist / Ask first: free-form shells, privilege escalation, disk destroyers,
+    // rm -rf, etc. Agent mode intentionally does NOT maintain a command/option
+    // allowlist — Linux has thousands of mostly harmless tools; structural safety +
+    // Guard scales better. Interactive Yolo skips hard Guard denials at the user's
+    // risk (workspace script paths and ordinary tools already work in Smart).
+    if (!unrestricted) {
+        error = apply_guard_decision(args, ask_handling, on_guard_ask, cancellation,
+                                     guard_rule_id, guard_decision_out);
+        if (!error.ok()) return error;
+    } else {
+        guard_decision_out = "allow";
+        guard_rule_id.clear();
+    }
 
     const std::string& command = args.front();
     if (command == "command" &&
@@ -590,7 +662,8 @@ Error parse_command(const std::string& command,
                     GuardAskHandling ask_handling,
                     const GuardApprovalCallback* on_guard_ask,
                     runtime::CancellationToken cancellation,
-                    bool allow_absolute_paths) {
+                    bool allow_absolute_paths,
+                    bool unrestricted) {
     guard_rule_id.clear();
     arguments.clear();
     {
@@ -613,7 +686,8 @@ Error parse_command(const std::string& command,
     if (policy == CommandPolicy::Agent) {
         std::string unused_decision;
         return enforce_agent_policy(arguments, guard_rule_id, ask_handling, on_guard_ask,
-                                    cancellation, unused_decision, allow_absolute_paths);
+                                    cancellation, unused_decision, allow_absolute_paths,
+                                    unrestricted);
     }
     if (policy == CommandPolicy::PlanReadOnly)
         return enforce_plan_read_only_policy(arguments, allow_absolute_paths);
@@ -636,12 +710,16 @@ Error execute_resolved_command(ProcessResult& output,
     output.cwd = cwd.string();
     if (output.arguments.empty())
         return {ErrorCode::BadArgs, "run_command command is empty"};
+    const bool workspace_exec =
+        policy == CommandPolicy::Agent && options.allow_workspace_executables;
     if (output.arguments.front() == "command") {
         const auto started = std::chrono::steady_clock::now();
         bool found_all = true;
         for (std::size_t index = 2; index < output.arguments.size(); ++index) {
             std::string found;
-            if (resolve_executable(output.arguments[index], found).ok())
+            if (resolve_executable(output.arguments[index], found, &root, &cwd,
+                                   workspace_exec, options.unrestricted)
+                    .ok())
                 output.stdout_text += found + "\n";
             else
                 found_all = false;
@@ -656,7 +734,9 @@ Error execute_resolved_command(ProcessResult& output,
         return ok_error();
     }
     std::string executable;
-    if (!(error = resolve_executable(output.arguments.front(), executable)).ok())
+    if (!(error = resolve_executable(output.arguments.front(), executable, &root, &cwd,
+                                     workspace_exec, options.unrestricted))
+             .ok())
         return error;
 
     // Prepare every allocation before fork. Security review may have several
@@ -779,7 +859,7 @@ Error run_command(const std::string& command,
         options.on_guard_ask ? &options.on_guard_ask : nullptr;
     Error error = parse_command(command, output.arguments, policy, output.guard_rule_id,
                                 ask_handling, ask_ptr, options.cancellation,
-                                options.allow_external_paths);
+                                options.allow_external_paths, options.unrestricted);
     if (policy == CommandPolicy::Agent && error.ok()) {
         output.guard_decision = "allow";
     } else if (policy == CommandPolicy::Agent && !error.ok()) {
@@ -813,7 +893,8 @@ Error run_argv(std::vector<std::string> arguments,
     if (policy == CommandPolicy::Agent) {
         error = enforce_agent_policy(output.arguments, output.guard_rule_id,
                                      ask_handling, ask_ptr, options.cancellation,
-                                     unused_decision, options.allow_external_paths);
+                                     unused_decision, options.allow_external_paths,
+                                     options.unrestricted);
         if (error.ok())
             output.guard_decision = "allow";
         else
@@ -836,7 +917,7 @@ Error run_argv(std::vector<std::string> arguments,
 
 bool ripgrep_available() {
     std::string resolved;
-    return resolve_executable("rg", resolved).ok();
+    return resolve_fixed_path_executable("rg", resolved).ok();
 }
 
 }  // namespace ainiux::agent

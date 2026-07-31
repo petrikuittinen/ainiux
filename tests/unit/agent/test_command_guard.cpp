@@ -3,6 +3,7 @@
 #include <filesystem>
 #include <fstream>
 #include <string>
+#include <sys/stat.h>
 #include <unistd.h>
 #include <vector>
 
@@ -38,7 +39,13 @@ void test_guard_patterns() {
     check(deny({"git", "push", "--force"}), "git push --force denied");
     check(deny({"find", ".", "-delete"}), "find -delete denied");
     check(deny({"sqlite3", "app.sqlite", "DROP TABLE users;"}), "destructive sql denied");
-    check(deny({"bash", "-c", "echo hi"}), "bash wrapper denied");
+    check(deny({"bash", "-c", "echo hi"}), "bash -c free-form denied");
+    check(agent::evaluate_command_guard({"bash", "server.sh", "start"}).decision ==
+              agent::GuardDecision::Allow,
+          "bash script-file form allowed by guard");
+    check(agent::evaluate_command_guard({"sh", "./scripts/setup.sh"}).decision ==
+              agent::GuardDecision::Allow,
+          "sh ./script form allowed by guard");
     check(deny({"sudo", "make"}), "sudo denied");
     check(deny({"apt-get", "install", "curl"}), "system package manager denied");
     check(deny({"ssh", "host"}), "remote shell denied");
@@ -102,10 +109,29 @@ void test_parse_policies() {
           "agent rejects unquoted pipe as shell syntax: " + error.message);
 
     error = agent::parse_command("bash -c echo", args, agent::CommandPolicy::Agent, rule);
-    check(!error.ok(), "agent still denylists shell wrappers: " + error.message);
+    check(!error.ok(), "agent still denylists free-form bash -c: " + error.message);
+
+    error = agent::parse_command("bash server.sh start", args, agent::CommandPolicy::Agent,
+                                 rule);
+    check(error.ok() && args.size() == 3 && args[0] == "bash" && args[1] == "server.sh",
+          "agent accepts bash script-file invocations: " + error.message);
+
+    error = agent::parse_command("./server.sh start", args, agent::CommandPolicy::Agent, rule);
+    check(error.ok() && args.size() == 2 && args[0] == "./server.sh",
+          "agent accepts relative workspace script paths: " + error.message);
+
+    error = agent::parse_command("bash -c echo", args, agent::CommandPolicy::Agent, rule,
+                                 agent::GuardAskHandling::DenyAsk, nullptr, {}, false,
+                                 true);
+    check(error.ok(),
+          "Yolo unrestricted accepts free-form bash -c: " + error.message);
 
     error = agent::parse_command("sudo make", args, agent::CommandPolicy::Agent, rule);
     check(!error.ok(), "agent still denylists sudo: " + error.message);
+    error = agent::parse_command("sudo make", args, agent::CommandPolicy::Agent, rule,
+                                 agent::GuardAskHandling::DenyAsk, nullptr, {}, false,
+                                 true);
+    check(error.ok(), "Yolo unrestricted accepts sudo at user risk: " + error.message);
 
     error = agent::parse_command("cat /etc/passwd", args, agent::CommandPolicy::Agent, rule);
     check(!error.ok() && error.message.find("absolute path") != std::string::npos,
@@ -272,6 +298,53 @@ void test_tool_agent_python_and_security_deny() {
     fs::remove_all(workspace, ec);
 }
 
+void test_workspace_script_execution() {
+    const std::string workspace = temp_workspace("workspace-script");
+    {
+        std::ofstream out(fs::path(workspace) / "server.sh");
+        out << "#!/bin/sh\necho \"arg=$1\"\n";
+    }
+    ::chmod((fs::path(workspace) / "server.sh").c_str(), 0755);
+
+    agent::ProcessOptions options;
+    options.workspace = workspace;
+    options.cwd = workspace;
+    options.allow_workspace_executables = true;
+    options.timeout_ms = 5000;
+    agent::ProcessResult result;
+
+    Error error =
+        agent::run_command("./server.sh start", options, result, agent::CommandPolicy::Agent);
+    check(error.ok() && result.exit_status == 0 &&
+              result.stdout_text.find("arg=start") != std::string::npos,
+          "agent runs ./server.sh with args: " + error.message + " out=" + result.stdout_text);
+
+    result = {};
+    error = agent::run_command("server.sh start", options, result, agent::CommandPolicy::Agent);
+    check(error.ok() && result.exit_status == 0 &&
+              result.stdout_text.find("arg=start") != std::string::npos,
+          "agent runs bare workspace script server.sh: " + error.message +
+              " out=" + result.stdout_text);
+
+    result = {};
+    error =
+        agent::run_command("bash server.sh start", options, result, agent::CommandPolicy::Agent);
+    check(error.ok() && result.exit_status == 0 &&
+              result.stdout_text.find("arg=start") != std::string::npos,
+          "agent runs bash server.sh form: " + error.message + " out=" + result.stdout_text);
+
+    // Without workspace executables, path form still fails closed (inspection-style).
+    options.allow_workspace_executables = false;
+    result = {};
+    error =
+        agent::run_command("./server.sh start", options, result, agent::CommandPolicy::Agent);
+    check(!error.ok() && error.message.find("bare command") != std::string::npos,
+          "path scripts require allow_workspace_executables: " + error.message);
+
+    std::error_code ec;
+    fs::remove_all(workspace, ec);
+}
+
 void test_interactive_approval_allows_then_denies() {
     const std::string workspace = temp_workspace("approve");
     agent::index::Options options;
@@ -400,6 +473,7 @@ void run_all() {
     test_parse_policies();
     test_read_only_command_classifier();
     test_tool_agent_python_and_security_deny();
+    test_workspace_script_execution();
     test_interactive_approval_allows_then_denies();
     test_approval_gate_resolve_and_cancel();
     test_ask_raw_decision_not_finalized();

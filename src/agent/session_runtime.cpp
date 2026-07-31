@@ -12,6 +12,7 @@
 
 #include "agent/agent_loop.hpp"
 #include "agent/compact.hpp"
+#include "agent/goal.hpp"
 #include "agent/project_root.hpp"
 #include "agent/project_settings.hpp"
 #include "agent/reasoning_preview.hpp"
@@ -876,6 +877,7 @@ void AgentSessionRuntime::reset() {
     options_ = SessionRuntimeOptions{};
     task_mode_ = AgentTaskMode::Act;
     permission_mode_ = PermissionMode::Smart;
+    goal_ = SessionGoal{};
     cached_request_tokens_.store(0, std::memory_order_relaxed);
     guard_approval_wait_ms_.store(0, std::memory_order_relaxed);
     operation_active_.store(false, std::memory_order_relaxed);
@@ -1017,6 +1019,10 @@ Error AgentSessionRuntime::prepare(const provider::RequestContext& context,
     tool_options.permission_mode = permission_mode_;
     tool_options.permission_controls = options_.interactive;
     tool_options.indexing_enabled = indexing_enabled;
+    tool_options.goal_hooks.has_active_goal = [this]() { return goal_is_active(goal_); };
+    tool_options.goal_hooks.mark_complete = [this](const std::string& evidence) -> Error {
+        return mark_goal_complete(evidence);
+    };
     // Wrap Ask so every resolution is persisted and optionally surfaced.
     if (options_.on_guard_ask) {
         tool_options.on_guard_ask =
@@ -1106,6 +1112,11 @@ Error AgentSessionRuntime::prepare(const provider::RequestContext& context,
             }
             options_.permission_mode = permission_mode_;
             tools_.set_permission_mode(permission_mode_);
+            error = goal_from_settings_json(project.settings_json, goal_);
+            if (!error.ok()) {
+                reset();
+                return error;
+            }
         }
     }
     publish_preparation(PreparationPhase::SessionDatabase, true, phase_started);
@@ -1430,12 +1441,160 @@ Error AgentSessionRuntime::switch_permission_mode(
             chat::settings_json_from_options(context.options), mode,
             project.settings_json);
         if (!error.ok()) return error;
+        // Preserve the session goal object across permission rewrites.
+        error = settings_json_with_goal(project.settings_json, goal_,
+                                       project.settings_json);
+        if (!error.ok()) return error;
         error = session_store_.update_project_meta(project);
         if (!error.ok()) return error;
     }
     permission_mode_ = mode;
     options_.permission_mode = mode;
     tools_.set_permission_mode(mode);
+    return ok_error();
+}
+
+Error AgentSessionRuntime::persist_goal_settings() {
+    if (!session_store_.is_open()) return ok_error();
+    AgentProjectRecord project;
+    Error error = session_store_.open_project(project);
+    if (!error.ok()) return error;
+    error = settings_json_with_goal(project.settings_json, goal_, project.settings_json);
+    if (!error.ok()) return error;
+    return session_store_.update_project_meta(project);
+}
+
+void AgentSessionRuntime::inject_active_goal_control(bool continue_nudge) {
+    if (!goal_is_active(goal_) || !conversation_seeded_) return;
+    const std::string control =
+        continue_nudge ? agent_goal_continue_control(goal_) : agent_goal_control(goal_);
+    if (control.empty()) return;
+    append_conversation_text(conversation_, "user", control);
+    publish_request_token_estimate();
+}
+
+Error AgentSessionRuntime::set_goal(const std::string& condition) {
+    if (!prepared_)
+        return {ErrorCode::Internal, "agent session runtime is not prepared"};
+    const std::string text = ascii_trim(condition);
+    if (text.empty())
+        return {ErrorCode::BadArgs, "goal condition must not be empty"};
+    bool expected = false;
+    if (!operation_active_.compare_exchange_strong(expected, true))
+        return {ErrorCode::BadArgs,
+                "cannot set a goal while an agent operation is active"};
+    struct Release {
+        std::atomic<bool>& active;
+        ~Release() { active.store(false); }
+    } release{operation_active_};
+
+    goal_.condition = text;
+    goal_.status = GoalStatus::Active;
+    goal_.turns = 0;
+    goal_.last_reason.clear();
+    Error error = persist_goal_settings();
+    if (!error.ok()) return error;
+    // Prompt injection happens on the next run_user_turn (avoids duplicate controls).
+    if (session_store_.is_open()) {
+        (void)session_store_.append_message(
+            "notice", "Goal set: " + bound_goal_text(goal_.condition, 240));
+    }
+    return ok_error();
+}
+
+Error AgentSessionRuntime::clear_goal(const std::string& reason) {
+    if (!prepared_)
+        return {ErrorCode::Internal, "agent session runtime is not prepared"};
+    bool expected = false;
+    if (!operation_active_.compare_exchange_strong(expected, true))
+        return {ErrorCode::BadArgs,
+                "cannot clear the goal while an agent operation is active"};
+    struct Release {
+        std::atomic<bool>& active;
+        ~Release() { active.store(false); }
+    } release{operation_active_};
+
+    const bool had = goal_.status != GoalStatus::Cleared && !goal_.condition.empty();
+    goal_.status = GoalStatus::Cleared;
+    goal_.turns = 0;
+    goal_.last_reason = bound_goal_text(reason);
+    if (!had) goal_.condition.clear();
+    Error error = persist_goal_settings();
+    if (!error.ok()) return error;
+    if (session_store_.is_open() && had) {
+        (void)session_store_.append_message("notice", "Goal cleared");
+    }
+    return ok_error();
+}
+
+Error AgentSessionRuntime::pause_goal(const std::string& reason) {
+    if (!prepared_)
+        return {ErrorCode::Internal, "agent session runtime is not prepared"};
+    if (!goal_is_active(goal_) && goal_.status != GoalStatus::Paused)
+        return {ErrorCode::BadArgs, "no active goal to pause"};
+    bool expected = false;
+    if (!operation_active_.compare_exchange_strong(expected, true))
+        return {ErrorCode::BadArgs,
+                "cannot pause the goal while an agent operation is active"};
+    struct Release {
+        std::atomic<bool>& active;
+        ~Release() { active.store(false); }
+    } release{operation_active_};
+
+    goal_.status = GoalStatus::Paused;
+    if (!reason.empty()) goal_.last_reason = bound_goal_text(reason);
+    Error error = persist_goal_settings();
+    if (!error.ok()) return error;
+    if (session_store_.is_open()) {
+        (void)session_store_.append_message(
+            "notice", "Goal paused: " + bound_goal_text(goal_.condition, 160));
+    }
+    return ok_error();
+}
+
+Error AgentSessionRuntime::resume_goal() {
+    if (!prepared_)
+        return {ErrorCode::Internal, "agent session runtime is not prepared"};
+    if (goal_.status != GoalStatus::Paused || ascii_trim(goal_.condition).empty())
+        return {ErrorCode::BadArgs, "no paused goal to resume"};
+    bool expected = false;
+    if (!operation_active_.compare_exchange_strong(expected, true))
+        return {ErrorCode::BadArgs,
+                "cannot resume the goal while an agent operation is active"};
+    struct Release {
+        std::atomic<bool>& active;
+        ~Release() { active.store(false); }
+    } release{operation_active_};
+
+    goal_.status = GoalStatus::Active;
+    Error error = persist_goal_settings();
+    if (!error.ok()) return error;
+    // Prompt injection happens on the next run_user_turn.
+    if (session_store_.is_open()) {
+        (void)session_store_.append_message(
+            "notice", "Goal resumed: " + bound_goal_text(goal_.condition, 160));
+    }
+    return ok_error();
+}
+
+Error AgentSessionRuntime::mark_goal_complete(const std::string& evidence) {
+    if (!prepared_)
+        return {ErrorCode::Internal, "agent session runtime is not prepared"};
+    if (!goal_is_active(goal_))
+        return {ErrorCode::UnsupportedFeature, "no active session goal"};
+    const std::string text = bound_goal_text(evidence);
+    if (ascii_trim(text).empty())
+        return {ErrorCode::BadArgs, "goal_met requires non-empty evidence"};
+    // Called from the tool executor while a turn is already active — do not
+    // take operation_active_ (already held by run_user_turn).
+    goal_.status = GoalStatus::Complete;
+    goal_.last_reason = text;
+    Error error = persist_goal_settings();
+    if (!error.ok()) return error;
+    if (session_store_.is_open()) {
+        (void)session_store_.append_message(
+            "notice", "Goal complete: " + bound_goal_text(text, 240));
+    }
     return ok_error();
 }
 
@@ -1564,6 +1723,12 @@ SessionTurnResult AgentSessionRuntime::run_user_turn(
                 result.error = settings_error;
                 return result;
             }
+            settings_error = settings_json_with_goal(project.settings_json, goal_,
+                                                     project.settings_json);
+            if (!settings_error.ok()) {
+                result.error = settings_error;
+                return result;
+            }
             project.workspace = options_.workspace;
             (void)session_store_.update_project_meta(project);
             session_id_ = 1;
@@ -1597,6 +1762,7 @@ SessionTurnResult AgentSessionRuntime::run_user_turn(
                           << " stored messages) into model context.\n";
         }
         conversation_seeded_ = true;
+        if (goal_is_active(goal_)) inject_active_goal_control(false);
         publish_request_token_estimate();
         if (session_store_.is_open() && session_id_ > 0) {
             Error message_error =
@@ -1621,6 +1787,7 @@ SessionTurnResult AgentSessionRuntime::run_user_turn(
         // Tool/assistant history lives in continuation_items_json. Follow-up
         // user turns must append there so serialize_tool_request places them
         // after prior tool results (not between the seed goal and tools).
+        if (goal_is_active(goal_)) inject_active_goal_control(false);
         append_conversation_text(conversation_, "user", text);
         publish_request_token_estimate();
         if (session_store_.is_open() && session_id_ > 0) {
@@ -1734,6 +1901,10 @@ SessionTurnResult AgentSessionRuntime::run_user_turn(
         logger_->event("agent_turn", {"agent"}, std::move(fields), status);
     };
     bool context_recovery_used = false;
+    // Tool-less FinalText rounds while a session goal is Active. After one
+    // auto-continue nudge, a second tool-less FinalText stalls (blocked/wait).
+    int consecutive_tool_less_finals = 0;
+    bool goal_completed_this_turn = false;
     // The scripted-round cap is per user-approved task segment. Keep
     // state_.turn cumulative for logs/session statistics.
     for (;;) {
@@ -2062,23 +2233,78 @@ SessionTurnResult AgentSessionRuntime::run_user_turn(
             }
         }
 
-        if (outcome.kind == AgentRoundOutcome::Kind::Continue) continue;
-
-        commit_turn_counts();
+        if (outcome.kind == AgentRoundOutcome::Kind::Continue) {
+            // Any tool round (including failed) resets the tool-less stall counter.
+            consecutive_tool_less_finals = 0;
+            if (goal_.status == GoalStatus::Complete) goal_completed_this_turn = true;
+            continue;
+        }
 
         if (outcome.kind == AgentRoundOutcome::Kind::FinalText) {
             final_text = outcome.final_text;
+            if (goal_.status == GoalStatus::Complete) goal_completed_this_turn = true;
+
+            // Active goal: auto-continue after tool-less FinalText until goal_met,
+            // stall (2 tool-less finals), max_goal_turns, or cancel.
+            if (goal_is_active(goal_) && !goal_completed_this_turn) {
+                ++consecutive_tool_less_finals;
+                const int max_goal_turns =
+                    options_.max_goal_turns > 0 ? options_.max_goal_turns : 20;
+                if (consecutive_tool_less_finals >= 2) {
+                    result.goal_stalled = true;
+                    const std::string stall_notice =
+                        "Goal still active (agent stopped; blocked or waiting for user): " +
+                        bound_goal_text(goal_.condition, 160);
+                    result.notice = result.notice.empty()
+                                        ? stall_notice
+                                        : result.notice + "\n" + stall_notice;
+                    if (session_store_.is_open())
+                        (void)session_store_.append_message("notice", stall_notice);
+                    // Fall through to normal FinalText completion (no more auto-continue).
+                } else if (goal_.turns >= max_goal_turns) {
+                    const std::string cap_notice =
+                        "Goal still active (auto-continue cap of " +
+                        std::to_string(max_goal_turns) + " reached)";
+                    result.notice = result.notice.empty()
+                                        ? cap_notice
+                                        : result.notice + "\n" + cap_notice;
+                    if (session_store_.is_open())
+                        (void)session_store_.append_message("notice", cap_notice);
+                } else {
+                    ++goal_.turns;
+                    (void)persist_goal_settings();
+                    if (session_store_.is_open() && session_id_ > 0 &&
+                        !final_text.empty()) {
+                        (void)session_store_.append_message(
+                            "assistant", redact_secrets(final_text, secrets_));
+                    }
+                    if (session_store_.is_open()) {
+                        (void)session_store_.append_message(
+                            "notice", "Continuing active goal…");
+                    }
+                    inject_active_goal_control(true);
+                    progress("Continuing active goal…");
+                    continue;  // next model round without returning
+                }
+            }
+
+            commit_turn_counts();
             result.error = ok_error();
             result.final_text = final_text;
+            result.goal_completed = goal_completed_this_turn ||
+                                    goal_.status == GoalStatus::Complete;
             const Error final_index_error =
                 tools_.refresh_persistent_index(true, cancellation);
             if (!final_index_error.ok() &&
                 final_index_error.code != ErrorCode::Cancelled) {
-                result.notice =
+                const std::string index_notice =
                     "final code-index refresh failed: " +
                     redact_secrets(final_index_error.message, secrets_);
+                result.notice = result.notice.empty()
+                                    ? index_notice
+                                    : result.notice + "\n" + index_notice;
                 if (!context.options.quiet)
-                    std::cerr << "Agent warning: " << result.notice << "\n";
+                    std::cerr << "Agent warning: " << index_notice << "\n";
                 if (logger_) {
                     json::Value fields = log_object();
                     fields.object["error_code"] =
@@ -2102,6 +2328,8 @@ SessionTurnResult AgentSessionRuntime::run_user_turn(
             log_token_usage();
             return result;
         }
+
+        commit_turn_counts();
 
         if (outcome.kind == AgentRoundOutcome::Kind::NeedsUserContinue) {
             result.error = ok_error();

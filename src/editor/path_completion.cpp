@@ -73,6 +73,7 @@ const std::vector<std::string>& chat_command_completions() {
 const std::vector<std::string>& agent_command_completions() {
     static const std::vector<std::string> commands = {
         "/act",
+        "/goal",
         "/agent",
         "/alignment-width ",
         "/attach ",

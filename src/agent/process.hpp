@@ -17,12 +17,18 @@ struct ProcessOptions {
     // Set only after the tool layer has validated and authorized every absolute
     // operand. Direct/headless process callers retain the deny-by-default policy.
     bool allow_external_paths = false;
+    // Interactive Yolo: skip hard Guard denials (shells, sudo, …) at the user's
+    // risk. Confirm/Smart keep the denylist. Unquoted shell control operators
+    // still fail closed because run_command never spawns a real shell.
+    bool unrestricted = false;
+    // Agent: resolve ./scripts and bare workspace executables under cwd/root.
+    bool allow_workspace_executables = false;
     long timeout_ms = 10000;
     std::size_t stdout_limit = 65536;
     std::size_t stderr_limit = 65536;
     runtime::CancellationToken cancellation;
     // When set, GuardDecision::Ask prompts the user (one-shot). When empty,
-    // Ask is denied (headless). Deny is never elevatable.
+    // Ask is denied (headless). Deny is never elevatable (unless unrestricted).
     GuardApprovalCallback on_guard_ask;
 };
 
@@ -68,7 +74,8 @@ Error parse_command(const std::string& command,
                     GuardAskHandling ask_handling = GuardAskHandling::DenyAsk,
                     const GuardApprovalCallback* on_guard_ask = nullptr,
                     runtime::CancellationToken cancellation = runtime::CancellationToken(),
-                    bool allow_absolute_paths = false);
+                    bool allow_absolute_paths = false,
+                    bool unrestricted = false);
 Error run_inspection_command(const std::string& command,
                              const ProcessOptions& options,
                              ProcessResult& result);

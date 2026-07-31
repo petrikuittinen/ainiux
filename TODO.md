@@ -9,7 +9,7 @@
 - Benchmark and design lazy SQLite-backed Agent symbol queries before replacing the eager in-memory snapshot; preserve security-review snapshot authorization and atomic refresh publication.
 - Keep `glob`, `search_text`/`grep`, targeted reads, compiler output, and tests as verification/fallback paths. The index remains a hint.
 - Do not rewrite the built-in agent prompt in this milestone; the user will specify a separate prompt-optimization pass for small local models.
-- Reserve `/goal`, `/loop`, and sub-agents for v1.1, but do not implement or infer their syntax, persistence, concurrency, safety, or UI until the user supplies specifications.
+- `/goal` (session completion condition + `goal_met`) is implemented for interactive agent. Still reserve `/loop` and sub-agents until separately specified.
 - Continue agent cleanup: load the agent transcript as the sole TUI source of truth, reduce chat-session coupling, strengthen editor↔agent handoff, and retain security-review as strictly read-only.
 - Measure representative agent turns before adding read-only tool parallelism. Add a bounded pool only if local tool execution reaches at least 5% of turn wall time; treat network-tool parallelism separately.
 - Add a future Agent-specific custom-command and skill system only after its own design; do not reuse `editor-commands.conf`, whose commands remain Chat/editor-only.

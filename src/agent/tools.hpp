@@ -2,6 +2,7 @@
 
 #include <cstddef>
 #include <filesystem>
+#include <functional>
 #include <map>
 #include <memory>
 #include <string>
@@ -53,6 +54,13 @@ struct HistoryBackupPolicy {
     int ttl_days = 7;
 };
 
+// Session goal completion tool (goal_met). Empty hooks ⇒ no_active_goal.
+struct GoalToolHooks {
+    std::function<bool()> has_active_goal;
+    // Returns ok_error() on success after persisting Complete; error otherwise.
+    std::function<Error(const std::string& evidence)> mark_complete;
+};
+
 struct ToolRegistryOptions {
     MutationPolicy mutation_policy = MutationPolicy::Disabled;
     // Network tools reuse src/fetch and src/search. Disabled for security-review.
@@ -62,6 +70,7 @@ struct ToolRegistryOptions {
     search::Options search_options = search::default_options();
     // Interactive Guard Ask. Empty ⇒ headless Deny for Ask decisions.
     GuardApprovalCallback on_guard_ask;
+    GoalToolHooks goal_hooks;
     PermissionMode permission_mode = PermissionMode::Smart;
     bool permission_controls = false;
     bool indexing_enabled = true;
@@ -244,6 +253,7 @@ class ReadToolRegistry {
     fetch::Options fetch_options_{};
     search::Options search_options_{};
     GuardApprovalCallback on_guard_ask_;
+    GoalToolHooks goal_hooks_;
     PermissionMode permission_mode_ = PermissionMode::Smart;
     bool permission_controls_ = false;
     bool indexing_enabled_ = true;

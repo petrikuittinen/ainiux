@@ -209,7 +209,7 @@ session management.
 
 Use `/chat`, `/editor`, `/agent`, or `/mode` for explicit mode handoffs.
 `/cycle` follows Ctrl+P and enters the editor from chat or agent. Manual
-`/compact` preserves the full transcript while compacting model-visible context. In interactive agent mode, `/plan` selects planning mode and `/act` returns to full coding mode. Refactor mode is not implemented yet.
+`/compact` preserves the full transcript while compacting model-visible context. In interactive agent mode, `/plan` selects planning mode and `/act` returns to full coding mode. `/goal [condition|clear|pause|resume]` sets a persistent completion condition; the agent auto-continues until it calls `goal_met` with evidence, stalls/blocks, hits the goal turn cap, or the user interrupts. Refactor mode is not implemented yet.
 
 ---
 

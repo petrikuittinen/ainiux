@@ -340,10 +340,19 @@ void test_permission_modes_and_native_path_tools() {
     agent::ReadToolRegistry yolo =
         make_registry(workspace, agent::MutationPolicy::Full, false, {},
                       agent::PermissionMode::Yolo, true);
-    const std::string hard_denied =
+    // Yolo skips hard Guard denials (sudo/shells/…) at user risk. Structural
+    // shell-free rules (unquoted | & ;) still apply because run_command never
+    // spawns a real shell.
+    const std::string yolo_sudo =
         yolo.execute("run_command", R"({"command":"sudo true"})");
-    check(!json_ok(hard_denied) && json_error_code(hard_denied) == "policy_denied",
-          "yolo cannot elevate a hard Guard denial");
+    check(json_ok(yolo_sudo) ||
+              yolo_sudo.find("not found") != std::string::npos ||
+              yolo_sudo.find("\"exit_status\"") != std::string::npos,
+          "yolo elevates hard Guard denials (sudo runs or fails as a process): " +
+              yolo_sudo);
+    check(!json_ok(yolo.execute(
+              "run_command", R"({"command":"echo hi | wc -l"})")),
+          "yolo still rejects unquoted shell control operators");
     check(json_ok(yolo.execute(
               "run_command", R"({"command":"echo yolo-non-vetted"})")),
           "yolo remains prompt-free for other validated commands");
@@ -2016,6 +2025,75 @@ void test_plan_document_mutation_policy() {
     fs::remove_all(workspace, ec);
 }
 
+void test_goal_met_tool_hooks() {
+    const std::string workspace = write_temp_workspace("goal-met");
+    agent::index::Options options;
+    options.workspace = workspace;
+    options.max_source_code_file_size = 1024 * 1024;
+    agent::index::RefreshStats stats;
+    check(agent::index::refresh(options, stats).ok(), "index refresh for goal_met");
+    agent::index::Snapshot snapshot;
+    check(agent::index::load_snapshot(options, snapshot).ok(), "snapshot for goal_met");
+
+    bool active = false;
+    std::string completed_evidence;
+    agent::ToolRegistryOptions tool_options;
+    tool_options.mutation_policy = agent::MutationPolicy::Full;
+    tool_options.goal_hooks.has_active_goal = [&]() { return active; };
+    tool_options.goal_hooks.mark_complete =
+        [&](const std::string& evidence) -> Error {
+        if (!active) return {ErrorCode::UnsupportedFeature, "no active session goal"};
+        if (ascii_trim(evidence).empty())
+            return {ErrorCode::BadArgs, "empty evidence"};
+        completed_evidence = evidence;
+        active = false;
+        return ok_error();
+    };
+
+    agent::ReadToolRegistry tools;
+    check(agent::ReadToolRegistry::create(std::move(options), std::move(snapshot), {},
+                                          tools, tool_options)
+              .ok(),
+          "create registry with goal hooks");
+
+    bool has_goal_met = false;
+    for (const provider::FunctionDefinition& definition : tools.definitions()) {
+        if (definition.name == "goal_met") {
+            has_goal_met = true;
+            check(definition.parameters_json.find("evidence") != std::string::npos,
+                  "goal_met schema requires evidence");
+        }
+    }
+    check(has_goal_met, "agent registry always advertises goal_met");
+
+    std::string result =
+        tools.execute("goal_met", R"JSON({"evidence":"file exists"})JSON");
+    check(!json_ok(result) && json_error_code(result) == "no_active_goal",
+          "goal_met rejects when no active goal");
+
+    active = true;
+    result = tools.execute("goal_met", R"JSON({"evidence":"   "})JSON");
+    check(!json_ok(result) && json_error_code(result) == "invalid_arguments",
+          "goal_met rejects empty evidence");
+
+    active = true;
+    result = tools.execute("goal_met", R"JSON({"evidence":"tests passed"})JSON");
+    check(json_ok(result) && completed_evidence == "tests passed" && !active,
+          "goal_met completes active goal with evidence");
+
+    // Security-review / read-only registries hide goal_met.
+    agent::ReadToolRegistry readonly =
+        make_registry(workspace, agent::MutationPolicy::Disabled);
+    has_goal_met = false;
+    for (const provider::FunctionDefinition& definition : readonly.definitions()) {
+        if (definition.name == "goal_met") has_goal_met = true;
+    }
+    check(!has_goal_met, "read-only registry does not advertise goal_met");
+
+    std::error_code ec;
+    fs::remove_all(workspace, ec);
+}
+
 }  // namespace
 
 void run_all() {
@@ -2042,6 +2120,7 @@ void run_all() {
     test_inspect_and_find_tests();
     test_git_and_network_tools_policy();
     test_plan_document_mutation_policy();
+    test_goal_met_tool_hooks();
 }
 
 }  // namespace ainiux::test::agent_file_tools

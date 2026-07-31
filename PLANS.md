@@ -124,7 +124,7 @@ Schema versions 1–3 migrate transactionally by rescanning definitions, adding 
 - tune declaration visibility inference without adding parser or language-server dependencies
 - enrich text search with enclosing definitions where cheap
 - retain live filesystem, compiler, and test verification because indexed locations are hints
-- keep `/goal`, `/loop`, and sub-agent behavior reserved until separately specified
+- `/goal` + `goal_met` landed for interactive agent; keep `/loop` and sub-agent behavior reserved until separately specified
 
 ## Remaining v0.9 polish
 
