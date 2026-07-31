@@ -28,6 +28,15 @@ long long estimate_tokens_from_text(const std::string& text);
 
 long long estimate_transcript_tokens(const std::vector<AgentMessageRecord>& messages);
 
+// How aggressively a tool result may be reduced before any model summarizer call.
+enum class ToolCompactionTier {
+    Prune,     // one-line status only (volatile snapshots)
+    Stub,      // args + status + tiny excerpt (reloadable)
+    Digest,    // mutation fact: path + op (not replayable)
+    Semantic,  // keep failure/exit lines (build/test/git)
+    Full,      // keep bounded full text unless oversized
+};
+
 struct CompactionLogicalItem {
     long long seq = 0;
     std::string role;
@@ -35,6 +44,11 @@ struct CompactionLogicalItem {
     std::string tool_name;
     bool tool_ok = true;
     long long estimated_tokens = 0;
+    // Optional fields filled when reducing tool events (merge / keep-list).
+    std::string primary_path;
+    std::string content_hash;
+    int exit_status = 0;
+    bool has_exit_status = false;
 };
 
 struct CompactionPartition {
@@ -48,6 +62,10 @@ struct CompactionPartition {
     bool protected_content_truncated = false;
 };
 
+struct CompactionKeepList {
+    std::vector<std::string> lines;
+};
+
 struct FastCompactionCandidate {
     std::string checkpoint;
     long long estimated_tokens = 0;
@@ -56,12 +74,20 @@ struct FastCompactionCandidate {
     bool omitted_item_at_least_2k = false;
 };
 
-// True for tools whose successful payloads are cheap to re-fetch from the
-// workspace (file bodies must not bloat compacted model context).
+ToolCompactionTier tool_compaction_tier(const std::string& tool_name);
+
+// True for tools whose successful payloads are cheap to re-fetch (workspace /
+// index / network). Bodies must not bloat compacted model context.
 bool is_reloadable_file_read_tool(const std::string& tool_name);
 
-// Build a short timeline body for read_file / read_many: keep arguments and
-// status, omit successful file content. Failures keep a bounded error snippet.
+// Deterministic reduction of one tool event for the compaction timeline.
+std::string reduce_tool_item_content(const std::string& tool_name,
+                                     const std::string& arguments_json,
+                                     const std::string& result_json,
+                                     bool ok,
+                                     CompactionLogicalItem* meta = nullptr);
+
+// Compatibility wrapper around reduce_tool_item_content for read stubs.
 std::string stub_reloadable_tool_item_content(const std::string& tool_name,
                                               const std::string& arguments_json,
                                               const std::string& result_json,
@@ -75,9 +101,19 @@ CompactionPartition partition_compaction_timeline(
     const std::vector<CompactionLogicalItem>& timeline,
     long long context_window_tokens);
 
+// Middle-only merge/dedupe after partition (consecutive reads, exploration,
+// read-then-edit, hash dedupe). Mutates middle items in place.
+void pre_shrink_compaction_middle(std::vector<CompactionLogicalItem>& middle);
+
+// Deterministic facts that must survive into the fast checkpoint and the
+// summarizer prompt (mutations, failures, user decisions, git actions).
+CompactionKeepList harvest_compaction_keep_list(
+    const std::vector<CompactionLogicalItem>& middle);
+
 FastCompactionCandidate build_fast_compaction_candidate(
     const CompactionPartition& partition,
-    long long max_checkpoint_tokens);
+    long long max_checkpoint_tokens,
+    const CompactionKeepList& keep_list = {});
 
 bool smart_compaction_should_escalate(const FastCompactionCandidate& candidate,
                                       long long context_window_tokens,
@@ -88,6 +124,9 @@ bool smart_compaction_should_escalate(const FastCompactionCandidate& candidate,
 long long compaction_summary_input_budget(long long context_window_tokens);
 long long compaction_summary_output_budget(long long source_tokens,
                                            long long context_window_tokens);
+
+// Wall-clock budget for the model compact path before falling back to fast.
+long long compaction_summary_model_timeout_ms();
 
 ReasoningSelection compaction_summary_reasoning(
     const std::vector<ReasoningSelection>& catalog_options);
@@ -102,6 +141,8 @@ std::string format_compaction_progress(CompactionStrategy strategy,
 
 std::string compaction_checkpoint_wrapper(const std::string& checkpoint);
 std::string compaction_summary_schema_prompt(const std::string& user_preamble);
+// Extra user-message block: verified keep-list + required heading skeleton.
+std::string compaction_summary_user_guidance(const CompactionKeepList& keep_list);
 std::string render_compaction_source(const CompactionPartition& partition);
 
 // Build a bounded prior-session context block for model reseed after reopen.

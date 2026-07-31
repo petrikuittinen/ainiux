@@ -643,8 +643,11 @@ void test_summary_compaction_is_transactional_and_uses_active_api_context() {
             seen_api = request.api_kind;
             check(messages.size() == 2 && messages[0].role == "system" &&
                       messages[0].content.find("Active Task") != std::string::npos &&
-                      max_output >= 512,
-                  "summary seam receives schema-only, non-tool request context");
+                      messages[1].role == "user" &&
+                      messages[1].content.find("Chronological history") !=
+                          std::string::npos &&
+                      max_output >= 512 && max_output <= 2000,
+                  "summary seam receives reduced-history schema prompt and guidance");
             summary =
                 "Active Task\nContinue\nGoal\nFinish\nConstraints\nNone\n"
                 "Decisions\nKeep tests\nCompleted Work\nSeeded\nActive State\nReady\n"
@@ -695,33 +698,74 @@ void test_summary_compaction_is_transactional_and_uses_active_api_context() {
           "prepare failed summary runtime");
     const auto empty =
         runtime.compact(context, agent::CompactionReason::Manual);
-    check(empty.error.code == ErrorCode::ProviderSchema && !empty.compacted,
-          "empty summary is rejected without a fallback commit");
+    check(empty.error.ok() && empty.compacted &&
+              empty.requested_strategy == CompactionStrategy::Summary &&
+              empty.applied_strategy == CompactionStrategy::Fast &&
+              empty.reason.find("falling back") != std::string::npos,
+          "empty summary falls back to a reducing fast checkpoint commit");
     std::vector<provider::Message> display;
-    check(runtime.load_display_messages(display).ok() && display.size() == 10,
-          "empty summary preserves every SQLite row transactionally");
+    check(runtime.load_display_messages(display).ok() && !display.empty(),
+          "empty-summary fallback still rebuilds a usable live transcript");
+    {
+        agent::AgentSessionStore stored;
+        check(stored.open(failed_workspace).ok(),
+              "inspect empty-summary fallback rows");
+        std::vector<agent::AgentMessageRecord> rows;
+        check(stored.load_messages(rows).ok() && rows.size() == 11 &&
+                  rows.back().role == "summary",
+              "empty-summary fallback appends one durable summary without dropping history");
+    }
     runtime.reset();
 
+    // Fresh workspace: model error also falls back to fast rather than failing.
+    const std::string timeout_workspace = temp_workspace("summary-timeout");
+    {
+        agent::AgentSessionStore store;
+        check(store.open(timeout_workspace).ok(), "timeout summary seed open");
+        agent::AgentProjectRecord project;
+        project.workspace = timeout_workspace;
+        check(store.open_project(project).ok(), "timeout summary seed project");
+        for (int index = 0; index < 10; ++index)
+            check(store.append_message(index % 2 ? "assistant" : "user",
+                                       "timeout row " + std::to_string(index) +
+                                           std::string(1000, 'z'))
+                      .ok(),
+                  "timeout summary seed message");
+    }
+    options.workspace = timeout_workspace;
     options.summary_call =
         [](const provider::RequestContext&,
            const std::vector<provider::Message>&, int,
            runtime::CancellationToken, std::string&) {
             return Error{ErrorCode::Timeout, "injected summary timeout"};
         };
+    context = offline_context(timeout_workspace);
     check(runtime.prepare(context, {}, {}, options).ok(),
-          "prepare failed summary runtime");
+          "prepare timeout summary runtime");
     const auto failed =
         runtime.compact(context, agent::CompactionReason::Manual);
-    check(failed.error.code == ErrorCode::Timeout && !failed.compacted,
-          "summary failure is returned without a fallback commit");
+    check(failed.error.ok() && failed.compacted &&
+              failed.applied_strategy == CompactionStrategy::Fast &&
+              failed.reason.find("falling back") != std::string::npos,
+          "summary model failure falls back to a fast checkpoint commit");
     display.clear();
-    check(runtime.load_display_messages(display).ok() && display.size() == 10,
-          "summary failure preserves every SQLite row transactionally");
+    check(runtime.load_display_messages(display).ok() && !display.empty(),
+          "timeout-summary fallback still rebuilds a usable live transcript");
+    {
+        agent::AgentSessionStore stored;
+        check(stored.open(timeout_workspace).ok(),
+              "inspect timeout-summary fallback rows");
+        std::vector<agent::AgentMessageRecord> rows;
+        check(stored.load_messages(rows).ok() && rows.size() == 11 &&
+                  rows.back().role == "summary",
+              "timeout-summary fallback appends one durable summary without dropping history");
+    }
     runtime.reset();
 
     std::error_code ec;
     fs::remove_all(workspace, ec);
     fs::remove_all(failed_workspace, ec);
+    fs::remove_all(timeout_workspace, ec);
 }
 
 void test_project_replacement_resets_exact_state_and_switches_workspace() {

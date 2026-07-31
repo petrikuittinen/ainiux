@@ -366,6 +366,18 @@ SessionCompactionResult AgentSessionRuntime::compact_impl(
             format_compaction_no_op_notice(result.tokens_after);
         return result;
     }
+    // Deterministic pre-shrink of the compressible middle before fast/summary.
+    pre_shrink_compaction_middle(partition.middle);
+    if (partition.middle.empty()) {
+        result.error = ok_error();
+        result.no_op = true;
+        result.tokens_after = result.tokens_before;
+        result.notice =
+            format_compaction_no_op_notice(result.tokens_after);
+        return result;
+    }
+    const CompactionKeepList keep_list =
+        harvest_compaction_keep_list(partition.middle);
     std::string first_head_carry;
     std::string summary_preamble;
     for (const CompactionLogicalItem& item : timeline) {
@@ -399,8 +411,9 @@ SessionCompactionResult AgentSessionRuntime::compact_impl(
                   100
             : 0;
     FastCompactionCandidate fast = build_fast_compaction_candidate(
-        partition, window > 0 ? std::max<long long>(512, window * 10 / 100)
-                              : 1000);
+        partition,
+        window > 0 ? std::max<long long>(512, window * 10 / 100) : 1000,
+        keep_list);
     auto has_oversized_protected = [&](const auto& items) {
         return std::any_of(
             items.begin(), items.end(), [&](const CompactionLogicalItem& item) {
@@ -460,6 +473,7 @@ SessionCompactionResult AgentSessionRuntime::compact_impl(
         bound_protected(partition.tail);
     }
 
+    bool model_fallback_to_fast = false;
     if (use_model) {
         applied = CompactionStrategy::Summary;
         const CompactionSummaryCall summary_call =
@@ -469,15 +483,29 @@ SessionCompactionResult AgentSessionRuntime::compact_impl(
             redact_secrets(render_compaction_source(partition), secrets_);
         const std::string system =
             compaction_summary_schema_prompt(summary_preamble);
+        const std::string user_guidance =
+            compaction_summary_user_guidance(keep_list);
         const long long input_budget = compaction_summary_input_budget(window);
         std::vector<std::string> chunks = utf8_chunks(source, input_budget);
         if (chunks.empty()) chunks.push_back(source);
         std::vector<std::string> summaries;
+        bool model_ok = true;
+        const auto model_deadline =
+            started + std::chrono::milliseconds(
+                          compaction_summary_model_timeout_ms());
+        auto model_timed_out = [&]() {
+            return std::chrono::steady_clock::now() >= model_deadline;
+        };
         for (const std::string& chunk : chunks) {
             if (cancellation.cancelled()) {
                 result.error = {ErrorCode::Cancelled,
                                 "agent compaction cancelled"};
                 return result;
+            }
+            if (model_timed_out()) {
+                model_ok = false;
+                result.reason = "summary model path exceeded wall-clock budget";
+                break;
             }
             std::string summary;
             const int output_budget = static_cast<int>(
@@ -486,59 +514,105 @@ SessionCompactionResult AgentSessionRuntime::compact_impl(
             result.error = summary_call(
                 context,
                 {{"system", system},
-                 {"user", "Chronological history to summarize:\n" + chunk}},
+                 {"user", user_guidance + "\nChronological history to summarize:\n" +
+                              chunk}},
                 output_budget, cancellation, summary);
-            if (!result.error.ok()) return failed_result();
+            if (!result.error.ok()) {
+                if (result.error.code == ErrorCode::Cancelled) return result;
+                model_ok = false;
+                result.reason = "summary model call failed; falling back to fast";
+                break;
+            }
             summary = ascii_trim(redact_secrets(summary, secrets_));
             if (summary.empty()) {
-                result.error = {ErrorCode::ProviderSchema,
-                                "agent compaction summarizer returned an empty checkpoint"};
-                return failed_result();
+                model_ok = false;
+                result.reason =
+                    "summary model returned an empty checkpoint; falling back to fast";
+                break;
             }
             summaries.push_back(std::move(summary));
         }
-        while (summaries.size() > 1) {
-            std::ostringstream combined;
-            for (const std::string& summary : summaries)
-                combined << "[Chunk checkpoint]\n" << summary << "\n";
-            std::vector<std::string> consolidation_chunks =
-                utf8_chunks(combined.str(), input_budget);
-            std::vector<std::string> next;
-            for (const std::string& chunk : consolidation_chunks) {
-                if (cancellation.cancelled()) {
-                    result.error = {ErrorCode::Cancelled,
-                                    "agent compaction cancelled"};
-                    return failed_result();
-                }
-                std::string summary;
-                result.error = summary_call(
-                    context,
-                    {{"system", system},
-                     {"user", "Consolidate these chunk checkpoints without losing "
-                              "unfinished work:\n" +
-                                  chunk}},
-                    static_cast<int>(compaction_summary_output_budget(
-                        estimate_tokens_from_text(chunk), window)),
-                    cancellation, summary);
-                if (!result.error.ok()) return failed_result();
-                summary = ascii_trim(redact_secrets(summary, secrets_));
-                if (summary.empty()) {
-                    result.error = {
-                        ErrorCode::ProviderSchema,
-                        "agent compaction consolidation returned an empty checkpoint"};
-                    return failed_result();
-                }
-                next.push_back(std::move(summary));
+        // At most one consolidation pass; further growth falls back to fast.
+        if (model_ok && summaries.size() > 1) {
+            if (cancellation.cancelled()) {
+                result.error = {ErrorCode::Cancelled,
+                                "agent compaction cancelled"};
+                return result;
             }
-            if (next.size() >= summaries.size() && next.size() > 1) {
-                result.error = {
-                    ErrorCode::ProviderSchema,
-                    "agent compaction could not consolidate the oversized history"};
-                return failed_result();
+            if (model_timed_out()) {
+                model_ok = false;
+                result.reason = "summary model path exceeded wall-clock budget";
+            } else {
+                std::ostringstream combined;
+                for (const std::string& summary : summaries)
+                    combined << "[Chunk checkpoint]\n" << summary << "\n";
+                std::vector<std::string> consolidation_chunks =
+                    utf8_chunks(combined.str(), input_budget);
+                std::vector<std::string> next;
+                for (const std::string& chunk : consolidation_chunks) {
+                    if (cancellation.cancelled()) {
+                        result.error = {ErrorCode::Cancelled,
+                                        "agent compaction cancelled"};
+                        return result;
+                    }
+                    if (model_timed_out()) {
+                        model_ok = false;
+                        result.reason =
+                            "summary model path exceeded wall-clock budget";
+                        break;
+                    }
+                    std::string summary;
+                    result.error = summary_call(
+                        context,
+                        {{"system", system},
+                         {"user",
+                          user_guidance +
+                              "\nConsolidate these chunk checkpoints without losing "
+                              "unfinished work or verified facts:\n" +
+                              chunk}},
+                        static_cast<int>(compaction_summary_output_budget(
+                            estimate_tokens_from_text(chunk), window)),
+                        cancellation, summary);
+                    if (!result.error.ok()) {
+                        if (result.error.code == ErrorCode::Cancelled)
+                            return result;
+                        model_ok = false;
+                        result.reason =
+                            "summary consolidation failed; falling back to fast";
+                        break;
+                    }
+                    summary = ascii_trim(redact_secrets(summary, secrets_));
+                    if (summary.empty()) {
+                        model_ok = false;
+                        result.reason =
+                            "summary consolidation returned empty; falling back to fast";
+                        break;
+                    }
+                    next.push_back(std::move(summary));
+                }
+                if (model_ok) {
+                    if (next.size() != 1) {
+                        model_ok = false;
+                        result.reason =
+                            "summary could not consolidate to one checkpoint; "
+                            "falling back to fast";
+                    } else {
+                        summaries = std::move(next);
+                    }
+                }
             }
-            summaries = std::move(next);
         }
-        checkpoint = summaries.front();
+        if (model_ok && !summaries.empty()) {
+            checkpoint = summaries.front();
+            result.error = ok_error();
+        } else {
+            model_fallback_to_fast = true;
+            checkpoint = fast.checkpoint;
+            applied = CompactionStrategy::Fast;
+            if (result.reason.empty())
+                result.reason = "summary fallback to fast checkpoint";
+            result.error = ok_error();
+        }
     }
 
     if (cancellation.cancelled()) {
@@ -546,30 +620,47 @@ SessionCompactionResult AgentSessionRuntime::compact_impl(
         return result;
     }
 
-    result.applied_strategy = applied;
+    auto try_project = [&](const std::string& candidate_checkpoint,
+                           CompactionStrategy candidate_strategy,
+                           bool enforce_summary_fit) -> bool {
+        const provider::ToolConversation old_conversation = conversation_;
+        rebuild_compacted_conversation(partition, candidate_checkpoint);
+        result.tokens_after = estimated_request_tokens();
+        conversation_ = old_conversation;
+        publish_request_token_estimate();
+        if (result.tokens_before > 0 &&
+            result.tokens_after >= result.tokens_before)
+            return false;
+        if (enforce_summary_fit && candidate_strategy == CompactionStrategy::Summary &&
+            window > 0) {
+            const long long fit_limit = std::min<long long>(
+                window * 60 / 100, trigger > 0 ? trigger : window);
+            if (result.tokens_after > fit_limit) return false;
+        }
+        return true;
+    };
+
     // Project the replacement before committing; ineffective LLM output is not
-    // allowed to alter SQLite or the live request.
-    const provider::ToolConversation old_conversation = conversation_;
-    rebuild_compacted_conversation(partition, checkpoint);
-    result.tokens_after = estimated_request_tokens();
-    conversation_ = old_conversation;
-    publish_request_token_estimate();
-    if (result.tokens_before > 0 &&
-        result.tokens_after >= result.tokens_before) {
+    // allowed to alter SQLite or the live request. Prefer summary when it
+    // reduces and fits; otherwise fall back to the deterministic fast checkpoint.
+    result.applied_strategy = applied;
+    bool projected_ok =
+        try_project(checkpoint, applied, applied == CompactionStrategy::Summary);
+    if (!projected_ok && applied == CompactionStrategy::Summary &&
+        !fast.checkpoint.empty()) {
+        checkpoint = fast.checkpoint;
+        applied = CompactionStrategy::Fast;
+        model_fallback_to_fast = true;
+        if (result.reason.empty())
+            result.reason =
+                "summary projection did not reduce/fit; falling back to fast";
+        result.applied_strategy = applied;
+        projected_ok = try_project(checkpoint, applied, false);
+    }
+    if (!projected_ok) {
         result.error = {ErrorCode::ProviderSchema,
                         "agent compaction did not reduce the model-visible context"};
         return failed_result();
-    }
-    if (applied == CompactionStrategy::Summary && window > 0) {
-        const long long fit_limit =
-            std::min<long long>(window * 60 / 100,
-                                trigger > 0 ? trigger : window);
-        if (result.tokens_after > fit_limit) {
-            result.error = {
-                ErrorCode::ProviderSchema,
-                "agent summary compaction projection still exceeds its context budget"};
-            return failed_result();
-        }
     }
 
     // Commit durable state first. Only after this succeeds may request context change.
@@ -582,6 +673,7 @@ SessionCompactionResult AgentSessionRuntime::compact_impl(
     result.tokens_after = estimated_request_tokens();
     result.error = ok_error();
     result.compacted = true;
+    result.applied_strategy = applied;
     last_auto_compact_failure_ms_ = 0;
     last_auto_compact_failure_seq_ = 0;
     const long long elapsed_seconds =
@@ -590,6 +682,9 @@ SessionCompactionResult AgentSessionRuntime::compact_impl(
             .count();
     result.notice = format_compaction_success_notice(
         elapsed_seconds, result.tokens_before, result.tokens_after);
+    if (model_fallback_to_fast && !result.reason.empty()) {
+        result.notice += " (" + result.reason + ")";
+    }
     return result;
 }
 
