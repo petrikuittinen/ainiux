@@ -91,6 +91,29 @@ void test_image_loading_and_chat_request() {
           "image loader rejects mismatched content and extension");
 }
 
+void test_extract_local_image_path_candidates() {
+    check(ainiux::input::path_has_supported_image_extension("a.PNG") &&
+              ainiux::input::path_has_supported_image_extension("x/y.jpg") &&
+              !ainiux::input::path_has_supported_image_extension("a.webp") &&
+              !ainiux::input::path_has_supported_image_extension("readme.md"),
+          "supported image extensions are recognized case-insensitively");
+
+    const std::string text =
+        "What is the temperature in file tests/image_files/temperature_meter.jpg?\n"
+        "Also compare \"docs/shot.PNG\" and https://example.com/remote.jpg and notes.md.";
+    const std::vector<std::string> paths =
+        ainiux::input::extract_local_image_path_candidates(text);
+    check(paths.size() == 2, "extracts two local image paths (skips URL and non-image)");
+    // Quoted paths are scanned first, then bare tokens.
+    check(paths[0] == "docs/shot.PNG", "quoted PNG path is collected");
+    check(paths[1] == "tests/image_files/temperature_meter.jpg",
+          "bare jpg path is collected without trailing punctuation");
+
+    const std::vector<std::string> empty =
+        ainiux::input::extract_local_image_path_candidates("no images here");
+    check(empty.empty(), "text without image paths yields no candidates");
+}
+
 void test_input_file_type_classification() {
     struct Case {
         const char* path;
@@ -268,6 +291,7 @@ void test_insert_source_accepts_any_utf8_file_ending() {
 
 void run_all() {
     test_image_loading_and_chat_request();
+    test_extract_local_image_path_candidates();
     test_input_file_type_classification();
     test_input_file_io_and_unicode_edge_cases();
     test_text_context_loading_and_cancellation();

@@ -48,6 +48,11 @@ struct InsertSource {
 };
 
 Error classify_file_type(const std::string& path, FileType& type);
+// True when the path ending is a supported vision image type (.png/.jpg/.jpeg/.gif).
+bool path_has_supported_image_extension(const std::string& path);
+// Paths mentioned in free text that look like local image files (quoted or bare).
+// Does not open files or resolve existence; caller validates with classify/load.
+std::vector<std::string> extract_local_image_path_candidates(const std::string& text);
 Error load_image_file(const std::string& path,
                       const FileType& type,
                       size_t max_bytes,

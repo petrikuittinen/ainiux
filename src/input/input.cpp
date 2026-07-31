@@ -3,11 +3,14 @@
 #include "common.hpp"
 
 #include <array>
+#include <cctype>
 #include <fstream>
 #include <initializer_list>
 #include <iostream>
 #include <string>
+#include <unordered_set>
 #include <utility>
+#include <vector>
 
 #include "html/html.hpp"
 
@@ -17,6 +20,12 @@ namespace {
 bool ends_with(const std::string& text, const std::string& suffix) {
     return text.size() >= suffix.size() &&
            text.compare(text.size() - suffix.size(), suffix.size(), suffix) == 0;
+}
+
+// Local helper so path extraction can run before the public is_http_url definition.
+bool looks_like_http_url(const std::string& source) {
+    const std::string lower = ascii_lower(source);
+    return lower.rfind("http://", 0) == 0 || lower.rfind("https://", 0) == 0;
 }
 
 Error validate_insert_text(const std::string& body, const std::string& source_description) {
@@ -165,6 +174,83 @@ std::string base64_encode(const std::string& data) {
 }
 
 }  // namespace
+
+bool path_has_supported_image_extension(const std::string& path) {
+    const std::string lower = ascii_lower(path);
+    return ends_with(lower, ".png") || ends_with(lower, ".jpg") || ends_with(lower, ".jpeg") ||
+           ends_with(lower, ".gif");
+}
+
+std::vector<std::string> extract_local_image_path_candidates(const std::string& text) {
+    std::vector<std::string> out;
+    std::unordered_set<std::string> seen;
+    auto consider = [&](std::string candidate) {
+        auto is_wrap_punct = [](char ch) {
+            return ch == '"' || ch == '\'' || ch == '(' || ch == ')' || ch == '[' || ch == ']' ||
+                   ch == '{' || ch == '}' || ch == '<' || ch == '>';
+        };
+        auto is_trail_punct = [&](char ch) {
+            return is_wrap_punct(ch) || ch == ',' || ch == ';' || ch == ':' || ch == '!' ||
+                   ch == '?' || ch == '.';
+        };
+        // Strip wrapping quotes/brackets first (may appear on bare tokens).
+        while (candidate.size() >= 2 && is_wrap_punct(candidate.front()) &&
+               is_wrap_punct(candidate.back())) {
+            candidate = candidate.substr(1, candidate.size() - 2);
+        }
+        while (!candidate.empty() && is_wrap_punct(candidate.front())) {
+            candidate.erase(candidate.begin());
+        }
+        // Strip trailing sentence punctuation often glued to paths (keep ".jpg").
+        while (!candidate.empty() && is_trail_punct(candidate.back())) {
+            const std::string without = candidate.substr(0, candidate.size() - 1);
+            if (path_has_supported_image_extension(without)) {
+                candidate = without;
+                continue;
+            }
+            // Drop a lone trailing wrap quote even if the remainder is not yet an image.
+            if (is_wrap_punct(candidate.back())) {
+                candidate.pop_back();
+                continue;
+            }
+            break;
+        }
+        if (!path_has_supported_image_extension(candidate)) return;
+        if (looks_like_http_url(candidate)) return;
+        if (candidate.find("://") != std::string::npos) return;
+        if (seen.insert(candidate).second) out.push_back(std::move(candidate));
+    };
+
+    // Quoted paths first: "path/to/x.jpg" or 'path/to/x.jpg'
+    for (std::size_t i = 0; i < text.size(); ++i) {
+        const char quote = text[i];
+        if (quote != '"' && quote != '\'') continue;
+        const std::size_t end = text.find(quote, i + 1);
+        if (end == std::string::npos) break;
+        consider(text.substr(i + 1, end - i - 1));
+        i = end;
+    }
+
+    // Bare path-like tokens with image extensions (allow / . _ - ~ and alnum).
+    for (std::size_t i = 0; i < text.size();) {
+        if (std::isspace(static_cast<unsigned char>(text[i]))) {
+            ++i;
+            continue;
+        }
+        std::size_t j = i;
+        while (j < text.size()) {
+            const unsigned char ch = static_cast<unsigned char>(text[j]);
+            if (std::isspace(ch)) break;
+            // Stop at common delimiters that never appear in file paths we care about.
+            if (ch == '<' || ch == '>' || ch == '|' || ch == '\n' || ch == '\r' || ch == '\t')
+                break;
+            ++j;
+        }
+        consider(text.substr(i, j - i));
+        i = j == i ? j + 1 : j;
+    }
+    return out;
+}
 
 Error classify_file_type(const std::string& path, FileType& type) {
     const std::string resolved = expand_user_path(path);

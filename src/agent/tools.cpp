@@ -30,6 +30,7 @@
 #include "agent/tool_args.hpp"
 #include "fetch/fetch.hpp"
 #include "html/html.hpp"
+#include "input/input.hpp"
 #include "json/json.hpp"
 #include "search/search.hpp"
 #include "security/redact.hpp"
@@ -1051,6 +1052,7 @@ Error ReadToolRegistry::create(index::Options index_options,
     loaded.search_options_ = options.search_options;
     loaded.on_guard_ask_ = std::move(options.on_guard_ask);
     loaded.goal_hooks_ = std::move(options.goal_hooks);
+    loaded.vision_hooks_ = std::move(options.vision_hooks);
     loaded.permission_mode_ = options.permission_mode;
     loaded.permission_controls_ = options.permission_controls;
     loaded.indexing_enabled_ = options.indexing_enabled;
@@ -3109,7 +3111,9 @@ std::vector<provider::FunctionDefinition> ReadToolRegistry::definitions() const 
              : "Single-target fallback: read one exact-path regular UTF-8 file in the live "
                "project filesystem; the file does not need to be indexed. Returns bounded "
                "line-numbered text and hashes. Do not issue multiple parallel read_file calls "
-               "when the known reads can be batched with read_many. Exact outside-project paths "
+               "when the known reads can be batched with read_many. PNG/JPEG/GIF images are "
+               "not readable as text—do not use Python/PIL; call attach_image when pixel "
+               "content is required (or ask the user to /attach). Exact outside-project paths "
                "follow the active interactive permission mode; headless Ask decisions are denied.",
          schema(range, "\"path\"")},
         {"run_command",
@@ -3218,6 +3222,15 @@ std::vector<provider::FunctionDefinition> ReadToolRegistry::definitions() const 
              "optimistically. Requires non-empty evidence (command output, file state, test "
              "result, etc.). Rejected when no goal is active.",
              schema("\"evidence\":{\"type\":\"string\"}", "\"evidence\"")});
+        tools.push_back(
+            {"attach_image",
+             "Attach one local PNG/JPEG/GIF for vision on the next model round of this turn. "
+             "Use when you need pixel content (screenshots, meters, UI mockups). Do not use "
+             "Python/PIL or shell tools to open images. Do not attach images proactively for "
+             "every path you see—only when vision is required. Request-local only (not stored "
+             "in the project). Per-turn limits apply (default up to 4 images). Requires a "
+             "vision-capable Chat Completions model.",
+             schema(path, "\"path\"")});
     }
     if (allow_mutations()) {
         tools.push_back(
@@ -3337,10 +3350,20 @@ Error ReadToolRegistry::read_external_source(const fs::path& absolute_path,
     Error read_error;
     const std::string source = read_all_bytes(absolute_path, read_error);
     if (!read_error.ok()) return read_error;
-    if (source.find('\0') != std::string::npos || !html::is_valid_utf8(source))
+    if (source.find('\0') != std::string::npos || !html::is_valid_utf8(source)) {
+        // Steer the model away from Python/PIL when the path is a vision image.
+        if (input::path_has_supported_image_extension(absolute_path.generic_string())) {
+            return {ErrorCode::UnsupportedFeature,
+                    description + " is a PNG/JPEG/GIF image, not UTF-8 text: " +
+                        absolute_path.generic_string() +
+                        ". Do not use Python/PIL or shell tools to open it. "
+                        "Call attach_image with this path when you need pixel content "
+                        "(vision model required), or ask the user to /attach the file."};
+        }
         return {ErrorCode::FileRead,
                 description + " is not UTF-8 text: " +
                     absolute_path.generic_string()};
+    }
     if (max_bytes == 0)
         return {ErrorCode::BadArgs, "source byte cap must be positive"};
 
@@ -3537,8 +3560,15 @@ Error ReadToolRegistry::read_source(const std::string& path,
     const std::string file_hash = index::content_hash(source);
     if (file_hash != record.content_hash)
         return {ErrorCode::FileRead, "indexed file changed after the snapshot: " + record.path};
-    if (source.find('\0') != std::string::npos || !html::is_valid_utf8(source))
+    if (source.find('\0') != std::string::npos || !html::is_valid_utf8(source)) {
+        if (input::path_has_supported_image_extension(record.path)) {
+            return {ErrorCode::UnsupportedFeature,
+                    "indexed path is a PNG/JPEG/GIF image, not UTF-8 text: " + record.path +
+                        ". Do not use Python/PIL; call attach_image when pixel content is "
+                        "required, or ask the user to /attach the file."};
+        }
         return {ErrorCode::FileRead, "indexed file is no longer valid UTF-8 text: " + record.path};
+    }
     if (max_bytes == 0) return {ErrorCode::BadArgs, "source byte cap must be positive"};
     const std::vector<std::string> lines = split_lines(source);
     if (start_line == 0) start_line = 1;
@@ -6472,6 +6502,136 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
         data.object["evidence"] =
             string_value(redact_secrets(evidence, secrets_));
         data.object["status"] = string_value("complete");
+        return envelope(true, std::move(data), "", "", {}, false);
+    }
+
+    if (name == "attach_image") {
+        if (mutation_policy_ == MutationPolicy::Disabled)
+            return tool_error_result("policy_denied",
+                                    "attach_image is only available in agent sessions");
+        std::string path;
+        if (!get_string(args, "path", path, true, validation_error))
+            return tool_error_result("invalid_arguments", validation_error);
+        path = ascii_trim(path);
+        if (path.empty())
+            return tool_error_result("invalid_arguments", "path must not be empty");
+        if (!vision_hooks_.queue_image)
+            return tool_error_result(
+                "unsupported",
+                "attach_image is not available in this session");
+        if (vision_hooks_.validate_capability) {
+            const Error capability = vision_hooks_.validate_capability();
+            if (!capability.ok()) {
+                const std::string code =
+                    capability.code == ErrorCode::UnsupportedFeature ? "unsupported"
+                                                                     : error_code_string(capability.code);
+                return tool_error_result(code, capability.message);
+            }
+        }
+        input::FileType type;
+        Error type_error = input::classify_file_type(path, type);
+        if (!type_error.ok() || type.kind != input::Kind::Image)
+            return tool_error_result(
+                "invalid_arguments",
+                type_error.ok()
+                    ? ("path is not a supported image type (.png/.jpg/.jpeg/.gif): " + path)
+                    : type_error.message);
+        // Project-relative paths resolve under the workspace; external paths need approval.
+        fs::path absolute;
+        if (safe_relative_path(path) && !path.empty()) {
+            fs::path current(snapshot_.workspace);
+            std::error_code ec;
+            for (const fs::path& component : fs::path(path)) {
+                current /= component;
+                const fs::file_status status = fs::symlink_status(current, ec);
+                if (ec || status.type() == fs::file_type::not_found)
+                    return tool_error_result(
+                        "file_read",
+                        "image does not exist or cannot be inspected: " + path +
+                            (ec ? " (" + ec.message() + ")" : std::string()));
+                if (fs::is_symlink(status))
+                    return tool_error_result(
+                        "policy_denied",
+                        "refusing symlink path for attach_image: " + path);
+            }
+            if (!fs::is_regular_file(current, ec) || ec)
+                return tool_error_result(
+                    "file_read", "attach_image path must be a regular file: " + path);
+            absolute = fs::canonical(current, ec);
+            if (ec || absolute.empty())
+                return tool_error_result(
+                    "file_read",
+                    "could not resolve image path " + path +
+                        (ec ? ": " + ec.message() : std::string()));
+            const fs::path root = fs::canonical(snapshot_.workspace, ec);
+            if (ec || !resolved_path_is_under(root, absolute))
+                return tool_error_result(
+                    "policy_denied",
+                    "image path escaped the active project: " + path);
+        } else {
+            Error resolve_error =
+                resolve_external_file_path(snapshot_.workspace, path, true, absolute);
+            if (!resolve_error.ok())
+                return tool_error_result(error_code_string(resolve_error.code),
+                                         resolve_error.message);
+            const GuardApprovalDecision decision = request_permission(
+                "attach_image", "attach_image " + absolute.generic_string(),
+                {absolute.generic_string()}, true,
+                resolved_path_is_under_system_temp(absolute), false, false,
+                "ask_on_external_file_read",
+                "Attach this image outside the active project for vision?\nExact resolved "
+                "path: " +
+                    absolute.generic_string() +
+                    "\nImage bytes are request-local for this turn only and are not stored "
+                    "in the project.",
+                cancellation);
+            if (decision != GuardApprovalDecision::Allow) {
+                std::string message =
+                    "refusing to attach image outside the project without user approval: " +
+                    absolute.generic_string();
+                if (decision == GuardApprovalDecision::Cancelled)
+                    message += " (approval cancelled)";
+                else if (!on_guard_ask_)
+                    message += " (headless agent denies external file access)";
+                else
+                    message += " (user selected No)";
+                return tool_error_result(
+                    decision == GuardApprovalDecision::Cancelled ? "cancelled"
+                                                                 : "policy_denied",
+                    message);
+            }
+        }
+        if (cancellation.cancelled())
+            return tool_error_result("cancelled", "attach_image cancelled");
+        const std::size_t limit = vision_hooks_.max_image_bytes > 0
+                                      ? vision_hooks_.max_image_bytes
+                                      : 20U * 1024U * 1024U;
+        input::ImageData loaded;
+        Error load_error =
+            input::load_image_file(absolute.generic_string(), type, limit, loaded, cancellation);
+        if (!load_error.ok())
+            return tool_error_result(error_code_string(load_error.code), load_error.message);
+        provider::ImageInput image{loaded.mime_type, std::move(loaded.base64_data)};
+        image.display_name = path;
+        image.source_ref = absolute.generic_string();
+        image.byte_size = static_cast<long long>(loaded.byte_size);
+        const Error queue_error = vision_hooks_.queue_image(std::move(image));
+        if (!queue_error.ok()) {
+            const std::string code =
+                queue_error.code == ErrorCode::UnsupportedFeature ? "limit_exceeded"
+                : queue_error.code == ErrorCode::BadArgs           ? "invalid_arguments"
+                                                                   : error_code_string(queue_error.code);
+            return tool_error_result(code, queue_error.message);
+        }
+        json::Value data = object_value();
+        data.object["path"] = string_value(path);
+        data.object["resolved_path"] = string_value(absolute.generic_string());
+        data.object["mime_type"] = string_value(type.mime_type);
+        data.object["bytes"] = number_value(static_cast<double>(loaded.byte_size));
+        data.object["scope"] = string_value("request_local_turn");
+        data.object["note"] = string_value(
+            "Image will be included on subsequent model rounds of this turn only; "
+            "it is not stored in agent.sqlite or project media.");
         return envelope(true, std::move(data), "", "", {}, false);
     }
 

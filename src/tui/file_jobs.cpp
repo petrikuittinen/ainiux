@@ -212,12 +212,23 @@ void TuiFileJobs::start_attach(const std::string& path) {
     if (busy()) {
         return;
     }
+    // Synchronous validation failures still emit AttachDone so the TUI can show a
+    // durable history notice (status alone is easy to miss in agent chrome).
+    auto fail_attach = [&](const Error& error) {
+        TuiEvent event;
+        event.type = TuiEventType::AttachDone;
+        event.text = path.empty() ? std::string("/attach") : path;
+        event.error = error;
+        events.push(std::move(event));
+        status = detail::error_line(error);
+    };
     if (path.empty()) {
-        status = "Usage: /attach PATH or URL";
+        fail_attach({ErrorCode::BadArgs, "Usage: /attach PATH or URL"});
         return;
     }
     if (path == "stdin") {
-        status = "stdin input is only supported by non-interactive --input and --attach";
+        fail_attach({ErrorCode::UnsupportedFeature,
+                     "stdin input is only supported by non-interactive --input and --attach"});
         return;
     }
     const bool is_url = input::is_http_url(path);
@@ -233,7 +244,8 @@ void TuiFileJobs::start_attach(const std::string& path) {
         options.allow_private = context.options.allow_private_url_fetch;
         const long text_limit = context.options.max_input_bytes;
         const long inline_limit = context.options.media_max_size_to_store_to_db;
-        const bool persist_attachment = sqlite_available;
+        // Agent mode never persists attachments to the chat media store / DB.
+        const bool persist_attachment = sqlite_available && !context.options.agent;
         const std::string media_database_path = sqlite_path;
         runtime::EventQueue<TuiEvent>& event_queue = events;
         file_job.start([path, options, text_limit, inline_limit, persist_attachment,
@@ -292,20 +304,21 @@ void TuiFileJobs::start_attach(const std::string& path) {
     input::FileType type;
     Error type_error = input::classify_file_type(path, type);
     if (!type_error.ok()) {
-        status = detail::error_line(type_error);
+        fail_attach(type_error);
         return;
     }
     if (type.kind == input::Kind::Image) {
         Error capability_error = provider::validate_image_input(context);
         if (!capability_error.ok()) {
-            status = detail::error_line(capability_error);
+            fail_attach(capability_error);
             return;
         }
     }
     const long text_limit = context.options.max_input_bytes;
     const long image_limit = context.options.max_image_bytes;
     const long inline_limit = context.options.media_max_size_to_store_to_db;
-    const bool persist_attachment = sqlite_available;
+    // Agent mode: request-local only (no ~/.ainiux/media, no chat SQLite).
+    const bool persist_attachment = sqlite_available && !context.options.agent;
     const std::string media_database_path = sqlite_path;
     runtime::EventQueue<TuiEvent>& event_queue = events;
     file_job.start([path, type, text_limit, image_limit, inline_limit, persist_attachment,
@@ -336,6 +349,8 @@ void TuiFileJobs::start_attach(const std::string& path) {
                     path, type, static_cast<size_t>(image_limit), loaded, token);
                 if (event.error.ok()) {
                     event.image = {loaded.mime_type, std::move(loaded.base64_data)};
+                    event.image.display_name = path;
+                    event.image.source_ref = expand_user_path(path);
                 }
             }
         } else if (text_limit <= 0) {

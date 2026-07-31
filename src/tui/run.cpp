@@ -38,7 +38,7 @@
 #include "editor/clipboard.hpp"
 #include "editor/path_completion.hpp"
 #include "editor/terminal_input.hpp"
-#include "editor/text_layout.hpp"
+
 #include "fetch/fetch.hpp"
 #include "search/search.hpp"
 #include "input/input.hpp"
@@ -122,19 +122,6 @@ app::TuiRunResult run(provider::RequestContext context,
     const size_t input_undo_limit = static_cast<size_t>(std::max(0, context.options.editor_undo_limit));
     bool syntax_highlight = interactive != nullptr ? interactive->highlight_enabled
                                                    : context.options.tui_highlight;
-    // History prose reflow: default from [editor] alignment-width (78); -1 = unlimited.
-    long long history_align_width =
-        static_cast<long long>(context.options.editor_text_align_width);
-    if (!editor::valid_chat_align_width(history_align_width)) {
-        history_align_width = static_cast<long long>(editor::kDefaultTextAlignWidth);
-    }
-    editor::TextAlignMode history_align_mode = editor::TextAlignMode::Left;
-    auto history_text_layout = [&]() {
-        detail::HistoryTextLayout layout;
-        layout.width = history_align_width;
-        layout.mode = history_align_mode;
-        return layout;
-    };
     auto new_input_editor = [&]() {
         editor::EditorState editor = detail::empty_input_editor(input_undo_limit);
         editor.set_language(highlight::Language::Markdown, false);
@@ -1138,14 +1125,20 @@ app::TuiRunResult run(provider::RequestContext context,
         // Agent is a separate mode from Chat (options.agent), but both use this
         // TUI shell. Chat sends ordinary completions; Agent runs the tool loop.
         const bool agent_mode = context.options.agent;
-        std::string agent_goal;
+        agent::AgentSessionRuntime::UserTurnPayload agent_payload;
         if (agent_mode) {
             for (auto it = request_messages.rbegin(); it != request_messages.rend(); ++it) {
                 if (it->role == "user") {
-                    agent_goal = it->content;
+                    agent_payload.text = it->content;
+                    agent_payload.images = it->images;
+                    // Keep text attachment metadata; expand Markdown in the worker.
+                    // (Hydration must not block the TUI thread.)
                     break;
                 }
             }
+            // Carry text_attachments via a one-message carrier for the worker.
+            // agent_payload only holds images + text; attachments live on the
+            // last user message inside request_messages until the worker runs.
         }
         // Fallback options if startup prepare failed; normally the runtime is already prepared.
         agent::SessionRuntimeOptions agent_prep_options = make_agent_runtime_options();
@@ -1158,7 +1151,7 @@ app::TuiRunResult run(provider::RequestContext context,
         }
         model_job.start([job_context, request_messages = std::move(request_messages),
                          media_database_path, max_image_bytes, max_attachment_bytes, agent_mode,
-                         agent_goal = std::move(agent_goal), agent_runtime,
+                         agent_payload = std::move(agent_payload), agent_runtime,
                          agent_prep_options = std::move(agent_prep_options),
                          &events](runtime::CancellationToken token) mutable {
             provider::ChatResult chat_result;
@@ -1180,6 +1173,64 @@ app::TuiRunResult run(provider::RequestContext context,
                         send_error =
                             runtime->prepare(job_context, token, {}, agent_prep_options);
                     }
+                    // Expand text attachments into the goal so the model sees bodies,
+                    // not only the compact "Attached files" list kept for display.
+                    if (send_error.ok()) {
+                        for (auto it = request_messages.rbegin();
+                             it != request_messages.rend(); ++it) {
+                            if (it->role != "user" || it->text_attachments.empty()) continue;
+                            std::vector<provider::Message> attach_carrier = {*it};
+                            send_error = chat::hydrate_message_text_attachments(
+                                media_database_path, attach_carrier, max_attachment_bytes,
+                                token);
+                            if (!send_error.ok()) {
+                                // Prefer inline Markdown already on the message.
+                                std::string expanded = agent_payload.text;
+                                bool any_inline = false;
+                                for (const provider::TextAttachment& attachment :
+                                     it->text_attachments) {
+                                    if (attachment.markdown_content.empty()) continue;
+                                    any_inline = true;
+                                    if (!expanded.empty()) expanded += "\n\n";
+                                    expanded += "---" + attachment.display_name + "---\n";
+                                    expanded += attachment.markdown_content;
+                                }
+                                if (any_inline) {
+                                    agent_payload.text = std::move(expanded);
+                                    send_error = ok_error();
+                                }
+                            } else if (!attach_carrier.empty()) {
+                                agent_payload.text = std::move(attach_carrier.front().content);
+                            }
+                            break;
+                        }
+                    }
+                    // Agent attaches are request-local base64. Hydrate unresolved
+                    // managed-media refs only as a best-effort bridge from chat.
+                    if (send_error.ok()) {
+                        for (provider::ImageInput& image : agent_payload.images) {
+                            if (!image.base64_data.empty()) continue;
+                            if (!image.storage_ref.empty() && !media_database_path.empty()) {
+                                std::vector<provider::Message> carrier = {
+                                    {"user", "", {image}}};
+                                send_error = chat::hydrate_message_images(
+                                    media_database_path, carrier, max_image_bytes, token);
+                                if (send_error.ok() && !carrier.empty() &&
+                                    !carrier.front().images.empty()) {
+                                    image = std::move(carrier.front().images.front());
+                                }
+                            } else {
+                                send_error = {
+                                    ErrorCode::FileRead,
+                                    "image attachment data is unavailable" +
+                                        (image.display_name.empty()
+                                             ? std::string("; re-attach the file in agent mode")
+                                             : ": " + image.display_name +
+                                                   "; re-attach the file in agent mode")};
+                            }
+                            if (!send_error.ok()) break;
+                        }
+                    }
                     if (send_error.ok()) {
                         // Stream tool activity into the chat panel as each call runs.
                         auto agent_progress = [&events](const std::string& line) {
@@ -1198,8 +1249,8 @@ app::TuiRunResult run(provider::RequestContext context,
                                 event.agent_progress = update;
                                 events.push(std::move(event));
                             };
-                        agent_turn = runtime->run_user_turn(job_context, agent_goal, token, {},
-                                                            agent_progress,
+                        agent_turn = runtime->run_user_turn(job_context, std::move(agent_payload),
+                                                            token, {}, agent_progress,
                                                             structured_progress);
                         have_agent_turn = true;
                         send_error = agent_turn.error;
@@ -2134,8 +2185,6 @@ app::TuiRunResult run(provider::RequestContext context,
                                       history_scroll,
                                       show_thinking_traces,
                                       syntax_highlight,
-                                      history_align_width,
-                                      history_align_mode,
                                       context.options.tui_themes,
                                       theme,
                                       use_colors,
@@ -2427,7 +2476,7 @@ app::TuiRunResult run(provider::RequestContext context,
     auto submit_input = [&]() {
         std::string raw = input.text.str();
         const std::string text = app::detail::trim_ascii(raw);
-        if (text.empty() && chat_attachments.empty()) {
+        if (text.empty() && chat_attachments.empty() && pending_images.empty()) {
             input = new_input_editor();
             return;
         }
@@ -2518,6 +2567,24 @@ app::TuiRunResult run(provider::RequestContext context,
             }
 
             attachments_committed_for_turn = chat_attachments.size();
+        }
+        if (!pending_images.empty()) {
+            // Display/provenance only — image bytes stay on Message.images (request path).
+            if (!display_content.empty()) {
+                display_content += "\n\n";
+            }
+            display_content += "Attached images (in order):\n";
+            for (const provider::ImageInput& image : pending_images) {
+                const std::string label = !image.display_name.empty()
+                                              ? image.display_name
+                                              : (!image.source_ref.empty() ? image.source_ref
+                                                                           : "image");
+                display_content += "- " + label + "\n";
+            }
+            if (context.options.agent) {
+                display_content +=
+                    "(images are request-local for this agent turn; not stored in the project)\n";
+            }
         }
 
         if (start_turn_with_pending_attachments(display_content)) {
@@ -2671,7 +2738,7 @@ app::TuiRunResult run(provider::RequestContext context,
                    activity_kind, render_frame, syntax_highlight,
                    detail::RenderStyle{&context.options.tui_themes, theme, use_colors},
                    terminal_frame_renderer, panel_title(), context.options.agent,
-                   build_agent_chrome(), history_text_layout());
+                   build_agent_chrome());
     while (!quit) {
         credit_jobs.reap_finished();
         process_clipboard_events();
@@ -3112,31 +3179,74 @@ app::TuiRunResult run(provider::RequestContext context,
                         set_status_maybe_agent_error(detail::error_line(event.error), true);
                     }
                     break;
-                case TuiEventType::AttachDone:
-                    file_job.join();
-                    completed_file_job = true;
+                case TuiEventType::AttachDone: {
+                    // Sync validation failures push AttachDone without starting file_job.
+                    if (file_job.joinable()) {
+                        file_job.join();
+                        completed_file_job = true;
+                    }
+                    auto attach_user_notice = [&](const std::string& text, bool as_error) {
+                        if (text.empty()) return;
+                        if (context.options.agent) {
+                            // Durable agent history notice (status chrome alone is easy to miss).
+                            append_agent_history_notice(text);
+                            if (as_error) {
+                                status = agent_runtime && agent_runtime->prepared() &&
+                                                 !agent_task_active
+                                             ? agent_ready_with_index_controls()
+                                             : status;
+                            } else {
+                                status = text;
+                            }
+                        } else {
+                            // Chat: keep compact status; also leave a display-only notice row.
+                            provider::Message notice{"notice", text};
+                            notice.created_at_ms = agent::now_unix_ms();
+                            session.messages.push_back(std::move(notice));
+                            history_scroll = history_scroll_for_thread_end();
+                            status = text;
+                        }
+                    };
                     if (event.error.ok() && event.image_attachment) {
                         pending_images.push_back(std::move(event.image));
-                        status = "Attached image for next prompt: " + event.text + " (" +
-                                 std::to_string(pending_images.size()) + " pending)";
+                        std::string msg =
+                            "Attached image for next prompt: " + event.text + " (" +
+                            std::to_string(pending_images.size()) + " pending";
+                        if (context.options.agent) {
+                            msg += "; request-local for that turn, not stored";
+                        }
+                        msg += ")";
+                        attach_user_notice(msg, false);
                     } else if (event.error.ok() && event.text_attachment_ready) {
                         chat_attachments.push_back(
                             {event.attached_source, std::move(event.text_attachment)});
-                        history_scroll = 0;
-                        status = "Attached " + event.text + " (" +
-                                 std::to_string(chat_attachments.size()) + " attachment" +
-                                 (chat_attachments.size() == 1 ? "" : "s") + ")";
+                        attach_user_notice(
+                            "Attached " + event.text + " (" +
+                                std::to_string(chat_attachments.size()) + " attachment" +
+                                (chat_attachments.size() == 1 ? "" : "s") +
+                                (context.options.agent ? "; included on next agent turn" : "") +
+                                ")",
+                            false);
                     } else if (event.error.ok()) {
                         // Fallback for any legacy inserted_message path
                         if (!event.inserted_message.content.empty()) {
                             session.messages.push_back(std::move(event.inserted_message));
                         }
-                        history_scroll = 0;
-                        status = "Attached context from " + event.text;
+                        attach_user_notice("Attached context from " + event.text, false);
                     } else {
-                        set_status_maybe_agent_error(detail::error_line(event.error), true);
+                        const std::string fail =
+                            "Attach failed: " +
+                            (event.text.empty() ? std::string("(unknown path)") : event.text) +
+                            " — " +
+                            (event.error.message.empty() ? detail::error_line(event.error)
+                                                         : event.error.message);
+                        attach_user_notice(fail, true);
+                        if (!context.options.agent) {
+                            set_status_maybe_agent_error(detail::error_line(event.error), true);
+                        }
                     }
                     break;
+                }
                 case TuiEventType::FetchDone:
                     file_job.join();
                     completed_file_job = true;
@@ -3776,7 +3886,7 @@ app::TuiRunResult run(provider::RequestContext context,
                        activity_kind, render_frame, syntax_highlight,
                        detail::RenderStyle{&context.options.tui_themes, theme, use_colors},
                        terminal_frame_renderer, panel_title(), context.options.agent,
-                       build_agent_chrome(), history_text_layout());
+                       build_agent_chrome());
     }
 
     model_job.cancel();

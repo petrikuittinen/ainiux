@@ -317,19 +317,9 @@ The status line shows the current language and line-ending mode compactly in par
 
 `/remove-blank-lines` drops empty and whitespace-only lines. `/remove-duplicate-blank-lines` collapses runs of consecutive blank lines to a single blank line. `/remove-duplicate-lines` keeps the first of each run of consecutive identical lines. All three use the same selection-or-whole-buffer scope and one undo step.
 
-### Chat and agent history display alignment
+### Chat and agent history
 
-In **chat** and **agent** TUI history (not the editor buffer), the same config default drives **display-only** reflow of every message role (user and assistant, and other history rows). Stored transcripts are not rewritten.
-
-| Command | Purpose |
-|---------|---------|
-| `/width [N\|-1]` | Show or set history/table column width. **`-1`** disables prose reflow (unlimited). Positive N must be > 20 and ≤ 1000. Alias: `/alignment-width`. |
-| `/left-align` | History align mode: left |
-| `/right-align` | History align mode: right (useful for Arabic and other RTL-leaning layouts) |
-| `/center-align` | History align mode: center |
-| `/justify-align` or `/justify` | History align mode: justify |
-
-Default mode is left-align; default width is `[editor] alignment-width` (78). On a wide terminal, prose wraps near that column so lines stay readable. Pretty Markdown tables are also capped to the effective width (session `/width` or the terminal content width, whichever is smaller): columns shrink and cell text word-wraps onto following lines so the table never runs past the margin. Fenced code is left intact; overlong prose words occupy their own line instead of failing.
+Chat and agent TUI history do **not** expose `/width`, `/left-align`, `/right-align`, `/center-align`, or `/justify`. Those commands remain **editor-only** buffer transforms. History rows are shown with terminal soft wrap; pretty Markdown tables are capped to the history content column. Stored transcripts are never rewritten by display layout.
 
 ## Configuration
 

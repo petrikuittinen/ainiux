@@ -3676,6 +3676,25 @@ Error send_tool_round(const RequestContext& context,
         precondition_error = {ErrorCode::BadArgs, "native tool request requires at least one function definition"};
     else if (cancellation.cancelled())
         precondition_error = {ErrorCode::Cancelled, "native tool request cancelled before it started"};
+    if (precondition_error.ok()) {
+        // Same image capability gates as ordinary chat when seed messages carry images.
+        for (const Message& message : conversation.messages) {
+            if (message.images.empty()) continue;
+            precondition_error = validate_image_input(context);
+            if (!precondition_error.ok()) break;
+            for (const ImageInput& image : message.images) {
+                if (image.base64_data.empty()) {
+                    precondition_error = {
+                        ErrorCode::FileRead,
+                        "image attachment data is unavailable" +
+                            (image.display_name.empty() ? std::string()
+                                                        : ": " + image.display_name)};
+                    break;
+                }
+            }
+            break;
+        }
+    }
     if (!precondition_error.ok()) {
         if (observer != nullptr && observer->on_response)
             observer->on_response(observation_context, http::Response{}, result, precondition_error);

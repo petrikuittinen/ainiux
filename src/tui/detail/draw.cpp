@@ -6,7 +6,7 @@
 
 #include "agent/tool_display.hpp"
 #include "app/detail.hpp"
-#include "editor/text_layout.hpp"
+
 #include "markdown/table_format.hpp"
 #include "provider/provider.hpp"
 
@@ -417,8 +417,7 @@ std::vector<StyledLine> history_lines_for_session(const chat::Session& session,
                                                   ActivityKind activity_kind,
                                                   size_t activity_frame,
                                                   bool markdown_highlight,
-                                                  bool agent_mode,
-                                                  HistoryTextLayout text_layout) {
+                                                  bool agent_mode) {
     std::vector<StyledLine> history;
     const int min_content_width = 8;
     // Agent total task time is relative to the most recent user message timestamp.
@@ -490,38 +489,18 @@ std::vector<StyledLine> history_lines_for_session(const chat::Session& session,
                                               "working...");
         } else {
             // Tool rows, shell notices, and thinking traces are preformatted
-            // (ls listings, command output, activity). Prose reflow joins
-            // consecutive non-blank lines into paragraphs and turns them into
-            // an unreadable word soup — never reflow those roles.
+            // (ls listings, command output, activity). Chat/agent history never
+            // applies left/right/justify prose reflow (editor-only commands).
             const bool preformatted =
                 message.role == "tool" || message.role == "notice" ||
                 message.role == "thinking";
-            // Display-only table pretty-print and prose reflow. Cap tables at the
-            // effective history width so they do not exceed the screen / /width.
+            // Display-only table pretty-print, capped to the history content width.
             const int prefix_cells = static_cast<int>(prefix.size());
             const int content_cols =
                 std::max(min_content_width, cols - prefix_cells);
-            size_t table_max = static_cast<size_t>(content_cols);
-            if (text_layout.width > 0) {
-                table_max = std::min(table_max, static_cast<size_t>(text_layout.width));
-            }
+            const size_t table_max = static_cast<size_t>(content_cols);
             if (!content.empty() && !preformatted) {
                 content = markdown::pretty_format_tables(content, table_max);
-            }
-            // Display-only prose reflow to a fixed column width (wide terminals).
-            // -1 / non-positive: unlimited. Fences and tables are preserved.
-            if (!content.empty() && !preformatted && text_layout.width > 0) {
-                size_t target = static_cast<size_t>(text_layout.width);
-                if (static_cast<size_t>(content_cols) < target) {
-                    target = static_cast<size_t>(content_cols);
-                }
-                if (target > 0) {
-                    const editor::TextLayoutResult laid = editor::reflow_align_display(
-                        content, text_layout.mode, target);
-                    if (laid.error.ok()) {
-                        content = laid.replacement;
-                    }
-                }
             }
             // Preformatted agent/shell output: keep monospace-ish plain text so
             // highlight rules do not restyle path names mid-listing.

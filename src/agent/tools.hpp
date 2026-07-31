@@ -61,6 +61,20 @@ struct GoalToolHooks {
     std::function<Error(const std::string& evidence)> mark_complete;
 };
 
+// Vision attach_image tool. Empty hooks ⇒ capability/session not ready.
+// The runtime queues images and injects them into the next model round only
+// (request-local; never persisted to agent.sqlite / project media).
+struct VisionAttachHooks {
+    // Per-image byte cap (matches --max-image-bytes).
+    std::size_t max_image_bytes = 20U * 1024U * 1024U;
+    // Max successful attach_image calls per user turn (bounds context growth).
+    std::size_t max_images_per_turn = 4;
+    // Validate Chat Completions + vision model (or image_capability allow).
+    std::function<Error()> validate_capability;
+    // Queue one request-local image for the next model round of this turn.
+    std::function<Error(provider::ImageInput image)> queue_image;
+};
+
 struct ToolRegistryOptions {
     MutationPolicy mutation_policy = MutationPolicy::Disabled;
     // Network tools reuse src/fetch and src/search. Disabled for security-review.
@@ -71,6 +85,7 @@ struct ToolRegistryOptions {
     // Interactive Guard Ask. Empty ⇒ headless Deny for Ask decisions.
     GuardApprovalCallback on_guard_ask;
     GoalToolHooks goal_hooks;
+    VisionAttachHooks vision_hooks;
     PermissionMode permission_mode = PermissionMode::Smart;
     bool permission_controls = false;
     bool indexing_enabled = true;
@@ -118,6 +133,10 @@ class ReadToolRegistry {
     void set_mutation_policy(MutationPolicy policy) { mutation_policy_ = policy; }
     PermissionMode permission_mode() const { return permission_mode_; }
     void set_permission_mode(PermissionMode mode) { permission_mode_ = mode; }
+    // Updated each user turn so capability/limits match the active model.
+    void set_vision_hooks(VisionAttachHooks hooks) {
+        vision_hooks_ = std::move(hooks);
+    }
     std::vector<provider::FunctionDefinition> definitions() const;
     // Mutating tools update the in-memory snapshot so later reads in the same
     // run see the new file hashes. Security-review never enables mutations.
@@ -254,6 +273,7 @@ class ReadToolRegistry {
     search::Options search_options_{};
     GuardApprovalCallback on_guard_ask_;
     GoalToolHooks goal_hooks_;
+    VisionAttachHooks vision_hooks_;
     PermissionMode permission_mode_ = PermissionMode::Smart;
     bool permission_controls_ = false;
     bool indexing_enabled_ = true;

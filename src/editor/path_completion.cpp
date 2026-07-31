@@ -26,10 +26,9 @@ struct ChatCompletionContext {
 };
 
 const std::vector<std::string>& chat_command_completions() {
+    // Align /width are editor-only (not chat history).
     static const std::vector<std::string> commands = {
-        "/alignment-width ",
         "/attach ",
-        "/center-align",
         "/clear",
         "/cleanup",
         "/clone",
@@ -39,9 +38,6 @@ const std::vector<std::string>& chat_command_completions() {
         "/help",
         "/highlight ",
         "/insert ",
-        "/justify",
-        "/justify-align",
-        "/left-align",
         "/list",
         "/load ",
         "/model ",
@@ -55,7 +51,6 @@ const std::vector<std::string>& chat_command_completions() {
         "/remove",
         "/remove-empty",
         "/response",
-        "/right-align",
         "/save ",
         "/search ",
         "/setting",
@@ -65,19 +60,17 @@ const std::vector<std::string>& chat_command_completions() {
         "/system",
         "/theme ",
         "/thinking ",
-        "/width ",
     };
     return commands;
 }
 
 const std::vector<std::string>& agent_command_completions() {
+    // Align /width are editor-only (not agent history).
     static const std::vector<std::string> commands = {
         "/act",
         "/goal",
         "/agent",
-        "/alignment-width ",
         "/attach ",
-        "/center-align",
         "/chat",
         "/clear",
         "/cmd-out ",
@@ -95,9 +88,6 @@ const std::vector<std::string>& agent_command_completions() {
         "/highlight ",
         "/index-code",
         "/insert ",
-        "/justify",
-        "/justify-align",
-        "/left-align",
         "/model ",
         "/models",
         "/mode ",
@@ -107,7 +97,6 @@ const std::vector<std::string>& agent_command_completions() {
         "/provider ",
         "/quit",
         "/reasoning ",
-        "/right-align",
         "/search ",
         "/setting",
         "/setting ",
@@ -117,7 +106,6 @@ const std::vector<std::string>& agent_command_completions() {
         "/system",
         "/theme ",
         "/thinking ",
-        "/width ",
     };
     return commands;
 }

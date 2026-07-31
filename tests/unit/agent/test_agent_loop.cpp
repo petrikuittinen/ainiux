@@ -720,6 +720,84 @@ void test_request_only_context_is_removed_without_history_loss() {
           "request-only context is removed without discarding tool rounds");
 }
 
+void test_agent_turn_images_on_seed_and_follow_up_then_strip() {
+    provider::RequestContext context = chat_context();
+    context.options.model = "gpt-4o";
+    context.options.stream = false;
+    context.options.image_capability = "allow";
+    context.profile.capabilities.images = true;
+
+    provider::ImageInput image{"image/png", "aGVsbG8="};  // "hello"
+    image.display_name = "shot.png";
+
+    provider::ToolConversation conversation;
+    conversation.messages = {{"system", "trusted"}, {"user", "make landing.html from this"}};
+    agent::attach_images_to_last_user_message(conversation, {image});
+    check(!conversation.messages.back().images.empty() &&
+              conversation.messages.back().images[0].base64_data == "aGVsbG8=",
+          "seed goal carries request-local image base64");
+
+    const std::vector<provider::FunctionDefinition> definitions = {
+        {"write_file", "Write",
+         R"({"type":"object","properties":{"path":{"type":"string"}},"required":["path"],"additionalProperties":false})"}};
+    json::ParseResult seed_parsed =
+        json::parse(provider::serialize_tool_request(context, conversation, definitions));
+    check(seed_parsed.error.ok(), "tool request with seed image serializes");
+    const json::Value* seed_messages = seed_parsed.value.get("messages");
+    check(seed_messages != nullptr && seed_messages->is_array() &&
+              seed_messages->array.size() >= 2,
+          "seed tool request has messages");
+    const json::Value* seed_user = seed_messages->array[1].get("content");
+    check(seed_user != nullptr && seed_user->is_array() && seed_user->array.size() == 2,
+          "seed user content is multimodal array");
+    check(seed_user->array[1].get("type") != nullptr &&
+              seed_user->array[1].get("type")->string == "image_url",
+          "seed user includes image_url part");
+    const json::Value* image_url = seed_user->array[1].get("image_url");
+    check(image_url != nullptr && image_url->get("url") != nullptr &&
+              image_url->get("url")->string.find("data:image/png;base64,aGVsbG8=") !=
+                  std::string::npos,
+          "seed image data URL is embedded for the provider");
+
+    // Simulate tool history, then a follow-up with another image.
+    conversation.continuation_items_json = {
+        R"({"role":"assistant","content":"working"})",
+        R"({"role":"tool","tool_call_id":"c1","content":"{\"ok\":true}"})"};
+    agent::append_conversation_user_with_images(conversation, "also check this crop",
+                                                {image});
+    check(conversation.continuation_items_json.back().find("image_url") != std::string::npos,
+          "follow-up continuation item encodes multimodal content");
+
+    json::ParseResult follow_parsed =
+        json::parse(provider::serialize_tool_request(context, conversation, definitions));
+    check(follow_parsed.error.ok(), "follow-up multimodal tool request serializes");
+    const json::Value* follow_messages = follow_parsed.value.get("messages");
+    check(follow_messages != nullptr && follow_messages->is_array() &&
+              follow_messages->array.back().get("content") != nullptr &&
+              follow_messages->array.back().get("content")->is_array(),
+          "follow-up user is last and multimodal");
+
+    agent::strip_conversation_images(conversation);
+    check(conversation.messages.back().images.empty(),
+          "strip clears seed message images");
+    check(conversation.continuation_items_json.back().find("image_url") == std::string::npos &&
+              conversation.continuation_items_json.back().find("aGVsbG8=") == std::string::npos,
+          "strip removes base64 from continuation items");
+    json::ParseResult stripped =
+        json::parse(conversation.continuation_items_json.back());
+    check(stripped.error.ok() && stripped.value.get("content") != nullptr &&
+              stripped.value.get("content")->is_string() &&
+              stripped.value.get("content")->string.find("crop") != std::string::npos,
+          "strip keeps follow-up text without image parts");
+
+    // Empty images uses plain text path (no array content).
+    agent::append_conversation_user_with_images(conversation, "text only", {});
+    check(conversation.continuation_items_json.back().find("\"content\":\"text only\"") !=
+                  std::string::npos ||
+              conversation.continuation_items_json.back().find("text only") != std::string::npos,
+          "empty image list keeps plain string content");
+}
+
 void test_batched_reads_reduce_rounds_and_serialized_request_bytes() {
     provider::RequestContext context = chat_context();
     const std::vector<provider::FunctionDefinition> definitions = {
@@ -765,6 +843,7 @@ void run_all() {
     test_scripted_turn_cap();
     test_follow_up_user_appends_after_tool_history();
     test_request_only_context_is_removed_without_history_loss();
+    test_agent_turn_images_on_seed_and_follow_up_then_strip();
     test_batched_reads_reduce_rounds_and_serialized_request_bytes();
 }
 

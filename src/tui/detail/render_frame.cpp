@@ -44,8 +44,7 @@ void render(const chat::Session& session,
             TerminalFrameRenderer& frame_renderer,
             const char* panel_title_override,
             bool agent_mode,
-            const AgentChrome& agent_chrome,
-            HistoryTextLayout text_layout) {
+            const AgentChrome& agent_chrome) {
     const TuiSize terminal = terminal_size();
     Layout layout = layout_for_terminal(terminal.rows, terminal.cols);
     if (agent_mode) {
@@ -79,8 +78,7 @@ void render(const chat::Session& session,
         panel_active
             ? panel_lines_for_text(panel_text, mode, history_cols, panel_title_override)
             : history_lines_for_session(session, history_cols, show_thinking_traces, activity_kind,
-                                        activity_frame, syntax_highlight, agent_mode,
-                                        text_layout);
+                                        activity_frame, syntax_highlight, agent_mode);
     if (agent_choice_active && !panel_text.empty()) {
         std::vector<StyledLine> details =
             panel_lines_for_text(panel_text, mode, history_cols, panel_title_override);

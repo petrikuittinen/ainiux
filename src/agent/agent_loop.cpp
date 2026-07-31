@@ -380,6 +380,101 @@ void append_conversation_text(provider::ToolConversation& conversation,
     conversation.continuation_items_json.push_back(json::stringify(item));
 }
 
+void append_conversation_user_with_images(
+    provider::ToolConversation& conversation,
+    const std::string& text,
+    const std::vector<provider::ImageInput>& images) {
+    if (images.empty()) {
+        append_conversation_text(conversation, "user", text);
+        return;
+    }
+    json::Value item = object_value();
+    item.object["role"] = string_value("user");
+    json::Value content_parts;
+    content_parts.type = json::Value::Type::Array;
+    if (!text.empty()) {
+        json::Value text_part = object_value();
+        text_part.object["type"] = string_value("text");
+        text_part.object["text"] = string_value(text);
+        content_parts.array.push_back(std::move(text_part));
+    }
+    for (const provider::ImageInput& image : images) {
+        json::Value image_part = object_value();
+        image_part.object["type"] = string_value("image_url");
+        json::Value image_url = object_value();
+        const std::string data_url =
+            "data:" + image.mime_type + ";base64," + image.base64_data;
+        image_url.object["url"] = string_value(data_url);
+        image_part.object["image_url"] = std::move(image_url);
+        content_parts.array.push_back(std::move(image_part));
+    }
+    item.object["content"] = std::move(content_parts);
+    conversation.continuation_items_json.push_back(json::stringify(item));
+}
+
+void attach_images_to_last_user_message(
+    provider::ToolConversation& conversation,
+    const std::vector<provider::ImageInput>& images) {
+    if (images.empty()) return;
+    for (auto it = conversation.messages.rbegin(); it != conversation.messages.rend();
+         ++it) {
+        if (it->role == "user") {
+            it->images = images;
+            return;
+        }
+    }
+}
+
+namespace {
+
+std::string text_from_multimodal_content(const json::Value& content) {
+    if (content.is_string()) return content.string;
+    if (!content.is_array()) return {};
+    std::string text;
+    for (const json::Value& part : content.array) {
+        if (!part.is_object()) continue;
+        const json::Value* type = part.get("type");
+        const json::Value* text_field = part.get("text");
+        if (type != nullptr && type->is_string() && type->string == "text" &&
+            text_field != nullptr && text_field->is_string()) {
+            if (!text.empty()) text.push_back('\n');
+            text += text_field->string;
+        }
+    }
+    return text;
+}
+
+bool continuation_item_has_images(const json::Value& item) {
+    if (!item.is_object()) return false;
+    const json::Value* content = item.get("content");
+    if (content == nullptr || !content->is_array()) return false;
+    for (const json::Value& part : content->array) {
+        if (!part.is_object()) continue;
+        const json::Value* type = part.get("type");
+        if (type != nullptr && type->is_string() && type->string == "image_url")
+            return true;
+    }
+    return false;
+}
+
+}  // namespace
+
+void strip_conversation_images(provider::ToolConversation& conversation) {
+    for (provider::Message& message : conversation.messages) {
+        message.images.clear();
+    }
+    for (std::string& encoded : conversation.continuation_items_json) {
+        json::ParseResult parsed = json::parse(encoded);
+        if (!parsed.error.ok() || !parsed.value.is_object()) continue;
+        if (!continuation_item_has_images(parsed.value)) continue;
+        const json::Value* content = parsed.value.get("content");
+        const std::string text =
+            content != nullptr ? text_from_multimodal_content(*content) : std::string();
+        parsed.value.object["content"] = string_value(text);
+        encoded = json::stringify(parsed.value);
+    }
+}
+
 std::size_t append_request_only_context(
     provider::ToolConversation& conversation,
     const std::string& content) {

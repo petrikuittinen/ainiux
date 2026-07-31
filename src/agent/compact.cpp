@@ -690,7 +690,8 @@ ToolCompactionTier tool_compaction_tier(const std::string& tool_name) {
     if (tool_name == "git_status" || tool_name == "git_diff" ||
         tool_name == "run_command")
         return ToolCompactionTier::Semantic;
-    if (tool_name == "goal_met") return ToolCompactionTier::Digest;
+    if (tool_name == "goal_met" || tool_name == "attach_image")
+        return ToolCompactionTier::Digest;
     return ToolCompactionTier::Full;
 }
 

@@ -2094,6 +2094,83 @@ void test_goal_met_tool_hooks() {
     fs::remove_all(workspace, ec);
 }
 
+void test_attach_image_tool_hooks() {
+    const std::string workspace = write_temp_workspace("attach-image");
+    // Minimal PNG signature + a few bytes (loader checks signature).
+    {
+        std::ofstream out(fs::path(workspace) / "shot.png", std::ios::binary);
+        out.write("\x89PNG\r\n\x1a\n", 8);
+        out.write("abc", 3);
+    }
+    agent::index::Options options;
+    options.workspace = workspace;
+    options.max_source_code_file_size = 1024 * 1024;
+    agent::index::RefreshStats stats;
+    check(agent::index::refresh(options, stats).ok(), "index refresh for attach_image");
+    agent::index::Snapshot snapshot;
+    check(agent::index::load_snapshot(options, snapshot).ok(), "snapshot for attach_image");
+
+    std::vector<provider::ImageInput> queued;
+    agent::ToolRegistryOptions tool_options;
+    tool_options.mutation_policy = agent::MutationPolicy::Full;
+    tool_options.vision_hooks.max_image_bytes = 1024;
+    tool_options.vision_hooks.max_images_per_turn = 2;
+    tool_options.vision_hooks.validate_capability = []() -> Error { return ok_error(); };
+    tool_options.vision_hooks.queue_image = [&](provider::ImageInput image) -> Error {
+        if (queued.size() >= 2)
+            return {ErrorCode::UnsupportedFeature, "attach_image limit reached for this turn"};
+        queued.push_back(std::move(image));
+        return ok_error();
+    };
+
+    agent::ReadToolRegistry tools;
+    check(agent::ReadToolRegistry::create(std::move(options), std::move(snapshot), {},
+                                          tools, tool_options)
+              .ok(),
+          "create registry with vision hooks");
+
+    bool has_attach = false;
+    for (const provider::FunctionDefinition& definition : tools.definitions()) {
+        if (definition.name == "attach_image") {
+            has_attach = true;
+            check(definition.parameters_json.find("path") != std::string::npos,
+                  "attach_image schema requires path");
+        }
+    }
+    check(has_attach, "agent registry advertises attach_image");
+
+    std::string result =
+        tools.execute("attach_image", R"JSON({"path":"shot.png"})JSON");
+    check(json_ok(result) && queued.size() == 1 &&
+              queued[0].mime_type == "image/png" && !queued[0].base64_data.empty(),
+          "attach_image queues a request-local PNG: " + result);
+
+    result = tools.execute("attach_image", R"JSON({"path":"missing.jpg"})JSON");
+    check(!json_ok(result), "attach_image rejects missing files");
+
+    result = tools.execute("attach_image", R"JSON({"path":"shot.png"})JSON");
+    check(json_ok(result) && queued.size() == 2, "second attach_image succeeds under limit");
+    result = tools.execute("attach_image", R"JSON({"path":"shot.png"})JSON");
+    check(!json_ok(result) && json_error_code(result) == "limit_exceeded",
+          "third attach_image hits per-turn limit");
+
+    // Image path via read_file should not invite Python/PIL.
+    result = tools.execute("read_file", R"JSON({"path":"shot.png"})JSON");
+    check(!json_ok(result) && result.find("attach_image") != std::string::npos,
+          "read_file on image points to attach_image");
+
+    agent::ReadToolRegistry readonly =
+        make_registry(workspace, agent::MutationPolicy::Disabled);
+    has_attach = false;
+    for (const provider::FunctionDefinition& definition : readonly.definitions()) {
+        if (definition.name == "attach_image") has_attach = true;
+    }
+    check(!has_attach, "read-only registry does not advertise attach_image");
+
+    std::error_code ec;
+    fs::remove_all(workspace, ec);
+}
+
 }  // namespace
 
 void run_all() {
@@ -2121,6 +2198,7 @@ void run_all() {
     test_git_and_network_tools_policy();
     test_plan_document_mutation_policy();
     test_goal_met_tool_hooks();
+    test_attach_image_tool_hooks();
 }
 
 }  // namespace ainiux::test::agent_file_tools

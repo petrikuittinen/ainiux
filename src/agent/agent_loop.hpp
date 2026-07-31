@@ -129,6 +129,25 @@ Error sanitize_round_continuation_for_history(provider::ApiKind api_kind,
 void append_conversation_text(provider::ToolConversation& conversation,
                               const std::string& role,
                               const std::string& content);
+
+// Follow-up user turn with optional image parts (Chat Completions content array).
+// When images is empty, behaves like append_conversation_text(..., "user", text).
+// Images are base64-only and ephemeral; call strip_conversation_images after the turn.
+void append_conversation_user_with_images(
+    provider::ToolConversation& conversation,
+    const std::string& text,
+    const std::vector<provider::ImageInput>& images);
+
+// Drop all image payloads from seed messages and collapse multimodal continuation
+// user items back to plain text. Safe to call when no images are present.
+void strip_conversation_images(provider::ToolConversation& conversation);
+
+// Attach images to the last user message in conversation.messages (seed goal path).
+// No-op when images is empty or no user message exists.
+void attach_images_to_last_user_message(
+    provider::ToolConversation& conversation,
+    const std::vector<provider::ImageInput>& images);
+
 // Request-only context is serialized like a continuation message, but callers
 // remove it after the active user turn so it never accumulates in history.
 std::size_t append_request_only_context(

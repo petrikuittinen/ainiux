@@ -254,6 +254,12 @@ void AgentSessionRuntime::publish_request_token_estimate() {
     for (const provider::Message& message : conversation_.messages) {
         total += estimate_tokens_from_text(message.role);
         total += estimate_tokens_from_text(message.content);
+        for (const provider::ImageInput& image : message.images) {
+            // Rough byte-based estimate; vision models often charge more per image.
+            total += estimate_tokens_from_text(image.base64_data);
+            total += estimate_tokens_from_text(image.mime_type);
+            total += 16;
+        }
         total += 4;
     }
     for (const std::string& item : conversation_.continuation_items_json) {
@@ -1626,7 +1632,7 @@ Error AgentSessionRuntime::finish_session(const std::string& status,
 
 SessionTurnResult AgentSessionRuntime::run_user_turn(
     provider::RequestContext& context,
-    const std::string& user_text,
+    UserTurnPayload payload,
     runtime::CancellationToken cancellation,
     std::function<bool()> interrupted,
     std::function<void(const std::string& status_line)> on_progress,
@@ -1645,13 +1651,95 @@ SessionTurnResult AgentSessionRuntime::run_user_turn(
         std::atomic<bool>& active;
         ~ReleaseOperation() { active.store(false); }
     } release_operation{operation_active_};
-    const std::string text = ascii_trim(user_text);
+    // Always drop image payloads when leaving this turn (success, error, cancel).
+    struct StripTurnImages {
+        provider::ToolConversation& conversation;
+        bool armed = true;
+        ~StripTurnImages() {
+            if (armed) strip_conversation_images(conversation);
+        }
+    } strip_images{conversation_};
+    std::string text = ascii_trim(payload.text);
+    if (text.empty() && !payload.images.empty()) {
+        text = payload.images.size() == 1 ? "See attached image."
+                                          : "See attached images.";
+    }
     if (text.empty()) {
         result.error = {ErrorCode::BadArgs, "agent turn requires a non-empty user message"};
         return result;
     }
+    if (!payload.images.empty()) {
+        Error image_error = provider::validate_image_input(context);
+        if (!image_error.ok()) {
+            result.error = image_error;
+            return result;
+        }
+        for (const provider::ImageInput& image : payload.images) {
+            if (image.mime_type.empty() || image.base64_data.empty()) {
+                result.error = {
+                    ErrorCode::FileRead,
+                    "image attachment data is unavailable" +
+                        (image.display_name.empty() ? std::string()
+                                                    : ": " + image.display_name)};
+                return result;
+            }
+        }
+    }
+    // attach_image tool: queue request-local images and inject after each tool round.
+    std::vector<provider::ImageInput> pending_tool_images;
+    std::size_t tool_images_attached = 0;
+    const std::size_t max_tool_images_per_turn = 4;
+    const std::size_t max_image_bytes =
+        context.options.max_image_bytes > 0
+            ? static_cast<std::size_t>(context.options.max_image_bytes)
+            : 20U * 1024U * 1024U;
+    {
+        VisionAttachHooks vision;
+        vision.max_image_bytes = max_image_bytes;
+        vision.max_images_per_turn = max_tool_images_per_turn;
+        vision.validate_capability = [&context]() -> Error {
+            return provider::validate_image_input(context);
+        };
+        vision.queue_image = [&](provider::ImageInput image) -> Error {
+            if (tool_images_attached >= max_tool_images_per_turn) {
+                return {ErrorCode::UnsupportedFeature,
+                        "attach_image limit reached for this turn (max " +
+                            std::to_string(max_tool_images_per_turn) +
+                            "); finish the turn or continue without more images"};
+            }
+            if (image.mime_type.empty() || image.base64_data.empty()) {
+                return {ErrorCode::FileRead, "attach_image produced empty image data"};
+            }
+            Error capability = provider::validate_image_input(context);
+            if (!capability.ok()) return capability;
+            pending_tool_images.push_back(std::move(image));
+            ++tool_images_attached;
+            return ok_error();
+        };
+        tools_.set_vision_hooks(std::move(vision));
+    }
+    // Lambdas above capture stack state; clear hooks on every exit path.
+    struct ClearVisionHooks {
+        ReadToolRegistry& tools;
+        ~ClearVisionHooks() { tools.set_vision_hooks({}); }
+    } clear_vision_hooks{tools_};
+    auto flush_pending_tool_images = [&]() {
+        if (pending_tool_images.empty()) return;
+        std::string note = "[Vision attachment for subsequent model rounds of this turn]";
+        if (pending_tool_images.size() == 1 &&
+            !pending_tool_images.front().display_name.empty()) {
+            note += "\n" + pending_tool_images.front().display_name;
+        } else {
+            for (const provider::ImageInput& image : pending_tool_images) {
+                if (image.display_name.empty()) continue;
+                note += "\n- " + image.display_name;
+            }
+        }
+        append_conversation_user_with_images(conversation_, note, pending_tool_images);
+        pending_tool_images.clear();
+        publish_request_token_estimate();
+    };
     reset_agent_loop_for_user_turn(state_);
-
     result.turn_started_ms = now_unix_ms();
     // Prefer the per-turn callback (TUI streaming); fall back to prepare-time options.
     auto progress = [&](const std::string& line) {
@@ -1761,10 +1849,12 @@ SessionTurnResult AgentSessionRuntime::run_user_turn(
                 std::cerr << "Injected prior agent transcript (" << prior.size()
                           << " stored messages) into model context.\n";
         }
+        attach_images_to_last_user_message(conversation_, payload.images);
         conversation_seeded_ = true;
         if (goal_is_active(goal_)) inject_active_goal_control(false);
         publish_request_token_estimate();
         if (session_store_.is_open() && session_id_ > 0) {
+            // Durable transcript is text-only (image bytes never leave RAM).
             Error message_error =
                 session_store_.append_message("user", redact_secrets(text, secrets_));
             if (!message_error.ok() && !context.options.quiet)
@@ -1777,6 +1867,10 @@ SessionTurnResult AgentSessionRuntime::run_user_turn(
                       << " with protocol "
                       << (state_.protocol == ToolProtocol::Xml ? "xml" : "native")
                       << " (" << agent_task_mode_name(task_mode_) << " tools).\n";
+            if (!payload.images.empty()) {
+                std::cerr << "Attached " << payload.images.size()
+                          << " image(s) for this turn only (not stored).\n";
+            }
             if (!agents_md_.documents.empty()) {
                 std::cerr << "Loaded project AGENTS.md (" << agents_md_.total_bytes << " bytes";
                 if (agents_md_.truncated) std::cerr << ", truncated";
@@ -1788,7 +1882,7 @@ SessionTurnResult AgentSessionRuntime::run_user_turn(
         // user turns must append there so serialize_tool_request places them
         // after prior tool results (not between the seed goal and tools).
         if (goal_is_active(goal_)) inject_active_goal_control(false);
-        append_conversation_text(conversation_, "user", text);
+        append_conversation_user_with_images(conversation_, text, payload.images);
         publish_request_token_estimate();
         if (session_store_.is_open() && session_id_ > 0) {
             Error message_error =
@@ -2237,6 +2331,9 @@ SessionTurnResult AgentSessionRuntime::run_user_turn(
             // Any tool round (including failed) resets the tool-less stall counter.
             consecutive_tool_less_finals = 0;
             if (goal_.status == GoalStatus::Complete) goal_completed_this_turn = true;
+            // Inject attach_image payloads after tool results so the next model
+            // round sees multimodal content (still stripped at end of turn).
+            flush_pending_tool_images();
             continue;
         }
 

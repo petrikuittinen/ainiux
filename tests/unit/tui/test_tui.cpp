@@ -1260,9 +1260,8 @@ void test_tui_agent_history_chrome() {
 }
 
 void test_agent_shell_notice_preserves_listing_newlines() {
-    // Prose reflow joins consecutive non-blank lines into paragraphs. Shell
-    // notices (and other preformatted agent rows) must keep physical newlines
-    // so `ls -la` stays readable under /width and justify modes.
+    // Chat/agent history does not apply prose reflow. Shell notices must keep
+    // physical newlines so `ls -la` stays readable.
     ainiux::chat::Session session;
     const std::string listing =
         "$ ls -laFg\n"
@@ -1273,12 +1272,9 @@ void test_agent_shell_notice_preserves_listing_newlines() {
         "-rwxrwxr-x 1 eye 2122 Jul 31 17:30 server.sh*\n";
     session.messages.push_back({"notice", listing});
 
-    ainiux::tui::detail::HistoryTextLayout layout;
-    layout.width = 48;
-    layout.mode = ainiux::editor::TextAlignMode::Justify;
     const std::vector<ainiux::tui::StyledLine> lines =
         ainiux::tui::detail::history_lines_for_session(
-            session, 80, false, ainiux::tui::ActivityKind::None, 0, true, true, layout);
+            session, 80, false, ainiux::tui::ActivityKind::None, 0, true, true);
 
     std::string joined;
     for (const auto& line : lines) {

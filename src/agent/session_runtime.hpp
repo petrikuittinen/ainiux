@@ -206,17 +206,38 @@ class AgentSessionRuntime {
     Error switch_permission_mode(PermissionMode mode,
                                  const provider::RequestContext& context);
 
+    // One user submit for the agent tool loop. Images are request-local: included
+    // on every model round of this turn, then stripped from the live conversation.
+    // They are never written to agent.sqlite or project media.
+    struct UserTurnPayload {
+        std::string text;
+        std::vector<provider::ImageInput> images;
+    };
+
     // Run one user goal/follow-up until FinalText, NeedsUserContinue, abort, or error.
     // First turn seeds the tool conversation; later turns append a user message.
     // Optional on_progress receives compact tool lines (and brief notices) as they
     // happen so interactive UIs can stream them without waiting for the final answer.
     SessionTurnResult run_user_turn(
         provider::RequestContext& context,
-        const std::string& user_text,
+        UserTurnPayload payload,
         runtime::CancellationToken cancellation = runtime::CancellationToken(),
         std::function<bool()> interrupted = {},
         std::function<void(const std::string& status_line)> on_progress = {},
         std::function<void(const AgentProgressUpdate&)> on_structured_progress = {});
+
+    // Text-only convenience overload (headless --run / tests).
+    SessionTurnResult run_user_turn(
+        provider::RequestContext& context,
+        const std::string& user_text,
+        runtime::CancellationToken cancellation = runtime::CancellationToken(),
+        std::function<bool()> interrupted = {},
+        std::function<void(const std::string& status_line)> on_progress = {},
+        std::function<void(const AgentProgressUpdate&)> on_structured_progress = {}) {
+        return run_user_turn(context, UserTurnPayload{user_text, {}}, cancellation,
+                             std::move(interrupted), std::move(on_progress),
+                             std::move(on_structured_progress));
+    }
 
     // Compact only the model-visible request projection. The durable transcript
     // remains complete. Manual compaction bypasses the configured threshold.

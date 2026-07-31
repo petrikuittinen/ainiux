@@ -12,7 +12,7 @@
 #include "agent/compact.hpp"
 #include "agent/approval.hpp"
 #include "editor/editor.hpp"
-#include "editor/text_layout.hpp"
+
 #include "provider/provider.hpp"
 #include "tui/events.hpp"
 #include "tui/theme_registry.hpp"
@@ -101,9 +101,6 @@ struct TuiCommandContext {
     int& history_scroll;
     bool& show_thinking_traces;
     bool& syntax_highlight;
-    // Chat/agent history display reflow (session override of config default).
-    long long& history_align_width;  // -1 = unlimited
-    editor::TextAlignMode& history_align_mode;
     const ThemeRegistry& themes;
     std::string& theme;
     bool use_colors = true;

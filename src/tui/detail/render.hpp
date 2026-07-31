@@ -6,7 +6,7 @@
 #include "chat/session.hpp"
 #include "common.hpp"
 #include "editor/editor.hpp"
-#include "editor/text_layout.hpp"
+
 #include "tui/events.hpp"
 #include "tui/detail/frame_buffer.hpp"
 #include "tui/theme_registry.hpp"
@@ -43,21 +43,13 @@ std::string format_line(int row,
 std::string error_line(const Error& error);
 StyleRole status_role_for_text(const std::string& status);
 
-// Chat/agent history prose layout (display-only; does not rewrite transcripts).
-// width = -1 means unlimited (no reflow); positive values reflow to that column count.
-struct HistoryTextLayout {
-    long long width = -1;
-    editor::TextAlignMode mode = editor::TextAlignMode::Left;
-};
-
 std::vector<StyledLine> history_lines_for_session(const chat::Session& session,
                                                   int cols,
                                                   bool show_thinking_traces,
                                                   ActivityKind activity_kind = ActivityKind::None,
                                                   size_t activity_frame = 0,
                                                   bool markdown_highlight = true,
-                                                  bool agent_mode = false,
-                                                  HistoryTextLayout text_layout = {});
+                                                  bool agent_mode = false);
 std::vector<StyledLine> panel_lines_for_text(const std::string& text,
                                                TuiMode mode,
                                                int cols,
@@ -81,7 +73,6 @@ void render(const chat::Session& session,
             TerminalFrameRenderer& frame_renderer,
             const char* panel_title_override = nullptr,
             bool agent_mode = false,
-            const AgentChrome& agent_chrome = AgentChrome{},
-            HistoryTextLayout text_layout = {});
+            const AgentChrome& agent_chrome = AgentChrome{});
 
 }  // namespace ainiux::tui::detail
