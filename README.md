@@ -61,8 +61,11 @@ Start the saved-thread chat interface with `-c`:
 ainiux lmstudio -c
 ```
 
-<!-- Future screenshot: docs/screenshots/chat-main.png -->
-<!-- Future screenshot: docs/screenshots/chat-thread-library.png -->
+![Ainiux chat interface](docs/aíniux_chat.png)
+
+![Provider selector](docs/ainiux_provider_selector.png)
+
+![Model selector](docs/ainux_model_selector.png)
 
 Open the standalone editor with `-e`. Provider `none` keeps it completely offline:
 
@@ -70,8 +73,9 @@ Open the standalone editor with `-e`. Provider `none` keeps it completely offlin
 ainiux none -e notes.md
 ```
 
-<!-- Future screenshot: docs/screenshots/editor-main.png -->
-<!-- Future screenshot: docs/screenshots/editor-ai-assist.png -->
+![Standalone editor](docs/ainux_editor.png)
+
+![Split-screen editor](docs/ainiux_editor_split_screen.png.png)
 
 Start an interactive project agent with `-a`:
 
@@ -79,7 +83,11 @@ Start an interactive project agent with `-a`:
 ainiux deepseek -m MODEL -a
 ```
 
-<!-- Future screenshot: docs/screenshots/agent-main.png -->
+![Interactive agent](docs/ainiux_agent.png)
+
+![Agent code editing](docs/ainux_agent_code_edit.png)
+
+![Agent code index summary](docs/ainiux_local_agent.png)
 
 Chat, editor, and agent share terminal presentation and selectors, but not semantics. Switch explicitly with `/chat`, `/editor`, `/agent`, `/mode`, `/cycle`, or `Ctrl+G`. The agent finishes its project session and disarms tools when you leave it.
 
