@@ -2,22 +2,22 @@
 
 ![Ainiux logo](docs/ainiux_logo.png)
 
-Ainiux is a C++17 command-line and terminal client for OpenAI and OpenAI-compatible APIs. It combines a script-friendly chat CLI, a full-screen chat client, a standalone editor with optional AI assistance, local agent workflows, document conversion, benchmarks, and judge grading in one binary.
+Ainiux is a C++17 command-line and terminal client for OpenAI and OpenAI-compatible APIs. It combines a script-friendly chat CLI, a full-screen chat client, a standalone editor with optional AI assistance, local agent workflows, document conversion, benchmarks, and judge grading in one binary. You can freely cycle between the modes from chat/agent to editor by pressing ctrl+g. One binary to rule them all.
 
-The core request, provider, streaming, cancellation, persistence, and error-handling layers are shared across these surfaces. You can use a local server such as LM Studio or Ollama, a supported cloud provider, or a custom OpenAI-compatible endpoint. Offline editing and conversion do not require a model.
+You can use a local server such as LM Studio, llama-server, vllm or Ollama, a supported cloud provider such as OpenRouter, Google, Anthropic or Deepseek, or a custom OpenAI-compatible endpoint. Offline editing and conversion do not require a model.
 
 Current release: **v1.15**. See the [version history](docs/version-history.md) for earlier releases and [PLANS.md](PLANS.md) for unfinished work.
 
-The name began with the author’s child Aini and echoes the Chinese phrase *ài nǐ* (“love you”). The command and project spelling is `ainiux`.
+The name began with the author’s child Aini and echoes the Chinese phrase 爱你 *ài nǐ* (“love you”). The command and project spelling is `ainiux`.
 
 ## Why use it?
 
 - **Useful in scripts.** Model output goes to `stdout`; status and errors go to `stderr`. Text, JSON, and streaming event formats are available.
 - **Local and cloud providers share one interface.** Provider profiles supply endpoint, authentication, and capability defaults without spreading provider-specific behavior through the UI.
-- **The editor is a product mode.** It has multiple buffers, split panes, grapheme-aware navigation, syntax highlighting, file locking, local layout tools, and configurable AI commands.
+- **Fully Featured Text and Code Editor.** It has multiple buffers, split panes, grapheme-aware navigation, syntax highlighting, file locking, local layout tools, and configurable AI commands.
 - **Interactive work stays responsive.** HTTP, streaming, conversion, benchmarks, and agent work run as cancellable jobs.
-- **Agent tools are separate from chat.** `-c` is ordinary conversation. `-a` opens the project-local agent with explicit permissions, Guard checks, Act/Plan policies, and logged tool activity.
-- **The implementation stays small and portable.** Ainiux uses C++17, a Makefile, libcurl, SQLite, POSIX terminal APIs, and ANSI rendering. It does not require Electron, a browser, or ncurses.
+- **Agent tools are separate from chat.** `-c` is ordinary conversation. `-a` opens the project-local agent with explicit permissions, built-in guard against destructive commands, Act/Plan policies, and logged tool activity.
+- **The implementation stays small and portable.** Ainiux uses C++17, a Makefile, libcurl, SQLite, POSIX terminal APIs, and ANSI rendering. It does not require Electron, a browser, or ncurses. And it won't eat all of your RAM.
 
 ## Platform support
 
@@ -80,7 +80,7 @@ ainiux none -e notes.md
 Start an interactive project agent with `-a`:
 
 ```sh
-ainiux deepseek -m MODEL -a
+ainiux deepseek -m "deepseek-v4-flash" -a
 ```
 
 ![Interactive agent](docs/ainiux_agent.png)
@@ -90,6 +90,10 @@ ainiux deepseek -m MODEL -a
 ![Agent code index summary](docs/ainiux_local_agent.png)
 
 Chat, editor, and agent share terminal presentation and selectors, but not semantics. Switch explicitly with `/chat`, `/editor`, `/agent`, `/mode`, `/cycle`, or `Ctrl+G`. The agent finishes its project session and disarms tools when you leave it.
+
+I have tested Ainiux using mostly the following local models: Qwen3.6-35B-A3B, Qwen3.6-27B, Gemma-4-26-A4B and Gemma-4-31B.
+
+From cloud models I have mostly relied on Deepseek-V4-Flash via official Deepseek API and lots of models Openrouter e.g. gpt-5.6-luna to gpt-5.6-sol to gemini-3.6-flash and gemini-3.5-lite.
 
 ## Current v1.15 capabilities
 
@@ -109,7 +113,7 @@ ainiux --fetch-url https://example.com --output-format plaintext
 printf 'piped text' | ainiux --input stdin --output stdout
 ```
 
-Text, Markdown, and HTML can be attached with `--attach`. PNG, JPEG, and GIF input is available through compatible Chat Completions models. PDF and DOCX conversion are not implemented. URL fetching happens only when explicitly requested with `--fetch-url` or `/fetch`; a URL inside a prompt never triggers a fetch. Private, loopback, link-local, multicast, and metadata addresses are blocked unless explicitly allowed.
+Text, Markdown, and HTML can be attached with `--attach`. PNG, JPEG, and GIF input is available through compatible Chat Completions models. PDF and DOCX conversion are not yet implemented. URL fetching happens only when explicitly requested with `--fetch-url` or `/fetch`; a URL inside a prompt never triggers a fetch. Private, loopback, link-local, multicast, and metadata addresses are blocked unless explicitly allowed.
 
 Web search supports API providers and keyless fallbacks:
 
@@ -135,7 +139,7 @@ Saved chat data and project agent data are deliberately separated. Removing or m
 
 The editor is usable with or without AI. It supports multiple buffers, horizontal and vertical splits, advisory file locks, external-change checks, auto-save backups, undo/redo, search/replace, word and path completion, syntax highlighting, reformatting, Unicode grapheme navigation, terminal cell-width rendering, and preserved line endings.
 
-When idle, `Ctrl+E`, `Esc`, or `Alt+X` opens the command minibuffer. `Ctrl+Space` runs mode-aware continuation, and `Ctrl+R` regenerates the previous AI assist. `/spell`, `/grammar`, `/rewrite`, translations, and other commands come from layered `editor-commands.conf` files. Local `/left-align`, `/right-align`, `/center-align`, `/justify`, and line-cleanup commands work offline.
+When idle, `Ctrl+E`, `Esc`, or `Alt+X` opens the command minibuffer. `Ctrl+Space` runs mode-aware continuation, and `Ctrl+R` regenerates the previous AI assist. `/spell`, `/grammar`, `/rewrite`, translations, and other commands come from layered `editor-commands.conf` files. Local `/left-align`, `/right-align`, `/center-align`, `/justify`, and line-cleanup commands work offline. You can TAB complete any command.
 
 See the detailed [editor help](docs/editor_help.md) and [keyboard reference](docs/keyboard-shortcuts.md).
 
