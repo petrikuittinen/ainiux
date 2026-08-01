@@ -144,6 +144,9 @@ struct RegenerationPlan {
 RegenerationPlan regeneration_plan_for_session(const chat::Session& session);
 bool last_unanswered_user_message(const chat::Session& session, std::size_t& index);
 bool last_editable_chat_message(const chat::Session& session, std::size_t& index);
+bool copy_last_chat_message(const chat::Session& session,
+                            editor::Clipboard& clipboard,
+                            std::string& copied_role);
 bool pop_last_chat_message(chat::Session& session, std::string& removed_role);
 ainiux::app::TuiRunResult run(provider::RequestContext context,
                               chat::Session session,

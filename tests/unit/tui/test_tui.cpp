@@ -24,6 +24,7 @@
 #include "tui/detail/frame_buffer.hpp"
 #include "tui/tui.hpp"
 #include "tui/detail/render.hpp"
+#include "ui/scrollbar.hpp"
 #include <algorithm>
 #include <chrono>
 #include <iostream>
@@ -109,19 +110,30 @@ void test_shared_tui_render_skips_identical_frame() {
     ainiux::tui::detail::render(
         session, input, status, history_scroll, false,
         ainiux::tui::TuiMode::Chat, "", ainiux::tui::ActivityKind::None,
-        0, false, {nullptr, "dark", false}, renderer);
+        0, false, true, {nullptr, "dark", false}, renderer);
     const std::string first = output.str();
     output.str("");
     output.clear();
     ainiux::tui::detail::render(
         session, input, status, history_scroll, false,
         ainiux::tui::TuiMode::Chat, "", ainiux::tui::ActivityKind::None,
-        0, false, {nullptr, "dark", false}, renderer);
+        0, false, true, {nullptr, "dark", false}, renderer);
     const std::string second = output.str();
+    output.str("");
+    output.clear();
+    ainiux::tui::detail::render(
+        session, input, status, history_scroll, false,
+        ainiux::tui::TuiMode::Chat, "", ainiux::tui::ActivityKind::None,
+        0, false, false, {nullptr, "dark", false}, renderer);
+    const std::string hidden_scrollbar = output.str();
     std::cout.rdbuf(previous);
 
     check(!first.empty() && second.empty(),
           "shared chat/agent TUI renderer emits nothing for an identical idle frame");
+    check(!hidden_scrollbar.empty() &&
+              hidden_scrollbar.find(ainiux::ui::kScrollbarThumbGlyph) == std::string::npos &&
+              hidden_scrollbar.find(ainiux::ui::kScrollbarTrackGlyph) == std::string::npos,
+          "shared chat/agent TUI renderer replaces a hidden scrollbar with blank cells");
 }
 
 void test_tui_provider_change_resets_only_on_actual_change() {
@@ -730,6 +742,29 @@ void test_tui_last_editable_chat_message_finds_last_user_or_assistant() {
     session.messages.push_back({"user", "second"});
     check(ainiux::tui::last_editable_chat_message(session, index) && index == 3,
           "TUI history edit helper selects the last user message");
+}
+
+void test_tui_copy_last_chat_message_uses_raw_transcript_text() {
+    ainiux::chat::Session session;
+    ainiux::editor::Clipboard clipboard;
+    std::string copied_role = "stale";
+    check(!ainiux::tui::copy_last_chat_message(session, clipboard, copied_role) &&
+              clipboard.empty() && copied_role.empty(),
+          "TUI history copy rejects an empty session");
+
+    session.messages.push_back({"user", "question"});
+    session.messages.push_back(
+        {"assistant", "first logical line\nsecond line with █ and ░ text"});
+    session.messages.push_back({"notice", "display-only row"});
+    check(ainiux::tui::copy_last_chat_message(session, clipboard, copied_role) &&
+              copied_role == "assistant" &&
+              clipboard.text() == "first logical line\nsecond line with █ and ░ text",
+          "TUI history copy preserves raw message newlines and ignores display-only rows");
+
+    session.messages.push_back({"user", ""});
+    check(!ainiux::tui::copy_last_chat_message(session, clipboard, copied_role) &&
+              copied_role.empty(),
+          "TUI history copy rejects an empty last message without replacing the clipboard");
 }
 
 void test_tui_pop_last_chat_message_removes_user_or_assistant_only() {
@@ -1972,6 +2007,7 @@ void run_all() {
     test_tui_handle_escape_plain_pageup_moves_input();
     test_tui_last_unanswered_user_message_requires_final_user();
     test_tui_last_editable_chat_message_finds_last_user_or_assistant();
+    test_tui_copy_last_chat_message_uses_raw_transcript_text();
     test_tui_pop_last_chat_message_removes_user_or_assistant_only();
     test_tui_regeneration_plan_uses_last_user_turn();
     test_tui_theme_parsing_and_contrast();

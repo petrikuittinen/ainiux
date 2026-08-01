@@ -124,7 +124,8 @@ void render_terminal(EditorState& state,
                      tui::detail::TerminalFrameRenderer& frame_renderer,
                      const TerminalThemeStyle& theme_style = {},
                      bool help_view = false,
-                     const EditorAssistDisplay* assist_display = nullptr);
+                     const EditorAssistDisplay* assist_display = nullptr,
+                     bool show_scrollbars = true);
 
 // Multi-pane editor layout. panes come from SplitLayout::layout_panes(editor_main_area()).
 // buffer_at(index) must return the EditorState for that buffer index; the focused buffer
@@ -138,7 +139,8 @@ void render_terminal_splits(
     const TerminalThemeStyle& theme_style = {},
     bool help_view = false,
     const EditorAssistDisplay* assist_display = nullptr,
-    size_t pane_count_hint = 1);
+    size_t pane_count_hint = 1,
+    bool show_scrollbars = true);
 
 void render_terminal_panel(EditorState& state,
                            const MinibufferState& minibuffer,

@@ -8,6 +8,7 @@
 #include "ainiux/model_setting.hpp"
 #include "tui/detail/render.hpp"
 #include "tui/theme_registry.hpp"
+#include "ui/scrollbar.hpp"
 
 namespace ainiux::tui {
 
@@ -23,6 +24,7 @@ bool allowed_for_read_only_thread(const std::string& text) {
            text.rfind("/load ", 0) == 0 || text == "/theme" ||
            text.rfind("/theme ", 0) == 0 || text == "/highlight" ||
            text.rfind("/highlight ", 0) == 0 ||
+           text == "/scrollbar" || text.rfind("/scrollbar ", 0) == 0 ||
            text == "/shell" || text.rfind("/shell ", 0) == 0 ||
            text == "/shell-stdout" || text.rfind("/shell-stdout ", 0) == 0;
 }
@@ -188,6 +190,7 @@ void handle_tui_command(const std::string& text, TuiCommandContext& ctx, TuiComm
             ctx.settings_text.clear();
             ctx.help_text =
                 "/help or Ctrl+H (hide/show this panel)\n"
+                "Ctrl+C (copy input selection, or last message when none)\n"
                 "/quit or /exit\n"
                 "/clear\n"
                 "/edit\n"
@@ -230,6 +233,7 @@ void handle_tui_command(const std::string& text, TuiCommandContext& ctx, TuiComm
                 "/shell COMMAND  or  !COMMAND (user shell; display-only notice)\n"
                 "/shell-stdout COMMAND  or  !!COMMAND (stdout → editable input draft)\n"
                 "/theme [THEME]\n"
+                "/scrollbar [show|hide] (Ctrl+O toggles)\n"
                 "/highlight [on|off]\n"
                 "/thinking [show|hide]\n"
                 "/editor (switch to editor mode)\n"
@@ -343,6 +347,17 @@ void handle_tui_command(const std::string& text, TuiCommandContext& ctx, TuiComm
             ctx.theme = theme_result.selected_theme;
         }
         if (theme_result.ok) ctx.use_colors = theme_result.colors_enabled;
+        return;
+    }
+    if (text == "/scrollbar" || text.rfind("/scrollbar ", 0) == 0) {
+        const std::string requested =
+            app::detail::trim_ascii(text.size() <= 10 ? "" : text.substr(10));
+        const ui::ScrollbarVisibilityResult result =
+            ui::handle_scrollbar_visibility(requested, ctx.show_scrollbars);
+        if (result.ok) {
+            ctx.show_scrollbars = result.visible;
+        }
+        ctx.status = result.message;
         return;
     }
     if (text == "/editor") {

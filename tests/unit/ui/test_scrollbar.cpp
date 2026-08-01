@@ -103,6 +103,23 @@ void test_scrollbar_equal_viewports_equal_thumb_height() {
           "equal viewports: thumb position tracks scroll offset");
 }
 
+void test_scrollbar_visibility_command() {
+    ainiux::ui::ScrollbarVisibilityResult result =
+        ainiux::ui::handle_scrollbar_visibility("", true);
+    check(result.ok && result.visible && result.message == "Scrollbar: show",
+          "visibility: bare command reports shown state");
+
+    result = ainiux::ui::handle_scrollbar_visibility("hide", true);
+    check(result.ok && !result.visible && result.message == "Scrollbar hidden",
+          "visibility: hide disables the scrollbar");
+    result = ainiux::ui::handle_scrollbar_visibility("show", false);
+    check(result.ok && result.visible && result.message == "Scrollbar shown",
+          "visibility: show enables the scrollbar");
+    result = ainiux::ui::handle_scrollbar_visibility("off", true);
+    check(!result.ok && result.visible && result.message == "Usage: /scrollbar show|hide",
+          "visibility: noncanonical values are rejected without changing state");
+}
+
 }  // namespace
 
 void run_scrollbar_tests() {
@@ -116,6 +133,7 @@ void run_scrollbar_tests() {
     test_scrollbar_glyphs();
     test_scrollbar_clamps_overscroll();
     test_scrollbar_equal_viewports_equal_thumb_height();
+    test_scrollbar_visibility_command();
 }
 
 }  // namespace ainiux::test::ui

@@ -104,6 +104,7 @@ struct TuiCommandContext {
     const ThemeRegistry& themes;
     std::string& theme;
     bool& use_colors;
+    bool& show_scrollbars;
     ActiveJob& active_job;
     TuiMode& mode;
     size_t input_undo_limit = 0;

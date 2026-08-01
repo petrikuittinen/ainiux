@@ -1275,7 +1275,8 @@ void render_terminal(EditorState& state,
                      tui::detail::TerminalFrameRenderer& frame_renderer,
                      const TerminalThemeStyle& theme_style,
                      bool help_view,
-                     const EditorAssistDisplay* assist_display) {
+                     const EditorAssistDisplay* assist_display,
+                     bool show_scrollbars) {
     SplitPaneRect single;
     single.buffer_index = 0;
     single.leaf_index = 0;
@@ -1290,7 +1291,8 @@ void render_terminal(EditorState& state,
         theme_style,
         help_view,
         assist_display,
-        1);
+        1,
+        show_scrollbars);
 }
 
 void render_terminal_splits(
@@ -1302,7 +1304,8 @@ void render_terminal_splits(
     const TerminalThemeStyle& theme_style,
     bool help_view,
     const EditorAssistDisplay* assist_display,
-    size_t pane_count_hint) {
+    size_t pane_count_hint,
+    bool show_scrollbars) {
     const TerminalSize size = terminal_size();
     const int rows = std::max(3, size.rows);
     const int cols = std::max(20, size.cols);
@@ -1318,7 +1321,7 @@ void render_terminal_splits(
             continue;
         }
         const Rect content_rect = editor_content_rect(pane.rect);
-        const bool show_scrollbar = pane.rect.width >= 2;
+        const bool show_scrollbar = show_scrollbars && pane.rect.width >= 2;
         const EditorState* source = &buffer_at(pane.buffer_index);
         if (pane.focused) {
             source = &focused_state;

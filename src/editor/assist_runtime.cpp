@@ -190,6 +190,7 @@ std::vector<std::string> chat_assist_command_completions(const EditorAssistConfi
         "/response",
         "/save ",
         "/search ",
+        "/scrollbar ",
         "/setting",
         "/setting ",
         "/system",

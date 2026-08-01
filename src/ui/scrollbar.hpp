@@ -17,6 +17,17 @@ struct ScrollbarMetrics {
     bool content_fits = true;
 };
 
+struct ScrollbarVisibilityResult {
+    bool ok = false;
+    bool visible = true;
+    std::string message;
+};
+
+// Parse the process-local /scrollbar setting. An empty request reports the
+// current value without changing it; accepted values are strictly show/hide.
+ScrollbarVisibilityResult handle_scrollbar_visibility(const std::string& requested,
+                                                       bool currently_visible);
+
 // Windows-style vertical scrollbar geometry.
 // content_height = total scrollable rows, viewport_height = visible rows,
 // scroll_offset = top-most visible content row (0 = top).

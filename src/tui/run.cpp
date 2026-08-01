@@ -166,9 +166,11 @@ app::TuiRunResult run(provider::RequestContext context,
     std::string theme = "dark";
     context.options.tui_themes.normalize_name(context.options.tui_theme, theme);
     bool use_colors = !context.options.no_colors;
+    bool show_scrollbars = true;
     if (interactive != nullptr) {
         context.options.tui_themes.normalize_name(interactive->theme_name, theme);
         use_colors = interactive->use_colors;
+        show_scrollbars = interactive->show_scrollbars;
     }
     bool quit = false;
     app::InteractiveUiTarget leave_target = app::InteractiveUiTarget::Quit;
@@ -2194,6 +2196,7 @@ app::TuiRunResult run(provider::RequestContext context,
                                       context.options.tui_themes,
                                       theme,
                                       use_colors,
+                                      show_scrollbars,
                                       active_job,
                                       mode,
                                       input_undo_limit,
@@ -2741,7 +2744,7 @@ app::TuiRunResult run(provider::RequestContext context,
     detail::TerminalFrameRenderer terminal_frame_renderer;
     ActivityKind activity_kind = ActivityKind::None;
     detail::render(session, input, status, history_scroll, show_thinking_traces, mode, visible_panel,
-                   activity_kind, render_frame, syntax_highlight,
+                   activity_kind, render_frame, syntax_highlight, show_scrollbars,
                    detail::RenderStyle{&context.options.tui_themes, theme, use_colors},
                    terminal_frame_renderer, panel_title(), context.options.agent,
                    build_agent_chrome());
@@ -3760,9 +3763,20 @@ app::TuiRunResult run(provider::RequestContext context,
                     continue;
                 }
                 if (ch == 3) {
-                    Error copy_error = input.copy_selection(editor::shared_clipboard());
-                    if (copy_error.ok()) publish_internal_clipboard();
-                    status = copy_error.ok() ? "Copied selection" : copy_error.message;
+                    if (input.selection.has_range()) {
+                        Error copy_error = input.copy_selection(editor::shared_clipboard());
+                        if (copy_error.ok()) publish_internal_clipboard();
+                        status = copy_error.ok() ? "Copied selection" : copy_error.message;
+                    } else {
+                        std::string copied_role;
+                        if (copy_last_chat_message(
+                                session, editor::shared_clipboard(), copied_role)) {
+                            publish_internal_clipboard();
+                            status = "Copied last " + copied_role + " message";
+                        } else {
+                            status = "No user or assistant message to copy";
+                        }
+                    }
                     continue;
                 }
                 if (ch == 8) {
@@ -3816,6 +3830,11 @@ app::TuiRunResult run(provider::RequestContext context,
                 }
                 if (ch == 20) {
                     cycle_reasoning();
+                    continue;
+                }
+                if (ch == 15 && mode == TuiMode::Chat) {
+                    show_scrollbars = !show_scrollbars;
+                    status = show_scrollbars ? "Scrollbar shown" : "Scrollbar hidden";
                     continue;
                 }
                 if (ch == 19) {
@@ -3899,7 +3918,7 @@ app::TuiRunResult run(provider::RequestContext context,
                 .count() /
             200);
         detail::render(session, input, status, history_scroll, show_thinking_traces, mode, visible_panel,
-                       activity_kind, render_frame, syntax_highlight,
+                       activity_kind, render_frame, syntax_highlight, show_scrollbars,
                        detail::RenderStyle{&context.options.tui_themes, theme, use_colors},
                        terminal_frame_renderer, panel_title(), context.options.agent,
                        build_agent_chrome());
@@ -3954,6 +3973,7 @@ app::TuiRunResult run(provider::RequestContext context,
             interactive->highlight_enabled = syntax_highlight;
             interactive->theme_name = theme;
             interactive->use_colors = use_colors;
+            interactive->show_scrollbars = show_scrollbars;
         }
         return {0, leave_target};
     }

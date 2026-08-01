@@ -62,6 +62,7 @@ struct InteractiveSession {
     bool highlight_enabled = true;
     std::string theme_name = "dark";
     bool use_colors = true;
+    bool show_scrollbars = true;
 };
 
 struct EditorRunResult {

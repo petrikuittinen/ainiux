@@ -4,6 +4,22 @@
 
 namespace ainiux::ui {
 
+ScrollbarVisibilityResult handle_scrollbar_visibility(const std::string& requested,
+                                                       bool currently_visible) {
+    if (requested.empty()) {
+        return {true, currently_visible,
+                std::string("Scrollbar: ") +
+                    (currently_visible ? "show" : "hide")};
+    }
+    if (requested == "show") {
+        return {true, true, "Scrollbar shown"};
+    }
+    if (requested == "hide") {
+        return {true, false, "Scrollbar hidden"};
+    }
+    return {false, currently_visible, "Usage: /scrollbar show|hide"};
+}
+
 ScrollbarMetrics compute_vertical_scrollbar(size_t viewport_height,
                                             size_t content_height,
                                             size_t scroll_offset) {

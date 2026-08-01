@@ -207,6 +207,20 @@ bool last_editable_chat_message(const chat::Session& session, std::size_t& index
     return false;
 }
 
+bool copy_last_chat_message(const chat::Session& session,
+                            editor::Clipboard& clipboard,
+                            std::string& copied_role) {
+    std::size_t index = 0;
+    if (!last_editable_chat_message(session, index) ||
+        session.messages[index].content.empty()) {
+        copied_role.clear();
+        return false;
+    }
+    clipboard.set(session.messages[index].content);
+    copied_role = session.messages[index].role;
+    return true;
+}
+
 bool pop_last_chat_message(chat::Session& session, std::string& removed_role) {
     for (std::size_t i = session.messages.size(); i > 0; --i) {
         const std::size_t index = i - 1;

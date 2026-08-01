@@ -22,7 +22,7 @@ Current bindings for chat, agent, and editor modes.
 | Shortcut | Action |
 |----------|--------|
 | `Ctrl+A` | Select entire input buffer |
-| `Ctrl+C` | Copy selection |
+| `Ctrl+C` | Copy input selection; with no selection, copy the last user/assistant message |
 | `Ctrl+V` | Paste (internal clipboard first, then desktop/OSC 52 clipboard) |
 | `Ctrl+K` | Kill from cursor to end of line |
 | `Ctrl+Z` or `Ctrl+U` | Undo last edit (typing, delete, cut, paste) |
@@ -31,7 +31,7 @@ Current bindings for chat, agent, and editor modes.
 | `Delete` | Delete at cursor (with a selection: cut to clipboard) |
 | `Tab` | Slash-command completion (start of first line) or path completion after `/insert`, `/attach`, `/save`, `/load` |
 
-Copy and selection-delete (Backspace/Delete on a range) publish to native desktop helpers and OSC 52 when available. With an empty internal clipboard, `Ctrl+V` reads external text asynchronously; SSH prefers a terminal OSC 52 query. Bracketed terminal paste (middle-click or Shift+Insert in many terminals) remains the fallback and is also undoable with `Ctrl+Z` / `Ctrl+U`. There is no dedicated cut key; delete the selection with Backspace or Delete, then paste with `Ctrl+V`.
+Copy and selection-delete (Backspace/Delete on a range) publish to native desktop helpers and OSC 52 when available. With no input selection, `Ctrl+C` copies the last user/assistant message from the stored transcript, preserving its original newlines and excluding soft-wrap padding, labels, and scrollbar glyphs. This is the reliable way to copy history from full-screen terminal clients whose mouse selection copies painted screen rows. With an empty internal clipboard, `Ctrl+V` reads external text asynchronously; SSH prefers a terminal OSC 52 query. Bracketed terminal paste (middle-click or Shift+Insert in many terminals) remains the fallback and is also undoable with `Ctrl+Z` / `Ctrl+U`. There is no dedicated cut key; delete the selection with Backspace or Delete, then paste with `Ctrl+V`.
 
 ### Chat-specific actions
 
@@ -44,6 +44,7 @@ Copy and selection-delete (Backspace/Delete on a range) publish to native deskto
 | `Ctrl+W` | Toggle traces in ordinary chat; close buffer in editor |
 | `Ctrl+L` | Open saved-thread picker (`/list`; also shown on chat startup) |
 | `Ctrl+P` | Open provider picker (same as bare `/provider`; model picker follows when needed) |
+| `Ctrl+O` | Toggle history scrollbar visibility (`/scrollbar show|hide`) |
 | `Ctrl+G` | Toggle chat → editor; the next Ctrl+G returns editor → chat |
 
 Chat mode opens the **thread selector** on startup (same UI as `Ctrl+L` / `/list`). Choose an existing thread or press **Tab** / **Insert** for a new one. If the CLI did not set a provider/model and the selected thread has them saved, those values are restored.
@@ -89,7 +90,7 @@ Use `/pop` to remove the last user or assistant message.
 
 ### Slash commands (type in input, `Enter` to run if single-line)
 
-`/help`, `/quit`, `/exit`, `/clear`, `/edit`, `/list`, `/new`, `/provider`, `/models`, `/model`, `/system`, `/setting`, `/clone`, `/save`, `/load`, `/remove`, `/remove-empty`, `/pop`, `/response`, `/insert`, `/attach`, `/fetch`, `/search`, `/theme`, `/thinking`
+`/help`, `/quit`, `/exit`, `/clear`, `/edit`, `/list`, `/new`, `/provider`, `/models`, `/model`, `/system`, `/setting`, `/clone`, `/save`, `/load`, `/remove`, `/remove-empty`, `/pop`, `/response`, `/insert`, `/attach`, `/fetch`, `/search`, `/theme`, `/scrollbar`, `/thinking`
 
 ---
 
@@ -208,6 +209,7 @@ session management.
 | `Esc` | Cancel the active model/tool job |
 | `Ctrl+H` | Toggle mode help panel (same as `/help`) |
 | `Ctrl+P` | Open provider picker (same as bare `/provider`; model picker follows when needed) |
+| `Ctrl+O` | Toggle history scrollbar visibility (`/scrollbar show|hide`) |
 | `Ctrl+G` | Toggle agent → editor; the next Ctrl+G returns editor → agent |
 | `Ctrl+Q` | Finish the project session and quit |
 | `y` / `n` | Allow or deny an active Guard Ask confirmation |
@@ -243,6 +245,7 @@ Use `/chat`, `/editor`, `/agent`, or `/mode` for explicit mode handoffs.
 | `Ctrl+X` | **Unused** (no dedicated cut) | Window-command prefix (splits) |
 | `Ctrl+E` | Edit last chat message | **Unused** |
 | `Ctrl+R` | Regenerate last answer | **Unused** (redo is `Ctrl+Y` only) |
+| `Ctrl+O` | Toggle history scrollbar | Open file buffer |
 | `Esc` (idle) | Cancel in-flight job | Open slash-command minibuffer |
 | `Ctrl+B` / `Ctrl+D` | Scroll chat history back / forward | Page up / down in the other split pane |
 | `Alt+PageUp` / `Alt+PageDown` | Scroll chat history (if terminal allows) | **Unused** |

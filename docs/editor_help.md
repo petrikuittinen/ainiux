@@ -240,6 +240,7 @@ Press **`Esc`** to open the command minibuffer (`Command:`). Type a command with
 | `/maximize` | Keep only the focused pane (same as `Ctrl+X 1`) |
 | `/nosplit` | Alias for `/maximize` |
 | `/highlight [on|off]` | Show or toggle syntax highlighting for editor and chat |
+| `/scrollbar [show|hide]` | Show or hide scrollbars process-wide without reflowing text |
 | `/setting` | Toggle a generated read-only settings view without changing the active buffer |
 | `/setting NAME=VALUE` | Apply shared settings (`on`/`off` for booleans) |
 | `/setting general|coding|instruct|creative` | Apply a model-catalog purpose preset |

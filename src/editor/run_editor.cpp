@@ -34,6 +34,7 @@
 #include "ui/confirmation.hpp"
 #include "ui/text_selector.hpp"
 #include "ui/provider_model_selector.hpp"
+#include "ui/scrollbar.hpp"
 
 #include <algorithm>
 #include <cctype>
@@ -300,6 +301,7 @@ app::EditorRunResult run_editor(const std::string& path,
     const auto activity_animation_started = std::chrono::steady_clock::now();
     std::string theme_name = settings.theme_name;
     bool use_colors = interactive != nullptr ? interactive->use_colors : settings.use_colors;
+    bool show_scrollbars = interactive != nullptr ? interactive->show_scrollbars : true;
     input::InsertSourceOptions insert_options;
     const cli::Options* runtime_options = nullptr;
     if (interactive != nullptr) {
@@ -402,6 +404,7 @@ app::EditorRunResult run_editor(const std::string& path,
         interactive->highlight_enabled = highlight_enabled;
         interactive->theme_name = theme_name;
         interactive->use_colors = use_colors;
+        interactive->show_scrollbars = show_scrollbars;
         interactive->ai_continue = ai_continue;
         app::sync_editor_provider_to_shared(*interactive, ai_continue);
         if (target == app::InteractiveUiTarget::Agent) {
@@ -481,7 +484,7 @@ app::EditorRunResult run_editor(const std::string& path,
         state.highlight_enabled = highlight_enabled;
         if (help_view.active || !split_layout.has_split()) {
             render_terminal(state, minibuffer, terminal_frame_renderer, theme_style,
-                            help_view.active, refresh_assist_display());
+                            help_view.active, refresh_assist_display(), show_scrollbars);
             return;
         }
         const std::vector<SplitPaneRect> panes = split_layout.layout_panes(editor_main_area());
@@ -502,7 +505,8 @@ app::EditorRunResult run_editor(const std::string& path,
             theme_style,
             help_view.active,
             refresh_assist_display(),
-            split_layout.leaf_count());
+            split_layout.leaf_count(),
+            show_scrollbars);
     };
     render_editor();
 
@@ -2608,6 +2612,24 @@ app::EditorRunResult run_editor(const std::string& path,
                 theme_name = theme_result.selected_theme;
             }
             if (theme_result.ok) use_colors = theme_result.colors_enabled;
+            return;
+        }
+        if (command_line == "/scrollbar" ||
+            command_line.rfind("/scrollbar ", 0) == 0) {
+            pending_assist = PendingAssist{};
+            exit_assist_command_mode(minibuffer, assist_completer);
+            const std::string requested = command_line.size() <= 10
+                                              ? ""
+                                              : trim_ascii_copy(command_line.substr(10));
+            const ui::ScrollbarVisibilityResult result =
+                ui::handle_scrollbar_visibility(requested, show_scrollbars);
+            if (result.ok) {
+                show_scrollbars = result.visible;
+            }
+            if (result.ok && interactive != nullptr) {
+                interactive->show_scrollbars = show_scrollbars;
+            }
+            minibuffer_message(minibuffer, result.message);
             return;
         }
         if (command_line == "/thinking" || command_line.rfind("/thinking ", 0) == 0) {

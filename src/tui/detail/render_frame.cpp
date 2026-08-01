@@ -40,6 +40,7 @@ void render(const chat::Session& session,
             ActivityKind activity_kind,
             size_t activity_frame,
             bool syntax_highlight,
+            bool show_scrollbar,
             const RenderStyle& style,
             TerminalFrameRenderer& frame_renderer,
             const char* panel_title_override,
@@ -63,8 +64,11 @@ void render(const chat::Session& session,
     }
     const int cols = layout.cols;
     // Reserve the rightmost column of the history band for a vertical scrollbar.
-    const bool history_scrollbar = cols >= 2;
-    const int history_cols = history_scrollbar ? cols - 1 : cols;
+    const bool history_scrollbar = show_scrollbar && cols >= 2;
+    // Keep one blank column reserved while hidden so toggling the scrollbar
+    // does not reflow history or move the user's mouse selection target.
+    const bool reserve_history_scrollbar_column = cols >= 2;
+    const int history_cols = reserve_history_scrollbar_column ? cols - 1 : cols;
     TerminalFrame frame(layout.rows, cols);
 
     input.ensure_cursor_visible(layout.input_rect);
@@ -128,7 +132,7 @@ void render(const chat::Session& session,
                                    const std::vector<StyledSegment>& segments) {
         std::string command =
             format_line(row, history_cols, segments, history_fill_role, style);
-        if (!history_scrollbar) {
+        if (!reserve_history_scrollbar_column) {
             return command;
         }
         // format_line clears to EOL; strip that so we can paint the scrollbar cell.
@@ -138,12 +142,16 @@ void render(const chat::Session& session,
             command.compare(command.size() - kClearEolLen, kClearEolLen, kClearEol) == 0) {
             command.resize(command.size() - kClearEolLen);
         }
-        if (style.colors && style.themes != nullptr) {
-            command += style_sequence_for(*style.themes, style.theme_name, StyleRole::Muted);
-        }
-        command += ui::scrollbar_glyph_at(history_bar, track_row);
-        if (style.colors) {
-            command += "\x1b[0m";
+        if (history_scrollbar) {
+            if (style.colors && style.themes != nullptr) {
+                command += style_sequence_for(*style.themes, style.theme_name, StyleRole::Muted);
+            }
+            command += ui::scrollbar_glyph_at(history_bar, track_row);
+            if (style.colors) {
+                command += "\x1b[0m";
+            }
+        } else {
+            command += ' ';
         }
         command += kClearEol;
         return command;
