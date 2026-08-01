@@ -2,7 +2,7 @@
 
 Internal reference for what Ainiux stores in the project code index and how agent tools use it (or fall back without it). Based on `src/agent/index/` and `src/agent/tools.cpp` as of the v1.1 definitions-only index (schema version **4**, scanner version **5**).
 
-This is a navigation aid for humans and agents optimizing the index. User-facing product docs remain in `README.md`; architecture constraints live in `AGENTS.md` and `docs/decisions.md`.
+This is a navigation aid for humans and agents optimizing the index. User-facing behavior is in [Agent workflows](agent.md); architecture constraints live in [AGENTS.md](../AGENTS.md) and [Decisions](decisions.md).
 
 ---
 
@@ -360,7 +360,7 @@ These operate on the live filesystem in Act/Plan. If indexing is enabled they re
 | Product / agent constraints | `AGENTS.md` |
 | Design notes (project-local index) | `docs/decisions.md` |
 | Roadmap v1.1 index notes | `PLANS.md` |
-| User-facing index CLI | `README.md` (`--index-code`, `--print-index`, `--clear-index`) |
+| User-facing index CLI | [Agent workflows](agent.md#code-index) (`--index-code`, `--print-index`, `--clear-index`) |
 
 ---
 

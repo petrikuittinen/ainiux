@@ -4,8 +4,10 @@ Project: `ainiux`
 
 This is the active implementation roadmap. It records current product direction,
 unfinished milestones, and enough design detail for the next implementation work.
-Current agent constraints live in `AGENTS.md`, user-facing behavior in `README.md`,
-design rationale in `docs/decisions.md`, and short open work in `TODO.md`.
+Current agent constraints live in `AGENTS.md`, user-facing behavior starts in
+`README.md` and `docs/README.md`, design rationale lives in `docs/decisions.md`,
+release history lives in `docs/version-history.md`, and short open work lives in
+`TODO.md`.
 
 This is a living roadmap, not an immutable specification. Git history retains the
 superseded long-form milestone plans and implementation checklists removed in the
@@ -36,7 +38,7 @@ error layers should serve:
 | v0.0–v0.8 | CLI, persistence, runtime/TUI, providers, context, config, benchmarks, editor | Landed |
 | v0.9 | Benchmark calibration, refactor hygiene, TUI/CLI/editor polish | Remaining work continues |
 | v0.90 | Local OpenAI-compatible server | Deferred behind v1.1 |
-| v1.0–v1.14 | Local agent foundation and hardening | Landed through v1.14 |
+| v1.0–v1.15 | Local agent foundation, hardening, and documentation overhaul | Landed through v1.15 |
 | **v1.1** | **Lightweight definition ranking and index tuning; later `/goal`, `/loop`, and sub-agents** | **Next priority** |
 | **v1.2** | **Image generation across CLI and interactive surfaces** | Planned after v1.1 |
 
@@ -46,7 +48,7 @@ ready.
 
 ## Current baseline
 
-Implementation status (2026-07-30): **v1.14**.
+Implementation status (2026-08-01): **v1.15**.
 
 The shipped product includes:
 
@@ -71,38 +73,10 @@ The current v1.1 index stores files and definitions for every supported scanner
 language, plus static declaration importance. It intentionally has no reference
 graph or automatic model-context hints.
 
-## Compact release history
+## Release history
 
-| Version | Main result |
-| --- | --- |
-| v0.0 | Repository/build/test and leak-check foundation |
-| v0.1 | Script-friendly OpenAI-compatible CLI and LM Studio profile |
-| v0.2 | REPL and persistence foundations |
-| v0.3 | Cancellable runtime jobs and full-screen TUI |
-| v0.4 | Provider registry, compatibility profiles, and Responses API |
-| v0.5 | Context policies, attachments, and safe URL fetching |
-| v0.6 | Layered TOML-like configuration |
-| v0.7 | Concurrent benchmark runner |
-| v0.8 | Standalone AI-assisted editor |
-| v0.81–v0.98 | TUI/editor/provider/search/highlighting/model-catalog hardening |
-| v0.99 | Read-only whole-project security review |
-| v1.01 | One-shot local agent |
-| v1.02 | Ordinary workspace mutations |
-| v1.03 | Project-local agent sessions and history |
-| v1.04 | Interactive agent and live tool activity |
-| v1.05 | Agent chrome and command guard |
-| v1.06 | Interactive Guard approvals and clipboard/UI polish |
-| v1.07 | Session-scoped Act/Plan modes |
-| v1.08 | Provider reasoning previews and in-place activity rows |
-| v1.09 | Stable prompt caching/accounting, Smart read-only commands, and context polish |
-| v1.10 | Lightweight definition importance, optional index startup, mutation-aware refresh, and one-shot tool metrics |
-| v1.11 | Three-strategy agent context compaction with visible progress and result reporting |
-| v1.12 | Retained terminal row rendering and punctuation-aware Markdown highlighting |
-| v1.13 | First-run index build offer, index chrome marker, timed index summary preface, and index progress lifetime fix |
-| v1.14 | Editor text layout commands; chat/agent history width and align modes; width-capped pretty tables |
-
-Historical implementation details remain available in Git history and the dated
-notes in `README.md` and `docs/decisions.md`.
+The compact v0.0–v1.15 timeline lives in `docs/version-history.md`. Historical
+implementation details remain available in Git history and `docs/decisions.md`.
 
 # v1.1 - Lightweight smarter agent indexing
 
@@ -137,7 +111,7 @@ Continue in small, test-backed slices:
 - focused cancellation, permission, sanitizer, and leak hardening
 - syntax-theme contrast warnings and remaining editor reformat/PTY coverage
 
-These are maintenance tracks, not a reason to delay v1.1 graph work indefinitely.
+These are maintenance tracks, not a reason to delay v1.1 definitions-index tuning indefinitely.
 
 ## v0.90 local OpenAI-compatible server
 
@@ -269,5 +243,5 @@ For non-trivial implementation work, add or update a short plan containing:
 ```
 
 Prefer current behavior and concise decisions over historical narration. Move completed
-implementation details to `README.md`, `docs/decisions.md`, or Git history rather than
+implementation details to the appropriate guide under `docs/`, `docs/decisions.md`, or Git history rather than
 allowing this roadmap to become another source of stale product truth.

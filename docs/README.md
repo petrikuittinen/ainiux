@@ -1,0 +1,43 @@
+# Ainiux documentation
+
+This index separates current usage guides from design records, roadmaps, and point-in-time audits. Start with [Getting started](getting-started.md) or return to the [project README](../README.md).
+
+## User guides
+
+| Guide | Covers |
+| --- | --- |
+| [Getting started](getting-started.md) | Dependencies, installation, providers, first commands, and platform expectations |
+| [CLI and scripting](cli.md) | One-shot chat, REPL, conversion, attachments, fetch/search, output, and context |
+| [Chat TUI](chat.md) | Threads, persistence, commands, attachments, and mode switching |
+| [Editor help](editor_help.md) | Complete editor operation and embedded help content |
+| [Keyboard shortcuts](keyboard-shortcuts.md) | Current chat, editor, and agent bindings |
+| [Agent workflows](agent.md) | Act/Plan, permissions, Guard, goals, compaction, indexing, and security review |
+| [Configuration](configuration.md) | Layering, credentials, themes, models, benchmark prompts, and editor commands |
+| [Benchmarks and grading](benchmarks.md) | Built-in corpus, JSONL runs, judge grading, and limitations |
+| [API compatibility](api-compatibility.md) | Provider and protocol compatibility details |
+| [Security](security.md) | Credential, persistence, fetch, attachment, and agent boundaries |
+| [Testing](../TESTING.md) | Test targets and selection policy |
+| [Version history](version-history.md) | Compact v0.0–v1.15 release timeline |
+
+## Architecture and implementation references
+
+- [Decisions](decisions.md) records design rationale.
+- [Code index and tool calls explained](code_index_and_tool_calls_explained.md) describes the current definitions-only index and agent navigation behavior.
+- [Agent compaction strategies](compact_strategies.md) documents the current `fast`, `smart`, and `summary` implementation in detail.
+- [Unicode license](unicode-license.txt) covers generated Unicode data.
+- [Project roadmap](../PLANS.md), [open work](../TODO.md), and [agent constraints](../AGENTS.md) govern future work.
+- [Postponed web mode](web-mode.md) is a historical planning note, not a current usage guide.
+
+## Point-in-time snapshots
+
+These documents preserve audit context. Their dates and code references matter; they do not replace current usage or security guidance.
+
+- [Security hardening audit](quick_security_todo.md)
+- [Testing coverage analysis](testing_coverage.md)
+
+## Other project material
+
+- [Marketing copy](ainiux_marketing.txt) contains restrained factual descriptions for project announcements.
+- [License](../LICENSE) contains the Modified MIT terms and no-warranty language.
+
+Every Markdown document under `docs/` is linked from this index. Topical guides also link back here so readers can distinguish current instructions from historical or internal material.

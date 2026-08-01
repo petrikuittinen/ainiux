@@ -1,5 +1,7 @@
 # API Compatibility
 
+Current provider selection, credentials, and CLI examples are in the [README](../README.md#provider-profiles-and-credentials) and [CLI guide](cli.md). This document records protocol details and quirks.
+
 ## OpenAI-Compatible Chat Completions
 
 Implemented for built-in OpenAI-compatible profiles:

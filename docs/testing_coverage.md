@@ -1,5 +1,7 @@
 # Testing coverage analysis — ainiux
 
+> **Point-in-time coverage snapshot:** test counts and gaps reflect the audited revision. Use [TESTING.md](../TESTING.md) for the current test policy and commands.
+
 Status: analysis complete, evidence-backed from the live workspace (Makefile, TESTING.md,
 `.github/workflows/ci.yml`, `tests/`, `tools/`, AGENTS.md slow-test policy).
 

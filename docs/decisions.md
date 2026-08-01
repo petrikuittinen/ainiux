@@ -1,5 +1,7 @@
 # Decisions
 
+These records explain implementation rationale. For current usage, start at the [documentation index](README.md).
+
 ## C++17 and Makefile
 
 The initial implementation uses C++17 and a plain Makefile to keep the binary portable across POSIX-like systems.
@@ -80,7 +82,7 @@ They **may and should share** the full-screen terminal shell and selector infras
 
 Shared code lives under `src/tui/` and `src/ui/`; mode identity is `InteractiveMode::{Chat,Agent}` plus `options.agent` for generation. Generation branches: Chat uses `provider::send_chat_messages`; Agent uses `AgentSessionRuntime`. Mode cycling is an explicit handoff via `InteractiveUiTarget`.
 
-**Agent is project-centric:** one workspace tree, one project state dir **`.ainiux-pr/`** (parent/nested project markers refused). User profile remains **`~/.ainiux/`** (chat library, media) and is never treated as a project root. Durable agent/index state is only under `.ainiux-pr/` (`agent.sqlite` schema v2 singleton thread, `history/` with one backup slot per path, size/TTL config, logs). Auto-compact uses estimated request tokens vs context window × `agent.compact_limit` (default 75% when window > 64k tokens, else 100%); `agent.auto_compact=false` disables it. Compact tool lines (`N: name(args) → ok|error`) are preferred for TUI and `--run` stderr.
+**Agent is project-centric:** one workspace tree, one project state dir **`.ainiux-pr/`** (parent/nested project markers refused). User profile remains **`~/.ainiux/`** (chat library, media) and is never treated as a project root. Durable agent/index state is only under `.ainiux-pr/` (`agent.sqlite` schema v2 singleton thread, `history/` with one backup slot per path, size/TTL config, logs). Auto-compact uses estimated request tokens vs context window × `agent.compact_limit`; an unset limit resolves to 75% for every known context-window size. `agent.auto_compact=false` disables it. Compact tool lines (`N: name(args) → ok|error`) are preferred for TUI and `--run` stderr.
 
 Trusted prompts: agent sessions use the bounded `resources/prompts/agent_prompt.md` plus a static native/XML appendix. The initial Act/Plan state is a separate Ainiux control message; later switches append controls and, only when changed, refreshed framed root `AGENTS.md` instructions. They never rewrite the earlier model-visible prefix. Compaction rebuilds the stable base with only the active mode. Native Act and Plan requests advertise the same ordered tool superset, while `MutationPolicy` enforces mode authority. `master_prompt.md` and `security_prompt.md` are retained exclusively for security review and still compose with the historical exact `master + "\n" + security` byte sequence. Security-review keeps its own bounded finalization loop and retry helper so its acceptance behavior stays stable. Diagnostic JSONL logging is shared (`ReviewLogger`) with a run-kind parameter so security-review and agent logs live under separate directories with the same live-flush / finalize semantics.
 

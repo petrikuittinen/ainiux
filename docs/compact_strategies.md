@@ -1,5 +1,7 @@
 # Agent compaction strategies (`fast` / `smart` / `summary`)
 
+This is the detailed implementation reference. For task-oriented usage, start with [Agent workflows](agent.md#compaction).
+
 Implementation-grounded reference for rethinking high-performance context
 compaction. Numbers and formulas match the code as of this document; if
 behavior diverges, trust the sources below.
@@ -66,9 +68,7 @@ if (configured_limit >= 1 && configured_limit <= 100)
 return 75;   // always, for any context window size
 ```
 
-**Stale doc note:** `docs/decisions.md` still says default 75% only when
-window > 64k else 100%. **That is not current behavior.** Unit tests
-assert 75 for windows 8k, 64k, and 128k when the configured limit is 0.
+Unit tests assert 75 for windows 8k, 64k, and 128k when the configured limit is 0.
 
 ### Strategy names
 

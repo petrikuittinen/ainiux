@@ -1,5 +1,7 @@
 # Security Hardening Plan — ainiux
 
+> **Point-in-time audit snapshot:** findings and line references reflect the reviewed revision. Use [Security](security.md) for current user guidance and re-verify each finding against current source before acting.
+
 Scope: security review of the most critical surfaces first (agent process execution,
 tool path containment, Guard rules, HTTP/fetch/SSRF, credential handling, SQLite
 stores, JSON/HTML parsing). Findings are ranked by severity. Each finding cites

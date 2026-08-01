@@ -1,4 +1,4 @@
-# ainiux Editor Help v0.99
+# ainiux Editor Help v1.15
 
 Standalone editor mode (`ainiux --editor [PATH]`) is a multiline text editor with Unicode-aware navigation, search/replace, and optional AI assist when a provider and model are configured.
 
@@ -114,7 +114,7 @@ denied.
 
 Hold `Shift` while using arrow keys, `Page Up`/`Page Down`, `Home`/`End`, or `Ctrl+Home`/`Ctrl+End` to extend the selection. Selected text is highlighted in reverse video.
 
-`Ctrl+E` is not used in standalone editor mode. In chat TUI mode, `Ctrl+E` copies the last user or assistant message into the input for editing; `Enter` saves and a bare `Esc` cancels.
+In standalone editor mode, `Ctrl+E` opens the command minibuffer. In chat TUI mode, `Ctrl+E` instead copies the last user or assistant message into the input for editing; `Enter` saves and a bare `Esc` cancels.
 
 ## Provider and model
 
@@ -136,6 +136,8 @@ Use the command minibuffer and enter `/provider` or `/model` to change provider 
 ## AI continue (`Ctrl+Space`)
 
 Requires a configured provider **and** model. If either is missing, `Ctrl+Space` and other AI commands report what to configure next.
+
+`Ctrl+R` regenerates the previous AI assist with the same captured command and scope. If an assist is still running, Ainiux cancels it before restarting. `/regenerate` is the command equivalent. It reports an error when there is no previous assist to repeat.
 
 `Ctrl+T` cycles the selected model's catalog-backed reasoning setting from lower
 to higher values, then Auto, and around again. For toggle-only Qwen 3.5/3.6 and
@@ -368,7 +370,7 @@ Keep the result concise.
 """
 ```
 
-Legacy slash-prefixed `string` values remain valid. See `README.md` for examples.
+Legacy slash-prefixed `string` values remain valid. See [Configuration](configuration.md#custom-editor-commands) for the layered command files.
 
 ## Tips
 
@@ -378,3 +380,5 @@ Legacy slash-prefixed `string` values remain valid. See `README.md` for examples
 - Scratch buffers (no path) prompt to save on quit when modified.
 - Bracketed paste is enabled for reliable paste detection.
 - Invalid UTF-8 in files is preserved; the renderer shows a visible placeholder for bad bytes.
+
+Related documentation: [documentation index](README.md), [keyboard shortcuts](keyboard-shortcuts.md), [configuration](configuration.md), [chat TUI](chat.md).

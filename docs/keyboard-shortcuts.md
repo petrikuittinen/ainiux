@@ -163,6 +163,7 @@ Bracketed terminal paste is undoable with `Ctrl+Z` / `Ctrl+U`.
 | Shortcut | Action |
 |----------|--------|
 | `Ctrl+Space` | Run mode-aware `/continue`: prose in text/Markdown, gap completion in code modes |
+| `Ctrl+R` | Regenerate the previous AI assist (same as `/regenerate`) |
 | `Esc` (during generation) | Cancel AI request (keeps streamed text) |
 | `Esc` (idle) | Open command minibuffer (`Command:`) |
 | `Ctrl+E` (idle) | Open command minibuffer (recommended portable shortcut) |
@@ -249,11 +250,13 @@ Use `/chat`, `/editor`, `/agent`, or `/mode` for explicit mode handoffs.
 | `Ctrl+L` | Thread list (`/list`) | Buffer list (`/list`) |
 | `Ctrl+H` | Toggle chat help panel | Toggle editor help view |
 | `Ctrl+X` | **Unused** (no dedicated cut) | Window-command prefix (splits) |
-| `Ctrl+E` | Edit last chat message | **Unused** |
-| `Ctrl+R` | Regenerate last answer | **Unused** (redo is `Ctrl+Y` only) |
+| `Ctrl+E` | Edit last chat message | Open command minibuffer |
+| `Ctrl+R` | Regenerate last answer | Regenerate previous AI assist (redo remains `Ctrl+Y`) |
 | `Ctrl+O` | Toggle history scrollbar | Open file buffer |
 | `Esc` (idle) | Cancel in-flight job | Open slash-command minibuffer |
 | `Ctrl+B` / `Ctrl+D` | Scroll chat history back / forward | Page up / down in the other split pane |
 | `Alt+PageUp` / `Alt+PageDown` | Scroll chat history (if terminal allows) | **Unused** |
 | `Tab` | Command/path completion | Word/path/command completion or indentation |
 | `↑` / `↓` | Visual-row movement (soft wrap) | Logical-line movement |
+
+Related documentation: [documentation index](README.md), [chat TUI](chat.md), [editor help](editor_help.md), [agent workflows](agent.md).

@@ -2,7 +2,7 @@
 
 Project: `ainiux`
 
-Repository-level instructions for AI coding agents. Treat this as current project guidance. The user's latest explicit instruction always wins. For milestones and history use `PLANS.md`; for user-facing usage use `README.md`; for design rationale use `docs/decisions.md`; for open work use `TODO.md`.
+Repository-level instructions for AI coding agents. Treat this as current project guidance. The user's latest explicit instruction always wins. For milestones use `PLANS.md`; for release history use `docs/version-history.md`; for user-facing usage start with `README.md` and `docs/README.md`; for design rationale use `docs/decisions.md`; for open work use `TODO.md`.
 
 ## Mission
 
@@ -23,7 +23,7 @@ The program must stay excellent as a scriptable CLI. Keep the core engine indepe
 
 ## Current product snapshot
 
-Status: **v1.14** (see `README.md` and `PLANS.md` implementation notes). One-shot (`run` / `--run` / `-r`) and interactive (`agent` / `--agent` / `-a`) local agent modes are landed with workspace writes, multi-turn project sessions (`.ainiux-pr/`), compact live tool activity, provider-supplied reasoning previews in interactive agent history, three-strategy transcript-preserving compaction, retained row-diff terminal rendering, punctuation-aware Markdown highlighting, chat↔editor↔agent cycling, project-persisted Confirm/Smart/Yolo permissions, OpenRouter/OpenAI/DeepSeek credit display, interactive Guard approvals, and session-scoped Act/Plan task modes. Live tool rows update in place, while display-only `notice` and `thinking` rows remain outside provider context. One-shot planning is available through `plan`, `--plan`, and `--plan-file`; Plan retains research tools but code-enforces planning-document-only writes. User profile stays `~/.ainiux/` (chat DB/media). The **v1.1** code index is a lightweight definitions-only index across all scanner languages, with static declaration importance and mutation-aware persistence. Local server mode is deferred behind v1.1, image generation moves to v1.2, and browser web UI remains postponed.
+Status: **v1.15** (see `README.md`, `docs/agent.md`, and `PLANS.md`). One-shot (`run` / `--run` / `-r`) and interactive (`agent` / `--agent` / `-a`) local agent modes are landed with workspace writes, multi-turn project sessions (`.ainiux-pr/`), compact live tool activity, provider-supplied reasoning previews in interactive agent history, three-strategy transcript-preserving compaction, retained row-diff terminal rendering, punctuation-aware Markdown highlighting, chat↔editor↔agent cycling, project-persisted Confirm/Smart/Yolo permissions, OpenRouter/OpenAI/DeepSeek credit display, interactive Guard approvals, and session-scoped Act/Plan task modes. Live tool rows update in place, while display-only `notice` and `thinking` rows remain outside provider context. One-shot planning is available through `plan`, `--plan`, and `--plan-file`; Plan retains research tools but code-enforces planning-document-only writes. User profile stays `~/.ainiux/` (chat DB/media). The **v1.1** code index is a lightweight definitions-only index across all scanner languages, with static declaration importance and mutation-aware persistence. Local server mode is deferred behind v1.1, image generation moves to v1.2, and browser web UI remains postponed.
 
 ### Implemented modes
 
@@ -62,7 +62,7 @@ Status: **v1.14** (see `README.md` and `PLANS.md` implementation notes). One-sho
 ### Not implemented yet (do not pretend they exist)
 
 - Local OpenAI-compatible **server** mode (`--server` in `PLANS.md` v0.90)
-- Browser local web UI (`src/web/` reserved; `docs/web-mode.md` is still a stub plan)
+- Browser local web UI (`src/web/` reserved; `docs/web-mode.md` is a postponed-design snapshot)
 - Reference extraction beyond the landed Python/C/C++ v1.1 review slice; JavaScript/TypeScript, Java/C#, Go, Rust, and other languages still have definitions-only indexes
 - `/loop` and sub-agents. Their names are reserved for later; do not infer behavior. Interactive `/goal` + `goal_met` is implemented (see README agent section)
 - Image generation (`ainiux image` / `/image`; moved to v1.2)
@@ -510,9 +510,12 @@ Compiler warnings should stay strict (`-Wall -Wextra -Wpedantic` as configured).
 
 Keep these current when behavior changes:
 
-- `README.md` — user-facing usage, examples, providers, build/install
+- `README.md` — concise project landing page, status, quick examples, providers, and install
+- `docs/README.md` — documentation index and classification of current guides versus snapshots
+- `docs/getting-started.md`, `docs/cli.md`, `docs/chat.md`, `docs/agent.md`, `docs/configuration.md`, `docs/benchmarks.md` — detailed user guides
+- `docs/version-history.md` — compact release history
 - `TODO.md` — short active task list
-- `PLANS.md` — roadmap and milestone acceptance criteria (history + next work)
+- `PLANS.md` — active roadmap and milestone acceptance criteria
 - `TESTING.md` — how to run and what is covered
 - `docs/api-compatibility.md` — provider quirks
 - `docs/security.md` — credential, URL-fetch, future server/agent safety
