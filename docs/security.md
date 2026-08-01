@@ -91,9 +91,9 @@ This is advisory coordination, not an operating-system write prohibition: unrela
 
 ## Configuration Files
 
-Automatic system and user configuration files may select a credential environment variable or key-file path, but API key values and arbitrary authorization headers are not accepted by the schema. Files are capped at 1 MiB and must be regular files. Unknown settings and invalid types fail closed before any part of that file is applied.
+Automatic installed-default and user configuration files may select a credential environment variable or key-file path, but API key values and arbitrary authorization headers are not accepted by the schema. Files are capped at 1 MiB and must be regular files. Unknown settings and invalid types fail closed before any part of that file is applied.
 
-`--no-config` skips only the automatic user file; system configuration remains effective. `--debug` prints configuration paths and load states to `stderr`, but not parsed values, credential contents, or authorization headers. Paths can still reveal local account or directory names, so avoid debug logs when that metadata is sensitive.
+`--no-config` skips the automatic user files while installed defaults remain effective. `--debug` prints configuration paths and load states to `stderr`, but not parsed values, credential contents, or authorization headers. Paths can still reveal local account or directory names, so avoid debug logs when that metadata is sensitive.
 
 `url_fetch.allow_private_addresses = on` relaxes SSRF protections for explicit CLI/TUI fetches and should only be enabled when local-network access is intended. `network.insecure_tls = on` prints a warning whenever effective. User configuration normally lives at `~/.config/ainiux/config.conf`; protect it appropriately if it contains a sensitive key-file path or private endpoint URL.
 

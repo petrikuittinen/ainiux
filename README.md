@@ -237,7 +237,7 @@ OpenRouter, OpenAI, and DeepSeek can display a credit balance when the selected 
 
 ## Configuration
 
-Ainiux uses a deliberately small TOML-like format, not full TOML. System `ainiux/config.conf` files load from `$XDG_CONFIG_DIRS` in reverse order, followed by `$XDG_CONFIG_HOME/ainiux/config.conf` (normally `~/.config/ainiux/config.conf`), then CLI options. `--no-config` skips only the user file.
+Ainiux uses a deliberately small TOML-like format, not full TOML. Installed defaults load from the prefix's `share/ainiux/` directory, followed by user files under `$XDG_CONFIG_HOME/ainiux/` (normally `~/.config/ainiux/`), then CLI options. `--no-config` skips the user files. There is no `/etc/xdg` layer.
 
 Themes, editor commands, benchmark judge prompts, and model metadata live in separate layered `themes.conf`, `editor-commands.conf`, `benchmarks.conf`, and `models.conf` files. Keep secret values out of configuration; store only key variable names or key-file paths. See [Configuration](docs/configuration.md) for settings and examples.
 

@@ -2,20 +2,14 @@
 # Remove a system (or custom PREFIX) Ainiux installation created by
 # `make install` / scripts/install.sh.
 #
-# By default keeps administrator templates under SYSCONFDIR/xdg/ainiux.
-# Use --purge to remove those as well.
-#
 # Usage:
 #   sudo ./scripts/uninstall.sh
 #   ./scripts/uninstall.sh --prefix "$HOME/.local"
-#   sudo ./scripts/uninstall.sh --purge
 
 set -euo pipefail
 
 PREFIX="${PREFIX:-/usr/local}"
-SYSCONFDIR="${SYSCONFDIR:-/etc}"
 DESTDIR="${DESTDIR:-}"
-PURGE=0
 
 usage() {
     cat <<'EOF'
@@ -25,15 +19,12 @@ Usage: uninstall.sh [options]
 
 Options:
   --prefix DIR       Installation prefix (default: /usr/local or $PREFIX)
-  --sysconfdir DIR   System config root (default: /etc or $SYSCONFDIR)
   --destdir DIR      Staging root for packaging (default: empty or $DESTDIR)
-  --purge            Also remove SYSCONFDIR/xdg/ainiux templates
   -h, --help         Show this help
 
 Examples:
   sudo ./scripts/uninstall.sh
   ./scripts/uninstall.sh --prefix "$HOME/.local"
-  sudo ./scripts/uninstall.sh --purge
 EOF
 }
 
@@ -43,17 +34,9 @@ while [ "$#" -gt 0 ]; do
             PREFIX="${2:?--prefix requires a directory}"
             shift 2
             ;;
-        --sysconfdir)
-            SYSCONFDIR="${2:?--sysconfdir requires a directory}"
-            shift 2
-            ;;
         --destdir)
             DESTDIR="${2:?--destdir requires a directory}"
             shift 2
-            ;;
-        --purge)
-            PURGE=1
-            shift
             ;;
         -h|--help)
             usage
@@ -79,12 +62,11 @@ root_path() {
 
 BIN_PATH="$(root_path "${PREFIX}/bin/ainiux")"
 SHARE_DIR="$(root_path "${PREFIX}/share/ainiux")"
-XDG_DIR="$(root_path "${SYSCONFDIR}/xdg/ainiux")"
 
 # Elevate only when an existing install path (or its first existing ancestor)
 # is not writable by the current user.
 need_root=0
-for path in "${BIN_PATH}" "${SHARE_DIR}" "${XDG_DIR}"; do
+for path in "${BIN_PATH}" "${SHARE_DIR}"; do
     probe="${path}"
     while [ ! -e "${probe}" ]; do
         parent="$(dirname -- "${probe}")"
@@ -103,7 +85,7 @@ run_install_cmd() {
     if [ "${need_root}" -eq 0 ] || [ "$(id -u)" -eq 0 ]; then
         "$@"
     elif command -v sudo >/dev/null 2>&1; then
-        sudo env DESTDIR="${DESTDIR}" PREFIX="${PREFIX}" SYSCONFDIR="${SYSCONFDIR}" "$@"
+        sudo env DESTDIR="${DESTDIR}" PREFIX="${PREFIX}" "$@"
     else
         echo "Root privileges are required to uninstall under ${PREFIX} (sudo or root)." >&2
         exit 1
@@ -122,21 +104,11 @@ remove_path() {
 
 echo "Uninstalling Ainiux"
 echo "  PREFIX=${PREFIX}"
-echo "  SYSCONFDIR=${SYSCONFDIR}"
 if [ -n "${DESTDIR}" ]; then
     echo "  DESTDIR=${DESTDIR}"
 fi
 
 remove_path "${BIN_PATH}"
 remove_path "${SHARE_DIR}"
-
-if [ "${PURGE}" -eq 1 ]; then
-    remove_path "${XDG_DIR}"
-else
-    if [ -e "${XDG_DIR}" ]; then
-        echo "Keeping system config directory: ${XDG_DIR}"
-        echo "  (pass --purge to remove it)"
-    fi
-fi
 
 echo "Uninstall finished."

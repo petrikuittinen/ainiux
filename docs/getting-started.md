@@ -21,10 +21,10 @@ Useful variants:
 ./scripts/install.sh --optimized
 ./scripts/install.sh --user
 ./scripts/uninstall.sh
-sudo ./scripts/uninstall.sh --purge
 ```
 
-`--user` installs below `~/.local`. Ordinary uninstall preserves administrator configuration; `--purge` removes installed system templates too.
+`--user` installs below `~/.local`. Uninstall removes the selected-prefix
+installation; user configuration under `~/.config/ainiux/` is left untouched.
 
 ## Build manually
 
@@ -37,7 +37,7 @@ make
 ./ainiux --version
 ```
 
-Some Ubuntu releases call the curl runtime package `libcurl4t64`; `scripts/install-deps.sh` detects the available name. `make optimized` uses release-oriented compiler settings. `sudo make install PREFIX=/usr/local` installs the binary and bundled configuration documents. Existing administrator configuration is preserved.
+Some Ubuntu releases call the curl runtime package `libcurl4t64`; `scripts/install-deps.sh` detects the available name. `make optimized` uses release-oriented compiler settings. `sudo make install PREFIX=/usr/local` installs the binary and refreshable bundled configuration documents below `/usr/local/share/ainiux/`.
 
 On another POSIX-like system, provide a C++17 compiler plus development headers and link libraries for libcurl and SQLite. The repository does not claim continuous testing on BSD or macOS, and terminal behavior can differ across emulators.
 
@@ -80,7 +80,7 @@ The editor and conversion paths can use `none` without inventing a model endpoin
 
 ## Where data goes
 
-User chat threads and media are stored under `~/.ainiux/`. Interactive and one-shot agent state stays within the current project under `.ainiux-pr/`. System configuration normally lives under `/etc/xdg/ainiux/`; user configuration normally lives under `~/.config/ainiux/`.
+User chat threads and media are stored under `~/.ainiux/`. Interactive and one-shot agent state stays within the current project under `.ainiux-pr/`. Installed defaults live under the prefix's `share/ainiux/` directory; user configuration normally lives under `~/.config/ainiux/`.
 
 ## Next steps
 

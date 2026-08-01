@@ -420,6 +420,17 @@ void test_benchmark_grading_interfaces() {
               grade_cli.options.stream_explicit &&
               grade_cli.options.temperature == 0.25,
           "explicit grading stream and temperature settings override defaults");
+    ainiux::cli::Options configured_options;
+    configured_options.stream = true;
+    configured_options.stream_explicit = true;
+    configured_options.has_temperature = true;
+    configured_options.temperature = 0.7;
+    const char* configured_grade_argv[] = {"ainiux", "--grade"};
+    grade_cli = ainiux::cli::parse_args(
+        2, const_cast<char**>(configured_grade_argv), configured_options);
+    check(grade_cli.error.ok() && !grade_cli.options.stream &&
+              grade_cli.options.has_temperature && grade_cli.options.temperature == 0.0,
+          "grading defaults override configured stream and temperature settings without CLI overrides");
     const char* incompatible_argv[] = {
         "ainiux", "--grade", "--dataset", "builtin", "--mode", "quality",
         "--runs", "2", "--warmup", "1", "--duration", "1s"};

@@ -36,7 +36,6 @@ fi
 BASE="http://127.0.0.1:$PORT"
 export HOME="$WORK/home"
 export XDG_CONFIG_HOME="$WORK/config"
-export XDG_CONFIG_DIRS="$WORK/system-config"
 mkdir -p "$HOME" "$XDG_CONFIG_HOME"
 
 chat_err="$WORK/chat.err"

@@ -300,11 +300,11 @@ ainiux --input page.html --output-format md
 Configuration is TOML-alike, not JSON.
 
 ```text
-system: $XDG_CONFIG_DIRS/ainiux/config.conf (default /etc/xdg/...)
-user:   $XDG_CONFIG_HOME/ainiux/config.conf or ~/.config/ainiux/config.conf
+installed: $PREFIX/share/ainiux/config.conf (default /usr/local/share/...)
+user:      $XDG_CONFIG_HOME/ainiux/config.conf or ~/.config/ainiux/config.conf
 ```
 
-Layering: system files (reverse `XDG_CONFIG_DIRS` order), then user file, then CLI (authoritative). `--no-config` skips the user file only. Separate documents:
+Layering: installed defaults, then user file, then CLI (authoritative). There is no `/etc/xdg` layer. `--no-config` skips the user file only. Separate documents:
 
 - `themes.conf` — TUI/editor themes
 - `editor-commands.conf` — editor AI slash commands

@@ -27,6 +27,7 @@ struct Options {
     bool list_models = false;
     bool stream = true;
     bool stream_explicit = false;
+    bool stream_cli_explicit = false;
     bool quiet = false;
     bool verbose = false;
     bool debug = false;
@@ -133,6 +134,7 @@ struct Options {
 
     double temperature = 0.0;
     bool has_temperature = false;
+    bool temperature_cli_explicit = false;
     // Distinguishes advisory catalog presets from an explicit CLI/config/UI value.
     bool temperature_preset_applied = false;
     double top_p = 0.0;

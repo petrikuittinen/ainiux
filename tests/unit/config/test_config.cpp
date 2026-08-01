@@ -149,20 +149,9 @@ void test_config_applies_user_settings() {
     check(err.ok() && fact_command != nullptr && fact_command->prompt == "Custom fact prompt",
           "editor assist fact config applies");
 
-    const std::string system_home =
-        std::filesystem::absolute("build/config-system").lexically_normal().string();
-    std::filesystem::create_directories(system_home + "/ainiux");
-    {
-        std::ofstream system_config(system_home + "/ainiux/config.conf", std::ios::trunc);
-        check(system_config.is_open(), "system config test file opens");
-        system_config << "[url_fetch]\nallow_private_addresses = off\n"
-                         "[tui]\ntheme = light\nthinking_traces = off\n";
-        system_config.close();
-        check(system_config.good(), "system config test file is written");
-    }
     const std::string config_home =
         std::filesystem::absolute("tests/fixtures/config-home").lexically_normal().string();
-    ainiux::config::Environment environment{config_home, system_home, "/nonexistent"};
+    ainiux::config::Environment environment{config_home, "/nonexistent"};
     ainiux::config::LoadResult loaded = ainiux::config::load_automatic(ainiux::cli::Options{}, environment);
     check(loaded.error.ok(), "automatic user config loading succeeds");
     check(loaded.loaded_paths.size() == 6 &&
@@ -170,9 +159,9 @@ void test_config_applies_user_settings() {
               loaded.loaded_paths[1].find("benchmarks.conf") != std::string::npos &&
               loaded.loaded_paths[2].find("themes.conf") != std::string::npos &&
               loaded.loaded_paths[3].find("editor-commands.conf") != std::string::npos &&
-              loaded.loaded_paths[4] == system_home + "/ainiux/config.conf" &&
+              loaded.loaded_paths[4].find("ainiux.conf") != std::string::npos &&
               loaded.loaded_paths[5] == config_home + "/ainiux/config.conf",
-          "automatic loading applies the bundled catalog and prompt/UI files before system and user config");
+          "automatic loading applies installed defaults before user config");
     check(loaded.options.tui_themes.has("dark") && loaded.options.tui_themes.has("light") &&
               loaded.options.tui_themes.has("sepia"),
           "automatic loading includes built-in themes");
@@ -212,20 +201,20 @@ void test_config_applies_user_settings() {
     }
     check(loaded.options.allow_private_url_fetch && loaded.options.show_thinking_traces &&
               loaded.options.tui_theme == "dark",
-          "user settings partially override automatic system settings");
+          "user settings override installed defaults");
 
     ainiux::config::LoadResult system_only =
         ainiux::config::load_automatic(ainiux::cli::Options{}, environment, false);
     check(system_only.error.ok() && !system_only.options.allow_private_url_fetch &&
-              !system_only.options.show_thinking_traces && system_only.options.tui_theme == "light",
-          "disabling user config retains the automatic system config");
+              !system_only.options.show_thinking_traces && system_only.options.tui_theme == "dark",
+          "disabling user config retains installed defaults");
     check(system_only.loaded_paths.size() == 5 &&
               system_only.loaded_paths[0].find("models.conf") != std::string::npos &&
               system_only.loaded_paths[1].find("benchmarks.conf") != std::string::npos &&
               system_only.loaded_paths[2].find("themes.conf") != std::string::npos &&
               system_only.loaded_paths[3].find("editor-commands.conf") != std::string::npos &&
-              system_only.loaded_paths[4] == system_home + "/ainiux/config.conf",
-          "disabling user config still loads the bundled catalog, prompt/UI files, and system config");
+              system_only.loaded_paths[4].find("ainiux.conf") != std::string::npos,
+          "disabling user config still loads installed defaults");
     bool skipped_user_config = false;
     for (const ainiux::config::ConfigDiagnostic& diagnostic : system_only.diagnostics) {
         if (diagnostic.scope == ainiux::config::ConfigScope::User &&
@@ -414,13 +403,12 @@ void test_benchmark_prompt_configuration() {
         std::filesystem::absolute("build/benchmark-prompt-config")
             .lexically_normal()
             .string();
-    const std::string system_root = root + "/system";
     const std::string user_root = root + "/user";
+    const std::string bundled_path = root + "/bundled.conf";
     std::filesystem::remove_all(root);
-    std::filesystem::create_directories(system_root + "/ainiux");
     std::filesystem::create_directories(user_root + "/ainiux");
     {
-        std::ofstream file(system_root + "/ainiux/benchmarks.conf");
+        std::ofstream file(bundled_path);
         file << "[grading]\nsystem_prompt = \"automatic system prompt\"\n";
     }
     {
@@ -428,8 +416,12 @@ void test_benchmark_prompt_configuration() {
         file << "[grading]\ncase_prompt = \"automatic user "
                 "{{benchmark_case_json}} prompt\"\n";
     }
-    const ainiux::config::Environment environment{user_root, system_root,
-                                                   "/nonexistent"};
+    const char* previous_bundled = std::getenv("AINIUX_BENCHMARKS");
+    const bool had_previous_bundled = previous_bundled != nullptr;
+    const std::string saved_bundled =
+        previous_bundled == nullptr ? std::string() : previous_bundled;
+    setenv("AINIUX_BENCHMARKS", bundled_path.c_str(), 1);
+    const ainiux::config::Environment environment{user_root, "/nonexistent"};
     ainiux::config::LoadResult automatic = ainiux::config::load_automatic(
         ainiux::cli::Options{}, environment, true);
     check(automatic.error.ok() &&
@@ -437,7 +429,7 @@ void test_benchmark_prompt_configuration() {
                   "automatic system prompt" &&
               automatic.options.benchmark_grading_prompts.case_prompt ==
                   "automatic user {{benchmark_case_json}} prompt",
-          "automatic benchmark prompts load bundled then system then user overrides");
+          "automatic benchmark prompts load bundled then user overrides");
     bool saw_bundled_prompt_diagnostic = false;
     bool saw_user_prompt_diagnostic = false;
     for (const ainiux::config::ConfigDiagnostic& diagnostic :
@@ -463,7 +455,7 @@ void test_benchmark_prompt_configuration() {
                   "automatic system prompt" &&
               without_user.options.benchmark_grading_prompts.case_prompt !=
                   "automatic user {{benchmark_case_json}} prompt",
-          "--no-config skips user benchmark prompts but retains bundled and system prompts");
+          "--no-config skips user benchmark prompts but retains bundled prompts");
     bool saw_skipped_user_prompts = false;
     for (const ainiux::config::ConfigDiagnostic& diagnostic :
          without_user.diagnostics) {
@@ -488,9 +480,14 @@ void test_benchmark_prompt_configuration() {
         previous_override == nullptr ? std::string() : previous_override;
     setenv("AINIUX_BENCHMARKS", override_path.c_str(), 1);
     ainiux::config::LoadResult overridden = ainiux::config::load_automatic(
-        ainiux::cli::Options{}, {"", "/nonexistent", "/nonexistent"}, false);
+        ainiux::cli::Options{}, {"", "/nonexistent"}, false);
     if (had_previous_override) {
         setenv("AINIUX_BENCHMARKS", saved_override.c_str(), 1);
+    } else {
+        unsetenv("AINIUX_BENCHMARKS");
+    }
+    if (had_previous_bundled) {
+        setenv("AINIUX_BENCHMARKS", saved_bundled.c_str(), 1);
     } else {
         unsetenv("AINIUX_BENCHMARKS");
     }
@@ -1006,8 +1003,8 @@ void test_config_schema_rejects_invalid_settings_transactionally() {
           "config schema rejects unknown editor linebreak modes");
 }
 
-void test_config_xdg_path_resolution() {
-    ainiux::config::Environment environment{"relative", "/high:relative:/low", "/home/tester"};
+void test_config_user_path_resolution() {
+    ainiux::config::Environment environment{"relative", "/home/tester"};
     check(ainiux::config::user_config_path(environment) == "/home/tester/.config/ainiux/config.conf",
           "relative XDG_CONFIG_HOME falls back to HOME");
     check(ainiux::config::user_editor_commands_path(environment) ==
@@ -1015,20 +1012,8 @@ void test_config_xdg_path_resolution() {
           "relative XDG_CONFIG_HOME falls back to HOME for editor commands");
     check(ainiux::config::user_themes_path(environment) == "/home/tester/.config/ainiux/themes.conf",
           "relative XDG_CONFIG_HOME falls back to HOME for themes");
-    const std::vector<std::string> system = ainiux::config::system_config_paths(environment);
-    check(system.size() == 2 && system[0] == "/low/ainiux/config.conf" &&
-              system[1] == "/high/ainiux/config.conf",
-          "system config directories load in reverse order and ignore relative entries");
-    const std::vector<std::string> editor_commands =
-        ainiux::config::system_editor_commands_paths(environment);
-    check(editor_commands.size() == 2 &&
-              editor_commands[0] == "/low/ainiux/editor-commands.conf" &&
-              editor_commands[1] == "/high/ainiux/editor-commands.conf",
-          "system editor-commands directories load in reverse order and ignore relative entries");
-    const std::vector<std::string> themes = ainiux::config::system_themes_paths(environment);
-    check(themes.size() == 2 && themes[0] == "/low/ainiux/themes.conf" &&
-              themes[1] == "/high/ainiux/themes.conf",
-          "system themes directories load in reverse order and ignore relative entries");
+    check(ainiux::config::bundled_config_paths().front() == "config/ainiux.conf",
+          "installed defaults begin with the development bundled config path");
 }
 
 void test_themes_config() {
@@ -1047,22 +1032,6 @@ void test_themes_config() {
     check(!err.ok() && err.message.find("unknown themes setting") != std::string::npos,
           "themes.conf rejects unrelated settings");
 
-    const std::string system_home =
-        std::filesystem::absolute("build/config-theme-system").lexically_normal().string();
-    std::filesystem::create_directories(system_home + "/ainiux");
-    {
-        std::ofstream system_themes(system_home + "/ainiux/themes.conf", std::ios::trunc);
-        check(system_themes.is_open(), "system themes test file opens");
-        system_themes << "[theme]\nname = sepia\nbackground = #F4ECD8\ntext = #5B4636\n"
-                         "muted = #7A6A58\nthinking_trace = #6E5F4D\nuser_label = #8B5E34\n"
-                         "assistant_label = #4F6F46\nerror = #9B2C2C\nstatus_foreground = #5B4636\n"
-                         "status_background = #E8DCC8\nthinking_activity = #8B5E34\n"
-                         "streaming_activity = #4F6F46\npanel_title = #8B5E34\npanel_border = #7A6A58\n"
-                         "panel_hint = #6E5F4D\npanel_highlight = #B7791F\npanel_body = #5B4636\n"
-                         "panel_background = #EFE2C8\n";
-        system_themes.close();
-        check(system_themes.good(), "system themes test file is written");
-    }
     const std::string config_home =
         std::filesystem::absolute("build/config-theme-user").lexically_normal().string();
     std::filesystem::create_directories(config_home + "/ainiux");
@@ -1079,11 +1048,11 @@ void test_themes_config() {
         user_themes.close();
         check(user_themes.good(), "user themes test file is written");
     }
-    ainiux::config::Environment environment{config_home, system_home, "/nonexistent"};
+    ainiux::config::Environment environment{config_home, "/nonexistent"};
     ainiux::config::LoadResult loaded = ainiux::config::load_automatic(ainiux::cli::Options{}, environment);
     check(loaded.error.ok(), "automatic loading with themes overrides succeeds");
     check(loaded.options.tui_themes.has("sepia") && loaded.options.tui_themes.has("dark"),
-          "system and user themes merge into the registry");
+          "installed and user themes merge into the registry");
     const ainiux::tui::ThemePalette* dark = loaded.options.tui_themes.find("dark");
     check(dark != nullptr && dark->background.r == 0x10 && dark->background.g == 0x10 &&
               dark->background.b == 0x10,
@@ -1134,17 +1103,6 @@ void test_editor_commands_config() {
     check(!err.ok() && err.message.find("unknown editor-commands setting") != std::string::npos,
           "editor-commands.conf rejects unrelated settings");
 
-    const std::string system_home =
-        std::filesystem::absolute("build/config-editor-system").lexically_normal().string();
-    std::filesystem::create_directories(system_home + "/ainiux");
-    {
-        std::ofstream system_commands(system_home + "/ainiux/editor-commands.conf", std::ios::trunc);
-        check(system_commands.is_open(), "system editor-commands test file opens");
-        system_commands << "[command]\nstring = /spell\nmodes = selection, all\n"
-                           "prompt = \"System spell override\"\n";
-        system_commands.close();
-        check(system_commands.good(), "system editor-commands test file is written");
-    }
     const std::string config_home =
         std::filesystem::absolute("build/config-editor-user").lexically_normal().string();
     std::filesystem::create_directories(config_home + "/ainiux");
@@ -1156,13 +1114,13 @@ void test_editor_commands_config() {
         user_commands.close();
         check(user_commands.good(), "user editor-commands test file is written");
     }
-    ainiux::config::Environment environment{config_home, system_home, "/nonexistent"};
+    ainiux::config::Environment environment{config_home, "/nonexistent"};
     ainiux::config::LoadResult loaded = ainiux::config::load_automatic(ainiux::cli::Options{}, environment);
     check(loaded.error.ok(), "automatic loading with editor-commands overrides succeeds");
     const ainiux::editor::EditorAssistCommand* overridden_spell =
         ainiux::editor::find_assist_command(loaded.options.editor_assist_config, "/spell");
     check(overridden_spell != nullptr && overridden_spell->prompt == "User spell override",
-          "user editor-commands.conf overrides system editor-commands.conf");
+          "user editor-commands.conf overrides installed editor commands");
     const ainiux::editor::EditorAssistCommand* kept_style =
         ainiux::editor::find_assist_command(loaded.options.editor_assist_config, "/style-formal");
     const ainiux::editor::EditorAssistCommand* kept_marketing =
@@ -1209,7 +1167,6 @@ void test_bundled_model_catalog_outside_source_directory() {
 
     const ainiux::config::Environment environment{
         (isolated_directory / "no-user-config").string(),
-        (isolated_directory / "no-system-config").string(),
         (isolated_directory / "no-home").string(),
     };
     const ainiux::config::LoadResult loaded =
@@ -1352,7 +1309,7 @@ void run_all() {
     test_config_reads_common_template();
     test_config_rejects_invalid_input();
     test_config_schema_rejects_invalid_settings_transactionally();
-    test_config_xdg_path_resolution();
+    test_config_user_path_resolution();
     test_themes_config();
     test_editor_commands_config();
 }

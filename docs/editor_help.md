@@ -163,7 +163,7 @@ Context settings live under `[editor]` in `config.conf` (and optional environmen
 | Code postfix | 2000 | `continue_postfix_max_chars` | `MAX_CONTINUE_POSTFIX` |
 | Output tokens | 32768 | `continue_max_tokens` | `MAX_AI_CONTINUE_TOKENS` |
 
-For any context side, `0` disables that side; it does not mean unlimited. Setting precedence is built-in default, system config, user config, then environment. The output-token setting is shared by prose and code.
+For any context side, `0` disables that side; it does not mean unlimited. Setting precedence is built-in default, installed defaults, user config, then environment. The output-token setting is shared by prose and code.
 
 ## Editor commands (`Ctrl+E`, `Esc`, or `Alt+X`, then type command)
 

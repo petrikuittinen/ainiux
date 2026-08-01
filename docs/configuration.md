@@ -4,13 +4,13 @@ Ainiux configuration is a small TOML-like format, not full TOML. Unknown keys, i
 
 ## Layering
 
-For `config.conf`, Ainiux loads:
-
-1. system files below each `$XDG_CONFIG_DIRS/ainiux/` entry in reverse directory order (default `/etc/xdg/ainiux/config.conf`);
-2. the user file at `$XDG_CONFIG_HOME/ainiux/config.conf` (normally `~/.config/ainiux/config.conf`);
-3. command-line options.
-
-Later values override earlier values by key. `--no-config` skips the user file only; administrator system configuration remains active. `--help` and `--version` do not load configuration.
+Ainiux loads the installed defaults from the selected prefix's
+`share/ainiux/` directory, then the user files below
+`$XDG_CONFIG_HOME/ainiux/` (normally `~/.config/ainiux/`), and finally command-line
+options. Later values override earlier values by key. Ainiux deliberately has no
+`/etc/xdg` system layer; this keeps upgrades from leaving stale administrator
+copies of experimental defaults in the active configuration path. `--no-config`
+skips the user files. `--help` and `--version` do not load configuration.
 
 Bundled templates live in `config/` and are installed by `make install`:
 
@@ -22,7 +22,9 @@ Bundled templates live in `config/` and are installed by `make install`:
 | `benchmarks.conf` | Judge grading instructions |
 | `models.conf` | Model capabilities, reasoning choices, context metadata, and purpose presets |
 
-The four specialized documents have their own system and user layers. See the comments in the bundled templates for record syntax.
+The bundled documents are installed beside the binary's other shared data. User
+copies can override or extend them; see the comments in the bundled templates for
+record syntax.
 
 ## A minimal user configuration
 

@@ -11,8 +11,6 @@ rm -rf "$HOME_DIR"
 mkdir -p "$HOME_DIR"
 export HOME="$HOME_DIR"
 unset XDG_CONFIG_HOME
-export XDG_CONFIG_DIRS="$ROOT/build/sqlite-empty-system-config"
-mkdir -p "$XDG_CONFIG_DIRS"
 export OPENAI_API_KEY="${OPENAI_API_KEY:-integration-test-key}"
 export AINIUX_SQLITE_TEST_IMAGE="$ROOT/tests/image_files/temperature_meter.jpg"
 

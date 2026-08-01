@@ -22,7 +22,6 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd -- "${SCRIPT_DIR}/.." && pwd)"
 
 PREFIX="${PREFIX:-/usr/local}"
-SYSCONFDIR="${SYSCONFDIR:-/etc}"
 DESTDIR="${DESTDIR:-}"
 WITH_DEPS=0
 NO_DEPS=0
@@ -43,7 +42,6 @@ Options:
   --optimized        Build with `make optimized` (-O3 -DNDEBUG, stripped)
   --user             Install to ~/.local (PREFIX and no sudo for a writable home)
   --prefix DIR       Installation prefix (default: /usr/local or $PREFIX)
-  --sysconfdir DIR   System config root (default: /etc or $SYSCONFDIR)
   --destdir DIR      Staging root for packaging (default: empty or $DESTDIR)
   -j N, --jobs N     Parallel make jobs
   -y, --yes          Non-interactive apt when used with --with-deps
@@ -84,10 +82,6 @@ while [ "$#" -gt 0 ]; do
             PREFIX="${2:?--prefix requires a directory}"
             shift 2
             ;;
-        --sysconfdir)
-            SYSCONFDIR="${2:?--sysconfdir requires a directory}"
-            shift 2
-            ;;
         --destdir)
             DESTDIR="${2:?--destdir requires a directory}"
             shift 2
@@ -120,8 +114,6 @@ fi
 
 if [ "${USER_INSTALL}" -eq 1 ]; then
     PREFIX="${HOME}/.local"
-    # User installs keep system templates under /etc only when root; for --user
-    # still pass SYSCONFDIR through make (existing files are preserved).
 fi
 
 cd -- "${REPO_ROOT}"
@@ -179,8 +171,7 @@ echo "==> Built $(./ainiux --version 2>/dev/null || true)"
 
 # The runtime parser intentionally accepts only canonical on/off booleans. Migrate
 # a preserved per-user override before installing so an upgrade cannot strand the
-# newly installed binary behind legacy true/false or yes/no values. The Makefile
-# performs the corresponding migration for preserved system configuration files.
+# newly installed binary behind legacy true/false or yes/no values.
 if [ -z "${DESTDIR}" ]; then
     user_config_root="${XDG_CONFIG_HOME:-${HOME}/.config}/ainiux"
     "${SCRIPT_DIR}/migrate-config-booleans.sh" \
@@ -206,7 +197,7 @@ if [ ! -w "${probe}" ] 2>/dev/null; then
 fi
 
 run_make_install() {
-    local -a cmd=(make install "PREFIX=${PREFIX}" "SYSCONFDIR=${SYSCONFDIR}")
+    local -a cmd=(make install "PREFIX=${PREFIX}")
     if [ -n "${DESTDIR}" ]; then
         cmd+=("DESTDIR=${DESTDIR}")
     fi
@@ -224,7 +215,7 @@ run_make_install() {
     fi
 }
 
-echo "==> Installing to PREFIX=${PREFIX} SYSCONFDIR=${SYSCONFDIR}${DESTDIR:+ DESTDIR=${DESTDIR}}"
+echo "==> Installing to PREFIX=${PREFIX}${DESTDIR:+ DESTDIR=${DESTDIR}}"
 run_make_install
 
 installed_bin="${DESTDIR}${PREFIX}/bin/ainiux"

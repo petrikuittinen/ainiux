@@ -56,16 +56,15 @@ struct ParseResult {
 
 struct Environment {
     std::string xdg_config_home;
-    std::string xdg_config_dirs;
     std::string home;
 };
 
-enum class ConfigScope { Bundled, System, User };
+enum class ConfigScope { Bundled, User };
 enum class ConfigFileKind { Config, EditorCommands, Themes, Benchmarks, Models };
 enum class ConfigFileState { Loaded, Missing, Skipped, Error, Unavailable };
 
 struct ConfigDiagnostic {
-    ConfigScope scope = ConfigScope::System;
+    ConfigScope scope = ConfigScope::Bundled;
     ConfigFileKind kind = ConfigFileKind::Config;
     ConfigFileState state = ConfigFileState::Missing;
     std::string path;
@@ -92,11 +91,7 @@ std::string user_editor_commands_path(const Environment& environment);
 std::string user_themes_path(const Environment& environment);
 std::string user_benchmarks_path(const Environment& environment);
 std::string user_models_path(const Environment& environment);
-std::vector<std::string> system_config_paths(const Environment& environment);
-std::vector<std::string> system_editor_commands_paths(const Environment& environment);
-std::vector<std::string> system_themes_paths(const Environment& environment);
-std::vector<std::string> system_benchmarks_paths(const Environment& environment);
-std::vector<std::string> system_models_paths(const Environment& environment);
+std::vector<std::string> bundled_config_paths();
 std::vector<std::string> bundled_editor_commands_paths();
 std::vector<std::string> bundled_themes_paths();
 std::vector<std::string> bundled_benchmarks_paths();

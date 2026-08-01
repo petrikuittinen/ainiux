@@ -11,7 +11,6 @@ TEST_HOME="$ROOT/build/test-home"
 mkdir -p "$EMPTY_CONFIG_HOME" "$TEST_HOME"
 export HOME="$TEST_HOME"
 export XDG_CONFIG_HOME="$EMPTY_CONFIG_HOME"
-export XDG_CONFIG_DIRS="$ROOT/build/empty-system-config"
 
 python3 "$ROOT/tests/mock_server/openai_mock.py" --port "$PORT" --model "$MODEL" >"$SERVER_LOG" 2>&1 &
 SERVER_PID=$!
@@ -328,19 +327,21 @@ configured_cli=$(XDG_CONFIG_DIRS="$config_system" XDG_CONFIG_HOME="$config_user"
     "$ROOT/ainiux" --input "$local_md" --output-format html --quiet)
 printf '%s\n' "$configured_cli" | grep -F '<h1>Local Input Title</h1>' >/dev/null
 
-configured_system_only=$(XDG_CONFIG_DIRS="$config_system" XDG_CONFIG_HOME="$config_user" \
+configured_defaults_only=$(XDG_CONFIG_DIRS="$config_system" XDG_CONFIG_HOME="$config_user" \
     "$ROOT/ainiux" --no-config --input "$local_md" --quiet)
-printf '%s\n' "$configured_system_only" | grep -F '<h1>Local Input Title</h1>' >/dev/null
+printf '%s\n' "$configured_defaults_only" | grep -F '# Local Input Title' >/dev/null
 
 config_debug_out="$ROOT/build/config-debug.out"
 config_debug_err="$ROOT/build/config-debug.err"
 XDG_CONFIG_DIRS="$config_system" XDG_CONFIG_HOME="$config_user" \
     "$ROOT/ainiux" --no-config --debug --input "$local_md" \
     >"$config_debug_out" 2>"$config_debug_err"
-grep -F "Config debug: loaded system config: $config_system/ainiux/config.conf" \
-    "$config_debug_err" >/dev/null
 grep -F "Config debug: skipped (--no-config) user config: $config_user/ainiux/config.conf" \
     "$config_debug_err" >/dev/null
+if grep -F 'Config debug: loaded system config:' "$config_debug_err" >/dev/null; then
+    echo "XDG_CONFIG_DIRS must not provide a system configuration layer" >&2
+    exit 1
+fi
 if grep -F 'Config debug:' "$config_debug_out" >/dev/null; then
     echo "config diagnostics must not be written to stdout" >&2
     exit 1
@@ -366,7 +367,7 @@ grep -F "$bad_config_user/ainiux/config.conf:3:1: invalid config setting tui.the
 
 skipped_invalid_user=$(XDG_CONFIG_DIRS="$config_system" XDG_CONFIG_HOME="$bad_config_user" \
     "$ROOT/ainiux" --no-config --input "$local_md" --quiet)
-printf '%s\n' "$skipped_invalid_user" | grep -F '<h1>Local Input Title</h1>' >/dev/null
+printf '%s\n' "$skipped_invalid_user" | grep -F '# Local Input Title' >/dev/null
 
 bad_config_system="$ROOT/build/config-invalid-system"
 mkdir -p "$bad_config_system/ainiux"
@@ -378,8 +379,8 @@ XDG_CONFIG_DIRS="$bad_config_system" XDG_CONFIG_HOME="$config_user" \
     "$ROOT/ainiux" --no-config --input "$local_md" --quiet \
     >"$ROOT/build/config-invalid-system.out" \
     2>"$ROOT/build/config-invalid-system.err" || bad_system_exit=$?
-test "$bad_system_exit" -eq 5
-grep -F 'unsupported config version 9' "$ROOT/build/config-invalid-system.err" >/dev/null
+test "$bad_system_exit" -eq 0
+printf '%s\n' "$(cat "$ROOT/build/config-invalid-system.out")" | grep -F '# Local Input Title' >/dev/null
 
 offline_markdown=$("$ROOT/ainiux" --provider none --input "$local_html" --output-format md --quiet)
 printf '%s\n' "$offline_markdown" | grep -F '# Local Input Title' >/dev/null
@@ -621,7 +622,7 @@ reasoning_warning_reply=$("$ROOT/ainiux" "$BASE" --no-stream \
 test "$reasoning_warning_reply" = "Hello"
 grep "Warning: reasoning value 'maxx' is not listed for model 'gateway/deepseek-v4-flash'" \
     "$reasoning_warning_err" >/dev/null
-grep 'models.conf values: none|high|max' "$reasoning_warning_err" >/dev/null
+grep 'models.conf values: none|low|high|max' "$reasoning_warning_err" >/dev/null
 
 repl_reasoning_warning_err="$ROOT/build/repl-reasoning-value-warning.err"
 printf '/reasoning maxx\nn\n/quit\n' | \

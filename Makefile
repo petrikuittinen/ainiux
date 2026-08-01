@@ -18,7 +18,6 @@ SQLITE_LIBS ?= $(shell pkg-config --libs sqlite3 2>/dev/null || printf '%s\n' -l
 CXXFLAGS += $(LIBCURL_CFLAGS) $(SQLITE_CFLAGS)
 LDFLAGS += $(LIBCURL_LIBS) $(SQLITE_LIBS)
 PREFIX ?= /usr/local
-SYSCONFDIR ?= /etc
 BUILD_DIR := build
 GENERATED_DIR := $(BUILD_DIR)/generated
 CXXFLAGS += -I$(GENERATED_DIR)
@@ -41,15 +40,9 @@ EDITOR_COMMANDS_CONFIG := config/editor-commands.conf
 THEMES_CONFIG := config/themes.conf
 BENCHMARKS_CONFIG := config/benchmarks.conf
 MODELS_CONFIG := config/models.conf
-CONFIG_MIGRATOR := scripts/migrate-config-booleans.sh
+COMMON_CONFIG_INSTALL := $(DESTDIR)$(PREFIX)/share/ainiux/config.conf
 MODELS_CONFIG_HEADER := $(GENERATED_DIR)/embedded_models_config.hpp
 EDITOR_COMMANDS_CONFIG_HEADER := $(GENERATED_DIR)/embedded_editor_commands.hpp
-COMMON_CONFIG_DIR := $(DESTDIR)$(SYSCONFDIR)/xdg/ainiux
-COMMON_CONFIG_PATH := $(COMMON_CONFIG_DIR)/config.conf
-EDITOR_COMMANDS_CONFIG_PATH := $(COMMON_CONFIG_DIR)/editor-commands.conf
-THEMES_CONFIG_PATH := $(COMMON_CONFIG_DIR)/themes.conf
-BENCHMARKS_CONFIG_PATH := $(COMMON_CONFIG_DIR)/benchmarks.conf
-MODELS_CONFIG_PATH := $(COMMON_CONFIG_DIR)/models.conf
 EDITOR_COMMANDS_INSTALL := $(DESTDIR)$(PREFIX)/share/ainiux/editor-commands.conf
 THEMES_INSTALL := $(DESTDIR)$(PREFIX)/share/ainiux/themes.conf
 BENCHMARKS_INSTALL := $(DESTDIR)$(PREFIX)/share/ainiux/benchmarks.conf
@@ -227,40 +220,13 @@ leak-check: $(BIN) $(TEST_BIN) $(IO_FAULT_BIN)
 
 test-leak: leak-check
 
-install: $(BIN) $(COMMON_CONFIG) $(EDITOR_COMMANDS_CONFIG) $(THEMES_CONFIG) $(BENCHMARKS_CONFIG) $(MODELS_CONFIG) $(CONFIG_MIGRATOR) $(EDITOR_HELP_SRC) $(MASTER_PROMPT_SRC) $(SECURITY_PROMPT_SRC) $(AGENT_PROMPT_SRC)
+install: $(BIN) $(COMMON_CONFIG) $(EDITOR_COMMANDS_CONFIG) $(THEMES_CONFIG) $(BENCHMARKS_CONFIG) $(MODELS_CONFIG) $(EDITOR_HELP_SRC) $(MASTER_PROMPT_SRC) $(SECURITY_PROMPT_SRC) $(AGENT_PROMPT_SRC)
 	install -d "$(DESTDIR)$(PREFIX)/bin"
 	install -m 0755 $(BIN) "$(DESTDIR)$(PREFIX)/bin/$(BIN)"
-	install -d "$(COMMON_CONFIG_DIR)"
-	@if test -e "$(COMMON_CONFIG_PATH)"; then \
-		"$(CONFIG_MIGRATOR)" "$(COMMON_CONFIG_PATH)"; \
-		echo "Preserving existing system config: $(COMMON_CONFIG_PATH)"; \
-	else \
-		install -m 0644 "$(COMMON_CONFIG)" "$(COMMON_CONFIG_PATH)"; \
-	fi
-	@if test -e "$(EDITOR_COMMANDS_CONFIG_PATH)"; then \
-		echo "Preserving existing system editor commands: $(EDITOR_COMMANDS_CONFIG_PATH)"; \
-	else \
-		install -m 0644 "$(EDITOR_COMMANDS_CONFIG)" "$(EDITOR_COMMANDS_CONFIG_PATH)"; \
-	fi
-	@if test -e "$(THEMES_CONFIG_PATH)"; then \
-		echo "Preserving existing system themes: $(THEMES_CONFIG_PATH)"; \
-	else \
-		install -m 0644 "$(THEMES_CONFIG)" "$(THEMES_CONFIG_PATH)"; \
-	fi
-	@if test -e "$(BENCHMARKS_CONFIG_PATH)"; then \
-		echo "Preserving existing system benchmark prompts: $(BENCHMARKS_CONFIG_PATH)"; \
-	else \
-		install -m 0644 "$(BENCHMARKS_CONFIG)" "$(BENCHMARKS_CONFIG_PATH)"; \
-	fi
-	@if test -e "$(MODELS_CONFIG_PATH)"; then \
-		"$(CONFIG_MIGRATOR)" "$(MODELS_CONFIG_PATH)"; \
-		echo "Preserving existing system model catalog: $(MODELS_CONFIG_PATH)"; \
-	else \
-		install -m 0644 "$(MODELS_CONFIG)" "$(MODELS_CONFIG_PATH)"; \
-	fi
 	install -d "$(BENCHMARK_DATA_DIR)"
 	install -m 0644 $(BUILTIN_DATASET) benchmarks/long-context.jsonl $(BUILTIN_DATASET_PARTS) "$(BENCHMARK_DATA_DIR)"
 	install -d "$(DESTDIR)$(PREFIX)/share/ainiux"
+	install -m 0644 "$(COMMON_CONFIG)" "$(COMMON_CONFIG_INSTALL)"
 	install -m 0644 "$(EDITOR_HELP_SRC)" "$(EDITOR_HELP_INSTALL)"
 	install -m 0644 "$(EDITOR_COMMANDS_CONFIG)" "$(EDITOR_COMMANDS_INSTALL)"
 	install -m 0644 "$(THEMES_CONFIG)" "$(THEMES_INSTALL)"

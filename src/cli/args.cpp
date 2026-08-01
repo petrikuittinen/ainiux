@@ -246,10 +246,10 @@ ParseResult parse_args(int argc, char** argv, const Options& base_options) {
         } else if ((arg == "grade" && i == 1) || arg == "--grade") {
             opts.grade = true;
             opts.format = OutputFormat::Ndjson;
-            if (!opts.stream_explicit) {
+            if (!opts.stream_cli_explicit) {
                 opts.stream = false;
             }
-            if (!opts.has_temperature) {
+            if (!opts.temperature_cli_explicit) {
                 opts.temperature = 0.0;
                 opts.has_temperature = true;
             }
@@ -288,9 +288,11 @@ ParseResult parse_args(int argc, char** argv, const Options& base_options) {
         } else if (arg == "--stream") {
             opts.stream = true;
             opts.stream_explicit = true;
+            opts.stream_cli_explicit = true;
         } else if (arg == "--no-stream") {
             opts.stream = false;
             opts.stream_explicit = true;
+            opts.stream_cli_explicit = true;
         } else if (arg == "--responses") {
             opts.api = "responses";
         } else if (arg == "--quiet") {
@@ -360,6 +362,7 @@ ParseResult parse_args(int argc, char** argv, const Options& base_options) {
                     return {opts, err};
                 }
                 opts.has_temperature = true;
+                opts.temperature_cli_explicit = true;
                 opts.temperature_preset_applied = false;
             } else if (opt == "--top-p") {
                 Error err = parse_double(opt, value, opts.top_p);
@@ -1136,7 +1139,7 @@ Options:
       --quiet
   -v, --verbose                 Print TTFT and token/s metrics to stderr.
       --debug                   Print configuration diagnostics to stderr.
-      --no-config               Skip the automatic user config; keep system config.
+      --no-config               Skip the automatic user config; keep installed defaults.
       --version
   -h, --help
 )";

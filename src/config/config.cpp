@@ -1292,24 +1292,6 @@ Error apply_editor_assist_entry(const std::string& name,
     return schema_error(entry, "unknown editor-commands setting");
 }
 
-std::vector<std::string> config_paths_from_dirs(const std::string& dirs, const char* filename) {
-    std::vector<std::string> priority_order;
-    size_t begin = 0;
-    while (begin <= dirs.size()) {
-        const size_t colon = dirs.find(':', begin);
-        const size_t end = colon == std::string::npos ? dirs.size() : colon;
-        const std::string dir = dirs.substr(begin, end - begin);
-        if (absolute_path(dir)) {
-            priority_order.push_back((std::filesystem::path(dir) / "ainiux" / filename).string());
-        }
-        if (colon == std::string::npos) {
-            break;
-        }
-        begin = colon + 1;
-    }
-    return std::vector<std::string>(priority_order.rbegin(), priority_order.rend());
-}
-
 bool repeatable_entry_parts(const std::string& name,
                             const std::string& section,
                             size_t& index,
@@ -2267,8 +2249,7 @@ Error apply_document(const Document& document, cli::Options& options) {
 }
 
 Environment process_environment() {
-    return {environment_value("XDG_CONFIG_HOME"), environment_value("XDG_CONFIG_DIRS"),
-            environment_value("HOME")};
+    return {environment_value("XDG_CONFIG_HOME"), environment_value("HOME")};
 }
 
 std::string user_config_path(const Environment& environment) {
@@ -2281,9 +2262,12 @@ std::string user_config_path(const Environment& environment) {
     return (std::filesystem::path(environment.home) / ".config" / "ainiux" / "config.conf").string();
 }
 
-std::vector<std::string> system_config_paths(const Environment& environment) {
-    const std::string dirs = environment.xdg_config_dirs.empty() ? "/etc/xdg" : environment.xdg_config_dirs;
-    return config_paths_from_dirs(dirs, "config.conf");
+std::vector<std::string> bundled_config_paths() {
+    std::vector<std::string> paths;
+    paths.emplace_back("config/ainiux.conf");
+    paths.emplace_back("/usr/local/share/ainiux/config.conf");
+    paths.emplace_back("/usr/share/ainiux/config.conf");
+    return paths;
 }
 
 std::string user_editor_commands_path(const Environment& environment) {
@@ -2296,11 +2280,6 @@ std::string user_editor_commands_path(const Environment& environment) {
     }
     return (std::filesystem::path(environment.home) / ".config" / "ainiux" / "editor-commands.conf")
         .string();
-}
-
-std::vector<std::string> system_editor_commands_paths(const Environment& environment) {
-    const std::string dirs = environment.xdg_config_dirs.empty() ? "/etc/xdg" : environment.xdg_config_dirs;
-    return config_paths_from_dirs(dirs, "editor-commands.conf");
 }
 
 std::vector<std::string> bundled_editor_commands_paths() {
@@ -2324,11 +2303,6 @@ std::string user_themes_path(const Environment& environment) {
         return {};
     }
     return (std::filesystem::path(environment.home) / ".config" / "ainiux" / "themes.conf").string();
-}
-
-std::vector<std::string> system_themes_paths(const Environment& environment) {
-    const std::string dirs = environment.xdg_config_dirs.empty() ? "/etc/xdg" : environment.xdg_config_dirs;
-    return config_paths_from_dirs(dirs, "themes.conf");
 }
 
 std::vector<std::string> bundled_themes_paths() {
@@ -2358,12 +2332,6 @@ std::string user_benchmarks_path(const Environment& environment) {
         .string();
 }
 
-std::vector<std::string> system_benchmarks_paths(const Environment& environment) {
-    const std::string dirs =
-        environment.xdg_config_dirs.empty() ? "/etc/xdg" : environment.xdg_config_dirs;
-    return config_paths_from_dirs(dirs, "benchmarks.conf");
-}
-
 std::vector<std::string> bundled_benchmarks_paths() {
     std::vector<std::string> paths;
     if (const char* override_path = std::getenv("AINIUX_BENCHMARKS")) {
@@ -2383,11 +2351,6 @@ std::string user_models_path(const Environment& environment) {
     }
     if (!absolute_path(environment.home)) return {};
     return (std::filesystem::path(environment.home) / ".config" / "ainiux" / "models.conf").string();
-}
-
-std::vector<std::string> system_models_paths(const Environment& environment) {
-    const std::string dirs = environment.xdg_config_dirs.empty() ? "/etc/xdg" : environment.xdg_config_dirs;
-    return config_paths_from_dirs(dirs, "models.conf");
 }
 
 std::vector<std::string> bundled_models_paths() {
@@ -2465,10 +2428,6 @@ LoadResult load_automatic(const cli::Options& base_options,
             {ConfigScope::Bundled, ConfigFileKind::Models,
              ConfigFileState::Loaded, "embedded models.conf"});
     }
-    for (const std::string& path : system_models_paths(environment)) {
-        Error err = load_models_path(path, ConfigScope::System);
-        if (!err.ok()) { result.error = std::move(err); return result; }
-    }
     const std::string user_models = user_models_path(environment);
     if (user_models.empty()) {
         result.diagnostics.push_back(
@@ -2528,14 +2487,6 @@ LoadResult load_automatic(const cli::Options& base_options,
         }
     }
     bool benchmark_prompts_loaded = bundled_benchmarks_loaded;
-    for (const std::string& path : system_benchmarks_paths(environment)) {
-        Error err = load_benchmarks_path(path, ConfigScope::System,
-                                         benchmark_prompts_loaded);
-        if (!err.ok()) {
-            result.error = std::move(err);
-            return result;
-        }
-    }
     const std::string user_benchmarks = user_benchmarks_path(environment);
     if (user_benchmarks.empty()) {
         result.diagnostics.push_back(
@@ -2582,12 +2533,17 @@ LoadResult load_automatic(const cli::Options& base_options,
     };
 
     bool themes_loaded = false;
-    for (const std::string& path : system_themes_paths(environment)) {
-        Error err = load_themes_path(path, ConfigScope::System, themes_loaded);
+    for (const std::string& path : bundled_themes_paths()) {
+        std::error_code filesystem_error;
+        if (!std::filesystem::exists(path, filesystem_error) || filesystem_error) {
+            continue;
+        }
+        Error err = load_themes_path(path, ConfigScope::Bundled, themes_loaded);
         if (!err.ok()) {
             result.error = std::move(err);
             return result;
         }
+        if (themes_loaded) break;
     }
 
     const std::string user_themes = user_themes_path(environment);
@@ -2602,23 +2558,6 @@ LoadResult load_automatic(const cli::Options& base_options,
         if (!err.ok()) {
             result.error = std::move(err);
             return result;
-        }
-    }
-
-    if (!themes_loaded) {
-        for (const std::string& path : bundled_themes_paths()) {
-            std::error_code filesystem_error;
-            if (!std::filesystem::exists(path, filesystem_error) || filesystem_error) {
-                continue;
-            }
-            Error err = load_themes_path(path, ConfigScope::System, themes_loaded);
-            if (!err.ok()) {
-                result.error = std::move(err);
-                return result;
-            }
-            if (themes_loaded) {
-                break;
-            }
         }
     }
 
@@ -2658,7 +2597,7 @@ LoadResult load_automatic(const cli::Options& base_options,
     };
 
     // Load order matches models.conf: bundled (or embedded) first so the full
-    // built-in command set is always available, then system/user overrides merge
+    // built-in command set is always available, then user overrides merge
     // on top. Previously a missing/outdated cwd or XDG file fell back to a
     // minimal C++ subset and dropped commands like /style-formal and /marketing.
     bool bundled_editor_commands_loaded = false;
@@ -2698,14 +2637,6 @@ LoadResult load_automatic(const cli::Options& base_options,
             {ConfigScope::Bundled, ConfigFileKind::EditorCommands, ConfigFileState::Loaded,
              "embedded editor-commands.conf"});
     }
-    for (const std::string& path : system_editor_commands_paths(environment)) {
-        Error err = load_editor_commands_path(path, ConfigScope::System);
-        if (!err.ok()) {
-            result.error = std::move(err);
-            return result;
-        }
-    }
-
     const std::string user_editor_commands = user_editor_commands_path(environment);
     if (user_editor_commands.empty()) {
         result.diagnostics.push_back(
@@ -2723,31 +2654,33 @@ LoadResult load_automatic(const cli::Options& base_options,
         }
     }
 
-    const std::vector<std::string> paths = system_config_paths(environment);
-    for (const std::string& path : paths) {
+    bool bundled_config_loaded = false;
+    for (const std::string& path : bundled_config_paths()) {
         std::error_code filesystem_error;
         const bool exists = std::filesystem::exists(path, filesystem_error);
         if (filesystem_error) {
-            result.diagnostics.push_back(
-                {ConfigScope::System, ConfigFileKind::Config, ConfigFileState::Error, path});
-            result.error = {ErrorCode::Config, "could not inspect config file: " + path};
-            return result;
+            continue;
         }
         if (!exists) {
-            result.diagnostics.push_back(
-                {ConfigScope::System, ConfigFileKind::Config, ConfigFileState::Missing, path});
             continue;
         }
         Error err = apply_config_file(path, result.options);
         if (!err.ok()) {
             result.diagnostics.push_back(
-                {ConfigScope::System, ConfigFileKind::Config, ConfigFileState::Error, path});
+                {ConfigScope::Bundled, ConfigFileKind::Config, ConfigFileState::Error, path});
             result.error = std::move(err);
             return result;
         }
         result.loaded_paths.push_back(path);
         result.diagnostics.push_back(
-            {ConfigScope::System, ConfigFileKind::Config, ConfigFileState::Loaded, path});
+            {ConfigScope::Bundled, ConfigFileKind::Config, ConfigFileState::Loaded, path});
+        bundled_config_loaded = true;
+        break;
+    }
+    if (!bundled_config_loaded) {
+        result.diagnostics.push_back(
+            {ConfigScope::Bundled, ConfigFileKind::Config, ConfigFileState::Unavailable,
+             "config/ainiux.conf, /usr/local/share/ainiux/config.conf, /usr/share/ainiux/config.conf"});
     }
 
     const std::string user_path = user_config_path(environment);
