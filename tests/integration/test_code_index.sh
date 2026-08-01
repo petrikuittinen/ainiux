@@ -43,11 +43,13 @@ grep -q 'bootModule' "$WORK/report.md"
 grep -q 'loadLegacy' "$WORK/report.md"
 grep -q '\.card' "$WORK/report.md"
 grep -q 'embeddedBoot' "$WORK/report.md"
-grep -q '| JavaScript | 2 | 5 |' "$WORK/report.md"
-grep -q '| TypeScript | 4 | 8 |' "$WORK/report.md"
-grep -q '| CSS | 1 | 2 |' "$WORK/report.md"
-grep -q '| HTML | 1 | 8 |' "$WORK/report.md"
-grep -q '| \*\*All languages\*\* | \*\*11\*\* | \*\*28\*\* | \*\*10\*\* | \*\*1\*\* |' "$WORK/report.md"
+# Totals render as a Unicode box table in UTF-8 locales and padded GFM in the
+# portable fallback. Match the semantic cells rather than one border style.
+grep -Eq 'JavaScript[[:space:]│|]+2[[:space:]│|]+5[[:space:]│|]' "$WORK/report.md"
+grep -Eq 'TypeScript[[:space:]│|]+4[[:space:]│|]+8[[:space:]│|]' "$WORK/report.md"
+grep -Eq 'CSS[[:space:]│|]+1[[:space:]│|]+2[[:space:]│|]' "$WORK/report.md"
+grep -Eq 'HTML[[:space:]│|]+1[[:space:]│|]+8[[:space:]│|]' "$WORK/report.md"
+grep -Eq '\*\*All languages\*\*[[:space:]│|]+\*\*11\*\*[[:space:]│|]+\*\*28\*\*[[:space:]│|]+\*\*10\*\*[[:space:]│|]+\*\*1\*\*[[:space:]│|]' "$WORK/report.md"
 if grep -q 'ignored.py' "$WORK/report.md"; then
     echo 'ignored source appeared in code index report' >&2
     exit 1
@@ -107,8 +109,9 @@ printf '%s\n' '[indexedToml]' 'enabled = true' > "$LANG_WORK/config.toml"
 printf '%s\n' 'indexedYaml:' '  enabled: true' > "$LANG_WORK/config.yaml"
 printf '%s\n' '[indexedIni]' 'enabled = true' > "$LANG_WORK/config.ini"
 (cd "$LANG_WORK" && "$BIN" --index-code --print-index >"$LANG_WORK/report.md" 2>"$LANG_WORK/index.stderr")
+sed 's/│/|/g' "$LANG_WORK/report.md" > "$LANG_WORK/report-ascii.md"
 for language in Markdown 'C++' 'C#' Java HTML-only XML JSON Bash PHP Perl Ruby Rust Go PowerShell Assembly SQL TOML YAML INI; do
-    grep -Fq "| $language |" "$LANG_WORK/report.md"
+    grep -Fq "| $language " "$LANG_WORK/report-ascii.md"
 done
 for symbol in 'Indexed Markdown' IndexedCpp IndexedCSharp IndexedJava indexed-xhtml IndexedXml \
     indexedJson indexed_bash indexed_php indexed_perl indexed_ruby indexed_rust indexedGo \

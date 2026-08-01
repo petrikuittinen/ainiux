@@ -176,6 +176,7 @@ def scenario_seed_alpha(binary, base, model, home_dir):
         [
             ("/new Alpha\r", 0.5),
             ("sqlite-save-one\r", 1.0),
+            ("/remove-empty\r", 0.5),
             ("/quit\r", 0.2),
         ],
     )
@@ -206,7 +207,7 @@ def scenario_fresh_start(binary, base, model, home_dir):
         base,
         model,
         home_dir,
-        [("/quit\r", 0.2)],
+        [("\x1b", 0.4), ("/quit\r", 0.2)],
         dismiss_startup_thread_list=False,
     )
     if b"Loaded last thread" in transcript:
@@ -225,6 +226,7 @@ def scenario_beta_and_list_load(binary, base, model, home_dir):
         [
             ("/new Beta\r", 0.5),
             ("sqlite-save-two\r", 1.0),
+            ("/remove-empty\r", 0.5),
             ("\x0c", 0.5),  # Ctrl+L thread list
             ("\x1b[B", 0.3),
             ("\r", 1.5),
@@ -258,6 +260,7 @@ def scenario_provider_update(binary, base, model, home_dir):
         [
             ("/new ProviderTest\r", 0.5),
             ("provider-ping\r", 1.5),
+            ("/remove-empty\r", 0.5),
             ("/provider openai\r", 1.0),
             ("\x1b", 0.5),
             ("/quit\r", 0.5),
@@ -289,6 +292,7 @@ def scenario_remove_thread(binary, base, model, home_dir):
         [
             ("/new ToRemove\r", 0.5),
             ("remove-me\r", 1.5),
+            ("/remove-empty\r", 0.5),
             ("/remove\r", 0.5),
             ("y\r", 0.8),
             ("/quit\r", 0.5),
@@ -314,9 +318,9 @@ def scenario_remove_thread(binary, base, model, home_dir):
 
 
 def scenario_stale_last_thread(binary, base, model, home_dir):
-    # Auto-resume of last_thread_id on TUI startup is not implemented yet (see TODO.md).
-    # This scenario still verifies that a stale last_thread_id value does not prevent
-    # a normal chat session from starting and exiting cleanly.
+    # Startup now opens the thread selector. Choosing a new thread replaces a
+    # stale last_thread_id, and clean exit removes that empty thread and clears
+    # the pointer rather than leaving it aimed at a nonexistent row.
     conn = query_db(db_path(home_dir))
     try:
         conn.execute(
@@ -343,8 +347,8 @@ def scenario_stale_last_thread(binary, base, model, home_dir):
         row = conn.execute(
             "SELECT value FROM app_state WHERE key = 'last_thread_id'"
         ).fetchone()
-        if row is None or str(row["value"]) != "99999":
-            raise RuntimeError("expected stale last_thread_id value to remain until a real load path uses it")
+        if row is None or str(row["value"]) != "0":
+            raise RuntimeError("expected startup and empty-thread cleanup to clear stale last_thread_id")
     finally:
         conn.close()
 
@@ -403,11 +407,11 @@ def scenario_media_restart(binary, base, model, home_dir):
         model,
         media_home,
         [
-            ("/list\r", 0.6),
             ("\r", 1.0),
             ("expect-restored-image\r", 1.5),
             ("/quit\r", 0.5),
         ],
+        dismiss_startup_thread_list=False,
     )
     if b"AINIUX_ERR_HTTP_STATUS" in transcript:
         raise RuntimeError("restored media thread produced an HTTP validation error")
@@ -431,8 +435,9 @@ def scenario_media_restart(binary, base, model, home_dir):
         conn.close()
     master, process, _ = start_tui(binary, base, model, media_home)
     try:
-        # Dismiss startup thread selector before slash commands.
-        send(master, "\t", 0.4)
+        # Leave the startup selector without creating an empty thread, then
+        # expire the only saved media thread.
+        send(master, "\x1b", 0.4)
         send(master, "/cleanup\r", 0.05)
         wait_for_thread_field(path, thread_id, "read_only", 1)
         send(master, "/quit\r", 0.1)
@@ -461,7 +466,8 @@ def scenario_media_restart(binary, base, model, home_dir):
         base,
         model,
         media_home,
-        [("/list\r", 0.6), ("\r", 1.0), ("must-not-send\r", 0.6), ("\x11", 0.5)],
+        [("\r", 1.0), ("must-not-send\r", 0.6), ("\x11", 0.5)],
+        dismiss_startup_thread_list=False,
     )
     if b"Thread is read-only" not in transcript:
         raise RuntimeError("expected a read-only status when continuing an expired-media thread")
@@ -555,11 +561,11 @@ def scenario_markdown_restart(binary, base, model, home_dir):
         model,
         markdown_home,
         [
-            ("/list\r", 0.6),
             ("\r", 1.0),
             ("expect-restored-markdown\r", 1.5),
             ("/quit\r", 0.5),
         ],
+        dismiss_startup_thread_list=False,
     )
     if b"AINIUX_ERR_HTTP_STATUS" in transcript:
         raise RuntimeError("restored Markdown thread failed durable replay validation")
@@ -577,6 +583,7 @@ def scenario_incomplete_thread_setup(binary, base, model, home_dir):
         [
             ("/new IncompleteModel\r", 0.5),
             ("setup-seed\r", 1.2),
+            ("/remove-empty\r", 0.5),
             ("/quit\r", 0.5),
         ],
     )
@@ -606,12 +613,12 @@ def scenario_incomplete_thread_setup(binary, base, model, home_dir):
         model,
         setup_home,
         [
-            ("/list\r", 0.6),
             ("\r", 0.8),
             ("\x1b", 0.4),
             ("must-not-send\r", 0.6),
             ("\x11", 0.5),
         ],
+        dismiss_startup_thread_list=False,
     )
     if b"[SETUP: model missing]" not in transcript:
         raise RuntimeError("expected the thread picker to label the missing model")
@@ -631,13 +638,13 @@ def scenario_incomplete_thread_setup(binary, base, model, home_dir):
         model,
         setup_home,
         [
-            ("/list\r", 0.6),
             ("\r", 0.8),
             ("\x1b", 0.4),
             (f"/provider {base}\r", 1.2),
             ("after-required-setup\r", 1.4),
             ("/quit\r", 0.5),
         ],
+        dismiss_startup_thread_list=False,
     )
     if b"AINIUX_ERR_HTTP_STATUS" in transcript:
         raise RuntimeError("configured incomplete thread produced an HTTP error")
