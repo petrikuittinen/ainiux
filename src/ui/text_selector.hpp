@@ -9,9 +9,12 @@
 
 namespace ainiux::ui {
 
-constexpr const char kTextSelectorStandardHint[] = "↑↓ move · Enter select · Esc cancel";
-constexpr const char kTextSelectorThreadHint[] = "Newest first · Enter opens · N new · DEL delete · Esc cancels";
-constexpr const char kTextSelectorBufferHint[] = "Buffers - Enter opens - N new - DEL close - Esc cancels";
+constexpr const char kTextSelectorStandardHint[] =
+    "↑↓ move · type to jump · Enter select · Esc cancel";
+constexpr const char kTextSelectorThreadHint[] =
+    "Newest first · Enter opens · Tab/Insert new · DEL delete · Esc cancels";
+constexpr const char kTextSelectorBufferHint[] =
+    "Buffers - Enter opens - Tab/Insert new - DEL close - Esc cancels";
 constexpr const char kTextSelectorAttachmentHint[] = "↑↓ move · DEL delete · Esc close";
 
 constexpr const char kTextSelectorArrowPrefix[] = u8"› ";
@@ -39,6 +42,15 @@ size_t move_text_selector_selection(size_t selected,
                                     size_t item_count,
                                     editor::MovementKey key,
                                     size_t page_step = kTextSelectorDefaultPageStep);
+
+// Case-insensitive contains match on displayed labels. Searches forward from
+// the item after `selected`, wrapping to the start. Printable chars only;
+// control keys (Tab, Esc, Ctrl+*) return false without changing selection.
+// Returns true when the selection index changed.
+bool jump_text_selector_by_char(size_t& selected,
+                                size_t item_count,
+                                const std::function<std::string(size_t)>& label_at,
+                                unsigned char ch);
 
 std::string text_selector_status(const std::string& label, size_t selected, size_t item_count);
 

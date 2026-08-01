@@ -42,9 +42,10 @@ Copy and selection-delete (Backspace/Delete on a range) publish to native deskto
 | `Ctrl+R` | Regenerate last answer (resend last user prompt) |
 | `Ctrl+T` | Toggle thinking-trace display (`/thinking trace` / `notrace`) |
 | `Ctrl+L` | Open saved-thread picker (`/list`; also shown on chat startup) |
-| `Ctrl+P` | Toggle chat → editor; the next Ctrl+P returns editor → chat |
+| `Ctrl+P` | Open provider picker (same as bare `/provider`; model picker follows when needed) |
+| `Ctrl+G` | Toggle chat → editor; the next Ctrl+G returns editor → chat |
 
-Chat mode opens the **thread selector** on startup (same UI as `Ctrl+L` / `/list`). Choose an existing thread or press **N** for a new one. If the CLI did not set a provider/model and the selected thread has them saved, those values are restored.
+Chat mode opens the **thread selector** on startup (same UI as `Ctrl+L` / `/list`). Choose an existing thread or press **Tab** / **Insert** for a new one. If the CLI did not set a provider/model and the selected thread has them saved, those values are restored.
 
 Use `/pop` to remove the last user or assistant message.
 
@@ -75,14 +76,15 @@ Use `/pop` to remove the last user or assistant message.
 **Thread list** (`Ctrl+L` / `/list`):
 
 - `↑`/`↓`, `PageUp`/`PageDown`, `Home`/`End` — move selection
+- Letter/number keys — jump to the next label containing that character (wraps; no match keeps selection)
 - `Enter` — open thread
-- `N` — new thread
+- `Tab` / `Insert` — new thread
 - `DEL` — delete selected thread (prompts y/n)
 - `Ctrl+H` — toggle help
 - `Esc` — cancel
 - `Ctrl+Q` — quit
 
-**Provider/model pickers**, **remove confirm**, **model confirm** — `↑`/`↓`, `Enter`, `y`/`n`/`Esc`, `Ctrl+Q` as appropriate.
+**Provider/model pickers** — `↑`/`↓`, type-to-jump (same character search), `Enter`, `Esc`, `Ctrl+Q`. **Remove confirm** / **model confirm** — `y`/`n`/`Esc`, `Ctrl+Q` as appropriate.
 
 ### Slash commands (type in input, `Enter` to run if single-line)
 
@@ -165,7 +167,8 @@ Bracketed terminal paste is undoable with `Ctrl+Z` / `Ctrl+U`.
 
 | Shortcut | Action |
 |----------|--------|
-| `Ctrl+P` | Return to the mode that opened the editor (chat or agent); standalone editor defaults to chat |
+| `Ctrl+G` | Return to the mode that opened the editor (chat or agent); standalone editor defaults to chat |
+| `Ctrl+P` | Open provider picker (same as bare `/provider`; model picker follows when needed) |
 
 Editor mode accepts `chat`, `agent`, and `editor` with or without a leading
 slash. Chat and agent modes use `/chat`, `/agent`, and `/editor`.
@@ -203,13 +206,14 @@ session management.
 | `Enter` / `Ctrl+S` | Submit the next agent goal or follow-up |
 | `Esc` | Cancel the active model/tool job |
 | `Ctrl+H` | Toggle mode help panel (same as `/help`) |
-| `Ctrl+P` | Toggle agent → editor; the next Ctrl+P returns editor → agent |
+| `Ctrl+P` | Open provider picker (same as bare `/provider`; model picker follows when needed) |
+| `Ctrl+G` | Toggle agent → editor; the next Ctrl+G returns editor → agent |
 | `Ctrl+Q` | Finish the project session and quit |
 | `y` / `n` | Allow or deny an active Guard Ask confirmation |
 
 Use `/chat`, `/editor`, `/agent`, or `/mode` for explicit mode handoffs.
-`/cycle` follows Ctrl+P and enters the editor from chat or agent. Manual
-`/compact` preserves the full transcript while compacting model-visible context. In interactive agent mode, `/plan` selects planning mode and `/act` returns to full coding mode. `/goal [condition|clear|pause|resume]` sets a persistent completion condition; the agent auto-continues until it calls `goal_met` with evidence, stalls/blocks, hits the goal turn cap, or the user interrupts. Refactor mode is not implemented yet.
+`/cycle` follows Ctrl+G and enters the editor from chat or agent. Manual
+`/compact` preserves the full transcript while compacting model-visible context. In interactive agent mode, `/plan` selects planning mode and `/act` returns to full coding mode. `/goal [condition|clear|pause|resume]` sets a persistent completion condition; the agent auto-continues until it calls `goal_met` with evidence, stalls/blocks, hits the goal turn cap, or the user interrupts. Refactor mode is not implemented yet. New agent projects require explicit `/new` (Tab/Insert do not create one).
 
 ---
 

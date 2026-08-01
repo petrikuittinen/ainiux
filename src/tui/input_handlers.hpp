@@ -13,6 +13,7 @@
 namespace ainiux::tui {
 
 std::string thread_picker_text(const std::vector<chat::ThreadSummary>& threads, size_t selected);
+std::string thread_picker_label(const chat::ThreadSummary& thread);
 std::string attachment_picker_text(const std::vector<ChatAttachment>& attachments, size_t selected);
 std::string remove_confirm_text(const chat::Session& session);
 std::string system_edit_text();
@@ -32,7 +33,7 @@ EscapeResult handle_escape(editor::EditorState& input,
                            std::string& status,
                            bool input_only_movement = false);
 
-enum class PickerEscapeResult { Navigated, Cancelled };
+enum class PickerEscapeResult { Navigated, Cancelled, CreateNew };
 
 PickerEscapeResult handle_list_picker_escape(size_t item_count,
                                              size_t& selected,
@@ -43,7 +44,8 @@ PickerEscapeResult handle_thread_list_escape(std::vector<chat::ThreadSummary>& t
                                                 size_t& selected,
                                                 std::string& status,
                                                 size_t& pending_delete,
-                                                TuiMode& mode);
+                                                TuiMode& mode,
+                                                bool allow_create_new = true);
 
 PickerEscapeResult handle_attachment_list_escape(size_t item_count,
                                                  size_t& selected,

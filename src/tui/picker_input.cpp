@@ -1,10 +1,39 @@
 #include "tui/picker_input.hpp"
 
+#include "provider/provider.hpp"
 #include "tui/agent_widgets.hpp"
 #include "tui/input_handlers.hpp"
 #include "ui/confirmation.hpp"
+#include "ui/text_selector.hpp"
 
 namespace ainiux::tui {
+
+namespace {
+
+const char* list_picker_selection_label(TuiMode mode) {
+    switch (mode) {
+        case TuiMode::ProviderList:
+            return "Selected provider";
+        case TuiMode::ModelList:
+            return "Selected model";
+        case TuiMode::ReasoningList:
+            return "Selected reasoning";
+        default:
+            return "Selected item";
+    }
+}
+
+std::string list_picker_label_at(const TuiPickerInputState& state, size_t index) {
+    if (index >= state.picker_items.size()) {
+        return {};
+    }
+    if (state.mode == TuiMode::ProviderList) {
+        return provider::display_name_for_profile(state.picker_items[index]);
+    }
+    return state.picker_items[index];
+}
+
+}  // namespace
 
 bool handle_tui_picker_input(unsigned char ch,
                              TuiPickerInputState& state,
@@ -16,11 +45,7 @@ bool handle_tui_picker_input(unsigned char ch,
             return true;
         }
         if (ch == 27) {
-            const std::string selection_label = state.mode == TuiMode::ProviderList
-                                                    ? "Selected provider"
-                                                    : state.mode == TuiMode::ModelList
-                                                          ? "Selected model"
-                                                          : "Selected reasoning";
+            const std::string selection_label = list_picker_selection_label(state.mode);
             const PickerEscapeResult result = handle_list_picker_escape(
                 state.picker_items.size(), state.picker_selected, state.status, selection_label);
             if (result == PickerEscapeResult::Cancelled) {
@@ -52,6 +77,15 @@ bool handle_tui_picker_input(unsigned char ch,
             }
             return true;
         }
+        if (ui::jump_text_selector_by_char(
+                state.picker_selected,
+                state.picker_items.size(),
+                [&](size_t index) { return list_picker_label_at(state, index); },
+                ch)) {
+            state.status = ui::text_selector_status(list_picker_selection_label(state.mode),
+                                                    state.picker_selected,
+                                                    state.picker_items.size());
+        }
         return true;
     }
     if (state.mode == TuiMode::ThreadList) {
@@ -65,12 +99,17 @@ bool handle_tui_picker_input(unsigned char ch,
                                           state.thread_picker_selected,
                                           state.status,
                                           state.pending_thread_delete,
-                                          state.mode);
+                                          state.mode,
+                                          !state.agent_mode);
             if (res == PickerEscapeResult::Cancelled) {
                 state.mode = TuiMode::Chat;
                 state.status = "Thread list cancelled";
                 if (callbacks.on_thread_list_cancelled) {
                     callbacks.on_thread_list_cancelled();
+                }
+            } else if (res == PickerEscapeResult::CreateNew) {
+                if (callbacks.on_thread_new) {
+                    callbacks.on_thread_new();
                 }
             }
             return true;
@@ -81,8 +120,11 @@ bool handle_tui_picker_input(unsigned char ch,
             }
             return true;
         }
-        if (ch == 'n' || ch == 'N') {
-            callbacks.on_thread_new();
+        // Tab/Insert create a new chat thread. Agent mode requires explicit /new.
+        if (ch == '\t') {
+            if (!state.agent_mode && callbacks.on_thread_new) {
+                callbacks.on_thread_new();
+            }
             return true;
         }
         // DEL deletes the selected thread. Ctrl+H is help (handled by the TUI loop).
@@ -96,6 +138,17 @@ bool handle_tui_picker_input(unsigned char ch,
         }
         if (ch == 8) {
             return false;
+        }
+        if (ui::jump_text_selector_by_char(
+                state.thread_picker_selected,
+                state.thread_picker_threads.size(),
+                [&](size_t index) {
+                    return thread_picker_label(state.thread_picker_threads[index]);
+                },
+                ch)) {
+            state.status = ui::text_selector_status("Selected thread",
+                                                    state.thread_picker_selected,
+                                                    state.thread_picker_threads.size());
         }
         return true;
     }

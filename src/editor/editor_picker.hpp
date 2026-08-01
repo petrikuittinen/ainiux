@@ -30,6 +30,9 @@ struct EditorProviderModelPicker {
                         size_t current);
     void clear();
     bool handle_escape(const std::string& sequence, std::string& status_out);
+    // Type-ahead jump by character against displayed labels. Returns true if
+    // selection moved (caller should refresh_view and update status).
+    bool handle_jump_char(unsigned char ch, std::string& status_out);
 };
 
 }  // namespace ainiux::editor

@@ -674,15 +674,15 @@ void test_chat_editor_reasoning_context_sync() {
     ainiux::app::InteractiveSession session;
     check(ainiux::app::editor_toggle_target(session) ==
               ainiux::app::InteractiveUiTarget::Chat,
-          "standalone editor Ctrl+P defaults to chat");
+          "standalone editor Ctrl+G defaults to chat");
     session.editor_return_mode = ainiux::app::InteractiveMode::Agent;
     check(ainiux::app::editor_toggle_target(session) ==
               ainiux::app::InteractiveUiTarget::Agent,
-          "editor Ctrl+P returns to the agent mode that opened it");
+          "editor Ctrl+G returns to the agent mode that opened it");
     session.editor_return_mode = ainiux::app::InteractiveMode::Chat;
     check(ainiux::app::editor_toggle_target(session) ==
               ainiux::app::InteractiveUiTarget::Chat,
-          "editor Ctrl+P returns to the chat mode that opened it");
+          "editor Ctrl+G returns to the chat mode that opened it");
 
     session.context.options.reasoning =
         ainiux::ReasoningSelection::named("high");
@@ -4284,7 +4284,8 @@ void test_editor_buffer_list_helpers() {
     buffers.push_back(scratch);
 
     const std::string rendered = ainiux::editor::editor_buffer_list_text(buffers, 1);
-    check(rendered.find("Buffers - Enter opens - N new - DEL close - Esc cancels") != std::string::npos,
+    check(rendered.find("Buffers - Enter opens - Tab/Insert new - DEL close - Esc cancels") !=
+              std::string::npos,
           "editor buffer list includes chooser instructions");
     check(rendered.find("  file1.txt - Ln 1, Col 6") != std::string::npos,
           "editor buffer list renders an inactive clean file");

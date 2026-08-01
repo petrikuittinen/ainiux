@@ -50,6 +50,33 @@ void test_text_selector_movement() {
           "text selector movement on empty list stays at zero");
 }
 
+void test_text_selector_type_ahead_jump() {
+    const std::vector<std::string> items = {
+        "openrouter", "openai", "deepseek", "llama", "lmstudio"};
+    auto label_at = [&](size_t index) { return items[index]; };
+
+    size_t selected = 0;
+    check(ainiux::ui::jump_text_selector_by_char(selected, items.size(), label_at, 'a') &&
+              selected == 1,
+          "type-ahead A from openrouter jumps to openai (contains a)");
+    check(ainiux::ui::jump_text_selector_by_char(selected, items.size(), label_at, 'A') &&
+              selected == 3,
+          "type-ahead A again jumps to llama and is case-insensitive");
+    check(ainiux::ui::jump_text_selector_by_char(selected, items.size(), label_at, 'a') &&
+              selected == 1,
+          "type-ahead A wraps from llama back to openai");
+
+    selected = 0;
+    check(!ainiux::ui::jump_text_selector_by_char(selected, items.size(), label_at, 'z') &&
+              selected == 0,
+          "type-ahead with no matches leaves selection unchanged");
+    check(!ainiux::ui::jump_text_selector_by_char(selected, items.size(), label_at, '\t') &&
+              selected == 0,
+          "type-ahead ignores Tab (control character)");
+    check(!ainiux::ui::jump_text_selector_by_char(selected, 0, label_at, 'a') && selected == 0,
+          "type-ahead on empty list is a no-op");
+}
+
 void test_confirmation_helpers() {
     check(ainiux::ui::yes_answer("y"), "confirmation accepts lowercase y");
     check(ainiux::ui::no_answer("n"), "confirmation accepts lowercase n");
@@ -164,6 +191,7 @@ void run_all() {
     test_confirmation_helpers();
     test_text_selector_rendering();
     test_text_selector_movement();
+    test_text_selector_type_ahead_jump();
     test_text_selector_escape_sequence();
     test_text_selector_status();
     test_provider_model_selectors();

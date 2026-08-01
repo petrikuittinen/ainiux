@@ -1,5 +1,6 @@
 #include "editor/editor_picker.hpp"
 
+#include "provider/provider.hpp"
 #include "ui/provider_model_selector.hpp"
 #include "ui/text_selector.hpp"
 
@@ -97,6 +98,29 @@ bool EditorProviderModelPicker::handle_escape(const std::string& sequence, std::
         }
     }
     return false;
+}
+
+bool EditorProviderModelPicker::handle_jump_char(unsigned char ch, std::string& status_out) {
+    if (!active || items.empty()) {
+        return false;
+    }
+    const bool jumped = ui::jump_text_selector_by_char(
+        selected,
+        items.size(),
+        [&](size_t index) -> std::string {
+            if (for_provider) {
+                return provider::display_name_for_profile(items[index]);
+            }
+            if (for_reasoning && index < display_labels.size()) {
+                return display_labels[index];
+            }
+            return items[index];
+        },
+        ch);
+    if (jumped) {
+        status_out = status_message();
+    }
+    return jumped;
 }
 
 }  // namespace ainiux::editor

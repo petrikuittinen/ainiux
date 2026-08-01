@@ -1524,7 +1524,9 @@ app::TuiRunResult run(provider::RequestContext context,
         help_text.clear();
         settings_text.clear();
         if (thread_picker_threads.empty()) {
-            status = "No saved threads · N new · Esc continues";
+            status = context.options.agent
+                         ? "No saved threads · Esc continues"
+                         : "No saved threads · Tab/Insert new · Esc continues";
         } else {
             status = ui::text_selector_status("Selected thread", thread_picker_selected,
                                               thread_picker_threads.size());
@@ -3823,8 +3825,14 @@ app::TuiRunResult run(provider::RequestContext context,
                                                     chat_assist_callbacks);
                     continue;
                 }
-                if (ch == 16 && mode == TuiMode::Chat && active_job == ActiveJob::None) {
+                if (ch == 7 && mode == TuiMode::Chat && active_job == ActiveJob::None) {
+                    // Ctrl+G: cycle chat/agent ↔ editor (same as /cycle).
                     command_handlers.switch_to_editor();
+                    continue;
+                }
+                if (ch == 16 && mode == TuiMode::Chat && active_job == ActiveJob::None) {
+                    // Ctrl+P: open provider picker (same as bare /provider).
+                    open_provider_picker(false);
                     continue;
                 }
                 if (ch == 5 && mode == TuiMode::Chat) {
@@ -3928,7 +3936,7 @@ app::TuiRunResult run(provider::RequestContext context,
             interactive->context = context;
             // Never write agent transcript into the chat library session. Agent
             // history is project-local (.ainiux-pr/agent.sqlite) and must not
-            // reappear under Chat after Ctrl+P /cycle.
+            // reappear under Chat after Ctrl+G /cycle.
             if (!context.options.agent) {
                 interactive->chat_session = session;
                 interactive->chat_session_initialized = true;

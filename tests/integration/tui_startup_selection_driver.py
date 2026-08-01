@@ -89,11 +89,11 @@ def check_missing_provider(binary, mode, model=None):
     args = ["--quiet", mode]
     if model is not None:
         args.extend(["--model", model])
-    # Chat opens the thread selector first (Ctrl+L UI); N starts a new thread
+    # Chat opens the thread selector first (Ctrl+L UI); Tab starts a new thread
     # and then the provider picker. Agent still opens the provider picker first.
     actions = [("\x11", 0.3)]
     if mode == "--chat":
-        actions = [("n", 0.5), ("\x11", 0.3)]
+        actions = [("\t", 0.5), ("\x11", 0.3)]
     output = run_case(
         binary,
         args,
@@ -114,7 +114,7 @@ def check_single_model_chat(binary, base_url, model):
         binary,
         [base_url, "--quiet", "--chat"],
         # Thread selector first, then new thread so model discovery can run.
-        [("n", 0.5), ("\x11", 0.3)],
+        [("\t", 0.5), ("\x11", 0.3)],
     )
     require(output, "Newest first", "showing chat startup thread selector")
     require(output, "only model auto-selected", "discovering one startup chat model")
@@ -130,7 +130,7 @@ def check_multiple_model_surface(binary, base_url, model, mode):
     ]
     if mode == "--chat":
         actions = [
-            ("n", 0.5),
+            ("\t", 0.5),
             ("\r", 0.6),
             ("\x11", 0.3),
         ]

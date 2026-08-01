@@ -181,7 +181,7 @@ void handle_tui_command(const std::string& text, TuiCommandContext& ctx, TuiComm
                 "/quit or /exit\n"
                 "/clear\n"
                 "/edit\n"
-                "/list (Ctrl+L; also shown on chat startup; N new thread)\n"
+                "/list (Ctrl+L; also shown on chat startup; Tab/Insert new thread)\n"
                 + std::string(ctx.context.options.agent
                                   ? "/new [PATH] (fresh agent project)\n"
                                     "/compact [fast|smart|summary] (preserve transcript)\n"
@@ -226,7 +226,7 @@ void handle_tui_command(const std::string& text, TuiCommandContext& ctx, TuiComm
                 "/chat (switch to ordinary chat mode)\n"
                 "/agent (switch to interactive agent mode)\n"
                 "/mode [chat|editor|agent] (show or jump modes)\n"
-                "/cycle or Ctrl+P (toggle current chat/agent mode ↔ editor)\n"
+                "/cycle or Ctrl+G (toggle current chat/agent mode ↔ editor)\n"
                 "/cmd-out [on|off] (agent: show run_command stdout)\n"
                 + std::string(ctx.context.options.agent
                                   ? "Agent commands are isolated from Chat/editor AI commands"

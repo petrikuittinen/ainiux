@@ -83,9 +83,9 @@ def run_tui(binary, base, model, home_dir, script, timeout=45,
     transcript = bytearray(startup)
     try:
         # Chat opens the thread selector on startup (same as Ctrl+L). Most
-        # scenarios expect normal chat input next, so N starts a new thread.
+        # scenarios expect normal chat input next, so Tab starts a new thread.
         if dismiss_startup_thread_list:
-            transcript.extend(send(master, "n", 0.4))
+            transcript.extend(send(master, "\t", 0.4))
         for item in script:
             if isinstance(item, tuple):
                 text, delay = item
@@ -432,7 +432,7 @@ def scenario_media_restart(binary, base, model, home_dir):
     master, process, _ = start_tui(binary, base, model, media_home)
     try:
         # Dismiss startup thread selector before slash commands.
-        send(master, "n", 0.4)
+        send(master, "\t", 0.4)
         send(master, "/cleanup\r", 0.05)
         wait_for_thread_field(path, thread_id, "read_only", 1)
         send(master, "/quit\r", 0.1)

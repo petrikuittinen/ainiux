@@ -945,7 +945,7 @@ void test_tui_theme_parsing_and_contrast() {
 
 void test_tui_buffer_list_uses_colored_panel_widget() {
     const std::string text =
-        "Buffers - Enter opens - N new - DEL close - Esc cancels\n> file1.txt - Ln 1, Col 1\n  file2.txt - Ln 2, Col 3";
+        "Buffers - Enter opens - Tab/Insert new - DEL close - Esc cancels\n> file1.txt - Ln 1, Col 1\n  file2.txt - Ln 2, Col 3";
     const std::vector<ainiux::tui::StyledLine> lines =
         ainiux::tui::detail::panel_lines_for_text(text, ainiux::tui::TuiMode::ThreadList, 80, "Buffers");
 
@@ -1458,7 +1458,7 @@ void test_tui_incomplete_thread_labels() {
 
     const std::string empty_list = ainiux::tui::thread_picker_text({}, 0);
     check(empty_list.find("Newest first") != std::string::npos &&
-              empty_list.find("N new") != std::string::npos,
+              empty_list.find("Tab/Insert new") != std::string::npos,
           "TUI thread picker renders the header when there are no saved threads");
 
     ainiux::chat::ThreadSummary missing_model;

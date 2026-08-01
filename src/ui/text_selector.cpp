@@ -15,6 +15,27 @@ size_t clamp_selection(size_t selected, size_t item_count) {
     return std::min(selected, item_count - 1);
 }
 
+bool is_printable_jump_char(unsigned char ch) {
+    return ch >= 0x20U && ch != 0x7fU;
+}
+
+char ascii_lower_char(unsigned char ch) {
+    if (ch >= 'A' && ch <= 'Z') {
+        return static_cast<char>(ch - 'A' + 'a');
+    }
+    return static_cast<char>(ch);
+}
+
+bool label_contains_char_ci(const std::string& label, unsigned char ch) {
+    const char needle = ascii_lower_char(ch);
+    for (unsigned char byte : label) {
+        if (ascii_lower_char(byte) == needle) {
+            return true;
+        }
+    }
+    return false;
+}
+
 }  // namespace
 
 std::string render_text_selector(const TextSelectorConfig& config,
@@ -70,6 +91,27 @@ size_t move_text_selector_selection(size_t selected,
             break;
     }
     return selected;
+}
+
+bool jump_text_selector_by_char(size_t& selected,
+                                size_t item_count,
+                                const std::function<std::string(size_t)>& label_at,
+                                unsigned char ch) {
+    if (!is_printable_jump_char(ch) || item_count == 0 || !label_at) {
+        return false;
+    }
+    selected = clamp_selection(selected, item_count);
+    for (size_t step = 1; step <= item_count; ++step) {
+        const size_t index = (selected + step) % item_count;
+        if (label_contains_char_ci(label_at(index), ch)) {
+            if (index == selected) {
+                return false;
+            }
+            selected = index;
+            return true;
+        }
+    }
+    return false;
 }
 
 std::string text_selector_status(const std::string& label, size_t selected, size_t item_count) {

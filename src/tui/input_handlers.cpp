@@ -114,6 +114,14 @@ std::string thread_summary_label(const chat::ThreadSummary& thread) {
     return out.str();
 }
 
+}  // namespace
+
+std::string thread_picker_label(const chat::ThreadSummary& thread) {
+    return thread_summary_label(thread);
+}
+
+namespace {
+
 ui::TextSelectorConfig picker_config(const char* header) {
     ui::TextSelectorConfig config;
     config.header = header;
@@ -260,7 +268,8 @@ PickerEscapeResult handle_thread_list_escape(std::vector<chat::ThreadSummary>& t
                                                 size_t& selected,
                                                 std::string& status,
                                                 size_t& pending_delete,
-                                                TuiMode& mode) {
+                                                TuiMode& mode,
+                                                bool allow_create_new) {
     unsigned char ch = 0;
     if (!editor::read_terminal_byte(
             ch, editor::terminal_escape_inter_byte_timeout_ms())) {
@@ -278,6 +287,13 @@ PickerEscapeResult handle_thread_list_escape(std::vector<chat::ThreadSummary>& t
             if ((next >= 'A' && next <= 'Z') || next == '~') {
                 break;
             }
+        }
+        if (seq == "[2~") {
+            // Insert key creates a new thread in chat; agent uses explicit /new.
+            if (allow_create_new) {
+                return PickerEscapeResult::CreateNew;
+            }
+            return PickerEscapeResult::Navigated;
         }
         if (seq == "[3~") {
             // Forward delete key (DEL)

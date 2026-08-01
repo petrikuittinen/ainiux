@@ -814,6 +814,11 @@ app::EditorRunResult run_editor(const std::string& path,
             cancel_buffer_list();
             return;
         }
+        if (sequence == "[2~") {
+            // Insert creates a new empty buffer in the list picker.
+            new_empty_buffer();
+            return;
+        }
         if (sequence == "[3~") {
             if (!buffers.empty() && buffer_list_selected < buffers.size()) {
                 perform_buffer_close(buffer_list_selected, false);
@@ -2937,6 +2942,11 @@ app::EditorRunResult run_editor(const std::string& path,
                 confirm_picker_selection();
                 return;
             }
+            std::string jump_status;
+            if (picker.handle_jump_char(ch, jump_status)) {
+                picker.refresh_view();
+                minibuffer_message(minibuffer, jump_status);
+            }
             return;
         }
         if (buffer_list_active) {
@@ -2971,7 +2981,7 @@ app::EditorRunResult run_editor(const std::string& path,
                 activate_buffer(buffer_list_selected);
                 return;
             }
-            if (ch == 'n' || ch == 'N') {
+            if (ch == '\t') {
                 new_empty_buffer();
                 return;
             }
@@ -2980,6 +2990,15 @@ app::EditorRunResult run_editor(const std::string& path,
                     perform_buffer_close(buffer_list_selected, false);
                 }
                 return;
+            }
+            if (ui::jump_text_selector_by_char(
+                    buffer_list_selected,
+                    buffers.size(),
+                    [&](size_t index) {
+                        return editor_buffer_display_name(buffers[index], index);
+                    },
+                    ch)) {
+                minibuffer_message(minibuffer, selected_buffer_status());
             }
             return;
         }
@@ -3224,9 +3243,14 @@ app::EditorRunResult run_editor(const std::string& path,
             return;
         }
 
-        if (ch == 16) {
-            // Return to the chat/agent mode that opened the editor.
+        if (ch == 7) {
+            // Ctrl+G: return to the chat/agent mode that opened the editor.
             request_editor_toggle();
+            return;
+        }
+        if (ch == 16) {
+            // Ctrl+P: open provider picker (same as bare /provider).
+            open_provider_picker();
             return;
         }
         if (ch == 18) {

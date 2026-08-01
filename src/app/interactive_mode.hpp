@@ -36,7 +36,7 @@ struct PendingEditorAssistFromChat {
 
 struct InteractiveSession {
     InteractiveMode start_mode = InteractiveMode::Editor;
-    // Ctrl+P toggles Editor with the conversational mode that opened it.
+    // Ctrl+G toggles Editor with the conversational mode that opened it.
     // A standalone editor defaults to Chat.
     InteractiveMode editor_return_mode = InteractiveMode::Chat;
 
