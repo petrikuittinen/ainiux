@@ -22,6 +22,8 @@ class TerminalFrameRenderer;
 
 namespace ainiux::editor {
 
+struct MouseInputEvent;
+
 struct TerminalSize {
     int rows = 24;
     int cols = 80;
@@ -125,7 +127,8 @@ void render_terminal(EditorState& state,
                      const TerminalThemeStyle& theme_style = {},
                      bool help_view = false,
                      const EditorAssistDisplay* assist_display = nullptr,
-                     bool show_scrollbars = true);
+                     bool show_scrollbars = true,
+                     bool follow_cursor = true);
 
 // Multi-pane editor layout. panes come from SplitLayout::layout_panes(editor_main_area()).
 // buffer_at(index) must return the EditorState for that buffer index; the focused buffer
@@ -140,7 +143,8 @@ void render_terminal_splits(
     bool help_view = false,
     const EditorAssistDisplay* assist_display = nullptr,
     size_t pane_count_hint = 1,
-    bool show_scrollbars = true);
+    bool show_scrollbars = true,
+    bool follow_cursor = true);
 
 void render_terminal_panel(EditorState& state,
                            const MinibufferState& minibuffer,
@@ -156,6 +160,9 @@ std::string editor_status_line(const EditorState& state,
 Rect editor_main_area();
 // Pane area used for text layout/cursor (full pane minus right scrollbar column).
 Rect editor_content_rect(const Rect& pane_rect);
+bool apply_editor_mouse_scroll(EditorState& state,
+                               const Rect& focused_content_rect,
+                               const MouseInputEvent& mouse);
 void dispatch_escape_sequence(EditorState& state,
                               const std::string& sequence,
                               std::string& status,

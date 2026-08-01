@@ -33,6 +33,8 @@ Current bindings for chat, agent, and editor modes.
 
 Copy and selection-delete (Backspace/Delete on a range) publish to native desktop helpers and OSC 52 when available. With no input selection, `Ctrl+C` copies the last user/assistant message from the stored transcript, preserving its original newlines and excluding soft-wrap padding, labels, and scrollbar glyphs. This is the reliable way to copy history from full-screen terminal clients whose mouse selection copies painted screen rows. With an empty internal clipboard, `Ctrl+V` reads external text asynchronously; SSH prefers a terminal OSC 52 query. Bracketed terminal paste (middle-click or Shift+Insert in many terminals) remains the fallback and is also undoable with `Ctrl+Z` / `Ctrl+U`. There is no dedicated cut key; delete the selection with Backspace or Delete, then paste with `Ctrl+V`.
 
+The mouse wheel scrolls one rendered visual row per event. Chat and agent scroll only while the pointer is over history (or the visible help panel); the editor scrolls only the focused pane's content and does not move the caret. Native terminal selection may require `Shift+drag` while full-screen mouse reporting is active.
+
 ### Chat-specific actions
 
 | Shortcut | Action |
@@ -95,6 +97,8 @@ Use `/pop` to remove the last user or assistant message.
 ---
 
 ## `--editor` mode (standalone `ainiux --editor`)
+
+Press `Ctrl+E`, `Esc`, or `Alt+X` to open the command minibuffer. `Ctrl+E` is the recommended timing-independent shortcut; `Alt+X` remains available. Enhanced Escape sequences are accepted, and key-repeat from holding `Esc` is ignored until the repeat burst stops or another key is typed; a later `Esc` cancels normally.
 
 ### File and buffer management
 
@@ -161,6 +165,8 @@ Bracketed terminal paste is undoable with `Ctrl+Z` / `Ctrl+U`.
 | `Ctrl+Space` | Run mode-aware `/continue`: prose in text/Markdown, gap completion in code modes |
 | `Esc` (during generation) | Cancel AI request (keeps streamed text) |
 | `Esc` (idle) | Open command minibuffer (`Command:`) |
+| `Ctrl+E` (idle) | Open command minibuffer (recommended portable shortcut) |
+| `Alt+X` (idle) | Open command minibuffer without relying on bare-Escape timing |
 | `Ctrl+H` | Toggle read-only help view (same as `Esc` `/help`) |
 | `Esc` `/help` | Toggle read-only help view |
 | `Esc` | Cancel minibuffer / command entry |
@@ -186,7 +192,7 @@ slash. Chat and agent modes use `/chat`, `/agent`, and `/editor`.
 | `PageUp` / `PageDown` | Move/scroll in document |
 | `Shift` + movement keys | Extend selection |
 
-### Slash commands (via `Esc` → command minibuffer, `Tab` completes)
+### Slash commands (via `Ctrl+E`, `Esc`, or `Alt+X`; `Tab` completes)
 
 Built-in AI: `/spell`, `/grammar`, `/continue`, `/fact`, `/comment`, `/rewrite`, `/style-formal`, `/style-casual`, `/style-humor`, `/marketing`, `/English`, `/Chinese`, `/Finnish`, `/German`, `/French`, `/Italian`, `/Spanish`, `/Portuguese`, `/Arabic`, `/Hindi`, `/Japanese`, `/Korean`, `/Swedish`, `/Polish`, `/Russian`, `/prompt`, `/regenerate` (and many more from `editor-commands.conf`)
 

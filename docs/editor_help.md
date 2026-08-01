@@ -8,6 +8,8 @@ Standalone editor mode (`ainiux --editor [PATH]`) is a multiline text editor wit
 - **Status line** (reverse video) — path, dirty flag, cursor position, quick hints
 - **Minibuffer** (bottom line) — commands, prompts, AI status, and messages
 
+Press `Ctrl+E`, `Esc`, or `Alt+X` to open the command minibuffer. `Ctrl+E` is the recommended timing-independent shortcut; `Alt+X` remains available. Enhanced Escape sequences from Windows Terminal are accepted, and holding `Esc` does not immediately cancel the newly opened minibuffer; type any command key to end repeat suppression. A later `Esc` cancels the active minibuffer normally.
+
 ### Window splits (`Ctrl+X` prefix)
 
 Splits use an Emacs-style two-key sequence. Press **Ctrl+X**, then one of:
@@ -23,7 +25,7 @@ Splits use an Emacs-style two-key sequence. Press **Ctrl+X**, then one of:
 | `Ctrl+B` | Page up in the **other** pane (last focused, without moving focus) |
 | `Ctrl+D` | Page down in the **other** pane (same target as Ctrl+B) |
 
-Slash commands (via `Esc` then the command):
+Slash commands (via `Ctrl+E`, `Esc`, or `Alt+X`, then the command):
 
 | Command | Action |
 |---------|--------|
@@ -34,6 +36,8 @@ Slash commands (via `Esc` then the command):
 | `/nosplit` | Alias for `/maximize` |
 
 Both panes of a new split show the same buffer at first and start with the same cursor and scroll position. After that, each pane keeps its own point and window scroll (Emacs-style), even when both panes show the same buffer—moving or scrolling in one pane does not move the other. Open another file in one pane (`Ctrl+O`) or switch buffers (`Ctrl+L`) to compare two files. Status shows `[N panes]` while more than one pane is open.
+
+The mouse wheel scrolls the focused pane by exactly one visual row, including soft-wrapped rows and read-only help/settings views. The caret, selection, undo history, and dirty state do not change. If the caret scrolls off-screen it is hidden; the next keyboard navigation, edit, or paste resumes normal cursor following. Wheel input over another pane, the status line, minibuffer, or a picker is ignored. Native terminal selection may require `Shift+drag`, depending on the terminal.
 
 **Other-pane scrolling:** after a split, `Ctrl+B`/`Ctrl+D` page the new sibling. After `Ctrl+X o`, they page the pane you left. With three or more panes, the target is always the last pane you left (not every non-focused pane). Cancel for minibuffers and replace mode is **Esc** only (not Ctrl+X).
 
@@ -123,7 +127,7 @@ ainiux lmstudio --editor draft.md
 
 When a provider is set but no model is chosen yet, ainiux loads `/v1/models`. A sole result is selected automatically; multiple results open the colored model selector. File editing still works while discovery runs, and AI commands stay disabled until a model is selected.
 
-Use `Esc` then `/provider` or `/model` to change provider or model. `/provider` with no argument opens the same colored selector widget used by chat and the editor buffer list. Choosing a provider clears the previous provider's model and immediately loads `/v1/models`; multiple results open the model selector, while one result is selected automatically. `/model` with no argument loads the same endpoint and selector directly. Each model change also refreshes its context window from `/v1/models` unless `--context` or `/context TOKENS` set an override. `/context auto` clears the override. When model metadata has no context window, usage shows only the estimated token count without a percentage.
+Use the command minibuffer and enter `/provider` or `/model` to change provider or model. `/provider` with no argument opens the same colored selector widget used by chat and the editor buffer list. Choosing a provider clears the previous provider's model and immediately loads `/v1/models`; multiple results open the model selector, while one result is selected automatically. `/model` with no argument loads the same endpoint and selector directly. Each model change also refreshes its context window from `/v1/models` unless `--context` or `/context TOKENS` set an override. `/context auto` clears the override. When model metadata has no context window, usage shows only the estimated token count without a percentage.
 
 `/reasoning` with no argument opens a model-aware selector from `models.conf`, with Auto first and the documented provider default shown when known. `/reasoning auto` clears the override; `/reasoning off` resolves to the matched model's disabling choice when available; `/reasoning VALUE` accepts a bounded ASCII value; and `/reasoning TOKENS` accepts an exact non-negative token budget. If the current model family matches but another direct value is not listed, the editor warns and asks for y/n confirmation. Changing the actual provider or model resets reasoning to Auto. The editor remembers its last provider, model, API, and reasoning selection globally in SQLite, loads it after configuration defaults, and still gives explicit CLI options final precedence. It does not store endpoint URLs or credentials in app state; a custom provider is restored only if its endpoint is still configured.
 
@@ -159,9 +163,9 @@ Context settings live under `[editor]` in `config.conf` (and optional environmen
 
 For any context side, `0` disables that side; it does not mean unlimited. Setting precedence is built-in default, system config, user config, then environment. The output-token setting is shared by prose and code.
 
-## Editor commands (`Esc` then type command)
+## Editor commands (`Ctrl+E`, `Esc`, or `Alt+X`, then type command)
 
-Press **`Esc`** to open the command minibuffer (`Command:`). Type a command with or without a leading slash and press `Enter` (`rewrite all` and `/rewrite all` are equivalent). **`Tab`** completes commands and mode variants while preserving whether the current prefix is slashless. This minibuffer completion is independent from document word completion. Chat commands remain slash-only.
+Press **`Ctrl+E`**, **`Esc`**, or **`Alt+X`** to open the command minibuffer (`Command:`). Type a command with or without a leading slash and press `Enter` (`rewrite all` and `/rewrite all` are equivalent). **`Tab`** completes commands and mode variants while preserving whether the current prefix is slashless. This minibuffer completion is independent from document word completion. Chat commands remain slash-only.
 
 ### Built-in commands
 

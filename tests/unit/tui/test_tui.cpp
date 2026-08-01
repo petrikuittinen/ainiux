@@ -90,6 +90,17 @@ void test_terminal_frame_renderer_updates_only_changed_rows() {
               output.str() == "\x1b[3;2H",
           "cursor-only TUI update moves the cursor without hiding or showing it");
 
+    changed.cursor_visible = false;
+    output.str("");
+    output.clear();
+    check(renderer.present(changed, output) == 0 && output.str() == "\x1b[?25l",
+          "retained TUI frame hides an off-screen editor caret without repainting rows");
+    changed.cursor_visible = true;
+    output.str("");
+    output.clear();
+    check(renderer.present(changed, output) == 0 && output.str() == "\x1b[?25h",
+          "retained TUI frame restores cursor visibility explicitly");
+
     ainiux::tui::detail::TerminalFrame resized(4, 24);
     output.str("");
     output.clear();
@@ -1649,6 +1660,43 @@ void test_tui_ctrl_chat_history_scroll_shortcuts() {
     check(history_scroll == 0, "Ctrl+D helper scrolls chat history forward");
 }
 
+void test_tui_mouse_history_scroll() {
+    const ainiux::tui::Layout layout = ainiux::tui::layout_for_terminal(24, 80);
+    int history_scroll = 0;
+    ainiux::editor::MouseInputEvent mouse;
+    mouse.button = ainiux::editor::MouseButton::WheelUp;
+    mouse.row = layout.history_row;
+    mouse.col = 1;
+    check(ainiux::tui::apply_chat_mouse_scroll(
+              mouse, layout, ainiux::tui::TuiMode::Chat, history_scroll) &&
+              history_scroll == 1,
+          "chat wheel up moves exactly one rendered history row toward older content");
+    mouse.button = ainiux::editor::MouseButton::WheelDown;
+    check(ainiux::tui::apply_chat_mouse_scroll(
+              mouse, layout, ainiux::tui::TuiMode::Chat, history_scroll) &&
+              history_scroll == 0,
+          "chat wheel down moves exactly one row toward the live bottom");
+    check(ainiux::tui::apply_chat_mouse_scroll(
+              mouse, layout, ainiux::tui::TuiMode::Chat, history_scroll) &&
+              history_scroll == 0,
+          "chat wheel down clamps at the live bottom");
+
+    mouse.button = ainiux::editor::MouseButton::WheelUp;
+    mouse.row = layout.input_rect.row;
+    check(!ainiux::tui::apply_chat_mouse_scroll(
+              mouse, layout, ainiux::tui::TuiMode::Chat, history_scroll) &&
+              history_scroll == 0,
+          "chat ignores wheel input in the input panel");
+    mouse.row = layout.history_row;
+    check(!ainiux::tui::apply_chat_mouse_scroll(
+              mouse, layout, ainiux::tui::TuiMode::ThreadList, history_scroll),
+          "chat ignores wheel input while a picker occupies the history band");
+    mouse.button = ainiux::editor::MouseButton::Left;
+    check(!ainiux::tui::apply_chat_mouse_scroll(
+              mouse, layout, ainiux::tui::TuiMode::Chat, history_scroll),
+          "chat consumes but ignores mouse clicks");
+}
+
 void test_tui_chat_history_scroll_keys() {
     ainiux::tui::Layout layout = ainiux::tui::layout_for_terminal(24, 80);
     int history_scroll = 0;
@@ -2000,6 +2048,7 @@ void run_all() {
     test_agent_widgets_and_dynamic_geometry();
     test_agent_inline_choices();
     test_tui_ctrl_chat_history_scroll_shortcuts();
+    test_tui_mouse_history_scroll();
     test_tui_chat_history_scroll_keys();
     test_tui_read_terminal_input_marks_alt_meta_prefix();
     test_tui_thread_picker_accepts_delayed_arrow_sequence();

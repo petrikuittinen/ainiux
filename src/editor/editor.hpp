@@ -278,6 +278,9 @@ struct EditorState {
     void move_line_end(const Rect& rect);
     Error kill_to_line_end(Clipboard& clipboard);
     void ensure_cursor_visible(const Rect& rect);
+    // Scroll the viewport by rendered rows without moving or editing the caret.
+    // Positive values move toward the document end; negative values move up.
+    bool scroll_view_rows(const Rect& rect, int rows);
     RenderedPanel render(const Rect& rect) const;
     // Render using an explicit window view (per-pane cursor/scroll) while
     // keeping this buffer's text, selection, and highlight cache.

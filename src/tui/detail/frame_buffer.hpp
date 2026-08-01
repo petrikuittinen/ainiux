@@ -17,6 +17,7 @@ struct TerminalFrame {
     int cols = 1;
     int cursor_row = 1;
     int cursor_col = 1;
+    bool cursor_visible = true;
     std::vector<std::string> row_commands;
 };
 
@@ -31,6 +32,7 @@ class TerminalFrameRenderer {
     int cols_ = 0;
     int cursor_row_ = 0;
     int cursor_col_ = 0;
+    bool cursor_visible_ = true;
     bool valid_ = false;
     std::vector<std::string> row_commands_;
 };

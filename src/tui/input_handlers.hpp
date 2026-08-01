@@ -7,6 +7,7 @@
 #include "chat/session.hpp"
 #include "chat/sqlite_store.hpp"
 #include "editor/editor.hpp"
+#include "editor/terminal_input.hpp"
 #include "tui/events.hpp"
 #include "tui/tui.hpp"
 
@@ -22,6 +23,10 @@ std::string join_models_preview(const std::vector<std::string>& models);
 
 void scroll_chat_history_page_up(const Layout& layout, int& history_scroll);
 void scroll_chat_history_page_down(const Layout& layout, int& history_scroll);
+bool apply_chat_mouse_scroll(const editor::MouseInputEvent& mouse,
+                             const Layout& layout,
+                             TuiMode mode,
+                             int& history_scroll);
 
 bool apply_chat_history_scroll(const editor::MovementKeyEvent& movement,
                                const Layout& layout,

@@ -33,7 +33,8 @@ Error TerminalSession::enter() {
     active_ = true;
     editor::clear_terminal_input_queue();
     std::cout << "\x1b[?1049h\x1b[?25h\x1b[2J\x1b[H" << editor::bracketed_paste_enable_sequence()
-              << editor::keyboard_modifier_enable_sequence();
+              << editor::keyboard_modifier_enable_sequence()
+              << editor::mouse_reporting_enable_sequence();
     std::cout.flush();
     return ok_error();
 }
@@ -43,7 +44,8 @@ void TerminalSession::restore() {
         return;
     }
     tcsetattr(STDIN_FILENO, TCSAFLUSH, &original_);
-    std::cout << editor::keyboard_modifier_disable_sequence()
+    std::cout << editor::mouse_reporting_disable_sequence()
+              << editor::keyboard_modifier_disable_sequence()
               << editor::bracketed_paste_disable_sequence()
               << "\x1b[0m\x1b[?25h\x1b[2J\x1b[H\x1b[?1049l";
     std::cout.flush();

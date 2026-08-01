@@ -6,6 +6,7 @@
 #include <cctype>
 #include <deque>
 #include <iostream>
+#include <limits>
 #include <sys/select.h>
 #include <unistd.h>
 
@@ -70,7 +71,11 @@ bool parse_positive_int(const std::string& text, int& out) {
         if (!std::isdigit(static_cast<unsigned char>(ch))) {
             return false;
         }
-        value = value * 10 + (ch - '0');
+        const int digit = ch - '0';
+        if (value > (std::numeric_limits<int>::max() - digit) / 10) {
+            return false;
+        }
+        value = value * 10 + digit;
     }
     out = value;
     return true;
@@ -146,9 +151,109 @@ bool csi_sequence_complete(const std::string& sequence) {
 
 }  // namespace
 
+void EscapeRepeatGuard::arm(Clock::time_point now) {
+    deadline_ = now + std::chrono::milliseconds(1000);
+    armed_ = true;
+}
+
+void EscapeRepeatGuard::reset() {
+    armed_ = false;
+}
+
+bool EscapeRepeatGuard::suppress(Clock::time_point now) {
+    if (!armed_ || now >= deadline_) {
+        armed_ = false;
+        return false;
+    }
+    // Continuous repeats keep the guard alive; after release it expires soon.
+    deadline_ = now + std::chrono::milliseconds(500);
+    return true;
+}
+
+namespace {
+
+bool decode_mouse_code(int code, bool sgr_release, MouseInputEvent& out) {
+    if (code < 0 || code > 255) return false;
+    out.shift = (code & 4) != 0;
+    out.alt = (code & 8) != 0;
+    out.ctrl = (code & 16) != 0;
+    out.motion = (code & 32) != 0;
+    out.pressed = !sgr_release;
+    const int button = code & 3;
+    if ((code & 64) != 0) {
+        switch (button) {
+            case 0: out.button = MouseButton::WheelUp; break;
+            case 1: out.button = MouseButton::WheelDown; break;
+            case 2: out.button = MouseButton::WheelLeft; break;
+            case 3: out.button = MouseButton::WheelRight; break;
+        }
+        return true;
+    }
+    if (sgr_release || button == 3) {
+        out.button = MouseButton::Release;
+        out.pressed = false;
+        return true;
+    }
+    switch (button) {
+        case 0: out.button = MouseButton::Left; break;
+        case 1: out.button = MouseButton::Middle; break;
+        case 2: out.button = MouseButton::Right; break;
+        default: return false;
+    }
+    return true;
+}
+
+}  // namespace
+
+bool decode_sgr_mouse_sequence(const std::string& sequence, MouseInputEvent& out) {
+    out = MouseInputEvent{};
+    if (sequence.size() < 7 || sequence.rfind("[<", 0) != 0 ||
+        (sequence.back() != 'M' && sequence.back() != 'm')) {
+        return false;
+    }
+    const size_t first = sequence.find(';', 2);
+    const size_t second = first == std::string::npos ? first : sequence.find(';', first + 1);
+    if (first == std::string::npos || second == std::string::npos ||
+        sequence.find(';', second + 1) != std::string::npos) {
+        return false;
+    }
+    int code = 0;
+    if (!parse_positive_int(sequence.substr(2, first - 2), code) ||
+        !parse_positive_int(sequence.substr(first + 1, second - first - 1), out.col) ||
+        !parse_positive_int(sequence.substr(second + 1, sequence.size() - second - 2), out.row) ||
+        out.col < 1 || out.row < 1) {
+        out = MouseInputEvent{};
+        return false;
+    }
+    if (!decode_mouse_code(code, sequence.back() == 'm', out)) {
+        out = MouseInputEvent{};
+        return false;
+    }
+    return true;
+}
+
+bool decode_x10_mouse_bytes(unsigned char code_byte,
+                            unsigned char col_byte,
+                            unsigned char row_byte,
+                            MouseInputEvent& out) {
+    out = MouseInputEvent{};
+    if (code_byte < 32 || col_byte < 33 || row_byte < 33) return false;
+    out.col = static_cast<int>(col_byte) - 32;
+    out.row = static_cast<int>(row_byte) - 32;
+    if (!decode_mouse_code(static_cast<int>(code_byte) - 32, false, out)) {
+        out = MouseInputEvent{};
+        return false;
+    }
+    return true;
+}
+
 bool decode_control_key_sequence(const std::string& sequence, unsigned char& out) {
     if (sequence == "[Z" || sequence == "OZ") {
         out = editor_key_backtab();
+        return true;
+    }
+    if (sequence == "[27u") {
+        out = 27;
         return true;
     }
     if (sequence.size() >= 4 && sequence[0] == '[' && sequence.back() == 'u') {
@@ -159,6 +264,14 @@ bool decode_control_key_sequence(const std::string& sequence, unsigned char& out
             if (!parse_positive_int(sequence.substr(1, semi - 1), codepoint) ||
                 !parse_positive_int(sequence.substr(semi + 1, sequence.size() - semi - 2), modifier)) {
                 return false;
+            }
+            if (codepoint == 27 && modifier == 1) {
+                out = 27;
+                return true;
+            }
+            if (codepoint == 'x' && modifier == 3) {
+                out = editor_key_command_minibuffer();
+                return true;
             }
             if (codepoint == 9 && modifier == 2) {
                 out = editor_key_backtab();
@@ -189,6 +302,14 @@ bool decode_control_key_sequence(const std::string& sequence, unsigned char& out
             if (!parse_positive_int(sequence.substr(prev_semi + 1, semi - prev_semi - 1), modifier) ||
                 !parse_positive_int(sequence.substr(semi + 1, sequence.size() - semi - 2), key)) {
                 return false;
+            }
+            if (modifier == 1 && key == 27) {
+                out = 27;
+                return true;
+            }
+            if (key == 'x' && modifier == 3) {
+                out = editor_key_command_minibuffer();
+                return true;
             }
             if (modifier == 2 && key == 9) {
                 out = editor_key_backtab();
@@ -341,6 +462,11 @@ bool read_terminal_input(TerminalInputEvent& out, int timeout_ms) {
     } else if (have_after_esc) {
         after_esc.push_back(static_cast<char>(ch));
     }
+    if (after_esc == "x") {
+        out.type = TerminalInputType::Byte;
+        out.byte = editor_key_command_minibuffer();
+        return true;
+    }
     while (read_terminal_byte(ch, terminal_escape_inter_byte_timeout_ms())) {
         after_esc.push_back(static_cast<char>(ch));
         if (after_esc == "[200~") {
@@ -359,12 +485,34 @@ bool read_terminal_input(TerminalInputEvent& out, int timeout_ms) {
         if (is_bracketed_paste_prefix(after_esc)) {
             continue;
         }
+        if (after_esc.rfind("[<", 0) == 0) {
+            if (ch == 'M' || ch == 'm') break;
+            continue;
+        }
         if (csi_sequence_complete(after_esc)) {
             break;
         }
         if (after_esc.size() > 32) {
             break;
         }
+    }
+
+    if (after_esc == "[M") {
+        unsigned char code = 0;
+        unsigned char col = 0;
+        unsigned char row = 0;
+        out.type = TerminalInputType::Mouse;
+        if (read_terminal_byte(code, terminal_escape_inter_byte_timeout_ms()) &&
+            read_terminal_byte(col, terminal_escape_inter_byte_timeout_ms()) &&
+            read_terminal_byte(row, terminal_escape_inter_byte_timeout_ms())) {
+            (void)decode_x10_mouse_bytes(code, col, row, out.mouse);
+        }
+        return true;
+    }
+    if (after_esc.rfind("[<", 0) == 0) {
+        out.type = TerminalInputType::Mouse;
+        (void)decode_sgr_mouse_sequence(after_esc, out.mouse);
+        return true;
     }
 
     unsigned char decoded = 0;
@@ -377,6 +525,7 @@ bool read_terminal_input(TerminalInputEvent& out, int timeout_ms) {
     if (decode_control_key_sequence(after_esc, decoded)) {
         out.type = TerminalInputType::Byte;
         out.byte = decoded;
+        out.decoded_escape = decoded == 27;
         return true;
     }
 

@@ -302,6 +302,9 @@ app::EditorRunResult run_editor(const std::string& path,
     std::string theme_name = settings.theme_name;
     bool use_colors = interactive != nullptr ? interactive->use_colors : settings.use_colors;
     bool show_scrollbars = interactive != nullptr ? interactive->show_scrollbars : true;
+    bool mouse_view_detached = false;
+    EscapeRepeatGuard assist_escape_repeat_guard;
+    bool current_escape_was_decoded = false;
     input::InsertSourceOptions insert_options;
     const cli::Options* runtime_options = nullptr;
     if (interactive != nullptr) {
@@ -484,7 +487,8 @@ app::EditorRunResult run_editor(const std::string& path,
         state.highlight_enabled = highlight_enabled;
         if (help_view.active || !split_layout.has_split()) {
             render_terminal(state, minibuffer, terminal_frame_renderer, theme_style,
-                            help_view.active, refresh_assist_display(), show_scrollbars);
+                            help_view.active, refresh_assist_display(), show_scrollbars,
+                            !mouse_view_detached);
             return;
         }
         const std::vector<SplitPaneRect> panes = split_layout.layout_panes(editor_main_area());
@@ -506,7 +510,8 @@ app::EditorRunResult run_editor(const std::string& path,
             help_view.active,
             refresh_assist_display(),
             split_layout.leaf_count(),
-            show_scrollbars);
+            show_scrollbars,
+            !mouse_view_detached);
     };
     render_editor();
 
@@ -852,7 +857,7 @@ app::EditorRunResult run_editor(const std::string& path,
     };
 
     auto handle_buffer_list_escape = [&]() {
-        const std::string sequence = read_escape_suffix();
+        const std::string sequence = current_escape_was_decoded ? std::string{} : read_escape_suffix();
         if (sequence.empty()) {
             cancel_buffer_list();
             return;
@@ -893,6 +898,7 @@ app::EditorRunResult run_editor(const std::string& path,
         if (!help_view.active || !help_view.settings) return;
         const cli::Options* options = active_model_options();
         if (options == nullptr) return;
+        const size_t retained_mouse_scroll = state.scroll_line;
         state.text = PieceTable::from_string(chat::format_settings_panel(
             *options,
             ai_continue.has_value()
@@ -900,7 +906,7 @@ app::EditorRunResult run_editor(const std::string& path,
                 : std::string{}));
         state.invalidate_word_index();
         state.cursor = 0;
-        state.scroll_line = 0;
+        state.scroll_line = mouse_view_detached ? retained_mouse_scroll : 0;
         state.scroll_column = 0;
         state.dirty = false;
         state.clear_selection();
@@ -1207,7 +1213,7 @@ app::EditorRunResult run_editor(const std::string& path,
     };
 
     auto handle_picker_list_escape = [&]() {
-        const std::string sequence = read_escape_suffix();
+        const std::string sequence = current_escape_was_decoded ? std::string{} : read_escape_suffix();
         std::string picker_status;
         picker.handle_escape(sequence, picker_status);
         minibuffer_message(minibuffer, picker_status);
@@ -2995,8 +3001,15 @@ app::EditorRunResult run_editor(const std::string& path,
         return updated;
     };
 
-    std::function<void(unsigned char)> handle_key;
-    handle_key = [&](unsigned char ch) {
+    std::function<void(unsigned char, bool)> handle_key;
+    auto open_assist_command_minibuffer = [&]() {
+        start_assist_command_mode(minibuffer, assist_completer);
+        assist_escape_repeat_guard.arm(EscapeRepeatGuard::Clock::now());
+    };
+    handle_key = [&](unsigned char ch, bool decoded_escape) {
+        current_escape_was_decoded = decoded_escape;
+        mouse_view_detached = false;
+        if (ch != 27) assist_escape_repeat_guard.reset();
         if (ch != '\t') {
             word_completer.reset();
         }
@@ -3006,6 +3019,15 @@ app::EditorRunResult run_editor(const std::string& path,
         }
         if (ch == 20) {
             cycle_reasoning();
+            return;
+        }
+        if (is_editor_command_minibuffer_key(ch)) {
+            const bool command_unavailable =
+                minibuffer.active || replace.active || assist_session.active ||
+                reformat_session.active || insert_session.active || shell_session.active ||
+                picker.active || buffer_list_active || pending_close_confirm ||
+                window_prefix_active;
+            if (!command_unavailable) open_assist_command_minibuffer();
             return;
         }
         if (minibuffer.active && ch == 22) {
@@ -3042,6 +3064,7 @@ app::EditorRunResult run_editor(const std::string& path,
             }
             if (minibuffer.active && is_assist_minibuffer_action(minibuffer.action)) {
                 if (ch == 27) {
+                    if (assist_escape_repeat_guard.suppress(EscapeRepeatGuard::Clock::now())) return;
                     pending_assist = PendingAssist{};
                     exit_assist_command_mode(minibuffer, assist_completer);
                     return;
@@ -3080,11 +3103,11 @@ app::EditorRunResult run_editor(const std::string& path,
                 return;
             }
             if (ch == 27) {
-                const std::string sequence = read_escape_suffix();
+                const std::string sequence = decoded_escape ? std::string{} : read_escape_suffix();
                 if (!sequence.empty()) {
                     unsigned char decoded = 0;
                     if (decode_control_key_sequence(sequence, decoded)) {
-                        handle_key(decoded);
+                        handle_key(decoded, decoded == 27);
                         return;
                     }
                     std::string escape_status;
@@ -3095,7 +3118,7 @@ app::EditorRunResult run_editor(const std::string& path,
                     }
                     return;
                 }
-                start_assist_command_mode(minibuffer, assist_completer);
+                open_assist_command_minibuffer();
                 return;
             }
             if (ch == 8) {
@@ -3227,6 +3250,7 @@ app::EditorRunResult run_editor(const std::string& path,
         }
         if (minibuffer.active && is_assist_minibuffer_action(minibuffer.action)) {
             if (ch == 27) {
+                if (assist_escape_repeat_guard.suppress(EscapeRepeatGuard::Clock::now())) return;
                 pending_assist = PendingAssist{};
                 exit_assist_command_mode(minibuffer, assist_completer);
                 return;
@@ -3572,11 +3596,11 @@ app::EditorRunResult run_editor(const std::string& path,
             }
         } else if (ch == 27) {
             if (!minibuffer.active && !replace.active && !assist_session.active) {
-                const std::string sequence = read_escape_suffix();
+                const std::string sequence = decoded_escape ? std::string{} : read_escape_suffix();
                 if (!sequence.empty()) {
                     unsigned char decoded = 0;
                     if (decode_control_key_sequence(sequence, decoded)) {
-                        handle_key(decoded);
+                        handle_key(decoded, decoded == 27);
                         return;
                     }
                     std::string escape_status;
@@ -3592,7 +3616,7 @@ app::EditorRunResult run_editor(const std::string& path,
                     minibuffer_message(minibuffer, "Window command cancelled");
                     return;
                 }
-                start_assist_command_mode(minibuffer, assist_completer);
+                open_assist_command_minibuffer();
                 return;
             }
             std::string escape_status;
@@ -3625,6 +3649,7 @@ app::EditorRunResult run_editor(const std::string& path,
     };
 
     auto handle_paste = [&](const std::string& terminal_text) {
+        mouse_view_detached = false;
         cancel_pending_clipboard();
         if (picker.active) {
             minibuffer_message(minibuffer, "Choose an item or press Esc to cancel");
@@ -3708,6 +3733,19 @@ app::EditorRunResult run_editor(const std::string& path,
     }
     schedule_selection_save();
 
+    auto handle_mouse_input = [&](const MouseInputEvent& mouse) {
+        if (picker.active || buffer_list_active || pending_close_confirm) return;
+        const Rect pane_rect = help_view.active || !split_layout.has_split()
+                                   ? editor_main_area()
+                                   : split_layout.focused_rect(editor_main_area());
+        const Rect content_rect = editor_content_rect(pane_rect);
+        if (!apply_editor_mouse_scroll(state, content_rect, mouse)) return;
+        mouse_view_detached = true;
+        if (!help_view.active) {
+            split_layout.set_focused_view(pane_view_from_state(state));
+        }
+    };
+
     if (interactive != nullptr && interactive->pending_editor_assist.active) {
         const app::PendingEditorAssistFromChat pending = interactive->pending_editor_assist;
         interactive->pending_editor_assist = {};
@@ -3783,7 +3821,9 @@ app::EditorRunResult run_editor(const std::string& path,
         }
 
         last_activity = SteadyClock::now();
-        if (event.type == TerminalInputType::BracketedPaste) {
+        if (event.type == TerminalInputType::Mouse) {
+            handle_mouse_input(event.mouse);
+        } else if (event.type == TerminalInputType::BracketedPaste) {
             handle_paste(event.text);
             prompt_for_changed_read_only_file();
         } else if (event.type == TerminalInputType::Osc52ClipboardResponse) {
@@ -3811,14 +3851,16 @@ app::EditorRunResult run_editor(const std::string& path,
                 }
             }
         } else if (event.type == TerminalInputType::Byte) {
-            handle_key(event.byte);
+            handle_key(event.byte, event.decoded_escape);
             prompt_for_changed_read_only_file();
             while (!quit) {
                 if (!read_terminal_input(event, 0)) {
                     break;
                 }
                 last_activity = SteadyClock::now();
-                if (event.type == TerminalInputType::BracketedPaste) {
+                if (event.type == TerminalInputType::Mouse) {
+                    handle_mouse_input(event.mouse);
+                } else if (event.type == TerminalInputType::BracketedPaste) {
                     handle_paste(event.text);
                     prompt_for_changed_read_only_file();
                 } else if (event.type == TerminalInputType::Osc52ClipboardResponse) {
@@ -3827,7 +3869,7 @@ app::EditorRunResult run_editor(const std::string& path,
                         apply_external_clipboard(event.text, "terminal clipboard");
                     }
                 } else if (event.type == TerminalInputType::Byte) {
-                    handle_key(event.byte);
+                    handle_key(event.byte, event.decoded_escape);
                     prompt_for_changed_read_only_file();
                 } else {
                     break;

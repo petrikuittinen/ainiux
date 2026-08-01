@@ -10,6 +10,7 @@
 #include "ui/text_selector.hpp"
 
 #include <sstream>
+#include <limits>
 
 namespace ainiux::tui {
 
@@ -66,6 +67,26 @@ void scroll_chat_history_page_up(const Layout& layout, int& history_scroll) {
 void scroll_chat_history_page_down(const Layout& layout, int& history_scroll) {
     const int step = std::max(1, layout.history_rows / 2);
     history_scroll -= step;
+}
+
+bool apply_chat_mouse_scroll(const editor::MouseInputEvent& mouse,
+                             const Layout& layout,
+                             TuiMode mode,
+                             int& history_scroll) {
+    if (mode != TuiMode::Chat || mouse.col < 1 || mouse.col > layout.cols ||
+        mouse.row < layout.history_row ||
+        mouse.row >= layout.history_row + layout.history_rows) {
+        return false;
+    }
+    if (mouse.button == editor::MouseButton::WheelUp) {
+        if (history_scroll < std::numeric_limits<int>::max()) ++history_scroll;
+        return true;
+    }
+    if (mouse.button == editor::MouseButton::WheelDown) {
+        history_scroll = std::max(0, history_scroll - 1);
+        return true;
+    }
+    return false;
 }
 
 bool apply_chat_history_scroll(const editor::MovementKeyEvent& movement,

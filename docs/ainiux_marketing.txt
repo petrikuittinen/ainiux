@@ -1,0 +1,31 @@
+Ainiux - AI-powered editor, chat and agent. 100% C++, open source. Supporting OpenAI compatible endpoints.
+
+Meme:
+
+Drake Meme:
+Top: "Using a bloated Electron AI editor that tracks every keystroke and eats 2GB of RAM"
+Bottom: "Using Ainiux — 100% C++, open source, hooks into any local OpenAI-compatible model"
+
+Slogan:
+
+Own your AI. Code at native speed. — Ainiux.
+
+Twitter (X):
+
+Most "AI editors" are just slow web apps in a trench coat. Ainiux is 100% C++ — a native AI editor, chat, and agent that sips RAM and screams. Open source. Works with any OpenAI-compatible backend, even a local one. #Ainiux #C++ #AI
+
+Facebook:
+
+Why let your AI editor hold your code hostage? Ainiux is a fully open-source AI editor built in pure C++ — lightning fast, low overhead, and private. Pair it with any OpenAI-compatible endpoint: use Ollama on your own machine, or your favorite cloud API. No bloat, no tracking, no lock-in. Ready to feel the difference?
+
+Instagram:
+
+C++ is not dead. It powers your AI editor now. Ainiux: open source, native speed, any OpenAI-compatible brain you choose. Your machine deserves this. #Ainiux #Cpp #OpenSource #AItools
+
+YouTube:
+
+Your AI editor can be fast. Your AI editor can be free. Your AI editor can be yours. Ainiux is the open-source, 100% C++ AI editor, chat, and agent that plugs into any OpenAI-compatible endpoint — from a local Ollama instance to your cloud API of choice. In this short, we show why switching to Ainiux feels like upgrading from a bicycle to a rocket. Watch now, then download and build it yourself.
+
+TikTok:
+
+POV: You open an AI editor that's actually pure C++ — it launches in 0.4 seconds, doesn't spy, and you can read all the source. That's Ainiux. Open source, OpenAI-compatible, all yours. Devs, you're welcome. #C++ #opensource #AItools

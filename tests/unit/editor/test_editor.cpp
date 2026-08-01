@@ -514,6 +514,119 @@ void test_osc52_clipboard_decode() {
     ed::cancel_terminal_clipboard_request();
 }
 
+void test_terminal_mouse_decode() {
+    namespace ed = ainiux::editor;
+    ed::clear_terminal_input_queue();
+    ed::push_terminal_input_bytes("\x1b[<92;17;6M\x1b[<65;4;9MZ");
+    ed::TerminalInputEvent event;
+    check(ed::read_terminal_input(event, 0) &&
+              event.type == ed::TerminalInputType::Mouse &&
+              event.mouse.button == ed::MouseButton::WheelUp && event.mouse.pressed &&
+              event.mouse.shift && event.mouse.alt && event.mouse.ctrl &&
+              event.mouse.col == 17 && event.mouse.row == 6,
+          "SGR mouse decoder preserves wheel direction, modifiers, and coordinates");
+    check(ed::read_terminal_input(event, 0) &&
+              event.type == ed::TerminalInputType::Mouse &&
+              event.mouse.button == ed::MouseButton::WheelDown &&
+              event.mouse.col == 4 && event.mouse.row == 9,
+          "SGR mouse decoder recognizes wheel down");
+    check(ed::read_terminal_input(event, 0) &&
+              event.type == ed::TerminalInputType::Byte && event.byte == 'Z',
+          "SGR mouse decoding preserves adjacent keyboard bytes");
+
+    ed::clear_terminal_input_queue();
+    ed::push_terminal_input_bytes("\x1b[<0;2;3M\x1b[<0;2;3mQ");
+    check(ed::read_terminal_input(event, 0) &&
+              event.type == ed::TerminalInputType::Mouse &&
+              event.mouse.button == ed::MouseButton::Left && event.mouse.pressed,
+          "SGR mouse clicks are decoded for callers to consume");
+    check(ed::read_terminal_input(event, 0) &&
+              event.type == ed::TerminalInputType::Mouse &&
+              event.mouse.button == ed::MouseButton::Release && !event.mouse.pressed,
+          "SGR mouse releases are decoded for callers to consume");
+    check(ed::read_terminal_input(event, 0) && event.byte == 'Q',
+          "ignored click and release sequences do not consume adjacent keys");
+
+    std::string x10("\x1b[M", 3);
+    x10.push_back(static_cast<char>(32 + 64));
+    x10.push_back(static_cast<char>(32 + 12));
+    x10.push_back(static_cast<char>(32 + 7));
+    x10.push_back('X');
+    ed::clear_terminal_input_queue();
+    ed::push_terminal_input_bytes(x10);
+    check(ed::read_terminal_input(event, 0) &&
+              event.type == ed::TerminalInputType::Mouse &&
+              event.mouse.button == ed::MouseButton::WheelUp &&
+              event.mouse.col == 12 && event.mouse.row == 7,
+          "legacy X10 mouse wheel reports use 1-based coordinates");
+    check(ed::read_terminal_input(event, 0) && event.byte == 'X',
+          "legacy X10 decoding preserves adjacent keyboard bytes");
+
+    ed::clear_terminal_input_queue();
+    ed::push_terminal_input_bytes("\x1b[<oopsM!");
+    check(ed::read_terminal_input(event, 0) &&
+              event.type == ed::TerminalInputType::Mouse &&
+              event.mouse.button == ed::MouseButton::Unknown,
+          "malformed SGR mouse input is consumed as an ignored mouse event");
+    check(ed::read_terminal_input(event, 0) && event.byte == '!',
+          "malformed mouse input does not leak into text and preserves adjacent keys");
+}
+
+void test_editor_mouse_visual_row_scrolling() {
+    namespace ed = ainiux::editor;
+    ed::EditorState state = ed::EditorState::from_text("abcdefghij\nklmnopqrst\nuvwxyz");
+    state.cursor = 1;
+    state.selection.anchor = 0;
+    state.selection.active = 1;
+    const ed::Rect focused{2, 3, 2, 5};
+    ed::MouseInputEvent wheel_down;
+    wheel_down.button = ed::MouseButton::WheelDown;
+    wheel_down.row = 2;
+    wheel_down.col = 3;
+    check(ed::apply_editor_mouse_scroll(state, focused, wheel_down) && state.scroll_line == 1,
+          "editor wheel down advances exactly one soft-wrapped visual row");
+    check(state.cursor == 1 && state.selection.anchor == 0 && state.selection.active == 1 &&
+              !state.dirty && !state.undo(),
+          "editor wheel scrolling leaves caret, selection, dirty state, and undo history unchanged");
+
+    ed::MouseInputEvent wheel_up = wheel_down;
+    wheel_up.button = ed::MouseButton::WheelUp;
+    check(ed::apply_editor_mouse_scroll(state, focused, wheel_up) && state.scroll_line == 0,
+          "editor wheel up retreats exactly one visual row");
+    check(ed::apply_editor_mouse_scroll(state, focused, wheel_up) && state.scroll_line == 0,
+          "editor wheel up clamps at the document beginning");
+
+    ed::MouseInputEvent outside = wheel_down;
+    outside.col = focused.col + focused.width;
+    check(!ed::apply_editor_mouse_scroll(state, focused, outside) && state.scroll_line == 0,
+          "editor ignores wheel input outside the focused content rectangle");
+    for (int i = 0; i < 20; ++i) {
+        (void)ed::apply_editor_mouse_scroll(state, focused, wheel_down);
+    }
+    check(state.scroll_line == 4,
+          "editor wheel scrolling clamps at the final visual-row viewport");
+    check(!state.render(focused).cursor.visible,
+          "a mouse-detached editor viewport can render with the caret off-screen");
+    state.ensure_cursor_visible(focused);
+    check(state.render(focused).cursor.visible,
+          "normal cursor following restores the caret after mouse scrolling");
+
+    ed::EditorState generated = ed::EditorState::from_text("first\nsecond\nthird");
+    generated.read_only = true;
+    const ed::Rect generated_rect{1, 1, 1, 20};
+    wheel_down.row = 1;
+    wheel_down.col = 1;
+    check(ed::apply_editor_mouse_scroll(generated, generated_rect, wheel_down) &&
+              generated.scroll_line == 1 && generated.render(generated_rect).lines[0] ==
+                                                    std::string("second") + std::string(14, ' '),
+          "editor wheel scrolling advances one physical row in read-only generated views");
+    ed::MouseInputEvent horizontal = wheel_down;
+    horizontal.button = ed::MouseButton::WheelRight;
+    check(!ed::apply_editor_mouse_scroll(generated, generated_rect, horizontal) &&
+              generated.scroll_line == 1,
+          "editor ignores horizontal wheel reports");
+}
+
 void test_editor_ai_setup_helpers() {
     check(ainiux::editor::editor_no_provider_message() ==
               "No provider chosen. Use /provider to choose one",
@@ -3585,6 +3698,25 @@ void test_editor_file_io_failures() {
 
 void test_editor_control_key_sequence_decode() {
     unsigned char decoded = 0;
+    check(ainiux::editor::is_editor_command_minibuffer_key(5),
+          "Ctrl+E is an editor command-minibuffer key");
+    check(ainiux::editor::is_editor_command_minibuffer_key(
+              ainiux::editor::editor_key_command_minibuffer()),
+          "Alt+X sentinel remains an editor command-minibuffer key");
+    check(!ainiux::editor::is_editor_command_minibuffer_key(13),
+          "Enter is not treated as an editor command-minibuffer key");
+    check(ainiux::editor::decode_control_key_sequence("[27u", decoded) && decoded == 27,
+          "editor decodes kitty-style Escape without a modifier field");
+    check(ainiux::editor::decode_control_key_sequence("[27;1u", decoded) && decoded == 27,
+          "editor decodes kitty-style Escape with an explicit base modifier");
+    check(ainiux::editor::decode_control_key_sequence("[27;1;27~", decoded) && decoded == 27,
+          "editor decodes xterm modifyOtherKeys Escape");
+    check(ainiux::editor::decode_control_key_sequence("[120;3u", decoded) &&
+              decoded == ainiux::editor::editor_key_command_minibuffer(),
+          "editor decodes kitty-style Alt+X as the command-minibuffer key");
+    check(ainiux::editor::decode_control_key_sequence("[27;3;120~", decoded) &&
+              decoded == ainiux::editor::editor_key_command_minibuffer(),
+          "editor decodes xterm modifyOtherKeys Alt+X as the command-minibuffer key");
     check(ainiux::editor::decode_control_key_sequence("[110;5u", decoded) && decoded == 14,
           "editor decodes kitty-style Ctrl+N as new-buffer");
     check(ainiux::editor::decode_control_key_sequence("[19;5u", decoded) && decoded == 19,
@@ -3610,6 +3742,50 @@ void test_editor_control_key_sequence_decode() {
           "editor decodes xterm modifyOtherKeys Shift+Tab as backtab");
     check(!ainiux::editor::decode_control_key_sequence("[A", decoded),
           "editor ignores arrow-key escape sequences");
+
+    ainiux::editor::clear_terminal_input_queue();
+    ainiux::editor::push_terminal_input_bytes("\x1b[27u/");
+    ainiux::editor::TerminalInputEvent event;
+    check(ainiux::editor::read_terminal_input(event, 0) &&
+              event.type == ainiux::editor::TerminalInputType::Byte && event.byte == 27 &&
+              event.decoded_escape,
+          "terminal input returns enhanced Escape as the same byte as bare Escape");
+    check(ainiux::editor::read_terminal_input(event, 0) && event.byte == '/',
+          "enhanced Escape decoding preserves adjacent command input");
+    ainiux::editor::clear_terminal_input_queue();
+
+    ainiux::editor::push_terminal_input_bytes("\x1b\x1b");
+    check(ainiux::editor::read_terminal_input(event, 0) && event.byte == 27 &&
+              !event.decoded_escape && ainiux::editor::read_escape_suffix().empty(),
+          "an immediate bare-Escape repeat remains a single minibuffer-open action");
+    ainiux::editor::clear_terminal_input_queue();
+
+    ainiux::editor::push_terminal_input_bytes("\x1bxZ");
+    check(ainiux::editor::read_terminal_input(event, 0) &&
+              event.type == ainiux::editor::TerminalInputType::Byte &&
+              event.byte == ainiux::editor::editor_key_command_minibuffer(),
+          "terminal input decodes legacy Alt+X as the command-minibuffer key");
+    check(ainiux::editor::read_terminal_input(event, 0) && event.byte == 'Z',
+          "legacy Alt+X decoding preserves adjacent keyboard input");
+    ainiux::editor::clear_terminal_input_queue();
+}
+
+void test_editor_escape_repeat_guard() {
+    using Guard = ainiux::editor::EscapeRepeatGuard;
+    Guard guard;
+    const Guard::Clock::time_point start{};
+    check(!guard.suppress(start), "unarmed Escape repeat guard does not suppress Escape");
+    guard.arm(start);
+    check(guard.suppress(start + std::chrono::milliseconds(500)),
+          "Escape repeat guard suppresses the delayed first key repeat");
+    check(guard.suppress(start + std::chrono::milliseconds(800)),
+          "continuous Escape repeats extend suppression until key release");
+    check(!guard.suppress(start + std::chrono::milliseconds(1400)),
+          "Escape repeat guard expires after the repeat burst goes quiet");
+    guard.arm(start);
+    guard.reset();
+    check(!guard.suppress(start + std::chrono::milliseconds(1)),
+          "typing another key resets Escape repeat suppression");
 }
 
 void test_editor_save_as_overwrite_helpers() {
@@ -4566,8 +4742,11 @@ void run_all() {
     test_system_clipboard_helpers();
     test_system_clipboard_cancellation_and_limits();
     test_osc52_clipboard_decode();
+    test_terminal_mouse_decode();
+    test_editor_mouse_visual_row_scrolling();
     test_editor_file_locking_and_read_only_sessions();
     test_editor_control_key_sequence_decode();
+    test_editor_escape_repeat_guard();
     test_editor_save_as_overwrite_helpers();
     test_editor_help_document_and_command();
     test_editor_assist_path_completion();

@@ -1094,6 +1094,26 @@ void EditorState::ensure_cursor_visible(const Rect& rect) {
     scroll_column = 0;
 }
 
+bool EditorState::scroll_view_rows(const Rect& rect, int rows) {
+    const size_t width = static_cast<size_t>(std::max(1, rect.width));
+    const size_t height = static_cast<size_t>(std::max(1, rect.height));
+    const size_t content_rows = visual_row_count_bounded(width, static_cast<size_t>(-1));
+    const size_t max_scroll = content_rows > height ? content_rows - height : 0;
+    const size_t before = scroll_line;
+    if (rows < 0) {
+        const size_t amount = static_cast<size_t>(-(static_cast<long long>(rows)));
+        scroll_line = amount > scroll_line ? 0 : scroll_line - amount;
+    } else if (rows > 0) {
+        const size_t amount = static_cast<size_t>(rows);
+        scroll_line = amount > max_scroll - std::min(scroll_line, max_scroll)
+                          ? max_scroll
+                          : std::min(scroll_line, max_scroll) + amount;
+    }
+    scroll_line = std::min(scroll_line, max_scroll);
+    scroll_column = 0;
+    return scroll_line != before;
+}
+
 RenderedPanel EditorState::render(const Rect& rect) const {
     return render(rect, cursor, scroll_line, scroll_column);
 }

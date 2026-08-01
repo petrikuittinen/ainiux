@@ -63,14 +63,18 @@ std::size_t TerminalFrameRenderer::present(const TerminalFrame& frame,
     const int cursor_col = std::min(frame.cols, std::max(1, frame.cursor_col));
     const bool cursor_moved =
         !valid_ || cursor_row_ != cursor_row || cursor_col_ != cursor_col;
+    const bool cursor_visibility_changed = !valid_ || cursor_visible_ != frame.cursor_visible;
     if (changed_rows > 0) {
         bytes += terminal_position(cursor_row, cursor_col);
-        if (full_redraw) {
-            bytes += "\x1b[?25h";
+        if (full_redraw || cursor_visibility_changed) {
+            bytes += frame.cursor_visible ? "\x1b[?25h" : "\x1b[?25l";
         }
     } else if (cursor_moved) {
         // Moving an already-visible cursor does not toggle its visibility or blink phase.
         bytes += terminal_position(cursor_row, cursor_col);
+    }
+    if (changed_rows == 0 && cursor_visibility_changed) {
+        bytes += frame.cursor_visible ? "\x1b[?25h" : "\x1b[?25l";
     }
 
     if (!bytes.empty()) {
@@ -82,6 +86,7 @@ std::size_t TerminalFrameRenderer::present(const TerminalFrame& frame,
     cols_ = frame.cols;
     cursor_row_ = cursor_row;
     cursor_col_ = cursor_col;
+    cursor_visible_ = frame.cursor_visible;
     valid_ = true;
     row_commands_ = frame.row_commands;
     return changed_rows;
@@ -92,6 +97,7 @@ void TerminalFrameRenderer::invalidate() {
     cols_ = 0;
     cursor_row_ = 0;
     cursor_col_ = 0;
+    cursor_visible_ = true;
     valid_ = false;
     row_commands_.clear();
 }

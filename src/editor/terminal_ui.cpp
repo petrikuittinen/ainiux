@@ -17,6 +17,7 @@
 #include "ui/confirmation.hpp"
 #include "ui/scrollbar.hpp"
 
+#include <algorithm>
 #include <cerrno>
 #include <charconv>
 #include <cstring>
@@ -80,7 +81,7 @@ Error TerminalSession::enter() {
         active_ = true;
         clear_terminal_input_queue();
         std::cout << "\x1b[?1049h\x1b[?25h\x1b[2J\x1b[H" << bracketed_paste_enable_sequence()
-                  << keyboard_modifier_enable_sequence();
+                  << keyboard_modifier_enable_sequence() << mouse_reporting_enable_sequence();
         std::cout.flush();
         return ok_error();
 }
@@ -90,7 +91,8 @@ void TerminalSession::restore() {
             return;
         }
         tcsetattr(STDIN_FILENO, TCSAFLUSH, &original_);
-        std::cout << keyboard_modifier_disable_sequence() << bracketed_paste_disable_sequence()
+        std::cout << mouse_reporting_disable_sequence() << keyboard_modifier_disable_sequence()
+                  << bracketed_paste_disable_sequence()
                   << "\x1b[0m\x1b[?25h\x1b[2J\x1b[H\x1b[?1049l";
         std::cout.flush();
         clear_terminal_input_queue();
@@ -142,6 +144,26 @@ Rect editor_content_rect(const Rect& pane_rect) {
         return pane_rect;
     }
     return Rect{pane_rect.row, pane_rect.col, pane_rect.height, pane_rect.width - 1};
+}
+
+bool apply_editor_mouse_scroll(EditorState& state,
+                               const Rect& focused_content_rect,
+                               const MouseInputEvent& mouse) {
+    if (mouse.row < focused_content_rect.row ||
+        mouse.row >= focused_content_rect.row + focused_content_rect.height ||
+        mouse.col < focused_content_rect.col ||
+        mouse.col >= focused_content_rect.col + focused_content_rect.width) {
+        return false;
+    }
+    if (mouse.button == MouseButton::WheelUp) {
+        (void)state.scroll_view_rows(focused_content_rect, -1);
+        return true;
+    }
+    if (mouse.button == MouseButton::WheelDown) {
+        (void)state.scroll_view_rows(focused_content_rect, 1);
+        return true;
+    }
+    return false;
 }
 
 namespace {
@@ -1276,7 +1298,8 @@ void render_terminal(EditorState& state,
                      const TerminalThemeStyle& theme_style,
                      bool help_view,
                      const EditorAssistDisplay* assist_display,
-                     bool show_scrollbars) {
+                     bool show_scrollbars,
+                     bool follow_cursor) {
     SplitPaneRect single;
     single.buffer_index = 0;
     single.leaf_index = 0;
@@ -1292,7 +1315,8 @@ void render_terminal(EditorState& state,
         help_view,
         assist_display,
         1,
-        show_scrollbars);
+        show_scrollbars,
+        follow_cursor);
 }
 
 void render_terminal_splits(
@@ -1305,7 +1329,8 @@ void render_terminal_splits(
     bool help_view,
     const EditorAssistDisplay* assist_display,
     size_t pane_count_hint,
-    bool show_scrollbars) {
+    bool show_scrollbars,
+    bool follow_cursor) {
     const TerminalSize size = terminal_size();
     const int rows = std::max(3, size.rows);
     const int cols = std::max(20, size.cols);
@@ -1325,7 +1350,7 @@ void render_terminal_splits(
         const EditorState* source = &buffer_at(pane.buffer_index);
         if (pane.focused) {
             source = &focused_state;
-            focused_state.ensure_cursor_visible(content_rect);
+            if (follow_cursor) focused_state.ensure_cursor_visible(content_rect);
         }
         // Per-pane view: focused uses live state; unfocused uses leaf-stored view.
         PaneViewState view =
@@ -1370,6 +1395,9 @@ void render_terminal_splits(
         if (pane.focused && panel.cursor.visible) {
             cursor_row = pane.rect.row + panel.cursor.row;
             cursor_col = pane.rect.col + panel.cursor.col;
+            frame.cursor_visible = true;
+        } else if (pane.focused) {
+            frame.cursor_visible = false;
         }
     }
 
@@ -1472,6 +1500,7 @@ void render_terminal_splits(
         const size_t input_width = minibuffer.input.size();
         cursor_col = 1 + static_cast<int>(std::min<size_t>(
             static_cast<size_t>(std::max(0, width - 1)), prompt_width + input_width));
+        frame.cursor_visible = true;
     }
     frame.cursor_row = cursor_row;
     frame.cursor_col = cursor_col;
@@ -1595,6 +1624,10 @@ std::string read_escape_suffix() {
         if ((ch >= 'A' && ch <= 'Z') || ch == '~') {
             break;
         }
+    }
+    if (!sequence.empty() &&
+        std::all_of(sequence.begin(), sequence.end(), [](char byte) { return byte == '\x1b'; })) {
+        return {};
     }
     return sequence;
 }

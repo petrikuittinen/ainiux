@@ -3530,6 +3530,12 @@ app::TuiRunResult run(provider::RequestContext context,
         if (ready > 0 && FD_ISSET(STDIN_FILENO, &readfds)) {
             editor::TerminalInputEvent event;
             while (editor::read_terminal_input(event, 0)) {
+                if (event.type == editor::TerminalInputType::Mouse) {
+                    const detail::TuiSize screen = detail::terminal_size();
+                    (void)apply_chat_mouse_scroll(
+                        event.mouse, current_layout(screen.rows, screen.cols), mode, history_scroll);
+                    continue;
+                }
                 if (event.type == editor::TerminalInputType::BracketedPaste) {
                     cancel_pending_clipboard();
                     if (!clipboard_mode_editable(mode)) {
@@ -3582,6 +3588,10 @@ app::TuiRunResult run(provider::RequestContext context,
                     continue;
                 }
                 const unsigned char ch = event.byte;
+                if (ch == editor::editor_key_command_minibuffer()) {
+                    // Alt+X is reserved for the standalone editor command minibuffer.
+                    continue;
+                }
                 TuiPickerInputState picker_state{mode,
                                                  quit,
                                                  status,
