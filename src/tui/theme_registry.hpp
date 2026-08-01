@@ -74,6 +74,7 @@ struct ThemeCommandResult {
     bool ok = false;
     std::string message;
     std::string selected_theme;
+    bool colors_enabled = true;
 };
 
 ThemeCommandResult handle_theme_command(const ThemeRegistry& registry,

@@ -36,6 +36,16 @@ bool reasoning_change_needs_confirmation(const std::string& requested,
         ctx.status = err.message;
         return true;
     }
+    err = config::resolve_reasoning_off(
+        ctx.context.options.model_catalog,
+        ctx.context.profile.name,
+        ctx.context.api_kind == provider::ApiKind::Responses ? "responses" : "chat",
+        ctx.context.options.model,
+        selection);
+    if (!err.ok()) {
+        ctx.status = err.message;
+        return true;
+    }
     const std::string warning = config::reasoning_catalog_warning(
         ctx.context.options.model_catalog,
         ctx.context.profile.name,
@@ -221,7 +231,7 @@ void handle_tui_command(const std::string& text, TuiCommandContext& ctx, TuiComm
                 "/shell-stdout COMMAND  or  !!COMMAND (stdout → editable input draft)\n"
                 "/theme [THEME]\n"
                 "/highlight [on|off]\n"
-                "/thinking [trace|notrace]\n"
+                "/thinking [show|hide]\n"
                 "/editor (switch to editor mode)\n"
                 "/chat (switch to ordinary chat mode)\n"
                 "/agent (switch to interactive agent mode)\n"
@@ -273,19 +283,19 @@ void handle_tui_command(const std::string& text, TuiCommandContext& ctx, TuiComm
     if (text.rfind("/thinking", 0) == 0) {
         const std::string requested = app::detail::trim_ascii(text.substr(9));
         if (requested.empty()) {
-            ctx.status = std::string("Thinking traces: ") + (ctx.show_thinking_traces ? "trace" : "notrace") +
-                           ". Use /thinking trace or /thinking notrace";
+            ctx.status = std::string("Thinking traces: ") + (ctx.show_thinking_traces ? "show" : "hide") +
+                           ". Use /thinking show or /thinking hide";
             return;
         }
-        if (requested == "trace") {
+        if (requested == "show") {
             handlers.set_thinking_trace_mode(true);
             return;
         }
-        if (requested == "notrace") {
+        if (requested == "hide") {
             handlers.set_thinking_trace_mode(false);
             return;
         }
-        ctx.status = "Usage: /thinking trace|notrace";
+        ctx.status = "Usage: /thinking show|hide";
         return;
     }
     // Editor-only text layout commands (not chat/agent history).
@@ -301,7 +311,7 @@ void handle_tui_command(const std::string& text, TuiCommandContext& ctx, TuiComm
         return;
     }
     if (text == "/highlight" || text.rfind("/highlight ", 0) == 0) {
-        const std::string requested = ascii_lower(app::detail::trim_ascii(text.substr(10)));
+        const std::string requested = app::detail::trim_ascii(text.substr(10));
         if (requested.empty()) {
             ctx.status = std::string("Syntax highlighting: ") +
                          (ctx.syntax_highlight ? "on" : "off");
@@ -332,6 +342,7 @@ void handle_tui_command(const std::string& text, TuiCommandContext& ctx, TuiComm
         if (theme_result.ok && !theme_result.selected_theme.empty()) {
             ctx.theme = theme_result.selected_theme;
         }
+        if (theme_result.ok) ctx.use_colors = theme_result.colors_enabled;
         return;
     }
     if (text == "/editor") {
@@ -419,12 +430,12 @@ void handle_tui_command(const std::string& text, TuiCommandContext& ctx, TuiComm
             ctx.status = ctx.context.options.agent_show_command_output ? "cmd-out on" : "cmd-out off";
             return;
         }
-        if (arg == "on" || arg == "true" || arg == "1") {
+        if (arg == "on") {
             ctx.context.options.agent_show_command_output = true;
             ctx.status = "cmd-out on";
             return;
         }
-        if (arg == "off" || arg == "false" || arg == "0") {
+        if (arg == "off") {
             ctx.context.options.agent_show_command_output = false;
             ctx.status = "cmd-out off";
             return;
@@ -765,6 +776,10 @@ void handle_tui_command(const std::string& text, TuiCommandContext& ctx, TuiComm
                 "thinking_preview_max_chars is available only in interactive agent mode";
             return;
         }
+        if (ascii_lower(name) == "cmd-out" && !ctx.context.options.agent) {
+            ctx.status = "cmd-out is available only in interactive agent mode";
+            return;
+        }
         if (ascii_lower(name) == "reasoning" &&
             reasoning_change_needs_confirmation(value, ctx, handlers)) {
             return;
@@ -774,6 +789,9 @@ void handle_tui_command(const std::string& text, TuiCommandContext& ctx, TuiComm
             ctx.status = setting_error.message;
             return;
         }
+        ctx.show_thinking_traces = ctx.context.options.show_thinking_traces;
+        ctx.syntax_highlight = ctx.context.options.tui_highlight;
+        ctx.input.highlight_enabled = ctx.syntax_highlight;
         std::string message = "Updated " + name;
         const std::string advisory =
             provider::reasoning_temperature_advisory(ctx.context);

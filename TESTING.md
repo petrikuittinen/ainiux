@@ -24,7 +24,7 @@ Useful targets:
 |--------|----------------|
 | `make test` | In-process units plus the small mock smoke |
 | `make test-full` | Units, fault injection, and comprehensive integration |
-| `make test-unit` | In-process `test_runner` only |
+| `make test-unit` | In-process `test_runner` plus the fast preserved-config migration check |
 | `make test-unit-faults` | Fault tests only |
 | `make test-integration-smoke` | Small Chat/Responses/agent mock smoke |
 | `make test-integration` | Code-index, mock-server, and SQLite TUI end-to-end scripts |
@@ -72,6 +72,7 @@ transport, filesystem, or PTY boundary is involved.
   display-width padding, and index/benchmark report generators)
 - Editor piece table, panels, selection, and file I/O
 - Chat JSON save/load, including named/numeric/Auto per-thread reasoning
+- Canonical `on`/`off` config and settings, model-aware reasoning-off mapping, theme-off state, and chat/editor trace-shortcut separation
 - SQLite store round-trip, editor model-selection app state, listing, soft delete, corrupt DB, and missing-thread handling
 - Runtime cancellation and event delivery
 - Security redaction helpers

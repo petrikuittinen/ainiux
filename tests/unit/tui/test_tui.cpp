@@ -918,7 +918,16 @@ void test_tui_theme_parsing_and_contrast() {
           "theme command lists configured themes");
     const ainiux::tui::ThemeCommandResult switched =
         ainiux::tui::handle_theme_command(options.tui_themes, "dark", "light", true);
-    check(switched.ok && switched.selected_theme == "light", "theme command switches themes");
+    check(switched.ok && switched.selected_theme == "light" && switched.colors_enabled,
+          "theme command switches themes and enables colors");
+    const ainiux::tui::ThemeCommandResult colors_off =
+        ainiux::tui::handle_theme_command(options.tui_themes, "dark", "off", true);
+    check(colors_off.ok && !colors_off.colors_enabled && colors_off.selected_theme == "dark",
+          "theme off disables styling while retaining the selected palette");
+    const ainiux::tui::ThemeCommandResult colors_back =
+        ainiux::tui::handle_theme_command(options.tui_themes, "dark", "light", false);
+    check(colors_back.ok && colors_back.colors_enabled && colors_back.selected_theme == "light",
+          "selecting a named theme re-enables styling");
 
     const ainiux::tui::TextAttributes heading_attributes =
         ainiux::tui::text_attributes_for_token(ainiux::highlight::TokenRole::Heading);

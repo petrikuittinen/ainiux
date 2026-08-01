@@ -40,7 +40,8 @@ Copy and selection-delete (Backspace/Delete on a range) publish to native deskto
 | `Ctrl+H` | Toggle mode help panel (same as `/help`) |
 | `Ctrl+E` | Copy last user/assistant message into input for editing (`/edit`) |
 | `Ctrl+R` | Regenerate last answer (resend last user prompt) |
-| `Ctrl+T` | Toggle thinking-trace display (`/thinking trace` / `notrace`) |
+| `Alt+Ctrl+T` | Toggle thinking-trace display (`/thinking show` / `hide`) |
+| `Ctrl+W` | Toggle traces in ordinary chat; close buffer in editor |
 | `Ctrl+L` | Open saved-thread picker (`/list`; also shown on chat startup) |
 | `Ctrl+P` | Open provider picker (same as bare `/provider`; model picker follows when needed) |
 | `Ctrl+G` | Toggle chat → editor; the next Ctrl+G returns editor → chat |

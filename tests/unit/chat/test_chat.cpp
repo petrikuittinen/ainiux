@@ -556,9 +556,20 @@ void test_chat_settings_helpers() {
     err = ainiux::chat::apply_chat_setting(options, "reasoning", "not valid");
     check(!err.ok() && err.code == ainiux::ErrorCode::BadArgs,
           "chat setting rejects an invalid reasoning token");
-    err = ainiux::chat::apply_chat_setting(options, "auto-convert-html-to-md", "no");
+    err = ainiux::chat::apply_chat_setting(options, "auto-convert-html-to-md", "off");
     check(err.ok() && !options.auto_convert_html_to_markdown,
           "chat setting parser can disable HTML-to-Markdown insertion conversion");
+    for (const std::string legacy : {"true", "false", "yes", "no", "1", "0", "enabled", "disabled"}) {
+        err = ainiux::chat::apply_chat_setting(options, "stream", legacy);
+        check(!err.ok() && err.message.find("expected on or off") != std::string::npos,
+              "chat boolean settings reject legacy value " + legacy);
+    }
+    err = ainiux::chat::apply_chat_setting(options, "stream", "off");
+    check(err.ok() && options.stream_explicit && !options.stream,
+          "chat stream setting accepts canonical off");
+    err = ainiux::chat::apply_chat_setting(options, "show_thinking_traces", "on");
+    check(err.ok() && options.has_show_thinking_traces && options.show_thinking_traces,
+          "chat trace visibility setting accepts canonical on");
     err = ainiux::chat::apply_chat_setting(
         options, "thinking_preview_max_chars", "321");
     check(err.ok() && options.has_agent_thinking_preview_max_chars &&
@@ -628,7 +639,7 @@ void test_chat_settings_helpers() {
     const std::string panel = ainiux::chat::format_settings_panel(options);
     check(panel.find("temperature=0.9") != std::string::npos &&
               panel.find("reasoning=ultra") != std::string::npos &&
-              panel.find("auto-convert-html-to-md=no") != std::string::npos &&
+              panel.find("auto-convert-html-to-md=off") != std::string::npos &&
               panel.find("top_k=") != std::string::npos &&
               panel.find("top_k=40") == std::string::npos,
           "chat settings panel shows canonical reasoning and set values");

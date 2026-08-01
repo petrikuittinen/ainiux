@@ -1,6 +1,7 @@
 #include "app/interactive_mode.hpp"
 #include "app/user_shell.hpp"
 #include "chat/settings.hpp"
+#include "chat/generation_settings.hpp"
 #include "chat/sqlite_store.hpp"
 #include "common.hpp"
 #include "security/redact.hpp"
@@ -49,6 +50,7 @@ namespace {
 
 struct HelpViewSession {
     bool active = false;
+    bool settings = false;
     EditorSnapshot saved;
     std::string saved_path;
     bool saved_dirty = false;
@@ -297,6 +299,7 @@ app::EditorRunResult run_editor(const std::string& path,
     size_t activity_frame = 0;
     const auto activity_animation_started = std::chrono::steady_clock::now();
     std::string theme_name = settings.theme_name;
+    bool use_colors = interactive != nullptr ? interactive->use_colors : settings.use_colors;
     input::InsertSourceOptions insert_options;
     const cli::Options* runtime_options = nullptr;
     if (interactive != nullptr) {
@@ -324,7 +327,7 @@ app::EditorRunResult run_editor(const std::string& path,
         settings.themes->normalize_name(theme_name, theme_name);
     }
     auto terminal_theme_style = [&]() {
-        return TerminalThemeStyle{settings.themes, theme_name, settings.use_colors};
+        return TerminalThemeStyle{settings.themes, theme_name, use_colors};
     };
     EditorAssistDisplay assist_display;
     auto refresh_assist_display = [&]() -> const EditorAssistDisplay* {
@@ -397,6 +400,8 @@ app::EditorRunResult run_editor(const std::string& path,
         interactive->editor_settings = settings;
         interactive->assist_config = assist_config;
         interactive->highlight_enabled = highlight_enabled;
+        interactive->theme_name = theme_name;
+        interactive->use_colors = use_colors;
         interactive->ai_continue = ai_continue;
         app::sync_editor_provider_to_shared(*interactive, ai_continue);
         if (target == app::InteractiveUiTarget::Agent) {
@@ -517,6 +522,7 @@ app::EditorRunResult run_editor(const std::string& path,
         state.dirty = help_view.saved_dirty;
         state.set_language(help_view.saved_language, help_view.saved_language_automatic);
         help_view.active = false;
+        help_view.settings = false;
         minibuffer_message(minibuffer, "Returned to editing");
     };
 
@@ -549,6 +555,7 @@ app::EditorRunResult run_editor(const std::string& path,
         help_view.saved_language = state.language;
         help_view.saved_language_automatic = state.language_automatic;
         help_view.active = true;
+        help_view.settings = false;
         state.text = PieceTable::from_string(std::move(help_text));
         state.invalidate_word_index();
         state.cursor = 0;
@@ -560,6 +567,38 @@ app::EditorRunResult run_editor(const std::string& path,
         state.clear_selection();
         state.clear_undo_history();
         minibuffer_message(minibuffer, "Help (read-only) — Ctrl+H, Esc /help, or Ctrl+Q to return");
+    };
+
+    auto enter_settings_view = [&](const std::string& text) {
+        if (help_view.active) {
+            if (help_view.settings) {
+                exit_help_view();
+                return;
+            }
+            exit_help_view();
+        }
+        if (assist_session.active || reformat_session.active || insert_session.active) {
+            minibuffer_message(minibuffer, "Finish or cancel the active job before opening settings");
+            return;
+        }
+        help_view.saved = state.capture_state();
+        help_view.saved_path = state.path;
+        help_view.saved_dirty = state.dirty;
+        help_view.saved_language = state.language;
+        help_view.saved_language_automatic = state.language_automatic;
+        help_view.active = true;
+        help_view.settings = true;
+        state.text = PieceTable::from_string(text);
+        state.invalidate_word_index();
+        state.cursor = 0;
+        state.preferred_column = 0;
+        state.scroll_line = 0;
+        state.scroll_column = 0;
+        state.dirty = false;
+        state.set_language(highlight::Language::Text, false);
+        state.clear_selection();
+        state.clear_undo_history();
+        minibuffer_message(minibuffer, "Settings (read-only) — /setting, Esc, or Ctrl+Q to return");
     };
 
     auto activate_buffer = [&](size_t index) {
@@ -840,6 +879,30 @@ app::EditorRunResult run_editor(const std::string& path,
         return nullptr;
     };
 
+    auto mutable_model_options = [&]() -> cli::Options* {
+        if (ai_continue.has_value()) return &ai_continue->request.options;
+        if (interactive != nullptr) return &interactive->context.options;
+        return nullptr;
+    };
+
+    auto refresh_settings_view = [&]() {
+        if (!help_view.active || !help_view.settings) return;
+        const cli::Options* options = active_model_options();
+        if (options == nullptr) return;
+        state.text = PieceTable::from_string(chat::format_settings_panel(
+            *options,
+            ai_continue.has_value()
+                ? provider::reasoning_temperature_advisory(ai_continue->request)
+                : std::string{}));
+        state.invalidate_word_index();
+        state.cursor = 0;
+        state.scroll_line = 0;
+        state.scroll_column = 0;
+        state.dirty = false;
+        state.clear_selection();
+        state.clear_undo_history();
+    };
+
     auto start_pending_selection_save = [&]() {
         if (selection_save_job.running() || pending_selection_save.empty()) return;
         std::string value = std::move(pending_selection_save);
@@ -975,6 +1038,7 @@ app::EditorRunResult run_editor(const std::string& path,
         if (!advisory.empty()) message += ". Warning: " + advisory;
         minibuffer_message(minibuffer, message);
         schedule_selection_save();
+        refresh_settings_view();
     };
 
     auto cycle_reasoning = [&]() {
@@ -1019,6 +1083,16 @@ app::EditorRunResult run_editor(const std::string& path,
             return;
         }
         const provider::RequestContext& request = ai_continue->request;
+        parse_error = config::resolve_reasoning_off(
+            request.options.model_catalog,
+            request.profile.name,
+            request.api_kind == provider::ApiKind::Responses ? "responses" : "chat",
+            request.options.model,
+            selection);
+        if (!parse_error.ok()) {
+            minibuffer_message(minibuffer, parse_error.message);
+            return;
+        }
         const std::string warning = config::reasoning_catalog_warning(
             request.options.model_catalog,
             request.profile.name,
@@ -2193,21 +2267,20 @@ app::EditorRunResult run_editor(const std::string& path,
             exit_assist_command_mode(minibuffer, assist_completer);
             const std::string requested = command_line.size() <= 24
                                               ? ""
-                                              : ascii_lower(trim_ascii_copy(command_line.substr(24)));
+                                              : trim_ascii_copy(command_line.substr(24));
             if (requested.empty()) {
                 minibuffer_message(minibuffer,
                                    std::string("Auto-convert HTML to Markdown: ") +
-                                       (insert_options.auto_convert_html_to_markdown ? "yes" : "no"));
+                                       (insert_options.auto_convert_html_to_markdown ? "on" : "off"));
                 return;
             }
-            if (requested != "yes" && requested != "no" && requested != "on" &&
-                requested != "off" && requested != "true" && requested != "false") {
+            if (requested != "on" && requested != "off") {
                 minibuffer_message(minibuffer,
-                                   "Usage: /auto-convert-html-to-md yes|no");
+                                   "Usage: /auto-convert-html-to-md on|off");
                 return;
             }
             insert_options.auto_convert_html_to_markdown =
-                requested == "yes" || requested == "on" || requested == "true";
+                requested == "on";
             if (interactive != nullptr) {
                 interactive->context.options.auto_convert_html_to_markdown =
                     insert_options.auto_convert_html_to_markdown;
@@ -2218,7 +2291,7 @@ app::EditorRunResult run_editor(const std::string& path,
             }
             minibuffer_message(minibuffer,
                                std::string("Auto-convert HTML to Markdown: ") +
-                                   (insert_options.auto_convert_html_to_markdown ? "yes" : "no"));
+                                   (insert_options.auto_convert_html_to_markdown ? "on" : "off"));
             return;
         }
         if (command_line == "/reformat" || command_line == "/reformat-all") {
@@ -2393,7 +2466,7 @@ app::EditorRunResult run_editor(const std::string& path,
             exit_assist_command_mode(minibuffer, assist_completer);
             const std::string requested = command_line.size() <= 10
                                               ? ""
-                                              : ascii_lower(trim_ascii_copy(command_line.substr(10)));
+                                              : trim_ascii_copy(command_line.substr(10));
             if (requested.empty()) {
                 minibuffer_message(minibuffer,
                                    std::string("Syntax highlighting: ") +
@@ -2529,11 +2602,121 @@ app::EditorRunResult run_editor(const std::string& path,
             const std::string requested =
                 command_line.size() <= 6 ? "" : trim_ascii_copy(command_line.substr(6));
             const tui::ThemeCommandResult theme_result =
-                tui::handle_theme_command(*settings.themes, theme_name, requested, settings.use_colors);
+                tui::handle_theme_command(*settings.themes, theme_name, requested, use_colors);
             minibuffer_message(minibuffer, theme_result.message);
             if (theme_result.ok && !theme_result.selected_theme.empty()) {
                 theme_name = theme_result.selected_theme;
             }
+            if (theme_result.ok) use_colors = theme_result.colors_enabled;
+            return;
+        }
+        if (command_line == "/thinking" || command_line.rfind("/thinking ", 0) == 0) {
+            pending_assist = PendingAssist{};
+            exit_assist_command_mode(minibuffer, assist_completer);
+            cli::Options* options = mutable_model_options();
+            if (options == nullptr) {
+                minibuffer_message(minibuffer, "Thinking trace settings are unavailable");
+                return;
+            }
+            const std::string requested = command_line.size() <= 9
+                                              ? ""
+                                              : trim_ascii_copy(command_line.substr(9));
+            if (requested.empty()) {
+                minibuffer_message(minibuffer,
+                                   std::string("Thinking traces: ") +
+                                       (options->show_thinking_traces ? "show" : "hide"));
+                return;
+            }
+            if (requested != "show" && requested != "hide") {
+                minibuffer_message(minibuffer, "Usage: /thinking show|hide");
+                return;
+            }
+            options->show_thinking_traces = requested == "show";
+            options->has_show_thinking_traces = true;
+            refresh_settings_view();
+            minibuffer_message(minibuffer,
+                               options->show_thinking_traces
+                                   ? "Thinking traces shown"
+                                   : "Thinking traces hidden");
+            return;
+        }
+        if (command_line == "/setting" || command_line.rfind("/setting ", 0) == 0) {
+            pending_assist = PendingAssist{};
+            exit_assist_command_mode(minibuffer, assist_completer);
+            cli::Options* options = mutable_model_options();
+            if (options == nullptr) {
+                minibuffer_message(minibuffer, "Settings are unavailable");
+                return;
+            }
+            const std::string requested = command_line.size() <= 8
+                                              ? ""
+                                              : trim_ascii_copy(command_line.substr(8));
+            if (requested.empty()) {
+                enter_settings_view(chat::format_settings_panel(
+                    *options,
+                    ai_continue.has_value()
+                        ? provider::reasoning_temperature_advisory(ai_continue->request)
+                        : std::string{}));
+                return;
+            }
+            if (chat::generation::is_chat_purpose(requested)) {
+                if (options->model.empty()) {
+                    minibuffer_message(minibuffer,
+                                       "Set a model with /model before applying a purpose preset");
+                    return;
+                }
+                const ModelCapability* capability = config::resolve_model_capability(
+                    options->model_catalog, options->provider, options->api, options->model);
+                const ModelSetting* preset = capability == nullptr
+                    ? nullptr
+                    : config::find_model_preset(options->model_catalog, *capability, requested);
+                if (preset == nullptr) {
+                    minibuffer_message(minibuffer,
+                                       "No [preset] in models.conf for model " + options->model +
+                                           " purpose " + requested);
+                    return;
+                }
+                Error err = chat::apply_model_setting_preset(*options, *preset, capability);
+                if (!err.ok()) {
+                    minibuffer_message(minibuffer, err.message);
+                    return;
+                }
+                minibuffer_message(minibuffer,
+                                   "Applied " + requested + " settings for " + options->model);
+                schedule_selection_save();
+                refresh_settings_view();
+                return;
+            }
+            const size_t equals = requested.find('=');
+            if (equals == std::string::npos) {
+                minibuffer_message(minibuffer,
+                                   "Usage: /setting NAME=VALUE or /setting general|coding|instruct|creative");
+                return;
+            }
+            const std::string name = trim_ascii_copy(requested.substr(0, equals));
+            const std::string value = trim_ascii_copy(requested.substr(equals + 1));
+            const std::string lower_name = ascii_lower(name);
+            if (lower_name == "thinking_preview_max_chars" || lower_name == "cmd-out") {
+                minibuffer_message(minibuffer,
+                                   name + " is available only in interactive agent mode");
+                return;
+            }
+            if (lower_name == "reasoning") {
+                apply_reasoning_selection(value);
+                return;
+            }
+            Error err = chat::apply_chat_setting(*options, name, value);
+            if (!err.ok()) {
+                minibuffer_message(minibuffer, err.message);
+                return;
+            }
+            insert_options.auto_convert_html_to_markdown =
+                options->auto_convert_html_to_markdown;
+            highlight_enabled = options->tui_highlight;
+            state.highlight_enabled = highlight_enabled;
+            if (interactive != nullptr) interactive->highlight_enabled = highlight_enabled;
+            refresh_settings_view();
+            minibuffer_message(minibuffer, "Updated " + name);
             return;
         }
         if (command_line == "/provider" || command_line.rfind("/provider ", 0) == 0) {

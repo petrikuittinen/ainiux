@@ -344,12 +344,22 @@ ThemeCommandResult handle_theme_command(const ThemeRegistry& registry,
                                         bool use_colors) {
     ThemeCommandResult result;
     result.selected_theme = current_theme;
+    result.colors_enabled = use_colors;
     if (requested.empty()) {
         result.ok = true;
-        result.message = "Theme: " + current_theme + ". Available: " + format_theme_list(registry);
-        if (!use_colors) {
-            result.message += " (colors disabled by --nocolors)";
-        }
+        result.message = "Theme: " + std::string(use_colors ? current_theme : "off") +
+                         ". Available: off, " + format_theme_list(registry);
+        return result;
+    }
+
+    std::string requested_lower = requested;
+    for (char& ch : requested_lower) {
+        if (ch >= 'A' && ch <= 'Z') ch = static_cast<char>(ch - 'A' + 'a');
+    }
+    if (requested_lower == "off") {
+        result.ok = true;
+        result.colors_enabled = false;
+        result.message = "Theme set to off";
         return result;
     }
 
@@ -360,10 +370,8 @@ ThemeCommandResult handle_theme_command(const ThemeRegistry& registry,
     }
     result.ok = true;
     result.selected_theme = normalized;
+    result.colors_enabled = true;
     result.message = "Theme set to " + normalized;
-    if (!use_colors) {
-        result.message += " (colors disabled by --nocolors)";
-    }
     return result;
 }
 

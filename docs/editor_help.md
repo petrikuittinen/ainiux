@@ -125,7 +125,7 @@ When a provider is set but no model is chosen yet, ainiux loads `/v1/models`. A 
 
 Use `Esc` then `/provider` or `/model` to change provider or model. `/provider` with no argument opens the same colored selector widget used by chat and the editor buffer list. Choosing a provider clears the previous provider's model and immediately loads `/v1/models`; multiple results open the model selector, while one result is selected automatically. `/model` with no argument loads the same endpoint and selector directly. Each model change also refreshes its context window from `/v1/models` unless `--context` or `/context TOKENS` set an override. `/context auto` clears the override. When model metadata has no context window, usage shows only the estimated token count without a percentage.
 
-`/reasoning` with no argument opens a model-aware selector from `models.conf`, with Auto first and the documented provider default shown when known. `/reasoning auto` clears the override; `/reasoning VALUE` accepts a bounded ASCII value; and `/reasoning TOKENS` accepts an exact non-negative token budget. If the current model family matches but the direct value is not listed, the editor warns and asks for y/n confirmation. Confirming permits a future provider value; declining keeps the current setting. Changing the actual provider or model resets reasoning to Auto. The editor remembers its last provider, model, API, and reasoning selection globally in SQLite, loads it after configuration defaults, and still gives explicit CLI options final precedence. It does not store endpoint URLs or credentials in app state; a custom provider is restored only if its endpoint is still configured.
+`/reasoning` with no argument opens a model-aware selector from `models.conf`, with Auto first and the documented provider default shown when known. `/reasoning auto` clears the override; `/reasoning off` resolves to the matched model's disabling choice when available; `/reasoning VALUE` accepts a bounded ASCII value; and `/reasoning TOKENS` accepts an exact non-negative token budget. If the current model family matches but another direct value is not listed, the editor warns and asks for y/n confirmation. Changing the actual provider or model resets reasoning to Auto. The editor remembers its last provider, model, API, and reasoning selection globally in SQLite, loads it after configuration defaults, and still gives explicit CLI options final precedence. It does not store endpoint URLs or credentials in app state; a custom provider is restored only if its endpoint is still configured.
 
 `ainiux --provider none --editor` (or plain `ainiux --editor`) runs as a local editor with no startup picker or model request. Use `/provider` later to discover and select a model for AI assist.
 
@@ -136,7 +136,7 @@ Requires a configured provider **and** model. If either is missing, `Ctrl+Space`
 `Ctrl+T` cycles the selected model's catalog-backed reasoning setting from lower
 to higher values, then Auto, and around again. For toggle-only Qwen 3.5/3.6 and
 Gemma 4 models it switches thinking off and on. With no selected model it does
-nothing. `Alt+Ctrl+T` toggles whether thinking traces are shown.
+nothing. `Alt+Ctrl+T` toggles whether thinking traces are shown; `/thinking show|hide` is the command equivalent.
 
 `Ctrl+Space` runs **`/continue`** in **continue** mode:
 
@@ -240,6 +240,11 @@ Press **`Esc`** to open the command minibuffer (`Command:`). Type a command with
 | `/maximize` | Keep only the focused pane (same as `Ctrl+X 1`) |
 | `/nosplit` | Alias for `/maximize` |
 | `/highlight [on|off]` | Show or toggle syntax highlighting for editor and chat |
+| `/setting` | Toggle a generated read-only settings view without changing the active buffer |
+| `/setting NAME=VALUE` | Apply shared settings (`on`/`off` for booleans) |
+| `/setting general|coding|instruct|creative` | Apply a model-catalog purpose preset |
+| `/thinking [show|hide]` | Show or set thinking-trace visibility |
+| `/theme [off|NAME]` | Disable styling or select/re-enable a named theme process-wide |
 | `/mode [MODE|auto]` | Show or set this buffer's syntax mode |
 | `/reformat` | Reformat leading indentation in the selected lines |
 | `/reformat-all` | Reformat leading indentation in the entire buffer |
@@ -257,7 +262,7 @@ Press **`Esc`** to open the command minibuffer (`Command:`). Type a command with
 | `/insert FILE_OR_URL` | Insert bounded UTF-8 file text or fetched HTML at the cursor |
 | `shell COMMAND` or `!COMMAND` (optional `/`) | Run a user shell command; open a **new buffer** with pure stdout; status/errors/time in the minibuffer |
 | `shell-stdout COMMAND` or `!!COMMAND` (optional `/`) | Same as `shell` in the editor (new buffer + minibuffer status) |
-| `/auto-convert-html-to-md [yes|no]` | Show or set URL HTML-to-Markdown conversion for this process |
+| `/auto-convert-html-to-md [on|off]` | Show or set URL HTML-to-Markdown conversion for this process |
 | `/provider [NAME]` | Change provider (picker when omitted) |
 | `/model [MODEL]` | Change model (picker when omitted) |
 | `/context [auto\|TOKENS]` | Show, override, or resume automatic model context-window discovery |
@@ -339,7 +344,7 @@ Chat and agent TUI history do **not** expose `/width`, `/left-align`, `/right-al
 - `tab-style` — fallback `spaces` or `tab` style (default `spaces`)
 - `linebreak` — default `lf`, `cr`, or `crlf` for new, empty, no-ending, and mixed-ending files (default `lf`)
 
-`[input] auto-convert-html-to-md` controls `/insert URL` and defaults to `yes`. URL insertion accepts only HTTP(S), retains the existing private-address, proxy, timeout, TLS, content-type, and response-size protections, and requires UTF-8 HTML. Set it to `no` to insert raw HTML. Local `/insert` accepts every file ending, but rejects NUL-containing, invalid UTF-8, unreadable, and oversized content. CR and CRLF are normalized to the editor's internal LF representation and use the buffer's chosen linebreak mode when saved.
+`[input] auto-convert-html-to-md` controls `/insert URL` and defaults to `on`. URL insertion accepts only HTTP(S), retains the existing private-address, proxy, timeout, TLS, content-type, and response-size protections, and requires UTF-8 HTML. Set it to `off` to insert raw HTML. Local `/insert` accepts every file ending, but rejects NUL-containing, invalid UTF-8, unreadable, and oversized content. CR and CRLF are normalized to the editor's internal LF representation and use the buffer's chosen linebreak mode when saved.
 
 User shell (`shell` / `/shell` / `!` / `shell-stdout` / `/shell-stdout` / `!!`) runs `/bin/sh -c` in the process working directory. In the editor the leading `/` is optional (as with other commands). Every form opens a **new buffer** containing pure stdout only; the minibuffer shows success (exit, elapsed ms, byte count) or a clear failure (exit/stderr snippet). Esc cancels an in-flight shell job. Unlike chat/agent, `shell-stdout` is not draft-fill here—both forms use the new-buffer path.
 

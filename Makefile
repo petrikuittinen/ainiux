@@ -41,6 +41,7 @@ EDITOR_COMMANDS_CONFIG := config/editor-commands.conf
 THEMES_CONFIG := config/themes.conf
 BENCHMARKS_CONFIG := config/benchmarks.conf
 MODELS_CONFIG := config/models.conf
+CONFIG_MIGRATOR := scripts/migrate-config-booleans.sh
 MODELS_CONFIG_HEADER := $(GENERATED_DIR)/embedded_models_config.hpp
 EDITOR_COMMANDS_CONFIG_HEADER := $(GENERATED_DIR)/embedded_editor_commands.hpp
 COMMON_CONFIG_DIR := $(DESTDIR)$(SYSCONFDIR)/xdg/ainiux
@@ -185,6 +186,7 @@ test-full:
 
 test-unit: $(TEST_BIN)
 	$(TEST_BIN)
+	tests/unit/config/test_config_migration.sh
 
 test-unit-faults: $(IO_FAULT_BIN) $(POSIX_IO_MOCK)
 	$(IO_FAULT_BIN)
@@ -225,11 +227,12 @@ leak-check: $(BIN) $(TEST_BIN) $(IO_FAULT_BIN)
 
 test-leak: leak-check
 
-install: $(BIN) $(COMMON_CONFIG) $(EDITOR_COMMANDS_CONFIG) $(THEMES_CONFIG) $(BENCHMARKS_CONFIG) $(MODELS_CONFIG) $(EDITOR_HELP_SRC) $(MASTER_PROMPT_SRC) $(SECURITY_PROMPT_SRC) $(AGENT_PROMPT_SRC)
+install: $(BIN) $(COMMON_CONFIG) $(EDITOR_COMMANDS_CONFIG) $(THEMES_CONFIG) $(BENCHMARKS_CONFIG) $(MODELS_CONFIG) $(CONFIG_MIGRATOR) $(EDITOR_HELP_SRC) $(MASTER_PROMPT_SRC) $(SECURITY_PROMPT_SRC) $(AGENT_PROMPT_SRC)
 	install -d "$(DESTDIR)$(PREFIX)/bin"
 	install -m 0755 $(BIN) "$(DESTDIR)$(PREFIX)/bin/$(BIN)"
 	install -d "$(COMMON_CONFIG_DIR)"
 	@if test -e "$(COMMON_CONFIG_PATH)"; then \
+		"$(CONFIG_MIGRATOR)" "$(COMMON_CONFIG_PATH)"; \
 		echo "Preserving existing system config: $(COMMON_CONFIG_PATH)"; \
 	else \
 		install -m 0644 "$(COMMON_CONFIG)" "$(COMMON_CONFIG_PATH)"; \
@@ -250,6 +253,7 @@ install: $(BIN) $(COMMON_CONFIG) $(EDITOR_COMMANDS_CONFIG) $(THEMES_CONFIG) $(BE
 		install -m 0644 "$(BENCHMARKS_CONFIG)" "$(BENCHMARKS_CONFIG_PATH)"; \
 	fi
 	@if test -e "$(MODELS_CONFIG_PATH)"; then \
+		"$(CONFIG_MIGRATOR)" "$(MODELS_CONFIG_PATH)"; \
 		echo "Preserving existing system model catalog: $(MODELS_CONFIG_PATH)"; \
 	else \
 		install -m 0644 "$(MODELS_CONFIG)" "$(MODELS_CONFIG_PATH)"; \

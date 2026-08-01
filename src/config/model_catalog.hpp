@@ -14,6 +14,11 @@ Error parse_reasoning_selection(const std::string& text,
 std::string reasoning_selection_value(const ReasoningSelection& selection);
 std::string reasoning_selection_display(const ReasoningSelection& selection);
 bool reasoning_selection_disables(const ReasoningSelection& selection);
+Error resolve_reasoning_off(const ModelCatalog& catalog,
+                            const std::string& provider,
+                            const std::string& api,
+                            const std::string& model,
+                            ReasoningSelection& selection);
 
 bool parse_reasoning_protocol(const std::string& text, ReasoningProtocol& protocol);
 const char* reasoning_protocol_name(ReasoningProtocol protocol);

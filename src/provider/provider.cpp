@@ -365,20 +365,36 @@ std::string reasoning_fields_json(const RequestContext& context) {
     const ReasoningSelection& selection = context.options.reasoning;
     if (selection.is_auto()) return {};
     const bool disabled = config::reasoning_selection_disables(selection);
-    const std::string scalar = reasoning_scalar_json(selection);
+    const bool semantic_off = selection.kind == ReasoningSelectionKind::Named &&
+                              ascii_lower(selection.value) == "off";
+    const ReasoningProtocol protocol = reasoning_protocol_for(context);
+    ReasoningSelection wire_selection = selection;
+    if (semantic_off) {
+        if (protocol == ReasoningProtocol::AnthropicBudget) {
+            wire_selection = ReasoningSelection::token_budget(0);
+        } else if (protocol == ReasoningProtocol::Hy3Template) {
+            wire_selection = ReasoningSelection::named("no_think");
+        } else {
+            wire_selection = ReasoningSelection::named("none");
+        }
+    }
+    const std::string scalar = reasoning_scalar_json(wire_selection);
     std::string fields;
-    switch (reasoning_protocol_for(context)) {
+    switch (protocol) {
         case ReasoningProtocol::None:
             return {};
         case ReasoningProtocol::GenericThinking:
             fields = append_pair(fields, "enable_thinking", disabled ? "false" : "true");
-            return append_pair(fields, "thinking_budget", scalar);
+            return append_pair(fields, "thinking_budget", disabled ? "0" : scalar);
         case ReasoningProtocol::OpenAiEffort:
             if (context.api_kind == ApiKind::Responses) {
-                return append_pair(fields, "reasoning", reasoning_effort_object(selection));
+                return append_pair(fields, "reasoning", reasoning_effort_object(wire_selection));
             }
             return append_pair(fields, "reasoning_effort", scalar);
         case ReasoningProtocol::OpenRouter:
+            if (semantic_off) {
+                return append_pair(fields, "reasoning", "{\"enabled\":false}");
+            }
             if (selection.kind == ReasoningSelectionKind::TokenBudget) {
                 return append_pair(fields, "reasoning", "{\"max_tokens\":" + scalar + "}");
             }
@@ -2356,6 +2372,13 @@ ContextResult build_context(const cli::Options& input_options) {
     } else {
         options.provider = profile.name;
     }
+    Error reasoning_error = config::resolve_reasoning_off(
+        options.model_catalog,
+        options.provider,
+        api_kind == ApiKind::Responses ? "responses" : "chat",
+        options.model,
+        options.reasoning);
+    if (!reasoning_error.ok()) return {{}, reasoning_error};
     if (base.empty()) {
         base = profile.base_url;
     }

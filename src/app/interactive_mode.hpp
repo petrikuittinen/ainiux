@@ -60,6 +60,8 @@ struct InteractiveSession {
     editor::EditorAssistConfig assist_config;
     PendingEditorAssistFromChat pending_editor_assist;
     bool highlight_enabled = true;
+    std::string theme_name = "dark";
+    bool use_colors = true;
 };
 
 struct EditorRunResult {

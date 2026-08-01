@@ -296,9 +296,9 @@ Error parse_value(const std::string& text,
     if (!text.empty() && text.front() == '"') {
         return parse_quoted(text, path, line, column, value);
     }
-    if (text == "true" || text == "false") {
+    if (text == "on" || text == "off") {
         value.type = Value::Type::Boolean;
-        value.boolean = text == "true";
+        value.boolean = text == "on";
         return ok_error();
     }
     if (integer_syntax(text)) {
@@ -646,6 +646,9 @@ Error require_type(const Entry& entry, Value::Type expected) {
     if (entry.value.type == expected) {
         return ok_error();
     }
+    if (expected == Value::Type::Boolean) {
+        return schema_error(entry, "expected on or off");
+    }
     return schema_error(entry, std::string("expected ") + value_type_name(expected) + ", got " +
                                    value_type_name(entry.value.type));
 }
@@ -828,19 +831,7 @@ Error auto_save_mode(const Entry& entry, bool& output) {
         output = entry.value.boolean;
         return ok_error();
     }
-    if (!entry.value.is_string()) {
-        return schema_error(entry, "expected boolean or on/off");
-    }
-    const std::string value = lower_config_ascii(trim_config_ascii(entry.value.string));
-    if (value == "on" || value == "yes" || value == "true") {
-        output = true;
-        return ok_error();
-    }
-    if (value == "off" || value == "no" || value == "false") {
-        output = false;
-        return ok_error();
-    }
-    return schema_error(entry, "expected on, off, true, false, yes, or no");
+    return schema_error(entry, "expected on or off");
 }
 
 ainiux::editor::EditorAssistCommand* find_assist_command_by_name(ainiux::editor::EditorAssistConfig& config,
@@ -995,6 +986,9 @@ Error apply_configured_themes(const Document& document, cli::Options& candidate)
         const Entry& entry = item.second;
         tui::Rgb color{};
         if (key == "name") {
+            if (entry.value.is_boolean() && !entry.value.boolean) {
+                return schema_error(entry, "theme name 'off' is reserved for disabling colors");
+            }
             Error err = require_type(entry, Value::Type::String);
             if (!err.ok()) {
                 return err;
@@ -1002,6 +996,9 @@ Error apply_configured_themes(const Document& document, cli::Options& candidate)
             const std::string theme_name = trim_config_ascii(entry.value.string);
             if (theme_name.empty()) {
                 return schema_error(entry, "name must not be empty");
+            }
+            if (lower_config_ascii(theme_name) == "off") {
+                return schema_error(entry, "theme name 'off' is reserved for disabling colors");
             }
             partial.name = theme_name;
         } else if (key == "background") {
@@ -1351,6 +1348,10 @@ Error reasoning_selection_entry(const Entry& entry,
         text = std::to_string(entry.value.integer);
     } else if (entry.value.is_string()) {
         text = entry.value.string;
+    } else if (entry.value.is_boolean() && !entry.value.boolean) {
+        // `off` is the canonical user spelling and is tokenized as a boolean
+        // by the TOML-like parser, but reasoning resolves it semantically.
+        text = "off";
     } else {
         return schema_error(entry, "reasoning must be an ASCII value or integer token budget");
     }
@@ -2217,8 +2218,13 @@ Error apply_document(const Document& document, cli::Options& options) {
         } else if (name == "tui.highlight") {
             err = auto_save_mode(entry, candidate.tui_highlight);
         } else if (name == "tui.theme") {
-            err = require_type(entry, Value::Type::String);
-            if (err.ok()) {
+            if (entry.value.is_boolean() && !entry.value.boolean) {
+                candidate.no_colors = true;
+                err = ok_error();
+            } else {
+                err = require_type(entry, Value::Type::String);
+            }
+            if (err.ok() && entry.value.is_string()) {
                 std::string normalized;
                 if (!candidate.tui_themes.normalize_name(entry.value.string, normalized)) {
                     err = schema_error(entry,

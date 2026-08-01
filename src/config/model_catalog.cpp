@@ -135,6 +135,37 @@ bool reasoning_selection_disables(const ReasoningSelection& selection) {
            value == "false" || value == "no" || value == "no_think";
 }
 
+Error resolve_reasoning_off(const ModelCatalog& catalog,
+                            const std::string& provider,
+                            const std::string& api,
+                            const std::string& model,
+                            ReasoningSelection& selection) {
+    if (selection.kind != ReasoningSelectionKind::Named ||
+        ascii_lower(selection.value) != "off") {
+        return ok_error();
+    }
+    const ModelCapability* capability =
+        resolve_model_capability(catalog, provider, api, model);
+    if (capability == nullptr) {
+        return ok_error();
+    }
+    for (const ReasoningSelection& option : capability->reasoning_options) {
+        if (reasoning_selection_disables(option)) {
+            selection = option;
+            return ok_error();
+        }
+    }
+    std::ostringstream choices;
+    for (size_t i = 0; i < capability->reasoning_options.size(); ++i) {
+        if (i != 0) choices << '|';
+        choices << reasoning_selection_value(capability->reasoning_options[i]);
+    }
+    return {ErrorCode::BadArgs,
+            "reasoning off is unavailable for model '" + model +
+                "'; models.conf choices: " +
+                (choices.str().empty() ? std::string("none") : choices.str())};
+}
+
 bool parse_reasoning_protocol(const std::string& text, ReasoningProtocol& protocol) {
     const std::string value = ascii_lower(text);
     const std::pair<const char*, ReasoningProtocol> protocols[] = {

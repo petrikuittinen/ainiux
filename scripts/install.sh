@@ -177,6 +177,17 @@ fi
 
 echo "==> Built $(./ainiux --version 2>/dev/null || true)"
 
+# The runtime parser intentionally accepts only canonical on/off booleans. Migrate
+# a preserved per-user override before installing so an upgrade cannot strand the
+# newly installed binary behind legacy true/false or yes/no values. The Makefile
+# performs the corresponding migration for preserved system configuration files.
+if [ -z "${DESTDIR}" ]; then
+    user_config_root="${XDG_CONFIG_HOME:-${HOME}/.config}/ainiux"
+    "${SCRIPT_DIR}/migrate-config-booleans.sh" \
+        "${user_config_root}/config.conf" \
+        "${user_config_root}/models.conf"
+fi
+
 # Decide whether install needs elevation: walk up from PREFIX/bin to the first
 # existing ancestor and check write access there (a missing PREFIX is fine if
 # its parent is writable, e.g. /tmp/foo when installing with --prefix /tmp/foo).

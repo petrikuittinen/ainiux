@@ -1048,7 +1048,7 @@ Options:
       --min-p FLOAT
       --repeat-penalty FLOAT
       --presence-penalty FLOAT
-      --reasoning auto|VALUE|TOKENS
+      --reasoning auto|off|VALUE|TOKENS
                                 Provider default, a named value (for example high),
                                 or an exact non-negative token budget.
       --purpose general|coding|instruct|creative

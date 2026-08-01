@@ -198,6 +198,16 @@ int run_repl(provider::RequestContext context, chat::Session session, std::ostre
                     print_error(err);
                     continue;
                 }
+                err = config::resolve_reasoning_off(
+                    context.options.model_catalog,
+                    context.profile.name,
+                    context.api_kind == provider::ApiKind::Responses ? "responses" : "chat",
+                    context.options.model,
+                    selection);
+                if (!err.ok()) {
+                    print_error(err);
+                    continue;
+                }
                 const std::string warning = config::reasoning_catalog_warning(
                     context.options.model_catalog,
                     context.profile.name,

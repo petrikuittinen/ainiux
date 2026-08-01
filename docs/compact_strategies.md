@@ -52,7 +52,7 @@ surface). This document is **agent project sessions** only
 
 ```toml
 # config/ainiux.conf [agent]
-auto_compact = true
+auto_compact = on
 compact_strategy = smart
 # compact_limit = 75
 ```

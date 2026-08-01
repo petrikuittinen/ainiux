@@ -103,7 +103,7 @@ struct TuiCommandContext {
     bool& syntax_highlight;
     const ThemeRegistry& themes;
     std::string& theme;
-    bool use_colors = true;
+    bool& use_colors;
     ActiveJob& active_job;
     TuiMode& mode;
     size_t input_undo_limit = 0;

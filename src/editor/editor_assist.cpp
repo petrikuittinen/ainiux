@@ -932,8 +932,8 @@ std::vector<std::string> assist_command_completions(const EditorAssistConfig& co
     commands.push_back("/shell-stdout ");
     commands.push_back("shell-stdout ");
     commands.push_back("/auto-convert-html-to-md ");
-    commands.push_back("/auto-convert-html-to-md yes");
-    commands.push_back("/auto-convert-html-to-md no");
+    commands.push_back("/auto-convert-html-to-md on");
+    commands.push_back("/auto-convert-html-to-md off");
     commands.push_back("/reformat");
     commands.push_back("/reformat-all");
     commands.push_back("/left-align ");

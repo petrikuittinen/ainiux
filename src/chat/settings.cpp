@@ -14,11 +14,11 @@ namespace ainiux::chat {
 namespace {
 
 bool parse_bool_setting(const std::string& value, bool& output) {
-    if (value == "1" || value == "true" || value == "on" || value == "yes") {
+    if (value == "on") {
         output = true;
         return true;
     }
-    if (value == "0" || value == "false" || value == "off" || value == "no") {
+    if (value == "off") {
         output = false;
         return true;
     }
@@ -219,9 +219,28 @@ Error apply_chat_setting(cli::Options& options, const std::string& raw_name, con
     if (name == "auto-convert-html-to-md") {
         bool enabled = false;
         if (!parse_bool_setting(value, enabled)) {
-            return invalid_setting_value(name, "expected yes or no");
+            return invalid_setting_value(name, "expected on or off");
         }
         options.auto_convert_html_to_markdown = enabled;
+        return ok_error();
+    }
+    if (name == "stream" || name == "show_thinking_traces" || name == "highlight" ||
+        name == "cmd-out") {
+        bool enabled = false;
+        if (!parse_bool_setting(value, enabled)) {
+            return invalid_setting_value(name, "expected on or off");
+        }
+        if (name == "stream") {
+            options.stream = enabled;
+            options.stream_explicit = true;
+        } else if (name == "show_thinking_traces") {
+            options.show_thinking_traces = enabled;
+            options.has_show_thinking_traces = true;
+        } else if (name == "highlight") {
+            options.tui_highlight = enabled;
+        } else {
+            options.agent_show_command_output = enabled;
+        }
         return ok_error();
     }
     if (name == "thinking_preview_max_chars") {
@@ -278,7 +297,7 @@ Error apply_chat_setting(cli::Options& options, const std::string& raw_name, con
         }
         return invalid_setting_value(name,
                                      "unknown setting; expected " + generation::chat_setting_names_description() +
-                                         ", or auto-convert-html-to-md");
+                                         ", stream, show_thinking_traces, highlight, cmd-out, or auto-convert-html-to-md");
     }
     if (name == generation::kMaxTokens || name == generation::kMaxOutputTokens) {
         int parsed = 0;
@@ -300,6 +319,12 @@ Error apply_chat_setting(cli::Options& options, const std::string& raw_name, con
         if (!err.ok()) {
             return err;
         }
+        err = config::resolve_reasoning_off(options.model_catalog,
+                                            options.provider,
+                                            options.api,
+                                            options.model,
+                                            selection);
+        if (!err.ok()) return err;
         options.reasoning = std::move(selection);
         options.reasoning_explicit = true;
         reconcile_preset_temperature(options);
@@ -359,7 +384,7 @@ Error apply_chat_setting(cli::Options& options, const std::string& raw_name, con
     }
     return invalid_setting_value(name,
                                  "unknown setting; expected " + generation::chat_setting_names_description() +
-                                     ", or auto-convert-html-to-md");
+                                     ", stream, show_thinking_traces, highlight, cmd-out, or auto-convert-html-to-md");
 }
 
 std::string settings_json_from_options(const cli::Options& options) {
@@ -627,14 +652,18 @@ std::string format_settings_panel(const cli::Options& options,
     append("max_tokens", options.has_max_output_tokens ? std::to_string(options.max_output_tokens) : "");
     append("reasoning", config::reasoning_selection_value(options.reasoning));
     append("show_thinking_traces",
-           options.has_show_thinking_traces ? (options.show_thinking_traces ? "trace" : "notrace") : "");
+           options.has_show_thinking_traces ? (options.show_thinking_traces ? "on" : "off") : "");
     append("purpose", options.has_chat_purpose ? options.chat_purpose : "");
     append("context_tokens", options.has_context_tokens ? std::to_string(options.context_tokens) : "");
-    append("thinking_preview_max_chars",
-           options.has_agent_thinking_preview_max_chars
-               ? std::to_string(options.agent_thinking_preview_max_chars)
-               : "");
-    append("auto-convert-html-to-md", options.auto_convert_html_to_markdown ? "yes" : "no");
+    if (options.agent) {
+        append("thinking_preview_max_chars",
+               options.has_agent_thinking_preview_max_chars
+                   ? std::to_string(options.agent_thinking_preview_max_chars)
+                   : "");
+        append("cmd-out", options.agent_show_command_output ? "on" : "off");
+    }
+    append("highlight", options.tui_highlight ? "on" : "off");
+    append("auto-convert-html-to-md", options.auto_convert_html_to_markdown ? "on" : "off");
     if (!advisory.empty()) append("warning", advisory);
     std::string text = out.str();
     if (!text.empty() && text.back() == '\n') {

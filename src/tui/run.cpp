@@ -165,7 +165,11 @@ app::TuiRunResult run(provider::RequestContext context,
     CompactionStrategy agent_compaction_strategy = CompactionStrategy::Smart;
     std::string theme = "dark";
     context.options.tui_themes.normalize_name(context.options.tui_theme, theme);
-    const bool use_colors = !context.options.no_colors;
+    bool use_colors = !context.options.no_colors;
+    if (interactive != nullptr) {
+        context.options.tui_themes.normalize_name(interactive->theme_name, theme);
+        use_colors = interactive->use_colors;
+    }
     bool quit = false;
     app::InteractiveUiTarget leave_target = app::InteractiveUiTarget::Quit;
     // Warm multi-turn agent session (project .ainiux-pr/agent.sqlite).
@@ -3806,6 +3810,10 @@ app::TuiRunResult run(provider::RequestContext context,
                     set_thinking_trace_mode(!show_thinking_traces);
                     continue;
                 }
+                if (ch == 23 && mode == TuiMode::Chat && !context.options.agent) {
+                    set_thinking_trace_mode(!show_thinking_traces);
+                    continue;
+                }
                 if (ch == 20) {
                     cycle_reasoning();
                     continue;
@@ -3944,6 +3952,8 @@ app::TuiRunResult run(provider::RequestContext context,
             interactive->ai_continue = ai_continue;
             interactive->assist_config = ai_continue.assist_config;
             interactive->highlight_enabled = syntax_highlight;
+            interactive->theme_name = theme;
+            interactive->use_colors = use_colors;
         }
         return {0, leave_target};
     }

@@ -1466,6 +1466,23 @@ void test_provider_reasoning_request_compatibility() {
     check_string_field(field(request, "thinking"), "type", "disabled",
                        "toggle protocol recognizes disable values");
 
+    context = chat_context(ainiux::ReasoningProtocol::OpenAiEffort,
+                           ainiux::ReasoningSelection::named("off"));
+    request = serialized_request_json(context);
+    check_string_field(request, "reasoning_effort", "none",
+                       "unmatched semantic off uses OpenAI's disabled effort shape");
+    context = chat_context(ainiux::ReasoningProtocol::OpenRouter,
+                           ainiux::ReasoningSelection::named("off"));
+    request = serialized_request_json(context);
+    check_bool_field(field(request, "reasoning"), "enabled", false,
+                     "unmatched semantic off uses OpenRouter's disabled object");
+    context = chat_context(ainiux::ReasoningProtocol::Hy3Template,
+                           ainiux::ReasoningSelection::named("off"));
+    request = serialized_request_json(context);
+    check_string_field(field(field(request, "extra_body"), "chat_template_kwargs"),
+                       "reasoning_effort", "no_think",
+                       "unmatched semantic off uses HY3's no_think value");
+
     context = chat_context(ainiux::ReasoningProtocol::QwenChat,
                            ainiux::ReasoningSelection::named("enabled"));
     request = serialized_request_json(context);

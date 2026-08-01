@@ -58,6 +58,8 @@ ainiux::app::InteractiveSession interactive_session_from_editor_startup(
     session.ai_continue = std::move(ai_continue);
     session.assist_config = options.editor_assist_config;
     session.highlight_enabled = options.tui_highlight;
+    session.theme_name = options.tui_theme;
+    session.use_colors = !options.no_colors;
     if (session.ai_continue.has_value()) {
         session.context = session.ai_continue->request;
     }
@@ -648,6 +650,8 @@ int main(int argc, char** argv) {
         interactive.editor_settings = editor_settings_from_options(interactive.context.options);
         interactive.assist_config = interactive.context.options.editor_assist_config;
         interactive.highlight_enabled = interactive.context.options.tui_highlight;
+        interactive.theme_name = interactive.context.options.tui_theme;
+        interactive.use_colors = !interactive.context.options.no_colors;
         ainiux::app::sync_shared_provider_to_editor(interactive);
         return ainiux::app::run_interactive(std::move(interactive));
     }

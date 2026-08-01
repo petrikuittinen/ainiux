@@ -38,11 +38,27 @@ void test_config_applies_user_settings() {
         ainiux::config::parse("[tui]\nhighlight = off\n", "highlight.conf");
     err = ainiux::config::apply_document(highlight_config.document, options);
     check(err.ok() && !options.tui_highlight,
-          "tui.highlight accepts the on/off compatibility form");
-    highlight_config = ainiux::config::parse("[tui]\nhighlight = true\n", "highlight-bool.conf");
+          "tui.highlight accepts off");
+    highlight_config = ainiux::config::parse("[tui]\nhighlight = on\n", "highlight-bool.conf");
     err = ainiux::config::apply_document(highlight_config.document, options);
     check(err.ok() && options.tui_highlight,
-          "tui.highlight accepts boolean values");
+          "tui.highlight accepts on");
+    ainiux::config::ParseResult theme_off_config =
+        ainiux::config::parse("[tui]\ntheme = off\n", "theme-off.conf");
+    err = ainiux::config::apply_document(theme_off_config.document, options);
+    check(err.ok() && options.no_colors && options.tui_theme == "dark",
+          "tui.theme off disables colors without replacing the selected palette");
+    ainiux::config::ParseResult reserved_theme = ainiux::config::parse(
+        "[theme]\nname = \"off\"\nbackground = #000000\ntext = #ffffff\n",
+        "reserved-theme.conf");
+    err = ainiux::config::apply_themes_document(reserved_theme.document, options);
+    check(!err.ok() && err.message.find("reserved") != std::string::npos,
+          "custom themes cannot use the reserved off name");
+    ainiux::config::ParseResult reasoning_off_config =
+        ainiux::config::parse("[generation]\nreasoning = off\n", "reasoning-off.conf");
+    err = ainiux::config::apply_document(reasoning_off_config.document, options);
+    check(err.ok() && options.reasoning == ainiux::ReasoningSelection::named("off"),
+          "generation reasoning accepts semantic off despite boolean tokenization");
 
     ainiux::config::ParseResult editor_config =
         ainiux::config::parse("[editor]\nundo_limit = 7\nhuge_file_size_warning = 2048\nfile_size_limit = -1\n"
@@ -117,11 +133,11 @@ void test_config_applies_user_settings() {
           "continuation settings follow system then user config precedence");
 
     ainiux::config::ParseResult insert_config = ainiux::config::parse(
-        "[input]\nauto-convert-html-to-md = no\n", "insert.conf");
+        "[input]\nauto-convert-html-to-md = off\n", "insert.conf");
     check(insert_config.error.ok(), "insert conversion config fixture parses");
     err = ainiux::config::apply_document(insert_config.document, options);
     check(err.ok() && !options.auto_convert_html_to_markdown,
-          "input auto-convert-html-to-md accepts no");
+          "input auto-convert-html-to-md accepts off");
 
     options.editor_assist_config = ainiux::editor::default_editor_assist_config();
     ainiux::config::ParseResult assist_prompt_config = ainiux::config::parse(
@@ -139,8 +155,8 @@ void test_config_applies_user_settings() {
     {
         std::ofstream system_config(system_home + "/ainiux/config.conf", std::ios::trunc);
         check(system_config.is_open(), "system config test file opens");
-        system_config << "[url_fetch]\nallow_private_addresses = false\n"
-                         "[tui]\ntheme = light\nthinking_traces = false\n";
+        system_config << "[url_fetch]\nallow_private_addresses = off\n"
+                         "[tui]\ntheme = light\nthinking_traces = off\n";
         system_config.close();
         check(system_config.good(), "system config test file is written");
     }
@@ -263,7 +279,7 @@ void test_config_parses_supported_values() {
         "negative = -12\r\n"
         "ratio = 3.25\r\n"
         "scientific = 1e3\r\n"
-        "enabled = false\r\n"
+        "enabled = off\r\n"
         "window = 64k\r\n"
         "[nested.section]\r\n"
         "name = value\r\n";
@@ -289,7 +305,7 @@ void test_config_parses_supported_values() {
           "config exponent float parsed");
     const ainiux::config::Entry* enabled = parsed.document.find("enabled");
     check(enabled != nullptr && enabled->value.is_boolean() && !enabled->value.boolean,
-          "config false boolean parsed");
+          "config off boolean parsed");
     const ainiux::config::Entry* window = parsed.document.find("window");
     check(window != nullptr && window->value.is_string() && window->value.string == "64k",
           "context shorthand remains a schema-level string");
@@ -499,11 +515,13 @@ void test_config_applies_model_catalog() {
         "reasoning_protocol = qwen_chat\n"
         "reasoning_default = medium\n"
         "temperature = supported\n"
+        "enabled = on\n"
         "[preset]\n"
         "model_id = qwen-coder\n"
         "purpose = coding\n"
         "top_k = 20\n"
         "top_p = 0.95\n"
+        "enabled = on\n"
         "reasoning = high\n",
         "models.conf");
     check(parsed.error.ok(), "models catalog parses");
@@ -591,6 +609,36 @@ void test_config_applies_model_catalog() {
     check(!ainiux::config::next_reasoning_selection(
               effort_catalog, "openai", "chat", "", next, next),
           "reasoning shortcut silently ignores a missing model");
+
+    const auto check_off_choice = [&](const ainiux::ReasoningSelection& disabled,
+                                      const std::string& label) {
+        ainiux::ModelCatalog catalog;
+        ainiux::ModelCapability model;
+        model.id = label;
+        model.model_regex = "^" + label + "$";
+        model.reasoning_options = {disabled, ainiux::ReasoningSelection::named("high")};
+        catalog.models.push_back(std::move(model));
+        ainiux::ReasoningSelection selection = ainiux::ReasoningSelection::named("off");
+        const ainiux::Error resolve = ainiux::config::resolve_reasoning_off(
+            catalog, "any", "chat", label, selection);
+        check(resolve.ok() && selection == disabled,
+              "reasoning off resolves to catalog disable choice " + label);
+    };
+    check_off_choice(ainiux::ReasoningSelection::named("none"), "gpt-none");
+    check_off_choice(ainiux::ReasoningSelection::token_budget(0), "anthropic-zero");
+    check_off_choice(ainiux::ReasoningSelection::named("disabled"), "toggle-disabled");
+    check_off_choice(ainiux::ReasoningSelection::named("no_think"), "hy3-no-think");
+
+    ainiux::ReasoningSelection unavailable = ainiux::ReasoningSelection::named("off");
+    const ainiux::Error unavailable_error = ainiux::config::resolve_reasoning_off(
+        effort_catalog, "openai", "chat", "effort-model", unavailable);
+    check(!unavailable_error.ok() && unavailable_error.message.find("min|medium|high|xhigh") != std::string::npos,
+          "known models without a disable choice reject reasoning off and list choices");
+    ainiux::ReasoningSelection unmatched = ainiux::ReasoningSelection::named("off");
+    check(ainiux::config::resolve_reasoning_off(
+              effort_catalog, "openai", "chat", "unmatched", unmatched).ok() &&
+              unmatched == ainiux::ReasoningSelection::named("off"),
+          "unmatched models retain semantic reasoning off");
 }
 
 void test_model_catalog_layering_and_validation() {
@@ -651,8 +699,8 @@ void test_model_catalog_layering_and_validation() {
           "presets merge by model id and purpose");
 
     err = apply(
-        "[preset]\nmodel_id = merged\npurpose = coding\nenabled = false\n"
-        "[model]\nid = merged\nenabled = false\n",
+        "[preset]\nmodel_id = merged\npurpose = coding\nenabled = off\n"
+        "[model]\nid = merged\nenabled = off\n",
         "remove-models.conf");
     check(err.ok() && options.model_catalog.models.size() == 3 &&
               options.model_catalog.presets.empty(),
@@ -747,7 +795,7 @@ void test_config_reads_models_template() {
         "vendor/DEEPSEEK-V4-FLASH",
         ainiux::ReasoningSelection::named("maxx"));
     check(valid_warning.empty() && typo_warning.find("maxx") != std::string::npos &&
-              typo_warning.find("none|high|max") != std::string::npos &&
+              typo_warning.find("none|low|high|max") != std::string::npos &&
               typo_warning.find("provider may reject") != std::string::npos,
           "catalog warning distinguishes configured reasoning values from forward-compatible overrides");
     check(ainiux::config::reasoning_catalog_warning(
@@ -909,8 +957,17 @@ void test_config_schema_rejects_invalid_settings_transactionally() {
     ainiux::config::ParseResult wrong_type =
         ainiux::config::parse("[url_fetch]\nallow_private_addresses = yes\n", "type.conf");
     err = ainiux::config::apply_document(wrong_type.document, options);
-    check(!err.ok() && err.message.find("expected boolean, got string") != std::string::npos,
-          "config schema reports expected and actual types");
+    check(!err.ok() && err.message.find("expected on or off") != std::string::npos,
+          "config schema reports the canonical boolean values");
+
+    for (const std::string legacy : {"true", "false", "yes", "no", "1", "0", "enabled", "disabled"}) {
+        ainiux::config::ParseResult legacy_bool = ainiux::config::parse(
+            "[url_fetch]\nallow_private_addresses = " + legacy + "\n",
+            "legacy-boolean.conf");
+        err = ainiux::config::apply_document(legacy_bool.document, options);
+        check(!err.ok() && err.message.find("expected on or off") != std::string::npos,
+              "config boolean schema rejects legacy value " + legacy);
+    }
 
     ainiux::config::ParseResult bad_version =
         ainiux::config::parse("config_version = 2\n", "version.conf");
@@ -1207,7 +1264,7 @@ void test_config_code_index_size() {
 
 void test_config_security_review_settings() {
     ainiux::config::ParseResult parsed = ainiux::config::parse(
-        "[agent]\nmax_parallel_agents = 4\nsecurity_review_batch_size = 200K\nsecurity_review_log_enabled = false\nsecurity_review_log_keep_runs = 9\n",
+        "[agent]\nmax_parallel_agents = 4\nsecurity_review_batch_size = 200K\nsecurity_review_log_enabled = off\nsecurity_review_log_keep_runs = 9\n",
         "agent.conf");
     ainiux::cli::Options options;
     ainiux::Error error = ainiux::config::apply_document(parsed.document, options);
