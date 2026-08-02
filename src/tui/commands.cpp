@@ -6,6 +6,7 @@
 #include "chat/settings.hpp"
 #include "cli/args.hpp"
 #include "ainiux/model_setting.hpp"
+#include "tui/activity.hpp"
 #include "tui/detail/render.hpp"
 #include "tui/theme_registry.hpp"
 #include "ui/scrollbar.hpp"
@@ -639,7 +640,9 @@ void handle_tui_command(const std::string& text, TuiCommandContext& ctx, TuiComm
             ctx.context.options.reasoning = ReasoningSelection::automatic();
             ctx.context.options.reasoning_explicit = true;
         }
-        ctx.status = provider_model_status_message(ctx.context, "ready");
+        ctx.status = ctx.context.options.agent
+                         ? provider_model_status_message(ctx.context, "ready")
+                         : with_history_navigation_help("ready · /provider · /list");
         handlers.start_store_save();
         if (changed && !ctx.context.options.has_context_tokens) {
             if (!ctx.context.profile.offline && !ctx.context.options.model.empty()) {

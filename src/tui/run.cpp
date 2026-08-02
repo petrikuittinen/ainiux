@@ -276,20 +276,16 @@ app::TuiRunResult run(provider::RequestContext context,
     std::vector<AgentLiveRow> live_agent_rows;
     int history_scroll = 0;
 
-    auto build_agent_chrome = [&]() -> AgentChrome {
+    auto build_shell_chrome = [&]() -> AgentChrome {
         AgentChrome chrome;
-        if (!context.options.agent) {
-            return chrome;
-        }
-        chrome.enabled = true;
+        // Shared fields for chat input label and agent chrome.
         chrome.provider = context.profile.name;
         chrome.model = context.options.model;
         chrome.reasoning = config::reasoning_selection_value(context.options.reasoning);
-        // Prefer the worker-published atomic estimate (never walks conversation_ here —
-        // that raced with run_user_turn and segfaulted during streaming). Fall back to
-        // the display transcript on the UI thread.
         long long used = 0;
-        if (agent_runtime && agent_runtime->prepared()) {
+        if (context.options.agent && agent_runtime && agent_runtime->prepared()) {
+            // Prefer the worker-published atomic estimate (never walks conversation_
+            // here — that raced with run_user_turn and segfaulted during streaming).
             used = agent_runtime->estimated_request_tokens();
         }
         const long long display_used = context::estimated_text_tokens(session.messages);
@@ -298,6 +294,11 @@ app::TuiRunResult run(provider::RequestContext context,
         }
         chrome.used_tokens = used;
         chrome.window_tokens = context.options.context_tokens;
+        chrome.credit_label = credit_balance_label;
+        if (!context.options.agent) {
+            return chrome;
+        }
+        chrome.enabled = true;
         chrome.workspace =
             agent_runtime && agent_runtime->prepared()
                 ? agent_runtime->workspace()
@@ -319,7 +320,6 @@ app::TuiRunResult run(provider::RequestContext context,
         chrome.index_enabled =
             agent_runtime && agent_runtime->prepared() &&
             agent_runtime->indexing_enabled();
-        chrome.credit_label = credit_balance_label;
         chrome.input_max_height_percent =
             context.options.agent_input_max_height_percent;
         chrome.cancellable = active_job != ActiveJob::None || file_job.joinable() ||
@@ -962,8 +962,8 @@ app::TuiRunResult run(provider::RequestContext context,
 
     auto refresh_credit_balance = [&]() {
         credit_balance_label.clear();
-        if (!context.options.agent ||
-            !provider::credit_balance_available(context)) {
+        // Chat and agent both show credits on chrome when the provider supports it.
+        if (!provider::credit_balance_available(context)) {
             credit_jobs.cancel_all();
             return;
         }
@@ -2256,7 +2256,9 @@ app::TuiRunResult run(provider::RequestContext context,
             picker_items.clear();
             picker_selected = 0;
             mode = TuiMode::Chat;
-            status = "Provider set to " + provider::display_name_for_profile(context.profile.name);
+            // Short display only: never show custom_openai_chat or raw URLs here.
+            status = "Provider set to " +
+                     provider::display_name_for_profile(context.profile.name);
             start_store_save();
             if (context.options.agent && agent_runtime && agent_runtime->prepared()) {
                 const Error error = agent_runtime->update_project_settings(context);
@@ -2286,12 +2288,15 @@ app::TuiRunResult run(provider::RequestContext context,
         picker_items.clear();
         picker_selected = 0;
         mode = TuiMode::Chat;
-        status = provider_model_status_message(context, "ready");
+        status = context.options.agent
+                     ? provider_model_status_message(context, "ready")
+                     : with_history_navigation_help("ready · /provider · /list");
         start_store_save();
         if (context.options.agent && agent_runtime && agent_runtime->prepared()) {
             const Error error = agent_runtime->update_project_settings(context);
             if (!error.ok()) status = "Agent settings save failed: " + error.message;
         }
+        refresh_credit_balance();
         flush_pending_index_build_offer();
     };
     picker_callbacks.on_reasoning_selected = [&](const std::string& reasoning) {
@@ -2747,7 +2752,7 @@ app::TuiRunResult run(provider::RequestContext context,
                    activity_kind, render_frame, syntax_highlight, show_scrollbars,
                    detail::RenderStyle{&context.options.tui_themes, theme, use_colors},
                    terminal_frame_renderer, panel_title(), context.options.agent,
-                   build_agent_chrome());
+                   build_shell_chrome());
     while (!quit) {
         credit_jobs.reap_finished();
         process_clipboard_events();
@@ -2966,7 +2971,7 @@ app::TuiRunResult run(provider::RequestContext context,
                         start_save(context.options.save_chat_path, session, true);
                         start_store_save();
                     }
-                    if (context.options.agent) refresh_credit_balance();
+                    refresh_credit_balance();
                     break;
                 }
                 case TuiEventType::Error: {
@@ -3351,8 +3356,8 @@ app::TuiRunResult run(provider::RequestContext context,
                                                     agent_runtime->prepared()
                                                 ? agent_ready_with_index_controls()
                                                 : "Preparing agent...")
-                                         : provider_model_status_message(context,
-                                                                        "only model auto-selected");
+                                         : with_history_navigation_help(
+                                               "only model auto-selected");
                         } else {
                             picker_items = std::move(event.models);
                             picker_selected = 0;
@@ -3931,7 +3936,7 @@ app::TuiRunResult run(provider::RequestContext context,
                        activity_kind, render_frame, syntax_highlight, show_scrollbars,
                        detail::RenderStyle{&context.options.tui_themes, theme, use_colors},
                        terminal_frame_renderer, panel_title(), context.options.agent,
-                       build_agent_chrome());
+                       build_shell_chrome());
     }
 
     model_job.cancel();

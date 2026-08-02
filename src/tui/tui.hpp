@@ -97,6 +97,11 @@ std::string provider_model_status_message(const provider::RequestContext& contex
 std::string provider_model_status_message(const provider::RequestContext& context,
                                           const std::string& indicator,
                                           const std::string& suffix);
+// TTFT/Response latency and tokens/s (one decimal). No provider/model prefix.
+std::string format_generation_metrics(const provider::ChatResult& result, bool stream);
+// Chat ready status: metrics + history navigation help.
+// provider/model/messages/context_tokens are accepted for API compatibility with
+// editor callers but are not rendered here (moved to the chat input label).
 std::string generation_ready_status(const std::string& provider_name,
                                     const std::string& model_name,
                                     const provider::ChatResult& result,

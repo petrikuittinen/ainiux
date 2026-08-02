@@ -21,6 +21,8 @@ A thread with missing managed media stays readable but becomes read-only. `/clea
 
 `Enter` or `Ctrl+S` sends. `Esc` then `Enter` inserts a newline. The shared editor input supports grapheme-aware navigation, selection, copy/paste, undo/redo, soft wrapping, and syntax highlighting.
 
+The line above the input shows version, mode, model and reasoning, estimated token usage (and percent of the known context window), and provider credits when available (for example OpenRouter or DeepSeek). When no model is selected it shows `[choose model /model]`. Custom URL providers display as short `custom`, never as long registry ids such as `custom_openai_chat`. History navigation help (`Ctrl+B` / `Ctrl+D`) lives on the status row with TTFT or response metrics after a reply.
+
 Common controls:
 
 | Key | Action |

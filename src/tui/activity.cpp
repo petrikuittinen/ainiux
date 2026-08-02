@@ -47,26 +47,67 @@ void append_segment(std::vector<StyledSegment>& segments, std::string text, Styl
     segments.push_back({std::move(text), role});
 }
 
-constexpr const char kInputLabelStatusMessage[] =
-    " | Ctrl+H help | history Ctrl+B ↑ Ctrl+D ↓";
+// History help lives on the status row so the input label can hold model/usage.
+constexpr const char kHistoryNavigationHelp[] = u8" · history Ctrl+B ↑ Ctrl+D ↓";
 
 // Short mode tags (user-facing chrome). Keep compact for narrow terminals.
 constexpr const char kChatModeTag[] = " Chat";
 constexpr const char kAgentModeTag[] = " Agent";
 
+constexpr const char kChooseModelBracket[] = "[choose model /model]";
+
 }  // namespace
 
+const char* history_navigation_help() {
+    return kHistoryNavigationHelp;
+}
+
+std::string with_history_navigation_help(const std::string& status) {
+    if (status.find("history Ctrl+B") != std::string::npos) {
+        return status;
+    }
+    return status + kHistoryNavigationHelp;
+}
+
 const char* input_label_status_message() {
-    return kInputLabelStatusMessage;
+    return kHistoryNavigationHelp;
+}
+
+std::string chat_model_reasoning_bracket(const std::string& model_name,
+                                        const std::string& reasoning) {
+    if (model_name.empty()) {
+        return kChooseModelBracket;
+    }
+    const std::string reason = reasoning.empty() ? "auto" : reasoning;
+    // Model only (no provider): keeps URL/custom profile names off the label.
+    return ui::provider_model_display_label("", model_name, reason);
+}
+
+std::string chat_input_label_text(const AgentChrome& chrome) {
+    std::string out = app_version_label();
+    out += kChatModeTag;
+    out += " ";
+    out += chat_model_reasoning_bracket(chrome.model, chrome.reasoning);
+    if (!chrome.model.empty()) {
+        out += " ";
+        out += format_agent_context_usage(chrome.used_tokens, chrome.window_tokens);
+        if (!chrome.credit_label.empty()) {
+            out += " · ";
+            out += chrome.credit_label;
+        }
+    }
+    return out;
 }
 
 std::string input_label_text() {
-    return app_version_label() + kChatModeTag + input_label_status_message();
+    return input_label_text_for_mode(false);
 }
 
 std::string input_label_text_for_mode(bool agent_mode) {
-    return app_version_label() + (agent_mode ? kAgentModeTag : kChatModeTag) +
-           input_label_status_message();
+    if (agent_mode) {
+        return app_version_label() + kAgentModeTag;
+    }
+    return chat_input_label_text(AgentChrome{});
 }
 
 std::vector<StyledSegment> input_label_segments() {
@@ -92,13 +133,32 @@ std::vector<StyledSegment> input_label_segments_for_mode(bool agent_mode, const 
             {usage, StyleRole::InputLabel},
         };
     }
-    const std::string label = input_label_text_for_mode(agent_mode);
+    if (!agent_mode) {
+        const std::string& version = app_version_label();
+        const std::string bracket =
+            chat_model_reasoning_bracket(chrome.model, chrome.reasoning);
+        std::vector<StyledSegment> segments = {
+            {version, StyleRole::PanelTitle},
+            {kChatModeTag, StyleRole::InputLabel},
+            {" ", StyleRole::InputLabel},
+            {bracket, StyleRole::PanelHighlight},
+        };
+        if (!chrome.model.empty()) {
+            segments.push_back({" ", StyleRole::InputLabel});
+            segments.push_back(
+                {format_agent_context_usage(chrome.used_tokens, chrome.window_tokens),
+                 StyleRole::InputLabel});
+            if (!chrome.credit_label.empty()) {
+                segments.push_back({" · ", StyleRole::InputLabel});
+                segments.push_back({chrome.credit_label, StyleRole::InputLabel});
+            }
+        }
+        return segments;
+    }
     const std::string& version = app_version_label();
-    const std::string mode_tag = agent_mode ? kAgentModeTag : kChatModeTag;
     return {
         {version, StyleRole::PanelTitle},
-        {mode_tag, agent_mode ? StyleRole::PanelHighlight : StyleRole::InputLabel},
-        {label.substr(version.size() + mode_tag.size()), StyleRole::InputLabel},
+        {kAgentModeTag, StyleRole::PanelHighlight},
     };
 }
 
@@ -173,6 +233,8 @@ std::vector<StyledSegment> activity_placeholder_segments(const std::string& labe
 }
 
 std::string session_status_label(const chat::Session& session) {
+    // Always use short display names so custom_openai_chat / raw URLs never
+    // inflate the thinking/streaming status row.
     return ui::provider_model_display_label(session.provider, session.model);
 }
 

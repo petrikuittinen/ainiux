@@ -1,8 +1,8 @@
 #include "tui/tui.hpp"
 
 #include "ainiux/version.hpp"
-#include "context/context.hpp"
 #include "provider/provider.hpp"
+#include "tui/activity.hpp"
 #include "ui/provider_model_display.hpp"
 
 #include <iomanip>
@@ -48,7 +48,8 @@ std::string provider_model_status_message(const provider::RequestContext& contex
 }
 
 std::string ready_status() {
-    return "Tab complete | Ctrl+Space continue | Alt+Enter newline";
+    return with_history_navigation_help(
+        "Tab complete | Ctrl+Space continue | Alt+Enter newline");
 }
 
 std::string sqlite_unavailable_status(const std::string& reason) {
@@ -76,41 +77,23 @@ std::string chat_provider_model_required_status(const provider::RequestContext& 
 
 std::string chat_startup_status(const provider::RequestContext& context) {
     if (context.profile.offline) {
-        return "Offline · /list or Ctrl+L · /provider then /model to enable sending";
+        return with_history_navigation_help(
+            "Offline · /list or Ctrl+L · /provider then /model to enable sending");
     }
     if (context.options.model.empty()) {
-        return "Choose a model with /model · Change provider with /provider";
+        return with_history_navigation_help(
+            "Choose a model with /model · Change provider with /provider");
     }
-    // Keep this short enough that "/list" remains visible on an 80-column status line
-    // after the "[provider/model] " prefix (integration tests assert on that hint).
-    return provider_model_status_message(context, "ready · /provider · /list");
+    // Provider/model live on the input label; keep status short and actionable.
+    return with_history_navigation_help("ready · /provider · /list");
 }
 
-std::string generation_ready_status(const std::string& provider_name,
-                                    const std::string& model_name,
-                                    const provider::ChatResult& result,
-                                    bool stream,
-                                    const std::vector<provider::Message>& messages,
-                                    long long context_tokens) {
+std::string format_generation_metrics(const provider::ChatResult& result, bool stream) {
     std::ostringstream out;
-    const std::string label = provider_model_status_label(provider_name, model_name);
-    if (label.empty()) {
-        out << ready_status();
-    } else {
-        out << label;
-    }
     if (stream) {
-        if (context_tokens > 0) {
-            out << " | TTFT " << result.ttft_ms << "ms";
-        } else {
-            out << " | TTFT: " << result.ttft_ms << " ms";
-        }
+        out << "TTFT: " << result.ttft_ms << " ms";
     } else {
-        if (context_tokens > 0) {
-            out << " | Response " << result.total_ms << "ms";
-        } else {
-            out << " | Response: " << result.total_ms << " ms";
-        }
+        out << "Response: " << result.total_ms << " ms";
     }
     out << " | ";
     if (result.completion_tokens_estimated) {
@@ -118,12 +101,16 @@ std::string generation_ready_status(const std::string& provider_name,
     }
     out << std::fixed << std::setprecision(1) << provider::tokens_per_second(result, stream)
         << " token/s";
-    const std::string context_usage =
-        context::format_context_usage(context::estimated_usage_tokens(messages, result), context_tokens);
-    if (!context_usage.empty()) {
-        out << " | context: " << context_usage;
-    }
     return out.str();
+}
+
+std::string generation_ready_status(const std::string& /*provider_name*/,
+                                    const std::string& /*model_name*/,
+                                    const provider::ChatResult& result,
+                                    bool stream,
+                                    const std::vector<provider::Message>& /*messages*/,
+                                    long long /*context_tokens*/) {
+    return with_history_navigation_help(format_generation_metrics(result, stream));
 }
 
 long long effective_agent_context_window(long long context_tokens) {

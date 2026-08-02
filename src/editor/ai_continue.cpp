@@ -1,6 +1,7 @@
 #include "editor/ai_continue.hpp"
 
 #include "cli/args.hpp"
+#include "context/context.hpp"
 #include "editor/editor_ai_setup.hpp"
 #include "editor/editor_assist.hpp"
 #include "tui/tui.hpp"
@@ -52,8 +53,17 @@ std::string continue_completion_status_message(const std::string& provider_name,
                                                bool stream,
                                                const std::vector<provider::Message>& messages,
                                                long long context_tokens) {
-    return tui::generation_ready_status(provider_name, model_name, result, stream, messages,
-                                        context_tokens);
+    // Editor has no chat input-label chrome: keep provider/model + metrics +
+    // optional context usage on the minibuffer status line.
+    std::string status =
+        continue_status_message(provider_name, model_name,
+                                tui::format_generation_metrics(result, stream));
+    const std::string context_usage = context::format_context_usage(
+        context::estimated_usage_tokens(messages, result), context_tokens);
+    if (!context_usage.empty()) {
+        status += " | context: " + context_usage;
+    }
+    return status;
 }
 
 Error validate_continue_request(const AiContinueContext& context) {

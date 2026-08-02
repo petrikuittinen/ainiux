@@ -24,6 +24,7 @@
 #include "tui/detail/frame_buffer.hpp"
 #include "tui/tui.hpp"
 #include "tui/detail/render.hpp"
+#include "ui/provider_model_display.hpp"
 #include "ui/scrollbar.hpp"
 #include <algorithm>
 #include <chrono>
@@ -670,11 +671,14 @@ void test_agent_inline_choices() {
 }
 
 void test_tui_ready_and_generation_status() {
-    check(ainiux::tui::ready_status() ==
-              "Tab complete | Ctrl+Space continue | Alt+Enter newline",
-          "TUI ready status displays compact input hints");
-    check(ainiux::tui::ready_status().size() <= 80,
-          "TUI ready status fits an 80-column terminal");
+    check(ainiux::tui::ready_status().find("Tab complete") != std::string::npos &&
+              ainiux::tui::ready_status().find("Ctrl+Space") != std::string::npos &&
+              ainiux::tui::ready_status().find(u8"history Ctrl+B ↑ Ctrl+D ↓") !=
+                  std::string::npos,
+          "TUI ready status displays compact input and history hints");
+    check(ainiux::editor::detail::display_width_for_range(
+              ainiux::tui::ready_status(), 0, ainiux::tui::ready_status().size()) <= 90,
+          "TUI ready status stays within a practical terminal width");
 
     ainiux::provider::ChatResult result;
     result.ttft_ms = 100;
@@ -684,12 +688,14 @@ void test_tui_ready_and_generation_status() {
 
     const std::string streaming =
         ainiux::tui::generation_ready_status("lm_studio", "gpt-test", result, true, {}, 0);
-    check(streaming.find("[lmstudio/gpt-test]") == 0,
-          "TUI streaming completion status starts with compact provider and model names");
-    check(streaming.find("TTFT: 100 ms") != std::string::npos,
-          "TUI streaming completion status displays time to first token");
+    check(streaming.find("[lmstudio/gpt-test]") == std::string::npos,
+          "TUI streaming completion status leaves provider/model on the input label");
+    check(streaming.find("TTFT: 100 ms") == 0,
+          "TUI streaming completion status starts with time to first token");
     check(streaming.find("| ~20.0 token/s") != std::string::npos,
           "TUI streaming completion status estimates throughput after the first token");
+    check(streaming.find(u8"history Ctrl+B ↑ Ctrl+D ↓") != std::string::npos,
+          "TUI streaming completion status includes history navigation help");
 
     const std::string non_streaming =
         ainiux::tui::generation_ready_status("lm_studio", "gpt-test", result, false, {}, 0);
@@ -711,16 +717,10 @@ void test_tui_ready_and_generation_status() {
         {"user", "hi"}, {"assistant", "<think>x</think>ok"}};
     const std::string context_status =
         ainiux::tui::generation_ready_status("lm_studio", "gpt-test", result, true, messages, 100);
-    check(context_status.find("TTFT 100ms | ~20.0 token/s") != std::string::npos,
-          "TUI context status uses compact timing and estimated-throughput notation");
-    check(context_status.find("context: 25 tok (25%)") != std::string::npos,
-          "TUI completion status displays estimated context usage");
-
-    result.usage_json = "null";
-    const std::string exhausted =
-        ainiux::tui::generation_ready_status("lm_studio", "gpt-test", result, true, messages, 10);
-    check(exhausted.find("context: 17 tok (170%)") != std::string::npos,
-          "TUI context estimate reports usage beyond the configured window");
+    check(context_status.find("TTFT: 100 ms | ~20.0 token/s") != std::string::npos,
+          "TUI ready status uses metrics without embedding context usage");
+    check(context_status.find("context:") == std::string::npos,
+          "TUI completion status omits context usage (shown on the input label)");
 }
 
 void test_tui_last_unanswered_user_message_requires_final_user() {
@@ -1349,12 +1349,29 @@ void test_agent_shell_notice_preserves_listing_newlines() {
 void test_tui_input_label_and_activity_indicators() {
     const std::string label = ainiux::tui::input_label_text();
     check(label == ainiux::tui::input_label_text_for_mode(false),
-          "TUI input label concatenates app version branding with helper text");
+          "TUI input label concatenates app version branding with chat chrome");
     check(label.find(ainiux::versionNumber) != std::string::npos, "TUI input label includes the current version");
-    check(label.find("Ctrl+H help") != std::string::npos &&
-              label.find(u8"history Ctrl+B ↑ Ctrl+D ↓") != std::string::npos,
-          "TUI input label shows compact help and history navigation hints");
-    check(label.size() <= 80, "TUI input label fits an 80-column terminal");
+    check(label.find(" Chat ") != std::string::npos &&
+              label.find("[choose model /model]") != std::string::npos,
+          "TUI input label prompts for model selection when none is chosen");
+    check(label.find("Ctrl+H help") == std::string::npos &&
+              label.find("history Ctrl+B") == std::string::npos,
+          "TUI input label leaves help and history navigation to the status row");
+
+    ainiux::tui::AgentChrome chrome;
+    chrome.model = "deepseek-v4-flash";
+    chrome.reasoning = "max";
+    chrome.used_tokens = 187982;
+    chrome.window_tokens = 262144;
+    chrome.credit_label = "$1.23";
+    const std::string rich = ainiux::tui::chat_input_label_text(chrome);
+    check(rich.find("[deepseek-v4-flash max]") != std::string::npos,
+          "chat input label shows model and reasoning without provider");
+    check(rich.find("187982 tok (71.7%)") != std::string::npos,
+          "chat input label shows token usage with one-decimal percent");
+    check(rich.find("$1.23") != std::string::npos, "chat input label appends credit balance");
+    check(ainiux::tui::chat_model_reasoning_bracket("", "high") == "[choose model /model]",
+          "empty model uses the choose-model bracket text");
 
     const std::string thinking_a =
         ainiux::tui::activity_indicator_text(ainiux::tui::ActivityKind::Thinking, 0);
@@ -1483,8 +1500,10 @@ void test_tui_chat_startup_status() {
     ready.profile.name = "lm_studio";
     ready.options.model = "qwen-local";
     const std::string ready_status = ainiux::tui::chat_startup_status(ready);
-    check(ready_status.find("[lmstudio/qwen-local]") == 0,
-          "TUI startup status shows provider and model when ready");
+    check(ready_status.find("[lmstudio/qwen-local]") == std::string::npos,
+          "TUI startup status leaves provider/model on the input label");
+    check(ready_status.find("ready") != std::string::npos,
+          "TUI startup status reports ready when model is set");
     check(ready_status.find("/provider") != std::string::npos &&
               ready_status.find("/list") != std::string::npos,
           "TUI startup status reminds about provider changes and thread list when ready");
@@ -1844,13 +1863,16 @@ void test_tui_handle_escape_plain_pageup_moves_input() {
 void test_tui_unicode_and_empty_status() {
     check(ainiux::tui::ready_status().find(ainiux::app_version_label()) == std::string::npos,
           "TUI ready status leaves app version branding to the input label line");
-    const std::string unicode_model = u8"模型-مرحبا-👨‍👩‍👧‍👦";
     ainiux::provider::ChatResult result;
+    result.total_ms = 42;
     const std::string status = ainiux::tui::generation_ready_status(
-        "https://example.test/v1", unicode_model, result, false, {}, 0);
-    check(status.find(unicode_model) != std::string::npos &&
-              status.find("[custom/") == 0,
-          "TUI generation status preserves Unicode models and labels custom URLs");
+        "https://example.test/v1", u8"模型-مرحبا", result, false, {}, 0);
+    check(status.find("Response: 42 ms") != std::string::npos &&
+              status.find("[custom/") == std::string::npos,
+          "TUI generation status is metrics-only and never dumps custom URL profiles");
+    check(ainiux::ui::provider_model_display_label("custom_openai_chat", "qwen") ==
+              "[custom/qwen]",
+          "custom OpenAI-compatible URL providers display as short custom, not registry ids");
 
     ainiux::tui::ThinkingDisplay hidden =
         ainiux::tui::thinking_display_text("", false);

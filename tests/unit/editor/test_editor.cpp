@@ -63,9 +63,9 @@ void test_editor_ai_continue_helpers() {
         ainiux::editor::continue_completion_status_message(
             "custom_openai_chat", "gpt-test", continue_result, true);
     check(continue_complete.find(
-              "[custom/gpt-test] | TTFT: 100 ms | ~20.0 token/s") == 0 &&
+              "[custom/gpt-test] TTFT: 100 ms | ~20.0 token/s") == 0 &&
               continue_complete.find("| context: 23 tok") != std::string::npos,
-          "continue completion status reuses TUI generation metrics formatting: " +
+          "continue completion status keeps provider/model with TUI metrics: " +
               continue_complete);
 
     ainiux::editor::EditorState state = ainiux::editor::EditorState::from_text("Once upon a ");
