@@ -520,6 +520,16 @@ void test_osc52_clipboard_decode() {
     ed::cancel_terminal_clipboard_request();
 }
 
+void test_terminal_autowrap_sequences() {
+    namespace ed = ainiux::editor;
+    // Full-screen chat/editor disable DECAWM so painting the last cell does not
+    // wrap onto the next line (Windows Terminal / ConPTY last-column clip).
+    check(std::string(ed::autowrap_disable_sequence()) == "\x1b[?7l",
+          "autowrap disable sequence is CSI ? 7 l");
+    check(std::string(ed::autowrap_enable_sequence()) == "\x1b[?7h",
+          "autowrap enable sequence is CSI ? 7 h");
+}
+
 void test_terminal_mouse_decode() {
     namespace ed = ainiux::editor;
     ed::clear_terminal_input_queue();
@@ -4813,6 +4823,7 @@ void run_all() {
     test_system_clipboard_helpers();
     test_system_clipboard_cancellation_and_limits();
     test_osc52_clipboard_decode();
+    test_terminal_autowrap_sequences();
     test_terminal_mouse_decode();
     test_editor_mouse_visual_row_scrolling();
     test_editor_file_locking_and_read_only_sessions();

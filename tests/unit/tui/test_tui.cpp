@@ -290,6 +290,14 @@ void test_tui_reasoning_picker_input() {
           "agent continuation confirmation defaults to Stop on Esc");
 }
 
+void test_tui_usable_terminal_cols() {
+    check(ainiux::tui::usable_terminal_cols(80) == 79,
+          "usable terminal cols leaves the host last column unpainted");
+    check(ainiux::tui::usable_terminal_cols(2) == 1, "usable terminal cols handles narrow width");
+    check(ainiux::tui::usable_terminal_cols(1) == 1, "usable terminal cols never goes below 1");
+    check(ainiux::tui::usable_terminal_cols(0) == 1, "usable terminal cols treats 0 as 1");
+}
+
 void test_tui_layout_reserves_editor_input_panel() {
     ainiux::tui::Layout small = ainiux::tui::layout_for_terminal(8, 20);
     check(small.rows == 8 && small.cols == 20, "TUI layout clamps to requested small terminal");
@@ -2146,6 +2154,7 @@ void run_all() {
     test_tui_provider_display_and_activity_status();
     test_tui_chat_startup_status();
     test_tui_unicode_and_empty_status();
+    test_tui_usable_terminal_cols();
     test_tui_layout_reserves_editor_input_panel();
     test_tui_sqlite_unavailable_status();
     test_chat_assist_turn_prompt_uses_configured_command_text();

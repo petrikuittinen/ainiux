@@ -47,6 +47,16 @@ struct Layout {
 Layout layout_for_terminal(int rows, int cols);
 Layout layout_for_agent_terminal(int rows, int cols, int framed_input_height);
 
+// Usable paint width for chat/agent fullscreen rows. Windows Terminal / ConPTY
+// (and some other hosts) still mishandle writes into the true last column even
+// with DECAWM off; match the standalone editor which keeps content in cols-1.
+inline int usable_terminal_cols(int reported_cols) {
+    if (reported_cols <= 1) {
+        return 1;
+    }
+    return reported_cols - 1;
+}
+
 // Complete the visible-history side of an interactive /new handoff. A successful
 // fresh project may legitimately provide an empty replacement transcript.
 void apply_agent_project_history_handoff(

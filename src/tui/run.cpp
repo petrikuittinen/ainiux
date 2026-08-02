@@ -348,18 +348,20 @@ app::TuiRunResult run(provider::RequestContext context,
     };
 
     auto current_layout = [&](int rows, int cols) {
-        if (!context.options.agent) return layout_for_terminal(rows, cols);
+        // Match detail::render: layout against usable (cols-1) paint width.
+        const int paint_cols = usable_terminal_cols(cols);
+        if (!context.options.agent) return layout_for_terminal(rows, paint_cols);
         const int percentage_cap =
             std::max(3, (std::max(6, rows) *
                          context.options.agent_input_max_height_percent) /
                             100);
         const size_t measured = input.visual_row_count_bounded(
-            static_cast<size_t>(std::max(1, cols - 2)),
+            static_cast<size_t>(std::max(1, paint_cols - 2)),
             static_cast<size_t>(std::max(1, percentage_cap - 2)));
         const AgentInputGeometry geometry =
-            agent_input_geometry(rows, cols, measured,
+            agent_input_geometry(rows, paint_cols, measured,
                                  context.options.agent_input_max_height_percent);
-        return layout_for_agent_terminal(rows, cols, geometry.box_height);
+        return layout_for_agent_terminal(rows, paint_cols, geometry.box_height);
     };
 
     auto append_agent_history_notice = [&](const std::string& text) {

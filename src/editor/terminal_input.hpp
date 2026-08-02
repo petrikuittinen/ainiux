@@ -67,6 +67,10 @@ constexpr const char* keyboard_modifier_enable_sequence() { return "\x1b[>4;2m\x
 constexpr const char* keyboard_modifier_disable_sequence() { return "\x1b[<1u\x1b[>4;0m"; }
 constexpr const char* mouse_reporting_enable_sequence() { return "\x1b[?1002h\x1b[?1006h"; }
 constexpr const char* mouse_reporting_disable_sequence() { return "\x1b[?1006l\x1b[?1002l"; }
+// DECAWM: disable autowrap so full-width row paints (status, agent borders, last
+// history cell) do not spill onto the next line on Windows Terminal / ConPTY.
+constexpr const char* autowrap_disable_sequence() { return "\x1b[?7l"; }
+constexpr const char* autowrap_enable_sequence() { return "\x1b[?7h"; }
 constexpr int terminal_escape_inter_byte_timeout_ms() { return 100; }
 
 bool read_terminal_byte(unsigned char& out, int timeout_ms);

@@ -47,29 +47,33 @@ void render(const chat::Session& session,
             bool agent_mode,
             const AgentChrome& agent_chrome) {
     const TuiSize terminal = terminal_size();
-    Layout layout = layout_for_terminal(terminal.rows, terminal.cols);
+    // Never paint the host's true last column (see usable_terminal_cols).
+    const int paint_cols = usable_terminal_cols(terminal.cols);
+    Layout layout = layout_for_terminal(terminal.rows, paint_cols);
     if (agent_mode) {
         const int percentage_cap =
             std::max(3, (std::max(5, terminal.rows) *
                          std::min(80, std::max(10, agent_chrome.input_max_height_percent))) /
                             100);
         const size_t measured = input.visual_row_count_bounded(
-            static_cast<size_t>(std::max(1, terminal.cols - 2)),
+            static_cast<size_t>(std::max(1, paint_cols - 2)),
             static_cast<size_t>(std::max(1, percentage_cap - 2)));
         const AgentInputGeometry geometry =
-            agent_input_geometry(terminal.rows, terminal.cols, measured,
+            agent_input_geometry(terminal.rows, paint_cols, measured,
                                  agent_chrome.input_max_height_percent);
         layout = layout_for_agent_terminal(
-            terminal.rows, terminal.cols, geometry.box_height);
+            terminal.rows, paint_cols, geometry.box_height);
     }
     const int cols = layout.cols;
-    // Reserve the rightmost column of the history band for a vertical scrollbar.
+    // Reserve the rightmost *paint* column of the history band for a scrollbar.
     const bool history_scrollbar = show_scrollbar && cols >= 2;
     // Keep one blank column reserved while hidden so toggling the scrollbar
     // does not reflow history or move the user's mouse selection target.
     const bool reserve_history_scrollbar_column = cols >= 2;
     const int history_cols = reserve_history_scrollbar_column ? cols - 1 : cols;
-    TerminalFrame frame(layout.rows, cols);
+    // Frame uses full reported size so the unpainted last host column stays blank
+    // after the alternate-screen clear; row commands only address paint_cols.
+    TerminalFrame frame(layout.rows, std::max(cols, terminal.cols));
 
     input.ensure_cursor_visible(layout.input_rect);
     const editor::RenderedPanel input_panel = input.render(layout.input_rect);
@@ -142,6 +146,10 @@ void render(const chat::Session& session,
             command.compare(command.size() - kClearEolLen, kClearEolLen, kClearEol) == 0) {
             command.resize(command.size() - kClearEolLen);
         }
+        // Absolute CUP to the scrollbar column (same approach as the standalone
+        // editor). Sequential append after padded content is fragile when cell
+        // counts and ConPTY last-column rules disagree.
+        command += "\x1b[" + std::to_string(row) + ";" + std::to_string(cols) + "H";
         if (history_scrollbar) {
             if (style.colors && style.themes != nullptr && style.color_mode != ColorMode::Off) {
                 command += style_sequence_for(
