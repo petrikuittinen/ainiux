@@ -2686,7 +2686,7 @@ Language detect_language(const std::string& path) {
         return Language::PowerShell;
     if (extension == ".asm" || extension == ".s") return Language::Assembly;
     if (extension == ".sql") return Language::Sql;
-    if (extension == ".toml") return Language::Toml;
+    if (extension == ".toml" || extension == ".conf") return Language::Toml;
     if (extension == ".yaml" || extension == ".yml") return Language::Yaml;
     if (extension == ".ini" || extension == ".cfg" || filename == ".editorconfig" ||
         filename == ".gitconfig") return Language::Ini;

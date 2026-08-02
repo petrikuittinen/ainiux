@@ -116,6 +116,7 @@ void test_mode_parsing_and_detection() {
         {"profile.ps1", Language::PowerShell}, {"module.psm1", Language::PowerShell},
         {"data.psd1", Language::PowerShell}, {"boot.asm", Language::Assembly},
         {"start.S", Language::Assembly}, {"schema.sql", Language::Sql}, {"Cargo.toml", Language::Toml},
+        {"config.conf", Language::Toml}, {"themes.conf", Language::Toml}, {"Ainiux.CONF", Language::Toml},
         {"compose.yaml", Language::Yaml}, {"workflow.yml", Language::Yaml},
         {"settings.ini", Language::Ini}, {"project.cfg", Language::Ini}, {".editorconfig", Language::Ini},
     };
