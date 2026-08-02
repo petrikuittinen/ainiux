@@ -1523,6 +1523,10 @@ void test_provider_reasoning_request_compatibility() {
     request = serialized_request_json(context);
     check_string_field(request, "reasoning_effort", "max",
                        "Kimi effort protocol preserves max");
+    context.options.reasoning = ainiux::ReasoningSelection::named("off");
+    request = serialized_request_json(context);
+    check_string_field(request, "reasoning_effort", "off",
+                       "Kimi effort protocol keeps semantic off as off");
 
     context = chat_context(ainiux::ReasoningProtocol::Zai,
                            ainiux::ReasoningSelection::named("xhigh"));

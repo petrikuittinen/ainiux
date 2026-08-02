@@ -1918,7 +1918,9 @@ Error apply_document(const Document& document, cli::Options& options) {
         } else if (name == "context.window_tokens") {
             err = context_window_tokens(entry, candidate.context_tokens);
             if (err.ok()) {
-                candidate.has_context_tokens = true;
+                // 0 means automatic discovery from /models or the model catalog.
+                // Only positive values lock an explicit override.
+                candidate.has_context_tokens = candidate.context_tokens > 0;
             }
         } else if (name == "context.max_bytes") {
             err = nonnegative_long(entry, candidate.max_context_bytes);

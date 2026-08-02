@@ -891,7 +891,14 @@ printf '%s\n' "$jsond" | grep '"event":"done"' >/dev/null
 verbose_err="$ROOT/build/verbose.err"
 verbose_out=$("$ROOT/ainiux" "$BASE" -v --stream -m "$MODEL" -p "hello" 2>"$verbose_err")
 test "$verbose_out" = "Hello"
-grep 'TTFT: ' "$verbose_err" | grep ', context: ' | grep '%)' >/dev/null
+# Without a known context window, usage is "N tok"; with a window it adds " (p%)".
+grep 'TTFT: ' "$verbose_err" | grep ', context: ' | grep ' tok' >/dev/null
+# With an explicit window the percent form must appear.
+verbose_window_err="$ROOT/build/verbose-window.err"
+verbose_window_out=$("$ROOT/ainiux" "$BASE" -v --stream -m "$MODEL" --context 64k \
+    -p "hello" 2>"$verbose_window_err")
+test "$verbose_window_out" = "Hello"
+grep 'TTFT: ' "$verbose_window_err" | grep ', context: ' | grep '%)' >/dev/null
 
 
 CHAT_FILE="$ROOT/build/chat.json"

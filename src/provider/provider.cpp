@@ -374,6 +374,9 @@ std::string reasoning_fields_json(const RequestContext& context) {
             wire_selection = ReasoningSelection::token_budget(0);
         } else if (protocol == ReasoningProtocol::Hy3Template) {
             wire_selection = ReasoningSelection::named("no_think");
+        } else if (protocol == ReasoningProtocol::KimiEffort) {
+            // Moonshot Kimi accepts reasoning_effort="off" (not OpenAI's "none").
+            wire_selection = ReasoningSelection::named("off");
         } else {
             wire_selection = ReasoningSelection::named("none");
         }
@@ -2892,7 +2895,7 @@ long long context_window_for_model(const ModelsResult& models, const std::string
 void apply_context_window_from_models(RequestContext& context,
                                       const ModelsResult& models,
                                       const std::string& model_selector) {
-    if (context.options.has_context_tokens) {
+    if (context.options.has_context_tokens && context.options.context_tokens > 0) {
         return;
     }
     // An automatically discovered value belongs only to the model for which it
@@ -2933,7 +2936,9 @@ void apply_context_window_from_models(RequestContext& context,
 }
 
 Error resolve_context_window(RequestContext& context, const std::string& model_selector) {
-    if (context.profile.offline || context.options.has_context_tokens) {
+    // Positive explicit overrides win; 0 / non-explicit means discover.
+    if (context.profile.offline ||
+        (context.options.has_context_tokens && context.options.context_tokens > 0)) {
         return ok_error();
     }
     context.options.context_tokens = 0;

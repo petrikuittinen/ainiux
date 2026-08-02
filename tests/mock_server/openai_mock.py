@@ -692,9 +692,10 @@ class Handler(BaseHTTPRequestHandler):
             reply = "attachments-ok" if attachment_alpha_seen and attachment_beta_seen else "missing-attachments"
         elif last == "summarize-insert" or last.endswith("summarize-insert"):
             reply = "insert-ok" if inserted_context_seen else "missing-insert"
-        elif last == "describe-image":
+        elif last == "describe-image" or last.startswith("describe-image\n"):
+            # Chat TUI appends an "Attached images (in order):" provenance block.
             reply = "image-input-ok" if image_count == 1 else "missing-image-input"
-        elif last == "describe-images":
+        elif last == "describe-images" or last.startswith("describe-images\n"):
             reply = f"images:{image_count}"
         elif last == "previous-assistant":
             reply = ""

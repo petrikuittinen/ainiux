@@ -90,7 +90,8 @@ void print_verbose_metrics(provider::RequestContext& context,
     if (!context.options.verbose || context.options.quiet) {
         return;
     }
-    if (!context.options.has_context_tokens && context.options.context_tokens <= 0) {
+    // Discover the window when it is not an explicit positive override.
+    if (!context.options.has_context_tokens || context.options.context_tokens <= 0) {
         const std::string selector = !result.model.empty() ? result.model : context.options.model;
         provider::resolve_context_window(context, selector);
     }

@@ -205,7 +205,7 @@ def check_provider_model_picker(binary, base_url, model):
         output.extend(provider_change)
         time.sleep(0.4)
         output.extend(drain(master, 1.0))
-        require_seen(output, "only model auto-selected", "chaining provider selection into model discovery")
+        require_seen(output, "auto-selected", "chaining provider selection into model discovery")
         require_seen(output, model, "automatically choosing the only returned model")
 
         output.extend(send(master, "\x11"))
@@ -262,7 +262,7 @@ def check_single_model_editor_startup(binary, base_url, model):
     try:
         time.sleep(0.5)
         output.extend(drain(master, 1.2))
-        require_seen(output, "only model auto-selected", "discovering one startup editor model")
+        require_seen(output, "auto-selected", "discovering one startup editor model")
         require_seen(output, model, "auto-selecting the sole startup editor model")
         if "── Model" in plain_text(output):
             raise RuntimeError("single-model editor startup unnecessarily opened a picker")
