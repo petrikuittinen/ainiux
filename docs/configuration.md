@@ -66,7 +66,7 @@ At invocation time, `--key-env`, `--key-file`, and `--key-stdin` provide generic
 - `[context]` supplies a window, request byte budget, and compaction policy.
 - `[network]` controls connect/request timeouts, proxy, and TLS verification.
 - `[input]` bounds text and image input and controls HTML-to-Markdown insertion.
-- `[agent]` controls logs, backups, automatic compaction, strategy, and optional command-output display. The universal derived compaction threshold is 75% when `compact_limit` is unset.
+- `[agent]` controls logs, backups, automatic compaction, strategy, optional command-output display, and the LLM HTTP response body cap (`max_response_bytes`, default `32M`; `0` is unlimited). The universal derived compaction threshold is 75% when `compact_limit` is unset.
 - `[media]` controls SQLite versus file-backed attachment size and cleanup ages.
 - `[editor]` controls undo, file size warnings, auto-save, indentation, line endings, alignment width, and AI continuation limits.
 - `[url_fetch]` controls byte limits and private-address permission.

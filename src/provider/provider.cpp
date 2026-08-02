@@ -3725,7 +3725,7 @@ Error send_tool_round(const RequestContext& context,
     }
     http::Request request = base_http_request(context, "POST", active_request_url(context), cancellation);
     request.body = serialize_tool_request(context, conversation, tools);
-    request.max_body_bytes = 8L * 1024L * 1024L;
+    request.max_body_bytes = context.options.agent_max_response_bytes;
     std::vector<std::string> header_names;
     header_names.reserve(request.headers.size());
     for (const std::string& header : request.headers) {

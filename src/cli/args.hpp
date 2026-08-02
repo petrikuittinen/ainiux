@@ -177,6 +177,8 @@ struct Options {
     // 0 = derive from context window (75%).
     int agent_compact_limit = 0;
     bool agent_show_command_output = false;
+    // Hard cap on the full agent LLM HTTP body (including SSE framing). 0 = unlimited.
+    long agent_max_response_bytes = 32L * 1024L * 1024L;  // 32 MiB
     long max_image_bytes = 20971520;
     long media_max_size_to_store_to_db = 65536;
     int media_expiration_days = 7;

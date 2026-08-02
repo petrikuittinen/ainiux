@@ -179,6 +179,26 @@ void test_cli_web_search_parse() {
     check(parsed.options.prompt == "summarize", "web search prompt parsed");
 }
 
+void test_cli_agent_max_response_bytes_parse() {
+    check(ainiux::cli::Options{}.agent_max_response_bytes == 32L * 1024L * 1024L,
+          "agent response cap defaults to 32 MiB");
+
+    const char* argv[] = {"ainiux", "--max-agent-response-bytes", "64M", "-p", "hi"};
+    ainiux::cli::ParseResult parsed = ainiux::cli::parse_args(5, const_cast<char**>(argv));
+    check(parsed.error.ok(), "agent max response bytes parse");
+    check(parsed.options.agent_max_response_bytes == 64L * 1024L * 1024L,
+          "agent max response bytes accepts 64M");
+
+    const char* unlimited[] = {"ainiux", "--max-agent-response-bytes", "0", "-p", "hi"};
+    parsed = ainiux::cli::parse_args(5, const_cast<char**>(unlimited));
+    check(parsed.error.ok() && parsed.options.agent_max_response_bytes == 0,
+          "agent max response bytes 0 disables the cap");
+
+    const char* bad[] = {"ainiux", "--max-agent-response-bytes", "-1", "-p", "hi"};
+    parsed = ainiux::cli::parse_args(5, const_cast<char**>(bad));
+    check(!parsed.error.ok(), "agent max response bytes rejects negatives");
+}
+
 void test_cli_html_extract_parse() {
     const char* argv[] = {"ainiux", "--fetch-url", "https://example.com/page", "--html-format", "markdown",
                           "--max-fetch-bytes", "123", "--allow-private-url-fetch", "--output", "page.md"};
@@ -717,6 +737,7 @@ void run_all() {
     test_cli_editor_parse();
     test_cli_help_displays_version();
     test_cli_web_search_parse();
+    test_cli_agent_max_response_bytes_parse();
     test_cli_html_extract_parse();
     test_cli_output_format_parse();
     test_cli_parse();

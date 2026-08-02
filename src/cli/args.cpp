@@ -27,6 +27,7 @@ bool needs_value(const std::string& opt) {
         "--proxy", "--fetch-url", "--search", "--web-search-provider", "--input", "--attach",
         "--html-file", "--html-format", "--max-fetch-bytes", "--max-web-search-results",
         "--max-input-bytes", "--max-image-bytes", "--max-context-bytes",
+        "--max-agent-response-bytes",
         "--max-source-code-file-size", "--trusted-prompt-dir",
         "--context", "--context-policy", "--image-capability",
         "--save-chat", "--load-chat", "--dataset", "--grade-input", "--category", "--case",
@@ -551,6 +552,17 @@ ParseResult parse_args(int argc, char** argv, const Options& base_options) {
                 if (!err.ok()) {
                     return {opts, err};
                 }
+            } else if (opt == "--max-agent-response-bytes") {
+                long long parsed_size = 0;
+                Error err = editor::parse_byte_size(value, parsed_size);
+                if (!err.ok() || parsed_size < 0 ||
+                    static_cast<unsigned long long>(parsed_size) >
+                        static_cast<unsigned long long>(std::numeric_limits<long>::max())) {
+                    return {opts, {ErrorCode::BadArgs,
+                                   "--max-agent-response-bytes expects a non-negative byte size "
+                                   "such as 32M (0 = unlimited)"}};
+                }
+                opts.agent_max_response_bytes = static_cast<long>(parsed_size);
             } else if (opt == "--context") {
                 Error err = parse_context_tokens(value, opts.context_tokens);
                 if (!err.ok()) {
@@ -1081,6 +1093,9 @@ Options:
       --max-fetch-bytes N       Default 1048576.
       --max-input-bytes N       Maximum bytes per text input/attachment; default 1048576.
       --max-image-bytes N       Maximum image file size; default 20971520.
+      --max-agent-response-bytes N
+                                Agent LLM HTTP body cap (SSE included); default 32M.
+                                0 disables the cap. Config: agent.max_response_bytes.
       --allow-private-url-fetch Allow loopback/private URL fetches.
 
   Context:

@@ -2025,6 +2025,15 @@ Error apply_document(const Document& document, cli::Options& options) {
         } else if (name == "agent.show_command_output") {
             err = require_type(entry, Value::Type::Boolean);
             if (err.ok()) candidate.agent_show_command_output = entry.value.boolean;
+        } else if (name == "agent.max_response_bytes") {
+            long long value = 0;
+            err = auto_save_byte_size(entry, value);
+            if (err.ok() &&
+                static_cast<unsigned long long>(value) >
+                    static_cast<unsigned long long>(std::numeric_limits<long>::max())) {
+                err = schema_error(entry, "expected a non-negative byte size in the platform long range");
+            }
+            if (err.ok()) candidate.agent_max_response_bytes = static_cast<long>(value);
         } else if (name == "input.image_capability") {
             err = enum_string(entry,
                               cli::option_values::image_capability_strings(),

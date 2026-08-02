@@ -828,7 +828,7 @@ void test_config_reads_models_template() {
 void test_config_reads_common_template() {
     ainiux::config::ParseResult parsed = ainiux::config::read_file("config/ainiux.conf");
     check(parsed.error.ok(), "common config file parses");
-    check(parsed.document.entries.size() == 70, "common config has every expected setting");
+    check(parsed.document.entries.size() == 71, "common config has every expected setting");
     ainiux::cli::Options highlight_options;
     ainiux::Error apply_error = ainiux::config::apply_document(parsed.document, highlight_options);
     check(apply_error.ok() && highlight_options.tui_highlight,
@@ -884,7 +884,8 @@ void test_config_reads_common_template() {
               options.agent_history_backup_ttl_days == 7 &&
               options.agent_auto_compact &&
               options.agent_compact_strategy == CompactionStrategy::Smart &&
-              !options.agent_show_command_output,
+              !options.agent_show_command_output &&
+              options.agent_max_response_bytes == 32L * 1024L * 1024L,
           "common config maps to the built-in runtime defaults");
     check(options.model_catalog.models.empty(),
           "common config leaves model capabilities to models.conf");
@@ -1246,6 +1247,31 @@ void test_config_security_review_settings() {
     check(!error.ok(), "security review log retention rejects values above 1000");
 }
 
+void test_config_agent_max_response_bytes() {
+    check(ainiux::cli::Options{}.agent_max_response_bytes == 32L * 1024L * 1024L,
+          "agent max response defaults to 32 MiB");
+
+    ainiux::config::ParseResult parsed =
+        ainiux::config::parse("[agent]\nmax_response_bytes = 64M\n", "agent-resp.conf");
+    ainiux::cli::Options options;
+    ainiux::Error error = ainiux::config::apply_document(parsed.document, options);
+    check(parsed.error.ok() && error.ok() &&
+              options.agent_max_response_bytes == 64L * 1024L * 1024L,
+          "agent.max_response_bytes accepts binary-M sizes");
+
+    parsed = ainiux::config::parse("[agent]\nmax_response_bytes = 0\n", "agent-resp-zero.conf");
+    options = ainiux::cli::Options{};
+    error = ainiux::config::apply_document(parsed.document, options);
+    check(parsed.error.ok() && error.ok() && options.agent_max_response_bytes == 0,
+          "agent.max_response_bytes 0 disables the HTTP body cap");
+
+    parsed =
+        ainiux::config::parse("[agent]\nmax_response_bytes = -1\n", "agent-resp-neg.conf");
+    options = ainiux::cli::Options{};
+    error = ainiux::config::apply_document(parsed.document, options);
+    check(!error.ok(), "agent.max_response_bytes rejects negative sizes");
+}
+
 void test_agent_input_height_config() {
     ainiux::cli::Options options;
     check(options.agent_input_max_height_percent == 25,
@@ -1301,6 +1327,7 @@ void run_all() {
     test_config_empty_and_numeric_edge_cases();
     test_config_code_index_size();
     test_config_security_review_settings();
+    test_config_agent_max_response_bytes();
     test_agent_input_height_config();
     test_config_file_read_errors();
     test_config_parses_supported_values();
