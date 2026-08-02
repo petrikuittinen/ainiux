@@ -2208,6 +2208,31 @@ Error apply_document(const Document& document, cli::Options& options) {
         } else if (name == "tui.colors") {
             err = require_type(entry, Value::Type::Boolean);
             if (err.ok()) candidate.no_colors = !entry.value.boolean;
+        } else if (name == "tui.color_mode") {
+            tui::ColorModePreference preference = tui::ColorModePreference::Auto;
+            if (entry.value.is_integer()) {
+                // Bare 16 / 256 are integers in the TOML-alike grammar.
+                if (entry.value.integer == 16) {
+                    preference = tui::ColorModePreference::Ansi16;
+                    err = ok_error();
+                } else if (entry.value.integer == 256) {
+                    preference = tui::ColorModePreference::Ansi256;
+                    err = ok_error();
+                } else {
+                    err = schema_error(
+                        entry, "tui.color_mode expects auto, truecolor, 256, or 16");
+                }
+            } else {
+                err = require_type(entry, Value::Type::String);
+                if (err.ok() &&
+                    !tui::parse_color_mode_preference(entry.value.string, preference)) {
+                    err = schema_error(
+                        entry, "tui.color_mode expects auto, truecolor, 256, or 16");
+                }
+            }
+            if (err.ok()) {
+                candidate.color_mode = preference;
+            }
         } else if (name == "tui.highlight") {
             err = auto_save_mode(entry, candidate.tui_highlight);
         } else if (name == "tui.theme") {
@@ -2218,12 +2243,20 @@ Error apply_document(const Document& document, cli::Options& options) {
                 err = require_type(entry, Value::Type::String);
             }
             if (err.ok() && entry.value.is_string()) {
-                std::string normalized;
-                if (!candidate.tui_themes.normalize_name(entry.value.string, normalized)) {
-                    err = schema_error(entry,
-                                         "unknown theme; available: " + tui::format_theme_list(candidate.tui_themes));
+                const std::string raw = trim_config_ascii(entry.value.string);
+                if (lower_config_ascii(raw) == "off") {
+                    // Same as /theme off and --theme off: keep the palette name.
+                    candidate.no_colors = true;
                 } else {
-                    candidate.tui_theme = normalized;
+                    std::string normalized;
+                    if (!candidate.tui_themes.normalize_name(raw, normalized)) {
+                        err = schema_error(
+                            entry,
+                            "unknown theme; available: off, " +
+                                tui::format_theme_list(candidate.tui_themes));
+                    } else {
+                        candidate.tui_theme = normalized;
+                    }
                 }
             }
         } else if (name == "tui.thinking_traces") {

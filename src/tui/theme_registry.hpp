@@ -61,8 +61,28 @@ class ThemeRegistry {
 ThemeRegistry default_theme_registry();
 bool parse_rgb_color(const std::string& text, Rgb& out);
 std::string format_theme_list(const ThemeRegistry& registry);
-std::string ansi_style_sequence(const StylePair& pair);
-std::string ansi_foreground_sequence(const Rgb& color);
+
+// Color-mode preference parsing and env-based resolution.
+bool parse_color_mode_preference(const std::string& text, ColorModePreference& out);
+const char* color_mode_preference_name(ColorModePreference preference);
+// Resolve preferred mode + use_colors against COLORTERM/TERM (nullptr-safe).
+// COLORTERM truecolor/24bit → Truecolor; TERM *256color*|*-direct|xterm*|tmux*|screen*
+// → Ansi256; otherwise Truecolor (colon form degrades safely if ignored).
+ColorMode resolve_color_mode(bool use_colors,
+                             ColorModePreference preference,
+                             const char* colorterm,
+                             const char* term);
+// Convenience: reads getenv("COLORTERM") and getenv("TERM").
+ColorMode resolve_color_mode(bool use_colors, ColorModePreference preference);
+
+// Map theme RGB to xterm 256-color index (6x6x6 cube + grayscale).
+int rgb_to_xterm256(const Rgb& color);
+// Map theme RGB to classic 16-color index (0-15).
+int rgb_to_ansi16(const Rgb& color);
+
+std::string ansi_foreground_sequence(const Rgb& color, ColorMode mode = ColorMode::Truecolor);
+std::string ansi_background_sequence(const Rgb& color, ColorMode mode = ColorMode::Truecolor);
+std::string ansi_style_sequence(const StylePair& pair, ColorMode mode = ColorMode::Truecolor);
 double contrast_ratio(Rgb foreground, Rgb background);
 StyleRole style_role_for_token(highlight::TokenRole role);
 TextAttributes text_attributes_for_token(highlight::TokenRole role);
@@ -84,6 +104,9 @@ ThemeCommandResult handle_theme_command(const ThemeRegistry& registry,
 
 StylePair style_pair_for(const ThemePalette& palette, StyleRole role);
 StylePair style_pair_for(const ThemeRegistry& registry, const std::string& theme_name, StyleRole role);
-std::string style_sequence_for(const ThemeRegistry& registry, const std::string& theme_name, StyleRole role);
+std::string style_sequence_for(const ThemeRegistry& registry,
+                               const std::string& theme_name,
+                               StyleRole role,
+                               ColorMode mode = ColorMode::Truecolor);
 
 }  // namespace ainiux::tui

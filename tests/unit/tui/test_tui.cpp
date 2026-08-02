@@ -998,6 +998,95 @@ void test_tui_theme_parsing_and_contrast() {
           "terminal text attributes emit standard bold and italic ANSI sequences");
 }
 
+void test_tui_color_mode_sequences_and_resolve() {
+    ainiux::tui::ColorModePreference preference = ainiux::tui::ColorModePreference::Auto;
+    check(ainiux::tui::parse_color_mode_preference("truecolor", preference) &&
+              preference == ainiux::tui::ColorModePreference::Truecolor,
+          "parse_color_mode_preference accepts truecolor");
+    check(ainiux::tui::parse_color_mode_preference("256", preference) &&
+              preference == ainiux::tui::ColorModePreference::Ansi256,
+          "parse_color_mode_preference accepts 256");
+    check(ainiux::tui::parse_color_mode_preference("16", preference) &&
+              preference == ainiux::tui::ColorModePreference::Ansi16,
+          "parse_color_mode_preference accepts 16");
+    check(ainiux::tui::parse_color_mode_preference("auto", preference) &&
+              preference == ainiux::tui::ColorModePreference::Auto,
+          "parse_color_mode_preference accepts auto");
+    check(!ainiux::tui::parse_color_mode_preference("rainbow", preference),
+          "parse_color_mode_preference rejects unknown values");
+
+    check(ainiux::tui::resolve_color_mode(false, ainiux::tui::ColorModePreference::Truecolor,
+                                          "truecolor", "xterm-256color") ==
+              ainiux::tui::ColorMode::Off,
+          "resolve_color_mode is Off when colors are disabled");
+    check(ainiux::tui::resolve_color_mode(true, ainiux::tui::ColorModePreference::Truecolor,
+                                          nullptr, "xterm-256color") ==
+              ainiux::tui::ColorMode::Truecolor,
+          "forced truecolor ignores env");
+    check(ainiux::tui::resolve_color_mode(true, ainiux::tui::ColorModePreference::Ansi256,
+                                          "truecolor", "xterm") == ainiux::tui::ColorMode::Ansi256,
+          "forced 256 ignores COLORTERM");
+    check(ainiux::tui::resolve_color_mode(true, ainiux::tui::ColorModePreference::Auto,
+                                          "truecolor", "xterm-256color") ==
+              ainiux::tui::ColorMode::Truecolor,
+          "auto prefers COLORTERM truecolor");
+    check(ainiux::tui::resolve_color_mode(true, ainiux::tui::ColorModePreference::Auto, nullptr,
+                                          "xterm-256color") == ainiux::tui::ColorMode::Ansi256,
+          "auto uses 256-color when TERM is *256color* without COLORTERM");
+    check(ainiux::tui::resolve_color_mode(true, ainiux::tui::ColorModePreference::Auto, nullptr,
+                                          "dumb") == ainiux::tui::ColorMode::Off,
+          "auto disables colors for TERM=dumb");
+
+    // Status background #1F2937 has channels 31 and 41 — classic SGR red fg/bg.
+    // Semicolon truecolor would be misread as pure red; colon form must not embed
+    // those numbers as separate SGR parameters.
+    const ainiux::tui::Rgb status_bg{0x1F, 0x29, 0x37};
+    const ainiux::tui::Rgb panel_bg{0x11, 0x17, 0x22};
+    const std::string truecolor_bg =
+        ainiux::tui::ansi_background_sequence(status_bg, ainiux::tui::ColorMode::Truecolor);
+    check(truecolor_bg == "\x1b[48:2:31:41:55m",
+          "truecolor background uses colon subparameters");
+    check(truecolor_bg.find(';') == std::string::npos,
+          "truecolor sequences do not use semicolon-separated RGB (classic SGR collision)");
+
+    const std::string truecolor_fg =
+        ainiux::tui::ansi_foreground_sequence(panel_bg, ainiux::tui::ColorMode::Truecolor);
+    check(truecolor_fg == "\x1b[38:2:17:23:34m",
+          "truecolor foreground uses colon subparameters");
+
+    const int white_256 = ainiux::tui::rgb_to_xterm256({255, 255, 255});
+    check(white_256 == 15 || white_256 == 231,
+          "rgb_to_xterm256 maps pure white to a bright gray/white index");
+    const int black_256 = ainiux::tui::rgb_to_xterm256({0, 0, 0});
+    check(black_256 == 0 || black_256 == 16 || black_256 == 232,
+          "rgb_to_xterm256 maps pure black to a dark index");
+
+    const std::string seq_256 =
+        ainiux::tui::ansi_style_sequence({{255, 255, 255}, {31, 41, 55}},
+                                         ainiux::tui::ColorMode::Ansi256);
+    check(seq_256.find("38;5;") != std::string::npos && seq_256.find("48;5;") != std::string::npos,
+          "256-color style sequence uses 38;5 and 48;5 indexes");
+    check(seq_256.find("38;2;") == std::string::npos && seq_256.find("48;2;") == std::string::npos,
+          "256-color style sequence does not emit truecolor");
+
+    const std::string seq_16 =
+        ainiux::tui::ansi_style_sequence({{255, 255, 255}, {0, 0, 0}},
+                                         ainiux::tui::ColorMode::Ansi16);
+    check(seq_16.find("\x1b[") != std::string::npos && seq_16.find(";2;") == std::string::npos &&
+              seq_16.find(";5;") == std::string::npos,
+          "16-color style sequence uses classic SGR only");
+
+    const ainiux::tui::ThemeRegistry registry = ainiux::tui::default_theme_registry();
+    const std::string themed = ainiux::tui::style_sequence_for(
+        registry, "dark", ainiux::tui::StyleRole::Status, ainiux::tui::ColorMode::Truecolor);
+    check(themed.find("38:2:") != std::string::npos && themed.find("48:2:") != std::string::npos,
+          "style_sequence_for truecolor status uses colon RGB form");
+    check(ainiux::tui::style_sequence_for(registry, "dark", ainiux::tui::StyleRole::Status,
+                                          ainiux::tui::ColorMode::Off)
+              .empty(),
+          "style_sequence_for Off emits nothing");
+}
+
 void test_tui_buffer_list_uses_colored_panel_widget() {
     const std::string text =
         "Buffers - Enter opens - Tab/Insert new - DEL close - Esc cancels\n> file1.txt - Ln 1, Col 1\n  file2.txt - Ln 2, Col 3";
@@ -2082,6 +2171,7 @@ void run_all() {
     test_tui_pop_last_chat_message_removes_user_or_assistant_only();
     test_tui_regeneration_plan_uses_last_user_turn();
     test_tui_theme_parsing_and_contrast();
+    test_tui_color_mode_sequences_and_resolve();
     test_tui_buffer_list_uses_colored_panel_widget();
     test_tui_thinking_trace_display();
     test_tui_markdown_history_highlighting();

@@ -53,7 +53,7 @@ Text, Markdown, and HTML are converted into bounded canonical Markdown. PNG, JPE
 
 ## Themes, highlighting, and thinking
 
-`/theme` lists or selects layered themes. `/theme off`, `--nocolors`, or configuration can disable color styling without breaking layout control sequences. `/highlight on|off` controls shared syntax styling. `/thinking show|hide` and `Alt+Ctrl+T` control visible reasoning traces where the provider supplies them.
+`/theme` lists or selects layered themes. `/theme off`, `--theme off`, `--nocolors`, or configuration can disable color styling without breaking layout control sequences. `--theme NAME` selects a palette at startup (for example `--theme light`). `--color-mode auto|truecolor|256|16` (and `[tui] color_mode`) chooses how RGB theme colors are emitted; `auto` prefers truecolor when `COLORTERM` advertises it and otherwise uses 256-color for common `TERM` values—useful when Windows Terminal over SSH shows unreadable blue/red chrome. `/highlight on|off` controls shared syntax styling. `/thinking show|hide` and `Alt+Ctrl+T` control visible reasoning traces where the provider supplies them.
 
 Display-only notices and thinking previews are excluded from provider context, compaction, and transcript token estimates. Raw saved messages remain the durable source.
 

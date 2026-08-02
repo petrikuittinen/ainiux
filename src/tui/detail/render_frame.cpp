@@ -143,8 +143,9 @@ void render(const chat::Session& session,
             command.resize(command.size() - kClearEolLen);
         }
         if (history_scrollbar) {
-            if (style.colors && style.themes != nullptr) {
-                command += style_sequence_for(*style.themes, style.theme_name, StyleRole::Muted);
+            if (style.colors && style.themes != nullptr && style.color_mode != ColorMode::Off) {
+                command += style_sequence_for(
+                    *style.themes, style.theme_name, StyleRole::Muted, style.color_mode);
             }
             command += ui::scrollbar_glyph_at(history_bar, track_row);
             if (style.colors) {

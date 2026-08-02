@@ -40,6 +40,8 @@ struct Options {
     bool editor = false;
     std::string editor_path;
     bool no_colors = false;
+    // Preferred color wire format; resolved with COLORTERM/TERM at TUI/editor start.
+    tui::ColorModePreference color_mode = tui::ColorModePreference::Auto;
     bool tui_highlight = true;
     bool allow_private_url_fetch = false;
     bool auto_convert_html_to_markdown = true;

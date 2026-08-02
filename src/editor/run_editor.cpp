@@ -335,7 +335,13 @@ app::EditorRunResult run_editor(const std::string& path,
         settings.themes->normalize_name(theme_name, theme_name);
     }
     auto terminal_theme_style = [&]() {
-        return TerminalThemeStyle{settings.themes, theme_name, use_colors};
+        const tui::ColorModePreference preference =
+            runtime_options != nullptr ? runtime_options->color_mode
+                                       : tui::ColorModePreference::Auto;
+        return TerminalThemeStyle{settings.themes,
+                                  theme_name,
+                                  use_colors,
+                                  tui::resolve_color_mode(use_colors, preference)};
     };
     EditorAssistDisplay assist_display;
     auto refresh_assist_display = [&]() -> const EditorAssistDisplay* {

@@ -215,7 +215,7 @@ void append_scrollbar_cell(std::string& output,
     }
     if (theme_style.use_colors && theme_style.themes != nullptr) {
         output += tui::style_sequence_for(
-            *theme_style.themes, theme_style.theme_name, tui::StyleRole::Muted);
+            *theme_style.themes, theme_style.theme_name, tui::StyleRole::Muted, theme_style.color_mode);
     }
     output += glyph;
     if (theme_style.use_colors && theme_style.themes != nullptr) {
@@ -230,7 +230,7 @@ void append_pane_separator_glyph(std::string& output,
                                  const char* glyph) {
     if (theme_style.use_colors && theme_style.themes != nullptr) {
         output += tui::style_sequence_for(
-            *theme_style.themes, theme_style.theme_name, tui::StyleRole::PanelBorder);
+            *theme_style.themes, theme_style.theme_name, tui::StyleRole::PanelBorder, theme_style.color_mode);
     }
     output += glyph;
     if (theme_style.use_colors && theme_style.themes != nullptr) {
@@ -255,7 +255,8 @@ std::string activity_color_sequence(const TerminalThemeStyle& theme_style, tui::
     }
     const tui::StyleRole role = tui::activity_indicator_role(kind);
     return tui::ansi_foreground_sequence(
-        tui::style_pair_for(*theme_style.themes, theme_style.theme_name, role).foreground);
+        tui::style_pair_for(*theme_style.themes, theme_style.theme_name, role).foreground,
+        theme_style.color_mode);
 }
 
 void append_editor_rendered_line(std::string& output,
@@ -266,7 +267,7 @@ void append_editor_rendered_line(std::string& output,
     auto append_base_style = [&]() {
         if (theme_style.use_colors && theme_style.themes != nullptr) {
             output += tui::style_sequence_for(
-                *theme_style.themes, theme_style.theme_name, tui::StyleRole::Text);
+                *theme_style.themes, theme_style.theme_name, tui::StyleRole::Text, theme_style.color_mode);
         }
     };
     append_base_style();
@@ -279,7 +280,8 @@ void append_editor_rendered_line(std::string& output,
         if (span.syntax && theme_style.use_colors && theme_style.themes != nullptr) {
             output += tui::style_sequence_for(*theme_style.themes,
                                               theme_style.theme_name,
-                                              tui::style_role_for_token(span.role));
+                                              tui::style_role_for_token(span.role),
+                                              theme_style.color_mode);
             output += tui::ansi_text_attributes_sequence(
                 tui::text_attributes_for_token(span.role));
         } else {
@@ -1466,7 +1468,7 @@ void render_terminal_splits(
                     if (theme_style.use_colors && theme_style.themes != nullptr) {
                         separator += tui::style_sequence_for(*theme_style.themes,
                                                              theme_style.theme_name,
-                                                             tui::StyleRole::PanelBorder);
+                                                             tui::StyleRole::PanelBorder, theme_style.color_mode);
                     }
                     for (int col = 0; col < a.width; ++col) {
                         separator += u8"─";
@@ -1482,7 +1484,7 @@ void render_terminal_splits(
                     if (theme_style.use_colors && theme_style.themes != nullptr) {
                         separator += tui::style_sequence_for(*theme_style.themes,
                                                              theme_style.theme_name,
-                                                             tui::StyleRole::PanelBorder);
+                                                             tui::StyleRole::PanelBorder, theme_style.color_mode);
                     }
                     for (int col = 0; col < b.width; ++col) {
                         separator += u8"─";
@@ -1503,7 +1505,7 @@ void render_terminal_splits(
     std::string status_command = terminal_position(status_row, 1);
     if (theme_style.use_colors && theme_style.themes != nullptr) {
         status_command += tui::style_sequence_for(
-            *theme_style.themes, theme_style.theme_name, tui::StyleRole::Status);
+            *theme_style.themes, theme_style.theme_name, tui::StyleRole::Status, theme_style.color_mode);
     } else {
         status_command += "\x1b[7m";
     }
@@ -1518,7 +1520,7 @@ void render_terminal_splits(
     std::string minibuffer_command = terminal_position(minibuffer_row, 1);
     if (theme_style.use_colors && theme_style.themes != nullptr && !show_assist_activity) {
         minibuffer_command += tui::style_sequence_for(
-            *theme_style.themes, theme_style.theme_name, tui::StyleRole::Text);
+            *theme_style.themes, theme_style.theme_name, tui::StyleRole::Text, theme_style.color_mode);
     }
     minibuffer_command += minibuffer_line;
     if (theme_style.use_colors && theme_style.themes != nullptr && !show_assist_activity) {
@@ -1613,7 +1615,7 @@ void render_terminal_panel(EditorState& state,
     if (theme_style.use_colors && theme_style.themes != nullptr) {
         status_command += tui::style_sequence_for(*theme_style.themes,
                                                   theme_style.theme_name,
-                                                  tui::StyleRole::Status);
+                                                  tui::StyleRole::Status, theme_style.color_mode);
     } else {
         status_command += "\x1b[7m";
     }
@@ -1625,7 +1627,7 @@ void render_terminal_panel(EditorState& state,
     if (theme_style.use_colors && theme_style.themes != nullptr) {
         minibuffer_command += tui::style_sequence_for(*theme_style.themes,
                                                       theme_style.theme_name,
-                                                      tui::StyleRole::Text);
+                                                      tui::StyleRole::Text, theme_style.color_mode);
     }
     minibuffer_command += minibuffer_line;
     if (theme_style.use_colors && theme_style.themes != nullptr) {

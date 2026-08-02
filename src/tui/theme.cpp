@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cctype>
 #include <cmath>
+#include <cstdlib>
 
 namespace ainiux::tui {
 namespace {
@@ -14,6 +15,39 @@ std::string lowercase_copy(const std::string& text) {
         lower.push_back(static_cast<char>(std::tolower(static_cast<unsigned char>(ch))));
     }
     return lower;
+}
+
+int clamp_byte(int value) {
+    if (value < 0) {
+        return 0;
+    }
+    if (value > 255) {
+        return 255;
+    }
+    return value;
+}
+
+// Distance in simple RGB space (good enough for palette quantization).
+long long rgb_distance2(const Rgb& left, const Rgb& right) {
+    const long long dr = static_cast<long long>(left.r) - right.r;
+    const long long dg = static_cast<long long>(left.g) - right.g;
+    const long long db = static_cast<long long>(left.b) - right.b;
+    return dr * dr + dg * dg + db * db;
+}
+
+// xterm 256 levels for the 6x6x6 color cube.
+int cube_level(int channel) {
+    if (channel < 48) {
+        return 0;
+    }
+    if (channel < 115) {
+        return 1;
+    }
+    return (channel - 35) / 40;
+}
+
+int cube_value(int level) {
+    return level == 0 ? 0 : 55 + level * 40;
 }
 
 ThemePalette dark_palette() {
@@ -209,14 +243,229 @@ std::string format_theme_list(const ThemeRegistry& registry) {
     return out;
 }
 
-std::string ansi_foreground_sequence(const Rgb& color) {
-    return "\x1b[38;2;" + std::to_string(color.r) + ";" + std::to_string(color.g) + ";" +
-           std::to_string(color.b) + "m";
+bool parse_color_mode_preference(const std::string& text, ColorModePreference& out) {
+    const std::string lower = lowercase_copy(text);
+    if (lower == "auto") {
+        out = ColorModePreference::Auto;
+        return true;
+    }
+    if (lower == "truecolor" || lower == "24bit" || lower == "24-bit" || lower == "true") {
+        out = ColorModePreference::Truecolor;
+        return true;
+    }
+    if (lower == "256" || lower == "256color" || lower == "ansi256") {
+        out = ColorModePreference::Ansi256;
+        return true;
+    }
+    if (lower == "16" || lower == "16color" || lower == "ansi16" || lower == "ansi") {
+        out = ColorModePreference::Ansi16;
+        return true;
+    }
+    return false;
 }
 
-std::string ansi_style_sequence(const StylePair& pair) {
-    return ansi_foreground_sequence(pair.foreground) + "\x1b[48;2;" + std::to_string(pair.background.r) + ";" +
-           std::to_string(pair.background.g) + ";" + std::to_string(pair.background.b) + "m";
+const char* color_mode_preference_name(ColorModePreference preference) {
+    switch (preference) {
+        case ColorModePreference::Auto:
+            return "auto";
+        case ColorModePreference::Truecolor:
+            return "truecolor";
+        case ColorModePreference::Ansi256:
+            return "256";
+        case ColorModePreference::Ansi16:
+            return "16";
+    }
+    return "auto";
+}
+
+namespace {
+
+bool colorterm_is_truecolor(const char* colorterm) {
+    if (colorterm == nullptr || colorterm[0] == '\0') {
+        return false;
+    }
+    const std::string lower = lowercase_copy(colorterm);
+    return lower == "truecolor" || lower == "24bit" || lower.find("truecolor") != std::string::npos ||
+           lower.find("24bit") != std::string::npos;
+}
+
+bool term_suggests_256(const char* term) {
+    if (term == nullptr || term[0] == '\0') {
+        return false;
+    }
+    const std::string lower = lowercase_copy(term);
+    if (lower == "dumb") {
+        return false;
+    }
+    return lower.find("256color") != std::string::npos || lower.find("-direct") != std::string::npos ||
+           lower.rfind("xterm", 0) == 0 || lower.rfind("tmux", 0) == 0 ||
+           lower.rfind("screen", 0) == 0 || lower.find("rxvt") != std::string::npos ||
+           lower.find("alacritty") != std::string::npos || lower.find("kitty") != std::string::npos ||
+           lower.find("wezterm") != std::string::npos || lower.find("st-") == 0 || lower == "st";
+}
+
+}  // namespace
+
+ColorMode resolve_color_mode(bool use_colors,
+                             ColorModePreference preference,
+                             const char* colorterm,
+                             const char* term) {
+    if (!use_colors) {
+        return ColorMode::Off;
+    }
+    switch (preference) {
+        case ColorModePreference::Truecolor:
+            return ColorMode::Truecolor;
+        case ColorModePreference::Ansi256:
+            return ColorMode::Ansi256;
+        case ColorModePreference::Ansi16:
+            return ColorMode::Ansi16;
+        case ColorModePreference::Auto:
+            break;
+    }
+    // Prefer truecolor when the terminal advertises it (local WT, Kitty, etc.).
+    // OpenSSH often does not forward COLORTERM; fall back to 256 when TERM looks
+    // capable so Windows Terminal + SSH avoids semicolon-truecolor mis-parses.
+    if (colorterm_is_truecolor(colorterm)) {
+        return ColorMode::Truecolor;
+    }
+    if (term != nullptr && lowercase_copy(term) == "dumb") {
+        return ColorMode::Off;
+    }
+    if (term_suggests_256(term)) {
+        return ColorMode::Ansi256;
+    }
+    // Modern default: colon truecolor. Naive parsers ignore colon subparams
+    // instead of applying classic SGR 31/34/41 from RGB channel values.
+    return ColorMode::Truecolor;
+}
+
+ColorMode resolve_color_mode(bool use_colors, ColorModePreference preference) {
+    return resolve_color_mode(use_colors, preference, std::getenv("COLORTERM"), std::getenv("TERM"));
+}
+
+int rgb_to_xterm256(const Rgb& color) {
+    const int r = clamp_byte(color.r);
+    const int g = clamp_byte(color.g);
+    const int b = clamp_byte(color.b);
+
+    const int ri = cube_level(r);
+    const int gi = cube_level(g);
+    const int bi = cube_level(b);
+    const Rgb cube{cube_value(ri), cube_value(gi), cube_value(bi)};
+    const int cube_index = 16 + 36 * ri + 6 * gi + bi;
+    const long long cube_dist = rgb_distance2({r, g, b}, cube);
+
+    // Grayscale ramp 232-255: 8 + 10*n for n in 0..23.
+    int gray_index = 0;
+    if (r + g + b != 0) {
+        gray_index = (r + g + b) / 3;
+    }
+    int gray_level = (gray_index - 8 + 5) / 10;
+    if (gray_level < 0) {
+        gray_level = 0;
+    }
+    if (gray_level > 23) {
+        gray_level = 23;
+    }
+    const int gray_value = 8 + gray_level * 10;
+    const Rgb gray{gray_value, gray_value, gray_value};
+    const int gray_code = 232 + gray_level;
+    const long long gray_dist = rgb_distance2({r, g, b}, gray);
+
+    // Also consider the classic 16 colors (0-15) for pure primaries.
+    static const Rgb kAnsi16[16] = {
+        {0, 0, 0},       {205, 0, 0},     {0, 205, 0},     {205, 205, 0},
+        {0, 0, 238},     {205, 0, 205},   {0, 205, 205},   {229, 229, 229},
+        {127, 127, 127}, {255, 0, 0},     {0, 255, 0},     {255, 255, 0},
+        {92, 92, 255},   {255, 0, 255},   {0, 255, 255},   {255, 255, 255},
+    };
+    int best_index = cube_index;
+    long long best_dist = cube_dist;
+    if (gray_dist < best_dist) {
+        best_dist = gray_dist;
+        best_index = gray_code;
+    }
+    for (int i = 0; i < 16; ++i) {
+        const long long dist = rgb_distance2({r, g, b}, kAnsi16[i]);
+        if (dist < best_dist) {
+            best_dist = dist;
+            best_index = i;
+        }
+    }
+    return best_index;
+}
+
+int rgb_to_ansi16(const Rgb& color) {
+    static const Rgb kAnsi16[16] = {
+        {0, 0, 0},       {205, 0, 0},     {0, 205, 0},     {205, 205, 0},
+        {0, 0, 238},     {205, 0, 205},   {0, 205, 205},   {229, 229, 229},
+        {127, 127, 127}, {255, 0, 0},     {0, 255, 0},     {255, 255, 0},
+        {92, 92, 255},   {255, 0, 255},   {0, 255, 255},   {255, 255, 255},
+    };
+    const Rgb clamped{clamp_byte(color.r), clamp_byte(color.g), clamp_byte(color.b)};
+    int best = 7;
+    long long best_dist = rgb_distance2(clamped, kAnsi16[7]);
+    for (int i = 0; i < 16; ++i) {
+        const long long dist = rgb_distance2(clamped, kAnsi16[i]);
+        if (dist < best_dist) {
+            best_dist = dist;
+            best = i;
+        }
+    }
+    return best;
+}
+
+std::string ansi_foreground_sequence(const Rgb& color, ColorMode mode) {
+    switch (mode) {
+        case ColorMode::Off:
+            return {};
+        case ColorMode::Truecolor:
+            // Colon subparameters: naive classic-SGR parsers do not split on ':'
+            // and will not apply RGB channel values as codes 31/34/41.
+            return "\x1b[38:2:" + std::to_string(clamp_byte(color.r)) + ":" +
+                   std::to_string(clamp_byte(color.g)) + ":" + std::to_string(clamp_byte(color.b)) +
+                   "m";
+        case ColorMode::Ansi256:
+            return "\x1b[38;5;" + std::to_string(rgb_to_xterm256(color)) + "m";
+        case ColorMode::Ansi16: {
+            const int index = rgb_to_ansi16(color);
+            if (index < 8) {
+                return "\x1b[" + std::to_string(30 + index) + "m";
+            }
+            return "\x1b[" + std::to_string(90 + (index - 8)) + "m";
+        }
+    }
+    return {};
+}
+
+std::string ansi_background_sequence(const Rgb& color, ColorMode mode) {
+    switch (mode) {
+        case ColorMode::Off:
+            return {};
+        case ColorMode::Truecolor:
+            return "\x1b[48:2:" + std::to_string(clamp_byte(color.r)) + ":" +
+                   std::to_string(clamp_byte(color.g)) + ":" + std::to_string(clamp_byte(color.b)) +
+                   "m";
+        case ColorMode::Ansi256:
+            return "\x1b[48;5;" + std::to_string(rgb_to_xterm256(color)) + "m";
+        case ColorMode::Ansi16: {
+            const int index = rgb_to_ansi16(color);
+            if (index < 8) {
+                return "\x1b[" + std::to_string(40 + index) + "m";
+            }
+            return "\x1b[" + std::to_string(100 + (index - 8)) + "m";
+        }
+    }
+    return {};
+}
+
+std::string ansi_style_sequence(const StylePair& pair, ColorMode mode) {
+    if (mode == ColorMode::Off) {
+        return {};
+    }
+    return ansi_foreground_sequence(pair.foreground, mode) +
+           ansi_background_sequence(pair.background, mode);
 }
 
 StyleRole style_role_for_token(highlight::TokenRole role) {
@@ -457,8 +706,11 @@ StylePair style_pair_for(const ThemeRegistry& registry, const std::string& theme
     return style_pair_for(*palette, role);
 }
 
-std::string style_sequence_for(const ThemeRegistry& registry, const std::string& theme_name, StyleRole role) {
-    return ansi_style_sequence(style_pair_for(registry, theme_name, role));
+std::string style_sequence_for(const ThemeRegistry& registry,
+                               const std::string& theme_name,
+                               StyleRole role,
+                               ColorMode mode) {
+    return ansi_style_sequence(style_pair_for(registry, theme_name, role), mode);
 }
 
 double contrast_ratio(Rgb foreground, Rgb background) {

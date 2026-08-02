@@ -1,10 +1,12 @@
 #include "cli/test_cli.hpp"
 #include "support/test_support.hpp"
 #include "cli/args.hpp"
+#include "config/config.hpp"
 #include "markdown/markdown.hpp"
 #include "ainiux/version.hpp"
 #include "editor/editor.hpp"
 #include "provider/provider.hpp"
+#include "tui/theme_registry.hpp"
 #include <string>
 
 namespace ainiux::test::cli {
@@ -21,6 +23,118 @@ void test_cli_chat_nocolors_parse() {
     check(parsed.options.tui, "chat UI flag parsed with nocolors");
     check(parsed.options.no_colors, "nocolors flag parsed");
     check(parsed.options.positional_url == "lmstudio", "chat UI nocolors positional profile parsed");
+}
+
+void test_cli_theme_parse() {
+    const char* light_argv[] = {"ainiux", "--chat", "--theme", "light"};
+    ainiux::cli::ParseResult parsed =
+        ainiux::cli::parse_args(4, const_cast<char**>(light_argv));
+    check(parsed.error.ok(), "--theme light args parse");
+    check(parsed.options.tui_theme == "light", "--theme light selects the light palette");
+    check(!parsed.options.no_colors, "--theme light enables colors");
+
+    const char* equals_argv[] = {"ainiux", "--editor", "--theme=dark"};
+    parsed = ainiux::cli::parse_args(3, const_cast<char**>(equals_argv));
+    check(parsed.error.ok(), "--theme=dark equals-form parses");
+    check(parsed.options.tui_theme == "dark" && !parsed.options.no_colors,
+          "--theme=dark selects dark and keeps colors on");
+
+    const char* off_argv[] = {"ainiux", "--chat", "--theme", "off"};
+    parsed = ainiux::cli::parse_args(4, const_cast<char**>(off_argv));
+    check(parsed.error.ok(), "--theme off args parse");
+    check(parsed.options.no_colors, "--theme off disables colors like /theme off");
+    check(parsed.options.tui_theme == "dark",
+          "--theme off keeps the previous palette name for later /theme");
+
+    const char* off_case_argv[] = {"ainiux", "--theme", "OFF", "--editor"};
+    parsed = ainiux::cli::parse_args(4, const_cast<char**>(off_case_argv));
+    check(parsed.error.ok() && parsed.options.no_colors, "--theme OFF is case-insensitive");
+
+    // First parse only has built-in dark/light; custom names are deferred until
+    // the post-config reparse (which loads themes.conf).
+    const char* deferred_argv[] = {"ainiux", "--chat", "--theme", "sepia"};
+    parsed = ainiux::cli::parse_args(4, const_cast<char**>(deferred_argv));
+    check(parsed.error.ok(), "first-pass --theme sepia is accepted before themes.conf");
+    check(parsed.options.tui_theme == "sepia" && !parsed.options.no_colors,
+          "first-pass keeps the raw theme name for reparse");
+
+    ainiux::cli::Options with_themes;
+    ainiux::config::ParseResult themes = ainiux::config::read_file("config/themes.conf");
+    check(themes.error.ok(), "bundled themes.conf is readable for CLI reparse test");
+    check(ainiux::config::apply_themes_document(themes.document, with_themes).ok(),
+          "bundled themes.conf applies for CLI reparse test");
+    check(with_themes.tui_themes.has("sepia"), "bundled themes include sepia");
+
+    const char* reparse_argv[] = {"ainiux", "--chat", "--theme", "sepia"};
+    parsed = ainiux::cli::parse_args(4, const_cast<char**>(reparse_argv), with_themes);
+    check(parsed.error.ok(), "second-pass --theme sepia resolves after themes.conf");
+    check(parsed.options.tui_theme == "sepia" && !parsed.options.no_colors,
+          "second-pass selects the sepia palette");
+
+    const char* unknown_argv[] = {"ainiux", "--theme", "not-a-real-theme"};
+    parsed = ainiux::cli::parse_args(3, const_cast<char**>(unknown_argv), with_themes);
+    check(!parsed.error.ok() && parsed.error.code == ainiux::ErrorCode::BadArgs,
+          "unknown --theme is rejected once the full registry is loaded");
+    check(parsed.error.message.find("unknown theme") != std::string::npos,
+          "unknown --theme names the problem");
+
+    const char* missing_argv[] = {"ainiux", "--theme"};
+    parsed = ainiux::cli::parse_args(2, const_cast<char**>(missing_argv));
+    check(!parsed.error.ok() && parsed.error.code == ainiux::ErrorCode::BadArgs,
+          "--theme without a value is rejected");
+}
+
+void test_cli_color_mode_parse() {
+    check(ainiux::cli::Options{}.color_mode == ainiux::tui::ColorModePreference::Auto,
+          "color_mode defaults to auto");
+
+    const char* auto_argv[] = {"ainiux", "--chat", "--color-mode", "auto"};
+    ainiux::cli::ParseResult parsed =
+        ainiux::cli::parse_args(4, const_cast<char**>(auto_argv));
+    check(parsed.error.ok() && parsed.options.color_mode == ainiux::tui::ColorModePreference::Auto,
+          "--color-mode auto parses");
+
+    const char* tc_argv[] = {"ainiux", "--editor", "--color-mode=truecolor"};
+    parsed = ainiux::cli::parse_args(3, const_cast<char**>(tc_argv));
+    check(parsed.error.ok() &&
+              parsed.options.color_mode == ainiux::tui::ColorModePreference::Truecolor,
+          "--color-mode=truecolor equals-form parses");
+
+    const char* c256_argv[] = {"ainiux", "--chat", "--color-mode", "256"};
+    parsed = ainiux::cli::parse_args(4, const_cast<char**>(c256_argv));
+    check(parsed.error.ok() &&
+              parsed.options.color_mode == ainiux::tui::ColorModePreference::Ansi256,
+          "--color-mode 256 parses");
+
+    const char* c16_argv[] = {"ainiux", "--color-mode", "16", "--chat"};
+    parsed = ainiux::cli::parse_args(4, const_cast<char**>(c16_argv));
+    check(parsed.error.ok() &&
+              parsed.options.color_mode == ainiux::tui::ColorModePreference::Ansi16,
+          "--color-mode 16 parses");
+
+    const char* bad_argv[] = {"ainiux", "--color-mode", "rainbow"};
+    parsed = ainiux::cli::parse_args(3, const_cast<char**>(bad_argv));
+    check(!parsed.error.ok() && parsed.error.code == ainiux::ErrorCode::BadArgs,
+          "unknown --color-mode is rejected");
+
+    const char* missing_argv[] = {"ainiux", "--color-mode"};
+    parsed = ainiux::cli::parse_args(2, const_cast<char**>(missing_argv));
+    check(!parsed.error.ok() && parsed.error.code == ainiux::ErrorCode::BadArgs,
+          "--color-mode without a value is rejected");
+
+    ainiux::config::ParseResult mode_config =
+        ainiux::config::parse("[tui]\ncolor_mode = 256\n", "color-mode.conf");
+    check(mode_config.error.ok(), "config color_mode parses");
+    ainiux::cli::Options options;
+    ainiux::Error err = ainiux::config::apply_document(mode_config.document, options);
+    check(err.ok() && options.color_mode == ainiux::tui::ColorModePreference::Ansi256,
+          "config [tui] color_mode = 256 applies");
+
+    ainiux::config::ParseResult bad_config =
+        ainiux::config::parse("[tui]\ncolor_mode = neon\n", "bad-color-mode.conf");
+    check(bad_config.error.ok(), "invalid color_mode document still parses as TOML-alike");
+    err = ainiux::config::apply_document(bad_config.document, options);
+    check(!err.ok(), "invalid [tui] color_mode is rejected");
 }
 
 void test_cli_chat_parse() {
@@ -729,6 +843,8 @@ void test_cli_agent_mode_parse() {
 void run_all() {
     test_cli_empty_and_unicode_edge_cases();
     test_cli_chat_nocolors_parse();
+    test_cli_theme_parse();
+    test_cli_color_mode_parse();
     test_cli_chat_parse();
     test_cli_context_token_parse();
     test_cli_code_index_parse();

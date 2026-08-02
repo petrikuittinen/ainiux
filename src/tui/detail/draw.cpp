@@ -75,8 +75,8 @@ int displayed_cells(const std::string& text) {
 }
 
 void append_style(std::string& output, const RenderStyle& style, StyleRole role) {
-    if (style.colors && style.themes != nullptr) {
-        output += style_sequence_for(*style.themes, style.theme_name, role);
+    if (style.colors && style.themes != nullptr && style.color_mode != ColorMode::Off) {
+        output += style_sequence_for(*style.themes, style.theme_name, role, style.color_mode);
     }
 }
 

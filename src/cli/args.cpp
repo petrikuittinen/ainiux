@@ -29,7 +29,7 @@ bool needs_value(const std::string& opt) {
         "--max-input-bytes", "--max-image-bytes", "--max-context-bytes",
         "--max-agent-response-bytes",
         "--max-source-code-file-size", "--trusted-prompt-dir",
-        "--context", "--context-policy", "--image-capability",
+        "--context", "--context-policy", "--image-capability", "--theme", "--color-mode",
         "--save-chat", "--load-chat", "--dataset", "--grade-input", "--category", "--case",
         "--runs", "--warmup", "--limit", "--mode", "--concurrency", "--duration",
         "--summary-format",
@@ -40,6 +40,70 @@ bool needs_value(const std::string& opt) {
         }
     }
     return false;
+}
+
+std::string ascii_lower_copy(std::string text) {
+    for (char& ch : text) {
+        if (ch >= 'A' && ch <= 'Z') {
+            ch = static_cast<char>(ch - 'A' + 'a');
+        }
+    }
+    return text;
+}
+
+bool theme_registry_is_builtin_only(const tui::ThemeRegistry& registry) {
+    const tui::ThemeRegistry builtins = tui::default_theme_registry();
+    const std::vector<std::string> names = registry.names();
+    if (names.size() != builtins.names().size()) {
+        return false;
+    }
+    for (const std::string& name : names) {
+        if (!builtins.has(name)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+// --theme NAME selects a palette (and enables colors). --theme off disables colors
+// like /theme off, without replacing the remembered palette name.
+Error apply_theme_cli_value(Options& opts, const std::string& value) {
+    if (value.empty()) {
+        return {ErrorCode::BadArgs, "--theme requires a theme name or off"};
+    }
+    if (ascii_lower_copy(value) == "off") {
+        opts.no_colors = true;
+        return ok_error();
+    }
+    std::string normalized;
+    if (opts.tui_themes.normalize_name(value, normalized)) {
+        opts.tui_theme = normalized;
+        opts.no_colors = false;
+        return ok_error();
+    }
+    // First CLI parse runs before themes.conf is loaded (default dark/light only).
+    // Keep the raw name so the post-config reparse can resolve custom palettes.
+    if (theme_registry_is_builtin_only(opts.tui_themes)) {
+        opts.tui_theme = value;
+        opts.no_colors = false;
+        return ok_error();
+    }
+    return {ErrorCode::BadArgs,
+            "unknown theme '" + value + "'; available: off, " +
+                tui::format_theme_list(opts.tui_themes)};
+}
+
+Error apply_color_mode_cli_value(Options& opts, const std::string& value) {
+    if (value.empty()) {
+        return {ErrorCode::BadArgs, "--color-mode requires auto, truecolor, 256, or 16"};
+    }
+    tui::ColorModePreference preference = tui::ColorModePreference::Auto;
+    if (!tui::parse_color_mode_preference(value, preference)) {
+        return {ErrorCode::BadArgs,
+                "unknown color mode '" + value + "'; expected auto, truecolor, 256, or 16"};
+    }
+    opts.color_mode = preference;
+    return ok_error();
 }
 
 Error parse_double(const std::string& name, const std::string& text, double& out) {
@@ -582,6 +646,16 @@ ParseResult parse_args(int argc, char** argv, const Options& base_options) {
                              "--image-capability must be " + option_values::image_capability_description()}};
                 }
                 opts.image_capability = value;
+            } else if (opt == "--theme") {
+                Error err = apply_theme_cli_value(opts, value);
+                if (!err.ok()) {
+                    return {opts, err};
+                }
+            } else if (opt == "--color-mode") {
+                Error err = apply_color_mode_cli_value(opts, value);
+                if (!err.ok()) {
+                    return {opts, err};
+                }
             } else if (opt == "--dataset") {
                 opts.benchmark_dataset = value;
                 opts.benchmark_dataset_explicit = true;
@@ -945,7 +1019,8 @@ Error validate_agent_interactive_arguments(int argc, char** argv, const Options&
             option == "-k" || option == "--key" || option == "--header" ||
             option == "--reasoning" || option == "--connect-timeout" || option == "--timeout" ||
             option == "--proxy" || option == "--trusted-prompt-dir" || option == "-p" ||
-            option == "--prompt" || option == "--prompt-file" ||
+            option == "--prompt" || option == "--prompt-file" || option == "--theme" ||
+            option == "--color-mode" ||
             option == "--max-source-code-file-size" || option == "--load-chat" ||
             option == "--save-chat";
         if (takes_value) {
@@ -1022,7 +1097,13 @@ Options:
       --list-models             List models from the configured endpoint.
   -i, --repl                    Start a simple line-oriented interactive chat.
   -c, --chat                    Start the full-screen non-blocking terminal chat.
-      --nocolors                Disable TUI color styling.
+      --nocolors                Disable TUI/editor color styling (same as --theme off).
+      --theme NAME|off          Select a TUI/editor theme (dark, light, sepia, or custom),
+                                or disable color styling with off (same as /theme).
+      --color-mode MODE         Color wire format: auto (default), truecolor, 256, or 16.
+                                auto uses COLORTERM/TERM (truecolor when advertised,
+                                else 256-color for common TERM values). Use 256 if colors
+                                look wrong over SSH from Windows Terminal.
   -e, --editor [PATH]           Start the standalone multiline editor; PATH is the file to open.
                                 A provider shortcut/profile may precede -e/--editor without
                                 -m/--model; choose a model inside the editor with /model

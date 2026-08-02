@@ -1,11 +1,30 @@
 #pragma once
 
+#include <string>
+
 namespace ainiux::tui {
 
 struct Rgb {
     int r = 0;
     int g = 0;
     int b = 0;
+};
+
+// Preferred wire format for theme RGB values (config/CLI). Auto is resolved
+// from COLORTERM/TERM at TUI/editor start; palette data stays full RGB.
+enum class ColorModePreference {
+    Auto,
+    Truecolor,
+    Ansi256,
+    Ansi16,
+};
+
+// Resolved emission mode used by sequence builders.
+enum class ColorMode {
+    Off,
+    Truecolor,
+    Ansi256,
+    Ansi16,
 };
 
 enum class StyleRole {

@@ -39,6 +39,7 @@ reasoning = auto
 
 [tui]
 theme = dark
+color_mode = auto
 highlight = on
 thinking_traces = off
 ```
@@ -71,13 +72,28 @@ At invocation time, `--key-env`, `--key-file`, and `--key-stdin` provide generic
 - `[editor]` controls undo, file size warnings, auto-save, indentation, line endings, alignment width, and AI continuation limits.
 - `[url_fetch]` controls byte limits and private-address permission.
 - `[web_search]` controls result count, provider, key-variable names, and optional endpoints.
-- `[tui]` controls colors, theme, highlighting, thinking display, agent input height, and reasoning-preview length.
+- `[tui]` controls colors, theme, color wire format (`color_mode`), highlighting, thinking display, agent input height, and reasoning-preview length.
 
 ## Themes
 
 Themes are repeatable `[theme]` records in `themes.conf`. The built-ins are `dark`, `light`, and `sepia`. Each complete custom record defines semantic body, status, panel, activity, and optional syntax colors. A later record with the same name replaces an earlier one.
 
-Use `/theme` to inspect themes, `/theme NAME` to select one, and `/theme off` to disable color styling. `--nocolors`, `[tui] colors = off`, and `[tui] theme = off` also start without palette styling.
+Use `/theme` to inspect themes, `/theme NAME` to select one, and `/theme off` to disable color styling. CLI `--theme NAME` selects a palette at startup; `--theme off` and `--nocolors` disable color styling (same as `/theme off`). Configuration can also start without palette styling via `[tui] colors = off` or `[tui] theme = off`.
+
+### Color mode (truecolor / 256 / 16)
+
+Theme palettes are stored as RGB. How those colors are sent to the terminal is controlled by `color_mode` / `--color-mode`:
+
+| Value | Emission |
+| --- | --- |
+| `auto` (default) | `COLORTERM=truecolor`/`24bit` → 24-bit; common `TERM` values (`*256color*`, `xterm*`, …) → 256-color; otherwise 24-bit |
+| `truecolor` | 24-bit SGR with **colon** subparameters (`38:2:R:G:B`) |
+| `256` | xterm 256-color indexes (`38;5;N`) |
+| `16` | classic 16 ANSI colors |
+
+OpenSSH usually does **not** forward `COLORTERM`, so remote sessions often resolve `auto` to 256-color. That avoids a class of broken truecolor paths (for example some Windows Terminal + PowerShell + SSH setups) where semicolon truecolor parameters were misread as classic SGR codes—producing pure red status bars and unreadable dark blue text for the default dark theme.
+
+If colors look wrong over SSH from Windows Terminal, try `--color-mode 256` or set `[tui] color_mode = 256`. Force full RGB with `--color-mode truecolor` when the terminal supports it.
 
 ## Model catalog
 

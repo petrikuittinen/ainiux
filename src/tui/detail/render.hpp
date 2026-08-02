@@ -18,6 +18,7 @@ struct RenderStyle {
     const ThemeRegistry* themes = nullptr;
     std::string theme_name = "dark";
     bool colors = true;
+    ColorMode color_mode = ColorMode::Truecolor;
 };
 
 struct TuiSize {

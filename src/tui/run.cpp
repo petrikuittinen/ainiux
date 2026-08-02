@@ -172,6 +172,12 @@ app::TuiRunResult run(provider::RequestContext context,
         use_colors = interactive->use_colors;
         show_scrollbars = interactive->show_scrollbars;
     }
+    auto make_render_style = [&]() {
+        return detail::RenderStyle{&context.options.tui_themes,
+                                   theme,
+                                   use_colors,
+                                   resolve_color_mode(use_colors, context.options.color_mode)};
+    };
     bool quit = false;
     app::InteractiveUiTarget leave_target = app::InteractiveUiTarget::Quit;
     // Warm multi-turn agent session (project .ainiux-pr/agent.sqlite).
@@ -2750,7 +2756,7 @@ app::TuiRunResult run(provider::RequestContext context,
     ActivityKind activity_kind = ActivityKind::None;
     detail::render(session, input, status, history_scroll, show_thinking_traces, mode, visible_panel,
                    activity_kind, render_frame, syntax_highlight, show_scrollbars,
-                   detail::RenderStyle{&context.options.tui_themes, theme, use_colors},
+                   make_render_style(),
                    terminal_frame_renderer, panel_title(), context.options.agent,
                    build_shell_chrome());
     while (!quit) {
@@ -3934,7 +3940,7 @@ app::TuiRunResult run(provider::RequestContext context,
             200);
         detail::render(session, input, status, history_scroll, show_thinking_traces, mode, visible_panel,
                        activity_kind, render_frame, syntax_highlight, show_scrollbars,
-                       detail::RenderStyle{&context.options.tui_themes, theme, use_colors},
+                       make_render_style(),
                        terminal_frame_renderer, panel_title(), context.options.agent,
                        build_shell_chrome());
     }

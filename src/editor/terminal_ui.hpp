@@ -120,6 +120,7 @@ struct TerminalThemeStyle {
     const tui::ThemeRegistry* themes = nullptr;
     std::string theme_name = "dark";
     bool use_colors = true;
+    tui::ColorMode color_mode = tui::ColorMode::Truecolor;
 };
 
 struct EditorStatusChrome {
