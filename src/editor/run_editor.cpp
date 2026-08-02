@@ -32,9 +32,10 @@
 #include "tui/theme_registry.hpp"
 #include "tui/tui.hpp"
 #include "ui/confirmation.hpp"
-#include "ui/text_selector.hpp"
+#include "ui/provider_model_display.hpp"
 #include "ui/provider_model_selector.hpp"
 #include "ui/scrollbar.hpp"
+#include "ui/text_selector.hpp"
 
 #include <algorithm>
 #include <cctype>
@@ -273,6 +274,8 @@ app::EditorRunResult run_editor(const std::string& path,
     std::string pending_reasoning;
     PendingAutosaveRecovery pending_autosave_recovery;
     AssistSession assist_session;
+    // Shown after AI assist; merged into the next auto-save minibuffer line when both fire.
+    std::string last_generated_tokens_message;
     ReformatSession reformat_session;
     InsertSession insert_session;
     ShellSession shell_session;
@@ -344,6 +347,15 @@ app::EditorRunResult run_editor(const std::string& path,
         assist_display.frame = activity_frame;
         return assist_display.active && assist_display.kind != tui::ActivityKind::None ? &assist_display
                                                                                        : nullptr;
+    };
+    auto current_status_chrome = [&]() -> EditorStatusChrome {
+        EditorStatusChrome chrome;
+        if (ai_continue.has_value() && !ai_continue->request.options.model.empty()) {
+            chrome.model = ai_continue->request.options.model;
+            chrome.reasoning =
+                config::reasoning_selection_value(ai_continue->request.options.reasoning);
+        }
+        return chrome;
     };
 
     auto sync_active_buffer = [&]() {
@@ -485,10 +497,11 @@ app::EditorRunResult run_editor(const std::string& path,
             return;
         }
         state.highlight_enabled = highlight_enabled;
+        const EditorStatusChrome status_chrome = current_status_chrome();
         if (help_view.active || !split_layout.has_split()) {
             render_terminal(state, minibuffer, terminal_frame_renderer, theme_style,
                             help_view.active, refresh_assist_display(), show_scrollbars,
-                            !mouse_view_detached);
+                            !mouse_view_detached, status_chrome);
             return;
         }
         const std::vector<SplitPaneRect> panes = split_layout.layout_panes(editor_main_area());
@@ -511,7 +524,8 @@ app::EditorRunResult run_editor(const std::string& path,
             refresh_assist_display(),
             split_layout.leaf_count(),
             show_scrollbars,
-            !mouse_view_detached);
+            !mouse_view_detached,
+            status_chrome);
     };
     render_editor();
 
@@ -1052,7 +1066,17 @@ app::EditorRunResult run_editor(const std::string& path,
     };
 
     auto cycle_reasoning = [&]() {
-        if (!editor_ai_ready(ai_continue) || assist_session.active) return;
+        if (assist_session.active) {
+            minibuffer_message(minibuffer, "Cannot change reasoning while AI assist is running");
+            return;
+        }
+        if (!editor_ai_ready(ai_continue)) {
+            minibuffer_message(minibuffer,
+                               editor_ai_has_provider(ai_continue)
+                                   ? editor_no_model_message()
+                                   : editor_no_provider_message());
+            return;
+        }
         provider::RequestContext& request = ai_continue->request;
         ReasoningSelection next;
         if (!config::next_reasoning_selection(
@@ -1062,6 +1086,9 @@ app::EditorRunResult run_editor(const std::string& path,
                 request.options.model,
                 request.options.reasoning,
                 next)) {
+            minibuffer_message(
+                minibuffer,
+                "No reasoning options for this model (add models.conf entry or use /reasoning)");
             return;
         }
         commit_reasoning_selection(config::reasoning_selection_value(next));
@@ -1296,8 +1323,8 @@ app::EditorRunResult run_editor(const std::string& path,
                 schedule_selection_save();
                 minibuffer_message(
                     minibuffer,
-                    tui::provider_model_status_message(ai_continue->request,
-                                                       "only model auto-selected"));
+                    ui::model_status_message(ai_continue->request.options.model,
+                                             "auto-selected"));
             },
             [&](const std::string& message) {
                 model_list_context_only = false;
@@ -1537,19 +1564,8 @@ app::EditorRunResult run_editor(const std::string& path,
         if (!event.chat.model.empty()) {
             session_state.model_name = event.chat.model;
         }
-        long long context_tokens = 0;
-        if (ai_continue.has_value()) {
-            context_tokens = ai_continue->request.options.context_tokens;
-        }
-        const std::vector<provider::Message>& usage_messages =
-            session_state.usage_messages.empty() ? session_state.messages : session_state.usage_messages;
-        const std::string completion_status = continue_completion_status_message(
-            session_state.provider_name,
-            session_state.model_name,
-            event.chat,
-            session_state.streaming,
-            usage_messages,
-            context_tokens);
+        const std::string completion_status = format_generated_tokens_message(event.chat);
+        last_generated_tokens_message = completion_status;
         if (session_state.edit_kind == AssistEditKind::ReplaceInPlace) {
             finish_assist_session(completion_status,
                                   false,
@@ -2259,6 +2275,18 @@ app::EditorRunResult run_editor(const std::string& path,
                 exit_assist_command_mode(minibuffer, assist_completer);
                 apply_maximize_split();
                 return;
+            case EditorSlashCommand::GotoLine: {
+                pending_assist = PendingAssist{};
+                exit_assist_command_mode(minibuffer, assist_completer);
+                if (slash.path.empty()) {
+                    start_minibuffer(minibuffer, MinibufferAction::GotoLine, "Goto line: ");
+                    return;
+                }
+                std::string message;
+                (void)state.goto_line(slash.path, message);
+                minibuffer_message(minibuffer, message);
+                return;
+            }
             case EditorSlashCommand::None:
                 break;
         }
@@ -3714,6 +3742,12 @@ app::EditorRunResult run_editor(const std::string& path,
         std::string message;
         const Error err = perform_autosave(state, settings, message);
         if (err.ok()) {
+            if (!last_generated_tokens_message.empty() &&
+                (minibuffer.message == last_generated_tokens_message ||
+                 minibuffer.message.rfind("Generated ", 0) == 0)) {
+                message = last_generated_tokens_message + ". " + message;
+                last_generated_tokens_message.clear();
+            }
             minibuffer_message(minibuffer, message);
             sync_active_buffer();
         } else if (!message.empty()) {

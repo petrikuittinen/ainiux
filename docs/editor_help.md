@@ -141,8 +141,13 @@ Requires a configured provider **and** model. If either is missing, `Ctrl+Space`
 
 `Ctrl+T` cycles the selected model's catalog-backed reasoning setting from lower
 to higher values, then Auto, and around again. For toggle-only Qwen 3.5/3.6 and
-Gemma 4 models it switches thinking off and on. With no selected model it does
-nothing. `Alt+Ctrl+T` toggles whether thinking traces are shown; `/thinking show|hide` is the command equivalent.
+Gemma 4 models it switches thinking off and on. The minibuffer reports the new
+value (or why cycling is unavailable). `Alt+Ctrl+T` toggles whether thinking
+traces are shown; `/thinking show|hide` is the command equivalent.
+
+After a successful AI command, the minibuffer shows `Generated N tokens` (or
+`Generated ~N tokens` when the count is estimated). If auto-save runs immediately
+afterward, the lines combine as `Generated N tokens. Auto-saved path~`.
 
 `Ctrl+Space` runs **`/continue`** in **continue** mode:
 
@@ -235,6 +240,7 @@ Press **`Ctrl+E`**, **`Esc`**, or **`Alt+X`** to open the command minibuffer (`C
 | `/save` | Save (same as `Ctrl+S`) |
 | `/saveas [PATH]` | Save as (same as `Ctrl+Shift+S`; `Tab` completes paths after the command) |
 | `/find` | Search (same as `Ctrl+F`) |
+| `/goto-line [N]` or `/goto [N]` | Jump to 1-based line `N`; prompts when omitted. Invalid values report an error without moving |
 | `/replace` or `replace-string` | Replace (search, then interactive replace) |
 | `/open [PATH]` | Open file (same as `Ctrl+O`; `Tab` completes paths after the command) |
 | `/new` | Open a new empty editor buffer (same as `Ctrl+N`) |
@@ -321,7 +327,7 @@ With a provider but no model, editing still works; AI commands report **No model
 
 Highlighting is enabled by default. The editor detects Markdown, Python, C, C++, C#, Java, JavaScript/JSX, TypeScript/TSX, HTML, HTML-only, CSS, XML/SVG, JSON/JSONL, Bash, PHP, Perl, Ruby, Rust, Go, PowerShell, Assembly, SQL, TOML, YAML, and INI from common filename endings. `.html` and `.htm` select `html`; `.xhtml` selects `htmlonly`. Scratch buffers, `.txt`, and unknown endings use `text`. Markdown fenced blocks use the named language highlighter when the fence tag is recognized. In Markdown mode, headings and strong text use the terminal's bold font, emphasis uses italic, and links and URLs are underlined.
 
-The status line shows the current language and line-ending mode compactly in parentheses, such as `(html LF)`, `(python CRLF)`, or `(text CR)`. `/mode text` disables syntax styling for the current buffer. `/mode markdown|python|c|cpp|csharp|java|javascript|typescript|html|htmlonly|css|xml|json|bash|php|perl|ruby|rust|go|powershell|assembly|sql|toml|yaml|ini` selects a manual mode. Short aliases include `md`, `py`, `c++`, `c#`, `js`, `ts`, `html-multi`, `htmlmulti`, `html-only`, `jsonl`, `sh`, `pl`, `rb`, `rs`, `golang`, `pwsh`, `ps1`, `asm`, `yml`, and `dosini`. The default `html` mode highlights JavaScript in `<script>` blocks and `on*` attributes, and CSS in `<style>` blocks and `style` attributes. Use `htmlonly` for markup-only highlighting with embedded code kept string-colored. `/mode auto` resumes filename detection. Bare `/mode` reports whether the current mode is automatic or manual. Manual mode survives buffer switches and save-as operations. `/highlight off` disables highlighting across editor/chat switches for the current process; it does not change configuration.
+The status line shows the current language and line-ending mode compactly in parentheses, such as `(html LF)`, `(python CRLF)`, or `(text CR)`. When a model is configured it also shows a short model and reasoning tag such as `[deepseek-v4-flash high]` (no provider prefix). Help keys (`Ctrl+Q` / `Ctrl+H`) appear on that line only when no model is selected. `/mode text` disables syntax styling for the current buffer. `/mode markdown|python|c|cpp|csharp|java|javascript|typescript|html|htmlonly|css|xml|json|bash|php|perl|ruby|rust|go|powershell|assembly|sql|toml|yaml|ini` selects a manual mode. Short aliases include `md`, `py`, `c++`, `c#`, `js`, `ts`, `html-multi`, `htmlmulti`, `html-only`, `jsonl`, `sh`, `pl`, `rb`, `rs`, `golang`, `pwsh`, `ps1`, `asm`, `yml`, and `dosini`. The default `html` mode highlights JavaScript in `<script>` blocks and `on*` attributes, and CSS in `<style>` blocks and `style` attributes. Use `htmlonly` for markup-only highlighting with embedded code kept string-colored. `/mode auto` resumes filename detection. Bare `/mode` reports whether the current mode is automatic or manual. Manual mode survives buffer switches and save-as operations. `/highlight off` disables highlighting across editor/chat switches for the current process; it does not change configuration.
 
 `/reformat` requires a selection and expands it to complete touched lines. `/reformat-all` reformats the complete buffer and keeps the cursor on its logical line. Both commands change leading indentation only, preserve blank lines and all other bytes, and are one undo step. They use the active language mode and current tab width/style; YAML always uses spaces. Comments, strings, heredocs, Markdown fences, YAML block scalars, and other multiline protected regions do not influence nesting. Reformatting runs in a cancellable background job: press `Esc` to cancel. You may continue editing or switch buffers; stale results are discarded safely.
 

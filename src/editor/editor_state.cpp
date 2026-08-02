@@ -3,6 +3,7 @@
 #include "editor/detail/wrap.hpp"
 
 #include <atomic>
+#include <charconv>
 #include <limits>
 #include <new>
 #include <optional>
@@ -619,6 +620,38 @@ Error EditorState::replace_all_from(size_t start,
 
 void EditorState::clear_selection() {
     selection.clear(cursor);
+}
+
+bool EditorState::goto_line(const std::string& line_text, std::string& message) {
+    const std::string trimmed = trim_ascii_copy(line_text);
+    if (trimmed.empty()) {
+        message = "Line number required";
+        return false;
+    }
+    long long line = 0;
+    const char* begin = trimmed.data();
+    const char* end = begin + trimmed.size();
+    const std::from_chars_result parsed = std::from_chars(begin, end, line);
+    if (parsed.ec != std::errc{} || parsed.ptr != end) {
+        message = "Not a line number: " + trimmed;
+        return false;
+    }
+    if (line <= 0) {
+        message = "Line number must be at least 1";
+        return false;
+    }
+    const size_t total_lines = text.line_count();
+    if (static_cast<unsigned long long>(line) > static_cast<unsigned long long>(total_lines)) {
+        message = "Line " + std::to_string(line) + " is past end of buffer (" +
+                  std::to_string(total_lines) +
+                  (total_lines == 1 ? " line)" : " lines)");
+        return false;
+    }
+    clear_selection();
+    cursor = text.line_start(static_cast<size_t>(line - 1));
+    update_preferred_column(*this);
+    message = "Line " + std::to_string(line);
+    return true;
 }
 
 void EditorState::select_all() {

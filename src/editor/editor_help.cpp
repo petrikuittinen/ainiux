@@ -71,6 +71,10 @@ EditorSlashCommand command_from_token(const std::string& command_token) {
     if (command_token == "maximize" || command_token == "nosplit") {
         return EditorSlashCommand::Maximize;
     }
+    if (command_token == "goto-line" || command_token == "gotoline" ||
+        command_token == "goto_line" || command_token == "goto") {
+        return EditorSlashCommand::GotoLine;
+    }
     return EditorSlashCommand::None;
 }
 

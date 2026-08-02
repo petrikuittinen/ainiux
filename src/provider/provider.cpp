@@ -2406,10 +2406,10 @@ ContextResult build_context(const cli::Options& input_options) {
             return {{}, err};
         }
     }
-    // Full-screen Chat/Agent alternate-screen UIs must not write status to
+    // Full-screen Chat/Agent/Editor alternate-screen UIs must not write status to
     // stderr: it lands under the input cursor and looks like editor content.
     if (changed && !options.quiet && !options.repl && !options.tui &&
-        !options.agent) {
+        !options.agent && !options.editor) {
         std::cerr << "Using base URL: " << base << "\n";
     }
 
@@ -2435,7 +2435,8 @@ ContextResult build_context(const cli::Options& input_options) {
                                       (profile.key_envs.empty() ? "AINIUX_API_KEY" : profile.key_envs[0]) +
                                       " or use --key-env/--key-file/--key-stdin"}};
     }
-    if (!profile.compatibility_warning.empty() && !options.quiet) {
+    if (!profile.compatibility_warning.empty() && !options.quiet && !options.repl &&
+        !options.tui && !options.agent && !options.editor) {
         std::cerr << "Provider warning: " << profile.compatibility_warning << "\n";
     }
 

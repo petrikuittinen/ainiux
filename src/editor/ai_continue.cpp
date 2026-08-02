@@ -29,14 +29,11 @@ AiContinueSettings ai_continue_settings(const cli::Options& options) {
     return settings;
 }
 
-std::string continue_status_message(const std::string& provider_name,
+std::string continue_status_message(const std::string& /*provider_name*/,
                                     const std::string& model_name,
                                     const std::string& suffix) {
-    const std::string label = ui::provider_model_display_label(provider_name, model_name);
-    if (label.empty()) {
-        return suffix;
-    }
-    return label + " " + suffix;
+    // Model-only short form for consistent chrome (no custom/ or provider prefix).
+    return ui::model_status_message(model_name, suffix);
 }
 
 std::string continue_status_label(const std::string& provider_name, const std::string& model_name) {
@@ -47,23 +44,26 @@ std::string continue_status_label(const std::string& provider_name, const std::s
     return label;
 }
 
-std::string continue_completion_status_message(const std::string& provider_name,
-                                               const std::string& model_name,
-                                               const provider::ChatResult& result,
-                                               bool stream,
-                                               const std::vector<provider::Message>& messages,
-                                               long long context_tokens) {
-    // Editor has no chat input-label chrome: keep provider/model + metrics +
-    // optional context usage on the minibuffer status line.
-    std::string status =
-        continue_status_message(provider_name, model_name,
-                                tui::format_generation_metrics(result, stream));
-    const std::string context_usage = context::format_context_usage(
-        context::estimated_usage_tokens(messages, result), context_tokens);
-    if (!context_usage.empty()) {
-        status += " | context: " + context_usage;
+std::string format_generated_tokens_message(const provider::ChatResult& result) {
+    long long tokens = result.completion_tokens;
+    if (tokens < 0) tokens = 0;
+    std::string message = "Generated ";
+    if (result.completion_tokens_estimated) {
+        message += "~";
     }
-    return status;
+    message += std::to_string(tokens);
+    message += tokens == 1 ? " token" : " tokens";
+    return message;
+}
+
+std::string continue_completion_status_message(const std::string& /*provider_name*/,
+                                               const std::string& /*model_name*/,
+                                               const provider::ChatResult& result,
+                                               bool /*stream*/,
+                                               const std::vector<provider::Message>& /*messages*/,
+                                               long long /*context_tokens*/) {
+    // Minibuffer: keep this short so auto-save can append without overflow.
+    return format_generated_tokens_message(result);
 }
 
 Error validate_continue_request(const AiContinueContext& context) {

@@ -60,6 +60,8 @@ Error apply_editor_provider_target(std::optional<AiContinueContext>& context,
     }
 
     cli::Options next = context->request.options;
+    // Always keep editor fullscreen semantics so base-URL notices never hit stderr.
+    next.editor = true;
     provider::apply_provider_target(next, target);
     provider::ContextResult rebuilt = provider::build_context(next);
     if (!rebuilt.error.ok()) {

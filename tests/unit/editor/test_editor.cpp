@@ -20,6 +20,7 @@
 #include "editor/text_layout.hpp"
 #include "editor/terminal_input.hpp"
 #include "editor/terminal_ui.hpp"
+#include "ui/provider_model_display.hpp"
 #include <algorithm>
 #include <chrono>
 #include <cstdint>
@@ -47,12 +48,12 @@ void test_editor_ai_continue_helpers() {
     check(text.range_text(0, 100) == "abcdefghij", "range_text clamps to buffer size");
 
     check(ainiux::editor::continue_status_message("custom_openai_chat", "gpt-test", "thinking... ESC to abort") ==
-              "[custom/gpt-test] thinking... ESC to abort",
-          "continue status message uses compact provider display names");
+              "[gpt-test] thinking... ESC to abort",
+          "continue status message uses model-only short display names");
     check(ainiux::editor::continue_status_message(
               "gemini", "models/gemini-3.1-flash-lite-preview", "thinking...") ==
-              u8"[gemini/gemini-3.1-flash-lite-pre…] thinking...",
-          "editor status strips and truncates provider-prefixed model names");
+              u8"[gemini-3.1-flash-lite-pre…] thinking...",
+          "editor status strips path prefixes and truncates long model names");
 
     ainiux::provider::ChatResult continue_result;
     continue_result.ttft_ms = 100;
@@ -62,11 +63,16 @@ void test_editor_ai_continue_helpers() {
     const std::string continue_complete =
         ainiux::editor::continue_completion_status_message(
             "custom_openai_chat", "gpt-test", continue_result, true);
-    check(continue_complete.find(
-              "[custom/gpt-test] TTFT: 100 ms | ~20.0 token/s") == 0 &&
-              continue_complete.find("| context: 23 tok") != std::string::npos,
-          "continue completion status keeps provider/model with TUI metrics: " +
-              continue_complete);
+    check(continue_complete == "Generated ~20 tokens",
+          "continue completion status reports generated tokens: " + continue_complete);
+    continue_result.completion_tokens_estimated = false;
+    check(ainiux::editor::format_generated_tokens_message(continue_result) ==
+              "Generated 20 tokens",
+          "exact completion tokens omit the estimate marker");
+    continue_result.completion_tokens = 1;
+    check(ainiux::editor::format_generated_tokens_message(continue_result) ==
+              "Generated 1 token",
+          "singular token wording");
 
     ainiux::editor::EditorState state = ainiux::editor::EditorState::from_text("Once upon a ");
     state.cursor = state.text.size();
@@ -2921,6 +2927,40 @@ void test_editor_search_navigation() {
     check(state.cursor == before, "editor search leaves cursor in place when not found");
 }
 
+void test_editor_goto_line() {
+    ainiux::editor::EditorState state =
+        ainiux::editor::EditorState::from_text("one\ntwo\nthree\n");
+    std::string message;
+    check(state.text.line_count() == 4, "goto-line fixture has four lines including trailing empty");
+
+    check(state.goto_line("2", message) && state.cursor == state.text.line_start(1) &&
+              message == "Line 2",
+          "goto-line 2 moves to the start of the second line");
+    check(state.goto_line("1", message) && state.cursor == 0 && message == "Line 1",
+          "goto-line 1 moves to the buffer start");
+    check(state.goto_line("4", message) && state.cursor == state.text.line_start(3) &&
+              message == "Line 4",
+          "goto-line accepts the last line of the buffer");
+
+    const size_t stayed = state.cursor;
+    check(!state.goto_line("0", message) && state.cursor == stayed &&
+              message.find("at least 1") != std::string::npos,
+          "goto-line rejects zero");
+    check(!state.goto_line("-3", message) && state.cursor == stayed &&
+              message.find("at least 1") != std::string::npos,
+          "goto-line rejects negative line numbers");
+    check(!state.goto_line("abc", message) && state.cursor == stayed &&
+              message.find("Not a line number") != std::string::npos,
+          "goto-line rejects non-numeric input");
+    check(!state.goto_line("99", message) && state.cursor == stayed &&
+              message.find("past end") != std::string::npos,
+          "goto-line rejects lines past the end of the buffer");
+    check(!state.goto_line("", message) && message.find("required") != std::string::npos,
+          "goto-line requires a line number");
+    check(!state.goto_line("2x", message) && state.cursor == stayed,
+          "goto-line rejects trailing garbage after a number");
+}
+
 void test_editor_search_replace() {
     ainiux::editor::EditorState state =
         ainiux::editor::EditorState::from_text("one two one two one");
@@ -3163,6 +3203,10 @@ void test_editor_undo_redo_key_bindings() {
           "kitty Ctrl+Z sequence decodes to undo key");
     check(ainiux::editor::decode_control_key_sequence("[18;5u", decoded) && decoded == 18,
           "kitty Ctrl+R sequence decodes to regenerate key");
+    check(ainiux::editor::decode_control_key_sequence("[116;5u", decoded) && decoded == 20,
+          "kitty Ctrl+t cycles reasoning (codepoint lowercase t)");
+    check(ainiux::editor::decode_control_key_sequence("[84;5u", decoded) && decoded == 20,
+          "kitty Ctrl+T cycles reasoning (codepoint uppercase T)");
     check(ainiux::editor::decode_control_key_sequence("[116;7u", decoded) &&
               decoded == ainiux::editor::editor_key_toggle_thinking_traces(),
           "kitty Alt+Ctrl+T decodes to the thinking-trace toggle");
@@ -4283,6 +4327,15 @@ void test_editor_help_document_and_command() {
     slash = ainiux::editor::parse_editor_slash_command("/find");
     check(slash.command == ainiux::editor::EditorSlashCommand::Find,
           "editor /find slash command is recognized");
+    slash = ainiux::editor::parse_editor_slash_command("/goto-line");
+    check(slash.command == ainiux::editor::EditorSlashCommand::GotoLine && slash.path.empty(),
+          "editor bare /goto-line is recognized");
+    slash = ainiux::editor::parse_editor_slash_command("/goto-line 42");
+    check(slash.command == ainiux::editor::EditorSlashCommand::GotoLine && slash.path == "42",
+          "editor /goto-line N captures the line argument");
+    slash = ainiux::editor::parse_editor_slash_command("goto 7");
+    check(slash.command == ainiux::editor::EditorSlashCommand::GotoLine && slash.path == "7",
+          "editor slashless goto N is recognized");
     slash = ainiux::editor::parse_editor_slash_command("/replace");
     check(slash.command == ainiux::editor::EditorSlashCommand::Replace,
           "editor /replace slash command is recognized");
@@ -4623,12 +4676,30 @@ void test_editor_markdown_mode_and_structured_highlighting() {
               status.find("(auto)") == std::string::npos &&
               status.find("(manual)") == std::string::npos,
           "editor status line displays the compact syntax and LF mode");
+    check(status.find("Ctrl+Q quit") != std::string::npos &&
+              status.find("Ctrl+H help") != std::string::npos,
+          "editor status line keeps help when no model is configured");
     state.linebreak = ainiux::editor::LineBreak::Crlf;
     check(ainiux::editor::editor_status_line(state).find("(text CRLF)") != std::string::npos,
           "editor status line displays CRLF mode");
     state.linebreak = ainiux::editor::LineBreak::Cr;
     check(ainiux::editor::editor_status_line(state).find("(text CR)") != std::string::npos,
           "editor status line displays CR mode");
+
+    ainiux::editor::EditorStatusChrome chrome;
+    chrome.model = "models/deepseek-v4-flash";
+    chrome.reasoning = "high";
+    const std::string with_model =
+        ainiux::editor::editor_status_line(state, false, 1, chrome);
+    check(with_model.find("[deepseek-v4-flash high]") != std::string::npos,
+          "editor status line shows short model and reasoning when known");
+    check(with_model.find("Ctrl+H help") == std::string::npos &&
+              with_model.find("custom/") == std::string::npos &&
+              with_model.find("deepseek/") == std::string::npos,
+          "editor status line drops help keys and never prefixes provider ids");
+    check(ainiux::ui::model_status_message("gemma-4-26b-a4b", "auto-selected") ==
+              "[gemma-4-26b-a4b] auto-selected",
+          "editor auto-select message is model-only");
 }
 
 
@@ -4781,6 +4852,7 @@ void run_all() {
     test_editor_piece_table_edits();
     test_editor_rectangular_rendering();
     test_editor_search_navigation();
+    test_editor_goto_line();
     test_editor_search_replace();
     test_editor_selection_and_clipboard();
     test_editor_autosave();

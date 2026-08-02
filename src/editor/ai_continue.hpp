@@ -51,6 +51,8 @@ std::string continue_status_message(const std::string& provider_name,
                                     const std::string& suffix);
 
 std::string continue_status_label(const std::string& provider_name, const std::string& model_name);
+// e.g. "Generated 128 tokens" or "Generated ~128 tokens" when estimated.
+std::string format_generated_tokens_message(const provider::ChatResult& result);
 std::string continue_completion_status_message(const std::string& provider_name,
                                                const std::string& model_name,
                                                const provider::ChatResult& result,

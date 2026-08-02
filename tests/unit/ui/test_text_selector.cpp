@@ -183,6 +183,16 @@ void test_provider_model_display() {
                   "[openai/model unknown]" &&
               ainiux::ui::provider_model_display_label("", "").empty(),
           "shared label preserves missing-value fallbacks");
+    check(ainiux::ui::model_reasoning_bracket("deepseek-v4-flash", "high") ==
+              "[deepseek-v4-flash high]",
+          "model-only reasoning bracket omits provider");
+    check(ainiux::ui::model_reasoning_bracket("models/foo-bar", "") == "[foo-bar auto]",
+          "model-only reasoning bracket strips path prefixes and defaults reasoning to auto");
+    check(ainiux::ui::model_reasoning_bracket("", "high").empty(),
+          "model-only reasoning bracket is empty without a model");
+    check(ainiux::ui::model_status_message("gemma-4-26b-a4b", "auto-selected") ==
+              "[gemma-4-26b-a4b] auto-selected",
+          "model-only status message never prefixes custom/ or provider ids");
 }
 
 }  // namespace

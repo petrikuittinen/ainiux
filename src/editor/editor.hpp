@@ -250,6 +250,9 @@ struct EditorState {
     Error replace_all_from(size_t start, const std::string& needle, const std::string& value, size_t& replacements);
     void clear_selection();
     void select_all();
+    // Move cursor to 1-based line start. Sets message; returns true if moved.
+    // Invalid values (non-numeric, ≤0, past end) leave the cursor and set an error message.
+    bool goto_line(const std::string& line_text, std::string& message);
     size_t selection_end_exclusive() const;
     std::string selected_text() const;
     Error copy_selection(Clipboard& clipboard);

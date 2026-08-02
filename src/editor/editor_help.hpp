@@ -23,6 +23,7 @@ enum class EditorSlashCommand {
     HSplit,
     CloseSplit,
     Maximize,
+    GotoLine,
 };
 
 struct ParsedEditorSlashCommand {

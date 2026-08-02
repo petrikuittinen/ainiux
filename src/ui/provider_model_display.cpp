@@ -54,4 +54,24 @@ std::string provider_model_display_label(const std::string& provider_name,
            (qualifier.empty() ? "" : " " + qualifier) + "]";
 }
 
+std::string model_reasoning_bracket(const std::string& model_name,
+                                    const std::string& reasoning) {
+    if (model_name.empty()) {
+        return {};
+    }
+    const std::string reason = reasoning.empty() ? "auto" : reasoning;
+    return provider_model_display_label("", model_name, reason);
+}
+
+std::string model_status_message(const std::string& model_name, const std::string& suffix) {
+    const std::string label = provider_model_display_label("", model_name);
+    if (label.empty()) {
+        return suffix;
+    }
+    if (suffix.empty()) {
+        return label;
+    }
+    return label + " " + suffix;
+}
+
 }  // namespace ainiux::ui

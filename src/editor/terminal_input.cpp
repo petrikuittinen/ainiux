@@ -95,8 +95,13 @@ bool ctrl_byte_from_codepoint(int codepoint, unsigned char& out) {
         out = static_cast<unsigned char>(codepoint);
         return true;
     }
+    // Kitty/xterm may report Ctrl+letter as lowercase or uppercase codepoints.
     if (codepoint >= 97 && codepoint <= 122) {
         out = static_cast<unsigned char>(codepoint - 96);
+        return true;
+    }
+    if (codepoint >= 65 && codepoint <= 90) {
+        out = static_cast<unsigned char>(codepoint - 64);
         return true;
     }
     return false;

@@ -15,6 +15,7 @@
 #include "tui/detail/render.hpp"
 #include "tui/theme_registry.hpp"
 #include "ui/confirmation.hpp"
+#include "ui/provider_model_display.hpp"
 #include "ui/scrollbar.hpp"
 
 #include <algorithm>
@@ -99,7 +100,10 @@ void TerminalSession::restore() {
         active_ = false;
 }
 
-std::string editor_status_line(const EditorState& state, bool help_view, size_t split_pane_count) {
+std::string editor_status_line(const EditorState& state,
+                               bool help_view,
+                               size_t split_pane_count,
+                               const EditorStatusChrome& status_chrome) {
     std::ostringstream out;
     if (help_view) {
         out << "Help (read-only)";
@@ -124,10 +128,19 @@ std::string editor_status_line(const EditorState& state, bool help_view, size_t 
     out << "  Ln " << line << ", Col " << column;
     if (help_view) {
         out << "  Ctrl+H / Esc /help / Ctrl+Q to return";
-    } else if (split_pane_count > 1) {
-        out << "  Ctrl+X o other  Ctrl+Q quit";
     } else {
-        out << "  Ctrl+Q quit  Ctrl+H help";
+        const std::string model_bracket =
+            ui::model_reasoning_bracket(status_chrome.model, status_chrome.reasoning);
+        if (!model_bracket.empty()) {
+            if (split_pane_count > 1) {
+                out << "  Ctrl+X o other";
+            }
+            out << "  " << model_bracket;
+        } else if (split_pane_count > 1) {
+            out << "  Ctrl+X o other  Ctrl+Q quit";
+        } else {
+            out << "  Ctrl+Q quit  Ctrl+H help";
+        }
     }
     return out.str();
 }
@@ -388,6 +401,7 @@ Error paste_into_minibuffer(MinibufferState& minibuffer, const std::string& text
         case MinibufferAction::ReplaceWith:
         case MinibufferAction::AssistCommand:
         case MinibufferAction::TextAlignWidth:
+        case MinibufferAction::GotoLine:
             break;
         case MinibufferAction::None:
         case MinibufferAction::ConfirmLoad:
@@ -852,6 +866,22 @@ void submit_minibuffer(EditorState& state,
         begin_replace_choices(state, minibuffer, replace);
         return;
     }
+    if (action == MinibufferAction::GotoLine) {
+        std::string message;
+        if (value.empty()) {
+            minibuffer.prompt = "Goto line: ";
+            minibuffer.input.clear();
+            return;
+        }
+        if (state.goto_line(value, message)) {
+            minibuffer_message(minibuffer, message);
+        } else {
+            // Keep the prompt open so the user can correct a bad line number.
+            minibuffer.prompt = message + " — Goto line: ";
+            minibuffer.input.clear();
+        }
+        return;
+    }
     if (action == MinibufferAction::TextAlignWidth) {
         size_t width = minibuffer.text_align_default_width;
         if (!value.empty()) {
@@ -1299,7 +1329,8 @@ void render_terminal(EditorState& state,
                      bool help_view,
                      const EditorAssistDisplay* assist_display,
                      bool show_scrollbars,
-                     bool follow_cursor) {
+                     bool follow_cursor,
+                     const EditorStatusChrome& status_chrome) {
     SplitPaneRect single;
     single.buffer_index = 0;
     single.leaf_index = 0;
@@ -1316,7 +1347,8 @@ void render_terminal(EditorState& state,
         assist_display,
         1,
         show_scrollbars,
-        follow_cursor);
+        follow_cursor,
+        status_chrome);
 }
 
 void render_terminal_splits(
@@ -1330,7 +1362,8 @@ void render_terminal_splits(
     const EditorAssistDisplay* assist_display,
     size_t pane_count_hint,
     bool show_scrollbars,
-    bool follow_cursor) {
+    bool follow_cursor,
+    const EditorStatusChrome& status_chrome) {
     const TerminalSize size = terminal_size();
     const int rows = std::max(3, size.rows);
     const int cols = std::max(20, size.cols);
@@ -1465,8 +1498,8 @@ void render_terminal_splits(
 
     const int status_row = rows - 1;
     const int minibuffer_row = rows;
-    const std::string status_text =
-        pad_or_clip_ascii(editor_status_line(focused_state, help_view, pane_count), width);
+    const std::string status_text = pad_or_clip_ascii(
+        editor_status_line(focused_state, help_view, pane_count, status_chrome), width);
     std::string status_command = terminal_position(status_row, 1);
     if (theme_style.use_colors && theme_style.themes != nullptr) {
         status_command += tui::style_sequence_for(
