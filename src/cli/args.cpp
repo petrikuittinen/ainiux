@@ -392,7 +392,8 @@ ParseResult parse_args(int argc, char** argv, const Options& base_options) {
                     opts.editor_path = argv[++i];
                 }
             }
-        } else if (arg == "--dired" || opt == "--dired") {
+        } else if (arg == "--dired" || opt == "--dired" || arg == "-d") {
+            // -d is the short form of --dired (optional PATH; same as --dired).
             opts.editor = true;
             opts.dired = true;
             if (!value.empty()) {
@@ -1057,9 +1058,8 @@ Usage:
   ainiux --list-models [BASE_URL|PROFILE] [options]
   ainiux -i, --repl [BASE_URL|PROFILE] [options]
   ainiux -c, --chat [BASE_URL|PROFILE] [options]
-  ainiux --dired [PATH]
   ainiux [BASE_URL|PROFILE] -e, --editor [PATH] [--output PATH]
-  ainiux --dired [PATH]
+  ainiux -d, --dired [PATH]
   ainiux --input PATH [--output-format md|html|plaintext|json|jsond] [--output PATH]
   ainiux --fetch-url URL [--output-format md|html|plaintext|json|jsond] [--output PATH]
   ainiux --search QUERY [--output-format md|html|plaintext|json|jsond] [--output PATH]
@@ -1090,6 +1090,8 @@ Examples:
   ainiux -i openrouter -m MODEL
   ainiux --repl --load-chat chat.json --save-chat chat.json
   ainiux -e notes.txt
+  ainiux -d
+  ainiux -d src/
   ainiux --input page.html --output-format md
   ainiux --fetch-url https://example.com --output-format md
   ainiux --search "web scraping" --output-format plaintext
@@ -1121,7 +1123,7 @@ Options:
                                 A provider shortcut/profile may precede -e/--editor without
                                 -m/--model; choose a model inside the editor with /model
                                 (like -c/--chat). Use --provider none for offline local editing.
-      --dired [PATH]            Start the editor in dired (directory browser). PATH is a
+  -d, --dired [PATH]            Start the editor in dired (directory browser). PATH is a
                                 directory or glob (default: current directory). Press q to
                                 leave dired for the editor; Ctrl+Q quits ainiux.
   -a, --agent                   Start interactive agent mode (separate from --chat; shares

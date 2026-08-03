@@ -9,6 +9,7 @@
 #include "common.hpp"
 #include "editor/editor.hpp"
 #include "editor/selection.hpp"
+#include "tui/tui.hpp"
 
 namespace ainiux::editor {
 
@@ -63,9 +64,17 @@ bool is_dired_f4_sequence(const std::string& sequence);
 std::string dired_sort_label(DiredSortKey key, bool ascending);
 // Short panel title (single line; full key help lives in dired_list_text).
 std::string dired_header_line(const DiredState& state);
-// Two leading help lines, then the file rows.
+// Two leading help lines, then the file rows (plain text; tests / debugging).
 std::string dired_list_text(const DiredState& state);
+// Styled body rows for the list panel (help + entries). Reuses existing theme roles.
+std::vector<tui::StyledLine> dired_list_body_lines(const DiredState& state);
 std::string dired_status_line(const DiredState& state);
+
+// Listing helpers (also used for coloring).
+bool dired_entry_is_hidden(const DiredEntry& entry);
+bool dired_entry_is_executable(const DiredEntry& entry);
+// Name color role: dirs / hidden dirs / files / executables / dirty files.
+tui::StyleRole dired_entry_name_role(const DiredEntry& entry);
 
 // Open path or directory/glob (e.g. "src/", "src/*.cpp", ".").
 Error dired_open(DiredState& state, const std::string& path_or_glob);
@@ -74,8 +83,11 @@ void dired_close(DiredState& state);
 
 void dired_set_sort(DiredState& state, DiredSortKey key, bool ascending);
 void dired_move_selection(DiredState& state, MovementKey key, int page_rows);
+// Session / bulk: store current hashes for all listed files as reviewed (all clean).
 void dired_capture_baseline(DiredState& state);
 void dired_update_dirty_flags(DiredState& state);
+// Toggle the selected regular file: dirty → reviewed, reviewed → dirty (per-file pass).
+Error dired_toggle_pass_selected(DiredState& state);
 
 // Enter directory / parent, or open read-only view for a file.
 Error dired_activate_selection(DiredState& state, const EditorSettings& settings);

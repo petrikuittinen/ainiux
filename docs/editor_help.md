@@ -1,6 +1,6 @@
 # ainiux Editor Help v1.16
 
-Standalone editor mode (`ainiux --editor [PATH]`) is a multiline text editor with Unicode-aware navigation, search/replace, and optional AI assist when a provider and model are configured. Start in the directory browser with `ainiux --dired [PATH]` (PATH defaults to the current directory; `q` leaves dired for the editor, `Ctrl+Q` quits ainiux). The full dired guide is [dired-mode.md](dired-mode.md).
+Standalone editor mode (`ainiux --editor [PATH]`) is a multiline text editor with Unicode-aware navigation, search/replace, and optional AI assist when a provider and model are configured. Start in the directory browser with `ainiux -d` / `ainiux --dired [PATH]` (PATH defaults to the current directory; `q` leaves dired for the editor, `Ctrl+Q` quits ainiux). The full dired guide is [dired-mode.md](dired-mode.md).
 
 ## Layout
 
@@ -30,7 +30,7 @@ Splits use an Emacs-style two-key sequence. Press **Ctrl+X**, then one of:
 
 Full guide: **[dired-mode.md](dired-mode.md)**.
 
-Enter with **`F4`**, **`Ctrl+X d`**, CLI `ainiux --dired [PATH]`, or `dired` / `/dired [path|glob]` in the command minibuffer (TAB completes paths). Dired is full-screen. **`q`** returns to the editor; **`Ctrl+Q`** quits ainiux. **Enter** opens a read-only preview or enters a directory; **Enter** again leaves the preview for the list. **`←`/`→`** go to parent / enter directory. **`o`** opens a file for edit and leaves dired. Sort with **`s`** then `(n)ame` / `(s)ize` / `(d)ate` (or uppercase for descending). **`*`** marks the listing reviewed (content-hash dirty markers). Linux rows show mode, owner, and group.
+Enter with **`F4`**, **`Ctrl+X d`**, CLI `ainiux -d` / `ainiux --dired [PATH]`, or `dired` / `/dired [path|glob]` in the command minibuffer (TAB completes paths). Dired is full-screen. **`q`** returns to the editor; **`Ctrl+Q`** quits ainiux. **Enter** opens a read-only preview or enters a directory; **Enter** again leaves the preview for the list. **`←`/`→`** go to parent / enter directory. **`o`** opens a file for edit and leaves dired. Sort with **`s`** then `(n)ame` / `(s)ize` / `(d)ate` (or uppercase for descending). **`p`** toggles the selected file dirty ↔ reviewed (content-hash; “pass”). In list or view, **Space** / **`b`** page down/up like less; in a viewed file, **`f`** or **`/`** finds. Linux rows show mode, owner, and group.
 
 Slash commands (via `Ctrl+E`, `Esc`, or `Alt+X`, then the command):
 

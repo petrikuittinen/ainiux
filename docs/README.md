@@ -10,7 +10,7 @@ This index separates current usage guides from design records, roadmaps, and poi
 | [CLI and scripting](cli.md) | One-shot chat, REPL, conversion, attachments, fetch/search, output, and context |
 | [Chat TUI](chat.md) | Threads, persistence, commands, attachments, and mode switching |
 | [Editor help](editor_help.md) | Complete editor operation and embedded help content |
-| [Dired mode](dired-mode.md) | Full-screen directory browser: keys, listing, dirty markers, CLI `--dired` |
+| [Dired mode](dired-mode.md) | Full-screen directory browser: keys, listing, dirty markers, CLI `-d` / `--dired` |
 | [Keyboard shortcuts](keyboard-shortcuts.md) | Current chat, editor, agent, and dired bindings |
 | [Agent workflows](agent.md) | Act/Plan, permissions, Guard, goals, compaction, indexing, and security review |
 | [Configuration](configuration.md) | Layering, credentials, themes, models, benchmark prompts, and editor commands |

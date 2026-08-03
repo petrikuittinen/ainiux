@@ -207,7 +207,7 @@ Full guide: [dired-mode.md](dired-mode.md).
 
 | Shortcut | Action |
 |----------|--------|
-| `F4` or `Ctrl+X d` or `/dired` or CLI `--dired [PATH]` | Enter dired |
+| `F4` or `Ctrl+X d` or `/dired` or CLI `-d` / `--dired [PATH]` | Enter dired |
 | `q` | Leave dired → editor |
 | `Ctrl+Q` | Quit ainiux (global) |
 | `Enter` | Enter dir / view file RO; again leaves view for list |
@@ -220,9 +220,10 @@ Full guide: [dired-mode.md](dired-mode.md).
 | `n` | New file |
 | `m` | New directory (`mkdir -p`) |
 | `t` | Touch |
-| `f` | Find in viewed file |
+| `f` or `/` | Find in viewed file (`/` is less-style alias) |
+| `Space` / `b` | Page down / page up (less-style; list and view) |
 | `s` + `(n)ame`/`(s)ize`/`(d)ate` or `(N)ame`/`(S)ize`/`(D)ate` | Sort asc/desc |
-| `*` | Mark reviewed (content-hash baseline) |
+| `p` | Toggle selected file dirty ↔ reviewed (pass) |
 
 Also: `/provider`, `/model`, `/search QUERY`
 

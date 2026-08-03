@@ -271,6 +271,24 @@ void test_cli_editor_parse() {
     check(parsed.error.ok(), "--dired with provider shortcut parses");
     check(parsed.options.positional_url == "lmstudio", "--dired keeps provider positional");
     check(parsed.options.dired_path == ".", "--dired path with provider parsed");
+
+    const char* dired_short_argv[] = {"ainiux", "-d"};
+    parsed = ainiux::cli::parse_args(2, const_cast<char**>(dired_short_argv));
+    check(parsed.error.ok(), "-d without path parses");
+    check(parsed.options.dired && parsed.options.editor, "-d enables dired and editor");
+    check(parsed.options.dired_path.empty(), "-d without path leaves dired_path empty");
+
+    const char* dired_short_path_argv[] = {"ainiux", "-d", "src/"};
+    parsed = ainiux::cli::parse_args(3, const_cast<char**>(dired_short_path_argv));
+    check(parsed.error.ok(), "-d with path parses");
+    check(parsed.options.dired && parsed.options.editor, "-d path enables dired and editor");
+    check(parsed.options.dired_path == "src/", "-d path stored");
+
+    const char* dired_short_provider_argv[] = {"ainiux", "none", "-d", "."};
+    parsed = ainiux::cli::parse_args(4, const_cast<char**>(dired_short_provider_argv));
+    check(parsed.error.ok(), "-d with provider shortcut parses");
+    check(parsed.options.positional_url == "none", "-d keeps provider positional");
+    check(parsed.options.dired_path == ".", "-d path with provider parsed");
 }
 
 void test_cli_help_displays_version() {
@@ -289,6 +307,8 @@ void test_cli_help_displays_version() {
           "CLI help documents -c short option for --chat");
     check(help.find("-e, --editor") != std::string::npos,
           "CLI help documents -e short option for --editor");
+    check(help.find("-d, --dired") != std::string::npos,
+          "CLI help documents -d short option for --dired");
     check(help.find("Mode:") != std::string::npos &&
               help.find("Prompt and generation:") != std::string::npos &&
               help.find("Provider and endpoint:") != std::string::npos &&

@@ -3317,6 +3317,53 @@ void test_editor_dired() {
         check(dirty_a, "content hash change marks file dirty after refresh");
     }
 
+    // p toggles only the selected file (dirty ↔ reviewed), not the whole listing.
+    {
+        for (size_t i = 0; i < state.entries.size(); ++i) {
+            if (state.entries[i].name == "a.txt") {
+                state.selected = i;
+                break;
+            }
+        }
+        check(ainiux::editor::dired_toggle_pass_selected(state).ok(),
+              "toggle pass on dirty file succeeds");
+        {
+            bool dirty_a = true;
+            bool dirty_b = false;
+            for (const auto& entry : state.entries) {
+                if (entry.name == "a.txt") dirty_a = entry.dirty;
+                if (entry.name == "b.txt") dirty_b = entry.dirty;
+            }
+            check(!dirty_a, "p marks selected dirty file reviewed");
+            check(!dirty_b, "p does not mark other files dirty");
+        }
+        check(ainiux::editor::dired_toggle_pass_selected(state).ok(),
+              "toggle pass again succeeds");
+        {
+            bool dirty_a = false;
+            bool dirty_b = true;
+            for (const auto& entry : state.entries) {
+                if (entry.name == "a.txt") dirty_a = entry.dirty;
+                if (entry.name == "b.txt") dirty_b = entry.dirty;
+            }
+            check(dirty_a, "p toggles selected file back to dirty");
+            check(!dirty_b, "p still leaves other files unchanged");
+        }
+        // Pass again so later steps see a reviewed a.txt.
+        check(ainiux::editor::dired_toggle_pass_selected(state).ok(),
+              "toggle pass third time succeeds");
+        check(!state.entries[state.selected].dirty, "a.txt reviewed after third toggle");
+
+        for (size_t i = 0; i < state.entries.size(); ++i) {
+            if (state.entries[i].is_parent) {
+                state.selected = i;
+                break;
+            }
+        }
+        check(!ainiux::editor::dired_toggle_pass_selected(state).ok(),
+              "toggle pass on ../ is rejected");
+    }
+
     // Glob filter.
     DiredState glob_state;
     Error glob_err = ainiux::editor::dired_open(glob_state, (root / "*.js").string());
@@ -3393,10 +3440,62 @@ void test_editor_dired() {
     const std::string list = ainiux::editor::dired_list_text(state);
     check(list.find("../") != std::string::npos, "list shows parent with trailing slash");
     check(list.find("sub/") != std::string::npos, "list shows directory with trailing slash");
-    check(list.find("RET view") != std::string::npos && list.find("left=parent") != std::string::npos,
+    check(list.find("RET view") != std::string::npos && list.find("←=parent") != std::string::npos &&
+              list.find("→=enter") != std::string::npos && list.find("p pass") != std::string::npos,
           "list embeds two-line key help");
     check(ainiux::editor::dired_header_line(state).find("RET view") == std::string::npos,
           "panel title stays short (help is not in the title)");
+
+    // Listing color roles reuse existing theme colors (no new palette keys).
+    {
+        ainiux::editor::DiredEntry parent;
+        parent.is_parent = true;
+        parent.name = "..";
+        check(ainiux::editor::dired_entry_name_role(parent) == ainiux::tui::StyleRole::Muted,
+              "parent dir uses muted");
+
+        ainiux::editor::DiredEntry dir;
+        dir.is_directory = true;
+        dir.name = "src";
+        check(ainiux::editor::dired_entry_name_role(dir) == ainiux::tui::StyleRole::UserLabel,
+              "normal directory uses user_label");
+
+        ainiux::editor::DiredEntry hidden_dir;
+        hidden_dir.is_directory = true;
+        hidden_dir.name = ".git";
+        check(ainiux::editor::dired_entry_is_hidden(hidden_dir), "dot directory is hidden");
+        check(ainiux::editor::dired_entry_name_role(hidden_dir) == ainiux::tui::StyleRole::Muted,
+              "hidden directory is dimmer than normal directory");
+
+        ainiux::editor::DiredEntry file;
+        file.name = "main.cpp";
+        check(ainiux::editor::dired_entry_name_role(file) == ainiux::tui::StyleRole::PanelBody,
+              "reviewed/clean file uses panel_body");
+
+        ainiux::editor::DiredEntry dirty;
+        dirty.name = "main.cpp";
+        dirty.dirty = true;
+        check(ainiux::editor::dired_entry_name_role(dirty) == ainiux::tui::StyleRole::SyntaxEmphasis,
+              "dirty file uses syntax_emphasis");
+
+        ainiux::editor::DiredEntry exec;
+        exec.name = "a.out";
+        exec.mode = "-rwxr-xr-x";
+        check(ainiux::editor::dired_entry_is_executable(exec), "mode with x is executable");
+        check(ainiux::editor::dired_entry_name_role(exec) == ainiux::tui::StyleRole::AssistantLabel,
+              "executable uses assistant_label");
+
+        ainiux::editor::DiredEntry hidden_file;
+        hidden_file.name = ".env";
+        check(ainiux::editor::dired_entry_name_role(hidden_file) == ainiux::tui::StyleRole::Muted,
+              "hidden file uses muted");
+
+        const auto body = ainiux::editor::dired_list_body_lines(state);
+        check(body.size() >= 3, "styled body has help lines plus entries");
+        check(!body[0].segments.empty() &&
+                  body[0].segments.front().role == ainiux::tui::StyleRole::PanelHint,
+              "help lines use panel_hint");
+    }
 #if !defined(_WIN32)
     bool saw_mode = false;
     for (const auto& entry : state.entries) {

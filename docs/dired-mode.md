@@ -8,9 +8,9 @@ This guide is the full reference. The editor’s embedded help (`Ctrl+H`) and [k
 
 | Entry | Notes |
 | --- | --- |
-| `ainiux --dired` | Open editor and enter dired in the **current directory** |
-| `ainiux --dired PATH` | Directory or simple glob (e.g. `src/`, `src/*.cpp`) |
-| `ainiux --dired=PATH` | Equals form |
+| `ainiux -d` or `ainiux --dired` | Open editor and enter dired in the **current directory** |
+| `ainiux -d PATH` or `ainiux --dired PATH` | Directory or simple glob (e.g. `src/`, `src/*.cpp`) |
+| `ainiux --dired=PATH` | Equals form (long option) |
 | `F4` | From an already running editor |
 | `Ctrl+X` then `d` | Emacs-style window prefix |
 | `dired` / `/dired [PATH\|glob]` | Command minibuffer (`Ctrl+E`, `Esc`, or `Alt+X`); **Tab** completes paths |
@@ -18,11 +18,12 @@ This guide is the full reference. The editor’s embedded help (`Ctrl+H`) and [k
 Provider profiles may precede startup flags, for example:
 
 ```sh
-ainiux none --dired src/
+ainiux -d
+ainiux none -d src/
 ainiux lmstudio --dired .
 ```
 
-`--dired` implies editor mode. It uses the same mutual-exclusion rules as `--editor` (not combined with `--chat`, `--agent`, `--repl`, and so on).
+`-d` / `--dired` implies editor mode. It uses the same mutual-exclusion rules as `--editor` (not combined with `--chat`, `--agent`, `--repl`, and so on).
 
 ## Screen layout
 
@@ -50,11 +51,31 @@ Each file or directory row includes:
 
 Windows builds omit mode, owner, and group columns.
 
+### Listing colors
+
+Dired reuses existing theme roles (no extra palette keys). Typical mapping:
+
+| Kind | Theme role | Notes |
+| --- | --- | --- |
+| Help lines | `panel_hint` | Key cheat sheet |
+| Mode / owner / size / mtime | `muted` | Secondary metadata |
+| Parent `../` | `muted` | Navigation |
+| Directory | `user_label` | Distinct from files |
+| Hidden directory (`.git`, …) | `muted` | Dimmer than normal directories |
+| Reviewed / clean file | `panel_body` | Default listing text |
+| Hidden file (`.env`, …) | `muted` | Dimmer than normal files |
+| Executable file | `assistant_label` | Green-style cue when mode has `x`/`s`/`t` |
+| Dirty file name | `syntax_emphasis` | Warm emphasis vs clean body |
+| Dirty `*` marker | `error` | High-contrast attention mark |
+| Selection | reverse + highlight on `>` | Keeps type colors on the selected row |
+
+The status bar shows the dired path/selection summary (not editor `(language LF)` chrome).
+
 Example (Linux):
 
 ```text
   RET view  o edit  g refresh  r rename  c copy  d del  n file  m dir
-  t touch  f find  * reviewed  left=parent  right=enter dir  q quit
+  t touch  f|/ find  p pass  SPC/b page  ←=parent  →=enter  q quit
 > * -rw-r--r-- eye      eye          1234  2026-08-03 12:00  main.cpp
     drwxr-xr-x eye      eye           DIR  2026-08-03 11:50  src/
     ../
@@ -87,6 +108,8 @@ Example (Linux):
 | --- | --- |
 | `↑` / `↓` | Previous / next entry (list) or line (view) |
 | `PageUp` / `PageDown` | Page the list or the viewed file |
+| `Space` | Same as PageDown (less-style) |
+| `b` | Same as PageUp / “back” (less-style) |
 | `Home` / `End` | First / last list entry, or start / end of line in view |
 | `Ctrl+Home` / `Ctrl+End` | Start / end of the **viewed** file |
 | `←` | Parent directory (reselects the folder you left when possible) |
@@ -130,19 +153,21 @@ Directories are listed before regular files; `../` stays first. The title update
 
 | Key | Action |
 | --- | --- |
-| `f` | Find (only meaningful while **viewing** a file) |
+| `f` or `/` | Find (only meaningful while **viewing** a file; `/` is a less-style alias) |
 | `F3` | Search next (after a find) |
 | `Shift+F3` | Search previous |
 
-In list focus, `f` reminds you to open a file with Enter first.
+In list focus, `f` or `/` reminds you to open a file with Enter first.
 
 ### Review / dirty markers
 
 | Key | Action |
 | --- | --- |
-| `*` | Mark the current listing as **reviewed** (clear dirty `*` markers) |
+| `p` | **Toggle** the selected **file**: dirty → reviewed, or reviewed → dirty (“pass”) |
 
-**Dirty** means the file’s **content hash** differs from the review baseline—not merely that mtime changed, and not requiring git. The baseline is established on the first dired open in the session (when empty) and whenever you press `*`. Refresh (`g`) recomputes hashes and updates markers without changing the baseline.
+**Dirty** means the file’s **content hash** differs from the review baseline, or you manually marked it dirty with `p`—not merely that mtime changed, and not requiring git. The baseline is established on the first dired open in the session (when empty). Refresh (`g`) recomputes hashes and updates markers without changing the baseline. Pressing `p` only affects the **selected file** (directories and `../` are not tracked). `p` is used instead of `*` so non-US keyboard layouts do not need Shift for a common action.
+
+Note: listing **type** colors (directories, executables, hidden names) are separate from dirty/reviewed. Dirty files show a `*` and use the dirty name color; `p` only toggles that reviewed state.
 
 Git status coloring and freeform git commands are **not** part of this release.
 
@@ -163,13 +188,13 @@ Git status coloring and freeform git commands are **not** part of this release.
 - Trash / undelete
 - Git status colors or in-dired git commands
 - Recursive `**` globs without bounds
-- New theme color roles dedicated to dired (dirty state uses a text marker)
+- New theme color roles dedicated to dired (listing reuses existing semantic colors)
 
 ## Tips for agentic coding
 
-1. After an agent turn, open dired on the project root (`F4` or `ainiux --dired .`).
-2. Use `g` to refresh and scan for `*` dirty files, or press `*` after a clean review pass.
-3. **Enter** to preview one file at a time with highlight; **Enter** again for the list.
+1. After an agent turn, open dired on the project root (`F4` or `ainiux -d .`).
+2. Use `g` to refresh and scan for `*` dirty files; press **`p`** on each file to mark it reviewed (or again to mark dirty).
+3. **Enter** to preview one file at a time with highlight; **Enter** again for the list. In a file, `f` or `/` finds text; Space/`b` page like less.
 4. **`o`** when you need to edit; that exits dired into the normal multi-buffer editor.
 5. Use `←` / `→` to walk the tree without hunting for `../`.
 

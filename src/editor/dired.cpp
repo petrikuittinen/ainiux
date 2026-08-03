@@ -437,39 +437,153 @@ std::string dired_header_line(const DiredState& state) {
     return out.str();
 }
 
+bool dired_entry_is_hidden(const DiredEntry& entry) {
+    return !entry.is_parent && !entry.name.empty() && entry.name[0] == '.';
+}
+
+bool dired_entry_is_executable(const DiredEntry& entry) {
+    if (entry.is_directory || entry.is_parent || entry.mode.size() < 10) {
+        return false;
+    }
+    // ls mode: type + rwxrwxrwx; s/t mark setuid/setgid/sticky with execute.
+    auto is_exec_bit = [](char ch) {
+        return ch == 'x' || ch == 's' || ch == 't';
+    };
+    return is_exec_bit(entry.mode[3]) || is_exec_bit(entry.mode[6]) || is_exec_bit(entry.mode[9]);
+}
+
+tui::StyleRole dired_entry_name_role(const DiredEntry& entry) {
+    // Reuse existing theme roles only (no new palette keys). Contrast goals:
+    // dirs ≠ files; hidden dirs dimmer than dirs; dirty ≠ reviewed; exec distinct.
+    if (entry.is_parent) {
+        return tui::StyleRole::Muted;
+    }
+    if (entry.is_directory) {
+        // Hidden directories (".git", …) use muted so they sit behind normal dirs.
+        return dired_entry_is_hidden(entry) ? tui::StyleRole::Muted : tui::StyleRole::UserLabel;
+    }
+    // Dirty files: warm emphasis (distinct from clean body text and green execs).
+    if (entry.dirty) {
+        return tui::StyleRole::SyntaxEmphasis;
+    }
+    // Executables: assistant green (classic terminal cue).
+    if (dired_entry_is_executable(entry)) {
+        return tui::StyleRole::AssistantLabel;
+    }
+    // Hidden regular files are dimmer than reviewed normal files.
+    if (dired_entry_is_hidden(entry)) {
+        return tui::StyleRole::Muted;
+    }
+    return tui::StyleRole::PanelBody;
+}
+
+std::string dired_entry_display_name(const DiredEntry& entry) {
+    if (entry.is_parent) {
+        return "../";
+    }
+    std::string name = entry.name;
+    if (entry.is_directory) {
+        name.push_back('/');
+    }
+    if (entry.is_symlink) {
+        name.push_back('@');
+    }
+    return name;
+}
+
+std::string dired_entry_meta_prefix(const DiredEntry& entry) {
+    std::ostringstream out;
+#if !defined(_WIN32)
+    if (!entry.mode.empty()) {
+        out << entry.mode << ' ' << pad_right(entry.owner, 8) << ' '
+            << pad_right(entry.group, 8) << ' ';
+    }
+#endif
+    out << format_size(entry.size, entry.is_directory) << "  "
+        << format_mtime(entry.mtime_sec) << "  ";
+    return out.str();
+}
+
+void append_dired_segment(std::vector<tui::StyledSegment>& segments,
+                          std::string text,
+                          tui::StyleRole role,
+                          bool reverse) {
+    if (text.empty()) {
+        return;
+    }
+    if (!segments.empty() && segments.back().role == role && segments.back().reverse == reverse &&
+        !segments.back().attributes.bold && !segments.back().attributes.italic &&
+        !segments.back().attributes.underline) {
+        segments.back().text += text;
+        return;
+    }
+    segments.push_back({std::move(text), role, reverse});
+}
+
 std::string dired_list_text(const DiredState& state) {
     std::ostringstream out;
     // Two fixed help lines (kept short so typical terminals show both fully).
     out << "  RET view  o edit  g refresh  r rename  c copy  d del  n file  m dir\n";
-    out << "  t touch  f find  * reviewed  left=parent  right=enter dir  q quit\n";
+    out << "  t touch  f|/ find  p pass  SPC/b page  ←=parent  →=enter  q quit\n";
     for (size_t i = 0; i < state.entries.size(); ++i) {
         const DiredEntry& entry = state.entries[i];
         const bool selected = i == state.selected && state.focus == DiredFocus::List;
         out << (selected ? "> " : "  ");
         out << (entry.dirty && !entry.is_parent ? "*" : " ");
-#if !defined(_WIN32)
-        if (!entry.mode.empty()) {
-            out << entry.mode << ' ' << pad_right(entry.owner, 8) << ' '
-                << pad_right(entry.group, 8) << ' ';
-        }
-#endif
-        out << format_size(entry.size, entry.is_directory) << "  "
-            << format_mtime(entry.mtime_sec) << "  ";
-        std::string name = entry.name;
-        if (entry.is_directory && !entry.is_parent) {
-            name.push_back('/');
-        } else if (entry.is_parent) {
-            name = "../";
-        }
-        if (entry.is_symlink && !entry.is_parent) {
-            name.push_back('@');
-        }
-        out << name << '\n';
+        out << dired_entry_meta_prefix(entry);
+        out << dired_entry_display_name(entry) << '\n';
     }
     if (state.entries.empty()) {
         out << "  (empty)\n";
     }
     return out.str();
+}
+
+std::vector<tui::StyledLine> dired_list_body_lines(const DiredState& state) {
+    std::vector<tui::StyledLine> lines;
+
+    auto push_help = [&](const char* text) {
+        tui::StyledLine line;
+        append_dired_segment(line.segments, text, tui::StyleRole::PanelHint, false);
+        lines.push_back(std::move(line));
+    };
+    push_help("  RET view  o edit  g refresh  r rename  c copy  d del  n file  m dir");
+    push_help("  t touch  f|/ find  p pass  SPC/b page  ←=parent  →=enter  q quit");
+
+    for (size_t i = 0; i < state.entries.size(); ++i) {
+        const DiredEntry& entry = state.entries[i];
+        const bool selected = i == state.selected && state.focus == DiredFocus::List;
+        const bool reverse = selected;
+        tui::StyledLine line;
+
+        // Selection marker: highlight role when selected, muted otherwise.
+        append_dired_segment(line.segments, selected ? "> " : "  ",
+                             selected ? tui::StyleRole::PanelHighlight : tui::StyleRole::Muted,
+                             reverse);
+
+        // Dirty star vs clean spacer.
+        if (entry.dirty && !entry.is_parent) {
+            append_dired_segment(line.segments, "*", tui::StyleRole::Error, reverse);
+        } else {
+            append_dired_segment(line.segments, " ", tui::StyleRole::Muted, reverse);
+        }
+
+        // Mode / owner / size / mtime stay secondary.
+        append_dired_segment(line.segments, dired_entry_meta_prefix(entry), tui::StyleRole::Muted,
+                             reverse);
+
+        // Name carries the type / dirty / exec / hidden color.
+        append_dired_segment(line.segments, dired_entry_display_name(entry),
+                             dired_entry_name_role(entry), reverse);
+
+        lines.push_back(std::move(line));
+    }
+    if (state.entries.empty()) {
+        tui::StyledLine line;
+        append_dired_segment(line.segments, "  (empty)", tui::StyleRole::Muted, false);
+        lines.push_back(std::move(line));
+    }
+    return lines;
 }
 
 std::string dired_status_line(const DiredState& state) {
@@ -482,6 +596,11 @@ std::string dired_status_line(const DiredState& state) {
     if (state.focus == DiredFocus::View) {
         out << "  viewing " << (state.view_path.empty() ? state.view.path : state.view_path)
             << " [RO]";
+        // Position only — no editor language/line-break chrome (meaningless in dired).
+        const size_t line = state.view.text.line_for_offset(state.view.cursor) + 1;
+        const size_t column =
+            state.view.text.display_column_for_offset(state.view.cursor, state.view.tab_width) + 1;
+        out << "  Ln " << line << ", Col " << column;
     } else if (const DiredEntry* entry = dired_selected_entry(state)) {
         out << "  " << (entry->is_directory ? "dir " : "file ") << entry->name;
         if (entry->dirty) {
@@ -672,6 +791,47 @@ void dired_update_dirty_flags(DiredState& state) {
             entry.dirty = it->second != entry.content_hash;
         }
     }
+}
+
+namespace {
+// Stored in reviewed_hashes to force a file dirty until the next pass.
+// Content hashes are 16 hex chars (FNV-1a); this sentinel never matches them.
+constexpr const char* kManualDirtySentinel = "!dirty";
+}  // namespace
+
+Error dired_toggle_pass_selected(DiredState& state) {
+    DiredEntry* entry = dired_selected_entry(state);
+    if (entry == nullptr || entry->is_parent) {
+        return {ErrorCode::BadArgs, "Select a file to toggle dirty/reviewed"};
+    }
+    if (entry->is_directory) {
+        return {ErrorCode::BadArgs, "Directories are not tracked for dirty/reviewed"};
+    }
+    if (entry->content_hash.empty()) {
+        return {ErrorCode::BadArgs, "Cannot hash file for review state: " + entry->name};
+    }
+
+    // Ensure update_dirty can treat "missing path" as dirty for new files later:
+    // a non-empty map is the "baseline active" signal. Seed from current listing
+    // if the user toggled before any baseline existed.
+    if (state.reviewed_hashes.empty()) {
+        dired_capture_baseline(state);
+        // After capture everything is clean; re-fetch entry (vector may be unchanged).
+        entry = dired_selected_entry(state);
+        if (entry == nullptr) {
+            return {ErrorCode::BadArgs, "Select a file to toggle dirty/reviewed"};
+        }
+    }
+
+    if (entry->dirty) {
+        // Pass: accept current content as reviewed.
+        state.reviewed_hashes[entry->path] = entry->content_hash;
+    } else {
+        // Un-pass: force dirty without changing on-disk content.
+        state.reviewed_hashes[entry->path] = kManualDirtySentinel;
+    }
+    dired_update_dirty_flags(state);
+    return ok_error();
 }
 
 Error dired_activate_selection(DiredState& state, const EditorSettings& settings) {

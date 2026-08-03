@@ -14,7 +14,7 @@ The name began with the author’s child Aini and echoes the Chinese phrase 爱�
 
 - **Useful in scripts.** Model output goes to `stdout`; status and errors go to `stderr`. Text, JSON, and streaming event formats are available.
 - **Local and cloud providers share one interface.** Provider profiles supply endpoint, authentication, and capability defaults without spreading provider-specific behavior through the UI.
-- **Fully Featured Text and Code Editor.** It has multiple buffers, split panes, grapheme-aware navigation, syntax highlighting, file locking, local layout tools, configurable AI commands, and a full-screen **dired** directory browser (`ainiux --dired`, `F4`, or `Ctrl+X d`).
+- **Fully Featured Text and Code Editor.** It has multiple buffers, split panes, grapheme-aware navigation, syntax highlighting, file locking, local layout tools, configurable AI commands, and a full-screen **dired** directory browser (`ainiux -d`, `F4`, or `Ctrl+X d`).
 - **Interactive work stays responsive.** HTTP, streaming, conversion, benchmarks, and agent work run as cancellable jobs.
 - **Agent tools are separate from chat.** `-c` is ordinary conversation. `-a` opens the project-local agent with explicit permissions, built-in guard against destructive commands, Act/Plan policies, and logged tool activity.
 - **The implementation stays small and portable.** Ainiux uses C++17, a Makefile, libcurl, SQLite, POSIX terminal APIs, and ANSI rendering. It does not require Electron, a browser, or ncurses. And it won't eat all of your RAM.
@@ -67,11 +67,12 @@ ainiux lmstudio -c
 
 ![Model selector](docs/ainux_model_selector.png)
 
-Open the standalone editor with `-e`. Provider `none` keeps it completely offline. Open the directory browser with `--dired` (optional path; default is `.`):
+Open the standalone editor with `-e`. Provider `none` keeps it completely offline. Open the directory browser with `-d` / `--dired` (optional path; default is `.`):
 
 ```sh
 ainiux none -e notes.md
-ainiux --dired src/
+ainiux -d
+ainiux -d src/
 ```
 
 ![Standalone editor](docs/ainux_editor.png)

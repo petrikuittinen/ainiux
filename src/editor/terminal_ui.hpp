@@ -11,6 +11,7 @@
 #include "editor/path_completion.hpp"
 #include "editor/split.hpp"
 #include "tui/activity.hpp"
+#include "tui/tui.hpp"
 
 namespace ainiux::tui {
 class ThemeRegistry;
@@ -143,7 +144,8 @@ void render_terminal(EditorState& state,
                      const EditorAssistDisplay* assist_display = nullptr,
                      bool show_scrollbars = true,
                      bool follow_cursor = true,
-                     const EditorStatusChrome& status_chrome = {});
+                     const EditorStatusChrome& status_chrome = {},
+                     const char* status_text_override = nullptr);
 
 // Multi-pane editor layout. panes come from SplitLayout::layout_panes(editor_main_area()).
 // buffer_at(index) must return the EditorState for that buffer index; the focused buffer
@@ -160,7 +162,8 @@ void render_terminal_splits(
     size_t pane_count_hint = 1,
     bool show_scrollbars = true,
     bool follow_cursor = true,
-    const EditorStatusChrome& status_chrome = {});
+    const EditorStatusChrome& status_chrome = {},
+    const char* status_text_override = nullptr);
 
 void render_terminal_panel(EditorState& state,
                            const MinibufferState& minibuffer,
@@ -168,7 +171,9 @@ void render_terminal_panel(EditorState& state,
                            const TerminalThemeStyle& theme_style,
                            tui::TuiMode mode,
                            int& panel_scroll,
-                           const char* panel_title_override = nullptr);
+                           const char* panel_title_override = nullptr,
+                           const char* status_text_override = nullptr,
+                           const std::vector<tui::StyledLine>* body_lines_override = nullptr);
 std::string editor_status_line(const EditorState& state,
                                bool help_view = false,
                                size_t split_pane_count = 1,

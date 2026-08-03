@@ -1342,7 +1342,8 @@ void render_terminal(EditorState& state,
                      const EditorAssistDisplay* assist_display,
                      bool show_scrollbars,
                      bool follow_cursor,
-                     const EditorStatusChrome& status_chrome) {
+                     const EditorStatusChrome& status_chrome,
+                     const char* status_text_override) {
     SplitPaneRect single;
     single.buffer_index = 0;
     single.leaf_index = 0;
@@ -1360,7 +1361,8 @@ void render_terminal(EditorState& state,
         1,
         show_scrollbars,
         follow_cursor,
-        status_chrome);
+        status_chrome,
+        status_text_override);
 }
 
 void render_terminal_splits(
@@ -1375,7 +1377,8 @@ void render_terminal_splits(
     size_t pane_count_hint,
     bool show_scrollbars,
     bool follow_cursor,
-    const EditorStatusChrome& status_chrome) {
+    const EditorStatusChrome& status_chrome,
+    const char* status_text_override) {
     const TerminalSize size = terminal_size();
     const int rows = std::max(3, size.rows);
     const int cols = std::max(20, size.cols);
@@ -1510,8 +1513,11 @@ void render_terminal_splits(
 
     const int status_row = rows - 1;
     const int minibuffer_row = rows;
-    const std::string status_text = pad_or_clip_ascii(
-        editor_status_line(focused_state, help_view, pane_count, status_chrome), width);
+    const std::string status_source =
+        status_text_override != nullptr
+            ? std::string(status_text_override)
+            : editor_status_line(focused_state, help_view, pane_count, status_chrome);
+    const std::string status_text = pad_or_clip_ascii(status_source, width);
     std::string status_command = terminal_position(status_row, 1);
     if (theme_style.use_colors && theme_style.themes != nullptr) {
         status_command += tui::style_sequence_for(
@@ -1558,7 +1564,9 @@ void render_terminal_panel(EditorState& state,
                            const TerminalThemeStyle& theme_style,
                            tui::TuiMode mode,
                            int& panel_scroll,
-                           const char* panel_title_override) {
+                           const char* panel_title_override,
+                           const char* status_text_override,
+                           const std::vector<tui::StyledLine>* body_lines_override) {
     const TerminalSize size = terminal_size();
     const int rows = std::max(3, size.rows);
     const int cols = std::max(20, size.cols);
@@ -1567,14 +1575,56 @@ void render_terminal_panel(EditorState& state,
     tui::detail::TerminalFrame frame(rows, cols);
     const tui::detail::RenderStyle render_style{theme_style.themes,
                                                  theme_style.theme_name,
-                                                 theme_style.use_colors};
-    const std::vector<tui::StyledLine> lines =
-        tui::detail::panel_lines_for_text(state.text.str(), mode, width, panel_title_override);
+                                                 theme_style.use_colors,
+                                                 theme_style.color_mode};
+    std::vector<tui::StyledLine> lines;
+    if (body_lines_override != nullptr) {
+        // Dired (and similar): custom multi-role body rows, same panel chrome as list pickers.
+        const char* title =
+            panel_title_override != nullptr ? panel_title_override : "Panel";
+        {
+            tui::StyledLine rule;
+            rule.segments.push_back({u8"── ", tui::StyleRole::PanelBorder});
+            rule.segments.push_back({title, tui::StyleRole::PanelTitle});
+            std::string tail = " ";
+            int used = 3 + static_cast<int>(std::string(title).size()) + 1;
+            while (used < width) {
+                tail += u8"─";
+                ++used;
+            }
+            rule.segments.push_back({std::move(tail), tui::StyleRole::PanelBorder});
+            lines.push_back(std::move(rule));
+        }
+        if (!body_lines_override->empty()) {
+            {
+                std::string fill;
+                for (int i = 0; i < width; ++i) {
+                    fill += u8"─";
+                }
+                lines.push_back({{{std::move(fill), tui::StyleRole::PanelBorder}}});
+            }
+            for (const tui::StyledLine& body : *body_lines_override) {
+                lines.push_back(body);
+            }
+            {
+                std::string fill;
+                for (int i = 0; i < width; ++i) {
+                    fill += u8"─";
+                }
+                lines.push_back({{{std::move(fill), tui::StyleRole::PanelBorder}}});
+            }
+        }
+    } else {
+        lines = tui::detail::panel_lines_for_text(state.text.str(), mode, width, panel_title_override);
+    }
 
     int highlighted_line = -1;
     for (size_t index = 0; index < lines.size(); ++index) {
-        if (!lines[index].segments.empty() &&
-            lines[index].segments.front().role == tui::StyleRole::PanelHighlight) {
+        if (lines[index].segments.empty()) {
+            continue;
+        }
+        const tui::StyledSegment& first = lines[index].segments.front();
+        if (first.role == tui::StyleRole::PanelHighlight || first.reverse) {
             highlighted_line = static_cast<int>(index);
             break;
         }
@@ -1620,7 +1670,10 @@ void render_terminal_panel(EditorState& state,
     int cursor_col = 1;
     const int status_row = rows - 1;
     const int minibuffer_row = rows;
-    const std::string status_text = pad_or_clip_ascii(editor_status_line(state, false), width);
+    const std::string status_source =
+        status_text_override != nullptr ? std::string(status_text_override)
+                                        : editor_status_line(state, false);
+    const std::string status_text = pad_or_clip_ascii(status_source, width);
     std::string status_command = terminal_position(status_row, 1);
     if (theme_style.use_colors && theme_style.themes != nullptr) {
         status_command += tui::style_sequence_for(*theme_style.themes,

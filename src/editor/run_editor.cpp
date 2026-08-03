@@ -510,18 +510,23 @@ app::EditorRunResult run_editor(const std::string& path,
         if (dired.active && dired.focus == DiredFocus::List) {
             refresh_dired_list_view();
             const std::string title = dired_header_line(dired);
+            const std::string dired_status = dired_status_line(dired);
+            const std::vector<tui::StyledLine> body = dired_list_body_lines(dired);
             render_terminal_panel(buffer_list_view,
                                   minibuffer,
                                   terminal_frame_renderer,
                                   theme_style,
                                   tui::TuiMode::ThreadList,
                                   dired.list_scroll,
-                                  title.c_str());
+                                  title.c_str(),
+                                  dired_status.c_str(),
+                                  &body);
             return;
         }
         if (dired.active && dired.focus == DiredFocus::View) {
             dired.view.highlight_enabled = highlight_enabled;
             dired.view.read_only = true;
+            const std::string dired_status = dired_status_line(dired);
             render_terminal(dired.view,
                             minibuffer,
                             terminal_frame_renderer,
@@ -530,7 +535,8 @@ app::EditorRunResult run_editor(const std::string& path,
                             nullptr,
                             show_scrollbars,
                             true,
-                            {});
+                            {},
+                            dired_status.c_str());
             return;
         }
         if (buffer_list_active) {
@@ -3453,9 +3459,18 @@ app::EditorRunResult run_editor(const std::string& path,
                     dired_open_for_edit();
                     return;
                 }
-                if (ch == 'f' || ch == 'F' || ch == 6) {
+                // f, /, Ctrl+F: find in the viewed file (less-style / also accepted).
+                if (ch == 'f' || ch == 'F' || ch == '/' || ch == 6) {
                     start_minibuffer(minibuffer, MinibufferAction::Search, "Find: ",
                                      dired.last_search.empty() ? last_search : dired.last_search);
+                    return;
+                }
+                // Space = PageDown, b = PageUp (less-style).
+                if (ch == ' ' || ch == 'b' || ch == 'B') {
+                    const Rect focus_rect = editor_content_rect(editor_main_area());
+                    dired.view.apply_movement(ch == ' ' ? MovementKey::PageDown
+                                                        : MovementKey::PageUp,
+                                              focus_rect, false, false, false);
                     return;
                 }
                 if (ch == 27) {
@@ -3474,7 +3489,8 @@ app::EditorRunResult run_editor(const std::string& path,
                         const std::string needle =
                             dired.last_search.empty() ? last_search : dired.last_search;
                         if (needle.empty()) {
-                            minibuffer_message(minibuffer, "No search string; press f to find");
+                            minibuffer_message(minibuffer,
+                                               "No search string; press f or / to find");
                         } else {
                             const bool found = dired.view.search_next(needle);
                             minibuffer_message(minibuffer,
@@ -3488,7 +3504,8 @@ app::EditorRunResult run_editor(const std::string& path,
                         const std::string needle =
                             dired.last_search.empty() ? last_search : dired.last_search;
                         if (needle.empty()) {
-                            minibuffer_message(minibuffer, "No search string; press f to find");
+                            minibuffer_message(minibuffer,
+                                               "No search string; press f or / to find");
                         } else {
                             const bool found = dired.view.search_previous(needle);
                             minibuffer_message(minibuffer,
@@ -3633,8 +3650,16 @@ app::EditorRunResult run_editor(const std::string& path,
                 minibuffer_message(minibuffer, err.ok() ? "Touched" : err.message);
                 return;
             }
-            if (ch == 'f' || ch == 'F') {
-                minibuffer_message(minibuffer, "Press Enter to view a file, then f to find");
+            if (ch == 'f' || ch == 'F' || ch == '/') {
+                minibuffer_message(minibuffer,
+                                   "Press Enter to view a file, then f or / to find");
+                return;
+            }
+            // Space = PageDown, b = PageUp (less-style).
+            if (ch == ' ' || ch == 'b' || ch == 'B') {
+                dired_move_selection(dired, ch == ' ' ? MovementKey::PageDown : MovementKey::PageUp,
+                                     dired_page_rows());
+                minibuffer_message(minibuffer, dired_status_line(dired));
                 return;
             }
             if (ch == 's' || ch == 'S') {
@@ -3644,9 +3669,21 @@ app::EditorRunResult run_editor(const std::string& path,
                     "Sort by: (n)ame (s)ize (d)ate asc, (N)ame (S)ize (D)ate desc");
                 return;
             }
-            if (ch == '*') {
-                dired_capture_baseline(dired);
-                minibuffer_message(minibuffer, "Marked listing as reviewed");
+            // p: toggle selected file dirty ↔ reviewed (per-file pass). Prefer p
+            // over * because * is awkward on many non-US keyboard layouts.
+            if (ch == 'p' || ch == 'P') {
+                const DiredEntry* before = dired_selected_entry(dired);
+                const std::string name =
+                    before != nullptr ? before->name : std::string();
+                Error err = dired_toggle_pass_selected(dired);
+                if (!err.ok()) {
+                    minibuffer_message(minibuffer, err.message);
+                    return;
+                }
+                const DiredEntry* after = dired_selected_entry(dired);
+                const bool now_dirty = after != nullptr && after->dirty;
+                minibuffer_message(minibuffer,
+                                   (now_dirty ? "Marked dirty: " : "Marked reviewed: ") + name);
                 return;
             }
             return;
