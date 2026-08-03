@@ -193,7 +193,8 @@ def check_provider_model_picker(binary, base_url, model):
         require_seen_plain(picker_output, "── Provider", "rendering the shared provider selector panel")
         require_match(
             picker_output,
-            r"\x1b\[38;2;\d+;\d+;\d+m\x1b\[48;2;\d+;\d+;\d+mProvider",
+            r"\x1b\[(?:38;2;\d+;\d+;\d+|38;5;\d+)m"
+            r"\x1b\[(?:48;2;\d+;\d+;\d+|48;5;\d+)mProvider",
             "coloring the editor provider selector title",
         )
         output.extend(picker_output)

@@ -250,8 +250,9 @@ def scenario_beta_and_list_load(binary, base, model, home_dir):
 
 
 def scenario_provider_update(binary, base, model, home_dir):
-    # Self-contained: create a non-empty thread, switch provider, cancel the
-    # model-list job (avoids hanging on api.openai.com offline), then quit.
+    # Provider metadata persistence is independent of model discovery. Use the
+    # built-in offline profile so this scenario cannot race /quit against a
+    # model-list transport job; picker/model transport has separate coverage.
     run_tui(
         binary,
         base,
@@ -261,8 +262,7 @@ def scenario_provider_update(binary, base, model, home_dir):
             ("/new ProviderTest\r", 0.5),
             ("provider-ping\r", 1.5),
             ("/remove-empty\r", 0.5),
-            ("/provider openai\r", 1.0),
-            ("\x1b", 0.5),
+            ("/provider none\r", 1.0),
             ("/quit\r", 0.5),
         ],
     )
@@ -274,9 +274,9 @@ def scenario_provider_update(binary, base, model, home_dir):
         ).fetchone()
         if row is None:
             raise RuntimeError("expected ProviderTest thread after /provider scenario")
-        if row["last_provider"] != "openai":
+        if row["last_provider"] != "none":
             raise RuntimeError(
-                f"expected ProviderTest last_provider openai, got {row['last_provider']!r}"
+                f"expected ProviderTest last_provider none, got {row['last_provider']!r}"
             )
     finally:
         conn.close()
