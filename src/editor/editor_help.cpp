@@ -75,6 +75,9 @@ EditorSlashCommand command_from_token(const std::string& command_token) {
         command_token == "goto_line" || command_token == "goto") {
         return EditorSlashCommand::GotoLine;
     }
+    if (command_token == "dired") {
+        return EditorSlashCommand::Dired;
+    }
     return EditorSlashCommand::None;
 }
 
@@ -128,7 +131,8 @@ size_t editor_assist_path_prefix_length(const std::string& input) {
         ++command_end;
     }
     const std::string command_token = command_token_lower(input, command_start, command_end);
-    if (command_token != "open" && command_token != "saveas" && command_token != "insert") {
+    if (command_token != "open" && command_token != "saveas" && command_token != "insert" &&
+        command_token != "dired") {
         return std::string::npos;
     }
     if (command_end >= input.size()) {

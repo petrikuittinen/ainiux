@@ -10,14 +10,15 @@ This index separates current usage guides from design records, roadmaps, and poi
 | [CLI and scripting](cli.md) | One-shot chat, REPL, conversion, attachments, fetch/search, output, and context |
 | [Chat TUI](chat.md) | Threads, persistence, commands, attachments, and mode switching |
 | [Editor help](editor_help.md) | Complete editor operation and embedded help content |
-| [Keyboard shortcuts](keyboard-shortcuts.md) | Current chat, editor, and agent bindings |
+| [Dired mode](dired-mode.md) | Full-screen directory browser: keys, listing, dirty markers, CLI `--dired` |
+| [Keyboard shortcuts](keyboard-shortcuts.md) | Current chat, editor, agent, and dired bindings |
 | [Agent workflows](agent.md) | Act/Plan, permissions, Guard, goals, compaction, indexing, and security review |
 | [Configuration](configuration.md) | Layering, credentials, themes, models, benchmark prompts, and editor commands |
 | [Benchmarks and grading](benchmarks.md) | Built-in corpus, JSONL runs, judge grading, and limitations |
 | [API compatibility](api-compatibility.md) | Provider and protocol compatibility details |
 | [Security](security.md) | Credential, persistence, fetch, attachment, and agent boundaries |
 | [Testing](../TESTING.md) | Test targets and selection policy |
-| [Version history](version-history.md) | Compact v0.0–v1.15 release timeline |
+| [Version history](version-history.md) | Compact v0.0–v1.16 release timeline |
 
 ## Architecture and implementation references
 

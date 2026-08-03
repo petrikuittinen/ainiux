@@ -35,7 +35,9 @@ namespace {
 
 bool minibuffer_supports_path_completion(MinibufferAction action) {
     return action == MinibufferAction::SaveFile || action == MinibufferAction::SaveAsFile ||
-           action == MinibufferAction::LoadFile;
+           action == MinibufferAction::LoadFile || action == MinibufferAction::DiredPath ||
+           action == MinibufferAction::DiredRename || action == MinibufferAction::DiredCopy ||
+           action == MinibufferAction::DiredNewFile || action == MinibufferAction::DiredNewDir;
 }
 
 std::string terminal_position(int row, int col) {
@@ -405,6 +407,11 @@ Error paste_into_minibuffer(MinibufferState& minibuffer, const std::string& text
         case MinibufferAction::AssistCommand:
         case MinibufferAction::TextAlignWidth:
         case MinibufferAction::GotoLine:
+        case MinibufferAction::DiredPath:
+        case MinibufferAction::DiredRename:
+        case MinibufferAction::DiredCopy:
+        case MinibufferAction::DiredNewFile:
+        case MinibufferAction::DiredNewDir:
             break;
         case MinibufferAction::None:
         case MinibufferAction::ConfirmLoad:
@@ -416,6 +423,8 @@ Error paste_into_minibuffer(MinibufferState& minibuffer, const std::string& text
         case MinibufferAction::ConfirmReasoning:
         case MinibufferAction::AssistScopeChoice:
         case MinibufferAction::AssistPromptMode:
+        case MinibufferAction::DiredConfirmDelete:
+        case MinibufferAction::DiredConfirmOverwrite:
             return {ErrorCode::BadArgs, "paste is not accepted by the active prompt"};
     }
 

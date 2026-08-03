@@ -10,6 +10,7 @@
 #include "editor/clipboard.hpp"
 #include "editor/editor.hpp"
 #include "editor/editor_assist.hpp"
+#include "editor/dired.hpp"
 #include "editor/editor_help.hpp"
 #include "editor/editor_picker.hpp"
 #include "editor/file_session.hpp"
@@ -3234,6 +3235,209 @@ void test_editor_undo_redo_key_bindings() {
     ainiux::editor::clear_terminal_input_queue();
 }
 
+void test_editor_dired() {
+    namespace fs = std::filesystem;
+    using ainiux::editor::DiredFocus;
+    using ainiux::editor::DiredSortKey;
+    using ainiux::editor::DiredState;
+    using ainiux::editor::EditorSettings;
+    using ainiux::editor::MovementKey;
+    using ainiux::editor::is_dired_f4_sequence;
+
+    check(is_dired_f4_sequence("OS"), "F4 xterm OS sequence recognized");
+    check(is_dired_f4_sequence("[14~"), "F4 [14~ sequence recognized");
+    check(is_dired_f4_sequence("[[D"), "F4 linux console sequence recognized");
+    check(!is_dired_f4_sequence("[13~"), "F3 is not F4");
+
+    check(ainiux::editor::dired_hash_bytes("alpha") == ainiux::editor::dired_hash_bytes("alpha"),
+          "content hash is stable");
+    check(ainiux::editor::dired_hash_bytes("alpha") != ainiux::editor::dired_hash_bytes("beta"),
+          "content hash differs for different bytes");
+
+    const fs::path root = fs::path("build") / "dired-test";
+    std::error_code ec;
+    fs::remove_all(root, ec);
+    fs::create_directories(root / "sub", ec);
+    {
+        std::ofstream a(root / "a.txt");
+        a << "hello\n";
+    }
+    {
+        std::ofstream b(root / "b.txt");
+        b << "world\n";
+    }
+    {
+        std::ofstream c(root / "c.js");
+        c << "console.log(1)\n";
+    }
+
+    DiredState state;
+    Error open_err = ainiux::editor::dired_open(state, root.string());
+    check(open_err.ok(), "dired opens directory: " + open_err.message);
+    check(state.active, "dired is active after open");
+    check(state.focus == DiredFocus::List, "dired starts in list focus");
+    check(!state.entries.empty(), "dired lists entries");
+
+    bool saw_a = false;
+    bool saw_sub = false;
+    bool saw_parent = false;
+    for (const auto& entry : state.entries) {
+        if (entry.is_parent) saw_parent = true;
+        if (entry.name == "a.txt") saw_a = true;
+        if (entry.name == "sub" && entry.is_directory) saw_sub = true;
+    }
+    check(saw_parent && saw_a && saw_sub, "dired lists parent, file, and directory");
+
+    ainiux::editor::dired_set_sort(state, DiredSortKey::Name, false);
+    check(state.sort_key == DiredSortKey::Name && !state.sort_ascending, "sort name descending");
+    check(ainiux::editor::dired_sort_label(DiredSortKey::Date, true) == "date^",
+          "sort label ascending uses ^");
+    check(ainiux::editor::dired_sort_label(DiredSortKey::Size, false) == "sizev",
+          "sort label descending uses v");
+
+    // Baseline marks files clean; content change makes them dirty after refresh.
+    ainiux::editor::dired_capture_baseline(state);
+    {
+        const ainiux::editor::DiredEntry* a_entry = nullptr;
+        for (const auto& entry : state.entries) {
+            if (entry.name == "a.txt") a_entry = &entry;
+        }
+        check(a_entry != nullptr && !a_entry->dirty, "baseline clears dirty for hashed files");
+    }
+    {
+        std::ofstream a(root / "a.txt", std::ios::trunc);
+        a << "changed\n";
+    }
+    check(ainiux::editor::dired_refresh(state).ok(), "dired refresh succeeds");
+    {
+        bool dirty_a = false;
+        for (const auto& entry : state.entries) {
+            if (entry.name == "a.txt") dirty_a = entry.dirty;
+        }
+        check(dirty_a, "content hash change marks file dirty after refresh");
+    }
+
+    // Glob filter.
+    DiredState glob_state;
+    Error glob_err = ainiux::editor::dired_open(glob_state, (root / "*.js").string());
+    check(glob_err.ok(), "dired opens glob: " + glob_err.message);
+    bool saw_js = false;
+    bool saw_txt = false;
+    for (const auto& entry : glob_state.entries) {
+        if (entry.name == "c.js") saw_js = true;
+        if (entry.name == "a.txt") saw_txt = true;
+    }
+    check(saw_js && !saw_txt, "glob *.js filters listing");
+
+    // Navigation and RO view.
+    for (size_t i = 0; i < state.entries.size(); ++i) {
+        if (state.entries[i].name == "b.txt") {
+            state.selected = i;
+            break;
+        }
+    }
+    EditorSettings settings;
+    Error view_err = ainiux::editor::dired_activate_selection(state, settings);
+    check(view_err.ok(), "enter opens file view: " + view_err.message);
+    check(state.focus == DiredFocus::View, "focus switches to view");
+    check(state.view.read_only, "view is read-only");
+    check(state.view.text.str().find("world") != std::string::npos, "view loads file content");
+    ainiux::editor::dired_close_view(state);
+    check(state.focus == DiredFocus::List, "closing view returns to list");
+
+    // mkdir -p style, touch, rename, copy, delete.
+    check(ainiux::editor::dired_create_directory(state, "templates/poll").ok(),
+          "dired creates recursive directory");
+    check(fs::is_directory(root / "templates" / "poll"), "mkdir -p created nested path");
+
+    std::string created;
+    check(ainiux::editor::dired_create_file(state, "new_note.md", created).ok(),
+          "dired creates new file");
+    check(fs::exists(created), "created file exists on disk");
+
+    for (size_t i = 0; i < state.entries.size(); ++i) {
+        if (state.entries[i].name == "new_note.md") {
+            state.selected = i;
+            break;
+        }
+    }
+    check(ainiux::editor::dired_touch_selected(state).ok(), "dired touch succeeds");
+    check(ainiux::editor::dired_rename_selected(state, "renamed_note.md", false).ok(),
+          "dired rename succeeds");
+    check(fs::exists(root / "renamed_note.md"), "renamed file exists");
+
+    for (size_t i = 0; i < state.entries.size(); ++i) {
+        if (state.entries[i].name == "renamed_note.md") {
+            state.selected = i;
+            break;
+        }
+    }
+    check(ainiux::editor::dired_copy_selected(state, "copied_note.md", false).ok(),
+          "dired copy succeeds");
+    check(fs::exists(root / "copied_note.md"), "copied file exists");
+
+    for (size_t i = 0; i < state.entries.size(); ++i) {
+        if (state.entries[i].name == "copied_note.md") {
+            state.selected = i;
+            break;
+        }
+    }
+    check(ainiux::editor::dired_delete_selected(state, false).ok(), "dired deletes file");
+    check(!fs::exists(root / "copied_note.md"), "deleted file is gone");
+
+    ainiux::editor::dired_move_selection(state, MovementKey::Home, 10);
+    check(state.selected == 0, "Home moves to first entry");
+    ainiux::editor::dired_move_selection(state, MovementKey::End, 10);
+    check(state.selected + 1 == state.entries.size(), "End moves to last entry");
+
+    const std::string list = ainiux::editor::dired_list_text(state);
+    check(list.find("../") != std::string::npos, "list shows parent with trailing slash");
+    check(list.find("sub/") != std::string::npos, "list shows directory with trailing slash");
+    check(list.find("RET view") != std::string::npos && list.find("left=parent") != std::string::npos,
+          "list embeds two-line key help");
+    check(ainiux::editor::dired_header_line(state).find("RET view") == std::string::npos,
+          "panel title stays short (help is not in the title)");
+#if !defined(_WIN32)
+    bool saw_mode = false;
+    for (const auto& entry : state.entries) {
+        if (entry.name == "a.txt" && entry.mode.size() == 10 && !entry.owner.empty() &&
+            !entry.group.empty()) {
+            saw_mode = true;
+        }
+    }
+    check(saw_mode, "POSIX listing fills mode/owner/group");
+    check(list.find("rw") != std::string::npos, "list text shows permission bits");
+#endif
+
+    // Left/right directory navigation.
+    for (size_t i = 0; i < state.entries.size(); ++i) {
+        if (state.entries[i].name == "sub") {
+            state.selected = i;
+            break;
+        }
+    }
+    check(ainiux::editor::dired_go_deeper(state).ok(), "right/deeper enters selected directory");
+    check(fs::path(state.directory).filename() == "sub", "deeper navigation updates directory");
+    check(ainiux::editor::dired_go_parent(state).ok(), "left/parent leaves directory");
+    {
+        bool reselected_sub = false;
+        if (state.selected < state.entries.size()) {
+            reselected_sub = state.entries[state.selected].name == "sub";
+        }
+        check(reselected_sub, "parent navigation reselects the directory we left");
+    }
+
+    auto slash = ainiux::editor::parse_editor_slash_command("/dired src/*.js");
+    check(slash.command == ainiux::editor::EditorSlashCommand::Dired,
+          "/dired slash command parses");
+    check(slash.path == "src/*.js", "/dired keeps glob path");
+
+    ainiux::editor::dired_close(state);
+    check(!state.active, "dired_close deactivates");
+
+    fs::remove_all(root, ec);
+}
+
 void test_editor_split_layout() {
     using ainiux::editor::Rect;
     using ainiux::editor::SplitKind;
@@ -3247,6 +3451,8 @@ void test_editor_split_layout() {
     check(window_prefix_action('o') == "other", "window prefix o is other pane");
     check(window_prefix_action('0') == "close", "window prefix 0 closes pane");
     check(window_prefix_action('1') == "maximize", "window prefix 1 maximizes pane");
+    check(window_prefix_action('d') == "dired", "window prefix d opens dired");
+    check(window_prefix_action('D') == "dired", "window prefix D opens dired");
     check(window_prefix_action(27) == "cancel", "Esc cancels window prefix");
     check(window_prefix_action(24) == "cancel", "Ctrl+X cancels window prefix");
     check(window_prefix_action(7).empty(), "Ctrl+G is not a window-prefix cancel key");
@@ -4870,6 +5076,7 @@ void run_all() {
     test_editor_undo_redo_key_bindings();
     test_editor_revert_to_snapshot();
     test_editor_undo_redo();
+    test_editor_dired();
     test_editor_split_layout();
     test_editor_unicode_combining_sequence_wraps_on_grapheme_boundary();
     test_editor_unicode_display_columns_and_offsets();

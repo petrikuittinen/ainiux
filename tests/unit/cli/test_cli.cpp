@@ -248,6 +248,29 @@ void test_cli_editor_parse() {
         "ainiux", "--editor-continue-prefix-max-chars", "100"};
     parsed = ainiux::cli::parse_args(3, const_cast<char**>(removed_continue_argv));
     check(!parsed.error.ok(), "removed editor continue CLI options are rejected");
+
+    const char* dired_argv[] = {"ainiux", "--dired"};
+    parsed = ainiux::cli::parse_args(2, const_cast<char**>(dired_argv));
+    check(parsed.error.ok(), "--dired without path parses");
+    check(parsed.options.dired && parsed.options.editor, "--dired enables dired and editor");
+    check(parsed.options.dired_path.empty(), "--dired without path leaves dired_path empty");
+
+    const char* dired_path_argv[] = {"ainiux", "--dired", "src/"};
+    parsed = ainiux::cli::parse_args(3, const_cast<char**>(dired_path_argv));
+    check(parsed.error.ok(), "--dired with path parses");
+    check(parsed.options.dired && parsed.options.editor, "--dired path enables dired and editor");
+    check(parsed.options.dired_path == "src/", "--dired path stored");
+
+    const char* dired_eq_argv[] = {"ainiux", "--dired=src/*.cpp"};
+    parsed = ainiux::cli::parse_args(2, const_cast<char**>(dired_eq_argv));
+    check(parsed.error.ok(), "--dired=glob parses");
+    check(parsed.options.dired_path == "src/*.cpp", "--dired equals-form path stored");
+
+    const char* dired_provider_argv[] = {"ainiux", "lmstudio", "--dired", "."};
+    parsed = ainiux::cli::parse_args(4, const_cast<char**>(dired_provider_argv));
+    check(parsed.error.ok(), "--dired with provider shortcut parses");
+    check(parsed.options.positional_url == "lmstudio", "--dired keeps provider positional");
+    check(parsed.options.dired_path == ".", "--dired path with provider parsed");
 }
 
 void test_cli_help_displays_version() {

@@ -49,6 +49,13 @@ enum class MinibufferAction {
     AssistPromptMode,
     TextAlignWidth,
     GotoLine,
+    DiredPath,
+    DiredRename,
+    DiredCopy,
+    DiredNewFile,
+    DiredNewDir,
+    DiredConfirmDelete,
+    DiredConfirmOverwrite,
 };
 
 struct PendingSaveRequest {

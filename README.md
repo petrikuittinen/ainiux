@@ -6,7 +6,7 @@ Ainiux is a C++17 command-line and terminal client for OpenAI and OpenAI-compati
 
 You can use a local server such as LM Studio, llama-server, vllm or Ollama, a supported cloud provider such as OpenRouter, Google, Anthropic or Deepseek, or a custom OpenAI-compatible endpoint. Offline editing and conversion do not require a model.
 
-Current release: **v1.15**. See the [version history](docs/version-history.md) for earlier releases and [PLANS.md](PLANS.md) for unfinished work.
+Current release: **v1.16**. See the [version history](docs/version-history.md) for earlier releases and [PLANS.md](PLANS.md) for unfinished work.
 
 The name began with the author’s child Aini and echoes the Chinese phrase 爱你 *ài nǐ* (“love you”). The command and project spelling is `ainiux`. It also signifies the future aims of this ambitious project: versatile AI tool (current state) → Ainiux programming language (new programming language for AI era) → Ainiux operating system.
 
@@ -14,7 +14,7 @@ The name began with the author’s child Aini and echoes the Chinese phrase 爱�
 
 - **Useful in scripts.** Model output goes to `stdout`; status and errors go to `stderr`. Text, JSON, and streaming event formats are available.
 - **Local and cloud providers share one interface.** Provider profiles supply endpoint, authentication, and capability defaults without spreading provider-specific behavior through the UI.
-- **Fully Featured Text and Code Editor.** It has multiple buffers, split panes, grapheme-aware navigation, syntax highlighting, file locking, local layout tools, and configurable AI commands.
+- **Fully Featured Text and Code Editor.** It has multiple buffers, split panes, grapheme-aware navigation, syntax highlighting, file locking, local layout tools, configurable AI commands, and a full-screen **dired** directory browser (`ainiux --dired`, `F4`, or `Ctrl+X d`).
 - **Interactive work stays responsive.** HTTP, streaming, conversion, benchmarks, and agent work run as cancellable jobs.
 - **Agent tools are separate from chat.** `-c` is ordinary conversation. `-a` opens the project-local agent with explicit permissions, built-in guard against destructive commands, Act/Plan policies, and logged tool activity.
 - **The implementation stays small and portable.** Ainiux uses C++17, a Makefile, libcurl, SQLite, POSIX terminal APIs, and ANSI rendering. It does not require Electron, a browser, or ncurses. And it won't eat all of your RAM.
@@ -67,10 +67,11 @@ ainiux lmstudio -c
 
 ![Model selector](docs/ainux_model_selector.png)
 
-Open the standalone editor with `-e`. Provider `none` keeps it completely offline:
+Open the standalone editor with `-e`. Provider `none` keeps it completely offline. Open the directory browser with `--dired` (optional path; default is `.`):
 
 ```sh
 ainiux none -e notes.md
+ainiux --dired src/
 ```
 
 ![Standalone editor](docs/ainux_editor.png)
@@ -95,7 +96,7 @@ I have tested Ainiux using mostly the following local models: Qwen3.6-35B-A3B, Q
 
 From cloud models I have mostly relied on Deepseek-V4-Flash via official Deepseek API and lots of models Openrouter e.g. gpt-5.6-luna to gpt-5.6-sol to gemini-3.6-flash and gemini-3.5-lite.
 
-## Current v1.15 capabilities
+## Current v1.16 capabilities
 
 The product is actively developed, but its primary surfaces are implemented and share production-oriented foundations: incremental SSE parsing, explicit connect and request timeouts, cancellation during active streams, credential redaction, structured errors, bounded inputs, and RAII ownership of network, database, terminal, and file resources. A network chunk is never assumed to be one complete SSE event, and partial UTF-8 is kept out of terminal rendering.
 
@@ -283,7 +284,7 @@ See [PLANS.md](PLANS.md) and [TODO.md](TODO.md) for active and deferred work.
 
 ## Documentation
 
-Start at the [documentation index](docs/README.md). It links current user guides, keyboard and editor references, architecture decisions, security material, testing instructions, audits, and the compact [v0.0–v1.15 history](docs/version-history.md).
+Start at the [documentation index](docs/README.md). It links current user guides, [dired mode](docs/dired-mode.md), keyboard and editor references, architecture decisions, security material, testing instructions, audits, and the compact [v0.0–v1.16 history](docs/version-history.md).
 
 For the complete current option list, run:
 

@@ -134,6 +134,8 @@ Press `Ctrl+E`, `Esc`, or `Alt+X` to open the command minibuffer. `Ctrl+E` is th
 | `Ctrl+X` `o` | Focus next pane |
 | `Ctrl+X` `0` | Close focused pane |
 | `Ctrl+X` `1` | Maximize focused pane |
+| `Ctrl+X` `d` | Open dired (directory browser) |
+| `F4` | Open dired (directory browser) |
 | `Esc` or `Ctrl+X` after prefix | Cancel window command |
 | `Ctrl+B` | Page up in the other pane (last focused; does not move focus) |
 | `Ctrl+D` | Page down in the other pane (same target as Ctrl+B) |
@@ -197,7 +199,30 @@ slash. Chat and agent modes use `/chat`, `/agent`, and `/editor`.
 
 Built-in AI: `/spell`, `/grammar`, `/continue`, `/fact`, `/comment`, `/rewrite`, `/style-formal`, `/style-casual`, `/style-humor`, `/marketing`, `/English`, `/Chinese`, `/Finnish`, `/German`, `/French`, `/Italian`, `/Spanish`, `/Portuguese`, `/Arabic`, `/Hindi`, `/Japanese`, `/Korean`, `/Swedish`, `/Polish`, `/Russian`, `/prompt`, `/regenerate` (and many more from `editor-commands.conf`)
 
-File/editor: `/save`, `/saveas`, `/find`, `/replace` (`replace-string`), `/open`, `/new`, `/list`, `/close`, `/vsplit`, `/hsplit`, `/closesplit`, `/maximize` (`/nosplit`), `/chat`, `/agent`, `/editor`, `/help`, `/quit`
+File/editor: `/save`, `/saveas`, `/find`, `/replace` (`replace-string`), `/open`, `/dired [path|glob]`, `/new`, `/list`, `/close`, `/vsplit`, `/hsplit`, `/closesplit`, `/maximize` (`/nosplit`), `/chat`, `/agent`, `/editor`, `/help`, `/quit`
+
+### Dired (full-screen directory browser)
+
+Full guide: [dired-mode.md](dired-mode.md).
+
+| Shortcut | Action |
+|----------|--------|
+| `F4` or `Ctrl+X d` or `/dired` or CLI `--dired [PATH]` | Enter dired |
+| `q` | Leave dired → editor |
+| `Ctrl+Q` | Quit ainiux (global) |
+| `Enter` | Enter dir / view file RO; again leaves view for list |
+| `←` / `→` | Parent directory / enter selected directory |
+| `o` | Open file for edit (exits dired) |
+| `g` | Refresh |
+| `r` / `R` | Rename |
+| `c` | Copy |
+| `d` | Delete (confirm) |
+| `n` | New file |
+| `m` | New directory (`mkdir -p`) |
+| `t` | Touch |
+| `f` | Find in viewed file |
+| `s` + `(n)ame`/`(s)ize`/`(d)ate` or `(N)ame`/`(S)ize`/`(D)ate` | Sort asc/desc |
+| `*` | Mark reviewed (content-hash baseline) |
 
 Also: `/provider`, `/model`, `/search QUERY`
 

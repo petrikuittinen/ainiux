@@ -44,10 +44,11 @@ This compact timeline moves release material out of the landing page. It describ
 | v1.13 | First-run index offer, index chrome marker, timed index summary, and index progress lifetime fix |
 | v1.14 | Offline editor text layout and line cleanup, width/align history display modes, and width-capped pretty tables |
 | v1.15 | Documentation overhaul with a concise landing page, focused user guides, provider and credential references, corrected shortcuts, and explicit compatibility limits |
+| v1.16 | Full-screen editor dired (directory browser): CLI `--dired`, F4 / Ctrl+X d, list↔read-only view, file ops, content-hash dirty markers, POSIX mode/owner/group |
 
-## Current status after v1.15
+## Current status after v1.16
 
-The current product includes CLI chat, conversion, REPL, saved-thread TUI chat, standalone editor, benchmarks, judge grading, security review, one-shot and interactive agents, session Act/Plan policy, Guard approvals, `/goal`, transcript-preserving compaction, and a lightweight definitions index.
+The current product includes CLI chat, conversion, REPL, saved-thread TUI chat, standalone editor with dired, benchmarks, judge grading, security review, one-shot and interactive agents, session Act/Plan policy, Guard approvals, `/goal`, transcript-preserving compaction, and a lightweight definitions index.
 
 The local OpenAI-compatible server, browser UI, image generation, PDF/DOCX conversion, `/loop`, sub-agents, and native Anthropic Messages adapter are not implemented. See [PLANS.md](../PLANS.md) and [TODO.md](../TODO.md) instead of inferring features from old version labels.
 

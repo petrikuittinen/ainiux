@@ -43,6 +43,8 @@ ainiux::editor::EditorSettings editor_settings_from_options(const ainiux::cli::O
     settings.theme_name = options.tui_theme;
     settings.use_colors = !options.no_colors;
     settings.highlight_enabled = options.tui_highlight;
+    settings.start_dired = options.dired;
+    settings.start_dired_path = options.dired_path.empty() ? "." : options.dired_path;
     return settings;
 }
 

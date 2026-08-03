@@ -39,6 +39,7 @@ error layers should serve:
 | v0.9 | Benchmark calibration, refactor hygiene, TUI/CLI/editor polish | Remaining work continues |
 | v0.90 | Local OpenAI-compatible server | Deferred behind v1.1 |
 | v1.0–v1.15 | Local agent foundation, hardening, and documentation overhaul | Landed through v1.15 |
+| v1.16 | Editor dired directory browser (`--dired`, F4, Ctrl+X d) | Landed |
 | **v1.1** | **Lightweight definition ranking and index tuning; later `/goal`, `/loop`, and sub-agents** | **Next priority** |
 | **v1.2** | **Image generation across CLI and interactive surfaces** | Planned after v1.1 |
 
@@ -48,7 +49,7 @@ ready.
 
 ## Current baseline
 
-Implementation status (2026-08-01): **v1.15**.
+Implementation status (2026-08-03): **v1.16**.
 
 The shipped product includes:
 
@@ -75,7 +76,7 @@ graph or automatic model-context hints.
 
 ## Release history
 
-The compact v0.0–v1.15 timeline lives in `docs/version-history.md`. Historical
+The compact v0.0–v1.16 timeline lives in `docs/version-history.md`. Historical
 implementation details remain available in Git history and `docs/decisions.md`.
 
 # v1.1 - Lightweight smarter agent indexing

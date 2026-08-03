@@ -452,6 +452,9 @@ std::string window_prefix_action(unsigned char ch) {
     if (ch == '1') {
         return "maximize";
     }
+    if (ch == 'd' || ch == 'D') {
+        return "dired";
+    }
     return "";
 }
 

@@ -114,6 +114,10 @@ struct EditorSettings {
     // Default column width for /left-align, /right-align, /center-align, /justify
     // when the user omits WIDTH (must be greater than 20).
     size_t text_align_width = kDefaultTextAlignWidth;
+    // When true, open dired after the editor UI is ready (CLI --dired).
+    bool start_dired = false;
+    // Directory or glob for start_dired; empty means ".".
+    std::string start_dired_path;
 };
 
 struct AiContinueContext;

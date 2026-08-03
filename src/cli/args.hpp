@@ -39,6 +39,10 @@ struct Options {
     bool tui = false;
     bool editor = false;
     std::string editor_path;
+    // Start the editor in dired (implies editor). Optional path is the directory/glob;
+    // empty means the current working directory.
+    bool dired = false;
+    std::string dired_path;
     bool no_colors = false;
     // Preferred color wire format; resolved with COLORTERM/TERM at TUI/editor start.
     tui::ColorModePreference color_mode = tui::ColorModePreference::Auto;

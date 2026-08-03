@@ -12,6 +12,7 @@
 #include "editor/clipboard.hpp"
 #include "editor/detail/editor_common.hpp"
 #include "editor/assist_runtime.hpp"
+#include "editor/dired.hpp"
 #include "editor/editor_assist.hpp"
 #include "editor/editor_help.hpp"
 #include "editor/editor_picker.hpp"
@@ -41,6 +42,7 @@
 #include <cctype>
 #include <charconv>
 #include <chrono>
+#include <filesystem>
 #include <functional>
 #include <iostream>
 #include <optional>
@@ -285,6 +287,8 @@ app::EditorRunResult run_editor(const std::string& path,
     WordCompleter word_completer;
     PendingAssist pending_assist;
     HelpViewSession help_view;
+    DiredState dired;
+    bool dired_overwrite_is_rename = false;
     bool buffer_list_active = false;
     size_t buffer_list_selected = 0;
     int buffer_list_scroll = 0;
@@ -398,10 +402,10 @@ app::EditorRunResult run_editor(const std::string& path,
         if (interactive == nullptr) {
             return false;
         }
-        return !help_view.active && !picker.active && !buffer_list_active && !pending_close_confirm &&
-               !minibuffer.active && !replace.active && !assist_session.active &&
-               !reformat_session.active && !insert_session.active && !shell_session.active &&
-               !window_prefix_active;
+        return !help_view.active && !dired.active && !picker.active && !buffer_list_active &&
+               !pending_close_confirm && !minibuffer.active && !replace.active &&
+               !assist_session.active && !reformat_session.active && !insert_session.active &&
+               !shell_session.active && !window_prefix_active;
     };
 
     auto leave_editor_for = [&](app::InteractiveUiTarget target) {
@@ -472,9 +476,22 @@ app::EditorRunResult run_editor(const std::string& path,
     };
 
     tui::detail::TerminalFrameRenderer terminal_frame_renderer;
+    auto refresh_dired_list_view = [&]() {
+        buffer_list_view = EditorState::from_text(dired_list_text(dired));
+        buffer_list_view.set_path("[dired]");
+        buffer_list_view.highlight_enabled = false;
+        buffer_list_view.dirty = false;
+        buffer_list_view.clear_undo_history();
+        if (!dired.entries.empty() && dired.selected < dired.entries.size()) {
+            // Title rule + blank + entry lines: keep selection near cursor via panel highlight.
+            const size_t line = std::min(dired.selected, buffer_list_view.text.line_count() - 1);
+            buffer_list_view.cursor = buffer_list_view.text.line_start(line);
+        }
+    };
+
     auto render_editor = [&]() {
         // Keep the focused leaf's view in sync so unfocused panes stay independent.
-        if (!help_view.active && !picker.active && !buffer_list_active) {
+        if (!help_view.active && !dired.active && !picker.active && !buffer_list_active) {
             split_layout.set_focused_view(pane_view_from_state(state));
         }
         const TerminalThemeStyle theme_style = terminal_theme_style();
@@ -488,6 +505,32 @@ app::EditorRunResult run_editor(const std::string& path,
                                       : picker.for_reasoning ? tui::TuiMode::ReasoningList
                                                              : tui::TuiMode::ModelList,
                                   picker.scroll);
+            return;
+        }
+        if (dired.active && dired.focus == DiredFocus::List) {
+            refresh_dired_list_view();
+            const std::string title = dired_header_line(dired);
+            render_terminal_panel(buffer_list_view,
+                                  minibuffer,
+                                  terminal_frame_renderer,
+                                  theme_style,
+                                  tui::TuiMode::ThreadList,
+                                  dired.list_scroll,
+                                  title.c_str());
+            return;
+        }
+        if (dired.active && dired.focus == DiredFocus::View) {
+            dired.view.highlight_enabled = highlight_enabled;
+            dired.view.read_only = true;
+            render_terminal(dired.view,
+                            minibuffer,
+                            terminal_frame_renderer,
+                            theme_style,
+                            false,
+                            nullptr,
+                            show_scrollbars,
+                            true,
+                            {});
             return;
         }
         if (buffer_list_active) {
@@ -630,6 +673,52 @@ app::EditorRunResult run_editor(const std::string& path,
         minibuffer_message(minibuffer, "Settings (read-only) — /setting, Esc, or Ctrl+Q to return");
     };
 
+    auto exit_dired = [&]() {
+        dired_close(dired);
+        dired_overwrite_is_rename = false;
+        minibuffer_message(minibuffer, "Left dired — editor mode");
+    };
+
+    auto enter_dired = [&](const std::string& path_or_glob) {
+        if (help_view.active) {
+            exit_help_view();
+        }
+        if (buffer_list_active) {
+            buffer_list_active = false;
+        }
+        if (picker.active) {
+            picker.active = false;
+        }
+        if (assist_session.active || reformat_session.active || insert_session.active ||
+            shell_session.active) {
+            minibuffer_message(minibuffer, "Finish or cancel the active job before opening dired");
+            return;
+        }
+        if (minibuffer.active) {
+            minibuffer_message(minibuffer, "Cancel the minibuffer before opening dired");
+            return;
+        }
+        std::string target = path_or_glob;
+        if (target.empty()) {
+            target = state.path.empty() ? std::string(".") : state.path;
+            // If current buffer is a file, open its directory.
+            if (!state.path.empty()) {
+                std::error_code ec;
+                const std::filesystem::path p(state.path);
+                if (std::filesystem::is_regular_file(p, ec) || !std::filesystem::is_directory(p, ec)) {
+                    target = p.has_parent_path() ? p.parent_path().string() : std::string(".");
+                }
+            }
+        }
+        Error err = dired_open(dired, target);
+        if (!err.ok()) {
+            dired_close(dired);
+            minibuffer_message(minibuffer, err.message);
+            return;
+        }
+        minibuffer_message(minibuffer, dired_status_line(dired));
+    };
+
     auto activate_buffer = [&](size_t index) {
         if (index >= buffers.size()) {
             return;
@@ -745,6 +834,22 @@ app::EditorRunResult run_editor(const std::string& path,
             return;
         }
         open_buffer_from_path(open_path, open_path, false);
+    };
+
+    auto dired_open_for_edit = [&]() {
+        const DiredEntry* entry = dired_selected_entry(dired);
+        if (entry == nullptr || entry->is_parent) {
+            minibuffer_message(minibuffer, "Nothing to open");
+            return;
+        }
+        if (entry->is_directory) {
+            minibuffer_message(minibuffer, "Use Enter to open a directory in dired");
+            return;
+        }
+        const std::string path = entry->path;
+        dired_close(dired);
+        dired_overwrite_is_rename = false;
+        request_open_buffer_from_path(path);
     };
 
     auto new_empty_buffer = [&]() {
@@ -2293,6 +2398,11 @@ app::EditorRunResult run_editor(const std::string& path,
                 minibuffer_message(minibuffer, message);
                 return;
             }
+            case EditorSlashCommand::Dired:
+                pending_assist = PendingAssist{};
+                exit_assist_command_mode(minibuffer, assist_completer);
+                enter_dired(slash.path);
+                return;
             case EditorSlashCommand::None:
                 break;
         }
@@ -3059,7 +3169,7 @@ app::EditorRunResult run_editor(const std::string& path,
             const bool command_unavailable =
                 minibuffer.active || replace.active || assist_session.active ||
                 reformat_session.active || insert_session.active || shell_session.active ||
-                picker.active || buffer_list_active || pending_close_confirm ||
+                picker.active || buffer_list_active || dired.active || pending_close_confirm ||
                 window_prefix_active;
             if (!command_unavailable) open_assist_command_minibuffer();
             return;
@@ -3162,6 +3272,381 @@ app::EditorRunResult run_editor(const std::string& path,
             }
             if (ch == 6) {
                 start_minibuffer(minibuffer, MinibufferAction::Search, "Search: ", last_search);
+                return;
+            }
+            return;
+        }
+        if (dired.active) {
+            auto dired_page_rows = [&]() {
+                const TerminalSize size = terminal_size();
+                return std::max(1, size.rows - 4);
+            };
+            auto finish_dired_prompt = [&](const std::string& message) {
+                minibuffer_path_completer.reset();
+                minibuffer_message(minibuffer, message);
+            };
+            if (minibuffer.active) {
+                if (ch == 27) {
+                    dired_overwrite_is_rename = false;
+                    finish_dired_prompt("Cancelled");
+                    return;
+                }
+                if (minibuffer.action == MinibufferAction::DiredConfirmDelete) {
+                    if (ch == 'y' || ch == 'Y') {
+                        Error err = dired_delete_selected(dired, true);
+                        finish_dired_prompt(err.ok() ? "Deleted" : err.message);
+                    } else if (ch == 'n' || ch == 'N') {
+                        finish_dired_prompt("Delete cancelled");
+                    } else {
+                        minibuffer.prompt = "Delete? (y/n) ";
+                        minibuffer.input.clear();
+                    }
+                    return;
+                }
+                if (minibuffer.action == MinibufferAction::DiredConfirmOverwrite) {
+                    if (ch == 'y' || ch == 'Y') {
+                        const bool was_rename = dired_overwrite_is_rename;
+                        Error err = was_rename
+                                        ? dired_rename_selected(dired, pending_load_path, true)
+                                        : dired_copy_selected(dired, pending_load_path, true);
+                        dired_overwrite_is_rename = false;
+                        pending_load_path.clear();
+                        finish_dired_prompt(err.ok() ? (was_rename ? "Renamed" : "Copied")
+                                                     : err.message);
+                    } else if (ch == 'n' || ch == 'N') {
+                        dired_overwrite_is_rename = false;
+                        pending_load_path.clear();
+                        finish_dired_prompt("Overwrite cancelled");
+                    } else {
+                        minibuffer.prompt = "Overwrite? (y/n) ";
+                        minibuffer.input.clear();
+                    }
+                    return;
+                }
+                if (minibuffer.action == MinibufferAction::Search) {
+                    if (ch == '\r' || ch == '\n') {
+                        last_search = minibuffer.input;
+                        dired.last_search = last_search;
+                        if (dired.focus == DiredFocus::View) {
+                            const bool found = dired.view.search_next(last_search);
+                            finish_dired_prompt(found ? ("Found: " + last_search)
+                                                      : ("Search not found: " + last_search));
+                        } else {
+                            finish_dired_prompt("Open a file with Enter before searching");
+                        }
+                        return;
+                    }
+                    if (ch == 127 || ch == 8) {
+                        if (!minibuffer.input.empty()) minibuffer.input.pop_back();
+                        return;
+                    }
+                    if (ch >= 0x20U) {
+                        minibuffer.input.push_back(static_cast<char>(ch));
+                        return;
+                    }
+                    return;
+                }
+                const bool path_prompt =
+                    minibuffer.action == MinibufferAction::DiredPath ||
+                    minibuffer.action == MinibufferAction::DiredRename ||
+                    minibuffer.action == MinibufferAction::DiredCopy ||
+                    minibuffer.action == MinibufferAction::DiredNewFile ||
+                    minibuffer.action == MinibufferAction::DiredNewDir;
+                if (path_prompt) {
+                    if (ch == '\t') {
+                        const PathCompletionResult result =
+                            complete_path_input(minibuffer.input, minibuffer_path_completer);
+                        minibuffer.message = path_completion_status(result);
+                        return;
+                    }
+                    if (ch == 127 || ch == 8) {
+                        if (!minibuffer.input.empty()) {
+                            minibuffer.input.pop_back();
+                            minibuffer_path_completer.reset();
+                        }
+                        return;
+                    }
+                    if (ch == '\r' || ch == '\n') {
+                        const std::string value = trim_ascii_copy(minibuffer.input);
+                        const MinibufferAction action = minibuffer.action;
+                        if (action == MinibufferAction::DiredPath) {
+                            Error err = dired_open(dired, value.empty() ? "." : value);
+                            finish_dired_prompt(err.ok() ? dired_status_line(dired) : err.message);
+                            return;
+                        }
+                        if (action == MinibufferAction::DiredRename) {
+                            Error err = dired_rename_selected(dired, value, false);
+                            if (!err.ok() && err.message.find("confirm overwrite") != std::string::npos) {
+                                pending_load_path = value;
+                                dired_overwrite_is_rename = true;
+                                start_minibuffer(minibuffer,
+                                                 MinibufferAction::DiredConfirmOverwrite,
+                                                 "Overwrite existing path? (y/n) ");
+                                return;
+                            }
+                            finish_dired_prompt(err.ok() ? "Renamed" : err.message);
+                            return;
+                        }
+                        if (action == MinibufferAction::DiredCopy) {
+                            Error err = dired_copy_selected(dired, value, false);
+                            if (!err.ok() && err.message.find("confirm overwrite") != std::string::npos) {
+                                pending_load_path = value;
+                                dired_overwrite_is_rename = false;
+                                start_minibuffer(minibuffer,
+                                                 MinibufferAction::DiredConfirmOverwrite,
+                                                 "Overwrite existing path? (y/n) ");
+                                return;
+                            }
+                            finish_dired_prompt(err.ok() ? "Copied" : err.message);
+                            return;
+                        }
+                        if (action == MinibufferAction::DiredNewFile) {
+                            std::string created;
+                            Error err = dired_create_file(dired, value, created);
+                            if (!err.ok()) {
+                                finish_dired_prompt(err.message);
+                                return;
+                            }
+                            dired_close(dired);
+                            dired_overwrite_is_rename = false;
+                            request_open_buffer_from_path(created);
+                            return;
+                        }
+                        if (action == MinibufferAction::DiredNewDir) {
+                            Error err = dired_create_directory(dired, value);
+                            finish_dired_prompt(err.ok() ? "Directory created" : err.message);
+                            return;
+                        }
+                        return;
+                    }
+                    if (ch >= 0x20U) {
+                        minibuffer.input.push_back(static_cast<char>(ch));
+                        minibuffer_path_completer.reset();
+                        return;
+                    }
+                    return;
+                }
+                // Unknown minibuffer while dired: cancel on Esc already handled.
+                return;
+            }
+
+            if (ch == 17) {
+                // Ctrl+Q is global quit: leave dired, then run the normal editor quit path.
+                dired_close(dired);
+                dired_overwrite_is_rename = false;
+                handle_key(17, false);
+                return;
+            }
+            if (ch == 'q' || ch == 'Q') {
+                exit_dired();
+                return;
+            }
+
+            // Viewing a file: navigation applies to the RO buffer.
+            if (dired.focus == DiredFocus::View) {
+                if (ch == '\r' || ch == '\n') {
+                    dired_close_view(dired);
+                    minibuffer_message(minibuffer, "Back to file list");
+                    return;
+                }
+                if (ch == 'o' || ch == 'O') {
+                    dired_open_for_edit();
+                    return;
+                }
+                if (ch == 'f' || ch == 'F' || ch == 6) {
+                    start_minibuffer(minibuffer, MinibufferAction::Search, "Find: ",
+                                     dired.last_search.empty() ? last_search : dired.last_search);
+                    return;
+                }
+                if (ch == 27) {
+                    const std::string sequence =
+                        decoded_escape ? std::string{} : read_escape_suffix();
+                    if (sequence.empty()) {
+                        // Bare Esc cancels nothing special; stay in view.
+                        minibuffer_message(minibuffer, "Viewing file — Enter returns to list");
+                        return;
+                    }
+                    if (is_dired_f4_sequence(sequence)) {
+                        // Already in dired.
+                        return;
+                    }
+                    if (sequence == "OR" || sequence == "[13~" || sequence == "[[C") {
+                        const std::string needle =
+                            dired.last_search.empty() ? last_search : dired.last_search;
+                        if (needle.empty()) {
+                            minibuffer_message(minibuffer, "No search string; press f to find");
+                        } else {
+                            const bool found = dired.view.search_next(needle);
+                            minibuffer_message(minibuffer,
+                                               found ? ("Found: " + needle)
+                                                     : ("Search not found: " + needle));
+                        }
+                        return;
+                    }
+                    if (sequence == "[1;2R" || sequence == "O1;2R" || sequence == "[13;2~" ||
+                        sequence == "[25~") {
+                        const std::string needle =
+                            dired.last_search.empty() ? last_search : dired.last_search;
+                        if (needle.empty()) {
+                            minibuffer_message(minibuffer, "No search string; press f to find");
+                        } else {
+                            const bool found = dired.view.search_previous(needle);
+                            minibuffer_message(minibuffer,
+                                               found ? ("Found: " + needle)
+                                                     : ("Search not found: " + needle));
+                        }
+                        return;
+                    }
+                    std::string escape_status;
+                    const Rect focus_rect = editor_content_rect(editor_main_area());
+                    dispatch_escape_sequence(dired.view, sequence, escape_status,
+                                             dired.last_search.empty() ? last_search
+                                                                       : dired.last_search,
+                                             &focus_rect);
+                    if (!escape_status.empty()) {
+                        minibuffer_message(minibuffer, escape_status);
+                    }
+                    return;
+                }
+                return;
+            }
+
+            // List mode.
+            if (dired.sort_pending) {
+                if (ch == 'n') {
+                    dired_set_sort(dired, DiredSortKey::Name, true);
+                } else if (ch == 'N') {
+                    dired_set_sort(dired, DiredSortKey::Name, false);
+                } else if (ch == 's') {
+                    dired_set_sort(dired, DiredSortKey::Size, true);
+                } else if (ch == 'S') {
+                    dired_set_sort(dired, DiredSortKey::Size, false);
+                } else if (ch == 'd') {
+                    dired_set_sort(dired, DiredSortKey::Date, true);
+                } else if (ch == 'D') {
+                    dired_set_sort(dired, DiredSortKey::Date, false);
+                } else if (ch == 27) {
+                    dired.sort_pending = false;
+                    minibuffer_message(minibuffer, "Sort cancelled");
+                    return;
+                } else {
+                    dired.sort_pending = false;
+                    minibuffer_message(
+                        minibuffer,
+                        "Sort cancelled (use (n)ame (s)ize (d)ate or (N)ame (S)ize (D)ate)");
+                    return;
+                }
+                minibuffer_message(minibuffer, "Sorted by " + dired_sort_label(dired.sort_key,
+                                                                               dired.sort_ascending));
+                return;
+            }
+
+            if (ch == 27) {
+                const std::string sequence =
+                    decoded_escape ? std::string{} : read_escape_suffix();
+                if (sequence.empty()) {
+                    minibuffer_message(minibuffer, "Dired — press q to leave");
+                    return;
+                }
+                if (is_dired_f4_sequence(sequence)) {
+                    return;
+                }
+                MovementKeyEvent movement;
+                if (parse_movement_sequence(sequence, movement)) {
+                    if (movement.key == MovementKey::Left) {
+                        Error err = dired_go_parent(dired);
+                        minibuffer_message(minibuffer,
+                                           err.ok() ? dired_status_line(dired) : err.message);
+                        return;
+                    }
+                    if (movement.key == MovementKey::Right) {
+                        Error err = dired_go_deeper(dired);
+                        minibuffer_message(minibuffer,
+                                           err.ok() ? dired_status_line(dired) : err.message);
+                        return;
+                    }
+                    dired_move_selection(dired, movement.key, dired_page_rows());
+                    minibuffer_message(minibuffer, dired_status_line(dired));
+                    return;
+                }
+                return;
+            }
+            if (ch == '\r' || ch == '\n') {
+                Error err = dired_activate_selection(dired, settings);
+                minibuffer_message(minibuffer, err.ok() ? dired_status_line(dired) : err.message);
+                return;
+            }
+            if (ch == 'o' || ch == 'O') {
+                dired_open_for_edit();
+                return;
+            }
+            if (ch == 'g' || ch == 'G') {
+                Error err = dired_refresh(dired);
+                minibuffer_message(minibuffer, err.ok() ? "Refreshed" : err.message);
+                return;
+            }
+            if (ch == 'r' || ch == 'R') {
+                const DiredEntry* entry = dired_selected_entry(dired);
+                const std::string initial =
+                    entry != nullptr && !entry->is_parent ? entry->name : std::string();
+                start_minibuffer(minibuffer, MinibufferAction::DiredRename, "Rename to: ", initial,
+                                 &minibuffer_path_completer);
+                return;
+            }
+            if (ch == 'c' || ch == 'C') {
+                const DiredEntry* entry = dired_selected_entry(dired);
+                const std::string initial =
+                    entry != nullptr && !entry->is_parent ? entry->name : std::string();
+                start_minibuffer(minibuffer, MinibufferAction::DiredCopy, "Copy to: ", initial,
+                                 &minibuffer_path_completer);
+                return;
+            }
+            if (ch == 'd' || ch == 'D') {
+                const DiredEntry* entry = dired_selected_entry(dired);
+                if (entry == nullptr || entry->is_parent) {
+                    minibuffer_message(minibuffer, "Nothing to delete");
+                    return;
+                }
+                std::error_code ec;
+                const bool nonempty_dir =
+                    entry->is_directory &&
+                    !std::filesystem::is_empty(entry->path, ec) && !ec;
+                start_minibuffer(
+                    minibuffer,
+                    MinibufferAction::DiredConfirmDelete,
+                    nonempty_dir ? ("Delete non-empty " + entry->name + "/ recursively? (y/n) ")
+                                 : ("Delete " + entry->name + "? (y/n) "));
+                return;
+            }
+            if (ch == 'n' || ch == 'N') {
+                start_minibuffer(minibuffer, MinibufferAction::DiredNewFile, "New file: ", "",
+                                 &minibuffer_path_completer);
+                return;
+            }
+            if (ch == 'm' || ch == 'M') {
+                start_minibuffer(minibuffer, MinibufferAction::DiredNewDir,
+                                 "New directory (mkdir -p): ", "", &minibuffer_path_completer);
+                return;
+            }
+            if (ch == 't' || ch == 'T') {
+                Error err = dired_touch_selected(dired);
+                minibuffer_message(minibuffer, err.ok() ? "Touched" : err.message);
+                return;
+            }
+            if (ch == 'f' || ch == 'F') {
+                minibuffer_message(minibuffer, "Press Enter to view a file, then f to find");
+                return;
+            }
+            if (ch == 's' || ch == 'S') {
+                dired.sort_pending = true;
+                minibuffer_message(
+                    minibuffer,
+                    "Sort by: (n)ame (s)ize (d)ate asc, (N)ame (S)ize (D)ate desc");
+                return;
+            }
+            if (ch == '*') {
+                dired_capture_baseline(dired);
+                minibuffer_message(minibuffer, "Marked listing as reviewed");
                 return;
             }
             return;
@@ -3415,7 +3900,7 @@ app::EditorRunResult run_editor(const std::string& path,
             if (action == "cancel" || action.empty()) {
                 minibuffer_message(minibuffer,
                                    action == "cancel" ? "Window command cancelled"
-                                                      : "Unknown window command (v/h/o/0/1)");
+                                                      : "Unknown window command (v/h/o/0/1/d)");
                 return;
             }
             if (action == "split-v") {
@@ -3439,13 +3924,15 @@ app::EditorRunResult run_editor(const std::string& path,
                 apply_closesplit();
             } else if (action == "maximize") {
                 apply_maximize_split();
+            } else if (action == "dired") {
+                enter_dired("");
             }
             return;
         }
         if (ch == 24) {
-            if (help_view.active || picker.active || buffer_list_active || pending_close_confirm ||
-                assist_session.active || reformat_session.active || insert_session.active ||
-                shell_session.active) {
+            if (help_view.active || dired.active || picker.active || buffer_list_active ||
+                pending_close_confirm || assist_session.active || reformat_session.active ||
+                insert_session.active || shell_session.active) {
                 minibuffer_message(minibuffer, "Finish the current action before window commands");
                 return;
             }
@@ -3637,6 +4124,10 @@ app::EditorRunResult run_editor(const std::string& path,
                         handle_key(decoded, decoded == 27);
                         return;
                     }
+                    if (is_dired_f4_sequence(sequence)) {
+                        enter_dired("");
+                        return;
+                    }
                     std::string escape_status;
                     const Rect focus_rect = assist_panel_rect();
                     dispatch_escape_sequence(state, sequence, escape_status, last_search, &focus_rect);
@@ -3806,6 +4297,10 @@ app::EditorRunResult run_editor(const std::string& path,
                          std::nullopt,
                          &assist_state);
         }
+    }
+
+    if (settings.start_dired) {
+        enter_dired(settings.start_dired_path.empty() ? "." : settings.start_dired_path);
     }
 
     while (!quit) {
