@@ -59,6 +59,18 @@ void close_fd(int& fd) {
     }
 }
 
+void discard_pending_signal(const sigset_t& blocked, int signal) {
+    sigset_t pending{};
+    if (sigpending(&pending) != 0 || sigismember(&pending, signal) != 1)
+        return;
+
+    int received = 0;
+    int wait_error = 0;
+    do {
+        wait_error = sigwait(&blocked, &received);
+    } while (wait_error == EINTR);
+}
+
 struct ChildProcess {
     pid_t pid = -1;
     pid_t group = -1;
@@ -120,12 +132,7 @@ struct PipeSignalGuard {
 
     ~PipeSignalGuard() {
         if (!active) return;
-        if (!was_pending) {
-            timespec timeout{};
-            while (sigtimedwait(&blocked, nullptr, &timeout) < 0 &&
-                   errno == EINTR) {
-            }
-        }
+        if (!was_pending) discard_pending_signal(blocked, SIGPIPE);
         (void)pthread_sigmask(SIG_SETMASK, &previous, nullptr);
     }
 };
