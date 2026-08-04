@@ -6,12 +6,12 @@
 #include <limits>
 #include <string>
 #include <vector>
-#include <unistd.h>
 
 #include "agent/session_runtime.hpp"
 #include "app/app.hpp"
 #include "cli/args.hpp"
 #include "provider/provider.hpp"
+#include "platform/environment.hpp"
 #include "support/test_support.hpp"
 
 namespace ainiux::test::agent_session_runtime {
@@ -22,7 +22,7 @@ namespace fs = std::filesystem;
 std::string temp_workspace(const std::string& name) {
     const fs::path root =
         fs::temp_directory_path() / ("ainiux-agent-runtime-" + name + "-" +
-                                     std::to_string(static_cast<long long>(::getpid())));
+                                     std::to_string(ainiux::platform::current_process_id()));
     std::error_code ec;
     fs::remove_all(root, ec);
     fs::create_directories(root, ec);

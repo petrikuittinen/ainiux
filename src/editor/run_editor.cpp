@@ -42,12 +42,12 @@
 #include <cctype>
 #include <charconv>
 #include <chrono>
+#include <cstdint>
 #include <filesystem>
 #include <functional>
 #include <iostream>
 #include <optional>
 #include <vector>
-#include <unistd.h>
 
 namespace ainiux::editor {
 namespace {
@@ -84,7 +84,7 @@ struct ShellEvent {
     std::string status_line;
     std::string buffer_text;
     long long duration_ms = 0;
-    int exit_status = -1;
+    std::int64_t exit_status = -1;
     bool failed = false;
 };
 
@@ -178,8 +178,11 @@ app::EditorRunResult run_editor(const std::string& path,
         split_layout.reset(active_buffer);
         status = "Editor";
     } else {
+        std::error_code initial_path_error;
         const bool initial_target_exists =
-            !initial_path.empty() && access(initial_path.c_str(), F_OK) == 0;
+            !initial_path.empty() &&
+            std::filesystem::exists(std::filesystem::u8path(initial_path), initial_path_error) &&
+            !initial_path_error;
         if (!initial_path.empty()) {
             Error lock_error = state.begin_file_session(initial_path, initial_target_exists);
             if (!lock_error.ok()) {
@@ -710,9 +713,9 @@ app::EditorRunResult run_editor(const std::string& path,
             // If current buffer is a file, open its directory.
             if (!state.path.empty()) {
                 std::error_code ec;
-                const std::filesystem::path p(state.path);
+                const std::filesystem::path p = std::filesystem::u8path(state.path);
                 if (std::filesystem::is_regular_file(p, ec) || !std::filesystem::is_directory(p, ec)) {
-                    target = p.has_parent_path() ? p.parent_path().string() : std::string(".");
+                    target = p.has_parent_path() ? p.parent_path().u8string() : std::string(".");
                 }
             }
         }

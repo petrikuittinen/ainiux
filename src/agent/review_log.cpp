@@ -6,14 +6,20 @@
 #include <chrono>
 #include <cstring>
 #include <ctime>
-#include <dirent.h>
 #include <filesystem>
+#include <fstream>
 #include <iomanip>
 #include <regex>
 #include <sstream>
+#if defined(_WIN32)
+#include "platform/environment.hpp"
+#include "platform/filesystem.hpp"
+#else
+#include <dirent.h>
 #include <sys/stat.h>
 #include <fcntl.h>
 #include <unistd.h>
+#endif
 
 #include "agent/project_paths.hpp"
 #include "html/html.hpp"
@@ -29,9 +35,11 @@ json::Value string_value(const std::string& s) { json::Value v; v.type = json::V
 json::Value number_value(double n) { json::Value v; v.type = json::Value::Type::Number; v.number = n; return v; }
 json::Value bool_value(bool b) { json::Value v; v.type = json::Value::Type::Bool; v.boolean = b; return v; }
 
+#if !defined(_WIN32)
 std::string errno_text(const std::string& action, const std::string& path) {
     return action + " " + path + ": " + std::strerror(errno);
 }
+#endif
 
 std::string timestamp(bool filename) {
     const auto now = std::chrono::system_clock::now();
@@ -39,7 +47,11 @@ std::string timestamp(bool filename) {
                             now.time_since_epoch()).count();
     const std::time_t seconds = static_cast<std::time_t>(millis / 1000);
     std::tm utc{};
+#if defined(_WIN32)
+    if (gmtime_s(&utc, &seconds) != 0) return std::to_string(millis);
+#else
     if (gmtime_r(&seconds, &utc) == nullptr) return std::to_string(millis);
+#endif
     char date[32] = {};
     std::strftime(date, sizeof(date), filename ? "%Y%m%dT%H%M%S" : "%Y-%m-%dT%H:%M:%S", &utc);
     std::ostringstream out;
@@ -47,6 +59,7 @@ std::string timestamp(bool filename) {
     return out.str();
 }
 
+#if !defined(_WIN32)
 class FdHandle {
    public:
     explicit FdHandle(int fd = -1) : fd_(fd) {}
@@ -82,6 +95,7 @@ Error open_secure_child_directory(int parent_fd, const std::string& name,
         return {ErrorCode::FileWrite, errno_text("could not secure log directory", display_path)};
     return ok_error();
 }
+#endif
 
 std::string base64_encode(const std::string& input) {
     static constexpr char table[] =
@@ -139,8 +153,15 @@ void add_error(json::Value& fields, const Error& error) {
 
 ReviewLogger::~ReviewLogger() {
     std::lock_guard<std::mutex> lock(mutex_);
+#if defined(_WIN32)
+    if (stream_) {
+        stream_->close();
+        stream_.reset();
+    }
+#else
     if (fd_ >= 0) ::close(fd_);
     if (directory_fd_ >= 0) ::close(directory_fd_);
+#endif
 }
 
 bool valid_run_kind(const std::string& run_kind) {
@@ -181,7 +202,39 @@ Error ReviewLogger::initialize(const std::string& workspace, int keep_runs,
     }
     secrets_.insert(secrets_.end(), escaped.begin(), escaped.end());
 
-    fs::path root = workspace.empty() ? fs::path(".") : fs::path(workspace);
+    fs::path root = workspace.empty() ? fs::path(".") : fs::u8path(workspace);
+#if defined(_WIN32)
+    const fs::path log_directory =
+        root / kProjectStateDirName / "logs" / fs::u8path(run_kind_);
+    Error directory_error =
+        platform::ensure_private_directory(log_directory.u8string(), true, true);
+    if (!directory_error.ok()) return directory_error;
+    directory_ = log_directory.u8string();
+    static std::atomic<unsigned long long> counter{0};
+    const std::string prefix = run_kind_ + "-" + timestamp(true) + "-" +
+                               std::to_string(platform::current_process_id()) + "-";
+    for (int attempts = 0; attempts < 1000; ++attempts) {
+        const unsigned long long suffix = counter.fetch_add(1) + 1;
+        run_id_ = prefix + std::to_string(suffix);
+        final_name_ = run_id_ + ".jsonl";
+        partial_name_ = final_name_ + ".partial";
+        final_path_ = (log_directory / fs::u8path(final_name_)).u8string();
+        partial_path_ = (log_directory / fs::u8path(partial_name_)).u8string();
+        bool created = false;
+        Error create_error = platform::create_private_file_exclusive(partial_path_, created);
+        if (!create_error.ok()) return create_error;
+        if (!created) continue;
+        stream_.reset(new std::ofstream(fs::u8path(partial_path_),
+                                        std::ios::out | std::ios::binary | std::ios::app));
+        if (!*stream_)
+            return {ErrorCode::FileWrite,
+                    "could not open security-review log: " + partial_path_};
+        break;
+    }
+    if (!stream_)
+        return {ErrorCode::FileWrite,
+                "could not choose a unique security-review log name"};
+#else
     FdHandle parent(::open(root.c_str(), O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW));
     if (parent.get() < 0)
         return {ErrorCode::FileWrite, errno_text("could not open security-review workspace", root.string())};
@@ -216,6 +269,7 @@ Error ReviewLogger::initialize(const std::string& workspace, int keep_runs,
         if (errno != EEXIST) return {ErrorCode::FileWrite, errno_text("could not create security-review log", partial_path_)};
     }
     if (fd_ < 0) return {ErrorCode::FileWrite, "could not choose a unique security-review log name"};
+#endif
     active_ = true;
     return ok_error();
 }
@@ -239,7 +293,14 @@ json::Value ReviewLogger::payload(const std::string& bytes) {
 
 void ReviewLogger::fail_locked(const std::string& detail) {
     active_ = false;
+#if defined(_WIN32)
+    if (stream_) {
+        stream_->close();
+        stream_.reset();
+    }
+#else
     if (fd_ >= 0) { ::close(fd_); fd_ = -1; }
+#endif
     if (!warned_) {
         warned_ = true;
         const std::string label = run_kind_ == "security-review" ? "SECURITY REVIEW"
@@ -254,6 +315,20 @@ void ReviewLogger::fail_locked(const std::string& detail) {
 bool ReviewLogger::write_record_locked(const std::string& record) {
     std::string line = redact_secrets(record, secrets_);
     line.push_back('\n');
+#if defined(_WIN32)
+    stream_->write(line.data(), static_cast<std::streamsize>(line.size()));
+    stream_->flush();
+    if (!*stream_) {
+        fail_locked("could not write security-review log: " + partial_path_);
+        return false;
+    }
+    Error flush_error = platform::flush_file(partial_path_);
+    if (!flush_error.ok()) {
+        fail_locked(flush_error.message);
+        return false;
+    }
+    return true;
+#else
     std::size_t offset = 0;
     while (offset < line.size()) {
         const ssize_t written = ::write(fd_, line.data() + offset, line.size() - offset);
@@ -279,6 +354,7 @@ bool ReviewLogger::write_record_locked(const std::string& record) {
         return false;
     }
     return true;
+#endif
 }
 
 void ReviewLogger::event(const std::string& event_type, const ReviewLogContext& context,
@@ -368,6 +444,31 @@ void ReviewLogger::finish(json::Value fields, const std::string& status) {
     {
         std::lock_guard<std::mutex> lock(mutex_);
         if (!active_) return;
+#if defined(_WIN32)
+        stream_->flush();
+        if (!*stream_) {
+            fail_locked("could not flush security-review log: " + partial_path_);
+            return;
+        }
+        Error flush_error = platform::flush_file(partial_path_);
+        if (!flush_error.ok()) {
+            fail_locked(flush_error.message);
+            return;
+        }
+        stream_->close();
+        if (stream_->fail()) {
+            stream_.reset();
+            fail_locked("could not close security-review log: " + partial_path_);
+            return;
+        }
+        stream_.reset();
+        Error move_error = platform::atomic_move(partial_path_, final_path_);
+        if (!move_error.ok()) {
+            fail_locked(move_error.message);
+            return;
+        }
+        active_ = false;
+#else
         if (::fsync(fd_) != 0) { fail_locked(errno_text("could not fsync security-review log", partial_path_)); return; }
         if (::close(fd_) != 0) { fd_ = -1; fail_locked(errno_text("could not close security-review log", partial_path_)); return; }
         fd_ = -1;
@@ -381,6 +482,7 @@ void ReviewLogger::finish(json::Value fields, const std::string& status) {
             if (!warned_ && warning_) warning_("SECURITY REVIEW LOG WARNING: " + redact_secrets(detail, secrets_));
             warned_ = true;
         }
+#endif
     }
     prune_completed();
 }
@@ -392,6 +494,46 @@ void ReviewLogger::prune_completed() {
     const std::regex recognized(pattern);
     const std::string warn_label =
         run_kind_ == "security-review" ? "SECURITY REVIEW LOG WARNING: " : "AGENT LOG WARNING: ";
+#if defined(_WIN32)
+    std::vector<std::string> files;
+    std::error_code enumeration_error;
+    for (fs::directory_iterator iterator(fs::u8path(directory_), enumeration_error), end;
+         !enumeration_error && iterator != end; iterator.increment(enumeration_error)) {
+        const std::string name = iterator->path().filename().u8string();
+        if (!std::regex_match(name, recognized)) continue;
+        std::error_code status_error;
+        const fs::file_status status = iterator->symlink_status(status_error);
+        bool linked = true;
+        const Error link_error = platform::path_is_link_or_reparse(
+            iterator->path().u8string(), linked);
+        if (!status_error && link_error.ok() && !linked && fs::is_regular_file(status))
+            files.push_back(name);
+    }
+    if (enumeration_error) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (!warned_ && warning_)
+            warning_(warn_label + "could not enumerate completed logs " + directory_ + ": " +
+                     enumeration_error.message());
+        warned_ = true;
+        return;
+    }
+    std::sort(files.begin(), files.end());
+    while (files.size() > static_cast<std::size_t>(keep_runs_)) {
+        const fs::path victim = fs::u8path(directory_) / fs::u8path(files.front());
+        files.erase(files.begin());
+        std::error_code remove_error;
+        const fs::file_status status = fs::symlink_status(victim, remove_error);
+        if (remove_error || !fs::is_regular_file(status) || !fs::remove(victim, remove_error) ||
+            remove_error) {
+            std::lock_guard<std::mutex> lock(mutex_);
+            if (!warned_ && warning_)
+                warning_(warn_label + "could not prune completed log " + victim.u8string() +
+                         (remove_error ? ": " + remove_error.message() : std::string()));
+            warned_ = true;
+            return;
+        }
+    }
+#else
     const int duplicate = ::dup(directory_fd_);
     DIR* raw_directory = duplicate < 0 ? nullptr : ::fdopendir(duplicate);
     if (raw_directory == nullptr) {
@@ -439,6 +581,7 @@ void ReviewLogger::prune_completed() {
             return;
         }
     }
+#endif
 }
 
 }  // namespace ainiux::agent

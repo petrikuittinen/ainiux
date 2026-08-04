@@ -6,21 +6,32 @@
 #include <cstring>
 #include <queue>
 #include <system_error>
-#include <unistd.h>
+#include "platform/environment.hpp"
+#include "platform/filesystem.hpp"
 
 namespace ainiux::agent {
 namespace {
 namespace fs = std::filesystem;
 
 std::string generic_string(const fs::path& path) {
-    return path.lexically_normal().generic_string();
+    return path.lexically_normal().generic_u8string();
+}
+
+fs::path project_state_path(const fs::path& parent) {
+    std::error_code error;
+    for (fs::directory_iterator iterator(parent, error), end;
+         !error && iterator != end; iterator.increment(error)) {
+        if (is_project_state_dir_name(iterator->path().filename().u8string()))
+            return iterator->path();
+    }
+    return parent / kProjectStateDirName;
 }
 
 }  // namespace
 
 bool has_project_state_dir(const std::string& path) {
     std::error_code ec;
-    const fs::path marker = fs::path(path) / kProjectStateDirName;
+    const fs::path marker = project_state_path(fs::u8path(path));
     return fs::is_directory(marker, ec) && !ec;
 }
 
@@ -35,21 +46,21 @@ Error resolve_new_project_target(const std::string& active_root,
     if (expanded.empty()) {
         expanded = active_root;
     } else if (expanded == "~" || expanded.rfind("~/", 0) == 0) {
-        const char* home = std::getenv("HOME");
-        if (home == nullptr || *home == '\0')
+        const std::string home = platform::home_directory();
+        if (home.empty())
             return {ErrorCode::BadArgs,
                     "could not expand ~ for /new because HOME is not set"};
         expanded = expanded == "~"
-                       ? std::string(home)
-                       : (fs::path(home) / expanded.substr(2)).string();
+                       ? home
+                       : (fs::u8path(home) / expanded.substr(2)).u8string();
     } else if (expanded[0] == '~') {
         return {ErrorCode::BadArgs,
                 "/new does not expand ~user paths; use an absolute path instead"};
     }
 
     std::error_code ec;
-    fs::path candidate(expanded);
-    if (candidate.is_relative()) candidate = fs::path(active_root) / candidate;
+    fs::path candidate = fs::u8path(expanded);
+    if (candidate.is_relative()) candidate = fs::u8path(active_root) / candidate;
     candidate = fs::absolute(candidate, ec).lexically_normal();
     if (ec)
         return {ErrorCode::BadArgs,
@@ -58,26 +69,28 @@ Error resolve_new_project_target(const std::string& active_root,
     const fs::file_status status = fs::symlink_status(candidate, ec);
     if (ec && ec != std::errc::no_such_file_or_directory) {
         return {ErrorCode::FileRead,
-                "could not inspect /new target " + candidate.string() + ": " + ec.message()};
+                "could not inspect /new target " + candidate.u8string() + ": " + ec.message()};
     }
     ec.clear();
     if (fs::exists(status)) {
-        if (fs::is_symlink(status))
+        bool linked = false;
+        Error link_error = platform::path_is_link_or_reparse(candidate.u8string(), linked);
+        if (!link_error.ok()) return link_error;
+        if (linked)
             return {ErrorCode::BadArgs,
-                    "/new target must be a real directory, not a symlink: " +
-                        candidate.string()};
+                    "/new target must be a real directory, not a symlink/reparse point: " +
+                        candidate.u8string()};
         if (!fs::is_directory(status))
             return {ErrorCode::BadArgs,
-                    "/new target is not a directory: " + candidate.string()};
+                    "/new target is not a directory: " + candidate.u8string()};
         candidate = fs::canonical(candidate, ec);
         if (ec)
             return {ErrorCode::FileRead,
-                    "could not access /new target " + candidate.string() + ": " + ec.message()};
+                    "could not access /new target " + candidate.u8string() + ": " + ec.message()};
         target.root_exists = true;
-        if (::access(candidate.c_str(), R_OK | W_OK | X_OK) != 0)
-            return {ErrorCode::FileWrite,
-                    "cannot read and modify /new target " + candidate.string() + ": " +
-                        std::strerror(errno)};
+        Error access_error =
+            platform::require_directory_access(candidate.u8string(), true, true);
+        if (!access_error.ok()) return access_error;
     } else {
         const fs::path parent = candidate.parent_path();
         const fs::file_status parent_status = fs::symlink_status(parent, ec);
@@ -85,34 +98,36 @@ Error resolve_new_project_target(const std::string& active_root,
             return {ErrorCode::BadArgs,
                     "/new can create only the final path component; parent directory does not "
                     "exist: " +
-                        parent.string()};
+                        parent.u8string()};
         }
         fs::path canonical_parent = fs::canonical(parent, ec);
         if (ec)
             return {ErrorCode::FileRead,
-                    "could not access /new parent " + parent.string() + ": " + ec.message()};
-        if (::access(canonical_parent.c_str(), W_OK | X_OK) != 0)
-            return {ErrorCode::FileWrite,
-                    "cannot create /new target in parent " + canonical_parent.string() + ": " +
-                        std::strerror(errno)};
+                    "could not access /new parent " + parent.u8string() + ": " + ec.message()};
+        Error access_error =
+            platform::require_directory_access(canonical_parent.u8string(), false, true);
+        if (!access_error.ok()) return access_error;
         candidate = canonical_parent / candidate.filename();
     }
 
-    const fs::path state_dir = candidate / kProjectStateDirName;
+    const fs::path state_dir = project_state_path(candidate);
     const fs::file_status state_status = fs::symlink_status(state_dir, ec);
     if (ec && ec != std::errc::no_such_file_or_directory) {
         return {ErrorCode::FileRead,
-                "could not inspect agent state " + state_dir.string() + ": " + ec.message()};
+                "could not inspect agent state " + state_dir.u8string() + ": " + ec.message()};
     }
     if (!ec && fs::exists(state_status)) {
-        if (fs::is_symlink(state_status))
+        bool linked = false;
+        Error link_error = platform::path_is_link_or_reparse(state_dir.u8string(), linked);
+        if (!link_error.ok()) return link_error;
+        if (linked)
             return {ErrorCode::BadArgs,
-                    "refusing /new because agent state is a symlink: " +
-                        state_dir.string()};
+                    "refusing /new because agent state is a symlink/reparse point: " +
+                        state_dir.u8string()};
         if (!fs::is_directory(state_status))
             return {ErrorCode::BadArgs,
                     "agent state path exists but is not a directory: " +
-                        state_dir.string()};
+                        state_dir.u8string()};
         target.state_dir_exists = true;
     }
 
@@ -124,7 +139,7 @@ Error resolve_new_project_target(const std::string& active_root,
 Error resolve_agent_project_root(const std::string& workspace, std::string& absolute_root) {
     absolute_root.clear();
     std::error_code ec;
-    const fs::path input = workspace.empty() ? fs::path(".") : fs::path(workspace);
+    const fs::path input = workspace.empty() ? fs::path(".") : fs::u8path(workspace);
     const fs::path cwd = fs::absolute(input, ec);
     if (ec) {
         return {ErrorCode::BadArgs, "could not resolve agent workspace path: " + ec.message()};
@@ -135,7 +150,7 @@ Error resolve_agent_project_root(const std::string& workspace, std::string& abso
     // Parent owns a project (.ainiux-pr only; ~/.ainiux is never a project marker).
     fs::path walk = candidate.parent_path();
     while (!walk.empty() && walk != walk.root_path()) {
-        if (has_project_state_dir(walk.string())) {
+        if (has_project_state_dir(walk.u8string())) {
             return {ErrorCode::BadArgs,
                     "agent project is ambiguous: parent project exists at " + generic_string(walk) +
                         " (cwd " + generic_string(candidate) +
@@ -162,11 +177,17 @@ Error resolve_agent_project_root(const std::string& workspace, std::string& abso
                  it.increment(iter_ec)) {
                 if (iter_ec) break;
                 const fs::path entry = it->path();
-                const std::string name = entry.filename().string();
-                if (name == "." || name == ".." || name == ".git") continue;
+                const std::string name = entry.filename().u8string();
+                if (name == "." || name == "..") continue;
                 std::error_code st_ec;
-                if (!fs::is_directory(entry, st_ec) || st_ec) continue;
-                if (name == kProjectStateDirName && depth > 0) {
+                const fs::file_status literal_status = fs::symlink_status(entry, st_ec);
+                if (st_ec || fs::is_symlink(literal_status) ||
+                    !fs::is_directory(entry, st_ec) || st_ec)
+                    continue;
+                bool linked = false;
+                if (!platform::path_is_link_or_reparse(entry.u8string(), linked).ok() || linked)
+                    continue;
+                if (is_project_state_dir_name(name) && depth > 0) {
                     return {ErrorCode::BadArgs,
                             "agent project is ambiguous: nested project at " +
                                 generic_string(entry.parent_path()) + " under " +
@@ -174,7 +195,7 @@ Error resolve_agent_project_root(const std::string& workspace, std::string& abso
                                 ". Enter that project root, or remove the nested " +
                                 std::string(kProjectStateDirName) + "."};
                 }
-                if (name == kProjectStateDirName) continue;  // cwd's own marker is fine
+                if (is_protected_state_dir_name(name)) continue;
                 q.push({entry, depth + 1});
                 ++visited;
             }

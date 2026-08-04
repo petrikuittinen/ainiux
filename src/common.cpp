@@ -1,5 +1,7 @@
 #include "common.hpp"
 
+#include "platform/environment.hpp"
+
 #include <cerrno>
 #include <cstdlib>
 #include <limits>
@@ -78,19 +80,13 @@ std::string expand_user_path(std::string path) {
         return path;
     }
     if (path == "~") {
-        if (const char* home = std::getenv("HOME")) {
-            if (*home != '\0') {
-                return home;
-            }
-        }
+        const std::string home = platform::home_directory();
+        if (!home.empty()) return home;
         return path;
     }
     if (path.rfind("~/", 0) == 0) {
-        if (const char* home = std::getenv("HOME")) {
-            if (*home != '\0') {
-                return std::string(home) + path.substr(1);
-            }
-        }
+        const std::string home = platform::home_directory();
+        if (!home.empty()) return home + path.substr(1);
     }
     return path;
 }

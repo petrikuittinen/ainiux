@@ -95,7 +95,7 @@ struct TuiEvent {
     // User shell (/shell vs /shell-stdout): draft mode fills the input buffer.
     bool shell_to_draft = false;
     bool shell_failed = false;
-    int shell_exit_status = -1;
+    std::int64_t shell_exit_status = -1;
     bool shell_stdout_truncated = false;
     chat::MediaCleanupResult media_cleanup;
     bool automatic_cleanup = false;

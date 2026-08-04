@@ -2642,9 +2642,9 @@ Language detect_language(const std::string& path) {
     if (path.empty()) {
         return Language::Text;
     }
-    const std::filesystem::path file_path(path);
-    const std::string extension = lower_ascii(file_path.extension().string());
-    const std::string filename = lower_ascii(file_path.filename().string());
+    const std::filesystem::path file_path = std::filesystem::u8path(path);
+    const std::string extension = lower_ascii(file_path.extension().u8string());
+    const std::string filename = lower_ascii(file_path.filename().u8string());
     if (extension == ".md" || extension == ".markdown" || extension == ".mdown" ||
         extension == ".mkd") {
         return Language::Markdown;

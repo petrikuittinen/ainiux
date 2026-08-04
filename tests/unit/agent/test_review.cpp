@@ -7,7 +7,9 @@
 #include <set>
 #include <sstream>
 #include <thread>
+#if !defined(_WIN32)
 #include <sys/stat.h>
+#endif
 
 #include "agent/index/index.hpp"
 #include "agent/process.hpp"
@@ -596,11 +598,16 @@ void test_review_logger() {
     check(error.ok() && logger != nullptr, "security-review logger creates secure run file");
     if (logger) {
         const fs::path partial = logger->partial_path();
+#if defined(_WIN32)
+        check(fs::is_regular_file(partial),
+              "security-review partial log is a regular Windows file");
+#else
         struct stat info{};
         check(::stat(partial.c_str(), &info) == 0 && (info.st_mode & 0777) == 0600,
               "security-review partial log has mode 0600");
         check(::stat(partial.parent_path().c_str(), &info) == 0 && (info.st_mode & 0777) == 0700,
               "security-review log directory has mode 0700");
+#endif
 
         ainiux::json::Value first_fields;
         first_fields.type = ainiux::json::Value::Type::Object;
@@ -709,7 +716,8 @@ void test_review_logger() {
         check(error.ok() && agent_logger != nullptr && agent_logger->run_kind() == "agent",
               "agent diagnostic logger uses the agent run kind");
         if (agent_logger) {
-            check(agent_logger->partial_path().find("/.ainiux-pr/logs/agent/") != std::string::npos,
+            check(std::filesystem::path(agent_logger->partial_path()).generic_u8string().find(
+                      "/.ainiux-pr/logs/agent/") != std::string::npos,
                   "agent diagnostic logs live under .ainiux-pr/logs/agent/");
             ainiux::json::Value fields;
             fields.type = ainiux::json::Value::Type::Object;

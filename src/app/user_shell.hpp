@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstddef>
+#include <cstdint>
 #include <string>
 #include <vector>
 
@@ -23,7 +24,7 @@ struct UserShellResult {
     std::string cwd;
     std::string stdout_text;
     std::string stderr_text;
-    int exit_status = -1;
+    std::int64_t exit_status = -1;
     int signal = 0;
     long long duration_ms = 0;
     bool stdout_truncated = false;

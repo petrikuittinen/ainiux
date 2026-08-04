@@ -3,7 +3,7 @@
 #include <algorithm>
 #include <iostream>
 
-#include <unistd.h>
+#include "tui/terminal.hpp"
 
 namespace ainiux::app {
 
@@ -22,7 +22,7 @@ const char* index_progress_phase_name(agent::index::ProgressPhase phase) {
 }
 
 IndexProgressPrinter::IndexProgressPrinter(bool enabled)
-    : enabled_(enabled), tty_(::isatty(STDERR_FILENO) != 0) {}
+    : enabled_(enabled), tty_(tui::terminal_output_is_interactive()) {}
 
 IndexProgressPrinter::~IndexProgressPrinter() { finish(); }
 

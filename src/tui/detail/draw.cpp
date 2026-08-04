@@ -9,11 +9,10 @@
 
 #include "markdown/table_format.hpp"
 #include "provider/provider.hpp"
+#include "tui/terminal.hpp"
 
 #include <iostream>
 #include <string>
-#include <sys/ioctl.h>
-#include <unistd.h>
 #include <vector>
 
 namespace ainiux::tui::detail {
@@ -201,11 +200,9 @@ StyleRole label_role_for_message(const std::string& role) {
 
 TuiSize terminal_size() {
     TuiSize size;
-    winsize ws{};
-    if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &ws) == 0 && ws.ws_row > 0 && ws.ws_col > 0) {
-        size.rows = ws.ws_row;
-        size.cols = ws.ws_col;
-    }
+    const TerminalDimensions dimensions = terminal_dimensions();
+    size.rows = dimensions.rows;
+    size.cols = dimensions.cols;
     return size;
 }
 

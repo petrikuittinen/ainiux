@@ -8,7 +8,6 @@
 #include <limits>
 #include <sstream>
 #include <utility>
-#include <unistd.h>
 
 #include "agent/agent_loop.hpp"
 #include "agent/compact.hpp"
@@ -20,6 +19,7 @@
 #include "chat/settings.hpp"
 #include "config/model_catalog.hpp"
 #include "security/redact.hpp"
+#include "platform/environment.hpp"
 
 namespace ainiux::agent {
 
@@ -764,7 +764,7 @@ SessionProjectReplaceResult AgentSessionRuntime::replace_project(
         std::error_code cleanup_ec;
         std::string rollback_detail;
         if (initialization_started) {
-            fs::remove_all(fs::path(target.state_dir), cleanup_ec);
+            fs::remove_all(fs::u8path(target.state_dir), cleanup_ec);
             if (cleanup_ec)
                 rollback_detail = "could not remove failed state " + target.state_dir + ": " +
                                   cleanup_ec.message();
@@ -775,13 +775,13 @@ SessionProjectReplaceResult AgentSessionRuntime::replace_project(
             const bool backup_exists = fs::exists(backup, cleanup_ec);
             if (backup_exists && !cleanup_ec) {
                 cleanup_ec.clear();
-                fs::rename(backup, fs::path(target.state_dir), cleanup_ec);
+                fs::rename(backup, fs::u8path(target.state_dir), cleanup_ec);
                 restored_state = !cleanup_ec;
             }
             if (!restored_state) {
                 if (!rollback_detail.empty()) rollback_detail += "; ";
                 rollback_detail +=
-                    "could not restore prior state from " + backup.string() + " to " +
+                    "could not restore prior state from " + backup.u8string() + " to " +
                     target.state_dir +
                     (cleanup_ec ? ": " + cleanup_ec.message()
                                 : std::string(": backup is unavailable"));
@@ -789,8 +789,8 @@ SessionProjectReplaceResult AgentSessionRuntime::replace_project(
         }
         if (created_root) {
             cleanup_ec.clear();
-            if (fs::is_empty(fs::path(target.root), cleanup_ec) && !cleanup_ec)
-                fs::remove(fs::path(target.root), cleanup_ec);
+            if (fs::is_empty(fs::u8path(target.root), cleanup_ec) && !cleanup_ec)
+                fs::remove(fs::u8path(target.root), cleanup_ec);
         }
         result.error = original;
         if (!rollback_detail.empty()) result.error.message += "; rollback: " + rollback_detail;
@@ -806,7 +806,7 @@ SessionProjectReplaceResult AgentSessionRuntime::replace_project(
     };
 
     if (!target.root_exists) {
-        created_root = fs::create_directory(fs::path(target.root), ec);
+        created_root = fs::create_directory(fs::u8path(target.root), ec);
         if (ec || !created_root) {
             reopen_old({ErrorCode::FileWrite,
                         "could not create /new project directory " + target.root + ": " +
@@ -816,15 +816,15 @@ SessionProjectReplaceResult AgentSessionRuntime::replace_project(
     }
 
     if (target.state_dir_exists) {
-        const fs::path root(target.root);
+        const fs::path root = fs::u8path(target.root);
         for (unsigned attempt = 0; attempt < 100; ++attempt) {
             backup = root / (std::string(".ainiux-pr.ainiux-new-backup-") +
-                             std::to_string(static_cast<long long>(::getpid())) + "-" +
+                             std::to_string(platform::current_process_id()) + "-" +
                              std::to_string(attempt));
             if (!fs::exists(backup, ec)) break;
             ec.clear();
         }
-        fs::rename(fs::path(target.state_dir), backup, ec);
+        fs::rename(fs::u8path(target.state_dir), backup, ec);
         if (ec) {
             reopen_old({ErrorCode::FileWrite,
                         "could not release existing agent state " + target.state_dir + ": " +
@@ -849,7 +849,7 @@ SessionProjectReplaceResult AgentSessionRuntime::replace_project(
         fs::remove_all(backup, ec);
         if (ec)
             result.warning = "Fresh project initialized, but old state cleanup failed at " +
-                             backup.string() + ": " + ec.message();
+                             backup.u8string() + ": " + ec.message();
     }
     result.workspace = target.root;
     result.error = ok_error();

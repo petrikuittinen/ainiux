@@ -7,6 +7,10 @@ MODEL="mock-model"
 SERVER_LOG="$ROOT/build/mock_server.log"
 EMPTY_CONFIG_HOME="$ROOT/build/empty-config-home"
 TEST_HOME="$ROOT/build/test-home"
+WINDOWS_NATIVE=0
+if [ "${OS:-}" = "Windows_NT" ]; then
+    WINDOWS_NATIVE=1
+fi
 
 mkdir -p "$EMPTY_CONFIG_HOME" "$TEST_HOME"
 export HOME="$TEST_HOME"
@@ -90,33 +94,35 @@ grep '^Speed progress: .*\/20 ms (.*; completed .* failed .* cancelled .*)$' \
     "$benchmark_speed_err" >/dev/null
 grep '^Benchmark summary:' "$benchmark_speed_err" >/dev/null
 
-benchmark_cancel_out="$ROOT/build/benchmark-cancel.out"
-benchmark_cancel_err="$ROOT/build/benchmark-cancel.err"
-set +e
-"$ROOT/ainiux" benchmark "$BASE" --dataset "$benchmark_dataset" \
-    --mode quality --runs 10 --limit 1 -m "$MODEL" \
-    --header "X-Ainiux-Test-Stream-Delay: 1" \
-    >"$benchmark_cancel_out" 2>"$benchmark_cancel_err" &
-BENCHMARK_PID=$!
-# Background jobs inherit SIGINT as ignored from a non-interactive shell until
-# the benchmark installs its cancellation handler. Sanitizer startup can make
-# a fixed delay race that initialization, so wait for the started event.
-i=0
-while ! grep '^Benchmark started:' "$benchmark_cancel_err" >/dev/null 2>&1; do
-    i=$((i + 1))
-    if [ "$i" -ge 50 ]; then
-        break
-    fi
-    sleep 0.1
-done
-kill -INT "$BENCHMARK_PID"
-wait "$BENCHMARK_PID"
-benchmark_cancel_status=$?
-set -e
-test "$benchmark_cancel_status" -eq 130
-grep '"type":"result".*"prompt":"reasoning".*"ok":false.*"cancelled":true' "$benchmark_cancel_out" >/dev/null
-grep '"type":"summary".*"interrupted":true' "$benchmark_cancel_out" >/dev/null
-grep '^AINIUX_ERR_CANCELLED: benchmark cancelled by Ctrl+C$' "$benchmark_cancel_err" >/dev/null
+if [ "$WINDOWS_NATIVE" -eq 0 ]; then
+    benchmark_cancel_out="$ROOT/build/benchmark-cancel.out"
+    benchmark_cancel_err="$ROOT/build/benchmark-cancel.err"
+    set +e
+    "$ROOT/ainiux" benchmark "$BASE" --dataset "$benchmark_dataset" \
+        --mode quality --runs 10 --limit 1 -m "$MODEL" \
+        --header "X-Ainiux-Test-Stream-Delay: 1" \
+        >"$benchmark_cancel_out" 2>"$benchmark_cancel_err" &
+    BENCHMARK_PID=$!
+    # Background jobs inherit SIGINT as ignored from a non-interactive shell until
+    # the benchmark installs its cancellation handler. Sanitizer startup can make
+    # a fixed delay race that initialization, so wait for the started event.
+    i=0
+    while ! grep '^Benchmark started:' "$benchmark_cancel_err" >/dev/null 2>&1; do
+        i=$((i + 1))
+        if [ "$i" -ge 50 ]; then
+            break
+        fi
+        sleep 0.1
+    done
+    kill -INT "$BENCHMARK_PID"
+    wait "$BENCHMARK_PID"
+    benchmark_cancel_status=$?
+    set -e
+    test "$benchmark_cancel_status" -eq 130
+    grep '"type":"result".*"prompt":"reasoning".*"ok":false.*"cancelled":true' "$benchmark_cancel_out" >/dev/null
+    grep '"type":"summary".*"interrupted":true' "$benchmark_cancel_out" >/dev/null
+    grep '^AINIUX_ERR_CANCELLED: benchmark cancelled by Ctrl+C$' "$benchmark_cancel_err" >/dev/null
+fi
 
 benchmark_output_dir="$ROOT/build/benchmark-results"
 rm -rf "$benchmark_output_dir"
@@ -226,37 +232,39 @@ grep '"type":"summary".*"graded_count":1.*"error_count":3' "$continued_out" >/de
 grep '^AINIUX_ERR_PROVIDER_SCHEMA: 3 selected benchmark grade(s) failed$' \
     "$continued_err" >/dev/null
 
-grade_cancel_source="$ROOT/build/custom-grade-cancel-results.jsonl"
-cat >"$grade_cancel_source" <<'JSONL'
+if [ "$WINDOWS_NATIVE" -eq 0 ]; then
+    grade_cancel_source="$ROOT/build/custom-grade-cancel-results.jsonl"
+    cat >"$grade_cancel_source" <<'JSONL'
 {"type":"result","id":"grade-cancel","category":"reasoning","language":"en","provider":"mock-source","model":"candidate","run":1,"turn":1,"ok":true,"prompt":"cancel prompt","response":"candidate answer","reference_answer":"candidate answer"}
 {"type":"summary","completed_case_runs":1}
 JSONL
-grade_cancel_out="$ROOT/build/grade-cancel.out"
-grade_cancel_err="$ROOT/build/grade-cancel.err"
-set +e
-"$ROOT/ainiux" --grade "$BASE" --stream \
-    --grade-input "$grade_cancel_source" -m "$MODEL" \
-    --header "X-Ainiux-Test-Stream-Delay: 1" \
-    >"$grade_cancel_out" 2>"$grade_cancel_err" &
-GRADE_PID=$!
-i=0
-while ! grep '^Grading started:' "$grade_cancel_err" >/dev/null 2>&1; do
-    i=$((i + 1))
-    if [ "$i" -ge 50 ]; then
-        break
-    fi
-    sleep 0.1
-done
-kill -INT "$GRADE_PID"
-wait "$GRADE_PID"
-grade_cancel_status=$?
-set -e
-test "$grade_cancel_status" -eq 130
-grep '"type":"grade".*"id":"grade-cancel".*"ok":false.*"cancelled":true' \
-    "$grade_cancel_out" >/dev/null
-grep '"type":"summary".*"interrupted":true' "$grade_cancel_out" >/dev/null
-grep '^AINIUX_ERR_CANCELLED: benchmark grading cancelled by Ctrl+C$' \
-    "$grade_cancel_err" >/dev/null
+    grade_cancel_out="$ROOT/build/grade-cancel.out"
+    grade_cancel_err="$ROOT/build/grade-cancel.err"
+    set +e
+    "$ROOT/ainiux" --grade "$BASE" --stream \
+        --grade-input "$grade_cancel_source" -m "$MODEL" \
+        --header "X-Ainiux-Test-Stream-Delay: 1" \
+        >"$grade_cancel_out" 2>"$grade_cancel_err" &
+    GRADE_PID=$!
+    i=0
+    while ! grep '^Grading started:' "$grade_cancel_err" >/dev/null 2>&1; do
+        i=$((i + 1))
+        if [ "$i" -ge 50 ]; then
+            break
+        fi
+        sleep 0.1
+    done
+    kill -INT "$GRADE_PID"
+    wait "$GRADE_PID"
+    grade_cancel_status=$?
+    set -e
+    test "$grade_cancel_status" -eq 130
+    grep '"type":"grade".*"id":"grade-cancel".*"ok":false.*"cancelled":true' \
+        "$grade_cancel_out" >/dev/null
+    grep '"type":"summary".*"interrupted":true' "$grade_cancel_out" >/dev/null
+    grep '^AINIUX_ERR_CANCELLED: benchmark grading cancelled by Ctrl+C$' \
+        "$grade_cancel_err" >/dev/null
+fi
 
 
 private_fetch_err="$ROOT/build/fetch-private.err"
@@ -578,11 +586,13 @@ repl_fetch_reply=$(printf '/fetch %s/page\nsummarize-url\n/quit\n' "$BASE" | \
     "$ROOT/ainiux" "$BASE" --quiet --repl --no-stream -m "$MODEL" --allow-private-url-fetch)
 test "$repl_fetch_reply" = "url-context-ok"
 
-python3 "$ROOT/tests/integration/editor_continue_driver.py" "$ROOT/ainiux" "$BASE" "$MODEL"
-python3 "$ROOT/tests/integration/editor_buffers_driver.py" "$ROOT/ainiux" "$BASE" "$MODEL"
-python3 "$ROOT/tests/integration/editor_locking_driver.py" "$ROOT/ainiux"
-python3 "$ROOT/tests/integration/tui_startup_selection_driver.py" \
-    "$ROOT/ainiux" "$BASE" "$MODEL"
+if [ "$WINDOWS_NATIVE" -eq 0 ]; then
+    python3 "$ROOT/tests/integration/editor_continue_driver.py" "$ROOT/ainiux" "$BASE" "$MODEL"
+    python3 "$ROOT/tests/integration/editor_buffers_driver.py" "$ROOT/ainiux" "$BASE" "$MODEL"
+    python3 "$ROOT/tests/integration/editor_locking_driver.py" "$ROOT/ainiux"
+    python3 "$ROOT/tests/integration/tui_startup_selection_driver.py" \
+        "$ROOT/ainiux" "$BASE" "$MODEL"
+fi
 
 image_extract_err="$ROOT/build/image-extract.err"
 if "$ROOT/ainiux" --input "$local_png" --quiet >"$ROOT/build/image-extract.out" 2>"$image_extract_err"; then
@@ -766,7 +776,9 @@ grep '^Security review diagnostic log (live): .*\.ainiux-pr/logs/security-review
 grep '^Security review diagnostic log (final): .*\.ainiux-pr/logs/security-review/security-review-' "$security_err" >/dev/null
 security_log=$(find "$security_workspace/.ainiux-pr/logs/security-review" -maxdepth 1 -type f -name 'security-review-*.jsonl' | head -n 1)
 test -n "$security_log"
-test "$(stat -c '%a' "$security_log")" = 600
+if [ "$WINDOWS_NATIVE" -eq 0 ]; then
+    test "$(stat -c '%a' "$security_log")" = 600
+fi
 for event in run_start index_result task_plan step_start llm_request llm_response tool_result validation_result step_end freshness_result run_end; do
     grep "\"event_type\":\"$event\"" "$security_log" >/dev/null
 done
@@ -831,26 +843,28 @@ grep '"event_type":"tool_result"' "$security_responses_log" >/dev/null
 grep '"tool_name":"submit_security_review"' "$security_responses_log" >/dev/null
 grep '"event_type":"run_end".*"status":"success"' "$security_responses_log" >/dev/null
 
-security_log_failure_workspace="$ROOT/build/security-review-log-failure-workspace"
-security_log_target="$ROOT/build/security-review-log-target"
-rm -rf "$security_log_failure_workspace" "$security_log_target"
-mkdir -p "$security_log_failure_workspace/.ainiux-pr" "$security_log_target"
-ln -s "$security_log_target" "$security_log_failure_workspace/.ainiux-pr/logs"
-cat >"$security_log_failure_workspace/review.cpp" <<'CPP'
+if [ "$WINDOWS_NATIVE" -eq 0 ]; then
+    security_log_failure_workspace="$ROOT/build/security-review-log-failure-workspace"
+    security_log_target="$ROOT/build/security-review-log-target"
+    rm -rf "$security_log_failure_workspace" "$security_log_target"
+    mkdir -p "$security_log_failure_workspace/.ainiux-pr" "$security_log_target"
+    ln -s "$security_log_target" "$security_log_failure_workspace/.ainiux-pr/logs"
+    cat >"$security_log_failure_workspace/review.cpp" <<'CPP'
 int main() { return 0; }
 CPP
-security_log_failure_out="$ROOT/build/security-review-log-failure.out"
-security_log_failure_err="$ROOT/build/security-review-log-failure.err"
-(
-    cd "$security_log_failure_workspace"
-    "$ROOT/ainiux" "$BASE" --security-review --no-stream --quiet -m "$MODEL" \
-        >"$security_log_failure_out" 2>"$security_log_failure_err"
-)
-grep 'Result: complete' "$security_log_failure_out" >/dev/null
-test "$(grep -c '^SECURITY REVIEW LOGGING DISABLED:' "$security_log_failure_err")" = 1
-if grep -E 'Code index refreshed|Security review scope|Security review:' "$security_log_failure_out" >/dev/null; then
-    echo "logging failure status leaked to security-review stdout" >&2
-    exit 1
+    security_log_failure_out="$ROOT/build/security-review-log-failure.out"
+    security_log_failure_err="$ROOT/build/security-review-log-failure.err"
+    (
+        cd "$security_log_failure_workspace"
+        "$ROOT/ainiux" "$BASE" --security-review --no-stream --quiet -m "$MODEL" \
+            >"$security_log_failure_out" 2>"$security_log_failure_err"
+    )
+    grep 'Result: complete' "$security_log_failure_out" >/dev/null
+    test "$(grep -c '^SECURITY REVIEW LOGGING DISABLED:' "$security_log_failure_err")" = 1
+    if grep -E 'Code index refreshed|Security review scope|Security review:' "$security_log_failure_out" >/dev/null; then
+        echo "logging failure status leaked to security-review stdout" >&2
+        exit 1
+    fi
 fi
 
 security_invalid_workspace="$ROOT/build/security-review-invalid-workspace"
@@ -947,17 +961,19 @@ if grep 'Using base URL:' "$repl_start_err" >/dev/null; then
     exit 1
 fi
 
-TUI_FILE="$ROOT/build/tui-insert-chat.json"
-python3 "$ROOT/tests/integration/tui_insert_driver.py" \
-    "$ROOT/ainiux" "$BASE" "$MODEL" "$insert_file" "$local_png" "$BASE/page" "$TUI_FILE"
-grep 'Inserted Context Marker' "$TUI_FILE" >/dev/null
-grep 'insert-ok' "$TUI_FILE" >/dev/null
-grep 'image-input-ok' "$TUI_FILE" >/dev/null
-grep 'Input context from URL' "$TUI_FILE" >/dev/null
-grep 'url-context-ok' "$TUI_FILE" >/dev/null
-if grep '/quit or /exit' "$TUI_FILE" >/dev/null; then
-    echo "TUI help text must not be persisted in chat JSON" >&2
-    exit 1
+if [ "$WINDOWS_NATIVE" -eq 0 ]; then
+    TUI_FILE="$ROOT/build/tui-insert-chat.json"
+    python3 "$ROOT/tests/integration/tui_insert_driver.py" \
+        "$ROOT/ainiux" "$BASE" "$MODEL" "$insert_file" "$local_png" "$BASE/page" "$TUI_FILE"
+    grep 'Inserted Context Marker' "$TUI_FILE" >/dev/null
+    grep 'insert-ok' "$TUI_FILE" >/dev/null
+    grep 'image-input-ok' "$TUI_FILE" >/dev/null
+    grep 'Input context from URL' "$TUI_FILE" >/dev/null
+    grep 'url-context-ok' "$TUI_FILE" >/dev/null
+    if grep '/quit or /exit' "$TUI_FILE" >/dev/null; then
+        echo "TUI help text must not be persisted in chat JSON" >&2
+        exit 1
+    fi
 fi
 
 

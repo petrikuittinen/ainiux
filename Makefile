@@ -1,4 +1,5 @@
 CXX ?= g++
+WINDRES ?= windres
 DEFAULT_JOBS ?= 10
 # Use a conservative parallel default on this 20-core development machine.
 # A command-line -j/--jobs remains authoritative, and recursive $(MAKE)
@@ -17,18 +18,35 @@ SQLITE_CFLAGS ?= $(shell pkg-config --cflags sqlite3 2>/dev/null)
 SQLITE_LIBS ?= $(shell pkg-config --libs sqlite3 2>/dev/null || printf '%s\n' -lsqlite3)
 CXXFLAGS += $(LIBCURL_CFLAGS) $(SQLITE_CFLAGS)
 LDFLAGS += $(LIBCURL_LIBS) $(SQLITE_LIBS)
+
+# Native Windows is built from the MSYS2 UCRT64 shell. MSYS2 is a build
+# environment only: the package target gathers the native UCRT64 DLL closure.
+WINDOWS_NATIVE := $(if $(filter Windows_NT,$(OS)),1,0)
+ifeq ($(WINDOWS_NATIVE),1)
+CXXFLAGS += -D_WIN32_WINNT=0x0A00 -DUNICODE -D_UNICODE
+LDFLAGS += -lws2_32 -ladvapi32 -luser32 -lshell32 -lole32 -lbcrypt
+EXEEXT := .exe
+else
+EXEEXT :=
+endif
 PREFIX ?= /usr/local
 BUILD_DIR := build
 GENERATED_DIR := $(BUILD_DIR)/generated
 CXXFLAGS += -I$(GENERATED_DIR)
+EXTRA_CXXFLAGS ?=
+EXTRA_LDFLAGS ?=
+CXXFLAGS += $(EXTRA_CXXFLAGS)
+LDFLAGS += $(EXTRA_LDFLAGS)
 DEBUG_FLAG_PATTERNS := -g -g0 -g1 -g2 -g3 -ggdb -ggdb% -glldb -glldb% -gdwarf% -gstabs%
 OPTIMIZED_CXXFLAGS := $(filter-out -O% $(DEBUG_FLAG_PATTERNS),$(CXXFLAGS)) -O3 -DNDEBUG
 OPTIMIZED_LDFLAGS := $(LDFLAGS) -s
 
 OBJ_DIR := $(BUILD_DIR)/obj
-BIN := ainiux
-TEST_BIN := $(BUILD_DIR)/test_runner
-IO_FAULT_BIN := $(BUILD_DIR)/test_io_faults
+BIN := ainiux$(EXEEXT)
+TEST_BIN := $(BUILD_DIR)/test_runner$(EXEEXT)
+IO_FAULT_BIN := $(BUILD_DIR)/test_io_faults$(EXEEXT)
+SUBPROCESS_FIXTURE_BIN := $(BUILD_DIR)/subprocess_fixture$(EXEEXT)
+CONPTY_TEST_BIN := $(BUILD_DIR)/conpty_harness$(EXEEXT)
 POSIX_IO_MOCK := $(BUILD_DIR)/posix_io_mock.so
 IO_FAULT_OBJ := $(OBJ_DIR)/tests/unit/test_io_faults.o \
                 $(OBJ_DIR)/tests/unit/io/test_io_faults.o \
@@ -66,6 +84,11 @@ BUILTIN_DATASET_PARTS := benchmarks/builtin/safety.jsonl \
 BUILTIN_DATASET := benchmarks/builtin.jsonl
 
 SRC := $(shell find src -name '*.cpp' | sort)
+ifeq ($(WINDOWS_NATIVE),1)
+SRC := $(filter-out src/runtime/subprocess_posix.cpp src/editor/file_session.cpp,$(SRC))
+else
+SRC := $(filter-out src/runtime/subprocess_windows.cpp src/platform/windows_utf.cpp src/editor/file_session_windows.cpp,$(SRC))
+endif
 APP_SRC := $(SRC)
 LIB_SRC := $(filter-out src/main.cpp,$(SRC))
 APP_OBJ := $(patsubst %.cpp,$(OBJ_DIR)/%.o,$(APP_SRC))
@@ -76,16 +99,34 @@ IO_FAULT_DEP := $(IO_FAULT_OBJ:.o=.d)
 DEP := $(sort $(APP_OBJ:.o=.d) $(TEST_OBJ:.o=.d) $(IO_FAULT_DEP))
 
 VALGRIND ?= valgrind --error-exitcode=1 --leak-check=full --show-leak-kinds=definite,indirect --quiet
+WINDOWS_RESOURCE := $(OBJ_DIR)/resources/windows/ainiux_resources.o
+ifeq ($(WINDOWS_NATIVE),1)
+APP_LINK_EXTRA := $(WINDOWS_RESOURCE)
+APP_LINK_FLAGS := -municode
+else
+APP_LINK_EXTRA :=
+APP_LINK_FLAGS :=
+endif
 
-.PHONY: all clean optimized test test-full test-unit test-unit-faults test-integration-smoke test-integration test-integration-sqlite sanitize test-sanitize leak-check test-leak install
+.PHONY: all clean optimized test test-full test-unit test-unit-faults test-integration-smoke test-integration test-integration-sqlite test-windows-conpty sanitize test-sanitize leak-check test-leak install package-windows
 
 all: $(BIN)
 
-$(BIN): $(APP_OBJ)
-	$(CXX) $(CXXFLAGS) $^ -o $@ $(LDFLAGS)
+$(BIN): $(APP_OBJ) $(APP_LINK_EXTRA)
+	$(CXX) $(CXXFLAGS) $^ -o $@ $(APP_LINK_FLAGS) $(LDFLAGS)
 
 $(TEST_BIN): $(LIB_OBJ) $(TEST_OBJ)
 	$(CXX) $(CXXFLAGS) $^ -o $@ $(LDFLAGS)
+
+$(TEST_BIN): | $(SUBPROCESS_FIXTURE_BIN)
+
+$(SUBPROCESS_FIXTURE_BIN): tests/fixtures/subprocess_fixture.cpp
+	@mkdir -p $(dir $@)
+	$(CXX) $(CXXFLAGS) $< -o $@ $(if $(filter 1,$(WINDOWS_NATIVE)),-municode,)
+
+$(CONPTY_TEST_BIN): tests/windows/conpty_harness.cpp
+	@mkdir -p $(dir $@)
+	$(CXX) $(CXXFLAGS) $< -o $@ $(if $(filter 1,$(WINDOWS_NATIVE)),-municode,) $(LDFLAGS)
 
 $(IO_FAULT_BIN): $(LIB_OBJ) $(IO_FAULT_OBJ)
 	$(CXX) $(CXXFLAGS) $^ -o $@ $(LDFLAGS)
@@ -97,6 +138,10 @@ $(POSIX_IO_MOCK): tests/mock/posix_io_mock.c
 $(OBJ_DIR)/%.o: %.cpp
 	@mkdir -p $(dir $@)
 	$(CXX) $(CXXFLAGS) -MMD -MP -c $< -o $@
+
+$(WINDOWS_RESOURCE): resources/windows/ainiux_resources.rc resources/windows/ainiux.exe.manifest
+	@mkdir -p $(dir $@)
+	$(WINDRES) -Iresources/windows $< -O coff -o $@
 
 $(BUILTIN_DATASET): $(BUILTIN_DATASET_PARTS)
 	@cat $(BUILTIN_DATASET_PARTS) >$@.tmp
@@ -176,14 +221,23 @@ test-full:
 	$(MAKE) test-unit
 	$(MAKE) test-unit-faults
 	$(MAKE) test-integration
+ifeq ($(WINDOWS_NATIVE),1)
+	$(MAKE) test-integration-sqlite
+	$(MAKE) test-windows-conpty
+endif
 
 test-unit: $(TEST_BIN)
 	$(TEST_BIN)
 	tests/unit/config/test_config_migration.sh
 
+ifeq ($(WINDOWS_NATIVE),1)
+test-unit-faults: $(IO_FAULT_BIN)
+	$(IO_FAULT_BIN)
+else
 test-unit-faults: $(IO_FAULT_BIN) $(POSIX_IO_MOCK)
 	$(IO_FAULT_BIN)
 	tools/run_enospc_test.sh "$(CXX)" "$(abspath $(POSIX_IO_MOCK))" "$(abspath $(IO_FAULT_BIN))"
+endif
 
 test-integration-smoke: $(BIN)
 	tests/integration/test_mock_smoke.sh
@@ -191,10 +245,31 @@ test-integration-smoke: $(BIN)
 test-integration: $(BIN)
 	tests/integration/test_code_index.sh
 	tests/integration/test_mock_server.sh
+ifeq ($(WINDOWS_NATIVE),0)
 	sh tests/integration/test_llama_server.sh
+endif
 
+ifeq ($(WINDOWS_NATIVE),1)
+test-integration-sqlite: $(BIN) $(CONPTY_TEST_BIN)
+	rm -rf "$(abspath $(BUILD_DIR)/windows-sqlite-home)"
+	mkdir -p "$(abspath $(BUILD_DIR)/windows-sqlite-home)"
+	$(CONPTY_TEST_BIN) "$(abspath $(BIN))" "$(abspath $(BUILD_DIR)/windows-sqlite-home)"
+	test -s "$(abspath $(BUILD_DIR)/windows-sqlite-home/.ainiux/ainiux.db)"
+	$(CONPTY_TEST_BIN) "$(abspath $(BIN))" "$(abspath $(BUILD_DIR)/windows-sqlite-home)"
+else
 test-integration-sqlite: $(BIN)
 	tests/integration/test_sqlite_persistence.sh
+endif
+
+test-windows-conpty: $(BIN) $(CONPTY_TEST_BIN)
+ifeq ($(WINDOWS_NATIVE),1)
+	rm -rf "$(abspath $(BUILD_DIR)/windows-conpty-home)"
+	mkdir -p "$(abspath $(BUILD_DIR)/windows-conpty-home)"
+	$(CONPTY_TEST_BIN) "$(abspath $(BIN))" "$(abspath $(BUILD_DIR)/windows-conpty-home)"
+else
+	@echo "test-windows-conpty requires native Windows" >&2
+	@exit 2
+endif
 
 optimized:
 	$(MAKE) clean
@@ -236,5 +311,13 @@ install: $(BIN) $(COMMON_CONFIG) $(EDITOR_COMMANDS_CONFIG) $(THEMES_CONFIG) $(BE
 	install -m 0644 "$(MASTER_PROMPT_SRC)" "$(SECURITY_PROMPT_SRC)" "$(AGENT_PROMPT_SRC)" \
 		"$(AGENT_PROMPTS_INSTALL_DIR)"
 
+package-windows: $(BIN)
+ifeq ($(WINDOWS_NATIVE),1)
+	tools/package_windows.sh "$(BIN)" "$(BUILD_DIR)"
+else
+	@echo "package-windows must run in the MSYS2 UCRT64 environment" >&2
+	@exit 2
+endif
+
 clean:
-	rm -rf $(BUILD_DIR) $(BIN) $(IO_FAULT_BIN)
+	rm -rf $(BUILD_DIR) $(BIN) $(IO_FAULT_BIN) $(SUBPROCESS_FIXTURE_BIN) $(CONPTY_TEST_BIN)

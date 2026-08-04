@@ -1,6 +1,6 @@
 # Getting started
 
-Ainiux builds as a C++17 terminal application with libcurl and SQLite. Ubuntu x86-64 and ARM64 are the tested baseline. The implementation targets wider POSIX-like portability through a Makefile, POSIX `termios`, and ANSI terminal rendering, but other systems are not guaranteed.
+Ainiux builds as a C++17 terminal application with libcurl and SQLite. Ubuntu x86-64 and ARM64 are the primary tested baseline. Native Windows 10 1903+/Windows 11 x64 builds use GNU Make in MSYS2 UCRT64; other POSIX-like systems are targeted where practical but are not guaranteed.
 
 ## Install on Ubuntu or Debian
 
@@ -41,6 +41,27 @@ Some Ubuntu releases call the curl runtime package `libcurl4t64`; `scripts/insta
 
 On another POSIX-like system, provide a C++17 compiler plus development headers and link libraries for libcurl and SQLite. The repository does not claim continuous testing on BSD or macOS, and terminal behavior can differ across emulators.
 
+## Build on native Windows x64
+
+Open the MSYS2 **UCRT64** shell, install the UCRT64 GCC, curl, SQLite, Python,
+and ZIP packages, then run `make`. Do not use the plain MSYS shell: it produces
+MSYS-runtime programs rather than the supported native UCRT target.
+
+```sh
+pacman -S --needed base-devel git zip \
+  mingw-w64-ucrt-x86_64-toolchain \
+  mingw-w64-ucrt-x86_64-curl \
+  mingw-w64-ucrt-x86_64-sqlite3 \
+  mingw-w64-ucrt-x86_64-python
+make
+./ainiux.exe --version
+make package-windows
+```
+
+Full-screen modes run in Windows Terminal or modern conhost. mintty is not a
+supported full-screen host. See [Native Windows](windows.md) for packaging,
+PowerShell, clipboard, path, and test details.
+
 ## Choose a first provider
 
 For a local LM Studio server at its default address:
@@ -80,7 +101,7 @@ The editor and conversion paths can use `none` without inventing a model endpoin
 
 ## Where data goes
 
-User chat threads and media are stored under `~/.ainiux/`. Interactive and one-shot agent state stays within the current project under `.ainiux-pr/`. Installed defaults live under the prefix's `share/ainiux/` directory; user configuration normally lives under `~/.config/ainiux/`.
+User chat threads and media are stored under `~/.ainiux/`. Interactive and one-shot agent state stays within the current project under `.ainiux-pr/`. Installed defaults live under the prefix's `share/ainiux/` directory; user configuration normally lives under `~/.config/ainiux/`. Windows keeps the same layout and derives `HOME` from `USERPROFILE` when needed.
 
 ## Next steps
 

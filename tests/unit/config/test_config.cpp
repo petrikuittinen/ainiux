@@ -416,11 +416,9 @@ void test_benchmark_prompt_configuration() {
         file << "[grading]\ncase_prompt = \"automatic user "
                 "{{benchmark_case_json}} prompt\"\n";
     }
-    const char* previous_bundled = std::getenv("AINIUX_BENCHMARKS");
-    const bool had_previous_bundled = previous_bundled != nullptr;
-    const std::string saved_bundled =
-        previous_bundled == nullptr ? std::string() : previous_bundled;
-    setenv("AINIUX_BENCHMARKS", bundled_path.c_str(), 1);
+    const std::optional<std::string> previous_bundled =
+        ainiux::test::test_environment("AINIUX_BENCHMARKS");
+    ainiux::test::set_test_environment("AINIUX_BENCHMARKS", bundled_path);
     const ainiux::config::Environment environment{user_root, "/nonexistent"};
     ainiux::config::LoadResult automatic = ainiux::config::load_automatic(
         ainiux::cli::Options{}, environment, true);
@@ -474,23 +472,19 @@ void test_benchmark_prompt_configuration() {
         file << "[grading]\nsystem_prompt = \"environment system\"\n"
                 "case_prompt = \"environment {{benchmark_case_json}} case\"\n";
     }
-    const char* previous_override = std::getenv("AINIUX_BENCHMARKS");
-    const bool had_previous_override = previous_override != nullptr;
-    const std::string saved_override =
-        previous_override == nullptr ? std::string() : previous_override;
-    setenv("AINIUX_BENCHMARKS", override_path.c_str(), 1);
+    const std::optional<std::string> previous_override =
+        ainiux::test::test_environment("AINIUX_BENCHMARKS");
+    ainiux::test::set_test_environment("AINIUX_BENCHMARKS", override_path);
     ainiux::config::LoadResult overridden = ainiux::config::load_automatic(
         ainiux::cli::Options{}, {"", "/nonexistent"}, false);
-    if (had_previous_override) {
-        setenv("AINIUX_BENCHMARKS", saved_override.c_str(), 1);
-    } else {
-        unsetenv("AINIUX_BENCHMARKS");
-    }
-    if (had_previous_bundled) {
-        setenv("AINIUX_BENCHMARKS", saved_bundled.c_str(), 1);
-    } else {
-        unsetenv("AINIUX_BENCHMARKS");
-    }
+    if (previous_override.has_value())
+        ainiux::test::set_test_environment("AINIUX_BENCHMARKS", *previous_override);
+    else
+        ainiux::test::unset_test_environment("AINIUX_BENCHMARKS");
+    if (previous_bundled.has_value())
+        ainiux::test::set_test_environment("AINIUX_BENCHMARKS", *previous_bundled);
+    else
+        ainiux::test::unset_test_environment("AINIUX_BENCHMARKS");
     check(overridden.error.ok() &&
               overridden.options.benchmark_grading_prompts.system_prompt ==
                   "environment system" &&

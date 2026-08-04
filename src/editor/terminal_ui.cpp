@@ -19,16 +19,12 @@
 #include "ui/scrollbar.hpp"
 
 #include <algorithm>
-#include <cerrno>
 #include <charconv>
-#include <cstring>
 #include <filesystem>
 #include <iostream>
 #include <new>
 #include <sstream>
 #include <stdexcept>
-#include <sys/ioctl.h>
-#include <unistd.h>
 
 namespace ainiux::editor {
 namespace {
@@ -49,58 +45,12 @@ std::string terminal_position(int row, int col) {
 
 using detail::pad_or_clip_ascii;
 
-TerminalSession::~TerminalSession() {
-    restore();
-}
-
 TerminalSize terminal_size() {
     TerminalSize size;
-    winsize ws{};
-    if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &ws) == 0 && ws.ws_row > 0 && ws.ws_col > 0) {
-        size.rows = ws.ws_row;
-        size.cols = ws.ws_col;
-    }
+    const tui::TerminalDimensions dimensions = tui::terminal_dimensions();
+    size.rows = dimensions.rows;
+    size.cols = dimensions.cols;
     return size;
-}
-
-Error TerminalSession::enter() {
-        if (!isatty(STDIN_FILENO) || !isatty(STDOUT_FILENO)) {
-            return {ErrorCode::BadArgs, "--editor requires an interactive terminal"};
-        }
-        if (tcgetattr(STDIN_FILENO, &original_) != 0) {
-            return {ErrorCode::Internal, std::string("could not read terminal mode: ") + std::strerror(errno)};
-        }
-
-        termios raw = original_;
-        raw.c_lflag &= static_cast<tcflag_t>(~(ECHO | ICANON | IEXTEN | ISIG));
-        raw.c_iflag &= static_cast<tcflag_t>(~(IXON | IXOFF | ICRNL | BRKINT));
-        raw.c_oflag &= static_cast<tcflag_t>(~OPOST);
-        raw.c_cc[VMIN] = 0;
-        raw.c_cc[VTIME] = 0;
-        if (tcsetattr(STDIN_FILENO, TCSAFLUSH, &raw) != 0) {
-            return {ErrorCode::Internal, std::string("could not set terminal mode: ") + std::strerror(errno)};
-        }
-
-        active_ = true;
-        clear_terminal_input_queue();
-        std::cout << "\x1b[?1049h\x1b[?25h\x1b[2J\x1b[H" << autowrap_disable_sequence()
-                  << bracketed_paste_enable_sequence() << keyboard_modifier_enable_sequence()
-                  << mouse_reporting_enable_sequence();
-        std::cout.flush();
-        return ok_error();
-}
-
-void TerminalSession::restore() {
-        if (!active_) {
-            return;
-        }
-        tcsetattr(STDIN_FILENO, TCSAFLUSH, &original_);
-        std::cout << mouse_reporting_disable_sequence() << keyboard_modifier_disable_sequence()
-                  << bracketed_paste_disable_sequence() << autowrap_enable_sequence()
-                  << "\x1b[0m\x1b[?25h\x1b[2J\x1b[H\x1b[?1049l";
-        std::cout.flush();
-        clear_terminal_input_queue();
-        active_ = false;
 }
 
 std::string editor_status_line(const EditorState& state,

@@ -1,6 +1,7 @@
 #include "editor/editor.hpp"
 
 #include "common.hpp"
+#include "platform/filesystem.hpp"
 
 #include <algorithm>
 #include <array>
@@ -8,7 +9,7 @@
 #include <fstream>
 #include <limits>
 #include <new>
-#include <unistd.h>
+#include <sstream>
 
 namespace ainiux::editor {
 
@@ -233,7 +234,7 @@ Error load_file(const std::string& path, const EditorSettings& settings, LoadedF
                     " (" + std::to_string(check.size) + " bytes)"};
     }
 
-    std::ifstream in(resolved, std::ios::binary);
+    std::ifstream in(std::filesystem::u8path(resolved), std::ios::binary);
     if (!in) {
         return {ErrorCode::FileRead, "could not open editor file for reading: " + resolved};
     }
@@ -332,17 +333,19 @@ Error save_file(const std::string& path, const PieceTable& text, LineBreak lineb
     if (resolved.empty()) {
         return {ErrorCode::BadArgs, "no editor save path was provided"};
     }
-    std::ofstream out(resolved, std::ios::binary | std::ios::trunc);
-    if (!out) {
-        return {ErrorCode::FileWrite, "could not open editor file for writing: " + resolved};
-    }
+    std::ostringstream out(std::ios::out | std::ios::binary);
     Error err = text.write_to(out, linebreak);
     if (!err.ok()) {
         return {err.code, err.message + ": " + resolved};
     }
-    out.close();
     if (!out) {
-        return {ErrorCode::FileWrite, "failed while closing editor file after writing: " + resolved};
+        return {ErrorCode::FileWrite, "failed while serializing editor file: " + resolved};
+    }
+    Error save_error = platform::atomic_write_private(resolved, out.str(), true);
+    if (!save_error.ok()) {
+        return {ErrorCode::FileWrite,
+                "failed while writing editor buffer: " + resolved + ": " +
+                    save_error.message};
     }
     return ok_error();
 }
@@ -352,7 +355,9 @@ Error ensure_empty_file(const std::string& path) {
     if (resolved.empty()) {
         return ok_error();
     }
-    if (access(resolved.c_str(), F_OK) == 0) {
+    std::error_code filesystem_error;
+    if (std::filesystem::exists(std::filesystem::u8path(resolved), filesystem_error) &&
+        !filesystem_error) {
         return ok_error();
     }
     return save_file(resolved, PieceTable::from_string(""));

@@ -5,7 +5,6 @@
 #include <filesystem>
 #include <fstream>
 #include <string>
-#include <unistd.h>
 #include <vector>
 
 #include "agent/index/index.hpp"
@@ -13,6 +12,7 @@
 #include "agent/tools.hpp"
 #include "json/json.hpp"
 #include "provider/provider.hpp"
+#include "platform/environment.hpp"
 #include "support/test_support.hpp"
 
 namespace ainiux::test::agent_file_tools {
@@ -23,7 +23,7 @@ namespace fs = std::filesystem;
 std::string write_temp_workspace(const std::string& name) {
     const fs::path root =
         fs::temp_directory_path() / ("ainiux-agent-file-tools-" + name + "-" +
-                                     std::to_string(static_cast<long long>(::getpid())));
+                                     std::to_string(ainiux::platform::current_process_id()));
     std::error_code ec;
     fs::remove_all(root, ec);
     fs::create_directories(root / "src", ec);

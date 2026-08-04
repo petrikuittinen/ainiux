@@ -23,7 +23,7 @@ The program must stay excellent as a scriptable CLI. Keep the core engine indepe
 
 ## Current product snapshot
 
-Status: **v1.16** (see `README.md`, `docs/agent.md`, and `PLANS.md`). One-shot (`run` / `--run` / `-r`) and interactive (`agent` / `--agent` / `-a`) local agent modes are landed with workspace writes, multi-turn project sessions (`.ainiux-pr/`), compact live tool activity, provider-supplied reasoning previews in interactive agent history, three-strategy transcript-preserving compaction, retained row-diff terminal rendering, punctuation-aware Markdown highlighting, chat↔editor↔agent cycling, project-persisted Confirm/Smart/Yolo permissions, OpenRouter/OpenAI/DeepSeek credit display, interactive Guard approvals, and session-scoped Act/Plan task modes. Live tool rows update in place, while display-only `notice` and `thinking` rows remain outside provider context. One-shot planning is available through `plan`, `--plan`, and `--plan-file`; Plan retains research tools but code-enforces planning-document-only writes. User profile stays `~/.ainiux/` (chat DB/media). The **v1.1** code index is a lightweight definitions-only index across all scanner languages, with static declaration importance and mutation-aware persistence. Local server mode is deferred behind v1.1, image generation moves to v1.2, and browser web UI remains postponed.
+Status: **v1.16 plus an unreleased native Windows parity target** (see `README.md`, `docs/windows.md`, `docs/agent.md`, and `PLANS.md`). One-shot (`run` / `--run` / `-r`) and interactive (`agent` / `--agent` / `-a`) local agent modes are landed with workspace writes, multi-turn project sessions (`.ainiux-pr/`), compact live tool activity, provider-supplied reasoning previews in interactive agent history, three-strategy transcript-preserving compaction, retained row-diff terminal rendering, punctuation-aware Markdown highlighting, chat↔editor↔agent cycling, project-persisted Confirm/Smart/Yolo permissions, OpenRouter/OpenAI/DeepSeek credit display, interactive Guard approvals, and session-scoped Act/Plan task modes. Live tool rows update in place, while display-only `notice` and `thinking` rows remain outside provider context. One-shot planning is available through `plan`, `--plan`, and `--plan-file`; Plan retains research tools but code-enforces planning-document-only writes. User profile stays `~/.ainiux/` (chat DB/media). The **v1.1** code index is a lightweight definitions-only index across all scanner languages, with static declaration importance and mutation-aware persistence. The Windows target remains unreleased until its native parity gate passes. Local server mode is deferred behind v1.1, image generation moves to v1.2, and browser web UI remains postponed.
 
 ### Implemented modes
 
@@ -69,13 +69,13 @@ Status: **v1.16** (see `README.md`, `docs/agent.md`, and `PLANS.md`). One-shot (
 - Agent session resume/list UI and richer tool-call transcript chrome; Guard Ask y/n in interactive agent is landed (headless Ask still denies); one-shot `ainiux run` / `--run` and interactive `ainiux agent` / `--agent` with multi-turn tools + mode cycling are landed
 - PDF / DOCX conversion modules
 - Native Anthropic Messages adapter; full live capability probing for all models
-- ncurses-based TUI (current UI uses POSIX `termios` + ANSI)
+- ncurses-based TUI (current UI uses shared POSIX termios or native Win32 console ownership plus ANSI/VT)
 
 ## Implementation stance
 
 - Default language: **C++17**.
 - Do not use Rust or Go.
-- Keep the code portable across Linux, BSD, macOS, and other POSIX-like systems where practical.
+- Keep the code portable across Linux, BSD, macOS, other POSIX-like systems, and the official Windows 10 1903+/Windows 11 x64 MSYS2 UCRT64 target.
 - Use a `Makefile` as the primary build entry point.
 - Do not require C++20, C++23, C23, non-portable compiler extensions, or a package manager unless the user explicitly approves it.
 - Prefer stack objects, RAII, `std::string`, `std::vector`, and standard containers.
@@ -189,7 +189,7 @@ Current baseline:
 - **libcurl** — HTTP/HTTPS, proxies, timeouts, streaming callbacks (`src/http/`).
 - **libsqlite3** — TUI chat library (`src/chat/sqlite_store.*`, `~/.ainiux/ainiux.db`).
 - **In-tree JSON facade** (`src/json/`) — request escaping and response parsing; expand or vendor a reviewed library only with an explicit decision.
-- **POSIX termios + ANSI** — TUI and editor terminal I/O. **No ncurses dependency** today. The editor renderer is independent of the terminal harness.
+- **POSIX termios / native Win32 console + ANSI VT** — shared TUI and editor terminal ownership. **No ncurses dependency** today. Windows full-screen modes support Windows Terminal and modern conhost, not mintty. The editor renderer is independent of the terminal harness.
 - **Generated Unicode tables** — editor word completion / properties under `src/editor/detail/` (see `tools/generate_editor_unicode_data.py`). Full `utf8proc` / `libgrapheme` integration is future work, not required for ordinary changes.
 
 Do not add a dependency only because it is convenient.
@@ -318,6 +318,9 @@ Bundled templates live in `config/` and install via `make install`. See `docs/de
 - **SQLite TUI library:** `~/.ainiux/ainiux.db` (WAL, per-message rows). Primary local chat library for `--chat`.
 - **JSON chat files:** explicit `--save-chat` / `--load-chat` import/export. Include schema version, timestamps, provider, base URL, model, settings, messages, attachments, usage, compaction events as applicable.
 - Atomic file saves where files are used: write temp → fsync where supported → rename → fsync parent where supported.
+- Native Windows private state uses current-user/SYSTEM protected DACLs, rejects
+  unexpected reparse points in sensitive paths, flushes with `FlushFileBuffers`,
+  and replaces with `ReplaceFileW` or write-through `MoveFileExW`.
 - Restrictive permissions for files that may contain prompts, history, URLs, or secrets.
 - Release every allocation, open DB handle, temporary file, and JSON object on success and failure.
 
@@ -496,12 +499,14 @@ make test-unit-faults
 make test-integration-smoke
 make test-integration
 make test-integration-sqlite
+make test-windows-conpty
 make sanitize
 make test-sanitize
 make leak-check
 make test-leak
 make clean
 make install PREFIX=/usr/local
+make package-windows              # UCRT64 only
 ```
 
 Compiler warnings should stay strict (`-Wall -Wextra -Wpedantic` as configured). Do not claim tests passed unless you actually ran them.

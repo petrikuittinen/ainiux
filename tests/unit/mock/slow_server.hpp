@@ -1,7 +1,11 @@
 #pragma once
 
+#include <atomic>
 #include <cstdint>
 #include <string>
+#include <thread>
+
+#include "runtime/runtime.hpp"
 
 namespace ainiux::test::mock {
 
@@ -17,14 +21,15 @@ class SlowHttpServer {
                double chunk_delay_seconds = 0.0,
                int chunk_count = 8);
     void stop();
-    bool running() const { return pid_ > 0; }
+    bool running() const { return running_.load(std::memory_order_acquire); }
     int port() const { return port_; }
     std::string base_url() const;
 
    private:
     int port_ = 0;
-    int pid_ = -1;
-    int ready_pipe_[2] = {-1, -1};
+    std::atomic<bool> running_{false};
+    runtime::CancellationSource cancellation_;
+    std::thread worker_;
 };
 
 int pick_free_port();

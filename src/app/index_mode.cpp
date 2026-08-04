@@ -1,46 +1,19 @@
 #include "app/app.hpp"
 
-#include <csignal>
 #include <fstream>
 #include <iostream>
 
 #include "agent/index/index.hpp"
 #include "app/index_progress.hpp"
+#include "runtime/interrupt.hpp"
 
 namespace ainiux::app {
-namespace {
-
-volatile std::sig_atomic_t g_index_interrupt = 0;
-
-void index_signal_handler(int) {
-    g_index_interrupt = 1;
-}
-
-class IndexSignalGuard {
-   public:
-    IndexSignalGuard() {
-        g_index_interrupt = 0;
-        previous_ = std::signal(SIGINT, index_signal_handler);
-    }
-    ~IndexSignalGuard() {
-        if (previous_ != SIG_ERR) std::signal(SIGINT, previous_);
-    }
-    IndexSignalGuard(const IndexSignalGuard&) = delete;
-    IndexSignalGuard& operator=(const IndexSignalGuard&) = delete;
-
-   private:
-    using Handler = void (*)(int);
-    Handler previous_ = SIG_ERR;
-};
-
-}  // namespace
-
 int run_index_mode(const cli::Options& options) {
-    IndexSignalGuard signal_guard;
+    runtime::InterruptGuard interrupt_guard;
     agent::index::Options index_options;
     index_options.workspace = ".";
     index_options.max_source_code_file_size = options.max_source_code_file_size;
-    index_options.interrupted = [] { return g_index_interrupt != 0; };
+    index_options.interrupted = [&interrupt_guard] { return interrupt_guard.interrupted(); };
 
     if (options.clear_index) {
         agent::index::ClearStats stats;

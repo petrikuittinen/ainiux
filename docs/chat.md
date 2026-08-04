@@ -9,6 +9,11 @@ ainiux openrouter -m MODEL -c
 
 Chat is conversation only. It does not enable agent workspace tools. Use `-a` for the separate [agent workflow](agent.md).
 
+Native Windows full-screen modes require Windows Terminal or modern conhost;
+mintty/non-console sessions are rejected with a clear error. Ainiux consumes
+mouse-wheel reports, so hold `Shift` while dragging for native terminal text
+selection. See [Native Windows](windows.md).
+
 ## Threads and persistence
 
 Chat opens the thread selector at startup. Choose a saved thread or press `Tab`/`Insert` for a new one. `Ctrl+L` or `/list` reopens the selector. Threads are stored newest-first in `~/.ainiux/ainiux.db` using SQLite WAL mode.

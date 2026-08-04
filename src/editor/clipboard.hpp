@@ -3,6 +3,7 @@
 #include "common.hpp"
 #include "runtime/runtime.hpp"
 
+#include <cstddef>
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -54,6 +55,7 @@ struct SystemClipboardResult {
 
 struct ClipboardEnvironment {
     std::string path;
+    bool windows = false;
     bool macos = false;
     bool wayland = false;
     bool x11 = false;
@@ -61,6 +63,31 @@ struct ClipboardEnvironment {
     bool wsl = false;
     bool ssh = false;
 };
+
+#if defined(_WIN32)
+// Narrow test seam around the Win32 clipboard calls. Production uses the
+// native implementation when this override is null; unit tests install a
+// process-local fake to cover busy/cancel, conversion, and ownership paths
+// without changing the user's clipboard.
+struct WindowsClipboardApiForTests {
+    void* context = nullptr;
+    bool (*open)(void*) = nullptr;
+    void (*close)(void*) = nullptr;
+    bool (*unicode_text_available)(void*) = nullptr;
+    void* (*get_unicode_text)(void*) = nullptr;
+    std::size_t (*global_size)(void*, void*) = nullptr;
+    void* (*global_lock)(void*, void*) = nullptr;
+    void (*global_unlock)(void*, void*) = nullptr;
+    bool (*empty)(void*) = nullptr;
+    void* (*global_alloc)(void*, std::size_t) = nullptr;
+    bool (*set_unicode_text)(void*, void*) = nullptr;
+    void (*global_free)(void*, void*) = nullptr;
+    unsigned long (*last_error)(void*) = nullptr;
+    void (*wait_ms)(void*, unsigned long) = nullptr;
+};
+
+void set_windows_clipboard_api_for_tests(const WindowsClipboardApiForTests* api);
+#endif
 
 ClipboardEnvironment current_clipboard_environment();
 bool prefer_terminal_clipboard_query(const ClipboardEnvironment& environment);

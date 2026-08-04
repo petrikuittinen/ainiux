@@ -6,11 +6,19 @@
 #include "provider/model_selection.hpp"
 #include "provider/provider.hpp"
 
+#if defined(_WIN32)
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#else
 #include <arpa/inet.h>
 #include <netinet/in.h>
 #include <sys/socket.h>
 #include <sys/time.h>
 #include <unistd.h>
+#endif
 
 #include <algorithm>
 #include <cstdlib>
@@ -101,31 +109,49 @@ void check_bool_field(const ainiux::json::Value* value,
           message);
 }
 
+#if defined(_WIN32)
+using TestSocket = SOCKET;
+constexpr TestSocket kInvalidTestSocket = INVALID_SOCKET;
+void close_test_socket(TestSocket socket) { closesocket(socket); }
+class WinsockGuard {
+   public:
+    WinsockGuard() { WSADATA data{}; ready_ = WSAStartup(MAKEWORD(2, 2), &data) == 0; }
+    ~WinsockGuard() { if (ready_) WSACleanup(); }
+    bool ready() const { return ready_; }
+   private:
+    bool ready_ = false;
+};
+#else
+using TestSocket = int;
+constexpr TestSocket kInvalidTestSocket = -1;
+void close_test_socket(TestSocket socket) { close(socket); }
+#endif
+
 class UniqueFd {
    public:
-    explicit UniqueFd(int fd = -1) : fd_(fd) {}
+    explicit UniqueFd(TestSocket fd = kInvalidTestSocket) : fd_(fd) {}
     ~UniqueFd() { reset(); }
     UniqueFd(const UniqueFd&) = delete;
     UniqueFd& operator=(const UniqueFd&) = delete;
 
-    int get() const { return fd_; }
-    int release() {
-        const int fd = fd_;
-        fd_ = -1;
+    TestSocket get() const { return fd_; }
+    TestSocket release() {
+        const TestSocket fd = fd_;
+        fd_ = kInvalidTestSocket;
         return fd;
     }
-    void reset(int next = -1) {
-        if (fd_ >= 0) {
-            close(fd_);
+    void reset(TestSocket next = kInvalidTestSocket) {
+        if (fd_ != kInvalidTestSocket) {
+            close_test_socket(fd_);
         }
         fd_ = next;
     }
 
    private:
-    int fd_ = -1;
+    TestSocket fd_ = kInvalidTestSocket;
 };
 
-bool send_all(int fd, const std::string& data) {
+bool send_all(TestSocket fd, const std::string& data) {
     size_t offset = 0;
     while (offset < data.size()) {
 #ifdef MSG_NOSIGNAL
@@ -133,7 +159,8 @@ bool send_all(int fd, const std::string& data) {
 #else
         const int flags = 0;
 #endif
-        const ssize_t written = send(fd, data.data() + offset, data.size() - offset, flags);
+        const int written = send(fd, data.data() + offset,
+                                 static_cast<int>(data.size() - offset), flags);
         if (written <= 0) {
             return false;
         }
@@ -146,17 +173,28 @@ ainiux::Error run_stream_from_body(const std::string& body,
                                    ainiux::provider::ApiKind api_kind,
                                    ainiux::provider::ChatResult& result,
                                    std::string& streamed) {
-    UniqueFd listen_fd(socket(AF_INET, SOCK_STREAM, 0));
-    if (listen_fd.get() < 0) {
+#if defined(_WIN32)
+    WinsockGuard winsock;
+    if (!winsock.ready())
+        return {ainiux::ErrorCode::Internal, "could not initialize Winsock"};
+#endif
+    UniqueFd listen_fd(socket(AF_INET, SOCK_STREAM, IPPROTO_TCP));
+    if (listen_fd.get() == kInvalidTestSocket) {
         return {ainiux::ErrorCode::Internal, "could not create test server socket"};
     }
     const int yes = 1;
-    if (setsockopt(listen_fd.get(), SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(yes)) != 0) {
+    if (setsockopt(listen_fd.get(), SOL_SOCKET, SO_REUSEADDR,
+                   reinterpret_cast<const char*>(&yes), sizeof(yes)) != 0) {
         return {ainiux::ErrorCode::Internal, "could not configure test server socket reuse"};
     }
+#if defined(_WIN32)
+    const DWORD timeout = 5000;
+#else
     timeval timeout{};
     timeout.tv_sec = 5;
-    if (setsockopt(listen_fd.get(), SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout)) != 0) {
+#endif
+    if (setsockopt(listen_fd.get(), SOL_SOCKET, SO_RCVTIMEO,
+                   reinterpret_cast<const char*>(&timeout), sizeof(timeout)) != 0) {
         return {ainiux::ErrorCode::Internal, "could not configure test server socket timeout"};
     }
 
@@ -170,16 +208,20 @@ ainiux::Error run_stream_from_body(const std::string& body,
     if (listen(listen_fd.get(), 1) != 0) {
         return {ainiux::ErrorCode::Internal, "could not listen on test server socket"};
     }
+#if defined(_WIN32)
+    int length = sizeof(address);
+#else
     socklen_t length = sizeof(address);
+#endif
     if (getsockname(listen_fd.get(), reinterpret_cast<sockaddr*>(&address), &length) != 0) {
         return {ainiux::ErrorCode::Internal, "could not inspect test server socket"};
     }
     const int port = ntohs(address.sin_port);
-    const int server_fd = listen_fd.release();
+    const TestSocket server_fd = listen_fd.release();
     std::thread server([server_fd, body]() {
         UniqueFd scoped_listen(server_fd);
         UniqueFd client(accept(scoped_listen.get(), nullptr, nullptr));
-        if (client.get() < 0) {
+        if (client.get() == kInvalidTestSocket) {
             return;
         }
         char request_buffer[1024] = {};
@@ -235,17 +277,28 @@ ainiux::Error run_chat_http_status_response(long status,
                                             const std::string& reason,
                                             const std::string& content_type,
                                             const std::string& body) {
-    UniqueFd listen_fd(socket(AF_INET, SOCK_STREAM, 0));
-    if (listen_fd.get() < 0) {
+#if defined(_WIN32)
+    WinsockGuard winsock;
+    if (!winsock.ready())
+        return {ainiux::ErrorCode::Internal, "could not initialize Winsock"};
+#endif
+    UniqueFd listen_fd(socket(AF_INET, SOCK_STREAM, IPPROTO_TCP));
+    if (listen_fd.get() == kInvalidTestSocket) {
         return {ainiux::ErrorCode::Internal, "could not create test server socket"};
     }
     const int yes = 1;
-    if (setsockopt(listen_fd.get(), SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(yes)) != 0) {
+    if (setsockopt(listen_fd.get(), SOL_SOCKET, SO_REUSEADDR,
+                   reinterpret_cast<const char*>(&yes), sizeof(yes)) != 0) {
         return {ainiux::ErrorCode::Internal, "could not configure test server socket reuse"};
     }
+#if defined(_WIN32)
+    const DWORD timeout = 5000;
+#else
     timeval timeout{};
     timeout.tv_sec = 5;
-    if (setsockopt(listen_fd.get(), SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout)) != 0) {
+#endif
+    if (setsockopt(listen_fd.get(), SOL_SOCKET, SO_RCVTIMEO,
+                   reinterpret_cast<const char*>(&timeout), sizeof(timeout)) != 0) {
         return {ainiux::ErrorCode::Internal, "could not configure test server socket timeout"};
     }
 
@@ -259,16 +312,20 @@ ainiux::Error run_chat_http_status_response(long status,
     if (listen(listen_fd.get(), 1) != 0) {
         return {ainiux::ErrorCode::Internal, "could not listen on test server socket"};
     }
+#if defined(_WIN32)
+    int length = sizeof(address);
+#else
     socklen_t length = sizeof(address);
+#endif
     if (getsockname(listen_fd.get(), reinterpret_cast<sockaddr*>(&address), &length) != 0) {
         return {ainiux::ErrorCode::Internal, "could not inspect test server socket"};
     }
     const int port = ntohs(address.sin_port);
-    const int server_fd = listen_fd.release();
+    const TestSocket server_fd = listen_fd.release();
     std::thread server([server_fd, status, reason, content_type, body]() {
         UniqueFd scoped_listen(server_fd);
         UniqueFd client(accept(scoped_listen.get(), nullptr, nullptr));
-        if (client.get() < 0) {
+        if (client.get() == kInvalidTestSocket) {
             return;
         }
         char request_buffer[4096] = {};
@@ -828,19 +885,15 @@ void test_models_markdown_format() {
 class ScopedUnsetenv {
    public:
     explicit ScopedUnsetenv(std::string name) : name_(std::move(name)) {
-        const char* previous = std::getenv(name_.c_str());
-        if (previous != nullptr) {
-            previous_value_ = previous;
-        }
-        unsetenv(name_.c_str());
+        previous_value_ = ainiux::test::test_environment(name_.c_str());
+        ainiux::test::unset_test_environment(name_.c_str());
     }
 
     ~ScopedUnsetenv() {
-        if (previous_value_.has_value()) {
-            setenv(name_.c_str(), previous_value_->c_str(), 1);
-        } else {
-            unsetenv(name_.c_str());
-        }
+        if (previous_value_.has_value())
+            ainiux::test::set_test_environment(name_.c_str(), *previous_value_);
+        else
+            ainiux::test::unset_test_environment(name_.c_str());
     }
 
    private:

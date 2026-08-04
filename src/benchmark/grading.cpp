@@ -233,7 +233,7 @@ SourceLoadResult load_grade_source(const std::string& path,
                                    const std::string& category,
                                    const std::string& case_id,
                                    size_t limit) {
-    std::ifstream input(path, std::ios::binary);
+    std::ifstream input(std::filesystem::u8path(path), std::ios::binary);
     if (!input) {
         return {{}, {ErrorCode::FileRead,
                      "could not open benchmark result JSONL for grading: " + path}};
@@ -603,7 +603,7 @@ std::string successful_grade_record(const GradeGroup& group,
 
 Error find_grade_input(const cli::Options& options, std::string& path) {
     if (!options.grade_input.empty()) {
-        std::filesystem::path explicit_path(options.grade_input);
+        std::filesystem::path explicit_path = std::filesystem::u8path(options.grade_input);
         std::error_code filesystem_error;
         if (!std::filesystem::is_regular_file(explicit_path, filesystem_error) ||
             filesystem_error) {
@@ -611,13 +611,13 @@ Error find_grade_input(const cli::Options& options, std::string& path) {
                     "--grade-input is not a readable regular file: " +
                         options.grade_input};
         }
-        path = explicit_path.string();
+        path = explicit_path.u8string();
         return ok_error();
     }
 
     std::vector<std::filesystem::path> directories;
     if (!options.output_path.empty() && options.output_path != "stdout") {
-        const std::filesystem::path output_path(options.output_path);
+        const std::filesystem::path output_path = std::filesystem::u8path(options.output_path);
         std::error_code filesystem_error;
         const bool is_directory =
             std::filesystem::is_directory(output_path, filesystem_error);
@@ -664,7 +664,7 @@ Error find_grade_input(const cli::Options& options, std::string& path) {
                 filesystem_error.clear();
                 continue;
             }
-            const std::string filename = entry.path().filename().string();
+            const std::string filename = entry.path().filename().u8string();
             if (filename.rfind("benchmark-", 0) != 0 || filename.size() < 17 ||
                 filename.compare(filename.size() - 6, 6, ".jsonl") != 0) {
                 continue;
@@ -682,14 +682,14 @@ Error find_grade_input(const cli::Options& options, std::string& path) {
         if (left.modified != right.modified) {
             return left.modified > right.modified;
         }
-        return left.path.string() < right.path.string();
+        return left.path.u8string() < right.path.u8string();
     });
     for (const Candidate& candidate : candidates) {
         SourceLoadResult loaded = load_grade_source(
-            candidate.path.string(), options.benchmark_category,
+            candidate.path.u8string(), options.benchmark_category,
             options.benchmark_case, 1);
         if (loaded.error.ok()) {
-            path = candidate.path.string();
+            path = candidate.path.u8string();
             return ok_error();
         }
     }
@@ -698,7 +698,7 @@ Error find_grade_input(const cli::Options& options, std::string& path) {
         if (!searched.empty()) {
             searched += ", ";
         }
-        searched += directory.string();
+        searched += directory.u8string();
     }
     return {ErrorCode::FileRead,
             "no valid benchmark-*.jsonl grading input matched the requested category/case in " +

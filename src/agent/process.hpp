@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstddef>
+#include <cstdint>
 #include <string>
 #include <vector>
 
@@ -34,10 +35,11 @@ struct ProcessOptions {
 
 struct ProcessResult {
     std::vector<std::string> arguments;
+    std::string resolved_executable;
     std::string cwd;
     std::string stdout_text;
     std::string stderr_text;
-    int exit_status = -1;
+    std::int64_t exit_status = -1;
     int signal = 0;
     long long duration_ms = 0;
     bool stdout_truncated = false;

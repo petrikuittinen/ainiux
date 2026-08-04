@@ -1,112 +1,98 @@
 #include "app/user_shell.hpp"
 
+#include "platform/environment.hpp"
+#if defined(_WIN32)
+#include "platform/windows_utf.hpp"
+#endif
+#include "runtime/subprocess.hpp"
 #include "security/redact.hpp"
 
-#include <algorithm>
-#include <cerrno>
-#include <chrono>
-#include <cstdlib>
-#include <cstring>
+#include <filesystem>
 #include <string>
 #include <vector>
-
-#include <fcntl.h>
-#include <poll.h>
-#include <signal.h>
-#include <sys/types.h>
-#include <sys/wait.h>
-#include <unistd.h>
 
 namespace ainiux::app {
 namespace {
 
-class Pipe {
-   public:
-    ~Pipe() { close_all(); }
-    Pipe(const Pipe&) = delete;
-    Pipe& operator=(const Pipe&) = delete;
-    Pipe() = default;
-
-    Error open() {
-        if (::pipe(fds_) != 0) {
-            return {ErrorCode::Internal,
-                    "could not create shell process pipe: " + std::string(std::strerror(errno))};
-        }
-        return ok_error();
-    }
-
-    int read_fd() const { return fds_[0]; }
-    int write_fd() const { return fds_[1]; }
-
-    int release_read() {
-        const int fd = fds_[0];
-        fds_[0] = -1;
-        return fd;
-    }
-
-    void close_read() { close_one(0); }
-    void close_write() { close_one(1); }
-
-   private:
-    int fds_[2] = {-1, -1};
-
-    void close_one(int index) {
-        if (fds_[index] >= 0) {
-            ::close(fds_[index]);
-            fds_[index] = -1;
-        }
-    }
-
-    void close_all() {
-        close_one(0);
-        close_one(1);
-    }
-};
-
-void append_bounded(std::string& output,
-                    const char* data,
-                    std::size_t count,
-                    std::size_t limit,
-                    bool& truncated) {
-    const std::size_t remaining = output.size() < limit ? limit - output.size() : 0;
-    const std::size_t accepted = std::min(remaining, count);
-    output.append(data, accepted);
-    if (accepted != count) truncated = true;
-}
-
-void drain_fd(int fd, std::string& output, std::size_t limit, bool& truncated, bool& open) {
-    char buffer[8192];
-    while (true) {
-        const ssize_t count = ::read(fd, buffer, sizeof(buffer));
-        if (count > 0) {
-            append_bounded(output, buffer, static_cast<std::size_t>(count), limit, truncated);
-            continue;
-        }
-        if (count == 0) {
-            ::close(fd);
-            open = false;
-            return;
-        }
-        if (errno == EAGAIN || errno == EWOULDBLOCK) return;
-        if (errno == EINTR) continue;
-        ::close(fd);
-        open = false;
-        return;
-    }
-}
-
 std::string resolve_shell_path() {
+#if defined(_WIN32)
+    const std::string system_root = platform::environment_value("SystemRoot");
+    if (system_root.empty()) return {};
+    const std::filesystem::path shell =
+        std::filesystem::u8path(system_root) / "System32" / "WindowsPowerShell" /
+        "v1.0" / "powershell.exe";
+    std::error_code error;
+    if (std::filesystem::is_regular_file(shell, error) && !error)
+        return shell.u8string();
+    return {};
+#else
     static const char* kCandidates[] = {"/bin/sh", "/usr/bin/sh"};
     for (const char* path : kCandidates) {
-        if (::access(path, X_OK) == 0) return path;
+        std::error_code error;
+        if (std::filesystem::is_regular_file(path, error) && !error) return path;
     }
     return {};
+#endif
 }
 
 std::string process_cwd() {
-    char buffer[4096];
-    if (::getcwd(buffer, sizeof(buffer)) != nullptr) return buffer;
+    std::error_code error;
+    const std::filesystem::path cwd = std::filesystem::current_path(error);
+    if (!error) return cwd.u8string();
     return ".";
+}
+
+#if defined(_WIN32)
+std::string base64_encode(const std::string& bytes) {
+    static constexpr char alphabet[] =
+        "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    std::string output;
+    output.reserve(((bytes.size() + 2U) / 3U) * 4U);
+    for (std::size_t offset = 0; offset < bytes.size(); offset += 3) {
+        const std::size_t remaining = bytes.size() - offset;
+        const unsigned int first = static_cast<unsigned char>(bytes[offset]);
+        const unsigned int second =
+            remaining > 1 ? static_cast<unsigned char>(bytes[offset + 1]) : 0U;
+        const unsigned int third =
+            remaining > 2 ? static_cast<unsigned char>(bytes[offset + 2]) : 0U;
+        const unsigned int value = (first << 16U) | (second << 8U) | third;
+        output.push_back(alphabet[(value >> 18U) & 0x3FU]);
+        output.push_back(alphabet[(value >> 12U) & 0x3FU]);
+        output.push_back(remaining > 1 ? alphabet[(value >> 6U) & 0x3FU] : '=');
+        output.push_back(remaining > 2 ? alphabet[value & 0x3FU] : '=');
+    }
+    return output;
+}
+
+Error powershell_encoded_command(const std::string& command, std::string& encoded) {
+    const std::string script =
+        "$ProgressPreference='SilentlyContinue';"
+        "$ainiux_utf8=New-Object System.Text.UTF8Encoding($false);"
+        "$OutputEncoding=$ainiux_utf8;"
+        "[Console]::OutputEncoding=$ainiux_utf8;"
+        "[Console]::InputEncoding=$ainiux_utf8;"
+        "& { " + command +
+        " };$ainiux_ok=$?;$ainiux_code=$LASTEXITCODE;"
+        "if($ainiux_ok){exit 0}"
+        "elseif($null -ne $ainiux_code){exit [int]$ainiux_code}else{exit 1}";
+    std::wstring wide;
+    Error error = platform::utf8_to_utf16(script, wide);
+    if (!error.ok()) return error;
+    std::string bytes;
+    bytes.reserve(wide.size() * 2U);
+    for (wchar_t value : wide) {
+        const unsigned int code = static_cast<unsigned int>(value);
+        bytes.push_back(static_cast<char>(code & 0xFFU));
+        bytes.push_back(static_cast<char>((code >> 8U) & 0xFFU));
+    }
+    encoded = base64_encode(bytes);
+    return ok_error();
+}
+#endif
+
+void append_environment(std::vector<std::string>& environment, const char* name) {
+    const std::string value = platform::environment_value(name);
+    if (!value.empty()) environment.push_back(std::string(name) + "=" + value);
 }
 
 std::string ascii_trim_copy(std::string text) {
@@ -191,130 +177,66 @@ Error run_user_shell(const std::string& command,
 
     const std::string shell = resolve_shell_path();
     if (shell.empty()) {
+#if defined(_WIN32)
+        return {ErrorCode::FileRead,
+                "could not find Windows PowerShell 5.1 below %SystemRoot%\\System32"};
+#else
         return {ErrorCode::FileRead, "could not find executable /bin/sh or /usr/bin/sh"};
+#endif
     }
 
     std::string cwd = options.cwd.empty() ? process_cwd() : options.cwd;
     result.cwd = cwd;
 
-    const long timeout_ms = options.timeout_ms > 0 ? options.timeout_ms : 60000;
-    const std::size_t stdout_limit =
-        options.stdout_limit > 0 ? options.stdout_limit : 256 * 1024;
-    const std::size_t stderr_limit =
-        options.stderr_limit > 0 ? options.stderr_limit : 256 * 1024;
-
-    // Prepare argv/env storage before fork (async-signal-safe child path).
-    std::string shell_storage = shell;
-    std::string dash_c = "-c";
-    std::string command_storage = command;
-    std::vector<char*> argv = {shell_storage.data(), dash_c.data(), command_storage.data(),
-                               nullptr};
-
-    std::vector<std::string> environment_storage = {
+    runtime::SubprocessOptions subprocess;
+    subprocess.executable = shell;
+    subprocess.cwd = cwd;
+    subprocess.timeout_ms = options.timeout_ms > 0 ? options.timeout_ms : 60000;
+    subprocess.stdout_limit = options.stdout_limit > 0 ? options.stdout_limit : 256 * 1024;
+    subprocess.stderr_limit = options.stderr_limit > 0 ? options.stderr_limit : 256 * 1024;
+    subprocess.cancellation = options.cancellation;
+#if defined(_WIN32)
+    std::string encoded;
+    Error encode_error = powershell_encoded_command(command, encoded);
+    if (!encode_error.ok()) return encode_error;
+    subprocess.arguments = {"-NoLogo", "-NoProfile", "-NonInteractive",
+                            "-ExecutionPolicy", "Bypass", "-EncodedCommand", encoded};
+    append_environment(subprocess.environment, "SystemRoot");
+    append_environment(subprocess.environment, "WINDIR");
+    append_environment(subprocess.environment, "COMSPEC");
+    append_environment(subprocess.environment, "PATH");
+    append_environment(subprocess.environment, "PATHEXT");
+    append_environment(subprocess.environment, "HOME");
+    append_environment(subprocess.environment, "USERPROFILE");
+    append_environment(subprocess.environment, "TEMP");
+    append_environment(subprocess.environment, "TMP");
+    append_environment(subprocess.environment, "PSModulePath");
+#else
+    subprocess.arguments = {"-c", command};
+    subprocess.environment = {
         "PATH=/usr/local/bin:/usr/bin:/bin",
         "LC_ALL=C.UTF-8",
         "LANG=C.UTF-8",
         "PAGER=cat",
     };
-    // Preserve a few non-secret user env vars that interactive shells often need.
-    if (const char* home = std::getenv("HOME")) {
-        if (home[0] != '\0') environment_storage.push_back(std::string("HOME=") + home);
-    }
-    if (const char* term = std::getenv("TERM")) {
-        if (term[0] != '\0') environment_storage.push_back(std::string("TERM=") + term);
-    }
-    if (const char* user = std::getenv("USER")) {
-        if (user[0] != '\0') environment_storage.push_back(std::string("USER=") + user);
-    }
-    std::vector<char*> environment;
-    environment.reserve(environment_storage.size() + 1);
-    for (std::string& item : environment_storage) environment.push_back(item.data());
-    environment.push_back(nullptr);
-
-    Pipe stdout_pipe;
-    Pipe stderr_pipe;
-    Error error = stdout_pipe.open();
-    if (!error.ok()) return error;
-    error = stderr_pipe.open();
-    if (!error.ok()) return error;
-
-    const auto started = std::chrono::steady_clock::now();
-    const pid_t pid = ::fork();
-    if (pid < 0) {
-        return {ErrorCode::Internal,
-                "could not fork shell command: " + std::string(std::strerror(errno))};
-    }
-    if (pid == 0) {
-        ::setpgid(0, 0);
-        stdout_pipe.close_read();
-        stderr_pipe.close_read();
-        const int null_fd = ::open("/dev/null", O_RDONLY);
-        if (null_fd >= 0) {
-            ::dup2(null_fd, STDIN_FILENO);
-            ::close(null_fd);
-        }
-        ::dup2(stdout_pipe.write_fd(), STDOUT_FILENO);
-        ::dup2(stderr_pipe.write_fd(), STDERR_FILENO);
-        stdout_pipe.close_write();
-        stderr_pipe.close_write();
-        if (::chdir(cwd.c_str()) != 0) _exit(126);
-        ::execve(shell_storage.c_str(), argv.data(), environment.data());
-        _exit(errno == ENOENT ? 127 : 126);
-    }
-
-    ::setpgid(pid, pid);
-    stdout_pipe.close_write();
-    stderr_pipe.close_write();
-    ::fcntl(stdout_pipe.read_fd(), F_SETFL, ::fcntl(stdout_pipe.read_fd(), F_GETFL) | O_NONBLOCK);
-    ::fcntl(stderr_pipe.read_fd(), F_SETFL, ::fcntl(stderr_pipe.read_fd(), F_GETFL) | O_NONBLOCK);
-    int stdout_fd = stdout_pipe.release_read();
-    int stderr_fd = stderr_pipe.release_read();
-    bool stdout_open = true;
-    bool stderr_open = true;
-    int wait_status = 0;
-    bool reaped = false;
-    bool terminated = false;
-    long long terminated_at = 0;
-
-    while (!reaped || stdout_open || stderr_open) {
-        const auto now = std::chrono::steady_clock::now();
-        const long long elapsed =
-            std::chrono::duration_cast<std::chrono::milliseconds>(now - started).count();
-        if (!terminated && (options.cancellation.cancelled() || elapsed > timeout_ms)) {
-            result.cancelled = options.cancellation.cancelled();
-            result.timed_out = !result.cancelled;
-            ::kill(-pid, SIGTERM);
-            terminated = true;
-            terminated_at = elapsed;
-        }
-        if (terminated && elapsed > terminated_at + 250) ::kill(-pid, SIGKILL);
-        pollfd fds[2] = {{stdout_fd, static_cast<short>(stdout_open ? POLLIN | POLLHUP : 0), 0},
-                         {stderr_fd, static_cast<short>(stderr_open ? POLLIN | POLLHUP : 0), 0}};
-        ::poll(fds, 2, 25);
-        if (stdout_open) {
-            drain_fd(stdout_fd, result.stdout_text, stdout_limit, result.stdout_truncated,
-                     stdout_open);
-        }
-        if (stderr_open) {
-            drain_fd(stderr_fd, result.stderr_text, stderr_limit, result.stderr_truncated,
-                     stderr_open);
-        }
-        if (!reaped) {
-            const pid_t waited = ::waitpid(pid, &wait_status, WNOHANG);
-            if (waited == pid) reaped = true;
-            else if (waited < 0 && errno != EINTR) reaped = true;
-        }
-    }
-
-    result.duration_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
-                             std::chrono::steady_clock::now() - started)
-                             .count();
-    if (WIFEXITED(wait_status)) result.exit_status = WEXITSTATUS(wait_status);
-    if (WIFSIGNALED(wait_status)) result.signal = WTERMSIG(wait_status);
-
-    if (result.cancelled) return {ErrorCode::Cancelled, "shell command cancelled"};
-    if (result.timed_out) return {ErrorCode::Timeout, "shell command exceeded its timeout"};
-    return ok_error();
+    append_environment(subprocess.environment, "HOME");
+    append_environment(subprocess.environment, "TERM");
+    append_environment(subprocess.environment, "USER");
+#endif
+    runtime::SubprocessResult process_result;
+    Error error = runtime::run_subprocess(subprocess, process_result);
+    result.stdout_text = std::move(process_result.stdout_text);
+    result.stderr_text = std::move(process_result.stderr_text);
+    result.exit_status = process_result.exit_code;
+    result.signal = process_result.signal;
+    result.duration_ms = process_result.duration_ms;
+    result.stdout_truncated = process_result.stdout_truncated;
+    result.stderr_truncated = process_result.stderr_truncated;
+    result.cancelled = process_result.termination ==
+                       runtime::SubprocessTerminationReason::Cancelled;
+    result.timed_out = process_result.termination ==
+                       runtime::SubprocessTerminationReason::TimedOut;
+    return error;
 }
 
 std::string format_user_shell_notice(const UserShellResult& result,

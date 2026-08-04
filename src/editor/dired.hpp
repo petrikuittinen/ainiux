@@ -30,6 +30,10 @@ struct DiredEntry {
     bool is_directory = false;
     bool is_parent = false;
     bool is_symlink = false;
+    bool is_hidden = false;
+    bool is_read_only = false;
+    bool is_reparse_point = false;
+    bool is_executable = false;
     std::uint64_t size = 0;
     std::int64_t mtime_sec = 0;
     // POSIX ls-style fields; empty on Windows (not shown in the listing).

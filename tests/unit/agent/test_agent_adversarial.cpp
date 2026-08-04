@@ -3,7 +3,6 @@
 #include <filesystem>
 #include <fstream>
 #include <string>
-#include <unistd.h>
 #include <vector>
 
 #include "agent/agents_md.hpp"
@@ -15,6 +14,7 @@
 #include "agent/text_match.hpp"
 #include "agent/tools.hpp"
 #include "json/json.hpp"
+#include "platform/environment.hpp"
 #include "support/test_support.hpp"
 
 // Adversarial and non-ASCII coverage for agent helpers: Unicode (emoji, CJK, Arabic),
@@ -34,7 +34,7 @@ const char* kMixed = u8"Hello 你好 مرحبا ❤️";
 std::string temp_workspace(const std::string& name) {
     const fs::path root =
         fs::temp_directory_path() / ("ainiux-agent-adv-" + name + "-" +
-                                     std::to_string(static_cast<long long>(::getpid())));
+                                     std::to_string(ainiux::platform::current_process_id()));
     std::error_code ec;
     fs::remove_all(root, ec);
     fs::create_directories(root / "src", ec);

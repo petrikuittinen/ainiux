@@ -17,11 +17,11 @@ The name began with the author’s child Aini and echoes the Chinese phrase 爱�
 - **Fully Featured Text and Code Editor.** It has multiple buffers, split panes, grapheme-aware navigation, syntax highlighting, file locking, local layout tools, configurable AI commands, and a full-screen **dired** directory browser (`ainiux -d`, `F4`, or `Ctrl+X d`).
 - **Interactive work stays responsive.** HTTP, streaming, conversion, benchmarks, and agent work run as cancellable jobs.
 - **Agent tools are separate from chat.** `-c` is ordinary conversation. `-a` opens the project-local agent with explicit permissions, built-in guard against destructive commands, Act/Plan policies, and logged tool activity.
-- **The implementation stays small and portable.** Ainiux uses C++17, a Makefile, libcurl, SQLite, POSIX terminal APIs, and ANSI rendering. It does not require Electron, a browser, or ncurses. And it won't eat all of your RAM.
+- **The implementation stays small and portable.** Ainiux uses C++17, a Makefile, libcurl, SQLite, native POSIX/Win32 platform backends, and ANSI/VT rendering. It does not require Electron, a browser, or ncurses. And it won't eat all of your RAM.
 
 ## Platform support
 
-Ubuntu on x86-64 and ARM64 is the tested baseline. The C++17, Makefile, POSIX `termios`/ANSI, libcurl, and SQLite design targets Linux, BSD, macOS, and other POSIX-like systems where practical, but those systems are not all continuously tested and compatibility is not guaranteed.
+Ubuntu on x86-64 and ARM64 remains the primary tested baseline. A native Windows 10 1903+/Windows 11 x64 target builds in MSYS2 UCRT64; Windows Terminal and modern conhost are supported for full-screen modes, while mintty is rejected with a clear diagnostic. Portable Windows release artifacts remain gated on the native parity workflow. BSD, macOS, and other POSIX-like systems are targeted where practical but are not all continuously tested. See [Native Windows](docs/windows.md).
 
 Ainiux is provided under the [Modified MIT License](LICENSE). It is provided **“as is,” without warranty**; review the license before relying on it for important work.
 
@@ -258,6 +258,10 @@ make clean
 make install PREFIX=/usr/local
 ```
 
+For native Windows, use the MSYS2 UCRT64 shell and `make`; `make package-windows`
+produces a portable ZIP with the required native DLL closure. See the
+[Windows build and runtime guide](docs/windows.md).
+
 Fault, integration, SQLite/TUI, sanitizer, and Valgrind suites are available but intentionally opt-in because some rebuild the project or start subprocess and PTY scenarios. [TESTING.md](TESTING.md) explains the selection policy and exact targets. Contributions should keep strict compiler warnings, add focused tests for behavior changes, avoid new dependencies without a recorded decision, and use RAII for every acquired resource.
 
 The authoritative layout and coding constraints are in [AGENTS.md](AGENTS.md). Design rationale is in [docs/decisions.md](docs/decisions.md); short active work is in [TODO.md](TODO.md).
@@ -275,7 +279,7 @@ Read [Security](docs/security.md) for the detailed threat boundaries and [the se
 
 ## Limitations and roadmap
 
-Ainiux does not currently implement a local OpenAI-compatible server, browser UI, image generation, PDF/DOCX conversion, `/loop`, sub-agents, or a native Anthropic Messages adapter. The terminal UI uses POSIX `termios` and ANSI rather than ncurses. HTML extraction is intentionally lightweight: it does not execute JavaScript, implement a browser DOM, or transcode legacy character sets.
+Ainiux does not currently implement a local OpenAI-compatible server, browser UI, image generation, PDF/DOCX conversion, `/loop`, sub-agents, or a native Anthropic Messages adapter. The terminal UI uses native POSIX `termios` or Win32 console mode ownership with shared ANSI/VT parsing rather than ncurses. HTML extraction is intentionally lightweight: it does not execute JavaScript, implement a browser DOM, or transcode legacy character sets.
 
 The editor’s grapheme and cell-width implementation covers the shipped behavior but is not a claim of complete Unicode standard conformance. The code index is a navigation hint. Benchmark and judge results require human interpretation. Provider compatibility may change outside this project’s control.
 

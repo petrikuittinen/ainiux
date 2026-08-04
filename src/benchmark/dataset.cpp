@@ -3,6 +3,7 @@
 #include "benchmark/detail.hpp"
 
 #include <cmath>
+#include <filesystem>
 #include <fstream>
 #include <set>
 #include <sstream>
@@ -372,7 +373,7 @@ LoadResult load_jsonl(const std::string& path) {
         std::istringstream input(kBuiltinDatasetJsonl);
         return parse_jsonl(input, "builtin");
     }
-    std::ifstream input(path, std::ios::binary);
+    std::ifstream input(std::filesystem::u8path(path), std::ios::binary);
     if (!input) {
         return {{}, {ErrorCode::FileRead, "could not open benchmark JSONL dataset: " + path}};
     }

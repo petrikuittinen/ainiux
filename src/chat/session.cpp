@@ -1,16 +1,11 @@
 #include "chat/session.hpp"
 
 #include "common.hpp"
+#include "platform/filesystem.hpp"
 
-#include <cerrno>
 #include <chrono>
-#include <cstring>
 #include <ctime>
-#include <fcntl.h>
 #include <sstream>
-#include <sys/stat.h>
-#include <sys/types.h>
-#include <unistd.h>
 
 #include "chat/settings.hpp"
 #include "json/json.hpp"
@@ -18,62 +13,6 @@
 namespace ainiux::chat {
 
 namespace {
-
-class Fd {
-   public:
-    explicit Fd(int fd = -1) : fd_(fd) {}
-    ~Fd() {
-        if (fd_ >= 0) {
-            close(fd_);
-        }
-    }
-    Fd(const Fd&) = delete;
-    Fd& operator=(const Fd&) = delete;
-    int get() const { return fd_; }
-    int release() {
-        int out = fd_;
-        fd_ = -1;
-        return out;
-    }
-
-   private:
-    int fd_;
-};
-
-std::string errno_message(const std::string& action, const std::string& path) {
-    return action + ": " + path + ": " + std::strerror(errno);
-}
-
-std::string dirname_of(const std::string& path) {
-    const size_t slash = path.find_last_of('/');
-    if (slash == std::string::npos) {
-        return ".";
-    }
-    if (slash == 0) {
-        return "/";
-    }
-    return path.substr(0, slash);
-}
-
-Error write_all(int fd, const std::string& data, const std::string& path) {
-    const char* ptr = data.data();
-    size_t remaining = data.size();
-    while (remaining > 0) {
-        const ssize_t written = write(fd, ptr, remaining);
-        if (written < 0) {
-            if (errno == EINTR) {
-                continue;
-            }
-            return {ErrorCode::FileWrite, errno_message("could not write chat file", path)};
-        }
-        if (written == 0) {
-            return {ErrorCode::FileWrite, "could not write chat file: " + path + ": short write"};
-        }
-        ptr += written;
-        remaining -= static_cast<size_t>(written);
-    }
-    return ok_error();
-}
 
 std::string required_string(const json::Value& root, const std::string& key, Error& error) {
     const json::Value* value = root.get(key);
@@ -94,7 +33,9 @@ std::string optional_raw_json(const json::Value& root, const std::string& key) {
 std::string current_timestamp_utc() {
     const std::time_t now = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
     std::tm tm{};
-#if defined(_POSIX_THREAD_SAFE_FUNCTIONS)
+#if defined(_WIN32)
+    gmtime_s(&tm, &now);
+#elif defined(_POSIX_THREAD_SAFE_FUNCTIONS)
     gmtime_r(&now, &tm);
 #else
     std::tm* tmp = std::gmtime(&now);
@@ -171,24 +112,12 @@ std::string session_to_json(const Session& session) {
 
 Error load_session(const std::string& path, Session& session) {
     const std::string resolved = expand_user_path(path);
-    Fd fd(open(resolved.c_str(), O_RDONLY));
-    if (fd.get() < 0) {
-        return {ErrorCode::FileRead, errno_message("could not open chat file for reading", resolved)};
-    }
     std::string data;
-    char buffer[8192];
-    while (true) {
-        const ssize_t n = read(fd.get(), buffer, sizeof(buffer));
-        if (n < 0) {
-            if (errno == EINTR) {
-                continue;
-            }
-            return {ErrorCode::FileRead, errno_message("could not read chat file", resolved)};
-        }
-        if (n == 0) {
-            break;
-        }
-        data.append(buffer, static_cast<size_t>(n));
+    Error read_error = platform::read_file_bounded(resolved, 512U * 1024U * 1024U, data);
+    if (!read_error.ok()) {
+        return {ErrorCode::FileRead,
+                "could not open chat file for reading: " + resolved + ": " +
+                    read_error.message};
     }
     json::ParseResult parsed = json::parse(data);
     if (!parsed.error.ok()) {
@@ -295,36 +224,7 @@ Error save_session_atomic(const std::string& path, Session session) {
     const std::string resolved = expand_user_path(path);
     session.updated_at = current_timestamp_utc();
     const std::string data = session_to_json(session);
-    const std::string tmp = resolved + ".tmp." + std::to_string(static_cast<long long>(getpid()));
-    Fd fd(open(tmp.c_str(), O_WRONLY | O_CREAT | O_EXCL | O_TRUNC, 0600));
-    if (fd.get() < 0) {
-        return {ErrorCode::FileWrite, errno_message("could not open temporary chat file", tmp)};
-    }
-    Error err = write_all(fd.get(), data, tmp);
-    if (!err.ok()) {
-        unlink(tmp.c_str());
-        return err;
-    }
-    if (fsync(fd.get()) != 0) {
-        err = {ErrorCode::FileWrite, errno_message("could not fsync temporary chat file", tmp)};
-        unlink(tmp.c_str());
-        return err;
-    }
-    if (close(fd.release()) != 0) {
-        err = {ErrorCode::FileWrite, errno_message("could not close temporary chat file", tmp)};
-        unlink(tmp.c_str());
-        return err;
-    }
-    if (rename(tmp.c_str(), resolved.c_str()) != 0) {
-        err = {ErrorCode::FileWrite, errno_message("could not replace chat file", resolved)};
-        unlink(tmp.c_str());
-        return err;
-    }
-    Fd dir(open(dirname_of(resolved).c_str(), O_RDONLY));
-    if (dir.get() >= 0) {
-        fsync(dir.get());
-    }
-    return ok_error();
+    return platform::atomic_write_private(resolved, data, true);
 }
 
 }  // namespace ainiux::chat

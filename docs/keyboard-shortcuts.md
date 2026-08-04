@@ -2,6 +2,10 @@
 
 Current bindings for chat, agent, and editor modes.
 
+On native Windows, use Windows Terminal or modern conhost for full-screen modes.
+Mouse reporting keeps wheel scrolling inside Ainiux; hold `Shift` while dragging
+for terminal-native selection. Clipboard shortcuts use `CF_UNICODETEXT` directly.
+
 ---
 
 ## `--chat` mode (TUI)

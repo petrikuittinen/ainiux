@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
 
 jobs:
-  test:
+  linux-full:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -31,3 +31,87 @@ jobs:
 
       - name: Valgrind leak check
         run: make test-leak
+
+  windows-ucrt64:
+    runs-on: windows-2022
+    defaults:
+      run:
+        shell: msys2 {0}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install MSYS2 UCRT64
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          update: true
+          install: >-
+            base-devel
+            git
+            zip
+            mingw-w64-ucrt-x86_64-toolchain
+            mingw-w64-ucrt-x86_64-curl
+            mingw-w64-ucrt-x86_64-sqlite3
+            mingw-w64-ucrt-x86_64-python
+
+      - name: Build native Windows executable
+        run: make -j2
+
+      - name: Unit and process-tree tests
+        run: make -j2 test-unit
+
+      - name: Windows fault and network tests
+        run: make -j2 test-unit-faults
+
+      - name: Mock-provider smoke
+        run: make test-integration-smoke
+
+      - name: Code-index and comprehensive mock-server integration
+        run: make test-integration
+
+      - name: Native SQLite persistence and reopen
+        run: make test-integration-sqlite
+
+      - name: ConPTY terminal parity smoke
+        run: make test-windows-conpty
+
+      - name: Build portable ZIP
+        run: make package-windows
+
+      - name: Upload portable Windows package
+        uses: actions/upload-artifact@v4
+        with:
+          name: ainiux-windows-x86_64
+          path: |
+            ainiux-*-windows-x86_64.zip
+            ainiux-*-windows-x86_64.zip.sha256
+          if-no-files-found: error
+
+  windows-ucrt64-sanitize:
+    runs-on: windows-2022
+    defaults:
+      run:
+        shell: msys2 {0}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install MSYS2 UCRT64 Clang
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          update: true
+          install: >-
+            base-devel
+            mingw-w64-ucrt-x86_64-toolchain
+            mingw-w64-ucrt-x86_64-clang
+            mingw-w64-ucrt-x86_64-curl
+            mingw-w64-ucrt-x86_64-sqlite3
+
+      - name: Clang ASan and UBSan unit tests
+        run: >-
+          make CXX=clang++
+          EXTRA_CXXFLAGS="-O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer"
+          EXTRA_LDFLAGS="-fsanitize=address,undefined"
+          test-unit

@@ -40,6 +40,7 @@ error layers should serve:
 | v0.90 | Local OpenAI-compatible server | Deferred behind v1.1 |
 | v1.0–v1.15 | Local agent foundation, hardening, and documentation overhaul | Landed through v1.15 |
 | v1.16 | Editor dired directory browser (`--dired`, F4, Ctrl+X d) | Landed |
+| Native Windows x64 | UCRT64 native target and portable ZIP; all-mode parity gate | Implementation landed; native acceptance pending |
 | **v1.1** | **Lightweight definition ranking and index tuning; later `/goal`, `/loop`, and sub-agents** | **Next priority** |
 | **v1.2** | **Image generation across CLI and interactive surfaces** | Planned after v1.1 |
 
@@ -73,6 +74,13 @@ The shipped product includes:
 The current v1.1 index stores files and definitions for every supported scanner
 language, plus static declaration importance. It intentionally has no reference
 graph or automatic model-context hints.
+
+The unreleased native Windows target supports Windows 10 1903+/Windows 11 x64
+through MSYS2 UCRT64, with a portable ZIP, wide path/process boundaries, Win32
+terminal/clipboard/persistence, Job Object process trees, and platform test/CI
+paths. It is not a released platform until every implemented product mode passes
+the native checklist in `docs/windows.md`; Windows ARM64, MSVC/CMake, installers,
+older Windows, and mintty full-screen operation are explicit non-goals.
 
 ## Release history
 

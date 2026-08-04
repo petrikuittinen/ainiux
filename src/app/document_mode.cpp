@@ -3,6 +3,7 @@
 #include "common.hpp"
 
 #include <array>
+#include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <utility>
@@ -26,7 +27,7 @@ Error read_local_file(const std::string& path,
     std::ifstream file;
     std::istream* input = &std::cin;
     if (resolved != "stdin") {
-        file.open(resolved, std::ios::binary);
+        file.open(std::filesystem::u8path(resolved), std::ios::binary);
         if (!file) {
             return {ErrorCode::FileRead, "could not open " + description + " for reading: " + resolved};
         }

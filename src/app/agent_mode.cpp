@@ -3,7 +3,6 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
-#include <csignal>
 #include <iomanip>
 #include <iostream>
 #include <sstream>
@@ -14,30 +13,9 @@
 #include "fetch/fetch.hpp"
 #include "search/search.hpp"
 #include "security/redact.hpp"
+#include "runtime/interrupt.hpp"
 
 namespace ainiux::app {
-namespace {
-
-volatile std::sig_atomic_t g_agent_interrupt = 0;
-
-void agent_signal_handler(int) { g_agent_interrupt = 1; }
-
-class AgentSignalGuard {
-   public:
-    AgentSignalGuard() { g_agent_interrupt = 0; previous_ = std::signal(SIGINT, agent_signal_handler); }
-    ~AgentSignalGuard() {
-        if (previous_ != SIG_ERR) std::signal(SIGINT, previous_);
-    }
-    AgentSignalGuard(const AgentSignalGuard&) = delete;
-    AgentSignalGuard& operator=(const AgentSignalGuard&) = delete;
-
-   private:
-    using Handler = void (*)(int);
-    Handler previous_ = SIG_ERR;
-};
-
-}  // namespace
-
 std::string format_agent_run_metrics(const AgentGoalResult& result) {
     std::ostringstream out;
     out << "Agent metrics: tool calls " << result.tool_calls << " ("
@@ -163,12 +141,12 @@ AgentGoalResult run_agent_goal(provider::RequestContext context,
 }
 
 int run_agent_mode(provider::RequestContext context) {
-    AgentSignalGuard signal_guard;
+    runtime::InterruptGuard interrupt_guard;
     runtime::CancellationSource cancellation;
     std::atomic<bool> finished{false};
     std::thread interrupt_monitor([&] {
         while (!finished.load(std::memory_order_acquire)) {
-            if (g_agent_interrupt != 0) {
+            if (interrupt_guard.interrupted()) {
                 cancellation.cancel();
                 return;
             }
@@ -188,7 +166,7 @@ int run_agent_mode(provider::RequestContext context) {
     const bool quiet = context.options.quiet;
     AgentGoalResult result =
         run_agent_goal(std::move(context), goal, cancellation.token(),
-                       [] { return g_agent_interrupt != 0; }, true, {});
+                       [&interrupt_guard] { return interrupt_guard.interrupted(); }, true, {});
     if (!result.error.ok()) {
         print_error(result.error);
         if (!quiet) std::cerr << format_agent_run_metrics(result) << "\n";

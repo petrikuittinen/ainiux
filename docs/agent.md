@@ -28,6 +28,14 @@ Interactive agent projects persist Confirm, Smart, or Yolo permission choices. C
 
 Permissions do not expand workspace containment or turn chat/editor AI assist into agents. Model output and repository instructions remain untrusted. Keep unrelated work backed up, inspect diffs, and avoid Yolo in valuable or unfamiliar trees.
 
+On Windows, agent commands remain direct argv execution. Executable discovery
+uses inherited PATH but ignores empty/relative entries and never implicitly
+searches the current directory; only `.com`, `.exe`, `.bat`, and `.cmd` are
+automatic PATHEXT candidates. Safe batch files use resolved `cmd.exe`. Guard also
+recognizes Windows deletion, disk/registry/elevation/shutdown, and destructive
+PowerShell forms. Child processes receive a sanitized environment and run in a
+kill-on-close Job Object so timeout or cancellation terminates descendants.
+
 ## Goals
 
 Interactive `/goal CONDITION` stores a session-scoped completion condition. The agent can continue across turns until it calls `goal_met` with evidence. It stops when the goal is met, the task stalls or blocks, the turn cap is reached, or the user interrupts.

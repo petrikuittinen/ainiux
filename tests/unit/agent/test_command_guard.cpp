@@ -2,9 +2,12 @@
 
 #include <filesystem>
 #include <fstream>
+#include <optional>
 #include <string>
+#if !defined(_WIN32)
 #include <sys/stat.h>
 #include <unistd.h>
+#endif
 #include <vector>
 
 #include "agent/approval.hpp"
@@ -14,6 +17,7 @@
 #include "agent/read_only_command.hpp"
 #include "agent/tools.hpp"
 #include "json/json.hpp"
+#include "platform/environment.hpp"
 #include "support/test_support.hpp"
 
 #include <atomic>
@@ -47,6 +51,16 @@ void test_guard_patterns() {
               agent::GuardDecision::Allow,
           "sh ./script form allowed by guard");
     check(deny({"sudo", "make"}), "sudo denied");
+    check(deny({"shutdown.exe", "/s"}), "Windows shutdown.exe denied");
+    check(deny({"diskpart.exe"}), "Windows diskpart.exe denied");
+    check(deny({"reg.exe", "delete", "HKCU\\Software\\Example"}),
+          "Windows registry deletion denied");
+    check(deny({"del.cmd", "/q", "data.db"}), "Windows del.cmd guarded");
+    check(deny({"rmdir", "/s", "/q", "build"}), "Windows recursive rmdir guarded");
+    check(deny({"powershell.exe", "-EncodedCommand", "AAAA"}),
+          "PowerShell encoded command denied");
+    check(deny({"Remove-Item", "-Recurse", "build"}),
+          "destructive PowerShell cmdlet guarded");
     check(deny({"apt-get", "install", "curl"}), "system package manager denied");
     check(deny({"ssh", "host"}), "remote shell denied");
     check(deny({"reboot"}), "host control denied");
@@ -61,6 +75,25 @@ void test_guard_patterns() {
     check(agent::evaluate_command_guard({"touch", "x"}).decision == agent::GuardDecision::Allow,
           "touch allowed by guard (not an allowlist)");
 }
+
+#if defined(_WIN32)
+void test_windows_direct_argv_paths() {
+    std::vector<std::string> arguments;
+    std::string rule;
+    Error error = agent::parse_command(
+        R"CMD(python.exe -c "print('C:\work\file.txt')")CMD", arguments,
+        agent::CommandPolicy::Agent, rule, agent::GuardAskHandling::DenyAsk,
+        nullptr, {}, true, true);
+    check(error.ok() && arguments.size() == 3 &&
+              arguments[2].find(R"(C:\work\file.txt)") != std::string::npos,
+          "Windows direct argv tokenizer preserves backslash path separators");
+    error = agent::parse_command(
+        R"(type.exe C:relative\file.txt)", arguments, agent::CommandPolicy::Agent,
+        rule, agent::GuardAskHandling::DenyAsk, nullptr, {}, true, true);
+    check(!error.ok() && error.message.find("drive-relative") != std::string::npos,
+          "Windows run_command rejects ambiguous drive-relative path arguments");
+}
+#endif
 
 void test_parse_policies() {
     std::vector<std::string> args;
@@ -223,7 +256,7 @@ void test_read_only_command_classifier() {
 std::string temp_workspace(const std::string& name) {
     const fs::path root =
         fs::temp_directory_path() / ("ainiux-cmd-guard-" + name + "-" +
-                                     std::to_string(static_cast<long long>(::getpid())));
+                                     std::to_string(ainiux::platform::current_process_id()));
     std::error_code ec;
     fs::remove_all(root, ec);
     fs::create_directories(root, ec);
@@ -269,7 +302,12 @@ void test_tool_agent_python_and_security_deny() {
 
     const std::string lookup =
         agent_tools.execute("run_command", R"JSON({"command":"command -v ls"})JSON");
-    check(json_ok(lookup) && lookup.find("/ls") != std::string::npos,
+    check(json_ok(lookup) &&
+#if defined(_WIN32)
+              lookup.find("ls.exe") != std::string::npos,
+#else
+              lookup.find("/ls") != std::string::npos,
+#endif
           "agent run_command emulates command -v without a shell: " + lookup);
     const std::string missing = agent_tools.execute(
         "run_command",
@@ -300,11 +338,24 @@ void test_tool_agent_python_and_security_deny() {
 
 void test_workspace_script_execution() {
     const std::string workspace = temp_workspace("workspace-script");
+#if defined(_WIN32)
+    const std::string script_name = "server.cmd";
     {
-        std::ofstream out(fs::path(workspace) / "server.sh");
+        std::ofstream out(fs::path(workspace) / script_name);
+        out << "@echo off\r\necho arg=%1\r\necho secret=%OPENAI_API_KEY%\r\n";
+    }
+    const std::optional<std::string> previous_api_key =
+        ainiux::test::test_environment("OPENAI_API_KEY");
+    constexpr const char* inherited_secret = "ainiux-agent-secret-must-not-leak";
+    ainiux::test::set_test_environment("OPENAI_API_KEY", inherited_secret);
+#else
+    const std::string script_name = "server.sh";
+    {
+        std::ofstream out(fs::path(workspace) / script_name);
         out << "#!/bin/sh\necho \"arg=$1\"\n";
     }
-    ::chmod((fs::path(workspace) / "server.sh").c_str(), 0755);
+    ::chmod((fs::path(workspace) / script_name).c_str(), 0755);
+#endif
 
     agent::ProcessOptions options;
     options.workspace = workspace;
@@ -313,31 +364,50 @@ void test_workspace_script_execution() {
     options.timeout_ms = 5000;
     agent::ProcessResult result;
 
-    Error error =
-        agent::run_command("./server.sh start", options, result, agent::CommandPolicy::Agent);
+    const std::string relative_command = "./" + script_name + " start";
+    const std::string bare_command = script_name + " start";
+    Error error = agent::run_command(relative_command, options, result,
+                                     agent::CommandPolicy::Agent);
+#if defined(_WIN32)
+    if (previous_api_key.has_value())
+        ainiux::test::set_test_environment("OPENAI_API_KEY", *previous_api_key);
+    else
+        ainiux::test::unset_test_environment("OPENAI_API_KEY");
+#endif
     check(error.ok() && result.exit_status == 0 &&
               result.stdout_text.find("arg=start") != std::string::npos,
           "agent runs ./server.sh with args: " + error.message + " out=" + result.stdout_text);
+#if defined(_WIN32)
+    check(result.stdout_text.find(inherited_secret) == std::string::npos,
+          "Windows agent subprocess environment excludes inherited API keys");
+    result = {};
+    error = agent::run_command("./server.cmd \"unsafe&argument\"", options, result,
+                               agent::CommandPolicy::Agent);
+    check(!error.ok() && error.message.find("metacharacters") != std::string::npos,
+          "Windows batch shim rejects cmd.exe expansion metacharacters");
+#endif
 
     result = {};
-    error = agent::run_command("server.sh start", options, result, agent::CommandPolicy::Agent);
+    error = agent::run_command(bare_command, options, result, agent::CommandPolicy::Agent);
     check(error.ok() && result.exit_status == 0 &&
               result.stdout_text.find("arg=start") != std::string::npos,
           "agent runs bare workspace script server.sh: " + error.message +
               " out=" + result.stdout_text);
 
+#if !defined(_WIN32)
     result = {};
     error =
         agent::run_command("bash server.sh start", options, result, agent::CommandPolicy::Agent);
     check(error.ok() && result.exit_status == 0 &&
               result.stdout_text.find("arg=start") != std::string::npos,
           "agent runs bash server.sh form: " + error.message + " out=" + result.stdout_text);
+#endif
 
     // Without workspace executables, path form still fails closed (inspection-style).
     options.allow_workspace_executables = false;
     result = {};
     error =
-        agent::run_command("./server.sh start", options, result, agent::CommandPolicy::Agent);
+        agent::run_command(relative_command, options, result, agent::CommandPolicy::Agent);
     check(!error.ok() && error.message.find("bare command") != std::string::npos,
           "path scripts require allow_workspace_executables: " + error.message);
 
@@ -470,6 +540,9 @@ void test_run_command_cancellation_remains_effective() {
 
 void run_all() {
     test_guard_patterns();
+#if defined(_WIN32)
+    test_windows_direct_argv_paths();
+#endif
     test_parse_policies();
     test_read_only_command_classifier();
     test_tool_agent_python_and_security_deny();

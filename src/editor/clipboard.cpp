@@ -1,30 +1,32 @@
 #include "editor/clipboard.hpp"
 
 #include "html/html.hpp"
+#include "platform/environment.hpp"
+#include "runtime/subprocess.hpp"
 
-#include <cerrno>
+#include <algorithm>
 #include <chrono>
-#include <csignal>
-#include <cstdlib>
-#include <cstring>
-#include <fcntl.h>
-#include <poll.h>
-#include <pthread.h>
-#include <spawn.h>
-#include <sys/types.h>
-#include <sys/wait.h>
-#include <unistd.h>
+#include <filesystem>
+#include <thread>
 
-extern char** environ;
+#if defined(_WIN32)
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#include "platform/windows_utf.hpp"
+#else
+#include <unistd.h>
+#endif
 
 namespace ainiux::editor {
 namespace {
 
 std::string getenv_copy(const char* name) {
-    const char* value = std::getenv(name);
-    return value == nullptr ? std::string() : std::string(value);
+    return platform::environment_value(name);
 }
 
+#if !defined(_WIN32)
 bool executable_in_path(const std::string& path, const std::string& name, std::string& resolved) {
     size_t start = 0;
     while (start <= path.size()) {
@@ -44,304 +46,314 @@ bool executable_in_path(const std::string& path, const std::string& name, std::s
     return false;
 }
 
-bool make_pipe(int fds[2]) {
-    if (pipe(fds) != 0) return false;
-    (void)fcntl(fds[0], F_SETFD, FD_CLOEXEC);
-    (void)fcntl(fds[1], F_SETFD, FD_CLOEXEC);
-    return true;
+void append_safe_environment(std::vector<std::string>& environment, const char* name) {
+    const std::string value = platform::environment_value(name);
+    if (!value.empty()) environment.push_back(std::string(name) + "=" + value);
 }
 
-void close_fd(int& fd) {
-    if (fd >= 0) {
-        while (close(fd) != 0 && errno == EINTR) {
-        }
-        fd = -1;
-    }
-}
-
-void discard_pending_signal(const sigset_t& blocked, int signal) {
-    sigset_t pending{};
-    if (sigpending(&pending) != 0 || sigismember(&pending, signal) != 1)
-        return;
-
-    int received = 0;
-    int wait_error = 0;
-    do {
-        wait_error = sigwait(&blocked, &received);
-    } while (wait_error == EINTR);
-}
-
-struct ChildProcess {
-    pid_t pid = -1;
-    pid_t group = -1;
-    int input = -1;
-    int output = -1;
-
-    ~ChildProcess() {
-        close_fd(input);
-        close_fd(output);
-        if (group > 0) (void)kill(-group, SIGKILL);
-        if (pid > 0) {
-            if (group <= 0) (void)kill(pid, SIGKILL);
-            while (waitpid(pid, nullptr, 0) < 0 && errno == EINTR) {
-            }
-        }
-    }
-
-    void reaped() {
-        pid = -1;
-        if (group > 0) {
-            (void)kill(-group, SIGKILL);
-            group = -1;
-        }
-    }
-};
-
-struct SpawnFileActions {
-    posix_spawn_file_actions_t actions{};
-    bool initialized = false;
-
-    ~SpawnFileActions() {
-        if (initialized) (void)posix_spawn_file_actions_destroy(&actions);
-    }
-};
-
-struct SpawnAttributes {
-    posix_spawnattr_t attributes{};
-    bool initialized = false;
-
-    ~SpawnAttributes() {
-        if (initialized) (void)posix_spawnattr_destroy(&attributes);
-    }
-};
-
-struct PipeSignalGuard {
-    sigset_t blocked{};
-    sigset_t previous{};
-    bool active = false;
-    bool was_pending = false;
-
-    PipeSignalGuard() {
-        sigemptyset(&blocked);
-        sigaddset(&blocked, SIGPIPE);
-        sigset_t pending{};
-        if (sigpending(&pending) == 0)
-            was_pending = sigismember(&pending, SIGPIPE) == 1;
-        active = pthread_sigmask(SIG_BLOCK, &blocked, &previous) == 0;
-    }
-
-    ~PipeSignalGuard() {
-        if (!active) return;
-        if (!was_pending) discard_pending_signal(blocked, SIGPIPE);
-        (void)pthread_sigmask(SIG_SETMASK, &previous, nullptr);
-    }
-};
-
-SystemClipboardResult run_command(const ClipboardCommand& command,
-                                  const std::string* input,
-                                  runtime::CancellationToken token) {
+SystemClipboardResult run_helper(const ClipboardCommand& command,
+                                 const std::string* input,
+                                 runtime::CancellationToken token) {
     SystemClipboardResult result;
     result.backend = command.backend;
-    int input_pipe[2] = {-1, -1};
-    int output_pipe[2] = {-1, -1};
-    if (!make_pipe(input_pipe) || !make_pipe(output_pipe)) {
-        close_fd(input_pipe[0]);
-        close_fd(input_pipe[1]);
-        close_fd(output_pipe[0]);
-        close_fd(output_pipe[1]);
-        result.error = SystemClipboardError::Failed;
-        result.message = "could not create clipboard helper pipes: " + std::string(std::strerror(errno));
+    runtime::SubprocessOptions options;
+    options.executable = command.executable;
+    options.arguments = command.arguments;
+    options.provide_stdin = input != nullptr;
+    if (input != nullptr) options.stdin_text = *input;
+    options.timeout_ms = kClipboardHelperTimeoutMs;
+    options.stdout_limit = kExternalClipboardReadLimit + 1U;
+    options.stderr_limit = 4096;
+    options.cancellation = token;
+    options.environment.push_back("PATH=" + platform::environment_value("PATH"));
+    const char* safe_names[] = {"HOME", "DISPLAY", "WAYLAND_DISPLAY", "XDG_RUNTIME_DIR",
+                                "XAUTHORITY", "DBUS_SESSION_BUS_ADDRESS", "TERMUX_VERSION",
+                                "PREFIX"};
+    for (const char* name : safe_names) append_safe_environment(options.environment, name);
+    runtime::SubprocessResult process;
+    const Error error = runtime::run_subprocess(options, process);
+    result.text = std::move(process.stdout_text);
+    if (process.termination == runtime::SubprocessTerminationReason::Cancelled) {
+        result.error = SystemClipboardError::Cancelled;
+        result.message = "clipboard operation cancelled";
         return result;
     }
-
-    ChildProcess child;
-    std::vector<char*> argv;
-    argv.reserve(command.arguments.size() + 2);
-    argv.push_back(const_cast<char*>(command.executable.c_str()));
-    for (const std::string& argument : command.arguments)
-        argv.push_back(const_cast<char*>(argument.c_str()));
-    argv.push_back(nullptr);
-
-    SpawnFileActions file_actions;
-    int spawn_error = posix_spawn_file_actions_init(&file_actions.actions);
-    file_actions.initialized = spawn_error == 0;
-    if (spawn_error == 0)
-        spawn_error = posix_spawn_file_actions_adddup2(
-            &file_actions.actions, input_pipe[0], STDIN_FILENO);
-    if (spawn_error == 0)
-        spawn_error = posix_spawn_file_actions_adddup2(
-            &file_actions.actions, output_pipe[1], STDOUT_FILENO);
-    if (spawn_error == 0)
-        spawn_error = posix_spawn_file_actions_addopen(
-            &file_actions.actions, STDERR_FILENO, "/dev/null", O_WRONLY, 0);
-    const int descriptors[] = {
-        input_pipe[0], input_pipe[1], output_pipe[0], output_pipe[1]};
-    for (int descriptor : descriptors) {
-        if (spawn_error == 0 && descriptor != STDIN_FILENO &&
-            descriptor != STDOUT_FILENO && descriptor != STDERR_FILENO)
-            spawn_error =
-                posix_spawn_file_actions_addclose(&file_actions.actions,
-                                                  descriptor);
-    }
-    SpawnAttributes spawn_attributes;
-    if (spawn_error == 0) {
-        spawn_error = posix_spawnattr_init(&spawn_attributes.attributes);
-        spawn_attributes.initialized = spawn_error == 0;
-    }
-    if (spawn_error == 0)
-        spawn_error = posix_spawnattr_setflags(&spawn_attributes.attributes,
-                                               POSIX_SPAWN_SETPGROUP);
-    if (spawn_error == 0)
-        spawn_error =
-            posix_spawnattr_setpgroup(&spawn_attributes.attributes, 0);
-    if (spawn_error == 0)
-        spawn_error = posix_spawn(&child.pid,
-                                  command.executable.c_str(),
-                                  &file_actions.actions,
-                                  &spawn_attributes.attributes,
-                                  argv.data(),
-                                  environ);
-    if (spawn_error == 0) child.group = child.pid;
-    if (spawn_error != 0) {
-        close_fd(input_pipe[0]);
-        close_fd(input_pipe[1]);
-        close_fd(output_pipe[0]);
-        close_fd(output_pipe[1]);
-        result.error = SystemClipboardError::Failed;
-        result.message = "could not start " + command.backend + " clipboard helper: " +
-                         std::string(std::strerror(spawn_error));
+    if (process.termination == runtime::SubprocessTerminationReason::TimedOut) {
+        result.error = SystemClipboardError::Timeout;
+        result.message = command.backend + " clipboard helper timed out after two seconds";
         return result;
     }
-
-    close_fd(input_pipe[0]);
-    close_fd(output_pipe[1]);
-    child.input = input_pipe[1];
-    child.output = output_pipe[0];
-    (void)fcntl(child.input, F_SETFL, fcntl(child.input, F_GETFL, 0) | O_NONBLOCK);
-    (void)fcntl(child.output, F_SETFL, fcntl(child.output, F_GETFL, 0) | O_NONBLOCK);
-    PipeSignalGuard pipe_signal_guard;
-    if (input != nullptr && !pipe_signal_guard.active) {
+    if (!error.ok() || process.exit_code != 0) {
         result.error = SystemClipboardError::Failed;
-        result.message = "could not safely prepare the clipboard helper input pipe";
+        result.message = !error.message.empty()
+                             ? error.message
+                             : command.backend + " clipboard helper exited unsuccessfully";
         return result;
     }
-
-    const std::string empty;
-    const std::string& bytes = input == nullptr ? empty : *input;
-    size_t written = 0;
-    bool input_closed = false;
-    bool input_failed = false;
-    bool output_closed = false;
-    bool exited = false;
-    int status = 0;
-    const auto deadline = std::chrono::steady_clock::now() +
-                          std::chrono::milliseconds(kClipboardHelperTimeoutMs);
-    while (!(exited && output_closed)) {
-        if (token.cancelled()) {
-            result.error = SystemClipboardError::Cancelled;
-            result.message = "clipboard operation cancelled";
-            return result;
-        }
-        if (std::chrono::steady_clock::now() >= deadline) {
-            result.error = SystemClipboardError::Timeout;
-            result.message = command.backend + " clipboard helper timed out after two seconds";
-            return result;
-        }
-
-        if (!input_closed && written == bytes.size()) {
-            close_fd(child.input);
-            input_closed = true;
-        }
-        pollfd fds[2]{};
-        nfds_t count = 0;
-        if (!input_closed) {
-            fds[count].fd = child.input;
-            fds[count].events = POLLOUT;
-            ++count;
-        }
-        if (!output_closed) {
-            fds[count].fd = child.output;
-            fds[count].events = POLLIN | POLLHUP;
-            ++count;
-        }
-        const int polled = poll(fds, count, 10);
-        if (polled < 0 && errno != EINTR) {
+    if (input != nullptr) {
+        if (process.stdin_incomplete) {
             result.error = SystemClipboardError::Failed;
-            result.message = "clipboard helper pipe failed: " + std::string(std::strerror(errno));
-            return result;
+            result.message = command.backend +
+                             " clipboard helper closed stdin before accepting all text";
         }
-        for (nfds_t index = 0; index < count; ++index) {
-            if (fds[index].fd == child.input && (fds[index].revents & POLLOUT)) {
-                const ssize_t n = write(child.input, bytes.data() + written, bytes.size() - written);
-                if (n > 0) written += static_cast<size_t>(n);
-                else if (n < 0 && errno != EAGAIN && errno != EINTR) {
-                    input_failed = true;
-                    close_fd(child.input);
-                    input_closed = true;
-                }
-            } else if (fds[index].fd == child.output &&
-                       (fds[index].revents & (POLLIN | POLLHUP))) {
-                char buffer[8192];
-                for (;;) {
-                    const ssize_t n = read(child.output, buffer, sizeof(buffer));
-                    if (n > 0) {
-                        if (result.text.size() + static_cast<size_t>(n) >
-                            kExternalClipboardReadLimit) {
-                            result.error = SystemClipboardError::TooLarge;
-                            result.message = "system clipboard exceeds the 16 MiB text limit";
-                            return result;
-                        }
-                        result.text.append(buffer, static_cast<size_t>(n));
-                    } else if (n == 0) {
-                        close_fd(child.output);
-                        output_closed = true;
-                        break;
-                    } else if (errno == EAGAIN || errno == EINTR) {
-                        break;
-                    } else {
-                        result.error = SystemClipboardError::Failed;
-                        result.message = "could not read clipboard helper output: " +
-                                         std::string(std::strerror(errno));
-                        return result;
-                    }
-                }
-            }
-        }
-        const pid_t waited = waitpid(child.pid, &status, WNOHANG);
-        if (waited == child.pid) {
-            child.reaped();
-            exited = true;
-        } else if (waited < 0 && errno != EINTR) {
-            result.error = SystemClipboardError::Failed;
-            result.message = "could not reap clipboard helper: " + std::string(std::strerror(errno));
-            return result;
-        }
-    }
-
-    if (!WIFEXITED(status) || WEXITSTATUS(status) != 0) {
-        result.error = SystemClipboardError::Failed;
-        result.message = command.backend + " clipboard helper exited unsuccessfully";
         return result;
     }
-    if (input_failed || (input != nullptr && written != bytes.size())) {
-        result.error = SystemClipboardError::Failed;
-        result.message = command.backend +
-                         " clipboard helper closed its input before the text was written";
+    if (process.stdout_truncated || result.text.size() > kExternalClipboardReadLimit) {
+        result.text.clear();
+        result.error = SystemClipboardError::TooLarge;
+        result.message = "system clipboard exceeds the 16 MiB text limit";
         return result;
     }
-    if (input != nullptr) return result;
     if (result.text.empty()) {
         result.error = SystemClipboardError::Empty;
         result.message = "system clipboard contains no text";
     } else if (result.text.find('\0') != std::string::npos) {
         result.error = SystemClipboardError::NonText;
         result.message = "system clipboard is not text";
-    } else if (!html::is_valid_utf8(result.text)) {
+    } else if (process.stdout_repaired_utf8 || !html::is_valid_utf8(result.text)) {
         result.error = SystemClipboardError::Malformed;
         result.message = "system clipboard text is not valid UTF-8";
     }
     return result;
 }
+#else
+bool native_clipboard_open(void*) { return OpenClipboard(nullptr) != FALSE; }
+void native_clipboard_close(void*) { (void)CloseClipboard(); }
+bool native_clipboard_unicode_available(void*) {
+    return IsClipboardFormatAvailable(CF_UNICODETEXT) != FALSE;
+}
+void* native_clipboard_get_unicode(void*) {
+    return GetClipboardData(CF_UNICODETEXT);
+}
+std::size_t native_clipboard_global_size(void*, void* object) {
+    return static_cast<std::size_t>(GlobalSize(static_cast<HGLOBAL>(object)));
+}
+void* native_clipboard_global_lock(void*, void* object) {
+    return GlobalLock(static_cast<HGLOBAL>(object));
+}
+void native_clipboard_global_unlock(void*, void* object) {
+    (void)GlobalUnlock(static_cast<HGLOBAL>(object));
+}
+bool native_clipboard_empty(void*) { return EmptyClipboard() != FALSE; }
+void* native_clipboard_global_alloc(void*, std::size_t bytes) {
+    return GlobalAlloc(GMEM_MOVEABLE, static_cast<SIZE_T>(bytes));
+}
+bool native_clipboard_set_unicode(void*, void* memory) {
+    return SetClipboardData(CF_UNICODETEXT, static_cast<HGLOBAL>(memory)) != nullptr;
+}
+void native_clipboard_global_free(void*, void* memory) {
+    (void)GlobalFree(static_cast<HGLOBAL>(memory));
+}
+unsigned long native_clipboard_last_error(void*) { return GetLastError(); }
+void native_clipboard_wait(void*, unsigned long milliseconds) { Sleep(milliseconds); }
+
+const WindowsClipboardApiForTests kNativeClipboardApi = {
+    nullptr,
+    native_clipboard_open,
+    native_clipboard_close,
+    native_clipboard_unicode_available,
+    native_clipboard_get_unicode,
+    native_clipboard_global_size,
+    native_clipboard_global_lock,
+    native_clipboard_global_unlock,
+    native_clipboard_empty,
+    native_clipboard_global_alloc,
+    native_clipboard_set_unicode,
+    native_clipboard_global_free,
+    native_clipboard_last_error,
+    native_clipboard_wait,
+};
+const WindowsClipboardApiForTests* windows_clipboard_api_override = nullptr;
+
+const WindowsClipboardApiForTests& windows_clipboard_api() {
+    return windows_clipboard_api_override == nullptr ? kNativeClipboardApi
+                                                     : *windows_clipboard_api_override;
+}
+
+class ClipboardGuard {
+   public:
+    ClipboardGuard() : api_(windows_clipboard_api()) {}
+    ~ClipboardGuard() { if (open_) api_.close(api_.context); }
+    bool open(runtime::CancellationToken token, SystemClipboardResult& result) {
+        if (token.cancelled()) {
+            result.error = SystemClipboardError::Cancelled;
+            result.message = "clipboard operation cancelled";
+            return false;
+        }
+        const auto deadline = std::chrono::steady_clock::now() +
+                              std::chrono::milliseconds(kClipboardHelperTimeoutMs);
+        while (!api_.open(api_.context)) {
+            if (token.cancelled()) {
+                result.error = SystemClipboardError::Cancelled;
+                result.message = "clipboard operation cancelled";
+                return false;
+            }
+            if (std::chrono::steady_clock::now() >= deadline) {
+                result.error = SystemClipboardError::Timeout;
+                result.message = "Windows clipboard remained busy for two seconds";
+                return false;
+            }
+            api_.wait_ms(api_.context, 10);
+        }
+        open_ = true;
+        return true;
+    }
+    const WindowsClipboardApiForTests& api() const { return api_; }
+   private:
+    const WindowsClipboardApiForTests& api_;
+    bool open_ = false;
+};
+
+std::string normalize_clipboard_lf(std::string text) {
+    std::size_t write = 0;
+    for (std::size_t read = 0; read < text.size(); ++read) {
+        if (text[read] == '\r') {
+            if (read + 1 < text.size() && text[read + 1] == '\n') ++read;
+            text[write++] = '\n';
+        } else {
+            text[write++] = text[read];
+        }
+    }
+    text.resize(write);
+    return text;
+}
+
+std::string clipboard_crlf(const std::string& text) {
+    std::string output;
+    output.reserve(text.size() + text.size() / 16U);
+    for (std::size_t index = 0; index < text.size(); ++index) {
+        const char ch = text[index];
+        if (ch == '\n' && (index == 0 || text[index - 1] != '\r')) output.push_back('\r');
+        output.push_back(ch);
+    }
+    return output;
+}
+
+SystemClipboardResult read_windows_clipboard(runtime::CancellationToken token) {
+    SystemClipboardResult result;
+    result.backend = "Windows";
+    ClipboardGuard clipboard;
+    if (!clipboard.open(token, result)) return result;
+    const WindowsClipboardApiForTests& api = clipboard.api();
+    void* object = api.get_unicode_text(api.context);
+    if (object == nullptr) {
+        result.error = api.unicode_text_available(api.context)
+                           ? SystemClipboardError::Failed
+                           : SystemClipboardError::NonText;
+        result.message = result.error == SystemClipboardError::NonText
+                             ? "Windows clipboard does not contain Unicode text"
+                             : "could not read Windows clipboard data: " +
+                                   platform::windows_error_message(api.last_error(api.context));
+        return result;
+    }
+    const std::size_t bytes = api.global_size(api.context, object);
+    if (bytes < sizeof(wchar_t)) {
+        result.error = SystemClipboardError::Empty;
+        result.message = "system clipboard contains no text";
+        return result;
+    }
+    const std::size_t capacity = static_cast<std::size_t>(bytes / sizeof(wchar_t));
+    if (capacity > kExternalClipboardReadLimit + 1U) {
+        result.error = SystemClipboardError::TooLarge;
+        result.message = "system clipboard exceeds the 16 MiB text limit";
+        return result;
+    }
+    const wchar_t* locked =
+        static_cast<const wchar_t*>(api.global_lock(api.context, object));
+    if (locked == nullptr) {
+        result.error = SystemClipboardError::Failed;
+        result.message = "could not lock Windows clipboard data: " +
+                         platform::windows_error_message(api.last_error(api.context));
+        return result;
+    }
+    std::size_t length = 0;
+    while (length < capacity && locked[length] != L'\0') ++length;
+    std::wstring wide(locked, length);
+    api.global_unlock(api.context, object);
+    if (length == capacity) {
+        result.error = SystemClipboardError::Malformed;
+        result.message = "Windows clipboard text is not NUL terminated";
+        return result;
+    }
+    Error conversion = platform::utf16_to_utf8(wide, result.text);
+    if (!conversion.ok()) {
+        result.error = SystemClipboardError::Malformed;
+        result.message = conversion.message;
+        return result;
+    }
+    result.text = normalize_clipboard_lf(std::move(result.text));
+    if (result.text.size() > kExternalClipboardReadLimit) {
+        result.text.clear();
+        result.error = SystemClipboardError::TooLarge;
+        result.message = "system clipboard exceeds the 16 MiB text limit";
+    } else if (result.text.empty()) {
+        result.error = SystemClipboardError::Empty;
+        result.message = "system clipboard contains no text";
+    }
+    return result;
+}
+
+SystemClipboardResult write_windows_clipboard(const std::string& text,
+                                              runtime::CancellationToken token) {
+    SystemClipboardResult result;
+    result.backend = "Windows";
+    if (text.size() > kExternalClipboardReadLimit) {
+        result.error = SystemClipboardError::TooLarge;
+        result.message = "system clipboard exceeds the 16 MiB text limit";
+        return result;
+    }
+    if (!html::is_valid_utf8(text) || text.find('\0') != std::string::npos) {
+        result.error = SystemClipboardError::Malformed;
+        result.message = "clipboard text is not valid UTF-8";
+        return result;
+    }
+    std::wstring wide;
+    Error conversion = platform::utf8_to_utf16(clipboard_crlf(text), wide);
+    if (!conversion.ok()) {
+        result.error = SystemClipboardError::Malformed;
+        result.message = conversion.message;
+        return result;
+    }
+    ClipboardGuard clipboard;
+    if (!clipboard.open(token, result)) return result;
+    const WindowsClipboardApiForTests& api = clipboard.api();
+    if (!api.empty(api.context)) {
+        result.error = SystemClipboardError::Failed;
+        result.message = "could not empty Windows clipboard: " +
+                         platform::windows_error_message(api.last_error(api.context));
+        return result;
+    }
+    const std::size_t bytes = (wide.size() + 1U) * sizeof(wchar_t);
+    void* memory = api.global_alloc(api.context, bytes);
+    if (memory == nullptr) {
+        result.error = SystemClipboardError::Failed;
+        result.message = "could not allocate Windows clipboard memory";
+        return result;
+    }
+    wchar_t* destination =
+        static_cast<wchar_t*>(api.global_lock(api.context, memory));
+    if (destination == nullptr) {
+        const unsigned long code = api.last_error(api.context);
+        api.global_free(api.context, memory);
+        result.error = SystemClipboardError::Failed;
+        result.message = "could not lock Windows clipboard memory: " +
+                         platform::windows_error_message(code);
+        return result;
+    }
+    std::copy(wide.begin(), wide.end(), destination);
+    destination[wide.size()] = L'\0';
+    api.global_unlock(api.context, memory);
+    if (!api.set_unicode_text(api.context, memory)) {
+        const unsigned long code = api.last_error(api.context);
+        api.global_free(api.context, memory);
+        result.error = SystemClipboardError::Failed;
+        result.message = "could not publish Windows clipboard text: " +
+                         platform::windows_error_message(code);
+    }
+    // On success the clipboard owns memory and is responsible for GlobalFree.
+    return result;
+}
+#endif
 
 }  // namespace
 
@@ -358,9 +370,18 @@ Clipboard& shared_clipboard() {
     return clipboard;
 }
 
+#if defined(_WIN32)
+void set_windows_clipboard_api_for_tests(const WindowsClipboardApiForTests* api) {
+    windows_clipboard_api_override = api;
+}
+#endif
+
 ClipboardEnvironment current_clipboard_environment() {
     ClipboardEnvironment environment;
     environment.path = getenv_copy("PATH");
+#if defined(_WIN32)
+    environment.windows = true;
+#endif
 #if defined(__APPLE__)
     environment.macos = true;
 #endif
@@ -385,6 +406,7 @@ bool prefer_terminal_clipboard_query(const ClipboardEnvironment& environment) {
 bool resolve_clipboard_command(const ClipboardEnvironment& environment,
                                bool write,
                                ClipboardCommand& command) {
+    if (environment.windows) return false;
     auto choose = [&](const char* backend, const char* name,
                       std::vector<std::string> arguments) {
         std::string executable;
@@ -421,23 +443,33 @@ bool resolve_clipboard_command(const ClipboardEnvironment& environment,
 
 SystemClipboardResult read_system_clipboard(const ClipboardEnvironment& environment,
                                             runtime::CancellationToken token) {
+#if defined(_WIN32)
+    (void)environment;
+    return read_windows_clipboard(token);
+#else
     ClipboardCommand command;
     if (!resolve_clipboard_command(environment, false, command)) {
         return {SystemClipboardError::Unavailable, "", "",
                 "no supported system clipboard reader was found"};
     }
-    return run_command(command, nullptr, token);
+    return run_helper(command, nullptr, token);
+#endif
 }
 
 SystemClipboardResult write_system_clipboard(const ClipboardEnvironment& environment,
                                              const std::string& text,
                                              runtime::CancellationToken token) {
+#if defined(_WIN32)
+    (void)environment;
+    return write_windows_clipboard(text, token);
+#else
     ClipboardCommand command;
     if (!resolve_clipboard_command(environment, true, command)) {
         return {SystemClipboardError::Unavailable, "", "",
                 "no supported system clipboard writer was found"};
     }
-    return run_command(command, &text, token);
+    return run_helper(command, &text, token);
+#endif
 }
 
 std::string clipboard_failure_help(const ClipboardEnvironment& environment,
@@ -447,7 +479,8 @@ std::string clipboard_failure_help(const ClipboardEnvironment& environment,
         return result.message +
                (reading ? "; use your terminal paste shortcut" : "");
     std::string suggestion;
-    if (environment.wayland) suggestion = "install wl-clipboard";
+    if (environment.windows) suggestion = "use Windows Terminal or modern conhost";
+    else if (environment.wayland) suggestion = "install wl-clipboard";
     else if (environment.x11) suggestion = "install xclip or xsel";
     else if (environment.termux) suggestion = "install Termux:API";
     else if (environment.wsl) suggestion = "ensure clip.exe and powershell.exe are in PATH";

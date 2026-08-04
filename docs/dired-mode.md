@@ -49,7 +49,11 @@ Each file or directory row includes:
 - Last modified time
 - Name (directories end with `/`; `../` is parent; symlinks may show `@`)
 
-Windows builds omit mode, owner, and group columns.
+Windows builds omit mode, owner, and group columns. They use native hidden,
+read-only, directory, and reparse-point attributes; `.com`, `.exe`, `.bat`, and
+`.cmd` are executable types. Name sort and simple glob matching are
+case-insensitive with deterministic original-name ties. ACL-denied operations
+still return their ordinary filesystem error instead of inventing POSIX metadata.
 
 ### Listing colors
 

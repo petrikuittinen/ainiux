@@ -5,10 +5,9 @@
 #include <cstdlib>
 #include <iomanip>
 #include <sstream>
-#include <sys/ioctl.h>
-#include <unistd.h>
 
 #include "json/json.hpp"
+#include "tui/terminal.hpp"
 
 namespace ainiux::agent {
 namespace {
@@ -53,13 +52,9 @@ bool looks_like_path_key(const std::string& key) {
 
 std::size_t terminal_column_count(std::size_t fallback) {
     if (fallback < 20) fallback = 20;
-    winsize ws{};
-    if (isatty(STDOUT_FILENO) && ioctl(STDOUT_FILENO, TIOCGWINSZ, &ws) == 0 && ws.ws_col >= 20) {
-        return static_cast<std::size_t>(ws.ws_col);
-    }
-    if (isatty(STDERR_FILENO) && ioctl(STDERR_FILENO, TIOCGWINSZ, &ws) == 0 && ws.ws_col >= 20) {
-        return static_cast<std::size_t>(ws.ws_col);
-    }
+    const tui::TerminalDimensions terminal = tui::terminal_dimensions();
+    if (tui::terminal_output_is_interactive() && terminal.cols >= 20)
+        return static_cast<std::size_t>(terminal.cols);
     const char* columns = std::getenv("COLUMNS");
     if (columns != nullptr && columns[0] != '\0') {
         char* end = nullptr;

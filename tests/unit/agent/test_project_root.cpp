@@ -4,12 +4,15 @@
 #include <fstream>
 #include <cstdlib>
 #include <string>
+#if !defined(_WIN32)
 #include <unistd.h>
+#endif
 
 #include "agent/compact.hpp"
 #include "agent/project_root.hpp"
 #include "agent/reasoning_preview.hpp"
 #include "agent/tool_display.hpp"
+#include "platform/environment.hpp"
 #include "support/test_support.hpp"
 
 namespace ainiux::test::agent_project_root {
@@ -20,7 +23,7 @@ namespace fs = std::filesystem;
 std::string temp_dir(const std::string& name) {
     const fs::path root =
         fs::temp_directory_path() / ("ainiux-proj-" + name + "-" +
-                                     std::to_string(static_cast<long long>(::getpid())));
+                                     std::to_string(ainiux::platform::current_process_id()));
     std::error_code ec;
     fs::remove_all(root, ec);
     fs::create_directories(root, ec);
@@ -72,6 +75,26 @@ void test_reject_nested_child_ainiux() {
     fs::remove_all(root, ec);
 }
 
+#if defined(_WIN32)
+void test_windows_protected_names_are_case_insensitive() {
+    const std::string root = temp_dir("windows-protected-case");
+    fs::create_directories(fs::u8path(root) / "pkg" / ".AINIUX-PR");
+    std::string absolute;
+    Error error = agent::resolve_agent_project_root(root, absolute);
+    check(!error.ok(),
+          "Windows nested project markers compare case-insensitively");
+
+    const fs::path target = fs::u8path(root) / "target";
+    fs::create_directories(target / ".AINIUX-PR");
+    agent::NewProjectTarget resolved;
+    error = agent::resolve_new_project_target(root, target.u8string(), resolved);
+    check(error.ok() && resolved.state_dir_exists,
+          "Windows /new recognizes case-variant project state");
+    std::error_code ignored;
+    fs::remove_all(fs::u8path(root), ignored);
+}
+#endif
+
 void test_new_project_target_resolution_and_validation() {
     const std::string root = temp_dir("new-target");
     const fs::path spaced = fs::path(root) / "project with spaces";
@@ -110,31 +133,33 @@ void test_new_project_target_resolution_and_validation() {
               "/new rejects .ainiux-pr symlinks");
     }
 
-    const char* old_home_value = std::getenv("HOME");
-    const std::string old_home = old_home_value == nullptr ? "" : old_home_value;
+    const std::optional<std::string> old_home =
+        ainiux::test::test_environment("HOME");
     const fs::path home_project = fs::path(root) / "home project";
     fs::create_directories(home_project);
-    ::setenv("HOME", root.c_str(), 1);
+    ainiux::test::set_test_environment("HOME", root);
     error = agent::resolve_new_project_target(root, "~/home project", target);
     check(error.ok() && target.root == fs::canonical(home_project).generic_string(),
           "/new expands ~/ from HOME");
     error = agent::resolve_new_project_target(root, "~someone/project", target);
     check(!error.ok(), "/new rejects ~user expansion");
-    if (old_home_value == nullptr)
-        ::unsetenv("HOME");
+    if (old_home.has_value())
+        ainiux::test::set_test_environment("HOME", *old_home);
     else
-        ::setenv("HOME", old_home.c_str(), 1);
+        ainiux::test::unset_test_environment("HOME");
 
     const fs::path locked = fs::path(root) / "locked";
     fs::create_directories(locked);
     std::error_code permission_ec;
     fs::permissions(locked, fs::perms::owner_read, fs::perm_options::replace,
                     permission_ec);
+#if !defined(_WIN32)
     if (!permission_ec && ::geteuid() != 0) {
         error = agent::resolve_new_project_target(root, locked.string(), target);
         check(!error.ok() && error.code == ErrorCode::FileWrite,
               "/new rejects inaccessible target directories");
     }
+#endif
     fs::permissions(locked, fs::perms::owner_all, fs::perm_options::replace,
                     permission_ec);
 
@@ -658,6 +683,9 @@ void run_all() {
     test_reject_parent_ainiux();
     test_home_ainiux_profile_is_not_a_project();
     test_reject_nested_child_ainiux();
+#if defined(_WIN32)
+    test_windows_protected_names_are_case_insensitive();
+#endif
     test_new_project_target_resolution_and_validation();
     test_compact_threshold_defaults();
     test_compaction_strategies_timeline_and_partition();

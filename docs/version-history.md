@@ -45,10 +45,11 @@ This compact timeline moves release material out of the landing page. It describ
 | v1.14 | Offline editor text layout and line cleanup, width/align history display modes, and width-capped pretty tables |
 | v1.15 | Documentation overhaul with a concise landing page, focused user guides, provider and credential references, corrected shortcuts, and explicit compatibility limits |
 | v1.16 | Full-screen editor dired (directory browser): CLI `--dired`, F4 / Ctrl+X d, list↔read-only view, file ops, content-hash dirty markers, POSIX mode/owner/group |
+| Unreleased | Native Windows 10 1903+/Windows 11 x64 UCRT64 target: wide UTF-8 process boundary, shared subprocess/interrupt and terminal ownership, Job Object cancellation, native clipboard, identity-safe paths and protected persistence, Windows dired behavior, ConPTY/CI coverage, and portable ZIP packaging; publication remains gated on the native parity checklist |
 
 ## Current status after v1.16
 
-The current product includes CLI chat, conversion, REPL, saved-thread TUI chat, standalone editor with dired, benchmarks, judge grading, security review, one-shot and interactive agents, session Act/Plan policy, Guard approvals, `/goal`, transcript-preserving compaction, and a lightweight definitions index.
+The current product includes CLI chat, conversion, REPL, saved-thread TUI chat, standalone editor with dired, benchmarks, judge grading, security review, one-shot and interactive agents, session Act/Plan policy, Guard approvals, `/goal`, transcript-preserving compaction, and a lightweight definitions index. Native Windows implementation is present but remains unreleased until the UCRT64 parity gate in [Native Windows](windows.md) passes.
 
 The local OpenAI-compatible server, browser UI, image generation, PDF/DOCX conversion, `/loop`, sub-agents, and native Anthropic Messages adapter are not implemented. See [PLANS.md](../PLANS.md) and [TODO.md](../TODO.md) instead of inferring features from old version labels.
 

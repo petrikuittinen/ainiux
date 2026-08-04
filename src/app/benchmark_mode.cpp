@@ -1,7 +1,6 @@
 #include "app/app.hpp"
 
 #include <chrono>
-#include <csignal>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -10,36 +9,11 @@
 
 #include "benchmark/benchmark.hpp"
 #include "json/json.hpp"
+#include "runtime/interrupt.hpp"
 
 namespace ainiux::app {
 
 namespace {
-
-volatile std::sig_atomic_t g_benchmark_interrupt = 0;
-
-void benchmark_signal_handler(int) {
-    g_benchmark_interrupt = 1;
-}
-
-class BenchmarkSignalGuard {
-   public:
-    BenchmarkSignalGuard() {
-        g_benchmark_interrupt = 0;
-        previous_ = std::signal(SIGINT, benchmark_signal_handler);
-    }
-    ~BenchmarkSignalGuard() {
-        if (previous_ != SIG_ERR) {
-            std::signal(SIGINT, previous_);
-        }
-    }
-    BenchmarkSignalGuard(const BenchmarkSignalGuard&) = delete;
-    BenchmarkSignalGuard& operator=(const BenchmarkSignalGuard&) = delete;
-    bool installed() const { return previous_ != SIG_ERR; }
-
-   private:
-    using SignalHandler = void (*)(int);
-    SignalHandler previous_ = SIG_ERR;
-};
 
 std::ostream* benchmark_output_stream(const cli::Options& options,
                                       std::ofstream& file,
@@ -48,7 +22,7 @@ std::ostream* benchmark_output_stream(const cli::Options& options,
     if (options.output_path.empty() || options.output_path == "stdout") {
         return &std::cout;
     }
-    std::filesystem::path path(options.output_path);
+    std::filesystem::path path = std::filesystem::u8path(options.output_path);
     std::error_code filesystem_error;
     const bool trailing_separator =
         options.output_path.back() == '/' || options.output_path.back() == '\\';
@@ -84,7 +58,9 @@ std::ostream* benchmark_output_stream(const cli::Options& options,
         while (!filesystem_error &&
                (std::filesystem::exists(candidate, filesystem_error) ||
                 (!filesystem_error &&
-                 std::filesystem::exists(benchmark::markdown_report_path(candidate.string()),
+                 std::filesystem::exists(
+                     std::filesystem::u8path(
+                         benchmark::markdown_report_path(candidate.u8string())),
                                          filesystem_error)))) {
             candidate = path / ("benchmark-" + std::to_string(timestamp) + "-" +
                                 std::to_string(suffix++) + ".jsonl");
@@ -97,8 +73,8 @@ std::ostream* benchmark_output_stream(const cli::Options& options,
         }
         path = std::move(candidate);
     }
-    actual_path = path.string();
-    file.open(actual_path, std::ios::binary | std::ios::trunc);
+    actual_path = path.u8string();
+    file.open(path, std::ios::binary | std::ios::trunc);
     if (!file) {
         error = {ErrorCode::FileWrite,
                  "could not open benchmark output file for writing: " + actual_path};
@@ -228,13 +204,13 @@ int run_benchmark_mode(const cli::Options& options) {
         print_error(context_result.error);
         return exit_code_for(context_result.error.code);
     }
-    BenchmarkSignalGuard signal_guard;
-    if (!signal_guard.installed()) {
+    runtime::InterruptGuard interrupt_guard;
+    if (!interrupt_guard.installed()) {
         print_error({ErrorCode::Internal, "could not install the benchmark Ctrl+C signal handler"});
         return exit_code_for(ErrorCode::Internal);
     }
     Error err = benchmark::run(context_result.context, selected, options, *out, std::cerr,
-                               [] { return g_benchmark_interrupt != 0; });
+                               [&interrupt_guard] { return interrupt_guard.interrupted(); });
     Error report_error = finish_file_outputs();
     if (!report_error.ok()) {
         print_error(report_error);

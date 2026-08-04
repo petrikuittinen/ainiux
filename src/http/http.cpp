@@ -1,5 +1,17 @@
 #include "http/http.hpp"
 
+#if defined(_WIN32)
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#else
+#include <sys/socket.h>
+#include <arpa/inet.h>
+#include <netinet/in.h>
+#endif
+
 #include <curl/curl.h>
 
 #include <chrono>
@@ -7,11 +19,7 @@
 #include <cstring>
 #include <sstream>
 #include <string>
-#include <sys/socket.h>
 #include <vector>
-
-#include <arpa/inet.h>
-#include <netinet/in.h>
 
 #include "security/redact.hpp"
 

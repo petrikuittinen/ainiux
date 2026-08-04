@@ -2,12 +2,12 @@
 
 #include <filesystem>
 #include <string>
-#include <unistd.h>
 #include <vector>
 
 #include "agent/goal.hpp"
 #include "agent/project_settings.hpp"
 #include "agent/session_store.hpp"
+#include "platform/environment.hpp"
 #include "support/test_support.hpp"
 
 namespace ainiux::test::agent_session_store {
@@ -18,7 +18,7 @@ namespace fs = std::filesystem;
 std::string temp_workspace(const std::string& name) {
     const fs::path root =
         fs::temp_directory_path() / ("ainiux-agent-session-" + name + "-" +
-                                     std::to_string(static_cast<long long>(::getpid())));
+                                     std::to_string(ainiux::platform::current_process_id()));
     std::error_code ec;
     fs::remove_all(root, ec);
     fs::create_directories(root, ec);

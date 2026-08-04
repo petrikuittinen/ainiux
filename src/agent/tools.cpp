@@ -19,8 +19,6 @@
 #include <sstream>
 #include <thread>
 #include <utility>
-#include <sys/stat.h>
-#include <unistd.h>
 
 #include "agent/apply_patch.hpp"
 #include "agent/process.hpp"
@@ -32,6 +30,8 @@
 #include "html/html.hpp"
 #include "input/input.hpp"
 #include "json/json.hpp"
+#include "platform/environment.hpp"
+#include "platform/filesystem.hpp"
 #include "search/search.hpp"
 #include "security/redact.hpp"
 
@@ -261,10 +261,13 @@ bool path_has_home_or_env_prefix(const std::string& path) {
 bool safe_relative_path(const std::string& path) {
     if (path.empty() || path == ".") return true;
     if (path_has_home_or_env_prefix(path)) return false;
-    const fs::path candidate(path);
+#if defined(_WIN32)
+    if (!platform::validate_windows_path_syntax(path).ok()) return false;
+#endif
+    const fs::path candidate = fs::u8path(path);
     if (candidate.is_absolute()) return false;
     for (const fs::path& component : candidate) {
-        if (is_forbidden_path_component(component.string())) return false;
+        if (is_forbidden_path_component(component.u8string())) return false;
     }
     return true;
 }
@@ -273,7 +276,7 @@ bool safe_relative_path(const std::string& path) {
 std::string unsafe_path_message(const std::string& path, const char* action = "manipulate") {
     if (path.empty())
         return std::string("Forbidden to ") + action + " files: path is empty.";
-    const fs::path candidate(path);
+    const fs::path candidate = fs::u8path(path);
     if (candidate.is_absolute() || path_has_home_or_env_prefix(path)) {
         return std::string("Forbidden to ") + action +
                " files outside the project directory. Use a path relative to the "
@@ -281,7 +284,7 @@ std::string unsafe_path_message(const std::string& path, const char* action = "m
                path;
     }
     for (const fs::path& component : candidate) {
-        const std::string value = component.string();
+        const std::string value = component.u8string();
         if (value == "..") {
             return std::string("Forbidden to ") + action +
                    " files outside the project directory (path escapes with '..': " + path +
@@ -310,21 +313,14 @@ std::string unsafe_path_message(const std::string& path, const char* action = "m
 Error ensure_under_workspace(const fs::path& workspace,
                              const fs::path& candidate,
                              const std::string& display_path) {
-    std::error_code ec;
-    const fs::path root = fs::weakly_canonical(fs::absolute(workspace, ec), ec);
-    if (ec || root.empty())
-        return {ErrorCode::FileWrite, "could not resolve project workspace root: " + ec.message()};
-    const fs::path resolved = fs::weakly_canonical(fs::absolute(candidate, ec), ec);
-    if (ec)
+    bool within = false;
+    const Error identity_error = platform::path_is_within(
+        workspace.u8string(), candidate.u8string(), within);
+    if (!identity_error.ok())
         return {ErrorCode::FileWrite,
-                "could not resolve path inside project: " + display_path + " (" + ec.message() +
-                    ")"};
-    const std::string root_s = root.generic_string();
-    const std::string path_s = resolved.generic_string();
-    if (path_s == root_s)
-        return {ErrorCode::BadArgs, "path must name a file inside the project, not the project root"};
-    if (path_s.size() < root_s.size() + 1 || path_s.compare(0, root_s.size(), root_s) != 0 ||
-        path_s[root_s.size()] != '/') {
+                "could not verify project path containment for " + display_path + ": " +
+                    identity_error.message};
+    if (!within) {
         return {ErrorCode::BadArgs,
                 "Forbidden to manipulate files outside the project directory (resolved path "
                 "escapes workspace). Refused: " +
@@ -334,11 +330,20 @@ Error ensure_under_workspace(const fs::path& workspace,
 }
 
 bool resolved_path_is_under(const fs::path& root, const fs::path& candidate) {
+    bool within = false;
+    if (platform::path_is_within(root.u8string(), candidate.u8string(), within).ok())
+        return within;
+#if defined(_WIN32)
+    // Windows containment must remain identity-based. A lexical fallback would
+    // be case-sensitive and could misclassify aliases or reparse-point paths.
+    return false;
+#else
     const std::string root_s = root.generic_string();
     const std::string path_s = candidate.generic_string();
     return path_s == root_s ||
            (path_s.size() > root_s.size() && path_s.compare(0, root_s.size(), root_s) == 0 &&
             path_s[root_s.size()] == '/');
+#endif
 }
 
 bool resolved_path_is_under_system_temp(const fs::path& candidate) {
@@ -350,12 +355,19 @@ bool resolved_path_is_under_system_temp(const fs::path& candidate) {
 
 bool contains_protected_metadata_component(const fs::path& path) {
     for (const fs::path& component : path) {
-        if (is_protected_state_dir_name(component.string())) return true;
+        if (is_protected_state_dir_name(component.u8string())) return true;
     }
     return false;
 }
 
 bool contains_symlink_component(const fs::path& path) {
+    bool contains = false;
+    const Error checked =
+        platform::path_contains_link_or_reparse(path.u8string(), contains);
+    if (checked.ok()) return contains;
+#if defined(_WIN32)
+    return true;
+#else
     fs::path current = path.root_path();
     for (const fs::path& component : path.relative_path()) {
         current /= component;
@@ -365,6 +377,7 @@ bool contains_symlink_component(const fs::path& path) {
         if (fs::is_symlink(status)) return true;
     }
     return false;
+#endif
 }
 
 Error resolve_native_path(const fs::path& workspace,
@@ -375,16 +388,20 @@ Error resolve_native_path(const fs::path& workspace,
     external = false;
     if (requested.empty() || requested[0] == '$')
         return {ErrorCode::BadArgs, "native path must be an exact non-empty path"};
+#if defined(_WIN32)
+    Error syntax = platform::validate_windows_path_syntax(requested);
+    if (!syntax.ok()) return syntax;
+#endif
     fs::path supplied;
     if (requested[0] == '~') {
         if (requested.size() < 2 || requested[1] != '/')
             return {ErrorCode::BadArgs, "~user paths are not supported"};
-        const char* home = std::getenv("HOME");
-        if (home == nullptr || *home == '\0')
+        const std::string home = platform::home_directory();
+        if (home.empty())
             return {ErrorCode::BadArgs, "HOME is not set; provide an absolute path"};
-        supplied = fs::path(home) / requested.substr(2);
+        supplied = fs::u8path(home) / fs::u8path(requested.substr(2));
     } else {
-        supplied = fs::path(requested);
+        supplied = fs::u8path(requested);
         if (!supplied.is_absolute()) {
             if (!safe_relative_path(requested))
                 return {ErrorCode::BadArgs,
@@ -395,7 +412,11 @@ Error resolve_native_path(const fs::path& workspace,
     std::error_code ec;
     const fs::path root = fs::canonical(workspace, ec);
     if (ec) return {ErrorCode::FileRead, "could not resolve project root"};
-    resolved = fs::weakly_canonical(fs::absolute(supplied, ec), ec);
+    const fs::path supplied_absolute = fs::absolute(supplied, ec).lexically_normal();
+    if (!ec && contains_symlink_component(supplied_absolute))
+        return {ErrorCode::BadArgs,
+                "refusing symlink or reparse-point path: " + supplied_absolute.u8string()};
+    resolved = fs::weakly_canonical(supplied_absolute, ec);
     if (ec || resolved.empty())
         return {ErrorCode::FileRead,
                 "could not resolve native path " + requested + ": " + ec.message()};
@@ -403,15 +424,15 @@ Error resolve_native_path(const fs::path& workspace,
     if (contains_protected_metadata_component(resolved))
         return {ErrorCode::BadArgs,
                 "refusing access to protected agent metadata: " +
-                    resolved.generic_string()};
+                    resolved.generic_u8string()};
     if (must_exist) {
         const fs::file_status status = fs::symlink_status(resolved, ec);
         if (ec || status.type() == fs::file_type::not_found)
             return {ErrorCode::FileRead,
-                    "path does not exist: " + resolved.generic_string()};
+                    "path does not exist: " + resolved.generic_u8string()};
         if (fs::is_symlink(status))
             return {ErrorCode::BadArgs,
-                    "refusing symlink path: " + resolved.generic_string()};
+                    "refusing symlink path: " + resolved.generic_u8string()};
     }
     return ok_error();
 }
@@ -424,9 +445,9 @@ bool is_broad_removal_root(const fs::path& workspace, const fs::path& target) {
     if (target == filesystem_root || target == root ||
         resolved_path_is_under(target, root))
         return true;
-    const char* home = std::getenv("HOME");
-    if (home != nullptr && *home != '\0') {
-        const fs::path home_root = fs::weakly_canonical(home, ec);
+    const std::string home = platform::home_directory();
+    if (!home.empty()) {
+        const fs::path home_root = fs::weakly_canonical(fs::u8path(home), ec);
         if (!ec && target == home_root) return true;
     }
     const fs::path temp_root =
@@ -441,6 +462,10 @@ Error resolve_external_file_path(const fs::path& workspace,
     resolved.clear();
     if (requested.empty())
         return {ErrorCode::BadArgs, "outside-project file path must not be empty"};
+#if defined(_WIN32)
+    Error syntax = platform::validate_windows_path_syntax(requested);
+    if (!syntax.ok()) return syntax;
+#endif
     if (requested[0] == '$')
         return {ErrorCode::BadArgs,
                 "environment-variable paths are not expanded for external file access; "
@@ -451,13 +476,13 @@ Error resolve_external_file_path(const fs::path& workspace,
         if (requested.size() < 2 || requested[1] != '/')
             return {ErrorCode::BadArgs,
                     "~user paths are not supported; provide the exact absolute path"};
-        const char* home = std::getenv("HOME");
-        if (home == nullptr || *home == '\0')
+        const std::string home = platform::home_directory();
+        if (home.empty())
             return {ErrorCode::BadArgs,
                     "could not expand ~/ because HOME is not set; provide an absolute path"};
-        supplied = fs::path(home) / requested.substr(2);
+        supplied = fs::u8path(home) / fs::u8path(requested.substr(2));
     } else {
-        supplied = fs::path(requested);
+        supplied = fs::u8path(requested);
         if (!supplied.is_absolute()) {
             if (!safe_relative_path(requested))
                 return {ErrorCode::BadArgs,
@@ -471,7 +496,12 @@ Error resolve_external_file_path(const fs::path& workspace,
     if (ec || root.empty())
         return {ErrorCode::FileRead,
                 "could not resolve project root before external file approval: " + ec.message()};
-    resolved = fs::weakly_canonical(fs::absolute(supplied, ec), ec);
+    const fs::path supplied_absolute = fs::absolute(supplied, ec).lexically_normal();
+    if (!ec && contains_symlink_component(supplied_absolute))
+        return {ErrorCode::BadArgs,
+                "refusing symlink or reparse-point external path: " +
+                    supplied_absolute.u8string()};
+    resolved = fs::weakly_canonical(supplied_absolute, ec);
     if (ec || resolved.empty())
         return {ErrorCode::FileRead,
                 "could not resolve external file path " + requested + ": " + ec.message()};
@@ -483,16 +513,16 @@ Error resolve_external_file_path(const fs::path& workspace,
     if (contains_protected_metadata_component(resolved))
         return {ErrorCode::BadArgs,
                 "refusing access to protected agent metadata outside the project: " +
-                    resolved.generic_string()};
+                    resolved.generic_u8string()};
     if (must_exist) {
         const fs::file_status status = fs::status(resolved, ec);
         if (ec || !fs::exists(status))
             return {ErrorCode::FileRead,
                     "external file does not exist or cannot be inspected: " +
-                        resolved.generic_string()};
+                        resolved.generic_u8string()};
         if (!fs::is_regular_file(status))
             return {ErrorCode::FileRead,
-                    "external read path must be a regular file: " + resolved.generic_string()};
+                    "external read path must be a regular file: " + resolved.generic_u8string()};
     }
     return ok_error();
 }
@@ -502,6 +532,10 @@ Error resolve_external_directory_path(const fs::path& workspace,
                                       fs::path& resolved) {
     if (requested.empty())
         return {ErrorCode::BadArgs, "outside-project directory path must not be empty"};
+#if defined(_WIN32)
+    Error syntax = platform::validate_windows_path_syntax(requested);
+    if (!syntax.ok()) return syntax;
+#endif
     if (requested[0] == '$')
         return {ErrorCode::BadArgs,
                 "environment-variable paths are not expanded; provide an exact path"};
@@ -509,12 +543,12 @@ Error resolve_external_directory_path(const fs::path& workspace,
     if (requested[0] == '~') {
         if (requested.size() < 2 || requested[1] != '/')
             return {ErrorCode::BadArgs, "~user paths are not supported"};
-        const char* home = std::getenv("HOME");
-        if (home == nullptr || *home == '\0')
+        const std::string home = platform::home_directory();
+        if (home.empty())
             return {ErrorCode::BadArgs, "HOME is not set; provide an absolute path"};
-        supplied = fs::path(home) / requested.substr(2);
+        supplied = fs::u8path(home) / fs::u8path(requested.substr(2));
     } else {
-        supplied = fs::path(requested);
+        supplied = fs::u8path(requested);
         if (!supplied.is_absolute()) {
             if (!safe_relative_path(requested))
                 return {ErrorCode::BadArgs,
@@ -525,11 +559,15 @@ Error resolve_external_directory_path(const fs::path& workspace,
     std::error_code ec;
     const fs::path root = fs::canonical(workspace, ec);
     if (ec) return {ErrorCode::FileRead, "could not resolve project root"};
+    if (contains_symlink_component(fs::absolute(supplied, ec).lexically_normal()))
+        return {ErrorCode::BadArgs,
+                "refusing symlink or reparse-point external directory: " +
+                    supplied.u8string()};
     resolved = fs::canonical(supplied, ec);
     if (ec || !fs::is_directory(resolved, ec))
         return {ErrorCode::FileRead,
                 "external directory does not exist or cannot be inspected: " +
-                    supplied.generic_string()};
+                    supplied.generic_u8string()};
     if (resolved_path_is_under(root, resolved))
         return {ErrorCode::BadArgs,
                 "protected or malformed project paths cannot be approved as external access"};
@@ -547,13 +585,13 @@ Error ensure_approved_external_path_unchanged(const fs::path& approved,
     if (ec || current.empty())
         return {error_code,
                 std::string("could not re-resolve approved external path before ") + action +
-                    ": " + approved.generic_string() +
+                    ": " + approved.generic_u8string() +
                     (ec ? " (" + ec.message() + ")" : std::string())};
     if (current != approved)
         return {error_code,
                 std::string("approved external path changed while waiting; refusing to ") +
-                    action + ". Approved: " + approved.generic_string() +
-                    "; now resolves to: " + current.generic_string()};
+                    action + ". Approved: " + approved.generic_u8string() +
+                    "; now resolves to: " + current.generic_u8string()};
     return ok_error();
 }
 
@@ -807,9 +845,9 @@ std::string redact_source_secrets(std::string text,
 
 std::string normalized_workspace_path(const std::string& cwd, const std::string& path) {
     fs::path combined;
-    if (!cwd.empty() && cwd != ".") combined /= fs::path(cwd);
-    combined /= fs::path(path);
-    std::string normalized = combined.lexically_normal().generic_string();
+    if (!cwd.empty() && cwd != ".") combined /= fs::u8path(cwd);
+    combined /= fs::u8path(path);
+    std::string normalized = combined.lexically_normal().generic_u8string();
     if (normalized == ".") normalized.clear();
     while (normalized.rfind("./", 0) == 0) normalized.erase(0, 2);
     return normalized;
@@ -837,7 +875,7 @@ bool visible_workspace_path(const index::Snapshot& snapshot,
     if (path.empty()) return true;
     if (!safe_relative_path(path)) return false;
     std::error_code ec;
-    const fs::path absolute = fs::path(snapshot.workspace) / path;
+    const fs::path absolute = fs::u8path(snapshot.workspace) / fs::u8path(path);
     const fs::file_status status = fs::symlink_status(absolute, ec);
     if (!ec && status.type() != fs::file_type::not_found) {
         if (fs::is_symlink(status)) return false;
@@ -872,7 +910,7 @@ Error validate_command_workspace_paths(const index::Snapshot& snapshot,
     if (ec) return {ErrorCode::FileRead, "could not resolve run_command workspace"};
     fs::path requested_cwd =
         cwd.empty() ? root
-                    : (fs::path(cwd).is_absolute() ? fs::path(cwd) : root / cwd);
+                    : (fs::u8path(cwd).is_absolute() ? fs::u8path(cwd) : root / fs::u8path(cwd));
     const fs::path canonical_cwd = fs::canonical(requested_cwd, ec);
     if (ec || !fs::is_directory(canonical_cwd, ec) ||
         contains_symlink_component(fs::absolute(requested_cwd).lexically_normal()) ||
@@ -883,8 +921,8 @@ Error validate_command_workspace_paths(const index::Snapshot& snapshot,
     if (uses_external && !allow_external)
         return {ErrorCode::BadArgs, "run_command cwd is outside the workspace"};
     const std::string normalized_cwd =
-        uses_external ? canonical_cwd.generic_string()
-                      : fs::relative(canonical_cwd, root, ec).generic_string();
+        uses_external ? canonical_cwd.generic_u8string()
+                      : fs::relative(canonical_cwd, root, ec).generic_u8string();
     if (ec)
         return {ErrorCode::BadArgs, "could not normalize run_command cwd"};
     const std::string workspace_cwd =
@@ -898,12 +936,13 @@ Error validate_command_workspace_paths(const index::Snapshot& snapshot,
     for (std::size_t index = 1; index < arguments.size(); ++index) {
         const std::string& argument = arguments[index];
         if (argument.empty() || argument.front() == '-') continue;
-        if (allow_external && fs::path(argument).is_absolute()) {
-            const fs::path canonical = fs::weakly_canonical(argument, ec);
-            const fs::file_status literal_status = fs::symlink_status(argument, ec);
+        if (allow_external && fs::u8path(argument).is_absolute()) {
+            const fs::path argument_path = fs::u8path(argument);
+            const fs::path canonical = fs::weakly_canonical(argument_path, ec);
+            const fs::file_status literal_status = fs::symlink_status(argument_path, ec);
             if (ec || canonical.empty() || !fs::exists(canonical, ec) ||
                 fs::is_symlink(literal_status) ||
-                contains_symlink_component(fs::absolute(argument).lexically_normal()) ||
+                contains_symlink_component(fs::absolute(argument_path).lexically_normal()) ||
                 contains_protected_metadata_component(canonical))
                 return {ErrorCode::BadArgs,
                         "run_command external path operand is not an existing safe path: " +
@@ -916,10 +955,12 @@ Error validate_command_workspace_paths(const index::Snapshot& snapshot,
         if (!safe_relative_path(relative))
             return {ErrorCode::BadArgs, unsafe_path_message(relative, "access via run_command")};
         std::error_code ec;
-        const fs::file_status status = fs::symlink_status(fs::path(snapshot.workspace) / relative, ec);
+        const fs::file_status status = fs::symlink_status(
+            fs::u8path(snapshot.workspace) / fs::u8path(relative), ec);
         if (!ec && status.type() != fs::file_type::not_found &&
             (contains_symlink_component(
-                 fs::absolute(fs::path(snapshot.workspace) / relative).lexically_normal()) ||
+                 fs::absolute(fs::u8path(snapshot.workspace) / fs::u8path(relative))
+                     .lexically_normal()) ||
              !path_allowed_for_command(snapshot, relative, fs::is_directory(status), index_only)))
             return {ErrorCode::BadArgs,
                     index_only
@@ -942,7 +983,7 @@ Error validate_vetted_read_only_paths(const index::Snapshot& snapshot,
                 "could not resolve project root for read-only command validation"};
     const fs::path requested_cwd =
         cwd.empty() ? root
-                    : (fs::path(cwd).is_absolute() ? fs::path(cwd) : root / cwd);
+                    : (fs::u8path(cwd).is_absolute() ? fs::u8path(cwd) : root / fs::u8path(cwd));
     const fs::path canonical_cwd = fs::canonical(requested_cwd, ec);
     if (ec || !fs::is_directory(canonical_cwd, ec) ||
         contains_symlink_component(fs::absolute(requested_cwd).lexically_normal()) ||
@@ -954,7 +995,7 @@ Error validate_vetted_read_only_paths(const index::Snapshot& snapshot,
 
     for (const std::string& operand : assessment.path_operands) {
         if (operand.empty() || operand == "-") continue;
-        const fs::path supplied(operand);
+        const fs::path supplied = fs::u8path(operand);
         const fs::path requested =
             supplied.is_absolute() ? supplied : canonical_cwd / supplied;
         if (contains_protected_metadata_component(requested.lexically_normal()))
@@ -996,7 +1037,8 @@ std::string filter_path_lines(const index::Snapshot& snapshot,
             if (arguments[index].empty() || arguments[index].front() == '-') continue;
             const std::string operand = normalized_workspace_path(cwd, arguments[index]);
             std::error_code ec;
-            if (fs::is_directory(fs::path(snapshot.workspace) / operand, ec)) listing_base = operand;
+            if (fs::is_directory(fs::u8path(snapshot.workspace) / fs::u8path(operand), ec))
+                listing_base = operand;
             break;
         }
     }
@@ -1357,11 +1399,11 @@ Error ReadToolRegistry::resolve_writable_path(const std::string& relative_path,
                                               fs::path& absolute) const {
     if (relative_path.empty() || !safe_relative_path(relative_path))
         return {ErrorCode::BadArgs, unsafe_path_message(relative_path, "create or modify")};
-    const std::string generic = fs::path(relative_path).generic_string();
+    const std::string generic = fs::u8path(relative_path).generic_u8string();
     if (generic.empty() || generic == ".")
         return {ErrorCode::BadArgs, "path must name a file, not the workspace root"};
     fs::path current(snapshot_.workspace);
-    fs::path remaining = fs::path(generic);
+    fs::path remaining = fs::u8path(generic);
     // Walk existing parents and refuse symlink components before creating anything.
     for (const fs::path& component : remaining) {
         current /= component;
@@ -1369,10 +1411,18 @@ Error ReadToolRegistry::resolve_writable_path(const std::string& relative_path,
         if (!fs::exists(current, ec) || ec) break;
         const fs::file_status status = fs::symlink_status(current, ec);
         if (ec) return {ErrorCode::FileWrite, "could not inspect path " + generic + ": " + ec.message()};
-        if (fs::is_symlink(status))
-            return {ErrorCode::FileWrite, "refusing symlink path in workspace write: " + generic};
+        bool linked = false;
+        const Error link_error =
+            platform::path_is_link_or_reparse(current.u8string(), linked);
+        if (!link_error.ok())
+            return {ErrorCode::FileWrite,
+                    "could not inspect workspace write path " + generic + ": " +
+                        link_error.message};
+        if (linked)
+            return {ErrorCode::FileWrite,
+                    "refusing symlink or reparse-point path in workspace write: " + generic};
     }
-    absolute = fs::path(snapshot_.workspace) / remaining;
+    absolute = fs::u8path(snapshot_.workspace) / remaining;
     // Final containment: never trust string join alone (symlink races, odd components).
     Error contained = ensure_under_workspace(snapshot_.workspace, absolute, generic);
     if (!contained.ok()) return contained;
@@ -1384,22 +1434,26 @@ Error ReadToolRegistry::normalize_mutation_path(const std::string& input,
     relative.clear();
     if (input.empty())
         return {ErrorCode::BadArgs, "path must not be empty"};
-    const fs::path supplied(input);
+#if defined(_WIN32)
+    Error syntax = platform::validate_windows_path_syntax(input);
+    if (!syntax.ok()) return syntax;
+#endif
+    const fs::path supplied = fs::u8path(input);
     if (!supplied.is_absolute()) {
-        relative = supplied.generic_string();
+        relative = supplied.generic_u8string();
         if (!safe_relative_path(relative))
             return {ErrorCode::BadArgs, unsafe_path_message(input, "create or modify")};
         return ok_error();
     }
 
     std::error_code ec;
-    const fs::path workspace = fs::absolute(fs::path(snapshot_.workspace), ec).lexically_normal();
+    const fs::path workspace = fs::absolute(fs::u8path(snapshot_.workspace), ec).lexically_normal();
     if (ec)
         return {ErrorCode::FileWrite,
                 "could not resolve project workspace for path validation: " + ec.message()};
     const fs::path normalized = supplied.lexically_normal();
     const fs::path within = normalized.lexically_relative(workspace);
-    relative = within.generic_string();
+    relative = within.generic_u8string();
     if (relative.empty() || relative == "." || !safe_relative_path(relative)) {
         relative.clear();
         return {ErrorCode::BadArgs,
@@ -1424,7 +1478,7 @@ Error ReadToolRegistry::validate_mutation_path(const std::string& relative_path,
                 "Plan mode cannot create directories"};
     if (relative_path.empty() || !safe_relative_path(relative_path))
         return {ErrorCode::BadArgs, unsafe_path_message(relative_path, "modify in Plan mode")};
-    const std::string path = fs::path(relative_path).generic_string();
+    const std::string path = fs::u8path(relative_path).generic_u8string();
     const bool root_allowed =
         path == "PLANS.md" || path == "PLAN.md" || path == "TODO.md" || path == "AGENTS.md";
     const bool plans_markdown =
@@ -1443,7 +1497,7 @@ Error ReadToolRegistry::validate_mutation_path(const std::string& relative_path,
     if (!fs::is_directory(parent, ec) || ec)
         return {ErrorCode::FileWrite,
                 "Plan mode requires the destination parent directory to already exist: " +
-                    parent.string()};
+                    parent.u8string()};
     const fs::file_status parent_status = fs::symlink_status(parent, ec);
     if (ec || fs::is_symlink(parent_status))
         return {ErrorCode::FileWrite,
@@ -1454,7 +1508,7 @@ Error ReadToolRegistry::validate_mutation_path(const std::string& relative_path,
 Error ReadToolRegistry::purge_expired_history_backups() const {
     if (!history_backup_.enabled || history_backup_.ttl_days <= 0) return ok_error();
     const fs::path history_dir =
-        fs::path(snapshot_.workspace) / kProjectStateDirName / "history";
+        fs::u8path(snapshot_.workspace) / kProjectStateDirName / "history";
     std::error_code ec;
     if (!fs::is_directory(history_dir, ec) || ec) return ok_error();
     const std::time_t now_tt = std::time(nullptr);
@@ -1462,19 +1516,17 @@ Error ReadToolRegistry::purge_expired_history_backups() const {
     for (fs::directory_iterator it(history_dir, ec), end; !ec && it != end; it.increment(ec)) {
         if (ec) break;
         if (!it->is_regular_file(ec) || ec) continue;
-        const std::string name = it->path().filename().string();
+        const std::string name = it->path().filename().u8string();
         if (name.size() < 4 || name.compare(name.size() - 4, 4, ".bak") != 0) continue;
-#if defined(_WIN32)
-        (void)now_tt;
-        (void)ttl_sec;
-#else
-        struct stat st {};
-        if (::stat(it->path().c_str(), &st) != 0) continue;
-        if (now_tt >= st.st_mtime && (now_tt - st.st_mtime) > ttl_sec) {
+        const fs::file_time_type modified = it->last_write_time(ec);
+        if (ec) { ec.clear(); continue; }
+        const auto system_modified = std::chrono::time_point_cast<std::chrono::system_clock::duration>(
+            modified - fs::file_time_type::clock::now() + std::chrono::system_clock::now());
+        const std::time_t modified_tt = std::chrono::system_clock::to_time_t(system_modified);
+        if (now_tt >= modified_tt && (now_tt - modified_tt) > ttl_sec) {
             std::error_code rm_ec;
             fs::remove(it->path(), rm_ec);
         }
-#endif
     }
     return ok_error();
 }
@@ -1489,13 +1541,14 @@ Error ReadToolRegistry::save_history_copy(const std::string& relative_path,
     }
 
     const fs::path history_dir =
-        fs::path(snapshot_.workspace) / kProjectStateDirName / "history";
+        fs::u8path(snapshot_.workspace) / kProjectStateDirName / "history";
     std::error_code ec;
-    fs::create_directories(history_dir, ec);
-    if (ec) return {ErrorCode::FileWrite, "could not create history directory: " + ec.message()};
+    Error directory_error =
+        platform::ensure_private_directory(history_dir.u8string(), true, true);
+    if (!directory_error.ok()) return directory_error;
 
     // One stable slot per workspace path (hash of generic relative path).
-    const std::string generic = fs::path(relative_path).generic_string();
+    const std::string generic = fs::u8path(relative_path).generic_u8string();
     const std::string digest = index::content_hash(generic);
     std::string short_hash = digest.size() > 16 ? digest.substr(0, 16) : digest;
     std::string safe_tail = generic;
@@ -1504,14 +1557,12 @@ Error ReadToolRegistry::save_history_copy(const std::string& relative_path,
     }
     if (safe_tail.size() > 48) safe_tail = safe_tail.substr(safe_tail.size() - 48);
     const fs::path history_file = history_dir / (short_hash + "-" + safe_tail + ".bak");
-    {
-        std::ofstream out(history_file, std::ios::binary | std::ios::trunc);
-        if (!out) return {ErrorCode::FileWrite, "could not open history file: " + history_file.string()};
-        out.write(previous_content.data(), static_cast<std::streamsize>(previous_content.size()));
-        if (!out) return {ErrorCode::FileWrite, "could not write history file: " + history_file.string()};
-    }
+    Error history_error =
+        platform::atomic_write_private(history_file.u8string(), previous_content, true);
+    if (!history_error.ok()) return history_error;
     history_path =
-        (fs::path(kProjectStateDirName) / "history" / history_file.filename()).generic_string();
+        (fs::path(kProjectStateDirName) / "history" / history_file.filename())
+            .generic_u8string();
     (void)purge_expired_history_backups();
     return ok_error();
 }
@@ -1519,7 +1570,7 @@ Error ReadToolRegistry::save_history_copy(const std::string& relative_path,
 void ReadToolRegistry::note_written_file(const std::string& relative_path,
                                          const std::string& content) const {
     if (!indexing_enabled_) return;
-    const std::string generic = fs::path(relative_path).generic_string();
+    const std::string generic = fs::u8path(relative_path).generic_u8string();
     const std::string hash = index::content_hash(content);
     const std::size_t line_count = content.empty()
                                        ? 0
@@ -1600,7 +1651,7 @@ void ReadToolRegistry::note_written_file(const std::string& relative_path,
 
 void ReadToolRegistry::note_removed_path(const std::string& relative_path) const {
     if (!indexing_enabled_) return;
-    const std::string generic = fs::path(relative_path).generic_string();
+    const std::string generic = fs::u8path(relative_path).generic_u8string();
     snapshot_.files.erase(
         std::remove_if(snapshot_.files.begin(), snapshot_.files.end(),
                        [&](const index::IndexedFile& file) {
@@ -1629,37 +1680,18 @@ void ReadToolRegistry::note_removed_path(const std::string& relative_path) const
 namespace {
 
 Error write_bytes_atomic(const fs::path& absolute, const std::string& content) {
-    const fs::path temporary =
-        absolute.string() + ".ainiux-tmp." + std::to_string(static_cast<long long>(::getpid()));
-    {
-        std::ofstream out(temporary, std::ios::binary | std::ios::trunc);
-        if (!out) return {ErrorCode::FileWrite, "could not open temporary file: " + temporary.string()};
-        out.write(content.data(), static_cast<std::streamsize>(content.size()));
-        if (!out) {
-            std::error_code ignore;
-            fs::remove(temporary, ignore);
-            return {ErrorCode::FileWrite, "could not write temporary file: " + temporary.string()};
-        }
-    }
-    std::error_code ec;
-    fs::rename(temporary, absolute, ec);
-    if (ec) {
-        std::error_code ignore;
-        fs::remove(temporary, ignore);
-        return {ErrorCode::FileWrite, "could not replace file " + absolute.string() + ": " + ec.message()};
-    }
-    return ok_error();
+    return platform::atomic_write_private(absolute.u8string(), content, true);
 }
 
 std::string read_all_bytes(const fs::path& absolute, Error& error) {
     std::ifstream input(absolute, std::ios::binary);
     if (!input) {
-        error = {ErrorCode::FileRead, "could not open file: " + absolute.string()};
+        error = {ErrorCode::FileRead, "could not open file: " + absolute.u8string()};
         return {};
     }
     std::string content{std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>()};
     if (input.bad()) {
-        error = {ErrorCode::FileRead, "could not read file: " + absolute.string()};
+        error = {ErrorCode::FileRead, "could not read file: " + absolute.u8string()};
         return {};
     }
     error = ok_error();
@@ -1729,11 +1761,11 @@ Error ReadToolRegistry::write_workspace_file(const std::string& relative_path,
             if (fs::is_regular_file(parent, ec) || fs::is_symlink(fs::symlink_status(parent, ec)))
                 return {ErrorCode::FileWrite,
                         "parent path exists and is not a directory: " +
-                            fs::path(relative_path).parent_path().generic_string()};
+                            fs::u8path(relative_path).parent_path().generic_u8string()};
             if (!fs::is_directory(parent, ec))
                 return {ErrorCode::FileWrite,
                         "parent path is not a usable directory: " +
-                            fs::path(relative_path).parent_path().generic_string()};
+                            fs::u8path(relative_path).parent_path().generic_u8string()};
         } else {
             if (!create_dirs)
                 return {ErrorCode::FileWrite,
@@ -1743,7 +1775,7 @@ Error ReadToolRegistry::write_workspace_file(const std::string& relative_path,
             // silently mkdir -p, and never treat missing parents as free license to wipe.
             if (!permission_controls_) {
                 const std::string parent_rel =
-                    fs::path(relative_path).parent_path().generic_string();
+                    fs::u8path(relative_path).parent_path().generic_u8string();
                 GuardApprovalRequest ask;
                 ask.tool_name = "write_file";
                 ask.command_preview = "create_directories " + parent_rel;
@@ -1771,7 +1803,9 @@ Error ReadToolRegistry::write_workspace_file(const std::string& relative_path,
             }
             // Re-check containment of parent before mkdir.
             error = ensure_under_workspace(snapshot_.workspace, parent,
-                                           fs::path(relative_path).parent_path().generic_string());
+                                           fs::u8path(relative_path)
+                                               .parent_path()
+                                               .generic_u8string());
             if (!error.ok()) return error;
             fs::create_directories(parent, ec);
             if (ec)
@@ -1780,13 +1814,13 @@ Error ReadToolRegistry::write_workspace_file(const std::string& relative_path,
             if (!fs::is_directory(parent, ec))
                 return {ErrorCode::FileWrite,
                         "parent directory was not created as a directory: " +
-                            fs::path(relative_path).parent_path().generic_string()};
+                            fs::u8path(relative_path).parent_path().generic_u8string()};
         }
     }
 
     // Containment again immediately before write (TOCTOU hardening).
     error = ensure_under_workspace(snapshot_.workspace, absolute,
-                                   fs::path(relative_path).generic_string());
+                                   fs::u8path(relative_path).generic_u8string());
     if (!error.ok()) return error;
 
     if (exists) {
@@ -1996,7 +2030,7 @@ std::vector<std::string> sibling_names(const fs::path& directory) {
     fs::directory_iterator it(directory, fs::directory_options::skip_permission_denied, ec);
     if (ec) return names;
     for (const fs::directory_entry& entry : it) {
-        const std::string name = entry.path().filename().string();
+        const std::string name = entry.path().filename().u8string();
         if (name.empty() || name == "." || name == ".." || is_protected_listing_name(name)) continue;
         names.push_back(name);
     }
@@ -2067,8 +2101,8 @@ Error ReadToolRegistry::remove_workspace_path(const std::string& relative_path,
     Error error = resolve_writable_path(relative_path, absolute);
     if (!error.ok()) return error;
 
-    const std::string generic = fs::path(relative_path).generic_string();
-    const std::string basename = absolute.filename().string();
+    const std::string generic = fs::u8path(relative_path).generic_u8string();
+    const std::string basename = absolute.filename().u8string();
     const fs::path parent = absolute.parent_path();
     bool permission_approved = false;
 
@@ -2167,11 +2201,11 @@ Error ReadToolRegistry::remove_workspace_path(const std::string& relative_path,
             bool db_delete_approved = false;
             for (fs::recursive_directory_iterator it(absolute, ec), end; !ec && it != end;
                  it.increment(ec)) {
-                const std::string name = it->path().filename().string();
+                const std::string name = it->path().filename().u8string();
                 std::string rel = generic;
                 const fs::path nested = it->path().lexically_relative(absolute);
                 if (!nested.empty() && nested != ".")
-                    rel = (fs::path(generic) / nested).generic_string();
+                    rel = (fs::u8path(generic) / nested).generic_u8string();
                 if (!db_delete_approved &&
                     (is_database_path(name) || is_database_path(rel))) {
                     guard_rule_id = "ask_on_database_delete";
@@ -2348,7 +2382,7 @@ Error ReadToolRegistry::apply_workspace_patch(const std::string& patch_text,
     for (const PatchFileOp& op : parsed.ops) {
         Planned item;
         item.kind = op.kind;
-        item.path = fs::path(op.path).generic_string();
+        item.path = fs::u8path(op.path).generic_u8string();
         if (item.path.empty() || !safe_relative_path(item.path))
             return {ErrorCode::BadArgs, unsafe_path_message(item.path.empty() ? op.path : item.path,
                                                             "patch")};
@@ -2610,7 +2644,7 @@ Error ReadToolRegistry::edit_workspace_file(const std::string& relative_path,
     operations_applied = 0;
     summary.clear();
     warnings.clear();
-    const bool external = fs::path(relative_path).is_absolute();
+    const bool external = fs::u8path(relative_path).is_absolute();
     Error policy_error;
     if (external) {
         if (mutation_policy_ != MutationPolicy::Full)
@@ -2856,10 +2890,11 @@ Error ReadToolRegistry::edit_workspace_file(const std::string& relative_path,
             return {ErrorCode::FileRead,
                     "replace_symbol: indexed symbol id was not found: " +
                         std::to_string(op.symbol_id)};
-        if (found->path != fs::path(relative_path).generic_string())
+        if (found->path != fs::u8path(relative_path).generic_u8string())
             return {ErrorCode::BadArgs,
                     "replace_symbol: symbol_id " + std::to_string(op.symbol_id) + " is in " +
-                        found->path + ", not " + fs::path(relative_path).generic_string()};
+                        found->path + ", not " +
+                            fs::u8path(relative_path).generic_u8string()};
         if (found->symbol.line_start <= 0 || found->symbol.line_end < found->symbol.line_start)
             return {ErrorCode::Internal, "replace_symbol: symbol has invalid line range"};
         op.type = LineEditOp::Type::ReplaceRange;
@@ -3339,37 +3374,37 @@ Error ReadToolRegistry::read_external_source(const fs::path& absolute_path,
     const std::uintmax_t file_size = fs::file_size(absolute_path, ec);
     if (ec)
         return {ErrorCode::FileRead,
-                "could not inspect " + description + " " + absolute_path.generic_string() +
+                "could not inspect " + description + " " + absolute_path.generic_u8string() +
                     ": " + ec.message()};
     if (file_size > index_options_.max_source_code_file_size)
         return {ErrorCode::FileRead,
                 description + " exceeds max_source_code_file_size (" +
                     std::to_string(index_options_.max_source_code_file_size) + " bytes): " +
-                    absolute_path.generic_string()};
+                    absolute_path.generic_u8string()};
 
     Error read_error;
     const std::string source = read_all_bytes(absolute_path, read_error);
     if (!read_error.ok()) return read_error;
     if (source.find('\0') != std::string::npos || !html::is_valid_utf8(source)) {
         // Steer the model away from Python/PIL when the path is a vision image.
-        if (input::path_has_supported_image_extension(absolute_path.generic_string())) {
+        if (input::path_has_supported_image_extension(absolute_path.generic_u8string())) {
             return {ErrorCode::UnsupportedFeature,
                     description + " is a PNG/JPEG/GIF image, not UTF-8 text: " +
-                        absolute_path.generic_string() +
+                        absolute_path.generic_u8string() +
                         ". Do not use Python/PIL or shell tools to open it. "
                         "Call attach_image with this path when you need pixel content "
                         "(vision model required), or ask the user to /attach the file."};
         }
         return {ErrorCode::FileRead,
                 description + " is not UTF-8 text: " +
-                    absolute_path.generic_string()};
+                    absolute_path.generic_u8string()};
     }
     if (max_bytes == 0)
         return {ErrorCode::BadArgs, "source byte cap must be positive"};
 
     const std::vector<std::string> lines = split_lines(source);
     if (start_line == 0) start_line = 1;
-    const std::string display_path = absolute_path.generic_string();
+    const std::string display_path = absolute_path.generic_u8string();
     const std::string file_hash = index::content_hash(source);
     if (lines.empty()) {
         if (start_line != 1 || end_line > 1)
@@ -3421,16 +3456,24 @@ Error ReadToolRegistry::read_workspace_source(const std::string& relative_path,
 
     fs::path current(snapshot_.workspace);
     std::error_code ec;
-    for (const fs::path& component : fs::path(relative_path)) {
+    for (const fs::path& component : fs::u8path(relative_path)) {
         current /= component;
         const fs::file_status status = fs::symlink_status(current, ec);
         if (ec || status.type() == fs::file_type::not_found)
             return {ErrorCode::FileRead,
                     "file does not exist or cannot be inspected: " + relative_path +
                         (ec ? " (" + ec.message() + ")" : std::string())};
-        if (fs::is_symlink(status))
+        bool linked = false;
+        const Error link_error =
+            platform::path_is_link_or_reparse(current.u8string(), linked);
+        if (!link_error.ok())
             return {ErrorCode::FileRead,
-                    "refusing symlink path in workspace read: " + relative_path};
+                    "could not inspect workspace path " + relative_path + ": " +
+                        link_error.message};
+        if (linked)
+            return {ErrorCode::FileRead,
+                    "refusing symlink or reparse-point path in workspace read: " +
+                        relative_path};
     }
     if (!fs::is_regular_file(current, ec) || ec)
         return {ErrorCode::FileRead,
@@ -3452,7 +3495,7 @@ Error ReadToolRegistry::read_workspace_source(const std::string& relative_path,
 
     Error error =
         read_external_source(canonical, start_line, end_line, max_bytes, range, false);
-    if (error.ok()) range.path = fs::path(relative_path).generic_string();
+    if (error.ok()) range.path = fs::u8path(relative_path).generic_u8string();
     return error;
 }
 
@@ -3489,11 +3532,11 @@ Error ReadToolRegistry::write_external_file(const fs::path& absolute_path,
     if (exists && !fs::is_regular_file(absolute_path, ec))
         return {ErrorCode::FileWrite,
                 "approved external destination is not a regular file: " +
-                    absolute_path.generic_string()};
+                    absolute_path.generic_u8string()};
     if (write_mode == "create_new" && exists)
         return {ErrorCode::FileWrite,
                 "external file already exists (mode=create_new): " +
-                    absolute_path.generic_string()};
+                    absolute_path.generic_u8string()};
     if (exists) {
         Error read_error;
         const std::string previous = read_all_bytes(absolute_path, read_error);
@@ -3520,7 +3563,7 @@ Error ReadToolRegistry::write_external_file(const fs::path& absolute_path,
         fs::create_directories(parent, ec);
         if (ec || !fs::is_directory(parent))
             return {ErrorCode::FileWrite,
-                    "could not create approved external parent " + parent.generic_string() +
+                    "could not create approved external parent " + parent.generic_u8string() +
                         (ec ? ": " + ec.message() : std::string())};
     }
 
@@ -3541,12 +3584,12 @@ Error ReadToolRegistry::read_source(const std::string& path,
                                     SourceRange& range) const {
     if (!safe_relative_path(path) || path.empty())
         return {ErrorCode::BadArgs, unsafe_path_message(path, "read")};
-    const auto found = files_.find(fs::path(path).generic_string());
+    const auto found = files_.find(fs::u8path(path).generic_u8string());
     if (found == files_.end() || found->second->status != "indexed")
         return {ErrorCode::FileRead, "path is not an eligible indexed file: " + path};
     const index::IndexedFile& record = *found->second;
     fs::path current(snapshot_.workspace);
-    for (const fs::path& component : fs::path(record.path)) {
+    for (const fs::path& component : fs::u8path(record.path)) {
         current /= component;
         std::error_code ec;
         const fs::file_status status = fs::symlink_status(current, ec);
@@ -3728,7 +3771,7 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
             if (get_string(args, "path", path, true, validation_error))
                 query_error = index::query_symbols(
                     query_options,
-                    {fs::path(path).generic_string()},
+                    {fs::u8path(path).generic_u8string()},
                     snapshot_.symbols);
         } else if (query_error.ok() && name == "read_symbol") {
             std::size_t id = 0;
@@ -3917,12 +3960,12 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
                 return tool_error_result("policy_denied", resolved.message);
             external = true;
             const GuardApprovalDecision decision = request_permission(
-                "list_directory", "list_directory " + absolute.generic_string(),
-                {absolute.generic_string()}, true,
+                "list_directory", "list_directory " + absolute.generic_u8string(),
+                {absolute.generic_u8string()}, true,
                 resolved_path_is_under_system_temp(absolute), false, false,
                 "ask_on_external_directory_read",
                 "List this exact directory outside the active project?\nExact resolved path: " +
-                    absolute.generic_string(),
+                    absolute.generic_u8string(),
                 cancellation);
             if (decision != GuardApprovalDecision::Allow)
                 return tool_error_result(
@@ -3937,17 +3980,17 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
                 return tool_error_result(error_code_string(stable.code),
                                          stable.message);
         } else {
-            path = path == "." ? "" : fs::path(path).generic_string();
+            path = path == "." ? "" : fs::u8path(path).generic_u8string();
             if (!path.empty() && path.back() == '/') path.pop_back();
             absolute =
-                path.empty() ? fs::path(snapshot_.workspace)
-                             : fs::path(snapshot_.workspace) / path;
+                path.empty() ? fs::u8path(snapshot_.workspace)
+                             : fs::u8path(snapshot_.workspace) / fs::u8path(path);
         }
         std::error_code ec;
         if (!external && !path.empty()) {
             // Walk components and refuse symlinks / missing parents.
             fs::path current(snapshot_.workspace);
-            for (const fs::path& component : fs::path(path)) {
+            for (const fs::path& component : fs::u8path(path)) {
                 current /= component;
                 const fs::file_status status = fs::symlink_status(current, ec);
                 if (ec || status.type() == fs::file_type::not_found)
@@ -3975,7 +4018,7 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
                                     "could not list directory: " + (path.empty() ? std::string(".") : path) +
                                         ": " + ec.message());
         for (const fs::directory_entry& entry : it) {
-            const std::string name = entry.path().filename().string();
+            const std::string name = entry.path().filename().u8string();
             if (name.empty() || name == "." || name == "..") continue;
             if (is_protected_listing_name(name)) continue;
             // Skip hidden protected-style components only; other dotfiles remain visible.
@@ -3999,7 +4042,7 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
                                              empty_ec);
                 if (!empty_ec) {
                     for (const fs::directory_entry& nested : child) {
-                        const std::string nested_name = nested.path().filename().string();
+                        const std::string nested_name = nested.path().filename().u8string();
                         if (nested_name == "." || nested_name == "..") continue;
                         is_empty = false;
                         break;
@@ -4014,7 +4057,8 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
                 item.type = "other";
             }
             const std::string relative =
-                path.empty() ? name : (fs::path(path) / name).generic_string();
+                path.empty() ? name
+                             : (fs::u8path(path) / fs::u8path(name)).generic_u8string();
             item.indexed =
                 !external &&
                 (eligible_indexed_path(snapshot_, relative, false) ||
@@ -4118,7 +4162,7 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
     if (name == "get_skeleton") {
         std::string path;
         if (!get_string(args, "path", path, true, validation_error)) return tool_error_result("invalid_arguments", validation_error);
-        const auto file = files_.find(fs::path(path).generic_string());
+        const auto file = files_.find(fs::u8path(path).generic_u8string());
         if (file == files_.end() || file->second->status != "indexed") return tool_error_result("not_found", "file is not indexed: " + path);
         json::Value data = array_value();
         for (const index::IndexedSymbol& symbol : snapshot_.symbols) if (symbol.path == file->second->path) {
@@ -4171,12 +4215,12 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
             if (error.ok()) {
                 const GuardApprovalDecision decision =
                     request_permission(
-                        "read_file", "read_file " + absolute.generic_string(),
-                        {absolute.generic_string()}, true,
+                        "read_file", "read_file " + absolute.generic_u8string(),
+                        {absolute.generic_u8string()}, true,
                         resolved_path_is_under_system_temp(absolute), false, false,
                         "ask_on_external_file_read",
                         "Read this file outside the active project?\nExact resolved path: " +
-                            absolute.generic_string() +
+                            absolute.generic_u8string() +
                             "\nApproval applies only to this tool call and returned text remains "
                             "bounded and credential-redacted.",
                         cancellation);
@@ -4190,7 +4234,7 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
                     std::string message =
                         "refusing to read file outside the project directory without user "
                         "approval: " +
-                        absolute.generic_string();
+                        absolute.generic_u8string();
                     if (decision == GuardApprovalDecision::Cancelled)
                         message += " (approval cancelled)";
                     else if (!on_guard_ask_)
@@ -4250,7 +4294,7 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
             std::vector<std::string> exact_paths;
             exact_paths.reserve(external_paths.size());
             for (const auto& item : external_paths)
-                exact_paths.push_back(item.second.generic_string());
+                exact_paths.push_back(item.second.generic_u8string());
             const GuardApprovalDecision decision = request_permission(
                 "read_many",
                 "read_many " + std::to_string(external_paths.size()) +
@@ -4850,6 +4894,8 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
         for (const std::string& argument : process.arguments)
             arguments.array.push_back(string_value(redact_secrets(argument, secrets_)));
         data.object["arguments"] = std::move(arguments); data.object["cwd"] = string_value(process.cwd);
+        data.object["resolved_executable"] =
+            string_value(redact_secrets(process.resolved_executable, secrets_));
         data.object["exit_status"] = number_value(process.exit_status);
         data.object["signal"] = number_value(process.signal);
         data.object["duration_ms"] = number_value(process.duration_ms);
@@ -4971,7 +5017,7 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
                             "project; use replace_range or replace_text");
                 }
                 external = true;
-                path = external_path.generic_string();
+                path = external_path.generic_u8string();
             } else {
                 return tool_error_result("policy_denied", normalize_error.message);
             }
@@ -5004,7 +5050,7 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
                             ? "edit_file approval cancelled"
                             : "edit_file requires user approval"};
         json::Value data = object_value();
-        data.object["path"] = string_value(fs::path(path).generic_string());
+        data.object["path"] = string_value(fs::u8path(path).generic_u8string());
         data.object["applied"] = bool_value(error.ok());
         data.object["operations_applied"] = number_value(static_cast<double>(operations_applied));
         data.object["old_file_hash"] = string_value(old_hash);
@@ -5076,14 +5122,14 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
                 const GuardApprovalDecision decision =
                     request_permission(
                         "write_file",
-                        "write_file " + external_path.generic_string() + " (" +
+                        "write_file " + external_path.generic_u8string() + " (" +
                             std::to_string(content.size()) + " bytes)",
-                        {external_path.generic_string(), mode,
+                        {external_path.generic_u8string(), mode,
                          create_dirs ? "create_dirs=true" : "create_dirs=false"},
                         true, resolved_path_is_under_system_temp(external_path), true, false,
                         "ask_on_external_file_write",
                         "Write this file outside the active project?\nExact resolved path: " +
-                            external_path.generic_string() +
+                            external_path.generic_u8string() +
                             "\nApproval applies only to this tool call. The write has no project "
                             "history backup and will not update the project index." +
                             (create_dirs
@@ -5101,7 +5147,7 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
                     std::string message =
                         "refusing to write file outside the project directory without user "
                         "approval: " +
-                        external_path.generic_string();
+                        external_path.generic_u8string();
                     if (decision == GuardApprovalDecision::Cancelled)
                         message += " (approval cancelled)";
                     else if (!on_guard_ask_)
@@ -5117,8 +5163,8 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
         }
         json::Value data = object_value();
         data.object["path"] =
-            string_value(external ? external_path.generic_string()
-                                  : fs::path(path).generic_string());
+            string_value(external ? external_path.generic_u8string()
+                                  : fs::u8path(path).generic_u8string());
         data.object["bytes_written"] = number_value(static_cast<double>(content.size()));
         data.object["created"] = bool_value(created);
         data.object["old_file_hash"] = string_value(old_hash);
@@ -5164,14 +5210,14 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
         if (error.ok() && !external) {
             std::error_code ec;
             const fs::path root = fs::canonical(snapshot_.workspace, ec);
-            const std::string relative = target.lexically_relative(root).generic_string();
+            const std::string relative = target.lexically_relative(root).generic_u8string();
             error = validate_mutation_path(relative, true, false);
         }
         const GuardApprovalDecision decision =
             error.ok()
                 ? request_permission(
-                      "create_directory", "create_directory " + target.generic_string(),
-                      {target.generic_string(), parents ? "parents=true" : "parents=false"},
+                      "create_directory", "create_directory " + target.generic_u8string(),
+                      {target.generic_u8string(), parents ? "parents=true" : "parents=false"},
                       external, external && resolved_path_is_under_system_temp(target), true,
                       false, {}, {}, cancellation)
                 : GuardApprovalDecision::Deny;
@@ -5198,19 +5244,19 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
             if (fs::exists(target, ec))
                 error = {ErrorCode::FileWrite,
                          "create_directory destination already exists: " +
-                             target.generic_string()};
+                             target.generic_u8string()};
             else {
                 const bool created =
                     parents ? fs::create_directories(target, ec)
                             : fs::create_directory(target, ec);
                 if (ec || !created)
                     error = {ErrorCode::FileWrite,
-                             "could not create directory " + target.generic_string() +
+                             "could not create directory " + target.generic_u8string() +
                                  (ec ? ": " + ec.message() : std::string())};
             }
         }
         json::Value data = object_value();
-        data.object["path"] = string_value(target.generic_string());
+        data.object["path"] = string_value(target.generic_u8string());
         data.object["created"] = bool_value(error.ok());
         data.object["external"] = bool_value(external);
         return error.ok()
@@ -5245,9 +5291,9 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
             error.ok()
                 ? request_permission(
                       "rename_path",
-                      "rename_path " + source.generic_string() + " -> " +
-                          destination.generic_string(),
-                      {source.generic_string(), destination.generic_string()}, external,
+                      "rename_path " + source.generic_u8string() + " -> " +
+                          destination.generic_u8string(),
+                      {source.generic_u8string(), destination.generic_u8string()}, external,
                       under_temp, true, false, {}, {}, cancellation)
                 : GuardApprovalDecision::Deny;
         if (error.ok() && decision != GuardApprovalDecision::Allow)
@@ -5280,13 +5326,13 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
             if (fs::exists(destination, ec))
                 error = {ErrorCode::FileWrite,
                          "rename_path destination already exists: " +
-                             destination.generic_string()};
+                             destination.generic_u8string()};
             else {
                 fs::rename(source, destination, ec);
                 if (ec)
                     error = {ErrorCode::FileWrite,
-                             "could not rename " + source.generic_string() + " to " +
-                                 destination.generic_string() + ": " + ec.message() +
+                             "could not rename " + source.generic_u8string() + " to " +
+                                 destination.generic_u8string() + ": " + ec.message() +
                                  " (cross-filesystem renames are not copied)"};
             }
         }
@@ -5294,21 +5340,21 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
             std::error_code ec;
             const fs::path root = fs::canonical(snapshot_.workspace, ec);
             if (!source_external)
-                note_removed_path(source.lexically_relative(root).generic_string());
+                note_removed_path(source.lexically_relative(root).generic_u8string());
             if (!destination_external && fs::is_regular_file(destination, ec)) {
                 Error read_error;
                 const std::string content = read_all_bytes(destination, read_error);
                 if (read_error.ok())
                     note_written_file(
-                        destination.lexically_relative(root).generic_string(), content);
+                        destination.lexically_relative(root).generic_u8string(), content);
             } else if (!destination_external &&
                        fs::is_directory(destination, ec)) {
                 queue_index_paths({}, true);
             }
         }
         json::Value data = object_value();
-        data.object["source"] = string_value(source.generic_string());
-        data.object["destination"] = string_value(destination.generic_string());
+        data.object["source"] = string_value(source.generic_u8string());
+        data.object["destination"] = string_value(destination.generic_u8string());
         data.object["renamed"] = bool_value(error.ok());
         return error.ok()
                    ? envelope(true, std::move(data), "", "", {}, false)
@@ -5409,7 +5455,7 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
                 if (!error.ok() && matches_found == 0)
                     error = {ErrorCode::FileWrite,
                              "old_text not found in external file: " +
-                                 external_path.generic_string()};
+                                 external_path.generic_u8string()};
             }
             std::string updated;
             if (error.ok()) {
@@ -5423,8 +5469,8 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
             if (error.ok()) {
                 const GuardApprovalDecision decision = request_permission(
                     "str_replace",
-                    "str_replace " + external_path.generic_string(),
-                    {external_path.generic_string()}, true,
+                    "str_replace " + external_path.generic_u8string(),
+                    {external_path.generic_u8string()}, true,
                     resolved_path_is_under_system_temp(external_path), true, false,
                     "ask_on_external_file_write",
                     "Edit this validated UTF-8 file outside the active project? The edit has "
@@ -5461,8 +5507,8 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
         }
         json::Value data = object_value();
         data.object["path"] =
-            string_value(external ? external_path.generic_string()
-                                  : fs::path(path).generic_string());
+            string_value(external ? external_path.generic_u8string()
+                                  : fs::u8path(path).generic_u8string());
         data.object["matches_found"] = number_value(static_cast<double>(matches_found));
         data.object["replacements_made"] = number_value(static_cast<double>(replacements_made));
         data.object["match_mode"] = string_value(match_mode.empty() ? "exact" : match_mode);
@@ -5529,31 +5575,31 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
                 error = {ErrorCode::BadArgs,
                          "refusing to remove a filesystem, home, temp, workspace root, "
                          "or workspace ancestor: " +
-                             external_path.generic_string()};
+                             external_path.generic_u8string()};
             const fs::file_status status =
                 error.ok() ? fs::symlink_status(external_path, ec) : fs::file_status{};
             if (error.ok() && (ec || fs::is_symlink(status)))
                 error = {ErrorCode::FileWrite,
                          "refusing to remove symlink path: " +
-                             external_path.generic_string()};
+                             external_path.generic_u8string()};
             was_directory = error.ok() && fs::is_directory(status);
             if (error.ok() && was_directory && !recursive &&
                 !fs::is_empty(external_path, ec))
                 error = {ErrorCode::FileWrite,
                          "directory is not empty; pass recursive=true to remove it"};
-            bool tree_has_database = is_database_path(external_path.generic_string());
+            bool tree_has_database = is_database_path(external_path.generic_u8string());
             if (error.ok() && was_directory && recursive) {
                 for (fs::recursive_directory_iterator it(external_path, ec), end;
                      !ec && it != end; it.increment(ec)) {
                     if (fs::is_symlink(it->symlink_status(ec))) {
                         error = {ErrorCode::FileWrite,
                                  "refusing recursive removal of a tree containing symlink: " +
-                                     it->path().generic_string()};
+                                     it->path().generic_u8string()};
                         break;
                     }
                     tree_has_database =
                         tree_has_database ||
-                        is_database_path(it->path().generic_string());
+                        is_database_path(it->path().generic_u8string());
                 }
                 if (ec && error.ok())
                     error = {ErrorCode::FileWrite,
@@ -5564,8 +5610,8 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
                 const GuardApprovalDecision decision = request_permission(
                     "remove",
                     std::string(recursive ? "remove -r " : "remove ") +
-                        external_path.generic_string(),
-                    {external_path.generic_string(),
+                        external_path.generic_u8string(),
+                    {external_path.generic_u8string(),
                      recursive ? "recursive=true" : "recursive=false"},
                     true, resolved_path_is_under_system_temp(external_path), true,
                     destructive,
@@ -5614,15 +5660,15 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
                 if (ec)
                     error = {ErrorCode::FileWrite,
                              "could not remove external path " +
-                                 external_path.generic_string() + ": " + ec.message()};
+                                 external_path.generic_u8string() + ": " + ec.message()};
                 else
                     guard_decision = "allow";
             }
         }
         json::Value data = object_value();
         data.object["path"] =
-            string_value(external ? external_path.generic_string()
-                                  : fs::path(path).generic_string());
+            string_value(external ? external_path.generic_u8string()
+                                  : fs::u8path(path).generic_u8string());
         data.object["removed"] = bool_value(error.ok());
         data.object["was_directory"] = bool_value(was_directory);
         data.object["history_path"] = string_value(history_path);
@@ -5904,7 +5950,7 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
                 if (!safe_relative_path(item.string))
                     return tool_error_result("policy_denied",
                                             unsafe_path_message(item.string, "index"));
-                paths.push_back(fs::path(item.string).generic_string());
+                paths.push_back(fs::u8path(item.string).generic_u8string());
             }
         }
         index::Options opts = index_options_;
@@ -6005,7 +6051,8 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
             return tool_error_result("policy_denied", unsafe_path_message(path, "inspect"));
 
         std::string focus_name;
-        std::string focus_path = path.empty() ? std::string() : fs::path(path).generic_string();
+        std::string focus_path =
+            path.empty() ? std::string() : fs::u8path(path).generic_u8string();
         if (symbol_id != 0) {
             bool found = false;
             for (const index::IndexedSymbol& symbol : snapshot_.symbols) {
@@ -6022,7 +6069,7 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
 
         auto basename_stem = [](const std::string& file_path) {
             const fs::path p(file_path);
-            std::string stem = p.stem().string();
+            std::string stem = p.stem().u8string();
             // Strip common source suffixes like .test already handled by stem.
             return stem;
         };
@@ -6067,7 +6114,7 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
                 lower.find("_spec.") != std::string::npos ||
                 lower.find("/spec/") != std::string::npos ||
                 lower.rfind("test_", 0) == 0 ||
-                fs::path(file.path).filename().string().rfind("test_", 0) == 0;
+                fs::u8path(file.path).filename().u8string().rfind("test_", 0) == 0;
             if (!looks_test && focus_path.empty()) continue;
             if (looks_test) consider_file(file.path, 0.4);
             else if (!stem_lower.empty() && lower.find(stem_lower) != std::string::npos)
@@ -6308,7 +6355,7 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
         if (include_tests && !file_hits.empty()) {
             // Reuse find_tests heuristics for the top file.
             const std::string top = file_hits.front().path;
-            const std::string stem = lowercase(fs::path(top).stem().string());
+            const std::string stem = lowercase(fs::u8path(top).stem().u8string());
             for (const index::IndexedFile& file : snapshot_.files) {
                 if (file.status != "indexed") continue;
                 const std::string lower = lowercase(file.path);
@@ -6541,7 +6588,7 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
         if (safe_relative_path(path) && !path.empty()) {
             fs::path current(snapshot_.workspace);
             std::error_code ec;
-            for (const fs::path& component : fs::path(path)) {
+            for (const fs::path& component : fs::u8path(path)) {
                 current /= component;
                 const fs::file_status status = fs::symlink_status(current, ec);
                 if (ec || status.type() == fs::file_type::not_found)
@@ -6575,20 +6622,20 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
                 return tool_error_result(error_code_string(resolve_error.code),
                                          resolve_error.message);
             const GuardApprovalDecision decision = request_permission(
-                "attach_image", "attach_image " + absolute.generic_string(),
-                {absolute.generic_string()}, true,
+                "attach_image", "attach_image " + absolute.generic_u8string(),
+                {absolute.generic_u8string()}, true,
                 resolved_path_is_under_system_temp(absolute), false, false,
                 "ask_on_external_file_read",
                 "Attach this image outside the active project for vision?\nExact resolved "
                 "path: " +
-                    absolute.generic_string() +
+                    absolute.generic_u8string() +
                     "\nImage bytes are request-local for this turn only and are not stored "
                     "in the project.",
                 cancellation);
             if (decision != GuardApprovalDecision::Allow) {
                 std::string message =
                     "refusing to attach image outside the project without user approval: " +
-                    absolute.generic_string();
+                    absolute.generic_u8string();
                 if (decision == GuardApprovalDecision::Cancelled)
                     message += " (approval cancelled)";
                 else if (!on_guard_ask_)
@@ -6608,12 +6655,13 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
                                       : 20U * 1024U * 1024U;
         input::ImageData loaded;
         Error load_error =
-            input::load_image_file(absolute.generic_string(), type, limit, loaded, cancellation);
+            input::load_image_file(absolute.generic_u8string(), type, limit, loaded,
+                                   cancellation);
         if (!load_error.ok())
             return tool_error_result(error_code_string(load_error.code), load_error.message);
         provider::ImageInput image{loaded.mime_type, std::move(loaded.base64_data)};
         image.display_name = path;
-        image.source_ref = absolute.generic_string();
+        image.source_ref = absolute.generic_u8string();
         image.byte_size = static_cast<long long>(loaded.byte_size);
         const Error queue_error = vision_hooks_.queue_image(std::move(image));
         if (!queue_error.ok()) {
@@ -6625,7 +6673,7 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
         }
         json::Value data = object_value();
         data.object["path"] = string_value(path);
-        data.object["resolved_path"] = string_value(absolute.generic_string());
+        data.object["resolved_path"] = string_value(absolute.generic_u8string());
         data.object["mime_type"] = string_value(type.mime_type);
         data.object["bytes"] = number_value(static_cast<double>(loaded.byte_size));
         data.object["scope"] = string_value("request_local_turn");

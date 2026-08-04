@@ -23,12 +23,14 @@ Useful targets:
 | Target | What it runs |
 |--------|----------------|
 | `make test` | In-process units plus the small mock smoke |
-| `make test-full` | Units, fault injection, and comprehensive integration |
+| `make test-full` | Units, fault tests, and comprehensive integration; Windows also runs native SQLite/ConPTY parity paths |
 | `make test-unit` | In-process `test_runner` plus the fast preserved-config migration check |
 | `make test-unit-faults` | Fault tests only |
 | `make test-integration-smoke` | Small Chat/Responses/agent mock smoke |
 | `make test-integration` | Code-index, mock-server, and SQLite TUI end-to-end scripts |
-| `make test-integration-sqlite` | SQLite TUI persistence only |
+| `make test-integration-sqlite` | SQLite TUI persistence (POSIX PTY or native Windows ConPTY reopen) |
+| `make test-windows-conpty` | Native Windows ConPTY terminal/mode-cycle smoke |
+| `make package-windows` | Native portable ZIP plus SHA-256 checksum |
 | `make test-sanitize` | AddressSanitizer/UBSan build of the full `make test` path |
 | `make test-leak` | Valgrind on `test_runner`, `test_io_faults`, and `ainiux --version` |
 
@@ -36,9 +38,11 @@ Code-index unit coverage includes all definition scanners, static importance acr
 
 Agent-loop/runtime unit coverage includes native/XML prepared-call accounting, strict top-level Boolean `ok` result normalization, failed-call totals across invalid arguments, denials, cancellation, malformed results and early exits, zero-tool runs, stable one-shot metrics formatting, non-blocking supersession and cleanup of background metadata jobs, catalog-only automatic context fallback without `/models`, automatic credit timeout fallback, ordered Agent preparation phases, truthful Preparing/Unavailable chrome, and display-only retry notices. Agent compaction coverage includes strict strategy/config/slash parsing, the universal 75% threshold, chronological message/tool timelines, display-role and duplicate-row exclusion, protected head and bounded whole-item tail partitioning, repeated-summary carry-forward, smart escalation, summary budgets/reasoning selection, persistent lifecycle notices, the dedicated animated `Agent compacting` state, elapsed-time success and explicit no-op/failure formatting, hidden raw checkpoint replay, the `fast` no-model guarantee, active-API summary injection, and transactional preservation on summary failure. Terminal frame coverage verifies that identical chat/agent/editor frames emit no output, partial changes emit only affected rows without cursor visibility toggles, cursor-only updates preserve visibility, and resize invalidates the retained frame.
 
-Manual CI (`.github/workflows/ci.yml`) runs `make test-full` and
-`make test-leak` on Ubuntu with libcurl, libsqlite3, Python 3, and Valgrind
-installed.
+Manual CI (`.github/workflows/ci.yml`) retains the Ubuntu `make test-full` plus
+Valgrind gate. Its UCRT64 jobs build native Windows, run unit/process-tree and
+fault tests, smoke and comprehensive mock-provider/index integration, native SQLite
+integration, the ConPTY harness, a Clang ASan/UBSan unit pass, and portable ZIP
+packaging.
 
 ## Layout
 
@@ -52,6 +56,13 @@ installed.
 - `tests/integration/clipboard_driver.py` — focused fake-helper/OSC 52 PTY coverage for editor and shared chat/agent input clipboard behavior.
 - `tests/mock_server/` — Python HTTP mocks for OpenAI-compatible APIs and slow responses.
 - `tests/mock/` — POSIX `LD_PRELOAD` shim for disk-full simulation.
+- `tests/fixtures/subprocess_fixture.cpp` — native Unicode argv/cwd/environment,
+  stdin/stdout/stderr, nonzero/exception exit, output-cap, timeout, cancellation,
+  and descendant-tree fixture.
+- `tests/windows/conpty_harness.cpp` — native pseudo-console startup, VT mouse,
+  resize, PowerShell-job cancellation, chat→agent→editor→chat cycling,
+  quit, alternate-screen restoration, and isolated project/SQLite profile
+  creation and reopen.
 
 The comprehensive mock path intentionally retains end-to-end surface coverage,
 but detailed format/error matrices belong in unit tests whenever no process,
@@ -75,6 +86,12 @@ transport, filesystem, or PTY boundary is involved.
 - Canonical `on`/`off` config and settings, model-aware reasoning-off mapping, theme-off state, and chat/editor trace-shortcut separation
 - SQLite store round-trip, editor model-selection app state, listing, soft delete, corrupt DB, and missing-thread handling
 - Runtime cancellation and event delivery
+- Shared subprocess Unicode/LF normalization, malformed-output repair, bounded
+  capture, nonzero status, timeout/cancel, descendant termination, Windows
+  exception codes, and repeated Windows handle-count stability
+- Windows path syntax, identity containment for existing/new targets,
+  symlink/reparse detection, protected directory/file creation, Unicode long
+  paths, and atomic replacement
 - Security redaction helpers
 - Agent Act/Plan prompt selection, CLI/TUI switching, typed mutation policy with atomic planning-patch preflight, structured in-place Thinking/tool activity, Unicode-safe redacted preview clipping, project preview settings, persisted preview restore, and display-role exclusion from provider projections
 - Native Chat/Responses tool definition, call, streamed-fragment/index validation, multi-item text, continuation, and result serialization
@@ -102,6 +119,9 @@ transport, filesystem, or PTY boundary is involved.
 - Connect timeout to an unreachable TEST-NET address
 - Read-only file and directory permission failures (`chmod`)
 - Simulated `ENOSPC` on tagged paths via `posix_io_mock.so`
+- Native Windows sharing violations for chat/editor reads and atomic writes,
+  plus one-shot native disk-full/short-write injection with target and temporary
+  cleanup checks (the POSIX path retains its `LD_PRELOAD` ENOSPC shim)
 
 ## Mocks
 
@@ -144,5 +164,14 @@ PTY driver for startup selection policy. It verifies that bare chat opens withou
 
 - No automated tests against real OpenAI, LM Studio, or other production providers (mock-only CI).
 - Valgrind does not cover the ENOSPC `LD_PRELOAD` path or the full integration shell scripts.
-- Interactive TUI resize, long-running stress, and browser/web mode are not implemented yet and are not covered.
-- Sanitizer builds are local/optional; CI currently uses Valgrind for leak checking on the unit/fault binaries.
+- Long-running terminal stress and browser/web mode are not implemented and are
+  not covered. Resize and terminal restoration have Windows ConPTY smoke coverage,
+  but real Windows Terminal/conhost acceptance remains a release checklist item.
+- Native Windows clipboard save/restore integration is opt-in/manual so tests do
+  not overwrite a developer's clipboard. A mocked Win32 boundary unit-covers
+  busy retries/cancellation, UTF-16 and line-ending conversion, malformed data,
+  size limits, and global-memory ownership; native desktop ownership remains
+  part of acceptance.
+- Linux uses Valgrind for leak checking. Windows CI uses the UCRT64 Clang
+  ASan/UBSan unit path plus repeated process handle counts; it does not run
+  Valgrind or the POSIX preload shim.

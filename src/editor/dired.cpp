@@ -12,7 +12,13 @@
 #include <sstream>
 #include <system_error>
 
-#if !defined(_WIN32)
+#if defined(_WIN32)
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#include "platform/windows_utf.hpp"
+#else
 #include <grp.h>
 #include <pwd.h>
 #include <sys/stat.h>
@@ -30,14 +36,78 @@ bool has_glob_chars(const std::string& text) {
     return text.find('*') != std::string::npos || text.find('?') != std::string::npos;
 }
 
+#if defined(_WIN32)
+char ascii_lower_char(char value) {
+    return value >= 'A' && value <= 'Z' ? static_cast<char>(value + ('a' - 'A')) : value;
+}
+#endif
+
+int compare_names(const std::string& left, const std::string& right) {
+#if defined(_WIN32)
+    std::wstring wide_left;
+    std::wstring wide_right;
+    if (platform::utf8_to_utf16(left, wide_left).ok() &&
+        platform::utf8_to_utf16(right, wide_right).ok()) {
+        const int insensitive = CompareStringOrdinal(
+            wide_left.c_str(), static_cast<int>(wide_left.size()), wide_right.c_str(),
+            static_cast<int>(wide_right.size()), TRUE);
+        if (insensitive == CSTR_LESS_THAN) return -1;
+        if (insensitive == CSTR_GREATER_THAN) return 1;
+        const int stable = CompareStringOrdinal(
+            wide_left.c_str(), static_cast<int>(wide_left.size()), wide_right.c_str(),
+            static_cast<int>(wide_right.size()), FALSE);
+        if (stable == CSTR_LESS_THAN) return -1;
+        if (stable == CSTR_GREATER_THAN) return 1;
+        return 0;
+    }
+#endif
+    return left.compare(right);
+}
+
 // Minimal glob: * and ? only, no ** recursion.
 bool glob_match(const std::string& pattern, const std::string& name) {
+#if defined(_WIN32)
+    std::wstring wide_pattern;
+    std::wstring wide_name;
+    if (!platform::utf8_to_utf16(pattern, wide_pattern).ok() ||
+        !platform::utf8_to_utf16(name, wide_name).ok())
+        return false;
+    std::size_t pi = 0;
+    std::size_t ni = 0;
+    std::size_t star_pi = std::wstring::npos;
+    std::size_t star_ni = 0;
+    while (ni < wide_name.size()) {
+        const bool same =
+            pi < wide_pattern.size() &&
+            CompareStringOrdinal(&wide_pattern[pi], 1, &wide_name[ni], 1, TRUE) ==
+                CSTR_EQUAL;
+        if (pi < wide_pattern.size() && (wide_pattern[pi] == L'?' || same)) {
+            ++pi;
+            ++ni;
+            continue;
+        }
+        if (pi < wide_pattern.size() && wide_pattern[pi] == L'*') {
+            star_pi = pi++;
+            star_ni = ni;
+            continue;
+        }
+        if (star_pi != std::wstring::npos) {
+            pi = star_pi + 1;
+            ni = ++star_ni;
+            continue;
+        }
+        return false;
+    }
+    while (pi < wide_pattern.size() && wide_pattern[pi] == L'*') ++pi;
+    return pi == wide_pattern.size();
+#else
     size_t pi = 0;
     size_t ni = 0;
     size_t star_pi = std::string::npos;
     size_t star_ni = 0;
     while (ni < name.size()) {
-        if (pi < pattern.size() && (pattern[pi] == '?' || pattern[pi] == name[ni])) {
+        if (pi < pattern.size() &&
+            (pattern[pi] == '?' || pattern[pi] == name[ni])) {
             ++pi;
             ++ni;
             continue;
@@ -58,6 +128,7 @@ bool glob_match(const std::string& pattern, const std::string& name) {
         ++pi;
     }
     return pi == pattern.size();
+#endif
 }
 
 std::string format_mtime(std::int64_t sec) {
@@ -190,6 +261,24 @@ void fill_unix_identity(DiredEntry& entry, const fs::path& path) {
 #endif
 }
 
+void fill_platform_attributes(DiredEntry& entry, const fs::path& path) {
+#if defined(_WIN32)
+    const DWORD attributes = GetFileAttributesW(path.wstring().c_str());
+    if (attributes == INVALID_FILE_ATTRIBUTES) return;
+    entry.is_hidden = (attributes & FILE_ATTRIBUTE_HIDDEN) != 0;
+    entry.is_read_only = (attributes & FILE_ATTRIBUTE_READONLY) != 0;
+    entry.is_reparse_point = (attributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0;
+    entry.is_symlink = entry.is_reparse_point;
+    std::string extension = path.extension().u8string();
+    std::transform(extension.begin(), extension.end(), extension.begin(), ascii_lower_char);
+    entry.is_executable = extension == ".exe" || extension == ".com" ||
+                          extension == ".bat" || extension == ".cmd";
+#else
+    (void)entry;
+    (void)path;
+#endif
+}
+
 std::string pad_right(std::string text, size_t width) {
     if (text.size() < width) {
         text.append(width - text.size(), ' ');
@@ -208,7 +297,7 @@ void sort_entries(std::vector<DiredEntry>& entries, DiredSortKey key, bool ascen
         int cmp = 0;
         switch (key) {
             case DiredSortKey::Name:
-                cmp = a.name.compare(b.name);
+                cmp = compare_names(a.name, b.name);
                 break;
             case DiredSortKey::Size:
                 if (a.size < b.size) {
@@ -216,7 +305,7 @@ void sort_entries(std::vector<DiredEntry>& entries, DiredSortKey key, bool ascen
                 } else if (a.size > b.size) {
                     cmp = 1;
                 } else {
-                    cmp = a.name.compare(b.name);
+                    cmp = compare_names(a.name, b.name);
                 }
                 break;
             case DiredSortKey::Date:
@@ -225,7 +314,7 @@ void sort_entries(std::vector<DiredEntry>& entries, DiredSortKey key, bool ascen
                 } else if (a.mtime_sec > b.mtime_sec) {
                     cmp = 1;
                 } else {
-                    cmp = a.name.compare(b.name);
+                    cmp = compare_names(a.name, b.name);
                 }
                 break;
         }
@@ -249,7 +338,7 @@ Error copy_path_recursive(const fs::path& from, const fs::path& to, bool overwri
     const auto options = overwrite ? (fs::copy_options::overwrite_existing | fs::copy_options::recursive)
                                    : (fs::copy_options::skip_existing | fs::copy_options::recursive);
     if (fs::exists(to, ec) && !overwrite) {
-        return {ErrorCode::FileWrite, "destination exists (confirm overwrite): " + to.string()};
+        return {ErrorCode::FileWrite, "destination exists (confirm overwrite): " + to.u8string()};
     }
     fs::copy(from, to, options, ec);
     if (ec) {
@@ -274,7 +363,7 @@ Error remove_path(const fs::path& path, bool recursive_ok) {
         return ok_error();
     }
     if (!fs::remove(path, ec) || ec) {
-        return {ErrorCode::FileWrite, "could not remove: " + (ec ? ec.message() : path.string())};
+        return {ErrorCode::FileWrite, "could not remove: " + (ec ? ec.message() : path.u8string())};
     }
     return ok_error();
 }
@@ -282,7 +371,7 @@ Error remove_path(const fs::path& path, bool recursive_ok) {
 DiredEntry make_entry_from_path(const fs::path& path, const std::string& display_name, bool parent) {
     DiredEntry entry;
     entry.name = display_name;
-    entry.path = path.lexically_normal().string();
+    entry.path = path.lexically_normal().u8string();
     entry.is_parent = parent;
     std::error_code ec;
     entry.is_symlink = fs::is_symlink(path, ec);
@@ -296,30 +385,39 @@ DiredEntry make_entry_from_path(const fs::path& path, const std::string& display
     }
     entry.mtime_sec = file_mtime_sec(path);
     fill_unix_identity(entry, path);
+    fill_platform_attributes(entry, path);
     return entry;
 }
 
 Error fill_directory(DiredState& state) {
     state.entries.clear();
     std::error_code ec;
-    fs::path dir = fs::absolute(state.directory, ec);
+    fs::path dir = fs::absolute(fs::u8path(state.directory), ec);
     if (ec) {
         return {ErrorCode::FileRead, "could not resolve directory: " + ec.message()};
     }
     if (!fs::is_directory(dir, ec) || ec) {
-        return {ErrorCode::FileRead, "not a directory: " + dir.string()};
+        return {ErrorCode::FileRead, "not a directory: " + dir.u8string()};
     }
-    state.directory = dir.lexically_normal().string();
+    state.directory = dir.lexically_normal().u8string();
 
     const fs::path parent = dir.has_parent_path() && dir != dir.root_path() ? dir.parent_path() : dir;
     state.entries.push_back(make_entry_from_path(parent, "..", true));
 
-    fs::directory_iterator it(dir, fs::directory_options::skip_permission_denied, ec);
+#if defined(_WIN32)
+    constexpr fs::directory_options listing_options = fs::directory_options::none;
+#else
+    constexpr fs::directory_options listing_options =
+        fs::directory_options::skip_permission_denied;
+#endif
+    fs::directory_iterator it(dir, listing_options, ec);
     if (ec) {
         return {ErrorCode::FileRead, "could not list directory: " + ec.message()};
     }
-    for (const fs::directory_entry& dent : it) {
-        const std::string name = dent.path().filename().string();
+    const fs::directory_iterator end;
+    for (; !ec && it != end; it.increment(ec)) {
+        const fs::directory_entry& dent = *it;
+        const std::string name = dent.path().filename().u8string();
         if (name.empty() || name == "." || name == "..") {
             continue;
         }
@@ -329,7 +427,7 @@ Error fill_directory(DiredState& state) {
         const bool is_dir = is_directory_entry(dent);
         DiredEntry entry;
         entry.name = name;
-        entry.path = dent.path().lexically_normal().string();
+        entry.path = dent.path().lexically_normal().u8string();
         entry.is_directory = is_dir;
         entry.is_symlink = is_symlink_entry(dent);
         entry.size = entry_size(dent, is_dir);
@@ -338,8 +436,13 @@ Error fill_directory(DiredState& state) {
             entry.content_hash = dired_hash_file(entry.path, kDefaultHashCap);
         }
         fill_unix_identity(entry, dent.path());
+        fill_platform_attributes(entry, dent.path());
         state.entries.push_back(std::move(entry));
     }
+    if (ec)
+        return {ErrorCode::FileRead,
+                "could not continue listing directory " + dir.u8string() + ": " +
+                    ec.message()};
 
     sort_entries(state.entries, state.sort_key, state.sort_ascending);
     if (state.selected >= state.entries.size()) {
@@ -354,20 +457,28 @@ Error fill_glob(DiredState& state, const fs::path& base_dir, const std::string& 
     std::error_code ec;
     fs::path dir = fs::absolute(base_dir, ec);
     if (ec || !fs::is_directory(dir, ec)) {
-        return {ErrorCode::FileRead, "could not list glob directory: " + base_dir.string()};
+        return {ErrorCode::FileRead, "could not list glob directory: " + base_dir.u8string()};
     }
-    state.directory = dir.lexically_normal().string();
+    state.directory = dir.lexically_normal().u8string();
     state.glob_pattern = pattern;
 
     const fs::path parent = dir.has_parent_path() && dir != dir.root_path() ? dir.parent_path() : dir;
     state.entries.push_back(make_entry_from_path(parent, "..", true));
 
-    fs::directory_iterator it(dir, fs::directory_options::skip_permission_denied, ec);
+#if defined(_WIN32)
+    constexpr fs::directory_options listing_options = fs::directory_options::none;
+#else
+    constexpr fs::directory_options listing_options =
+        fs::directory_options::skip_permission_denied;
+#endif
+    fs::directory_iterator it(dir, listing_options, ec);
     if (ec) {
         return {ErrorCode::FileRead, "could not list directory: " + ec.message()};
     }
-    for (const fs::directory_entry& dent : it) {
-        const std::string name = dent.path().filename().string();
+    const fs::directory_iterator end;
+    for (; !ec && it != end; it.increment(ec)) {
+        const fs::directory_entry& dent = *it;
+        const std::string name = dent.path().filename().u8string();
         if (name.empty() || name == "." || name == "..") {
             continue;
         }
@@ -377,7 +488,7 @@ Error fill_glob(DiredState& state, const fs::path& base_dir, const std::string& 
         const bool is_dir = is_directory_entry(dent);
         DiredEntry entry;
         entry.name = name;
-        entry.path = dent.path().lexically_normal().string();
+        entry.path = dent.path().lexically_normal().u8string();
         entry.is_directory = is_dir;
         entry.is_symlink = is_symlink_entry(dent);
         entry.size = entry_size(dent, is_dir);
@@ -386,8 +497,13 @@ Error fill_glob(DiredState& state, const fs::path& base_dir, const std::string& 
             entry.content_hash = dired_hash_file(entry.path, kDefaultHashCap);
         }
         fill_unix_identity(entry, dent.path());
+        fill_platform_attributes(entry, dent.path());
         state.entries.push_back(std::move(entry));
     }
+    if (ec)
+        return {ErrorCode::FileRead,
+                "could not continue listing directory " + dir.u8string() + ": " +
+                    ec.message()};
     sort_entries(state.entries, state.sort_key, state.sort_ascending);
     state.selected = 0;
     dired_update_dirty_flags(state);
@@ -395,11 +511,11 @@ Error fill_glob(DiredState& state, const fs::path& base_dir, const std::string& 
 }
 
 fs::path resolve_under_directory(const DiredState& state, const std::string& name) {
-    fs::path input(name);
+    fs::path input = fs::u8path(name);
     if (input.is_absolute()) {
         return input.lexically_normal();
     }
-    return (fs::path(state.directory) / input).lexically_normal();
+    return (fs::u8path(state.directory) / input).lexically_normal();
 }
 
 }  // namespace
@@ -438,10 +554,12 @@ std::string dired_header_line(const DiredState& state) {
 }
 
 bool dired_entry_is_hidden(const DiredEntry& entry) {
-    return !entry.is_parent && !entry.name.empty() && entry.name[0] == '.';
+    return !entry.is_parent &&
+           (entry.is_hidden || (!entry.name.empty() && entry.name[0] == '.'));
 }
 
 bool dired_entry_is_executable(const DiredEntry& entry) {
+    if (entry.is_executable) return !entry.is_directory && !entry.is_parent;
     if (entry.is_directory || entry.is_parent || entry.mode.size() < 10) {
         return false;
     }
@@ -627,7 +745,7 @@ Error dired_open(DiredState& state, const std::string& path_or_glob) {
     }
 
     std::error_code ec;
-    fs::path path(input);
+    fs::path path = fs::u8path(input);
     if (!path.is_absolute()) {
         path = fs::absolute(path, ec);
         if (ec) {
@@ -636,15 +754,15 @@ Error dired_open(DiredState& state, const std::string& path_or_glob) {
         }
     }
 
-    if (has_glob_chars(path.filename().string()) && !fs::exists(path, ec)) {
+    if (has_glob_chars(path.filename().u8string()) && !fs::exists(path, ec)) {
         const fs::path parent = path.has_parent_path() ? path.parent_path() : fs::current_path();
-        Error err = fill_glob(state, parent, path.filename().string());
+        Error err = fill_glob(state, parent, path.filename().u8string());
         if (!err.ok()) {
             state.active = false;
             return err;
         }
     } else if (fs::is_directory(path, ec)) {
-        state.directory = path.lexically_normal().string();
+        state.directory = path.lexically_normal().u8string();
         state.glob_pattern.clear();
         Error err = fill_directory(state);
         if (!err.ok()) {
@@ -652,7 +770,7 @@ Error dired_open(DiredState& state, const std::string& path_or_glob) {
             return err;
         }
     } else if (fs::is_regular_file(path, ec)) {
-        state.directory = path.parent_path().lexically_normal().string();
+        state.directory = path.parent_path().lexically_normal().u8string();
         state.glob_pattern.clear();
         Error err = fill_directory(state);
         if (!err.ok()) {
@@ -660,7 +778,7 @@ Error dired_open(DiredState& state, const std::string& path_or_glob) {
             return err;
         }
         for (size_t i = 0; i < state.entries.size(); ++i) {
-            if (state.entries[i].path == path.lexically_normal().string()) {
+            if (state.entries[i].path == path.lexically_normal().u8string()) {
                 state.selected = i;
                 break;
             }
@@ -668,9 +786,9 @@ Error dired_open(DiredState& state, const std::string& path_or_glob) {
     } else {
         // Treat as directory path that may not exist yet → error, or parent+glob.
         if (has_glob_chars(input)) {
-            fs::path as_path(input);
+            fs::path as_path = fs::u8path(input);
             fs::path parent = as_path.has_parent_path() ? as_path.parent_path() : fs::path(".");
-            Error err = fill_glob(state, parent, as_path.filename().string());
+            Error err = fill_glob(state, parent, as_path.filename().u8string());
             if (!err.ok()) {
                 state.active = false;
                 return err;
@@ -841,7 +959,7 @@ Error dired_activate_selection(DiredState& state, const EditorSettings& settings
     }
     if (entry->is_directory || entry->is_parent) {
         const std::string came_from =
-            entry->is_parent ? fs::path(state.directory).filename().string() : std::string();
+            entry->is_parent ? fs::u8path(state.directory).filename().u8string() : std::string();
         state.directory = entry->path;
         state.glob_pattern.clear();
         state.focus = DiredFocus::List;
@@ -890,7 +1008,7 @@ Error dired_go_parent(DiredState& state) {
         return {ErrorCode::BadArgs, "leave the file view first (Enter)"};
     }
     std::error_code ec;
-    fs::path dir = fs::absolute(state.directory, ec);
+    fs::path dir = fs::absolute(fs::u8path(state.directory), ec);
     if (ec) {
         return {ErrorCode::FileRead, "could not resolve directory: " + ec.message()};
     }
@@ -898,8 +1016,8 @@ Error dired_go_parent(DiredState& state) {
     if (!dir.has_parent_path() || dir == dir.root_path()) {
         return {ErrorCode::FileRead, "already at filesystem root"};
     }
-    const std::string came_from = dir.filename().string();
-    state.directory = dir.parent_path().lexically_normal().string();
+    const std::string came_from = dir.filename().u8string();
+    state.directory = dir.parent_path().lexically_normal().u8string();
     state.glob_pattern.clear();
     Error err = fill_directory(state);
     if (!err.ok()) {
@@ -943,7 +1061,7 @@ Error dired_rename_selected(DiredState& state, const std::string& new_path, bool
     if (entry == nullptr || entry->is_parent) {
         return {ErrorCode::BadArgs, "nothing to rename"};
     }
-    const fs::path from(entry->path);
+    const fs::path from = fs::u8path(entry->path);
     const fs::path to = resolve_under_directory(state, trim_ascii_copy(new_path));
     if (to.empty()) {
         return {ErrorCode::BadArgs, "empty destination path"};
@@ -951,7 +1069,7 @@ Error dired_rename_selected(DiredState& state, const std::string& new_path, bool
     std::error_code ec;
     if (fs::exists(to, ec)) {
         if (!overwrite) {
-            return {ErrorCode::FileWrite, "destination exists (confirm overwrite): " + to.string()};
+            return {ErrorCode::FileWrite, "destination exists (confirm overwrite): " + to.u8string()};
         }
         Error remove_err = remove_path(to, true);
         if (!remove_err.ok()) {
@@ -966,11 +1084,11 @@ Error dired_rename_selected(DiredState& state, const std::string& new_path, bool
     if (ec) {
         return {ErrorCode::FileWrite, "rename failed: " + ec.message()};
     }
-    auto hash_it = state.reviewed_hashes.find(from.string());
+    auto hash_it = state.reviewed_hashes.find(from.u8string());
     if (hash_it != state.reviewed_hashes.end()) {
         const std::string hash = hash_it->second;
         state.reviewed_hashes.erase(hash_it);
-        state.reviewed_hashes[to.lexically_normal().string()] = hash;
+        state.reviewed_hashes[to.lexically_normal().u8string()] = hash;
     }
     return dired_refresh(state);
 }
@@ -980,7 +1098,7 @@ Error dired_copy_selected(DiredState& state, const std::string& dest_path, bool 
     if (entry == nullptr || entry->is_parent) {
         return {ErrorCode::BadArgs, "nothing to copy"};
     }
-    const fs::path from(entry->path);
+    const fs::path from = fs::u8path(entry->path);
     const fs::path to = resolve_under_directory(state, trim_ascii_copy(dest_path));
     Error parent_err = ensure_parent_dirs(to);
     if (!parent_err.ok()) {
@@ -998,7 +1116,7 @@ Error dired_delete_selected(DiredState& state, bool recursive_confirmed) {
     if (entry == nullptr || entry->is_parent) {
         return {ErrorCode::BadArgs, "nothing to delete"};
     }
-    const fs::path path(entry->path);
+    const fs::path path = fs::u8path(entry->path);
     std::error_code ec;
     if (entry->is_directory && !fs::is_empty(path, ec) && !ec && !recursive_confirmed) {
         return {ErrorCode::FileWrite, "directory is not empty; confirm recursive delete"};
@@ -1034,7 +1152,7 @@ Error dired_create_file(DiredState& state, const std::string& name, std::string&
     const fs::path path = resolve_under_directory(state, trimmed);
     std::error_code ec;
     if (fs::exists(path, ec)) {
-        return {ErrorCode::FileWrite, "already exists: " + path.string()};
+        return {ErrorCode::FileWrite, "already exists: " + path.u8string()};
     }
     Error parent_err = ensure_parent_dirs(path);
     if (!parent_err.ok()) {
@@ -1042,9 +1160,9 @@ Error dired_create_file(DiredState& state, const std::string& name, std::string&
     }
     std::ofstream out(path, std::ios::binary | std::ios::trunc);
     if (!out) {
-        return {ErrorCode::FileWrite, "could not create file: " + path.string()};
+        return {ErrorCode::FileWrite, "could not create file: " + path.u8string()};
     }
-    created_path = path.lexically_normal().string();
+    created_path = path.lexically_normal().u8string();
     Error refresh = dired_refresh(state);
     if (!refresh.ok()) {
         return refresh;
@@ -1070,13 +1188,13 @@ Error dired_create_directory(DiredState& state, const std::string& name) {
     }
     // create_directories returns false if already exists without error.
     if (fs::exists(path, ec) && !fs::is_directory(path, ec)) {
-        return {ErrorCode::FileWrite, "path exists and is not a directory: " + path.string()};
+        return {ErrorCode::FileWrite, "path exists and is not a directory: " + path.u8string()};
     }
     Error refresh = dired_refresh(state);
     if (!refresh.ok()) {
         return refresh;
     }
-    const std::string want = path.lexically_normal().string();
+    const std::string want = path.lexically_normal().u8string();
     for (size_t i = 0; i < state.entries.size(); ++i) {
         if (state.entries[i].path == want) {
             state.selected = i;
@@ -1099,7 +1217,7 @@ std::string dired_hash_bytes(const std::string& bytes) {
 }
 
 std::string dired_hash_file(const std::string& path, std::uint64_t max_bytes) {
-    std::ifstream in(path, std::ios::binary);
+    std::ifstream in(fs::u8path(path), std::ios::binary);
     if (!in) {
         return {};
     }

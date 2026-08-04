@@ -205,8 +205,8 @@ EditorLockAttempt acquire_canonical(const std::string& canonical_path, bool allo
             (void)rmdir(directory.c_str());
             return result;
         }
-        result.lock = std::shared_ptr<EditorFileLock>(
-            new EditorFileLock(canonical_path, directory, std::move(owner)));
+        result.lock = std::make_shared<EditorFileLock>(
+            canonical_path, directory, std::move(owner));
         return result;
     }
 

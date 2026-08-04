@@ -11,12 +11,20 @@
 #include <string>
 #include <system_error>
 
+#if defined(_WIN32)
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#endif
+
 namespace ainiux::test::io {
 
 namespace {
 
 using ainiux::test::check;
 
+#if !defined(_WIN32)
 void chmod_path(const std::string& path, std::filesystem::perms perms) {
     std::error_code error;
     std::filesystem::permissions(path, perms, error);
@@ -36,6 +44,7 @@ private:
     std::string path_;
     std::filesystem::perms perms_;
 };
+#endif
 
 ainiux::chat::Session make_session() {
     ainiux::provider::RequestContext context;
@@ -49,6 +58,7 @@ ainiux::chat::Session make_session() {
     return session;
 }
 
+#if !defined(_WIN32)
 void test_readonly_chat_load_and_save() {
     const std::string dir = "build/mock-readonly-chat";
     const std::string path = dir + "/chat.json";
@@ -108,6 +118,63 @@ void test_readonly_editor_load_and_save() {
     check(!err.ok() && err.code == ainiux::ErrorCode::FileWrite,
           "read-only directory blocks editor save of a new file");
 }
+#endif
+
+#if defined(_WIN32)
+class WindowsHandle {
+   public:
+    explicit WindowsHandle(HANDLE value = INVALID_HANDLE_VALUE) : value_(value) {}
+    ~WindowsHandle() {
+        if (value_ != INVALID_HANDLE_VALUE && value_ != nullptr) CloseHandle(value_);
+    }
+    bool valid() const { return value_ != INVALID_HANDLE_VALUE && value_ != nullptr; }
+   private:
+    HANDLE value_ = INVALID_HANDLE_VALUE;
+};
+
+void test_windows_sharing_violations() {
+    const std::string directory = "build/mock-windows-sharing";
+    const std::string chat_path = directory + "/chat.json";
+    const std::string editor_path = directory + "/notes.txt";
+    std::filesystem::create_directories(directory);
+    ainiux::chat::Session session = make_session();
+    check(ainiux::chat::save_session_atomic(chat_path, session).ok(),
+          "Windows sharing fixture chat saves");
+    {
+        WindowsHandle locked(CreateFileW(std::filesystem::path(chat_path).wstring().c_str(),
+                                         GENERIC_READ | GENERIC_WRITE, 0, nullptr,
+                                         OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr));
+        check(locked.valid(), "Windows chat fixture obtains an exclusive handle");
+        ainiux::chat::Session loaded;
+        Error error = ainiux::chat::load_session(chat_path, loaded);
+        check(error.code == ErrorCode::FileRead,
+              "Windows sharing violation reports a chat file-read error");
+        error = ainiux::chat::save_session_atomic(chat_path, session);
+        check(error.code == ErrorCode::FileWrite,
+              "Windows sharing violation reports an atomic chat file-write error");
+    }
+    {
+        std::ofstream file(editor_path, std::ios::binary);
+        file << "locked editor\n";
+    }
+    {
+        WindowsHandle locked(CreateFileW(std::filesystem::path(editor_path).wstring().c_str(),
+                                         GENERIC_READ | GENERIC_WRITE, 0, nullptr,
+                                         OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr));
+        check(locked.valid(), "Windows editor fixture obtains an exclusive handle");
+        ainiux::editor::PieceTable table;
+        Error error = ainiux::editor::load_file(editor_path, table);
+        check(error.code == ErrorCode::FileRead,
+              "Windows sharing violation reports an editor file-read error");
+        table = ainiux::editor::PieceTable::from_string("replacement");
+        error = ainiux::editor::save_file(editor_path, table);
+        check(error.code == ErrorCode::FileWrite,
+              "Windows sharing violation reports an atomic editor file-write error");
+    }
+    std::error_code ignored;
+    std::filesystem::remove_all(directory, ignored);
+}
+#endif
 
 void test_enospc_chat_save() {
     const char* mock_flag = std::getenv("AINIUX_MOCK_ENOSPC");
@@ -148,8 +215,12 @@ void test_enospc_editor_save() {
 }  // namespace
 
 void run_readonly_all() {
+#if defined(_WIN32)
+    test_windows_sharing_violations();
+#else
     test_readonly_chat_load_and_save();
     test_readonly_editor_load_and_save();
+#endif
 }
 
 void run_enospc_all() {

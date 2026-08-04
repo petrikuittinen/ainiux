@@ -3,6 +3,7 @@
 #include "html/html.hpp"
 #include "http/http.hpp"
 #include "json/json.hpp"
+#include "platform/environment.hpp"
 #include "security/redact.hpp"
 
 #include <cstdlib>
@@ -19,8 +20,7 @@ constexpr const char* kUserAgent =
 constexpr std::size_t kMaxResultUrlBytes = 512;
 
 std::string getenv_string(const char* name) {
-    const char* value = std::getenv(name);
-    return value == nullptr ? std::string() : std::string(value);
+    return platform::environment_value(name);
 }
 
 std::string resolve_key_env(const std::string& configured_env, const char* fallback_env) {

@@ -5,6 +5,7 @@
 #include "cli/option_values.hpp"
 #include "context/policy.hpp"
 #include "config/model_catalog.hpp"
+#include "platform/environment.hpp"
 #include "editor/autosave.hpp"
 #include "editor/editor_prompts.hpp"
 #include "embedded_editor_commands.hpp"
@@ -798,12 +799,37 @@ Error context_window_tokens(const Entry& entry, long long& output) {
 }
 
 bool absolute_path(const std::string& path) {
-    return !path.empty() && std::filesystem::path(path).is_absolute();
+    return !path.empty() && std::filesystem::u8path(path).is_absolute();
 }
 
 std::string environment_value(const char* name) {
-    const char* value = std::getenv(name);
-    return value == nullptr ? std::string() : std::string(value);
+    return platform::environment_value(name);
+}
+
+// Installed share lookup for make install PREFIX and scripts/install.sh --user.
+// Order: $XDG_DATA_HOME/ainiux, else ~/.local/share/ainiux, then /usr/local and /usr.
+void append_installed_share_paths(std::vector<std::string>& paths, const char* filename) {
+    const std::string xdg_data = environment_value("XDG_DATA_HOME");
+    if (absolute_path(xdg_data)) {
+        paths.emplace_back((std::filesystem::u8path(xdg_data) / "ainiux" / filename).u8string());
+    } else {
+        const std::string home = platform::home_directory();
+        if (absolute_path(home)) {
+            paths.emplace_back(
+                (std::filesystem::u8path(home) / ".local" / "share" / "ainiux" / filename)
+                    .u8string());
+        }
+    }
+    paths.emplace_back(std::string("/usr/local/share/ainiux/") + filename);
+    paths.emplace_back(std::string("/usr/share/ainiux/") + filename);
+}
+
+void append_executable_share_path(std::vector<std::string>& paths, const char* filename) {
+    const std::string executable_dir = platform::executable_directory();
+    if (!executable_dir.empty()) {
+        paths.emplace_back((std::filesystem::u8path(executable_dir) / "share" / "ainiux" /
+                            filename).u8string());
+    }
 }
 
 std::string trim_config_ascii(std::string text) {
@@ -1813,14 +1839,17 @@ ParseResult parse(const std::string& input, const std::string& source_path) {
 
 ParseResult read_file(const std::string& path, size_t max_bytes) {
     std::error_code filesystem_error;
-    const std::filesystem::file_status status = std::filesystem::status(path, filesystem_error);
+    const std::filesystem::path native_path = std::filesystem::u8path(path);
+    const std::filesystem::file_status status =
+        std::filesystem::status(native_path, filesystem_error);
     if (filesystem_error || !std::filesystem::exists(status)) {
         return {{}, {ErrorCode::Config, "could not inspect config file: " + path}};
     }
     if (!std::filesystem::is_regular_file(status)) {
         return {{}, {ErrorCode::Config, "config path is not a regular file: " + path}};
     }
-    const std::uintmax_t file_size = std::filesystem::file_size(path, filesystem_error);
+    const std::uintmax_t file_size =
+        std::filesystem::file_size(native_path, filesystem_error);
     if (filesystem_error) {
         return {{}, {ErrorCode::Config, "could not determine config file size: " + path}};
     }
@@ -1829,7 +1858,7 @@ ParseResult read_file(const std::string& path, size_t max_bytes) {
                      "config file exceeds " + std::to_string(max_bytes) + " byte limit: " + path}};
     }
 
-    std::ifstream file(path, std::ios::binary);
+    std::ifstream file(native_path, std::ios::binary);
     if (!file) {
         return {{}, {ErrorCode::Config, "could not open config file for reading: " + path}};
     }
@@ -2293,118 +2322,123 @@ Error apply_document(const Document& document, cli::Options& options) {
 }
 
 Environment process_environment() {
-    return {environment_value("XDG_CONFIG_HOME"), environment_value("HOME")};
+    return {platform::environment_value("XDG_CONFIG_HOME"), platform::home_directory()};
 }
 
 std::string user_config_path(const Environment& environment) {
     if (absolute_path(environment.xdg_config_home)) {
-        return (std::filesystem::path(environment.xdg_config_home) / "ainiux" / "config.conf").string();
+        return (std::filesystem::u8path(environment.xdg_config_home) / "ainiux" /
+                "config.conf")
+            .u8string();
     }
     if (!absolute_path(environment.home)) {
         return {};
     }
-    return (std::filesystem::path(environment.home) / ".config" / "ainiux" / "config.conf").string();
+    return (std::filesystem::u8path(environment.home) / ".config" / "ainiux" /
+            "config.conf")
+        .u8string();
 }
 
 std::vector<std::string> bundled_config_paths() {
     std::vector<std::string> paths;
+    // Development tree first so an in-repo binary picks up local templates.
     paths.emplace_back("config/ainiux.conf");
-    paths.emplace_back("/usr/local/share/ainiux/config.conf");
-    paths.emplace_back("/usr/share/ainiux/config.conf");
+    append_executable_share_path(paths, "config.conf");
+    append_installed_share_paths(paths, "config.conf");
     return paths;
 }
 
 std::string user_editor_commands_path(const Environment& environment) {
     if (absolute_path(environment.xdg_config_home)) {
-        return (std::filesystem::path(environment.xdg_config_home) / "ainiux" / "editor-commands.conf")
-            .string();
+        return (std::filesystem::u8path(environment.xdg_config_home) / "ainiux" /
+                "editor-commands.conf")
+            .u8string();
     }
     if (!absolute_path(environment.home)) {
         return {};
     }
-    return (std::filesystem::path(environment.home) / ".config" / "ainiux" / "editor-commands.conf")
-        .string();
+    return (std::filesystem::u8path(environment.home) / ".config" / "ainiux" /
+            "editor-commands.conf")
+        .u8string();
 }
 
 std::vector<std::string> bundled_editor_commands_paths() {
     std::vector<std::string> paths;
-    if (const char* override_path = std::getenv("AINIUX_EDITOR_COMMANDS")) {
-        if (override_path[0] != '\0') {
-            paths.emplace_back(override_path);
-        }
-    }
+    const std::string override_path = environment_value("AINIUX_EDITOR_COMMANDS");
+    if (!override_path.empty()) paths.push_back(override_path);
     paths.emplace_back("config/editor-commands.conf");
-    paths.emplace_back("/usr/local/share/ainiux/editor-commands.conf");
-    paths.emplace_back("/usr/share/ainiux/editor-commands.conf");
+    append_executable_share_path(paths, "editor-commands.conf");
+    append_installed_share_paths(paths, "editor-commands.conf");
     return paths;
 }
 
 std::string user_themes_path(const Environment& environment) {
     if (absolute_path(environment.xdg_config_home)) {
-        return (std::filesystem::path(environment.xdg_config_home) / "ainiux" / "themes.conf").string();
+        return (std::filesystem::u8path(environment.xdg_config_home) / "ainiux" /
+                "themes.conf")
+            .u8string();
     }
     if (!absolute_path(environment.home)) {
         return {};
     }
-    return (std::filesystem::path(environment.home) / ".config" / "ainiux" / "themes.conf").string();
+    return (std::filesystem::u8path(environment.home) / ".config" / "ainiux" /
+            "themes.conf")
+        .u8string();
 }
 
 std::vector<std::string> bundled_themes_paths() {
     std::vector<std::string> paths;
-    if (const char* override_path = std::getenv("AINIUX_THEMES")) {
-        if (override_path[0] != '\0') {
-            paths.emplace_back(override_path);
-        }
-    }
+    const std::string override_path = environment_value("AINIUX_THEMES");
+    if (!override_path.empty()) paths.push_back(override_path);
     paths.emplace_back("config/themes.conf");
-    paths.emplace_back("/usr/local/share/ainiux/themes.conf");
-    paths.emplace_back("/usr/share/ainiux/themes.conf");
+    append_executable_share_path(paths, "themes.conf");
+    append_installed_share_paths(paths, "themes.conf");
     return paths;
 }
 
 std::string user_benchmarks_path(const Environment& environment) {
     if (absolute_path(environment.xdg_config_home)) {
-        return (std::filesystem::path(environment.xdg_config_home) / "ainiux" /
+        return (std::filesystem::u8path(environment.xdg_config_home) / "ainiux" /
                 "benchmarks.conf")
-            .string();
+            .u8string();
     }
     if (!absolute_path(environment.home)) {
         return {};
     }
-    return (std::filesystem::path(environment.home) / ".config" / "ainiux" /
+    return (std::filesystem::u8path(environment.home) / ".config" / "ainiux" /
             "benchmarks.conf")
-        .string();
+        .u8string();
 }
 
 std::vector<std::string> bundled_benchmarks_paths() {
     std::vector<std::string> paths;
-    if (const char* override_path = std::getenv("AINIUX_BENCHMARKS")) {
-        if (override_path[0] != '\0') {
-            paths.emplace_back(override_path);
-        }
-    }
+    const std::string override_path = environment_value("AINIUX_BENCHMARKS");
+    if (!override_path.empty()) paths.push_back(override_path);
     paths.emplace_back("config/benchmarks.conf");
-    paths.emplace_back("/usr/local/share/ainiux/benchmarks.conf");
-    paths.emplace_back("/usr/share/ainiux/benchmarks.conf");
+    append_executable_share_path(paths, "benchmarks.conf");
+    append_installed_share_paths(paths, "benchmarks.conf");
     return paths;
 }
 
 std::string user_models_path(const Environment& environment) {
     if (absolute_path(environment.xdg_config_home)) {
-        return (std::filesystem::path(environment.xdg_config_home) / "ainiux" / "models.conf").string();
+        return (std::filesystem::u8path(environment.xdg_config_home) / "ainiux" /
+                "models.conf")
+            .u8string();
     }
     if (!absolute_path(environment.home)) return {};
-    return (std::filesystem::path(environment.home) / ".config" / "ainiux" / "models.conf").string();
+    return (std::filesystem::u8path(environment.home) / ".config" / "ainiux" /
+            "models.conf")
+        .u8string();
 }
 
 std::vector<std::string> bundled_models_paths() {
     std::vector<std::string> paths;
-    if (const char* override_path = std::getenv("AINIUX_MODELS")) {
-        if (override_path[0] != '\0') paths.emplace_back(override_path);
-    }
+    const std::string override_path = environment_value("AINIUX_MODELS");
+    if (!override_path.empty()) paths.push_back(override_path);
     paths.emplace_back("config/models.conf");
-    paths.emplace_back("/usr/local/share/ainiux/models.conf");
-    paths.emplace_back("/usr/share/ainiux/models.conf");
+    append_executable_share_path(paths, "models.conf");
+    append_installed_share_paths(paths, "models.conf");
     return paths;
 }
 
@@ -2415,7 +2449,7 @@ LoadResult load_automatic(const cli::Options& base_options,
     result.options.editor_assist_config = ainiux::editor::empty_editor_assist_config();
     result.options.tui_themes = tui::default_theme_registry();
 
-    auto load_models_path = [&](const std::string& path, ConfigScope scope) -> Error {
+    auto load_models_path = [&](const std::string& path, ConfigScope scope, bool& loaded) -> Error {
         std::error_code filesystem_error;
         const bool exists = std::filesystem::exists(path, filesystem_error);
         if (filesystem_error) {
@@ -2436,6 +2470,7 @@ LoadResult load_automatic(const cli::Options& base_options,
             result.diagnostics.push_back({scope, ConfigFileKind::Models, ConfigFileState::Error, path});
             return err;
         }
+        loaded = true;
         result.loaded_paths.push_back(path);
         result.diagnostics.push_back({scope, ConfigFileKind::Models, ConfigFileState::Loaded, path});
         return ok_error();
@@ -2443,12 +2478,9 @@ LoadResult load_automatic(const cli::Options& base_options,
 
     bool bundled_models_loaded = false;
     for (const std::string& path : bundled_models_paths()) {
-        std::error_code filesystem_error;
-        if (!std::filesystem::exists(path, filesystem_error) || filesystem_error) continue;
-        Error err = load_models_path(path, ConfigScope::Bundled);
+        Error err = load_models_path(path, ConfigScope::Bundled, bundled_models_loaded);
         if (!err.ok()) { result.error = std::move(err); return result; }
-        bundled_models_loaded = true;
-        break;
+        if (bundled_models_loaded) break;
     }
     if (!bundled_models_loaded) {
         ParseResult parsed = parse(kEmbeddedModelsConfig, "embedded models.conf");
@@ -2480,8 +2512,10 @@ LoadResult load_automatic(const cli::Options& base_options,
         result.diagnostics.push_back(
             {ConfigScope::User, ConfigFileKind::Models, ConfigFileState::Skipped, user_models});
     } else {
-        Error err = load_models_path(user_models, ConfigScope::User);
+        bool user_models_loaded = false;
+        Error err = load_models_path(user_models, ConfigScope::User, user_models_loaded);
         if (!err.ok()) { result.error = std::move(err); return result; }
+        (void)user_models_loaded;
     }
 
     auto load_benchmarks_path = [&](const std::string& path,
@@ -2724,7 +2758,8 @@ LoadResult load_automatic(const cli::Options& base_options,
     if (!bundled_config_loaded) {
         result.diagnostics.push_back(
             {ConfigScope::Bundled, ConfigFileKind::Config, ConfigFileState::Unavailable,
-             "config/ainiux.conf, /usr/local/share/ainiux/config.conf, /usr/share/ainiux/config.conf"});
+             "config/ainiux.conf, ~/.local/share/ainiux/config.conf, "
+             "/usr/local/share/ainiux/config.conf, /usr/share/ainiux/config.conf"});
     }
 
     const std::string user_path = user_config_path(environment);

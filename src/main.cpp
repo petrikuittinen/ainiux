@@ -18,6 +18,10 @@
 #include "ainiux/version.hpp"
 #include "provider/provider.hpp"
 #include "provider/model_selection.hpp"
+#include "platform/environment.hpp"
+#if defined(_WIN32)
+#include "platform/windows_utf.hpp"
+#endif
 #include "search/search.hpp"
 #include "tui/tui.hpp"
 
@@ -70,7 +74,7 @@ ainiux::app::InteractiveSession interactive_session_from_editor_startup(
 
 }  // namespace
 
-int main(int argc, char** argv) {
+int ainiux_main(int argc, char** argv) {
     ainiux::cli::ParseResult parsed = ainiux::cli::parse_args(argc, argv);
     if (!parsed.error.ok()) {
         ainiux::app::print_error(parsed.error);
@@ -702,3 +706,31 @@ int main(int argc, char** argv) {
     ainiux::app::print_verbose_metrics(context, chat, session.messages);
     return 0;
 }
+
+#if defined(_WIN32)
+int wmain(int argc, wchar_t** wide_argv) {
+    ainiux::platform::ProcessEnvironmentGuard environment_guard;
+    std::vector<std::string> arguments;
+    arguments.reserve(static_cast<std::size_t>(argc));
+    for (int index = 0; index < argc; ++index) {
+        std::string utf8;
+        const ainiux::Error error =
+            ainiux::platform::utf16_to_utf8(wide_argv[index], utf8);
+        if (!error.ok()) {
+            ainiux::app::print_error(error);
+            return ainiux::app::exit_code_for(error.code);
+        }
+        arguments.push_back(std::move(utf8));
+    }
+    std::vector<char*> argv;
+    argv.reserve(arguments.size() + 1U);
+    for (std::string& argument : arguments) argv.push_back(argument.data());
+    argv.push_back(nullptr);
+    return ainiux_main(argc, argv.data());
+}
+#else
+int main(int argc, char** argv) {
+    ainiux::platform::ProcessEnvironmentGuard environment_guard;
+    return ainiux_main(argc, argv);
+}
+#endif

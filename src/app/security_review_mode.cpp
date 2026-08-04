@@ -3,7 +3,6 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
-#include <csignal>
 #include <filesystem>
 #include <iostream>
 #include <map>
@@ -18,30 +17,16 @@
 #include "app/index_progress.hpp"
 #include "security/redact.hpp"
 #include "json/json.hpp"
+#include "runtime/interrupt.hpp"
 
 namespace ainiux::app {
 namespace {
-
-volatile std::sig_atomic_t g_review_interrupt = 0;
 
 json::Value log_object() { json::Value value; value.type = json::Value::Type::Object; return value; }
 json::Value log_array() { json::Value value; value.type = json::Value::Type::Array; return value; }
 json::Value log_string(const std::string& text) { json::Value value; value.type = json::Value::Type::String; value.string = text; return value; }
 json::Value log_number(double number) { json::Value value; value.type = json::Value::Type::Number; value.number = number; return value; }
 json::Value log_bool(bool boolean) { json::Value value; value.type = json::Value::Type::Bool; value.boolean = boolean; return value; }
-
-void review_signal_handler(int) { g_review_interrupt = 1; }
-
-class ReviewSignalGuard {
-   public:
-    ReviewSignalGuard() { g_review_interrupt = 0; previous_ = std::signal(SIGINT, review_signal_handler); }
-    ~ReviewSignalGuard() { if (previous_ != SIG_ERR) std::signal(SIGINT, previous_); }
-    ReviewSignalGuard(const ReviewSignalGuard&) = delete;
-    ReviewSignalGuard& operator=(const ReviewSignalGuard&) = delete;
-   private:
-    using Handler = void (*)(int);
-    Handler previous_ = SIG_ERR;
-};
 
 std::vector<std::string> configured_secrets(const provider::RequestContext& context) {
     std::vector<std::string> secrets;
@@ -86,12 +71,12 @@ int render_failure_report(const provider::RequestContext& context,
 }  // namespace
 
 int run_security_review_mode(provider::RequestContext context) {
-    ReviewSignalGuard signal_guard;
+    runtime::InterruptGuard interrupt_guard;
     runtime::CancellationSource cancellation;
     std::atomic<bool> finished{false};
     std::thread interrupt_monitor([&] {
         while (!finished.load(std::memory_order_acquire)) {
-            if (g_review_interrupt != 0) { cancellation.cancel(); return; }
+            if (interrupt_guard.interrupted()) { cancellation.cancel(); return; }
             std::this_thread::sleep_for(std::chrono::milliseconds(25));
         }
     });
@@ -164,7 +149,7 @@ int run_security_review_mode(provider::RequestContext context) {
     index_options.workspace = ".";
     index_options.max_source_code_file_size = context.options.max_source_code_file_size;
     index_options.cancellation = cancellation.token();
-    index_options.interrupted = [] { return g_review_interrupt != 0; };
+    index_options.interrupted = [&interrupt_guard] { return interrupt_guard.interrupted(); };
     IndexProgressPrinter index_progress(!context.options.quiet);
     index_options.on_progress =
         [&index_progress](const agent::index::Progress& update) {

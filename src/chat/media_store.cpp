@@ -1,78 +1,24 @@
 #include "chat/media_store.hpp"
+#include "platform/filesystem.hpp"
 
 #include <array>
-#include <cerrno>
 #include <cstdint>
 #include <cstring>
-#include <fcntl.h>
+#include <filesystem>
 #include <limits>
 #include <sstream>
-#include <sys/stat.h>
-#include <sys/types.h>
-#include <unistd.h>
 #include <vector>
 
 namespace ainiux::chat {
 namespace {
 
-class Fd {
-   public:
-    explicit Fd(int fd = -1) : fd_(fd) {}
-    ~Fd() {
-        if (fd_ >= 0) {
-            close(fd_);
-        }
-    }
-    Fd(const Fd&) = delete;
-    Fd& operator=(const Fd&) = delete;
-    int get() const { return fd_; }
-    int release() {
-        const int fd = fd_;
-        fd_ = -1;
-        return fd;
-    }
-
-   private:
-    int fd_ = -1;
-};
-
-std::string errno_message(const std::string& action, const std::string& path) {
-    return action + ": " + path + ": " + std::strerror(errno);
-}
-
 std::string dirname_of(const std::string& path) {
-    const size_t slash = path.find_last_of('/');
-    if (slash == std::string::npos) {
-        return ".";
-    }
-    if (slash == 0) {
-        return "/";
-    }
-    return path.substr(0, slash);
+    const std::filesystem::path parent = std::filesystem::u8path(path).parent_path();
+    return parent.empty() ? "." : parent.u8string();
 }
 
 Error ensure_directory(const std::string& path) {
-    if (path.empty() || path == "." || path == "/") {
-        return ok_error();
-    }
-    struct stat st {};
-    if (stat(path.c_str(), &st) == 0) {
-        if (!S_ISDIR(st.st_mode)) {
-            return {ErrorCode::FileWrite, "media path exists but is not a directory: " + path};
-        }
-        return ok_error();
-    }
-    if (errno != ENOENT) {
-        return {ErrorCode::FileWrite, errno_message("could not inspect media directory", path)};
-    }
-    Error err = ensure_directory(dirname_of(path));
-    if (!err.ok()) {
-        return err;
-    }
-    if (mkdir(path.c_str(), 0700) != 0 && errno != EEXIST) {
-        return {ErrorCode::FileWrite, errno_message("could not create media directory", path)};
-    }
-    return ok_error();
+    return platform::ensure_private_directory(path, true, true);
 }
 
 uint32_t rotate_right(uint32_t value, uint32_t count) {
@@ -239,56 +185,19 @@ std::string path_for_digest(const std::string& database_path,
            relative_path_for_digest(digest, mime_type);
 }
 
-Error write_all(int fd, const std::string& bytes, const std::string& path) {
-    const char* cursor = bytes.data();
-    size_t remaining = bytes.size();
-    while (remaining > 0) {
-        const ssize_t count = write(fd, cursor, remaining);
-        if (count < 0) {
-            if (errno == EINTR) {
-                continue;
-            }
-            return {ErrorCode::FileWrite, errno_message("could not write media object", path)};
-        }
-        if (count == 0) {
-            return {ErrorCode::FileWrite, "could not write media object: short write: " + path};
-        }
-        cursor += count;
-        remaining -= static_cast<size_t>(count);
-    }
-    return ok_error();
-}
-
 Error read_file(const std::string& path,
                 size_t max_bytes,
                 std::string& bytes,
                 runtime::CancellationToken cancellation) {
-    Fd fd(open(path.c_str(), O_RDONLY));
-    if (fd.get() < 0) {
-        return {ErrorCode::FileRead, errno_message("could not open managed media", path)};
-    }
-    std::array<char, 8192> buffer{};
-    while (true) {
-        if (cancellation.cancelled()) {
-            return {ErrorCode::Cancelled, "managed media read cancelled: " + path};
-        }
-        const ssize_t count = read(fd.get(), buffer.data(), buffer.size());
-        if (count < 0) {
-            if (errno == EINTR) {
-                continue;
-            }
-            return {ErrorCode::FileRead, errno_message("could not read managed media", path)};
-        }
-        if (count == 0) {
-            break;
-        }
-        const size_t chunk = static_cast<size_t>(count);
-        if (bytes.size() > max_bytes || chunk > max_bytes - bytes.size()) {
-            return {ErrorCode::UnsupportedFeature,
-                    "managed attachment exceeds its configured size limit: " + path};
-        }
-        bytes.append(buffer.data(), chunk);
-    }
+    if (cancellation.cancelled())
+        return {ErrorCode::Cancelled, "managed media read cancelled: " + path};
+    Error error = platform::read_file_bounded(path, max_bytes, bytes);
+    if (!error.ok() && error.message.find("exceeds size limit") != std::string::npos)
+        return {ErrorCode::UnsupportedFeature,
+                "managed attachment exceeds its configured size limit: " + path};
+    if (!error.ok()) return error;
+    if (cancellation.cancelled())
+        return {ErrorCode::Cancelled, "managed media read cancelled: " + path};
     return ok_error();
 }
 
@@ -365,10 +274,8 @@ Error base64_decode(const std::string& encoded, std::string& decoded) {
 }  // namespace
 
 std::string media_root_for_database(const std::string& database_path) {
-    const size_t slash = database_path.find_last_of('/');
-    const std::string filename = slash == std::string::npos
-                                     ? database_path
-                                     : database_path.substr(slash + 1);
+    const std::filesystem::path database = std::filesystem::u8path(database_path);
+    const std::string filename = database.filename().u8string();
     if (filename == "ainiux.db") {
         return dirname_of(database_path) + "/media";
     }
@@ -389,9 +296,14 @@ Error store_media_bytes(const std::string& database_path,
         return err;
     }
 
-    struct stat existing {};
-    if (stat(destination.c_str(), &existing) == 0) {
-        if (!S_ISREG(existing.st_mode) || existing.st_size != static_cast<off_t>(bytes.size())) {
+    std::error_code filesystem_error;
+    const std::filesystem::file_status existing =
+        std::filesystem::status(std::filesystem::u8path(destination), filesystem_error);
+    if (!filesystem_error && std::filesystem::exists(existing)) {
+        const std::uintmax_t existing_size =
+            std::filesystem::file_size(std::filesystem::u8path(destination), filesystem_error);
+        if (filesystem_error || !std::filesystem::is_regular_file(existing) ||
+            existing_size != bytes.size()) {
             return {ErrorCode::FileRead, "managed media object is corrupt: " + destination};
         }
         std::string existing_bytes;
@@ -405,50 +317,14 @@ Error store_media_bytes(const std::string& database_path,
                     "managed media object content does not match its SHA-256 path: " +
                         destination};
         }
-    } else if (errno == ENOENT) {
-        std::string temporary_pattern = destination + ".tmp.XXXXXX";
-        std::vector<char> temporary_buffer(temporary_pattern.begin(), temporary_pattern.end());
-        temporary_buffer.push_back('\0');
-        Fd fd(mkstemp(temporary_buffer.data()));
-        const std::string temporary = temporary_buffer.data();
-        if (fd.get() < 0) {
-            return {ErrorCode::FileWrite,
-                    errno_message("could not create temporary media object", temporary)};
-        }
-        if (fchmod(fd.get(), 0600) != 0) {
-            Error mode_error{ErrorCode::FileWrite,
-                             errno_message("could not protect temporary media object", temporary)};
-            unlink(temporary.c_str());
-            return mode_error;
-        }
-        err = write_all(fd.get(), bytes, temporary);
-        if (!err.ok()) {
-            unlink(temporary.c_str());
-            return err;
-        }
-        if (fsync(fd.get()) != 0) {
-            err = {ErrorCode::FileWrite, errno_message("could not fsync media object", temporary)};
-            unlink(temporary.c_str());
-            return err;
-        }
-        if (close(fd.release()) != 0) {
-            err = {ErrorCode::FileWrite, errno_message("could not close media object", temporary)};
-            unlink(temporary.c_str());
-            return err;
-        }
-        if (link(temporary.c_str(), destination.c_str()) != 0 && errno != EEXIST) {
-            err = {ErrorCode::FileWrite,
-                   errno_message("could not install managed media object", destination)};
-            unlink(temporary.c_str());
-            return err;
-        }
-        unlink(temporary.c_str());
-        Fd directory(open(dirname_of(destination).c_str(), O_RDONLY));
-        if (directory.get() >= 0) {
-            fsync(directory.get());
-        }
+    } else if (!filesystem_error ||
+               filesystem_error == std::errc::no_such_file_or_directory) {
+        err = platform::atomic_write_private(destination, bytes, true);
+        if (!err.ok()) return err;
     } else {
-        return {ErrorCode::FileWrite, errno_message("could not inspect media object", destination)};
+        return {ErrorCode::FileWrite,
+                "could not inspect media object: " + destination + ": " +
+                    filesystem_error.message()};
     }
 
     stored.sha256 = digest;
@@ -582,15 +458,20 @@ Error media_file_available(const std::string& database_path,
         return {ErrorCode::ProviderSchema, "invalid managed-media SHA-256 reference"};
     }
     const std::string path = path_for_digest(database_path, sha256, mime_type);
-    struct stat st {};
-    if (stat(path.c_str(), &st) != 0) {
-        if (errno == ENOENT) {
-            return ok_error();
-        }
-        return {ErrorCode::FileRead, errno_message("could not inspect managed media", path)};
-    }
-    available = S_ISREG(st.st_mode) &&
-                (expected_size <= 0 || st.st_size == static_cast<off_t>(expected_size));
+    std::error_code filesystem_error;
+    const std::filesystem::file_status status =
+        std::filesystem::status(std::filesystem::u8path(path), filesystem_error);
+    if (filesystem_error == std::errc::no_such_file_or_directory) return ok_error();
+    if (filesystem_error)
+        return {ErrorCode::FileRead,
+                "could not inspect managed media: " + path + ": " +
+                    filesystem_error.message()};
+    const std::uintmax_t size = std::filesystem::is_regular_file(status)
+                                    ? std::filesystem::file_size(
+                                          std::filesystem::u8path(path), filesystem_error)
+                                    : 0;
+    available = !filesystem_error && std::filesystem::is_regular_file(status) &&
+                (expected_size <= 0 || size == static_cast<std::uintmax_t>(expected_size));
     return ok_error();
 }
 
@@ -603,17 +484,12 @@ Error remove_media_file(const std::string& database_path,
         return {ErrorCode::ProviderSchema, "invalid managed-media SHA-256 reference"};
     }
     const std::string path = path_for_digest(database_path, sha256, mime_type);
-    if (unlink(path.c_str()) != 0) {
-        if (errno == ENOENT) {
-            return ok_error();
-        }
-        return {ErrorCode::FileWrite, errno_message("could not remove managed media", path)};
-    }
-    removed = true;
-    Fd directory(open(dirname_of(path).c_str(), O_RDONLY));
-    if (directory.get() >= 0) {
-        fsync(directory.get());
-    }
+    std::error_code filesystem_error;
+    removed = std::filesystem::remove(std::filesystem::u8path(path), filesystem_error);
+    if (filesystem_error)
+        return {ErrorCode::FileWrite,
+                "could not remove managed media: " + path + ": " +
+                    filesystem_error.message()};
     return ok_error();
 }
 

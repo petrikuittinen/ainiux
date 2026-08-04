@@ -1,42 +1,16 @@
 #include "app/app.hpp"
 
 #include <chrono>
-#include <csignal>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <utility>
 
 #include "benchmark/benchmark.hpp"
+#include "runtime/interrupt.hpp"
 
 namespace ainiux::app {
 namespace {
-
-volatile std::sig_atomic_t g_grade_interrupt = 0;
-
-void grade_signal_handler(int) {
-    g_grade_interrupt = 1;
-}
-
-class GradeSignalGuard {
-   public:
-    GradeSignalGuard() {
-        g_grade_interrupt = 0;
-        previous_ = std::signal(SIGINT, grade_signal_handler);
-    }
-    ~GradeSignalGuard() {
-        if (previous_ != SIG_ERR) {
-            std::signal(SIGINT, previous_);
-        }
-    }
-    GradeSignalGuard(const GradeSignalGuard&) = delete;
-    GradeSignalGuard& operator=(const GradeSignalGuard&) = delete;
-    bool installed() const { return previous_ != SIG_ERR; }
-
-   private:
-    using SignalHandler = void (*)(int);
-    SignalHandler previous_ = SIG_ERR;
-};
 
 std::ostream* grade_output_stream(const cli::Options& options,
                                   const std::string& source_path,
@@ -46,7 +20,7 @@ std::ostream* grade_output_stream(const cli::Options& options,
     if (options.output_path.empty() || options.output_path == "stdout") {
         return &std::cout;
     }
-    std::filesystem::path path(options.output_path);
+    std::filesystem::path path = std::filesystem::u8path(options.output_path);
     std::error_code filesystem_error;
     const bool trailing_separator = options.output_path.back() == '/' ||
                                     options.output_path.back() == '\\';
@@ -78,7 +52,7 @@ std::ostream* grade_output_stream(const cli::Options& options,
                 std::chrono::system_clock::now().time_since_epoch())
                 .count();
         const std::string source_stem =
-            std::filesystem::path(source_path).stem().string();
+            std::filesystem::u8path(source_path).stem().u8string();
         const std::string base = "grade-" + source_stem + "-" +
                                  std::to_string(timestamp);
         std::filesystem::path candidate = path / (base + ".jsonl");
@@ -87,7 +61,8 @@ std::ostream* grade_output_stream(const cli::Options& options,
                (std::filesystem::exists(candidate, filesystem_error) ||
                 (!filesystem_error &&
                  std::filesystem::exists(
-                     benchmark::markdown_report_path(candidate.string()),
+                     std::filesystem::u8path(
+                         benchmark::markdown_report_path(candidate.u8string())),
                      filesystem_error)))) {
             candidate = path / (base + "-" + std::to_string(suffix++) +
                                 ".jsonl");
@@ -100,11 +75,11 @@ std::ostream* grade_output_stream(const cli::Options& options,
         }
         path = std::move(candidate);
     }
-    std::string extension = ascii_lower(path.extension().string());
+    std::string extension = ascii_lower(path.extension().u8string());
     if (extension != ".jsonl") {
         error = {ErrorCode::BadArgs,
                  "explicit grading output must use a .jsonl filename: " +
-                     path.string()};
+                     path.u8string()};
         return nullptr;
     }
     std::error_code equivalence_error;
@@ -113,11 +88,11 @@ std::ostream* grade_output_stream(const cli::Options& options,
         !equivalence_error) {
         error = {ErrorCode::BadArgs,
                  "grading output must not overwrite its benchmark source: " +
-                     path.string()};
+                     path.u8string()};
         return nullptr;
     }
-    actual_path = path.string();
-    file.open(actual_path, std::ios::binary | std::ios::trunc);
+    actual_path = path.u8string();
+    file.open(path, std::ios::binary | std::ios::trunc);
     if (!file) {
         error = {ErrorCode::FileWrite,
                  "could not open grading output file for writing: " + actual_path};
@@ -224,15 +199,15 @@ int run_grade_mode(const cli::Options& options) {
         print_error(context_result.error);
         return exit_code_for(context_result.error.code);
     }
-    GradeSignalGuard signal_guard;
-    if (!signal_guard.installed()) {
+    runtime::InterruptGuard interrupt_guard;
+    if (!interrupt_guard.installed()) {
         print_error({ErrorCode::Internal,
                      "could not install the grading Ctrl+C signal handler"});
         return exit_code_for(ErrorCode::Internal);
     }
     Error err = benchmark::grade(
         context_result.context, source_path, options, *out, std::cerr,
-        [] { return g_grade_interrupt != 0; });
+        [&interrupt_guard] { return interrupt_guard.interrupted(); });
     std::string markdown_path;
     Error report_error = finish_grade_outputs(out_file, actual_output_path,
                                               markdown_path);

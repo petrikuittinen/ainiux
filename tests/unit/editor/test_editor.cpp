@@ -21,6 +21,7 @@
 #include "editor/text_layout.hpp"
 #include "editor/terminal_input.hpp"
 #include "editor/terminal_ui.hpp"
+#include "platform/environment.hpp"
 #include "ui/provider_model_display.hpp"
 #include <algorithm>
 #include <chrono>
@@ -32,9 +33,16 @@
 #include <string>
 #include <thread>
 #include <vector>
+#if !defined(_WIN32)
 #include <sys/stat.h>
 #include <sys/wait.h>
 #include <unistd.h>
+#else
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#endif
 
 namespace ainiux::test::editor {
 
@@ -310,6 +318,7 @@ void test_editor_ai_continue_helpers() {
 #endif
 }
 
+#if !defined(_WIN32)
 std::string make_clipboard_helper_directory() {
     char pattern[] = "/tmp/ainiux-clipboard-unit-XXXXXX";
     char* directory = mkdtemp(pattern);
@@ -445,7 +454,219 @@ void test_system_clipboard_helpers() {
 
     std::filesystem::remove_all(directory);
 }
+#else
+struct FakeWindowsClipboard {
+    int open_failures = 0;
+    int open_calls = 0;
+    int close_calls = 0;
+    int wait_calls = 0;
+    int unlock_calls = 0;
+    int empty_calls = 0;
+    int free_calls = 0;
+    bool available = true;
+    bool return_null_data = false;
+    bool empty_succeeds = true;
+    bool allocation_succeeds = true;
+    bool lock_succeeds = true;
+    bool publish_succeeds = true;
+    unsigned long error = ERROR_ACCESS_DENIED;
+    std::size_t reported_bytes = 0;
+    std::vector<wchar_t> clipboard;
+    std::vector<wchar_t> allocation;
+    std::vector<wchar_t> published;
+    ainiux::runtime::CancellationSource* cancel_on_wait = nullptr;  // Non-owning.
+};
 
+bool fake_clipboard_open(void* context) {
+    FakeWindowsClipboard& state = *static_cast<FakeWindowsClipboard*>(context);
+    ++state.open_calls;
+    if (state.open_failures > 0) {
+        --state.open_failures;
+        return false;
+    }
+    return true;
+}
+
+void fake_clipboard_close(void* context) {
+    ++static_cast<FakeWindowsClipboard*>(context)->close_calls;
+}
+
+bool fake_clipboard_available(void* context) {
+    return static_cast<FakeWindowsClipboard*>(context)->available;
+}
+
+void* fake_clipboard_get(void* context) {
+    FakeWindowsClipboard& state = *static_cast<FakeWindowsClipboard*>(context);
+    if (state.return_null_data) return nullptr;
+    return state.clipboard.data();
+}
+
+std::size_t fake_clipboard_size(void* context, void*) {
+    FakeWindowsClipboard& state = *static_cast<FakeWindowsClipboard*>(context);
+    return state.reported_bytes > 0
+               ? state.reported_bytes
+               : state.clipboard.size() * sizeof(wchar_t);
+}
+
+void* fake_clipboard_lock(void* context, void* object) {
+    FakeWindowsClipboard& state = *static_cast<FakeWindowsClipboard*>(context);
+    return state.lock_succeeds ? object : nullptr;
+}
+
+void fake_clipboard_unlock(void* context, void*) {
+    ++static_cast<FakeWindowsClipboard*>(context)->unlock_calls;
+}
+
+bool fake_clipboard_empty(void* context) {
+    FakeWindowsClipboard& state = *static_cast<FakeWindowsClipboard*>(context);
+    ++state.empty_calls;
+    return state.empty_succeeds;
+}
+
+void* fake_clipboard_alloc(void* context, std::size_t bytes) {
+    FakeWindowsClipboard& state = *static_cast<FakeWindowsClipboard*>(context);
+    if (!state.allocation_succeeds) return nullptr;
+    state.allocation.assign(bytes / sizeof(wchar_t), L'\0');
+    return state.allocation.data();
+}
+
+bool fake_clipboard_publish(void* context, void*) {
+    FakeWindowsClipboard& state = *static_cast<FakeWindowsClipboard*>(context);
+    if (!state.publish_succeeds) return false;
+    state.published = state.allocation;
+    return true;
+}
+
+void fake_clipboard_free(void* context, void*) {
+    FakeWindowsClipboard& state = *static_cast<FakeWindowsClipboard*>(context);
+    ++state.free_calls;
+    state.allocation.clear();
+}
+
+unsigned long fake_clipboard_last_error(void* context) {
+    return static_cast<FakeWindowsClipboard*>(context)->error;
+}
+
+void fake_clipboard_wait(void* context, unsigned long) {
+    FakeWindowsClipboard& state = *static_cast<FakeWindowsClipboard*>(context);
+    ++state.wait_calls;
+    if (state.cancel_on_wait != nullptr) state.cancel_on_wait->cancel();
+}
+
+ainiux::editor::WindowsClipboardApiForTests fake_clipboard_api(
+    FakeWindowsClipboard& state) {
+    return {
+        &state,
+        fake_clipboard_open,
+        fake_clipboard_close,
+        fake_clipboard_available,
+        fake_clipboard_get,
+        fake_clipboard_size,
+        fake_clipboard_lock,
+        fake_clipboard_unlock,
+        fake_clipboard_empty,
+        fake_clipboard_alloc,
+        fake_clipboard_publish,
+        fake_clipboard_free,
+        fake_clipboard_last_error,
+        fake_clipboard_wait,
+    };
+}
+
+class WindowsClipboardApiReset {
+   public:
+    ~WindowsClipboardApiReset() {
+        ainiux::editor::set_windows_clipboard_api_for_tests(nullptr);
+    }
+};
+
+void test_system_clipboard_helpers() {
+    namespace ed = ainiux::editor;
+    ainiux::editor::ClipboardEnvironment environment;
+    environment.windows = true;
+    ainiux::editor::ClipboardCommand command;
+    check(!ainiux::editor::resolve_clipboard_command(environment, true, command) &&
+              !ainiux::editor::resolve_clipboard_command(environment, false, command),
+          "native Windows clipboard does not resolve subprocess helpers");
+
+    FakeWindowsClipboard fake;
+    fake.open_failures = 2;
+    fake.clipboard = {L'o', L'n', L'e', L'\r', L'\n', 0x03A9, L' ',
+                      0xD83D, 0xDE00, L'\r', L't', L'w', L'o', L'\0'};
+    ed::WindowsClipboardApiForTests api = fake_clipboard_api(fake);
+    ed::set_windows_clipboard_api_for_tests(&api);
+    WindowsClipboardApiReset reset;
+    ainiux::runtime::CancellationSource source;
+    ed::SystemClipboardResult result =
+        ed::read_system_clipboard(environment, source.token());
+    check(result.ok() && result.text == u8"one\nΩ 😀\ntwo" &&
+              fake.open_calls == 3 && fake.wait_calls == 2 &&
+              fake.unlock_calls == 1 && fake.close_calls == 1,
+          "mock Windows clipboard retries busy access and normalizes Unicode CRLF text");
+
+    fake = FakeWindowsClipboard{};
+    fake.clipboard = {L'x', L'y'};
+    result = ed::read_system_clipboard(environment, source.token());
+    check(result.error == ed::SystemClipboardError::Malformed &&
+              fake.unlock_calls == 1 && fake.close_calls == 1,
+          "mock Windows clipboard rejects a non-terminated Unicode payload");
+
+    fake = FakeWindowsClipboard{};
+    fake.return_null_data = true;
+    fake.available = false;
+    result = ed::read_system_clipboard(environment, source.token());
+    check(result.error == ed::SystemClipboardError::NonText && fake.close_calls == 1,
+          "mock Windows clipboard reports a missing Unicode text format");
+
+    fake = FakeWindowsClipboard{};
+    result = ed::write_system_clipboard(environment, u8"one\nΩ 😀", source.token());
+    const std::vector<wchar_t> expected = {L'o', L'n', L'e', L'\r', L'\n',
+                                           0x03A9, L' ', 0xD83D, 0xDE00, L'\0'};
+    check(result.ok() && fake.published == expected && fake.empty_calls == 1 &&
+              fake.unlock_calls == 1 && fake.free_calls == 0 && fake.close_calls == 1,
+          "mock Windows clipboard converts LF to CRLF and transfers memory ownership");
+
+    fake = FakeWindowsClipboard{};
+    fake.publish_succeeds = false;
+    result = ed::write_system_clipboard(environment, "text", source.token());
+    check(result.error == ed::SystemClipboardError::Failed && fake.free_calls == 1 &&
+              fake.close_calls == 1,
+          "mock Windows clipboard frees global memory after publish failure");
+
+    fake = FakeWindowsClipboard{};
+    fake.lock_succeeds = false;
+    result = ed::write_system_clipboard(environment, "text", source.token());
+    check(result.error == ed::SystemClipboardError::Failed && fake.free_calls == 1 &&
+              fake.close_calls == 1,
+          "mock Windows clipboard frees global memory after lock failure");
+}
+
+void test_windows_clipboard_save_restore_opt_in() {
+    if (ainiux::platform::environment_value("AINIUX_TEST_WINDOWS_CLIPBOARD") != "1")
+        return;
+    ainiux::editor::ClipboardEnvironment environment;
+    environment.windows = true;
+    ainiux::runtime::CancellationSource source;
+    const ainiux::editor::SystemClipboardResult original =
+        ainiux::editor::read_system_clipboard(environment, source.token());
+    if (!original.ok()) {
+        check(false,
+              "opt-in Windows clipboard test requires existing Unicode text so it can restore it");
+        return;
+    }
+    const std::string marker = u8"ainiux Windows clipboard\nUnicode: ä Ω 😀";
+    const ainiux::editor::SystemClipboardResult written =
+        ainiux::editor::write_system_clipboard(environment, marker, source.token());
+    const ainiux::editor::SystemClipboardResult read_back =
+        ainiux::editor::read_system_clipboard(environment, source.token());
+    const ainiux::editor::SystemClipboardResult restored =
+        ainiux::editor::write_system_clipboard(environment, original.text, source.token());
+    check(written.ok() && read_back.ok() && read_back.text == marker && restored.ok(),
+          "opt-in Windows clipboard test round-trips Unicode/LF and restores prior text");
+}
+#endif
+
+#if !defined(_WIN32)
 void test_system_clipboard_cancellation_and_limits() {
     namespace ed = ainiux::editor;
     const std::string directory = make_clipboard_helper_directory();
@@ -485,6 +706,43 @@ void test_system_clipboard_cancellation_and_limits() {
           "clipboard helper rejects output above 16 MiB");
     std::filesystem::remove_all(directory);
 }
+#else
+void test_system_clipboard_cancellation_and_limits() {
+    namespace ed = ainiux::editor;
+    ed::ClipboardEnvironment environment;
+    environment.windows = true;
+    FakeWindowsClipboard fake;
+    fake.open_failures = 1000000;
+    ainiux::runtime::CancellationSource busy_source;
+    fake.cancel_on_wait = &busy_source;
+    ed::WindowsClipboardApiForTests api = fake_clipboard_api(fake);
+    ed::set_windows_clipboard_api_for_tests(&api);
+    WindowsClipboardApiReset reset;
+    const ed::SystemClipboardResult busy_cancelled =
+        ed::read_system_clipboard(environment, busy_source.token());
+    check(busy_cancelled.error == ed::SystemClipboardError::Cancelled &&
+              fake.wait_calls == 1 && fake.close_calls == 0,
+          "mock Windows clipboard cancellation interrupts a busy-open retry");
+
+    ed::set_windows_clipboard_api_for_tests(nullptr);
+    ainiux::runtime::CancellationSource cancelled_source;
+    cancelled_source.cancel();
+    const ed::SystemClipboardResult cancelled =
+        ed::read_system_clipboard(environment, cancelled_source.token());
+    check(cancelled.error == ed::SystemClipboardError::Cancelled,
+          "native Windows clipboard observes cancellation before opening");
+    ainiux::runtime::CancellationSource source;
+    const ed::SystemClipboardResult oversized = ed::write_system_clipboard(
+        environment, std::string(ed::kExternalClipboardReadLimit + 1U, 'x'),
+        source.token());
+    check(oversized.error == ed::SystemClipboardError::TooLarge,
+          "native Windows clipboard refuses text above 16 MiB before ownership transfer");
+    const ed::SystemClipboardResult malformed = ed::write_system_clipboard(
+        environment, std::string("bad\xFF", 4), source.token());
+    check(malformed.error == ed::SystemClipboardError::Malformed,
+          "native Windows clipboard refuses malformed UTF-8 before ownership transfer");
+}
+#endif
 
 void test_osc52_clipboard_decode() {
     namespace ed = ainiux::editor;
@@ -3270,6 +3528,22 @@ void test_editor_dired() {
         std::ofstream c(root / "c.js");
         c << "console.log(1)\n";
     }
+#if defined(_WIN32)
+    {
+        std::ofstream executable(root / "tool.CMD");
+        executable << "@echo off\r\n";
+        std::ofstream hidden(root / "hidden.txt");
+        hidden << "hidden\n";
+        std::ofstream read_only(root / "readonly.txt");
+        read_only << "readonly\n";
+        std::ofstream unicode(root / fs::u8path(u8"Äpfel.TXT"));
+        unicode << "unicode\n";
+    }
+    (void)SetFileAttributesW((root / "hidden.txt").wstring().c_str(),
+                             FILE_ATTRIBUTE_HIDDEN);
+    (void)SetFileAttributesW((root / "readonly.txt").wstring().c_str(),
+                             FILE_ATTRIBUTE_READONLY);
+#endif
 
     DiredState state;
     Error open_err = ainiux::editor::dired_open(state, root.string());
@@ -3287,6 +3561,33 @@ void test_editor_dired() {
         if (entry.name == "sub" && entry.is_directory) saw_sub = true;
     }
     check(saw_parent && saw_a && saw_sub, "dired lists parent, file, and directory");
+#if defined(_WIN32)
+    bool saw_hidden_attribute = false;
+    bool saw_read_only_attribute = false;
+    bool saw_windows_executable = false;
+    bool omitted_posix_identity = true;
+    for (const auto& entry : state.entries) {
+        if (entry.name == "hidden.txt") saw_hidden_attribute = entry.is_hidden;
+        if (entry.name == "readonly.txt") saw_read_only_attribute = entry.is_read_only;
+        if (entry.name == "tool.CMD")
+            saw_windows_executable = ainiux::editor::dired_entry_is_executable(entry);
+        omitted_posix_identity = omitted_posix_identity && entry.mode.empty() &&
+                                 entry.owner.empty() && entry.group.empty();
+    }
+    check(saw_hidden_attribute && saw_read_only_attribute && saw_windows_executable,
+          "Windows dired exposes hidden/read-only attributes and executable extensions");
+    check(omitted_posix_identity,
+          "Windows dired omits synthetic POSIX mode/owner/group fields");
+
+    DiredState unicode_glob;
+    const Error unicode_glob_error = ainiux::editor::dired_open(
+        unicode_glob, (root / fs::u8path(u8"ä*.txt")).u8string());
+    bool saw_unicode_case_match = false;
+    for (const auto& entry : unicode_glob.entries)
+        saw_unicode_case_match = saw_unicode_case_match || entry.name == u8"Äpfel.TXT";
+    check(unicode_glob_error.ok() && saw_unicode_case_match,
+          "Windows dired glob matching is Unicode case-insensitive");
+#endif
 
     ainiux::editor::dired_set_sort(state, DiredSortKey::Name, false);
     check(state.sort_key == DiredSortKey::Name && !state.sort_ascending, "sort name descending");
@@ -3534,6 +3835,10 @@ void test_editor_dired() {
     ainiux::editor::dired_close(state);
     check(!state.active, "dired_close deactivates");
 
+#if defined(_WIN32)
+    (void)SetFileAttributesW((root / "readonly.txt").wstring().c_str(),
+                             FILE_ATTRIBUTE_NORMAL);
+#endif
     fs::remove_all(root, ec);
 }
 
@@ -4192,7 +4497,8 @@ void test_editor_file_locking_and_read_only_sessions() {
           "editor lock acquisition atomically creates FILE.LOCK");
     ainiux::editor::EditorLockOwner owner;
     check(ainiux::editor::read_editor_lock_owner(canonical + ".LOCK", owner).ok() &&
-              owner.schema_version == 1 && owner.pid == static_cast<long long>(getpid()) &&
+              owner.schema_version == 1 &&
+              owner.pid == static_cast<long long>(ainiux::platform::current_process_id()) &&
               owner.canonical_target == canonical && !owner.token.empty(),
           "editor lock writes complete bounded owner metadata");
     ainiux::editor::EditorLockAttempt contended =
@@ -4200,6 +4506,13 @@ void test_editor_file_locking_and_read_only_sessions() {
     check(!contended.lock && contended.error.code == ainiux::ErrorCode::FileLock &&
               contended.owner_metadata_valid,
           "live editor lock contention is reported without removal");
+#if defined(_WIN32)
+    ainiux::editor::EditorLockAttempt case_variant =
+        ainiux::editor::acquire_editor_file_lock((root / "DOCUMENT.TXT").u8string());
+    check(!case_variant.lock && case_variant.owner_metadata_valid &&
+              case_variant.conflicting_owner.canonical_target == canonical,
+          "Windows case variants contend on the enumerated canonical target");
+#endif
 
     {
         const std::string owner_path = canonical + ".LOCK/owner";
@@ -4221,11 +4534,14 @@ void test_editor_file_locking_and_read_only_sessions() {
           "remote-host lock owner is never removed automatically");
 
     const fs::path alias = root / "alias.txt";
-    fs::create_symlink(target.filename(), alias);
-    ainiux::editor::EditorLockAttempt alias_attempt =
-        ainiux::editor::acquire_editor_file_lock(alias.string());
-    check(!alias_attempt.lock && alias_attempt.conflicting_owner.canonical_target == canonical,
-          "symlink aliases contend on the canonical target lock");
+    std::error_code alias_error;
+    fs::create_symlink(target.filename(), alias, alias_error);
+    if (!alias_error) {
+        ainiux::editor::EditorLockAttempt alias_attempt =
+            ainiux::editor::acquire_editor_file_lock(alias.string());
+        check(!alias_attempt.lock && alias_attempt.conflicting_owner.canonical_target == canonical,
+              "symlink aliases contend on the canonical target lock");
+    }
 
     ainiux::editor::EditorState copied;
     copied.set_path(target.string());
@@ -4256,6 +4572,50 @@ void test_editor_file_locking_and_read_only_sessions() {
     fs::remove(token_directory + "/owner");
     fs::remove(token_directory);
 
+#if defined(_WIN32)
+    auto hex_encode_owner_field = [](const std::string& value) {
+        static constexpr char digits[] = "0123456789abcdef";
+        std::string encoded;
+        encoded.reserve(value.size() * 2U);
+        for (unsigned char ch : value) {
+            encoded.push_back(digits[ch >> 4U]);
+            encoded.push_back(digits[ch & 0x0FU]);
+        }
+        return encoded;
+    };
+    auto write_windows_stale_lock = [&](const std::string& token) {
+        fs::create_directory(canonical + ".LOCK");
+        std::ofstream stale_owner(canonical + ".LOCK/owner",
+                                  std::ios::binary | std::ios::trunc);
+        stale_owner << "schema=1\n"
+                    << "hostname=" << hex_encode_owner_field(owner.hostname) << "\n"
+                    << "pid=" << ainiux::platform::current_process_id() << "\n"
+                    // Same live PID with the wrong creation time models PID reuse.
+                    << "start_time=1\n"
+                    << "target=" << hex_encode_owner_field(canonical) << "\n"
+                    << "token=" << hex_encode_owner_field(token) << "\n";
+    };
+    write_windows_stale_lock("stale-owner");
+    ainiux::editor::EditorLockAttempt recovered =
+        ainiux::editor::acquire_editor_file_lock(target.string());
+    check(recovered.lock != nullptr && recovered.stale_lock_recovered,
+          "Windows lock recovery detects a reused PID by process creation time");
+    recovered.lock.reset();
+
+    write_windows_stale_lock("stale-nonempty");
+    {
+        std::ofstream unexpected(canonical + ".LOCK/unexpected");
+        unexpected << "do not remove";
+    }
+    ainiux::editor::EditorLockAttempt nonempty =
+        ainiux::editor::acquire_editor_file_lock(target.string());
+    check(!nonempty.lock && fs::exists(canonical + ".LOCK/owner") &&
+              fs::exists(canonical + ".LOCK/unexpected"),
+          "Windows stale lock recovery preserves a directory with unexpected contents");
+    fs::remove(canonical + ".LOCK/unexpected");
+    fs::remove(canonical + ".LOCK/owner");
+    fs::remove(canonical + ".LOCK");
+#else
     const pid_t child = fork();
     if (child == 0) {
         ainiux::editor::EditorLockAttempt child_lock =
@@ -4294,6 +4654,7 @@ void test_editor_file_locking_and_read_only_sessions() {
     fs::remove(canonical + ".LOCK/unexpected");
     fs::remove(canonical + ".LOCK/owner");
     fs::remove(canonical + ".LOCK");
+#endif
 
     ainiux::editor::EditorLockAttempt upgrade_blocker =
         ainiux::editor::acquire_editor_file_lock(target.string());
@@ -5126,6 +5487,9 @@ void test_editor_text_layout_align_and_cleanup() {
 
 void run_all() {
     test_system_clipboard_helpers();
+#if defined(_WIN32)
+    test_windows_clipboard_save_restore_opt_in();
+#endif
     test_system_clipboard_cancellation_and_limits();
     test_osc52_clipboard_decode();
     test_terminal_autowrap_sequences();

@@ -23,9 +23,9 @@ std::size_t utf8_prefix(const std::string& text, std::size_t limit) {
 
 Error read_utf8_file(const fs::path& absolute, std::string& content) {
     std::ifstream input(absolute, std::ios::binary);
-    if (!input) return {ErrorCode::FileRead, "could not open AGENTS.md: " + absolute.string()};
+    if (!input) return {ErrorCode::FileRead, "could not open AGENTS.md: " + absolute.u8string()};
     content.assign(std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>());
-    if (input.bad()) return {ErrorCode::FileRead, "could not read AGENTS.md: " + absolute.string()};
+    if (input.bad()) return {ErrorCode::FileRead, "could not read AGENTS.md: " + absolute.u8string()};
     if (content.find('\0') != std::string::npos)
         return {ErrorCode::FileRead, "AGENTS.md contains NUL bytes and is not usable as text"};
     if (!html::is_valid_utf8(content))
@@ -68,12 +68,12 @@ std::vector<std::string> agents_md_candidate_paths(const std::string& relative_p
     if (relative_path.empty() || relative_path == "." || relative_path == "./")
         return candidates;
 
-    const fs::path path(relative_path);
+    const fs::path path = fs::u8path(relative_path);
     if (path.is_absolute()) return candidates;
 
     std::vector<std::string> components;
     for (const fs::path& component : path) {
-        const std::string value = component.string();
+        const std::string value = component.u8string();
         if (value.empty() || value == ".") continue;
         if (!safe_component(value)) {
             // Stop at first unsafe component; keep root-only.
@@ -123,7 +123,7 @@ Error try_load_document(const fs::path& workspace_root,
     if (content.empty()) return ok_error();
 
     present = true;
-    document.path = fs::path(relative_doc_path).generic_string();
+    document.path = fs::u8path(relative_doc_path).generic_u8string();
     document.content_hash = index::content_hash(content);
     if (remaining_bytes == 0) {
         document.content.clear();
@@ -146,7 +146,7 @@ Error load_agents_md_chain(const std::string& workspace,
     if (workspace.empty()) return {ErrorCode::BadArgs, "workspace is required to load AGENTS.md"};
     if (max_bytes == 0) max_bytes = kDefaultAgentsMdMaxBytes;
 
-    const fs::path root(workspace);
+    const fs::path root = fs::u8path(workspace);
     std::size_t remaining = max_bytes;
     for (const std::string& candidate : candidates) {
         AgentsMdDocument document;

@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <filesystem>
 #include <fstream>
 #include <functional>
 #include <iomanip>
@@ -158,7 +159,7 @@ void write_markdown_table(std::ostream& output,
 Error for_each_report_record(
     const std::string& path,
     const std::function<Error(const json::Value&, size_t)>& callback) {
-    std::ifstream input(path, std::ios::binary);
+    std::ifstream input(std::filesystem::u8path(path), std::ios::binary);
     if (!input) {
         return {ErrorCode::FileRead,
                 "could not open benchmark JSONL output for Markdown conversion: " + path};
@@ -423,7 +424,8 @@ Error write_markdown_report(const std::string& jsonl_path,
                     jsonl_path};
     }
 
-    std::ofstream output(markdown_path, std::ios::binary | std::ios::trunc);
+    std::ofstream output(std::filesystem::u8path(markdown_path),
+                         std::ios::binary | std::ios::trunc);
     if (!output) {
         return {ErrorCode::FileWrite,
                 "could not open benchmark Markdown report for writing: " + markdown_path};

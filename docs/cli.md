@@ -76,4 +76,8 @@ Use `--quiet` to suppress ordinary status and `-v` for timing. `--debug` prints 
 
 Avoid `-k`: keys in process arguments may be visible locally. Prefer environment variables, `--key-env NAME`, `--key-file PATH`, or `--key-stdin`.
 
+Native Windows uses the same stdout/stderr and exit-code contract. UCRT64 build,
+portable package, PowerShell, profile paths, and supported console details are in
+[Native Windows](windows.md).
+
 Related documentation: [documentation index](README.md), [getting started](getting-started.md), [API compatibility](api-compatibility.md), [security](security.md).

@@ -2,13 +2,12 @@
 
 #include "editor/editor.hpp"
 #include "html/html.hpp"
+#include "tui/terminal.hpp"
 
 #include <cctype>
 #include <deque>
 #include <iostream>
 #include <limits>
-#include <sys/select.h>
-#include <unistd.h>
 
 namespace ainiux::editor {
 namespace {
@@ -408,18 +407,7 @@ bool read_terminal_byte(unsigned char& out, int timeout_ms) {
         return true;
     }
 
-    fd_set read_fds;
-    FD_ZERO(&read_fds);
-    FD_SET(STDIN_FILENO, &read_fds);
-    timeval tv{};
-    tv.tv_sec = timeout_ms / 1000;
-    tv.tv_usec = (timeout_ms % 1000) * 1000;
-    const int ready = select(STDIN_FILENO + 1, &read_fds, nullptr, nullptr, &tv);
-    if (ready <= 0 || !FD_ISSET(STDIN_FILENO, &read_fds)) {
-        return false;
-    }
-    const ssize_t n = read(STDIN_FILENO, &out, 1);
-    return n == 1;
+    return tui::terminal_read_byte(out, timeout_ms);
 }
 
 bool read_terminal_input(TerminalInputEvent& out, int timeout_ms) {
@@ -571,7 +559,8 @@ Error paste_with_clipboard_preference(EditorState& state,
 }
 
 void publish_terminal_clipboard(const std::string& text) {
-    if (text.empty() || text.size() > kExternalClipboardReadLimit || !isatty(STDOUT_FILENO)) {
+    if (text.empty() || text.size() > kExternalClipboardReadLimit ||
+        !tui::terminal_output_is_interactive()) {
         return;
     }
     std::cout << "\x1b]52;c;" << base64_encode(text) << "\x07";
@@ -580,7 +569,7 @@ void publish_terminal_clipboard(const std::string& text) {
 
 void request_terminal_clipboard() {
     g_terminal_clipboard_query_pending = true;
-    if (!isatty(STDOUT_FILENO)) return;
+    if (!tui::terminal_output_is_interactive()) return;
     std::cout << "\x1b]52;c;?\x07";
     std::cout.flush();
 }

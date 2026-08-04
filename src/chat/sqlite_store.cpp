@@ -1,17 +1,14 @@
 #include "chat/sqlite_store.hpp"
 
 #include "chat/media_store.hpp"
+#include "platform/environment.hpp"
+#include "platform/filesystem.hpp"
 
 #include <sqlite3.h>
 
-#include <cerrno>
 #include <cstdlib>
-#include <cstring>
-#include <fcntl.h>
+#include <filesystem>
 #include <sstream>
-#include <sys/stat.h>
-#include <sys/types.h>
-#include <unistd.h>
 #include <utility>
 
 namespace ainiux::chat {
@@ -55,57 +52,20 @@ Error sqlite_error(sqlite3* db, const std::string& path, const std::string& acti
     }
 }
 
-std::string errno_message(const std::string& action, const std::string& path) {
-    return action + ": " + path + ": " + std::strerror(errno);
-}
-
 std::string dirname_of(const std::string& path) {
-    const size_t slash = path.find_last_of('/');
-    if (slash == std::string::npos) {
-        return ".";
-    }
-    if (slash == 0) {
-        return "/";
-    }
-    return path.substr(0, slash);
+    const std::filesystem::path parent =
+        std::filesystem::u8path(path).parent_path();
+    return parent.empty() ? "." : parent.u8string();
 }
 
 Error ensure_directory(const std::string& path) {
-    if (path.empty() || path == ".") {
-        return ok_error();
-    }
-    if (path == "/") {
-        return ok_error();
-    }
-    struct stat st {};
-    if (stat(path.c_str(), &st) == 0) {
-        if (S_ISDIR(st.st_mode)) {
-            return ok_error();
-        }
-        return {ErrorCode::FileWrite, path + " exists but is not a directory"};
-    }
-    if (errno != ENOENT) {
-        return {ErrorCode::FileWrite, errno_message("could not inspect directory", path)};
-    }
-    Error parent = ensure_directory(dirname_of(path));
-    if (!parent.ok()) {
-        return parent;
-    }
-    if (mkdir(path.c_str(), 0700) != 0 && errno != EEXIST) {
-        return {ErrorCode::FileWrite, errno_message("could not create directory", path)};
-    }
-    return ok_error();
+    const bool product_profile =
+        std::filesystem::u8path(path).filename().u8string() == ".ainiux";
+    return platform::ensure_private_directory(path, true, product_profile);
 }
 
 Error precreate_database_file(const std::string& path) {
-    const int fd = open(path.c_str(), O_RDWR | O_CREAT, 0600);
-    if (fd < 0) {
-        return {ErrorCode::FileWrite, errno_message("could not create SQLite database", path)};
-    }
-    if (close(fd) != 0) {
-        return {ErrorCode::FileWrite, errno_message("could not close SQLite database", path)};
-    }
-    return ok_error();
+    return platform::create_private_file_if_missing(path);
 }
 
 Error exec_sql(sqlite3* db, const std::string& path, const char* sql, const std::string& action) {
@@ -843,11 +803,14 @@ Error load_text_attachments_for_message(
 }  // namespace
 
 DatabasePathResult default_sqlite_database_path() {
-    const char* home = std::getenv("HOME");
-    if (home == nullptr || std::string(home).empty()) {
-        return {"", {ErrorCode::Config, "HOME is not set; cannot locate ~/.ainiux/ainiux.db"}};
+    const std::string home = platform::home_directory();
+    if (home.empty()) {
+        return {"", {ErrorCode::Config,
+                     "HOME is not set (and USERPROFILE is unavailable on Windows); "
+                     "cannot locate ~/.ainiux/ainiux.db"}};
     }
-    return {std::string(home) + "/.ainiux/ainiux.db", ok_error()};
+    return {(std::filesystem::u8path(home) / ".ainiux" / "ainiux.db").u8string(),
+            ok_error()};
 }
 
 SqliteStore::~SqliteStore() {

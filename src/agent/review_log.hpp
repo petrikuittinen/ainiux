@@ -1,6 +1,7 @@
 #pragma once
 
 #include <functional>
+#include <fstream>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -73,6 +74,9 @@ class ReviewLogger {
     mutable std::mutex mutex_;
     int fd_ = -1;
     int directory_fd_ = -1;
+#if defined(_WIN32)
+    std::unique_ptr<std::ofstream> stream_;
+#endif
     int keep_runs_ = 3;
     unsigned long long sequence_ = 0;
     bool active_ = false;

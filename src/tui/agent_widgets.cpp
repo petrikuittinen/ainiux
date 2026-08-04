@@ -3,6 +3,7 @@
 #include "ainiux/version.hpp"
 #include "editor/detail/wrap.hpp"
 #include "editor/detail/unicode.hpp"
+#include "platform/environment.hpp"
 #include "tui/tui.hpp"
 #include "ui/provider_model_display.hpp"
 
@@ -192,12 +193,12 @@ AgentInputGeometry agent_input_geometry(int terminal_rows,
 std::string abbreviate_agent_workspace(const std::string& workspace) {
     if (workspace.empty()) return ".";
     std::string result = workspace;
-    const char* home_value = std::getenv("HOME");
-    if (home_value != nullptr) {
-        const std::string home(home_value);
+    const std::string home = platform::home_directory();
+    if (!home.empty()) {
         if (result == home) return "~";
         if (!home.empty() && result.size() > home.size() &&
-            result.compare(0, home.size(), home) == 0 && result[home.size()] == '/') {
+            result.compare(0, home.size(), home) == 0 &&
+            (result[home.size()] == '/' || result[home.size()] == '\\')) {
             result.replace(0, home.size(), "~");
         }
     }
@@ -210,7 +211,7 @@ std::string agent_input_title(const AgentInputFrame& frame, int available_cells)
     std::string path = abbreviate_agent_workspace(frame.workspace);
     const std::string suffix = " " + mode;
     if (static_cast<int>(text_cells(path + suffix)) <= available_cells) return path + suffix;
-    const std::string leaf = fs::path(path).filename().string();
+    const std::string leaf = fs::u8path(path).filename().u8string();
     const int path_cells = std::max(1, available_cells - static_cast<int>(suffix.size()));
     if (static_cast<int>(text_cells(leaf)) + 2 <= path_cells) {
         path = u8"…/" + leaf;

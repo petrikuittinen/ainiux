@@ -452,7 +452,8 @@ std::string simple_name(const std::string& name) {
 }
 
 bool is_cpp_header(const std::string& path, const std::string& masked) {
-    if (ascii_lower(std::filesystem::path(path).extension().string()) != ".h") return false;
+    if (ascii_lower(std::filesystem::u8path(path).extension().u8string()) != ".h")
+        return false;
     static const std::regex marker(
         R"((^|[^A-Za-z0-9_])(namespace|class|template|constexpr|consteval|constinit|noexcept|nullptr|using)[^A-Za-z0-9_]|::|\b(public|private|protected)\s*:)",
         std::regex::optimize);

@@ -1,7 +1,5 @@
 #pragma once
 
-#include <termios.h>
-
 #include <functional>
 #include <string>
 #include <vector>
@@ -11,6 +9,7 @@
 #include "editor/path_completion.hpp"
 #include "editor/split.hpp"
 #include "tui/activity.hpp"
+#include "tui/terminal.hpp"
 #include "tui/tui.hpp"
 
 namespace ainiux::tui {
@@ -108,20 +107,7 @@ struct EditorAssistDisplay {
     size_t frame = 0;
 };
 
-class TerminalSession {
-   public:
-    TerminalSession() = default;
-    ~TerminalSession();
-    TerminalSession(const TerminalSession&) = delete;
-    TerminalSession& operator=(const TerminalSession&) = delete;
-
-    Error enter();
-    void restore();
-
-   private:
-    termios original_{};
-    bool active_ = false;
-};
+using TerminalSession = tui::TerminalSession;
 
 TerminalSize terminal_size();
 struct TerminalThemeStyle {

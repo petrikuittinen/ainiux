@@ -33,7 +33,9 @@
 #include <string>
 #include <thread>
 #include <vector>
+#if !defined(_WIN32)
 #include <unistd.h>
+#endif
 
 namespace ainiux::test::tui {
 
@@ -1868,6 +1870,25 @@ void test_tui_read_terminal_input_marks_alt_meta_prefix() {
 }
 
 void test_tui_thread_picker_accepts_delayed_arrow_sequence() {
+#if defined(_WIN32)
+    ainiux::editor::clear_terminal_input_queue();
+    ainiux::editor::push_terminal_input_bytes("\x1b[B");
+    ainiux::editor::TerminalInputEvent event;
+    const bool read_escape = ainiux::editor::read_terminal_input(event, 0);
+    std::vector<ainiux::chat::ThreadSummary> threads(2);
+    size_t selected = 0;
+    size_t pending_delete = static_cast<size_t>(-1);
+    std::string status;
+    ainiux::tui::TuiMode mode = ainiux::tui::TuiMode::ThreadList;
+    const ainiux::tui::PickerEscapeResult picker_result =
+        read_escape
+            ? ainiux::tui::handle_thread_list_escape(
+                  threads, selected, status, pending_delete, mode)
+            : ainiux::tui::PickerEscapeResult::Cancelled;
+    check(read_escape && picker_result == ainiux::tui::PickerEscapeResult::Navigated &&
+              selected == 1,
+          "Windows VT arrow input navigates the thread picker");
+#else
     ainiux::editor::clear_terminal_input_queue();
 
     int input_pipe[2] = {-1, -1};
@@ -1921,6 +1942,7 @@ void test_tui_thread_picker_accepts_delayed_arrow_sequence() {
     check(picker_result == ainiux::tui::PickerEscapeResult::Navigated &&
               mode == ainiux::tui::TuiMode::ThreadList && selected == 1,
           "thread picker moves down instead of cancelling on a delayed arrow sequence");
+#endif
 }
 
 void test_tui_handle_escape_alt_pageup_scrolls_history() {

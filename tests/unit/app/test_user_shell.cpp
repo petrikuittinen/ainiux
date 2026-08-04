@@ -3,6 +3,7 @@
 #include "app/user_shell.hpp"
 #include "support/test_support.hpp"
 
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -54,14 +55,30 @@ void test_parse_user_shell_invocation() {
 }
 
 void test_run_user_shell_echo() {
+    const std::optional<std::string> previous_key =
+        ainiux::test::test_environment("OPENAI_API_KEY");
+    constexpr const char* inherited_secret = "ainiux-shell-secret-must-not-leak";
+    ainiux::test::set_test_environment("OPENAI_API_KEY", inherited_secret);
     app::UserShellOptions options;
     options.timeout_ms = 5000;
     app::UserShellResult result;
-    Error err = app::run_user_shell("echo hello-user-shell", options, result);
+    Error err = app::run_user_shell(
+#if defined(_WIN32)
+        "Write-Output hello-user-shell; Write-Output $env:OPENAI_API_KEY",
+#else
+        "printf 'hello-user-shell\\n%s\\n' \"$OPENAI_API_KEY\"",
+#endif
+        options, result);
+    if (previous_key.has_value())
+        ainiux::test::set_test_environment("OPENAI_API_KEY", *previous_key);
+    else
+        ainiux::test::unset_test_environment("OPENAI_API_KEY");
     check(err.ok(), "echo shell command succeeds");
     check(result.exit_status == 0, "echo exit status is 0");
     check(result.stdout_text.find("hello-user-shell") != std::string::npos,
           "echo stdout contains payload");
+    check(result.stdout_text.find(inherited_secret) == std::string::npos,
+          "user shell subprocess excludes inherited API keys");
     check(!result.cancelled && !result.timed_out, "echo was not cancelled or timed out");
 }
 
@@ -69,7 +86,13 @@ void test_run_user_shell_nonzero_exit() {
     app::UserShellOptions options;
     options.timeout_ms = 5000;
     app::UserShellResult result;
-    Error err = app::run_user_shell("false", options, result);
+    Error err = app::run_user_shell(
+#if defined(_WIN32)
+        "exit 9",
+#else
+        "false",
+#endif
+        options, result);
     check(err.ok(), "non-zero exit is still an ok Error");
     check(result.exit_status != 0, "false returns non-zero exit status");
 }
@@ -85,7 +108,13 @@ void test_run_user_shell_timeout() {
     app::UserShellOptions options;
     options.timeout_ms = 200;
     app::UserShellResult result;
-    Error err = app::run_user_shell("sleep 5", options, result);
+    Error err = app::run_user_shell(
+#if defined(_WIN32)
+        "Start-Sleep -Seconds 5",
+#else
+        "sleep 5",
+#endif
+        options, result);
     check(!err.ok() && err.code == ErrorCode::Timeout, "short timeout returns Timeout");
     check(result.timed_out, "result.timed_out is set");
 }

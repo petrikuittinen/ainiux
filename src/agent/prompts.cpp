@@ -6,6 +6,7 @@
 #include <vector>
 
 #include "embedded_agent_prompts.hpp"
+#include "platform/environment.hpp"
 
 namespace ainiux::agent {
 namespace {
@@ -13,10 +14,10 @@ namespace fs = std::filesystem;
 
 Error read_prompt(const fs::path& path, std::string& output) {
     std::ifstream input(path, std::ios::binary);
-    if (!input) return {ErrorCode::FileRead, "could not open trusted prompt: " + path.string()};
+    if (!input) return {ErrorCode::FileRead, "could not open trusted prompt: " + path.u8string()};
     output.assign(std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>());
-    if (input.bad()) return {ErrorCode::FileRead, "could not read trusted prompt: " + path.string()};
-    if (output.empty()) return {ErrorCode::FileRead, "trusted prompt is empty: " + path.string()};
+    if (input.bad()) return {ErrorCode::FileRead, "could not read trusted prompt: " + path.u8string()};
+    if (output.empty()) return {ErrorCode::FileRead, "trusted prompt is empty: " + path.u8string()};
     return ok_error();
 }
 
@@ -95,11 +96,16 @@ std::string agent_task_mode_control(AgentTaskMode mode) {
 }
 
 Error load_trusted_prompts(const std::string& override_directory, TrustedPrompts& prompts) {
-    if (!override_directory.empty()) return load_directory(fs::path(override_directory), prompts);
+    if (!override_directory.empty())
+        return load_directory(fs::u8path(override_directory), prompts);
 
-    const std::vector<fs::path> installed = {
-        fs::path("/usr/local/share/ainiux/prompts"),
-        fs::path("/usr/share/ainiux/prompts")};
+    std::vector<fs::path> installed;
+    const std::string executable_directory = platform::executable_directory();
+    if (!executable_directory.empty())
+        installed.push_back(fs::u8path(executable_directory) / "share" / "ainiux" /
+                            "prompts");
+    installed.push_back(fs::path("/usr/local/share/ainiux/prompts"));
+    installed.push_back(fs::path("/usr/share/ainiux/prompts"));
     for (const fs::path& directory : installed) {
         std::error_code error;
         if (fs::is_directory(directory, error) && !error) {

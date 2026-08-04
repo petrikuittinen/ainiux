@@ -57,8 +57,6 @@
 #include <memory>
 #include <optional>
 #include <sstream>
-#include <sys/select.h>
-#include <unistd.h>
 
 namespace ainiux::tui {
 
@@ -3530,19 +3528,10 @@ app::TuiRunResult run(provider::RequestContext context,
             start_turn(prompt);
         }
 
-        fd_set readfds;
-        FD_ZERO(&readfds);
-        FD_SET(STDIN_FILENO, &readfds);
-        timeval timeout{};
-        timeout.tv_usec = 50000;
-        const int ready = select(STDIN_FILENO + 1, &readfds, nullptr, nullptr, &timeout);
-        if (ready < 0 && errno != EINTR) {
-            set_status_maybe_agent_error(std::string("terminal input error: ") + std::strerror(errno),
-                                         true);
-        }
-        if (ready > 0 && FD_ISSET(STDIN_FILENO, &readfds)) {
+        {
             editor::TerminalInputEvent event;
-            while (editor::read_terminal_input(event, 0)) {
+            if (editor::read_terminal_input(event, 50)) {
+            do {
                 if (event.type == editor::TerminalInputType::Mouse) {
                     const detail::TuiSize screen = detail::terminal_size();
                     (void)apply_chat_mouse_scroll(
@@ -3920,6 +3909,7 @@ app::TuiRunResult run(provider::RequestContext context,
                 if (ch >= 32) {
                     detail::insert_input(input, std::string(1, static_cast<char>(ch)), status);
                 }
+            } while (editor::read_terminal_input(event, 0));
             }
         }
         if (agent_compaction_active) {

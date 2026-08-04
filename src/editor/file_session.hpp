@@ -34,7 +34,7 @@ struct EditorLockOwner {
 class EditorFileLock {
    public:
     // Instances are created by acquire_editor_file_lock. The constructor is
-    // public only so std::shared_ptr can own the RAII object without a custom
+    // public only so std::make_shared can own the RAII object without a custom
     // allocation wrapper; callers must not construct locks directly.
     EditorFileLock(std::string canonical_target,
                    std::string lock_directory,

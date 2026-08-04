@@ -8,6 +8,7 @@
 #include <utility>
 
 #include "agent/project_paths.hpp"
+#include "platform/filesystem.hpp"
 
 namespace ainiux::agent {
 namespace {
@@ -81,7 +82,7 @@ class Statement {
 }  // namespace
 
 std::string AgentSessionStore::database_path(const std::string& workspace) {
-    return (fs::path(workspace) / kProjectStateDirName / "agent.sqlite").string();
+    return (fs::u8path(workspace) / kProjectStateDirName / "agent.sqlite").u8string();
 }
 
 AgentSessionStore::~AgentSessionStore() { close(); }
@@ -119,12 +120,11 @@ Error AgentSessionStore::open(const std::string& workspace) {
     workspace_ = workspace;
     path_ = database_path(workspace);
 
-    std::error_code ec;
-    fs::create_directories(fs::path(path_).parent_path(), ec);
-    if (ec)
-        return {ErrorCode::FileWrite,
-                std::string("could not create ") + kProjectStateDirName +
-                    " for agent session DB: " + ec.message()};
+    Error security_error = platform::ensure_private_directory(
+        fs::u8path(path_).parent_path().u8string(), true, true);
+    if (!security_error.ok()) return security_error;
+    security_error = platform::create_private_file_if_missing(path_);
+    if (!security_error.ok()) return security_error;
 
     const int rc =
         sqlite3_open_v2(path_.c_str(), &db_,

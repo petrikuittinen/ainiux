@@ -2,61 +2,37 @@
 
 #include "agent/command_guard.hpp"
 #include "agent/read_only_command.hpp"
+#include "platform/environment.hpp"
+#include "platform/filesystem.hpp"
+#include "runtime/subprocess.hpp"
 
 #include <algorithm>
 #include <cerrno>
 #include <chrono>
-#include <cstring>
+#include <cstdlib>
 #include <filesystem>
 #include <set>
 
+#if !defined(_WIN32)
 #include <fcntl.h>
-#include <poll.h>
-#include <signal.h>
-#include <sys/types.h>
-#include <sys/wait.h>
 #include <unistd.h>
+#endif
 
 namespace ainiux::agent {
 namespace {
 namespace fs = std::filesystem;
 
-class Pipe {
-   public:
-    ~Pipe() { close_all(); }
-    Pipe(const Pipe&) = delete;
-    Pipe& operator=(const Pipe&) = delete;
-    Pipe() = default;
-    Error open() {
-        if (::pipe(fds_) != 0) return {ErrorCode::Internal, "could not create process pipe: " + std::string(std::strerror(errno))};
-        return ok_error();
-    }
-    int read_fd() const { return fds_[0]; }
-    int write_fd() const { return fds_[1]; }
-    int release_read() { const int fd = fds_[0]; fds_[0] = -1; return fd; }
-    void close_read() { close_one(0); }
-    void close_write() { close_one(1); }
-   private:
-    int fds_[2] = {-1, -1};
-    void close_one(int index) { if (fds_[index] >= 0) { ::close(fds_[index]); fds_[index] = -1; } }
-    void close_all() { close_one(0); close_one(1); }
-};
-
 bool inside_root(const fs::path& root, const fs::path& candidate) {
-    auto root_it = root.begin();
-    auto path_it = candidate.begin();
-    for (; root_it != root.end(); ++root_it, ++path_it) {
-        if (path_it == candidate.end() || *root_it != *path_it) return false;
-    }
-    return true;
+    bool within = false;
+    return platform::path_is_within(root.u8string(), candidate.u8string(), within).ok() && within;
 }
 
 Error resolve_cwd(const ProcessOptions& options, fs::path& root, fs::path& cwd) {
     std::error_code ec;
-    root = fs::canonical(fs::absolute(options.workspace, ec), ec);
+    root = fs::canonical(fs::absolute(fs::u8path(options.workspace), ec), ec);
     if (ec || !fs::is_directory(root, ec))
         return {ErrorCode::FileRead, "could not resolve command workspace: " + options.workspace};
-    const fs::path supplied(options.cwd);
+    const fs::path supplied = fs::u8path(options.cwd);
     fs::path requested =
         options.cwd.empty() ? root
                             : (supplied.is_absolute() ? supplied : root / supplied);
@@ -70,15 +46,103 @@ Error resolve_cwd(const ProcessOptions& options, fs::path& root, fs::path& cwd) 
     return ok_error();
 }
 
-// Fixed trusted PATH only. Includes Homebrew on macOS; never the caller's PATH
-// (Windows ports can extend this list). Agent mode may additionally resolve
-// workspace-relative executables via resolve_executable.
-const char* fixed_command_path() {
+// POSIX deliberately uses a small trusted PATH. Native Windows uses the inherited
+// PATH, but its resolver below ignores empty/relative components and never falls
+// back to the current directory.
+std::string fixed_command_path() {
+#if defined(_WIN32)
+    const std::string inherited = platform::environment_value("PATH");
+    std::string sanitized;
+    std::size_t start = 0;
+    while (start <= inherited.size()) {
+        const std::size_t end = inherited.find(';', start);
+        const std::string entry = inherited.substr(
+            start, end == std::string::npos ? std::string::npos : end - start);
+        const fs::path directory = fs::u8path(entry);
+        if (!entry.empty() && directory.is_absolute() &&
+            platform::validate_windows_path_syntax(entry).ok()) {
+            if (!sanitized.empty()) sanitized.push_back(';');
+            sanitized += directory.lexically_normal().u8string();
+        }
+        if (end == std::string::npos) break;
+        start = end + 1;
+    }
+    return sanitized;
+#else
     return "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin";
+#endif
 }
+
+#if defined(_WIN32)
+std::string ascii_lower(std::string value) {
+    for (char& ch : value) {
+        if (ch >= 'A' && ch <= 'Z') ch = static_cast<char>(ch + ('a' - 'A'));
+    }
+    return value;
+}
+
+bool supported_windows_executable_extension(const fs::path& path) {
+    const std::string extension = ascii_lower(path.extension().u8string());
+    return extension == ".com" || extension == ".exe" || extension == ".bat" ||
+           extension == ".cmd";
+}
+
+std::vector<std::string> windows_path_extensions() {
+    const std::vector<std::string> fallback = {".com", ".exe", ".bat", ".cmd"};
+    const std::string inherited = platform::environment_value("PATHEXT");
+    if (inherited.empty()) return fallback;
+    std::vector<std::string> extensions;
+    std::size_t start = 0;
+    while (start <= inherited.size()) {
+        const std::size_t end = inherited.find(';', start);
+        std::string extension = ascii_lower(
+            inherited.substr(start, end == std::string::npos ? std::string::npos : end - start));
+        if (!extension.empty() && extension.front() != '.') extension.insert(extension.begin(), '.');
+        if (std::find(fallback.begin(), fallback.end(), extension) != fallback.end() &&
+            std::find(extensions.begin(), extensions.end(), extension) == extensions.end())
+            extensions.push_back(std::move(extension));
+        if (end == std::string::npos) break;
+        start = end + 1;
+    }
+    return extensions.empty() ? fallback : extensions;
+}
+#endif
 
 Error resolve_fixed_path_executable(const std::string& name, std::string& resolved) {
     const std::string path = fixed_command_path();
+#if defined(_WIN32)
+    const fs::path supplied = fs::u8path(name);
+    const bool has_extension = supplied.has_extension();
+    if (has_extension && !supported_windows_executable_extension(supplied))
+        return {ErrorCode::BadArgs,
+                "Windows agent commands only execute .com, .exe, .bat, or .cmd files: " +
+                    name};
+    const std::vector<std::string> extensions =
+        has_extension ? std::vector<std::string>{""} : windows_path_extensions();
+    std::size_t start = 0;
+    while (start <= path.size()) {
+        const std::size_t end = path.find(';', start);
+        const std::string directory_text =
+            path.substr(start, end == std::string::npos ? std::string::npos : end - start);
+        const fs::path directory = fs::u8path(directory_text);
+        if (!directory_text.empty() && directory.is_absolute()) {
+            for (const std::string& extension : extensions) {
+                const fs::path candidate = directory / fs::u8path(name + extension);
+                std::error_code ec;
+                if (!fs::is_regular_file(candidate, ec) || ec) continue;
+                const fs::path canonical = fs::canonical(candidate, ec);
+                if (!ec && supported_windows_executable_extension(canonical)) {
+                    resolved = canonical.u8string();
+                    return ok_error();
+                }
+            }
+        }
+        if (end == std::string::npos) break;
+        start = end + 1;
+    }
+    return {ErrorCode::FileRead,
+            "command not found on inherited absolute PATH entries: " + name};
+#else
     std::size_t start = 0;
     while (start <= path.size()) {
         const std::size_t colon = path.find(':', start);
@@ -89,7 +153,7 @@ Error resolve_fixed_path_executable(const std::string& name, std::string& resolv
             std::error_code ec;
             const fs::path canonical = fs::canonical(candidate, ec);
             if (!ec) {
-                resolved = canonical.string();
+                resolved = canonical.u8string();
                 return ok_error();
             }
         }
@@ -97,8 +161,9 @@ Error resolve_fixed_path_executable(const std::string& name, std::string& resolv
         start = colon + 1;
     }
     return {ErrorCode::FileRead,
-            std::string("command not found on fixed PATH (") + fixed_command_path() +
+            std::string("command not found on fixed PATH (") + path +
                 "): " + name};
+#endif
 }
 
 // Accept an on-disk executable. When unrestricted is false, require it to live
@@ -109,19 +174,26 @@ Error accept_executable_file(const fs::path& candidate,
                              std::string& resolved) {
     std::error_code ec;
     if (!fs::exists(candidate, ec) || ec)
-        return {ErrorCode::FileRead, "executable not found: " + candidate.string()};
+        return {ErrorCode::FileRead, "executable not found: " + candidate.u8string()};
+#if defined(_WIN32)
+    if (!fs::is_regular_file(candidate, ec) || ec ||
+        !supported_windows_executable_extension(candidate))
+        return {ErrorCode::BadArgs,
+                "path is not a supported Windows executable: " + candidate.u8string()};
+#else
     if (::access(candidate.c_str(), X_OK) != 0)
         return {ErrorCode::BadArgs,
-                "path is not executable (chmod +x?): " + candidate.string()};
+                "path is not executable (chmod +x?): " + candidate.u8string()};
+#endif
     const fs::path canonical = fs::weakly_canonical(candidate, ec);
     if (ec)
         return {ErrorCode::FileRead,
-                "could not resolve executable path: " + candidate.string() + ": " +
+                "could not resolve executable path: " + candidate.u8string() + ": " +
                     ec.message()};
     if (!unrestricted && !inside_root(workspace_root, canonical))
         return {ErrorCode::BadArgs,
-                "executable path must stay inside the workspace: " + canonical.string()};
-    resolved = canonical.string();
+                "executable path must stay inside the workspace: " + canonical.u8string()};
+    resolved = canonical.u8string();
     return ok_error();
 }
 
@@ -135,18 +207,19 @@ Error resolve_executable(const std::string& name,
         return {ErrorCode::BadArgs, "run_command command is empty"};
 
     // Path form: ./script, scripts/run.sh, /abs/path (Yolo/external only).
-    if (name.find('/') != std::string::npos) {
+    if (name.find('/') != std::string::npos || name.find('\\') != std::string::npos) {
         if (!allow_workspace_executables || workspace_root == nullptr || cwd == nullptr)
             return {ErrorCode::BadArgs,
                     "run_command requires a bare command name (no path); binaries resolve "
                     "from a fixed PATH, or use Agent workspace scripts (./script.sh)"};
-        const fs::path supplied(name);
+        const fs::path supplied = fs::u8path(name);
         const fs::path candidate =
             supplied.is_absolute() ? supplied : (*cwd / supplied);
         return accept_executable_file(candidate, *workspace_root, unrestricted, resolved);
     }
 
-    // Bare name: fixed trusted PATH first (never the caller's PATH).
+    // Bare name: the platform resolver path first. POSIX uses the fixed trusted
+    // path above; native Windows uses sanitized inherited absolute PATH entries.
     Error path_error = resolve_fixed_path_executable(name, resolved);
     if (path_error.ok()) return ok_error();
 
@@ -192,8 +265,14 @@ bool scan_unquoted_shell_syntax(const std::string& command,
             continue;
         }
         if (ch == '\\') {
+#if defined(_WIN32)
+            // Backslash is a path separator for direct Windows argv. It never
+            // quotes a following shell operator because no shell is involved.
+            continue;
+#else
             escaping = true;
             continue;
+#endif
         }
         if (quote != 0) {
             if (ch == quote) quote = 0;
@@ -330,13 +409,28 @@ Error enforce_common_safety(const std::vector<std::string>& args,
     // payloads such as python3 -c "import x; print(1)". Unquoted operators in
     // the raw command string are rejected in parse_command instead.
     for (const std::string& arg : args) {
+#if defined(_WIN32)
+        if (arg.size() >= 2 &&
+            ((arg[0] >= 'A' && arg[0] <= 'Z') ||
+             (arg[0] >= 'a' && arg[0] <= 'z')) &&
+            arg[1] == ':') {
+            const Error syntax = platform::validate_windows_path_syntax(arg);
+            if (!syntax.ok())
+                return {ErrorCode::BadArgs,
+                        "run_command rejected unsafe Windows path syntax: " +
+                            syntax.message};
+        }
+#endif
         const fs::path possible_path(arg);
         if (possible_path.is_absolute() && !allow_absolute_paths)
             return {ErrorCode::BadArgs, "run_command rejects absolute path arguments"};
         for (const fs::path& component : possible_path) {
-            const std::string value = component.string();
-            if (value == ".." || value == ".ainiux-pr" || value == ".ainiux" || value == ".git" ||
-                value == ".hg" || value == ".svn")
+            std::string value = component.u8string();
+#if defined(_WIN32)
+            value = ascii_lower(std::move(value));
+#endif
+            if (value == ".." || value == ".ainiux-pr" || value == ".ainiux" ||
+                value == ".git" || value == ".hg" || value == ".svn")
                 return {ErrorCode::BadArgs,
                         "run_command rejects traversal and protected metadata paths"};
         }
@@ -595,8 +689,13 @@ Error tokenize_command(const std::string& command, std::vector<std::string>& arg
             continue;
         }
         if (ch == '\\') {
+#if defined(_WIN32)
+            current.push_back(ch);
+            token_started = true;
+#else
             escaping = true;
             token_started = true;
+#endif
             continue;
         }
         if (quote != 0) {
@@ -626,26 +725,6 @@ Error tokenize_command(const std::string& command, std::vector<std::string>& arg
         return {ErrorCode::BadArgs, "run_command contains an incomplete quote or escape"};
     if (token_started) arguments.push_back(std::move(current));
     return ok_error();
-}
-
-void append_bounded(std::string& output, const char* data, std::size_t count,
-                    std::size_t limit, bool& truncated) {
-    const std::size_t remaining = output.size() < limit ? limit - output.size() : 0;
-    const std::size_t accepted = std::min(remaining, count);
-    output.append(data, accepted);
-    if (accepted != count) truncated = true;
-}
-
-void drain_fd(int fd, std::string& output, std::size_t limit, bool& truncated, bool& open) {
-    char buffer[8192];
-    while (true) {
-        const ssize_t count = ::read(fd, buffer, sizeof(buffer));
-        if (count > 0) { append_bounded(output, buffer, static_cast<std::size_t>(count), limit, truncated); continue; }
-        if (count == 0) { ::close(fd); open = false; return; }
-        if (errno == EAGAIN || errno == EWOULDBLOCK) return;
-        if (errno == EINTR) continue;
-        ::close(fd); open = false; return;
-    }
 }
 
 }  // namespace
@@ -707,7 +786,7 @@ Error execute_resolved_command(ProcessResult& output,
     fs::path root;
     fs::path cwd;
     if (!(error = resolve_cwd(options, root, cwd)).ok()) return error;
-    output.cwd = cwd.string();
+    output.cwd = cwd.u8string();
     if (output.arguments.empty())
         return {ErrorCode::BadArgs, "run_command command is empty"};
     const bool workspace_exec =
@@ -738,16 +817,52 @@ Error execute_resolved_command(ProcessResult& output,
                                      workspace_exec, options.unrestricted))
              .ok())
         return error;
+    output.resolved_executable = executable;
 
-    // Prepare every allocation before fork. Security review may have several
-    // worker threads; the child must call only async-signal-safe functions
-    // until execve replaces the process image.
-    std::vector<char*> argv;
-    argv.reserve(output.arguments.size() + 1);
-    for (std::string& item : output.arguments) argv.push_back(item.data());
-    argv.push_back(nullptr);
-    std::vector<std::string> environment_storage = {
+    runtime::SubprocessOptions subprocess;
+    subprocess.executable = executable;
+    subprocess.arguments.assign(output.arguments.begin() + 1, output.arguments.end());
+    subprocess.cwd = cwd.u8string();
+    subprocess.timeout_ms = options.timeout_ms;
+    subprocess.stdout_limit = options.stdout_limit;
+    subprocess.stderr_limit = options.stderr_limit;
+    subprocess.cancellation = options.cancellation;
+    subprocess.environment = {
         std::string("PATH=") + fixed_command_path(),
+#if defined(_WIN32)
+        "PAGER=cat",
+        "GIT_PAGER=cat",
+        "GIT_EXTERNAL_DIFF=",
+        "GIT_OPTIONAL_LOCKS=0",
+        "RIPGREP_CONFIG_PATH=NUL"};
+    const char* inherited_names[] = {"SystemRoot", "WINDIR",
+                                     "HOME", "USERPROFILE", "TEMP", "TMP"};
+    for (const char* name : inherited_names) {
+        const std::string value = platform::environment_value(name);
+        if (!value.empty()) subprocess.environment.push_back(std::string(name) + "=" + value);
+    }
+    subprocess.environment.push_back("PATHEXT=.COM;.EXE;.BAT;.CMD");
+    const std::string system_root_for_env = platform::environment_value("SystemRoot");
+    if (!system_root_for_env.empty())
+        subprocess.environment.push_back(
+            "COMSPEC=" + (fs::u8path(system_root_for_env) / "System32" / "cmd.exe").u8string());
+    const std::string extension = ascii_lower(fs::u8path(executable).extension().u8string());
+    if (extension == ".bat" || extension == ".cmd") {
+        const std::string system_root = platform::environment_value("SystemRoot");
+        if (system_root.empty())
+            return {ErrorCode::Config,
+                    "SystemRoot is not set; cannot resolve cmd.exe for batch command"};
+        const fs::path cmd = fs::u8path(system_root) / "System32" / "cmd.exe";
+        std::error_code cmd_error;
+        const fs::path resolved_cmd = fs::canonical(cmd, cmd_error);
+        if (cmd_error || !fs::is_regular_file(resolved_cmd, cmd_error))
+            return {ErrorCode::FileRead,
+                    "could not resolve cmd.exe for batch command: " + cmd.u8string()};
+        subprocess.executable = resolved_cmd.u8string();
+        subprocess.arguments.insert(subprocess.arguments.begin(), executable);
+        subprocess.windows_batch = true;
+    }
+#else
         "LC_ALL=C.UTF-8",
         "LANG=C.UTF-8",
         "PAGER=cat",
@@ -755,94 +870,24 @@ Error execute_resolved_command(ProcessResult& output,
         "GIT_EXTERNAL_DIFF=",
         "GIT_OPTIONAL_LOCKS=0",
         "RIPGREP_CONFIG_PATH=/dev/null"};
-    std::vector<char*> environment;
-    environment.reserve(environment_storage.size() + 1);
-    for (std::string& item : environment_storage) environment.push_back(item.data());
-    environment.push_back(nullptr);
-
-    Pipe stdout_pipe;
-    Pipe stderr_pipe;
-    if (!(error = stdout_pipe.open()).ok() || !(error = stderr_pipe.open()).ok())
-        return error;
-    const auto started = std::chrono::steady_clock::now();
-    const pid_t pid = ::fork();
-    if (pid < 0)
-        return {ErrorCode::Internal,
-                "could not fork inspection command: " + std::string(std::strerror(errno))};
-    if (pid == 0) {
-        ::setpgid(0, 0);
-        stdout_pipe.close_read();
-        stderr_pipe.close_read();
-        const int null_fd = ::open("/dev/null", O_RDONLY);
-        if (null_fd >= 0) {
-            ::dup2(null_fd, STDIN_FILENO);
-            ::close(null_fd);
-        }
-        ::dup2(stdout_pipe.write_fd(), STDOUT_FILENO);
-        ::dup2(stderr_pipe.write_fd(), STDERR_FILENO);
-        stdout_pipe.close_write();
-        stderr_pipe.close_write();
-        if (::chdir(cwd.c_str()) != 0) _exit(126);
-        ::execve(executable.c_str(), argv.data(), environment.data());
-        _exit(errno == ENOENT ? 127 : 126);
-    }
-
-    ::setpgid(pid, pid);
-    stdout_pipe.close_write();
-    stderr_pipe.close_write();
-    ::fcntl(stdout_pipe.read_fd(), F_SETFL,
-            ::fcntl(stdout_pipe.read_fd(), F_GETFL) | O_NONBLOCK);
-    ::fcntl(stderr_pipe.read_fd(), F_SETFL,
-            ::fcntl(stderr_pipe.read_fd(), F_GETFL) | O_NONBLOCK);
-    int stdout_fd = stdout_pipe.release_read();
-    int stderr_fd = stderr_pipe.release_read();
-    bool stdout_open = true;
-    bool stderr_open = true;
-    int wait_status = 0;
-    bool reaped = false;
-    bool terminated = false;
-    long long terminated_at = 0;
-    while (!reaped || stdout_open || stderr_open) {
-        const auto now = std::chrono::steady_clock::now();
-        const long long elapsed =
-            std::chrono::duration_cast<std::chrono::milliseconds>(now - started).count();
-        if (!terminated &&
-            (options.cancellation.cancelled() || elapsed > options.timeout_ms)) {
-            output.cancelled = options.cancellation.cancelled();
-            output.timed_out = !output.cancelled;
-            ::kill(-pid, SIGTERM);
-            terminated = true;
-            terminated_at = elapsed;
-        }
-        if (terminated && elapsed > terminated_at + 250) ::kill(-pid, SIGKILL);
-        pollfd fds[2] = {
-            {stdout_fd, static_cast<short>(stdout_open ? POLLIN | POLLHUP : 0), 0},
-            {stderr_fd, static_cast<short>(stderr_open ? POLLIN | POLLHUP : 0), 0}};
-        ::poll(fds, 2, 25);
-        if (stdout_open)
-            drain_fd(stdout_fd, output.stdout_text, options.stdout_limit,
-                     output.stdout_truncated, stdout_open);
-        if (stderr_open)
-            drain_fd(stderr_fd, output.stderr_text, options.stderr_limit,
-                     output.stderr_truncated, stderr_open);
-        if (!reaped) {
-            const pid_t waited = ::waitpid(pid, &wait_status, WNOHANG);
-            if (waited == pid) reaped = true;
-            else if (waited < 0 && errno != EINTR)
-                reaped = true;
-        }
-    }
-    output.duration_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
-                             std::chrono::steady_clock::now() - started)
-                             .count();
-    if (WIFEXITED(wait_status)) output.exit_status = WEXITSTATUS(wait_status);
-    if (WIFSIGNALED(wait_status)) output.signal = WTERMSIG(wait_status);
+#endif
+    runtime::SubprocessResult process_result;
+    error = runtime::run_subprocess(subprocess, process_result);
+    output.stdout_text = std::move(process_result.stdout_text);
+    output.stderr_text = std::move(process_result.stderr_text);
+    output.exit_status = process_result.exit_code;
+    output.signal = process_result.signal;
+    output.duration_ms = process_result.duration_ms;
+    output.stdout_truncated = process_result.stdout_truncated;
+    output.stderr_truncated = process_result.stderr_truncated;
+    output.cancelled = process_result.termination ==
+                       runtime::SubprocessTerminationReason::Cancelled;
+    output.timed_out = process_result.termination ==
+                       runtime::SubprocessTerminationReason::TimedOut;
     output.policy =
         policy == CommandPolicy::Agent ? "allowed-agent" : "allowed-read-only";
     if (output.guard_decision.empty()) output.guard_decision = "allow";
-    if (output.cancelled) return {ErrorCode::Cancelled, "run_command cancelled"};
-    if (output.timed_out) return {ErrorCode::Timeout, "run_command exceeded its timeout"};
-    return ok_error();
+    return error;
 }
 
 Error run_command(const std::string& command,

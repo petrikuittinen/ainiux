@@ -13,6 +13,22 @@ std::string lowercase(std::string text) {
     return text;
 }
 
+std::string normalized_command_name(std::string text) {
+    const std::size_t slash = text.find_last_of("/\\");
+    if (slash != std::string::npos) text.erase(0, slash + 1);
+    text = lowercase(std::move(text));
+    static const char* extensions[] = {".exe", ".com", ".cmd", ".bat"};
+    for (const char* extension : extensions) {
+        const std::size_t length = std::char_traits<char>::length(extension);
+        if (text.size() > length &&
+            text.compare(text.size() - length, length, extension) == 0) {
+            text.resize(text.size() - length);
+            break;
+        }
+    }
+    return text;
+}
+
 bool has_flag(const std::vector<std::string>& args, const char* flag) {
     for (const std::string& arg : args) {
         if (arg == flag) return true;
@@ -74,7 +90,55 @@ GuardResult ask(const char* rule_id, const std::string& message) {
 
 GuardResult evaluate_command_guard(const std::vector<std::string>& arguments) {
     if (arguments.empty()) return {};
-    const std::string command = lowercase(arguments.front());
+    const std::string command = normalized_command_name(arguments.front());
+
+    if (command == "del" || command == "erase") {
+        return ask("ask_on_windows_delete",
+                   "refusing Windows file deletion via del/erase; use the remove tool for "
+                   "workspace paths");
+    }
+    if (command == "rmdir" || command == "rd") {
+        const bool recursive = has_flag(arguments, "/s") || has_flag(arguments, "/S");
+        return ask(recursive ? "ask_on_recursive_delete" : "ask_on_windows_delete",
+                   recursive ? "refusing recursive Windows rmdir /s"
+                             : "refusing Windows directory deletion via rmdir/rd");
+    }
+    if (command == "format" || command == "diskpart" || command == "bcdedit" ||
+        command == "cipher")
+        return deny("forbid_disk_destroy",
+                    "Windows disk/device destructive commands are not allowed");
+    if (command == "reg" && arguments.size() >= 2 &&
+        lowercase(arguments[1]) == "delete")
+        return deny("forbid_registry_delete", "Windows registry deletion is not allowed");
+    if (command == "runas" || command == "elevate" || command == "gsudo")
+        return deny("forbid_privilege_escalation",
+                    "Windows privilege elevation commands are not allowed");
+    if (command == "cmd") {
+        for (const std::string& argument : arguments) {
+            const std::string lower = lowercase(argument);
+            if (lower == "/c" || lower == "/k")
+                return deny("forbid_shell_wrapper",
+                            "cmd.exe free-form /c and /k execution is not allowed");
+        }
+    }
+    if (command == "powershell" || command == "pwsh") {
+        for (const std::string& argument : arguments) {
+            const std::string lower = lowercase(argument);
+            if (lower == "-command" || lower == "-c" || lower == "-encodedcommand" ||
+                lower == "-ec")
+                return deny("forbid_shell_wrapper",
+                            "PowerShell free-form/encoded command execution is not allowed");
+        }
+    }
+    static const char* destructive_powershell[] = {
+        "remove-item", "clear-content", "remove-itemproperty", "remove-partition",
+        "format-volume", "clear-disk", "initialize-disk", "stop-computer",
+        "restart-computer", "remove-computer"};
+    for (const char* name : destructive_powershell) {
+        if (command == name)
+            return ask("ask_on_destructive_powershell",
+                       "refusing destructive PowerShell command: " + command);
+    }
 
     // Recursive force delete variants.
     if (command == "rm") {

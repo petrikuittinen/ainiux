@@ -109,9 +109,10 @@ Dead same-host lock owners are recovered automatically. Remote, live, malformed,
 There is no dedicated cut key (`Ctrl+X` is the window-command prefix). Delete a
 selection with Backspace or Delete to place it on the clipboard, then paste with
 `Ctrl+V`. Copy, selection-delete, and line kill retain text in Ainiux's
-process-wide clipboard and also publish it through a native desktop helper and
-OSC 52 when available. With an empty internal clipboard, `Ctrl+V` reads text
-asynchronously from `pbpaste`, `wl-paste`, `xclip`, `xsel`, Termux, or WSL. SSH
+process-wide clipboard and also publish it through the native Windows clipboard,
+a desktop helper on POSIX, and OSC 52 when available. With an empty internal
+clipboard, `Ctrl+V` uses `CF_UNICODETEXT` on Windows or reads asynchronously from
+`pbpaste`, `wl-paste`, `xclip`, `xsel`, Termux, or WSL. SSH
 sessions query the terminal first. Reads are limited to 16 MiB and are applied
 only if the buffer, cursor, selection, and input mode have not changed. Terminal
 bracketed paste remains the fallback when clipboard access is unavailable or
@@ -366,7 +367,7 @@ Chat and agent TUI history do **not** expose `/width`, `/left-align`, `/right-al
 
 `[input] auto-convert-html-to-md` controls `/insert URL` and defaults to `on`. URL insertion accepts only HTTP(S), retains the existing private-address, proxy, timeout, TLS, content-type, and response-size protections, and requires UTF-8 HTML. Set it to `off` to insert raw HTML. Local `/insert` accepts every file ending, but rejects NUL-containing, invalid UTF-8, unreadable, and oversized content. CR and CRLF are normalized to the editor's internal LF representation and use the buffer's chosen linebreak mode when saved.
 
-User shell (`shell` / `/shell` / `!` / `shell-stdout` / `/shell-stdout` / `!!`) runs `/bin/sh -c` in the process working directory. In the editor the leading `/` is optional (as with other commands). Every form opens a **new buffer** containing pure stdout only; the minibuffer shows success (exit, elapsed ms, byte count) or a clear failure (exit/stderr snippet). Esc cancels an in-flight shell job. Unlike chat/agent, `shell-stdout` is not draft-fill here—both forms use the new-buffer path.
+User shell (`shell` / `/shell` / `!` / `shell-stdout` / `/shell-stdout` / `!!`) runs `/bin/sh -c` on POSIX or built-in Windows PowerShell 5.1 (`-NoLogo -NoProfile -NonInteractive`, encoded command, UTF-8 output) on Windows. In the editor the leading `/` is optional (as with other commands). Every form opens a **new buffer** containing pure stdout only; the minibuffer shows success (exit, elapsed ms, byte count) or a clear failure (exit/stderr snippet). Esc cancels an in-flight shell job. Unlike chat/agent, `shell-stdout` is not draft-fill here—both forms use the new-buffer path.
 
 When you open a file whose auto-save backup (for example `notes.txt~`) is newer than the saved file, ainiux asks whether to recover the backup instead. At startup this prompt appears on stderr before the editor UI; when opening another file in the editor, the minibuffer asks `y` to recover or `n` to load the saved file.
 

@@ -25,11 +25,10 @@
 #include <thread>
 #include <utility>
 
-#include <sys/stat.h>
-
 #include "agent/project_paths.hpp"
 #include "html/html.hpp"
 #include "markdown/table_format.hpp"
+#include "platform/filesystem.hpp"
 
 namespace ainiux::agent::index {
 namespace {
@@ -463,14 +462,14 @@ Error load_ignore_rules(const fs::path& root, IgnoreRules& rules) {
         const fs::path path = root / filename;
         std::error_code error;
         if (!fs::exists(path, error)) {
-            if (error) return {ErrorCode::FileRead, "could not inspect " + path.string() + ": " + error.message()};
+            if (error) return {ErrorCode::FileRead, "could not inspect " + path.u8string() + ": " + error.message()};
             fingerprint_input += std::string(filename) + "=<missing>\n";
             continue;
         }
         std::ifstream input(path, std::ios::binary);
-        if (!input) return {ErrorCode::FileRead, "could not read root ignore file: " + path.string()};
+        if (!input) return {ErrorCode::FileRead, "could not read root ignore file: " + path.u8string()};
         std::string body((std::istreambuf_iterator<char>(input)), std::istreambuf_iterator<char>());
-        if (input.bad()) return {ErrorCode::FileRead, "could not read root ignore file: " + path.string()};
+        if (input.bad()) return {ErrorCode::FileRead, "could not read root ignore file: " + path.u8string()};
         fingerprint_input += std::string(filename) + "=" + body + "\n";
         std::istringstream lines(body);
         std::string line;
@@ -488,7 +487,7 @@ Error load_ignore_rules(const fs::path& root, IgnoreRules& rules) {
                 rules.patterns.push_back({negated, std::regex(glob_regex(line), std::regex::optimize)});
             } catch (const std::regex_error& exception) {
                 return {ErrorCode::Config,
-                        "could not compile ignore pattern " + line + " from " + path.string() +
+                        "could not compile ignore pattern " + line + " from " + path.u8string() +
                             ": " + exception.what()};
             }
         }
@@ -510,10 +509,10 @@ bool excluded_directory(const std::string& name) {
 
 Error workspace_root(const std::string& requested, fs::path& root) {
     std::error_code error;
-    root = fs::canonical(fs::absolute(requested, error), error);
+    root = fs::canonical(fs::absolute(fs::u8path(requested), error), error);
     if (error) return {ErrorCode::FileRead, "could not resolve workspace " + requested + ": " + error.message()};
     if (!fs::is_directory(root, error) || error) {
-        return {ErrorCode::FileRead, "workspace is not a readable directory: " + root.string()};
+        return {ErrorCode::FileRead, "workspace is not a readable directory: " + root.u8string()};
     }
     return ok_error();
 }
@@ -564,7 +563,7 @@ Error discover(const fs::path& root,
             const fs::directory_iterator end;
             if (filesystem_error) {
                 fail({ErrorCode::FileRead,
-                      "could not traverse workspace directory " + directory.string() + ": " +
+                      "could not traverse workspace directory " + directory.u8string() + ": " +
                           filesystem_error.message()});
                 return;
             }
@@ -577,13 +576,14 @@ Error discover(const fs::path& root,
                 const fs::file_status status = entry.symlink_status(filesystem_error);
                 if (filesystem_error) {
                     fail({ErrorCode::FileRead,
-                          "could not inspect workspace path " + entry.path().string() + ": " +
+                          "could not inspect workspace path " + entry.path().u8string() + ": " +
                               filesystem_error.message()});
                     return;
                 }
-                const std::string relative = entry.path().lexically_relative(root).generic_string();
+                const std::string relative =
+                    entry.path().lexically_relative(root).generic_u8string();
                 if (!fs::is_symlink(status) && fs::is_directory(status)) {
-                    if (!excluded_directory(entry.path().filename().string())) {
+                    if (!excluded_directory(entry.path().filename().u8string())) {
                         std::lock_guard<std::mutex> lock(mutex);
                         directories.push_back(entry.path());
                         ++pending_directories;
@@ -838,7 +838,7 @@ std::string utc_time(std::string seconds) {
 }  // namespace
 
 std::string database_path(const std::string& workspace) {
-    return (fs::path(workspace) / kProjectStateDirName / "index.sqlite").string();
+    return (fs::u8path(workspace) / kProjectStateDirName / "index.sqlite").u8string();
 }
 
 std::size_t worker_count_for(std::size_t online_cores,
@@ -881,36 +881,36 @@ Error clear_database(const Options& options, ClearStats& stats) {
     if (filesystem_error == std::errc::no_such_file_or_directory) return ok_error();
     if (filesystem_error) {
         return {ErrorCode::FileWrite,
-                "could not inspect project index directory " + state_directory.string() + ": " +
+                "could not inspect project index directory " + state_directory.u8string() + ": " +
                     filesystem_error.message()};
     }
     if (!fs::exists(directory_status)) return ok_error();
     if (fs::is_symlink(directory_status) || !fs::is_directory(directory_status)) {
         return {ErrorCode::FileWrite,
-                "refusing to clear code index because " + state_directory.string() +
+                "refusing to clear code index because " + state_directory.u8string() +
                     " is not a project-local directory"};
     }
 
     const fs::path db_path = state_directory / "index.sqlite";
-    const fs::path targets[] = {db_path, fs::path(db_path.string() + "-wal"),
-                                fs::path(db_path.string() + "-shm")};
+    const fs::path targets[] = {db_path, fs::u8path(db_path.u8string() + "-wal"),
+                                fs::u8path(db_path.u8string() + "-shm")};
     for (const fs::path& target : targets) {
         filesystem_error.clear();
         const fs::file_status status = fs::symlink_status(target, filesystem_error);
         if (filesystem_error == std::errc::no_such_file_or_directory) continue;
         if (filesystem_error) {
             return {ErrorCode::FileWrite,
-                    "could not inspect code index file " + target.string() + ": " +
+                    "could not inspect code index file " + target.u8string() + ": " +
                         filesystem_error.message()};
         }
         if (!fs::exists(status)) continue;
         if (!fs::is_regular_file(status) && !fs::is_symlink(status)) {
             return {ErrorCode::FileWrite,
-                    "refusing to remove non-file code index path " + target.string()};
+                    "refusing to remove non-file code index path " + target.u8string()};
         }
         if (!fs::remove(target, filesystem_error) || filesystem_error) {
             return {ErrorCode::FileWrite,
-                    "could not remove code index file " + target.string() + ": " +
+                    "could not remove code index file " + target.u8string() + ": " +
                         (filesystem_error ? filesystem_error.message() : "path was not removed")};
         }
         ++stats.removed_files;
@@ -924,7 +924,7 @@ Error probe(const Options& options, ProbeResult& result) {
     Error error = workspace_root(options.workspace, root);
     if (!error.ok()) return error;
     const fs::path path = root / kProjectStateDirName / "index.sqlite";
-    result.path = path.string();
+    result.path = path.u8string();
 
     std::error_code filesystem_error;
     const fs::file_status status = fs::symlink_status(path, filesystem_error);
@@ -935,23 +935,23 @@ Error probe(const Options& options, ProbeResult& result) {
     }
     if (filesystem_error) {
         return {ErrorCode::FileRead,
-                "could not inspect code index " + path.string() + ": " +
+                "could not inspect code index " + path.u8string() + ": " +
                     filesystem_error.message()};
     }
     if (!fs::is_regular_file(status)) {
         result.state = ProbeState::Corrupt;
         result.error = {ErrorCode::FileRead,
-                        "code index path is not a regular file: " + path.string() +
+                        "code index path is not a regular file: " + path.u8string() +
                             "; remove it and rebuild with --index-code"};
         return ok_error();
     }
 
     Database db;
-    error = db.open(path.string(), true);
+    error = db.open(path.u8string(), true);
     if (!error.ok()) {
         result.state = ProbeState::Corrupt;
         result.error = {ErrorCode::FileRead,
-                        "could not read code index " + path.string() + ": " +
+                        "could not read code index " + path.u8string() + ": " +
                             error.message + "; rebuild it with --index-code"};
         return ok_error();
     }
@@ -961,7 +961,7 @@ Error probe(const Options& options, ProbeResult& result) {
     if (!error.ok()) {
         result.state = ProbeState::Corrupt;
         result.error = {ErrorCode::FileRead,
-                        "could not read code index metadata at " + path.string() +
+                        "could not read code index metadata at " + path.u8string() +
                             "; rebuild it with --index-code"};
         return ok_error();
     }
@@ -979,7 +979,7 @@ Error probe(const Options& options, ProbeResult& result) {
         result.state = ProbeState::Corrupt;
         result.error = {
             ErrorCode::UnsupportedFeature,
-            "code index schema at " + path.string() +
+            "code index schema at " + path.u8string() +
                 " is not supported; rebuild it with --index-code"};
         return ok_error();
     }
@@ -988,7 +988,7 @@ Error probe(const Options& options, ProbeResult& result) {
     if (!error.ok()) {
         result.state = ProbeState::Corrupt;
         result.error = {ErrorCode::FileRead,
-                        "could not read completion metadata at " + path.string() +
+                        "could not read completion metadata at " + path.u8string() +
                             "; rebuild it with --index-code"};
         return ok_error();
     }
@@ -1042,27 +1042,17 @@ Error refresh(const Options& options, RefreshStats& stats) {
 
     const fs::path state_directory = root / kProjectStateDirName;
     std::error_code filesystem_error;
-    const bool created_state_directory = fs::create_directories(state_directory, filesystem_error);
-    if (filesystem_error) {
-        return {ErrorCode::FileWrite,
-                "could not create project index directory " + state_directory.string() + ": " +
-                    filesystem_error.message()};
-    }
-    if (created_state_directory && chmod(state_directory.c_str(), S_IRWXU) != 0) {
-        return {ErrorCode::FileWrite,
-                "could not set permissions on project index directory " + state_directory.string() +
-                    ": " + std::strerror(errno)};
-    }
+    if (!(error = platform::ensure_private_directory(state_directory.u8string(), true,
+                                                      true)).ok())
+        return error;
     const fs::path db_path = state_directory / "index.sqlite";
     const bool existed = fs::exists(db_path, filesystem_error);
     if (filesystem_error) return {ErrorCode::FileWrite, "could not inspect code index path: " + filesystem_error.message()};
+    if (!existed &&
+        !(error = platform::create_private_file_if_missing(db_path.u8string())).ok())
+        return error;
     Database db;
-    if (!(error = db.open(db_path.string(), false)).ok()) return error;
-    if (!existed && chmod(db_path.c_str(), S_IRUSR | S_IWUSR) != 0) {
-        return {ErrorCode::FileWrite,
-                "could not set permissions on project code index " + db_path.string() +
-                    ": " + std::strerror(errno)};
-    }
+    if (!(error = db.open(db_path.u8string(), false)).ok()) return error;
     if (!(error = ensure_schema(db)).ok()) return error;
     std::map<std::string, FileRecord> existing;
     if (!(error = load_records(db, existing)).ok()) return error;
@@ -1077,13 +1067,13 @@ Error refresh(const Options& options, RefreshStats& stats) {
             stored_schema_version = std::stoi(stored_schema);
         } catch (...) {
             return {ErrorCode::UnsupportedFeature,
-                    "code index schema at " + db_path.string() +
+                    "code index schema at " + db_path.u8string() +
                         " is invalid; rebuild it with --index-code"};
         }
         if (stored_schema_version < 1 ||
             stored_schema_version > kSchemaVersion)
             return {ErrorCode::UnsupportedFeature,
-                    "code index schema at " + db_path.string() +
+                    "code index schema at " + db_path.u8string() +
                         " is not supported; rebuild it with --index-code"};
     }
     const bool schema_changed =
@@ -1105,7 +1095,8 @@ Error refresh(const Options& options, RefreshStats& stats) {
 
     std::set<std::string> force_only;
     for (const std::string& path : options.update_paths) {
-        if (!path.empty() && path != ".") force_only.insert(fs::path(path).generic_string());
+        if (!path.empty() && path != ".")
+            force_only.insert(fs::u8path(path).generic_u8string());
     }
     const bool path_filter = !force_only.empty();
 
@@ -1233,7 +1224,7 @@ Error refresh(const Options& options, RefreshStats& stats) {
         !(error = set_metadata(db, "scanner_version", std::to_string(kScannerVersion))).ok() ||
         !(error = set_metadata(db, "ignore_fingerprint", ignores.fingerprint)).ok() ||
         !(error = set_metadata(db, "max_source_code_file_size", std::to_string(options.max_source_code_file_size))).ok() ||
-        !(error = set_metadata(db, "workspace", root.string())).ok() ||
+        !(error = set_metadata(db, "workspace", root.u8string())).ok() ||
         !(error = set_metadata(db, "updated_at", std::to_string(indexed_at))).ok() ||
         !(error = set_metadata(db, "complete", "1")).ok()) return error;
     if (cancelled(options)) return {ErrorCode::Cancelled, "code indexing cancelled; previous snapshot preserved"};
@@ -1278,9 +1269,9 @@ Error check_freshness(const Options& options, Freshness& freshness) {
     if (!error.ok()) return error;
     const fs::path path = root / kProjectStateDirName / "index.sqlite";
     Database db;
-    if (!(error = db.open(path.string(), true)).ok()) {
+    if (!(error = db.open(path.u8string(), true)).ok()) {
         return {ErrorCode::FileRead,
-                "no completed code index exists at " + path.string() + "; run --index-code first"};
+                "no completed code index exists at " + path.u8string() + "; run --index-code first"};
     }
     if (!(error = validate_read_schema(db)).ok()) return error;
     std::map<std::string, FileRecord> existing;
@@ -1322,14 +1313,16 @@ Error print_markdown(const Options& options, const Freshness& freshness, std::os
     if (!error.ok()) return error;
     const fs::path path = root / kProjectStateDirName / "index.sqlite";
     Database db;
-    if (!(error = db.open(path.string(), true)).ok() || !(error = validate_read_schema(db)).ok()) return error;
+    if (!(error = db.open(path.u8string(), true)).ok() ||
+        !(error = validate_read_schema(db)).ok())
+        return error;
     std::string updated;
     bool found = false;
     if (!(error = metadata(db, "updated_at", updated, found)).ok()) return error;
 
     output << "# ainiux Code Index\n\n"
-           << "- Workspace: " << markdown_code(root.string()) << "\n"
-           << "- Database: " << markdown_code(path.string()) << "\n"
+           << "- Workspace: " << markdown_code(root.u8string()) << "\n"
+           << "- Database: " << markdown_code(path.u8string()) << "\n"
            << "- Schema version: " << kSchemaVersion << "\n"
            << "- Scanner version: " << kScannerVersion << "\n"
            << "- Updated: " << (found ? utc_time(updated) : std::string("unknown")) << "\n"
@@ -1447,11 +1440,11 @@ Error load_snapshot(const Options& options, Snapshot& snapshot) {
     if (!error.ok()) return error;
     Database db;
     const fs::path path = root / kProjectStateDirName / "index.sqlite";
-    if (!(error = db.open(path.string(), true)).ok() ||
+    if (!(error = db.open(path.u8string(), true)).ok() ||
         !(error = validate_read_schema(db)).ok()) return error;
 
     Snapshot loaded;
-    loaded.workspace = root.string();
+    loaded.workspace = root.u8string();
     std::string updated;
     bool found = false;
     if (!(error = metadata(db, "updated_at", updated, found)).ok()) return error;
@@ -1460,7 +1453,7 @@ Error load_snapshot(const Options& options, Snapshot& snapshot) {
             loaded.updated_at = std::stoll(updated);
         } catch (...) {
             return {ErrorCode::FileRead,
-                    "invalid updated_at metadata in code index " + path.string()};
+                    "invalid updated_at metadata in code index " + path.u8string()};
         }
     }
 
@@ -1537,7 +1530,7 @@ Error open_query_database(const Options& options, fs::path& root,
     Error error = workspace_root(options.workspace, root);
     if (!error.ok()) return error;
     const fs::path path = root / kProjectStateDirName / "index.sqlite";
-    if (!(error = db.open(path.string(), true)).ok() ||
+    if (!(error = db.open(path.u8string(), true)).ok() ||
         !(error = validate_read_schema(db)).ok() ||
         !(error = transaction.begin()).ok())
         return error;

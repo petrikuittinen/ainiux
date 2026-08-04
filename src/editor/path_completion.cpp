@@ -8,6 +8,14 @@
 #include <filesystem>
 #include <system_error>
 
+#if defined(_WIN32)
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#include "platform/windows_utf.hpp"
+#endif
+
 namespace ainiux::editor {
 namespace {
 
@@ -177,13 +185,17 @@ std::string longest_common_prefix(const std::vector<std::string>& values) {
 }
 
 std::filesystem::path expanded_scan_path(const std::string& path) {
-    return std::filesystem::path(expand_user_path(path));
+    return std::filesystem::u8path(expand_user_path(path));
 }
 
 Error find_candidates(const std::string& token,
                       std::vector<std::string>& candidates,
                       const std::function<bool()>& cancelled) {
+#if defined(_WIN32)
+    const size_t slash = token.find_last_of("/\\");
+#else
     const size_t slash = token.find_last_of('/');
+#endif
     const std::string display_directory =
         slash == std::string::npos ? "" : token.substr(0, slash + 1);
     const std::string name_prefix =
@@ -192,6 +204,11 @@ Error find_candidates(const std::string& token,
     std::string scan_directory = ".";
     if (slash != std::string::npos) {
         scan_directory = token.substr(0, slash);
+#if defined(_WIN32)
+        if (slash == 0 ||
+            (slash == 2 && token.size() >= 3 && token[1] == ':'))
+            scan_directory = token.substr(0, slash + 1);
+#endif
         if (scan_directory.empty()) {
             scan_directory = "/";
         }
@@ -216,8 +233,24 @@ Error find_candidates(const std::string& token,
         if (cancelled && cancelled()) {
             return {ErrorCode::Cancelled, "path completion cancelled"};
         }
-        const std::string name = entry->path().filename().string();
-        if (name.compare(0, name_prefix.size(), name_prefix) == 0 &&
+        const std::string name = entry->path().filename().u8string();
+        bool prefix_matches = name.compare(0, name_prefix.size(), name_prefix) == 0;
+#if defined(_WIN32)
+        std::wstring wide_name;
+        std::wstring wide_prefix;
+        if (!name_prefix.empty() &&
+            platform::utf8_to_utf16(name, wide_name).ok() &&
+            platform::utf8_to_utf16(name_prefix, wide_prefix).ok() &&
+            wide_prefix.size() <= wide_name.size()) {
+            prefix_matches =
+                CompareStringOrdinal(wide_name.c_str(),
+                                     static_cast<int>(wide_prefix.size()),
+                                     wide_prefix.c_str(),
+                                     static_cast<int>(wide_prefix.size()), TRUE) ==
+                CSTR_EQUAL;
+        }
+#endif
+        if (prefix_matches &&
             (!name_prefix.empty() || name.empty() || name[0] != '.')) {
             std::string candidate = display_directory + name;
             std::error_code type_error;

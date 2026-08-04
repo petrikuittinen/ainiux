@@ -12,6 +12,7 @@
 #include <ctime>
 #include <set>
 #include <exception>
+#include <filesystem>
 #include <fstream>
 #include <iomanip>
 #include <iostream>
@@ -21,6 +22,7 @@
 
 #include "json/json.hpp"
 #include "output/thinking.hpp"
+#include "platform/environment.hpp"
 #include "security/redact.hpp"
 
 namespace ainiux::provider {
@@ -246,7 +248,7 @@ Error read_file(const std::string& path, std::string& out) {
         return ok_error();
     }
     const std::string resolved = expand_user_path(path);
-    std::ifstream file(resolved, std::ios::binary);
+    std::ifstream file(std::filesystem::u8path(resolved), std::ios::binary);
     if (!file) {
         return {ErrorCode::FileRead, "could not open file for reading: " + resolved};
     }
@@ -264,14 +266,11 @@ std::string resolve_key(const cli::Options& options, const Profile& profile) {
         return options.key;
     }
     if (!options.key_env.empty()) {
-        const char* value = std::getenv(options.key_env.c_str());
-        return value == nullptr ? "" : std::string(value);
+        return platform::environment_value(options.key_env.c_str());
     }
     for (const std::string& env : profile.key_envs) {
-        const char* value = std::getenv(env.c_str());
-        if (value != nullptr && *value != '\0') {
-            return std::string(value);
-        }
+        const std::string value = platform::environment_value(env.c_str());
+        if (!value.empty()) return value;
     }
     return profile.dummy_api_key;
 }

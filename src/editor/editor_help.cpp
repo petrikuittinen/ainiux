@@ -2,9 +2,11 @@
 
 #include "detail/editor_common.hpp"
 #include "embedded_editor_help.hpp"
+#include "platform/environment.hpp"
 
 #include <cctype>
 #include <cstdlib>
+#include <filesystem>
 #include <fstream>
 #include <sstream>
 #include <vector>
@@ -82,7 +84,7 @@ EditorSlashCommand command_from_token(const std::string& command_token) {
 }
 
 std::string read_file_text(const std::string& path) {
-    std::ifstream input(path, std::ios::binary);
+    std::ifstream input(std::filesystem::u8path(path), std::ios::binary);
     if (!input) {
         return {};
     }
@@ -93,20 +95,17 @@ std::string read_file_text(const std::string& path) {
 
 std::vector<std::string> editor_help_search_paths() {
     std::vector<std::string> paths;
-    if (const char* override_path = std::getenv("AINIUX_EDITOR_HELP")) {
-        if (override_path[0] != '\0') {
-            paths.emplace_back(override_path);
-        }
-    }
-    if (const char* xdg_data = std::getenv("XDG_DATA_HOME")) {
-        if (xdg_data[0] != '\0') {
-            paths.push_back(std::string(xdg_data) + "/ainiux/editor_help.md");
-        }
-    } else if (const char* home = std::getenv("HOME")) {
-        if (home[0] != '\0') {
-            paths.push_back(std::string(home) + "/.local/share/ainiux/editor_help.md");
-        }
-    }
+    const std::string override_path = platform::environment_value("AINIUX_EDITOR_HELP");
+    if (!override_path.empty()) paths.push_back(override_path);
+    const std::string xdg_data = platform::environment_value("XDG_DATA_HOME");
+    const std::string home = platform::home_directory();
+    if (!xdg_data.empty())
+        paths.push_back(xdg_data + "/ainiux/editor_help.md");
+    else if (!home.empty())
+        paths.push_back(home + "/.local/share/ainiux/editor_help.md");
+    const std::string executable = platform::executable_directory();
+    if (!executable.empty())
+        paths.push_back(executable + "/share/ainiux/editor_help.md");
     paths.emplace_back("/usr/local/share/ainiux/editor_help.md");
     paths.emplace_back("/usr/share/ainiux/editor_help.md");
     paths.emplace_back("docs/editor_help.md");

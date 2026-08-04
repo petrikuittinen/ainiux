@@ -4,7 +4,42 @@ These records explain implementation rationale. For current usage, start at the 
 
 ## C++17 and Makefile
 
-The initial implementation uses C++17 and a plain Makefile to keep the binary portable across POSIX-like systems.
+The implementation uses C++17 and a plain Makefile across POSIX-like systems and
+the native MSYS2 UCRT64 Windows target. CMake, MSVC, and a package-manager-owned
+runtime are deliberately not required.
+
+## Native Windows x64 foundation
+
+Windows 10 1903+ and Windows 11 x64 use an official UCRT64 build because it
+retains GCC/GNU Make, produces a native Win32 executable, and allows a portable
+ZIP without the MSYS POSIX runtime. `wmain` is the process boundary: UTF-16
+arguments and wide environment/path values become internal UTF-8. A manifest
+declares long-path and UTF-8 awareness, and portable resources are also searched
+under `share/ainiux` beside the executable.
+
+`src/platform/` owns UTF conversion, environment discovery, identity-based path
+containment, protected DACL creation, secure temporary siblings, durable atomic
+replacement, and native error text. Existing objects are compared by volume/file
+identity; new targets are anchored to a canonical existing parent. Path strings
+are never globally lowercased. Windows-sensitive operations reject drive-relative
+paths, alternate streams, device names, caller NT namespaces, and reparse-point
+escapes. Persistent project-relative names keep `/` and enumerated casing so the
+SQLite and JSON schemas stay portable.
+
+`src/runtime/subprocess.*` is the common bounded/cancellable process interface.
+POSIX uses `fork`/`execve` and process groups. Windows uses `CreateProcessW`, an
+explicit inherited-handle list, anonymous pipes, and a kill-on-close Job Object
+assigned while the child is suspended. Both return LF-normalized valid UTF-8,
+explicit termination reasons, 64-bit exit status, and bounded stdout/stderr.
+The headless interrupt guard similarly maps SIGINT to `SetConsoleCtrlHandler`.
+
+Full-screen terminal ownership is one RAII object shared by chat, agent, and
+editor. Its POSIX backend retains termios; its Windows backend saves console
+modes/code pages and enables virtual-terminal input/output. Windows Terminal and
+modern conhost are supported; mintty/non-console full-screen sessions fail with
+an actionable error. Native `CF_UNICODETEXT` replaces clipboard helper processes
+on Windows. The package and native acceptance policy are documented in
+[Native Windows](windows.md).
 
 ## HTTP Transport
 
@@ -53,12 +88,22 @@ The first agent-like runtime is deliberately a single explicit non-interactive m
 
 ## User-initiated shell vs agent `run_command`
 
-Interactive chat, agent TUI, and REPL offer user shell for the human operator via `src/app/user_shell.*` (`/bin/sh -c`, closed stdin, bounded pipes, timeout, cancel):
+Interactive chat, agent TUI, and REPL offer user shell for the human operator via
+`src/app/user_shell.*`: `/bin/sh -c` on POSIX, or built-in Windows PowerShell 5.1
+with a no-profile encoded UTF-16 command and UTF-8 output on Windows. Both use
+closed stdin, bounded pipes, timeout, cancellation, and a sanitized environment:
 
 - `/shell` / `!` → display-only `notice` (filtered from provider payloads and chat SQLite).
 - `/shell-stdout` / `!!` → pure redacted stdout replaces the TUI input draft; the user must submit explicitly (Enter/Ctrl+S). Safer than auto-injecting shell output as a user message.
 
-This is intentionally **not** the agent tool path. Agent `run_command` (`src/agent/process.*`) is shell-free `execve` with structural argument safety (no metacharacters, relative path operands, fixed PATH resolution) and a **denylist / Guard** for dangerous forms. Security-review keeps a strict inspection allowlist. Agent mode deliberately does **not** grow per-command option allowlists—that does not scale across Linux toolchains.
+This is intentionally **not** the agent tool path. Agent `run_command`
+(`src/agent/process.*`) is direct argv execution with structural argument safety
+and a **denylist / Guard** for dangerous forms. POSIX uses fixed-PATH `execve`;
+Windows resolves absolute executables from inherited absolute PATH entries,
+filters PATHEXT, and runs safe `.bat`/`.cmd` files only through resolved
+`cmd.exe`. Security-review keeps a strict inspection allowlist. Agent mode
+deliberately does **not** grow per-command option allowlists—that does not scale
+across platform toolchains.
 
 ## Guard Ask approvals (interactive only)
 
@@ -74,7 +119,15 @@ Provider account-credit display is likewise registry-driven and optional. A prof
 
 ## Workspace path containment for agent writes
 
-Agent file tools only accept **project-relative** paths. On POSIX, `~/…` is *not* absolute—it is a relative component—so rejecting only `fs::path::is_absolute()` is insufficient: `~/code/x` would otherwise create `$workspace/~/code/x`. Paths with `~`, `~user`, `$…`, `..`, protected metadata dirs, or absolutes are rejected. After string checks, every write destination is re-validated with `weakly_canonical` so the resolved path must stay under the workspace root. `create_directories` never replaces existing non-directories and never deletes trees.
+Agent file tools only accept **project-relative** paths. On POSIX, `~/…` is *not*
+absolute—it is a relative component—so rejecting only
+`fs::path::is_absolute()` is insufficient: `~/code/x` would otherwise create
+`$workspace/~/code/x`. Paths with `~`, `~user`, `$…`, `..`, protected metadata
+dirs, or absolutes are rejected. Identity-based containment anchors a new target
+to its canonical existing parent and verifies existing targets by filesystem
+identity. Windows additionally applies its lexical path rules and rejects any
+link/reparse component in sensitive operations. `create_directories` never
+replaces existing non-directories and never deletes trees.
 
 ## Chat vs interactive agent (shared shell, separate modes)
 
@@ -98,7 +151,7 @@ Review workers receive an explicit per-batch `EXPECTED_COVERAGE` array and norma
 
 Security-review diagnostic logs append each JSONL event to a live `*.jsonl.partial` path and flush after every record so operators can `tail -f` progress. The path is printed on `stderr` at start; graceful completion renames the file to the final `*.jsonl` name.
 
-Security-review read tools are views over narrow index snapshot records, not SQLite handles. Index file/symbol rows remain hints; review source ranges are accepted only after reading the real file once and matching its indexed hash. The virtual snapshot tree is the security-review authorization list, so ignored, unsupported, generated, VCS, state, traversal, and symlink paths do not become review-readable. Agent mode keeps index/search/symbol tools on that snapshot but routes exact-path `read_file` and `read_many` through the same validated live-filesystem layer as its native mutation tools, allowing safe unindexed project files without broadening protected metadata or symlink access. A separate POSIX process runner exists because inspection command lifecycle, process groups, bounded pipes, cancellation, and Git hardening are reusable concerns; the security-review policy is a conservative read-only allowlist and never uses `system`, `popen`, or a shell.
+Security-review read tools are views over narrow index snapshot records, not SQLite handles. Index file/symbol rows remain hints; review source ranges are accepted only after reading the real file once and matching its indexed hash. The virtual snapshot tree is the security-review authorization list, so ignored, unsupported, generated, VCS, state, traversal, and symlink paths do not become review-readable. Agent mode keeps index/search/symbol tools on that snapshot but routes exact-path `read_file` and `read_many` through the same validated live-filesystem layer as its native mutation tools, allowing safe unindexed project files without broadening protected metadata or symlink access. A shared native process runner exists because inspection command lifecycle, process trees, bounded pipes, cancellation, and Git hardening are reusable concerns; the security-review policy is a conservative read-only allowlist and never uses `system`, `popen`, or an unrestricted shell.
 
 The security-review command runner post-filters path-listing/search stdout against its index snapshot. Agent Act/Plan does not apply that output filter: after command and canonical path validation, stdout represents the live project filesystem in every interactive permission mode. Besides being the intended live-filesystem behavior, this avoids incorrectly treating formatted rows such as `ls -l` output as literal filenames.
 
@@ -109,11 +162,11 @@ All wire construction remains inside registered protocols in `src/provider/`. Th
 
 ## JSON Chat Persistence
 
-v0.2 stores explicit chat files via `--save-chat PATH` and `--load-chat PATH` before adding automatic XDG chat IDs. This keeps the early REPL scriptable and reviewable while still using the target schema fields: `schema_version`, timestamps, provider, base URL, model, settings, messages, attachments, usage, and compaction events. Saves use a temporary file, fsync, rename, and restrictive file permissions.
+v0.2 stores explicit chat files via `--save-chat PATH` and `--load-chat PATH` before adding automatic XDG chat IDs. This keeps the early REPL scriptable and reviewable while still using the target schema fields: `schema_version`, timestamps, provider, base URL, model, settings, messages, attachments, usage, and compaction events. Saves use a private temporary sibling, durable flush, and atomic replacement: POSIX mode/fsync/rename or a protected Windows DACL with `FlushFileBuffers` and write-through replacement.
 
 ## SQLite Chat Persistence
 
-The automatic local TUI chat library uses `libsqlite3` and stores its database at `~/.ainiux/ainiux.db`. SQLite is a standard system library on the target POSIX-like platforms and keeps the dependency smaller than adding a bespoke storage engine. The schema stores one row per message rather than one JSON transcript blob so thread listing, transcript replay, regeneration, attachments, usage records, and compaction events have stable identifiers and indexes. WAL mode is enabled for the local database, with short transactions and a short busy timeout so indexed `/list` queries can run synchronously without waiting indefinitely on a lock. Provider, base URL, and model fields are restored as one authoritative thread context: empty persisted fields clear prior in-memory values instead of inheriting them. An incomplete provider/model pair is treated as recoverable setup state rather than a valid request configuration; the TUI labels it, requires provider-then-model selection, and prevents sends until repaired.
+The automatic local TUI chat library uses `libsqlite3` and stores its database at `~/.ainiux/ainiux.db`. SQLite is available on the target POSIX-like systems and UCRT64 and keeps the dependency smaller than adding a bespoke storage engine. The schema stores one row per message rather than one JSON transcript blob so thread listing, transcript replay, regeneration, attachments, usage records, and compaction events have stable identifiers and indexes. WAL mode is enabled for the local database, with short transactions and a short busy timeout so indexed `/list` queries can run synchronously without waiting indefinitely on a lock. Provider, base URL, and model fields are restored as one authoritative thread context: empty persisted fields clear prior in-memory values instead of inheriting them. An incomplete provider/model pair is treated as recoverable setup state rather than a valid request configuration; the TUI labels it, requires provider-then-model selection, and prevents sends until repaired.
 
 ## Runtime Jobs
 
@@ -142,7 +195,7 @@ The UI exposes `/highlight` in editor/chat and per-buffer `/mode MODE|auto` in t
 
 `--editor` is a permanent bonus mode and a controlled test bed for the multiline editing layer now embedded in the chat TUI. The editor core uses a piece table: the original file and appended edit buffer are kept separately while visible text is represented by pieces. This keeps inserts and deletes local to the piece list instead of rewriting the whole buffer on every keystroke, which is a better fit for large files than a single mutable string.
 
-Rendering is split from terminal I/O. `EditorState` renders into a caller-provided `Rect`, so one terminal window can eventually host multiple editor panels or embed the editor in a partial-screen chat layout. Long lines soft-wrap inside that rectangle, preferring whitespace breakpoints and hard-wrapping long words. Vertical movement has two modes: logical hard-line movement for file editing, and visual-row movement that treats wrapped overflow rows as cursor targets for TUI chat input. The current terminal harness uses POSIX `termios` and ANSI escape sequences because `ncursesw` was not available in the build environment; the core renderer is independent of that choice.
+Rendering is split from terminal I/O. `EditorState` renders into a caller-provided `Rect`, so one terminal window can eventually host multiple editor panels or embed the editor in a partial-screen chat layout. Long lines soft-wrap inside that rectangle, preferring whitespace breakpoints and hard-wrapping long words. Vertical movement has two modes: logical hard-line movement for file editing, and visual-row movement that treats wrapped overflow rows as cursor targets for TUI chat input. The terminal harness uses the shared RAII POSIX-termios/Win32-console backend and ANSI/VT escape sequences; the core renderer remains independent of terminal ownership and no ncurses dependency is added.
 
 The standalone editor reserves the bottom two terminal rows for editor-owned UI: a reverse-video status line and a one-line minibuffer. The main editing screen uses all remaining rows. The status line reports path, dirty state, the compact syntax language and line-ending mode as `(mode LF)`, `(mode CRLF)`, or `(mode CR)`, and cursor position; it omits redundant editor and automatic/manual labels to preserve space on 80-column terminals. The minibuffer handles prompts such as save path, load path, huge-file load confirmation, exact substring search, exact substring replacement, overwrite confirmation, scratch-buffer save-on-quit, and unsaved-exit confirmation. Replacement mode is deliberately modal after the search/replacement prompts: each match is replaced, skipped, or all remaining matches are replaced to the end of the buffer. The editor keeps a bounded undo/redo history with a configurable default depth of five entries. Editor file loads are unlimited by default except by address space and available memory, but config can set a hard byte limit and a separate warning threshold. Document `Tab` first queries the document word-completion domain and falls back to indentation; selected blocks always indent. Command and path completion remain isolated in the command minibuffer, while chat-TUI completion keeps its existing context rules.
 

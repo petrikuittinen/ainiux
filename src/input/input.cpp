@@ -4,6 +4,7 @@
 
 #include <array>
 #include <cctype>
+#include <filesystem>
 #include <fstream>
 #include <initializer_list>
 #include <iostream>
@@ -81,7 +82,7 @@ Error read_insert_file(const std::string& path,
     if (max_bytes == 0) {
         return {ErrorCode::BadArgs, "input.max_input_bytes must be greater than zero for /insert"};
     }
-    std::ifstream file(path, std::ios::binary);
+    std::ifstream file(std::filesystem::u8path(path), std::ios::binary);
     if (!file) {
         return {ErrorCode::FileRead, "could not open file for insertion: " + path};
     }
@@ -305,7 +306,7 @@ Error load_image_file_bytes(const std::string& path,
     if (type.kind != Kind::Image) {
         return {ErrorCode::Internal, "load_image_file_bytes called for non-image input: " + resolved};
     }
-    std::ifstream file(resolved, std::ios::binary);
+    std::ifstream file(std::filesystem::u8path(resolved), std::ios::binary);
     if (!file) {
         return {ErrorCode::FileRead, "could not open image for reading: " + resolved};
     }
@@ -386,7 +387,7 @@ Error load_text_context_file(const std::string& path,
     std::ifstream file;
     std::istream* input = &std::cin;
     if (resolved != "stdin") {
-        file.open(resolved, std::ios::binary);
+        file.open(std::filesystem::u8path(resolved), std::ios::binary);
         if (!file) {
             return {ErrorCode::FileRead, "could not open " + type.name + " for reading: " + resolved};
         }
@@ -547,7 +548,7 @@ Error read_local_text_file_for_attach(const std::string& path,
                     resolved};
     }
 
-    std::ifstream file(resolved, std::ios::binary);
+    std::ifstream file(std::filesystem::u8path(resolved), std::ios::binary);
     if (!file) {
         return {ErrorCode::FileRead, "could not open " + type.name + " for reading: " + resolved};
     }
