@@ -370,7 +370,16 @@ LoadResult parse_jsonl(std::istream& input, const std::string& source) {
 
 LoadResult load_jsonl(const std::string& path) {
     if (path == "builtin") {
-        std::istringstream input(kBuiltinDatasetJsonl);
+        std::size_t total_bytes = 0;
+        for (const std::string_view record : kBuiltinDatasetJsonlRecords)
+            total_bytes += record.size() + 1;
+        std::string builtin_jsonl;
+        builtin_jsonl.reserve(total_bytes);
+        for (const std::string_view record : kBuiltinDatasetJsonlRecords) {
+            builtin_jsonl.append(record.data(), record.size());
+            builtin_jsonl.push_back('\n');
+        }
+        std::istringstream input(builtin_jsonl);
         return parse_jsonl(input, "builtin");
     }
     std::ifstream input(std::filesystem::u8path(path), std::ios::binary);

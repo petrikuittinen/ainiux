@@ -50,6 +50,18 @@ int fixture_main(const std::string& self, const std::vector<std::string>& argume
             std::strtoll(arguments[1].c_str(), nullptr, 10)));
         return 0;
     }
+    if (mode == "--close-stdin") {
+#if defined(_WIN32)
+        const HANDLE input = GetStdHandle(STD_INPUT_HANDLE);
+        if (input == nullptr || input == INVALID_HANDLE_VALUE || !CloseHandle(input))
+            return 3;
+        (void)SetStdHandle(STD_INPUT_HANDLE, INVALID_HANDLE_VALUE);
+#else
+        if (::close(STDIN_FILENO) != 0) return 3;
+#endif
+        std::this_thread::sleep_for(std::chrono::milliseconds(25));
+        return 0;
+    }
     if (mode == "--flood" && arguments.size() == 2) {
         const std::size_t bytes = static_cast<std::size_t>(
             std::strtoull(arguments[1].c_str(), nullptr, 10));

@@ -21,7 +21,7 @@ The name began with the author’s child Aini and echoes the Chinese phrase 爱�
 
 ## Platform support
 
-Ubuntu on x86-64 and ARM64 remains the primary tested baseline. A native Windows 10 1903+/Windows 11 x64 target builds in MSYS2 UCRT64; Windows Terminal and modern conhost are supported for full-screen modes, while mintty is rejected with a clear diagnostic. Portable Windows release artifacts remain gated on the native parity workflow. BSD, macOS, and other POSIX-like systems are targeted where practical but are not all continuously tested. See [Native Windows](docs/windows.md).
+Ubuntu on x86-64 and ARM64 remains the primary tested baseline. Apple Silicon macOS 15+ supports source builds with Apple Clang, GNU Make, and Homebrew dependency metadata. A native Windows 10 1903+/Windows 11 x64 target builds in MSYS2 UCRT64; Windows Terminal and modern conhost are supported for full-screen modes, while mintty is rejected with a clear diagnostic. Portable Windows release artifacts remain gated on the native parity workflow. BSD and other POSIX-like systems are targeted where practical but are not all continuously tested. See [Getting started](docs/getting-started.md#build-on-apple-silicon-macos-15) and [Native Windows](docs/windows.md).
 
 Ainiux is provided under the [Modified MIT License](LICENSE). It is provided **“as is,” without warranty**; review the license before relying on it for important work.
 

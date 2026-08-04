@@ -150,10 +150,13 @@ $(BUILTIN_DATASET): $(BUILTIN_DATASET_PARTS)
 $(BUILTIN_BENCHMARK_HEADER): $(BUILTIN_DATASET)
 	@mkdir -p $(dir $@)
 	@{ \
-		printf '%s\n' '#pragma once' 'namespace ainiux::benchmark {' \
-			'inline constexpr char kBuiltinDatasetJsonl[] = R"AINIUX_JSONL('; \
-		cat $<; \
-		printf '%s\n' ')AINIUX_JSONL";' '}  // namespace ainiux::benchmark'; \
+		printf '%s\n' '#pragma once' '#include <string_view>' \
+			'namespace ainiux::benchmark {' \
+			'inline constexpr std::string_view kBuiltinDatasetJsonlRecords[] = {'; \
+		while IFS= read -r line || [ -n "$$line" ]; do \
+			printf '%s%s%s\n' '    R"AINIUX_JSONL(' "$$line" ')AINIUX_JSONL",'; \
+		done <$<; \
+		printf '%s\n' '};' '}  // namespace ainiux::benchmark'; \
 	} >$@.tmp
 	@mv $@.tmp $@
 

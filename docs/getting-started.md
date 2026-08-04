@@ -1,6 +1,6 @@
 # Getting started
 
-Ainiux builds as a C++17 terminal application with libcurl and SQLite. Ubuntu x86-64 and ARM64 are the primary tested baseline. Native Windows 10 1903+/Windows 11 x64 builds use GNU Make in MSYS2 UCRT64; other POSIX-like systems are targeted where practical but are not guaranteed.
+Ainiux builds as a C++17 terminal application with libcurl and SQLite. Ubuntu x86-64 and ARM64 are the primary tested baseline. Native Windows 10 1903+/Windows 11 x64 builds use GNU Make in MSYS2 UCRT64. Apple Silicon source builds support macOS 15 or newer; other POSIX-like systems are targeted where practical but are not guaranteed.
 
 ## Install on Ubuntu or Debian
 
@@ -39,7 +39,26 @@ make
 
 Some Ubuntu releases call the curl runtime package `libcurl4t64`; `scripts/install-deps.sh` detects the available name. `make optimized` uses release-oriented compiler settings. `sudo make install PREFIX=/usr/local` installs the binary and refreshable bundled configuration documents below `/usr/local/share/ainiux/`.
 
-On another POSIX-like system, provide a C++17 compiler plus development headers and link libraries for libcurl and SQLite. The repository does not claim continuous testing on BSD or macOS, and terminal behavior can differ across emulators.
+On another POSIX-like system, provide a C++17 compiler plus development headers and link libraries for libcurl and SQLite. Terminal behavior can differ across emulators.
+
+## Build on Apple Silicon macOS 15+
+
+Install Apple Clang from the Xcode Command Line Tools, then use GNU Make and
+Homebrew's `pkg-config` metadata for curl and SQLite:
+
+```sh
+xcode-select --install
+brew install make pkg-config curl sqlite
+export PKG_CONFIG_PATH="$(brew --prefix curl)/lib/pkgconfig:$(brew --prefix sqlite)/lib/pkgconfig"
+gmake CXX=clang++ -j2
+./ainiux --version
+gmake CXX=clang++ test-unit
+```
+
+This is source-build support only. The project does not currently provide macOS
+CI, packages, app bundles, universal binaries, Intel compatibility guarantees,
+code signing, or notarization. Full-screen modes continue to use the existing
+POSIX terminal implementation.
 
 ## Build on native Windows x64
 

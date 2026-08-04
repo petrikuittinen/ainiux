@@ -19,6 +19,8 @@
 #endif
 #include <windows.h>
 #include <aclapi.h>
+#else
+#include <signal.h>
 #endif
 
 namespace ainiux::test::runtime {
@@ -331,6 +333,61 @@ void test_subprocess_timeout_cancellation_and_descendants() {
           "subprocess timeout terminates the complete descendant process tree");
 }
 
+void test_subprocess_closed_stdin_is_incomplete() {
+    ainiux::runtime::SubprocessOptions options;
+    options.executable = subprocess_fixture_path();
+    options.arguments = {"--close-stdin"};
+    options.provide_stdin = true;
+    options.stdin_text.assign(1024 * 1024, 'x');
+    options.timeout_ms = 5000;
+    ainiux::runtime::SubprocessResult result;
+    const Error error = ainiux::runtime::run_subprocess(options, result);
+    check(error.ok() &&
+              result.termination ==
+                  ainiux::runtime::SubprocessTerminationReason::Exited &&
+              result.exit_code == 0,
+          "subprocess survives a child closing stdin before a large payload is written");
+    check(result.stdin_incomplete,
+          "subprocess reports stdin incomplete when the child closes without reading it");
+
+#if !defined(_WIN32)
+    sigset_t sigpipe_set{};
+    sigemptyset(&sigpipe_set);
+    sigaddset(&sigpipe_set, SIGPIPE);
+    sigset_t previous_mask{};
+    const int mask_error =
+        pthread_sigmask(SIG_BLOCK, &sigpipe_set, &previous_mask);
+    check(mask_error == 0, "subprocess SIGPIPE isolation test blocks SIGPIPE");
+    if (mask_error == 0) {
+        sigset_t pending_before{};
+        const bool already_pending =
+            sigpending(&pending_before) == 0 &&
+            sigismember(&pending_before, SIGPIPE) == 1;
+        check(!already_pending,
+              "subprocess SIGPIPE isolation test starts without a pending SIGPIPE");
+        if (!already_pending && raise(SIGPIPE) == 0) {
+            const Error pending_error =
+                ainiux::runtime::run_subprocess(options, result);
+            sigset_t pending_after{};
+            const bool remains_pending =
+                sigpending(&pending_after) == 0 &&
+                sigismember(&pending_after, SIGPIPE) == 1;
+            check(pending_error.ok() && result.stdin_incomplete && remains_pending,
+                  "subprocess preserves a SIGPIPE that was already pending");
+        } else if (!already_pending) {
+            check(false, "subprocess SIGPIPE isolation test queues SIGPIPE");
+        }
+        sigset_t pending_cleanup{};
+        if (!already_pending && sigpending(&pending_cleanup) == 0 &&
+            sigismember(&pending_cleanup, SIGPIPE) == 1) {
+            int signal_number = 0;
+            (void)sigwait(&sigpipe_set, &signal_number);
+        }
+        (void)pthread_sigmask(SIG_SETMASK, &previous_mask, nullptr);
+    }
+#endif
+}
+
 #if defined(_WIN32)
 void test_subprocess_handle_stability() {
     DWORD before = 0;
@@ -492,6 +549,7 @@ void run_all() {
     test_runtime_queue_timeout();
     test_background_jobs_supersede_without_blocking();
     test_subprocess_utf8_io_and_status();
+    test_subprocess_closed_stdin_is_incomplete();
     test_subprocess_timeout_cancellation_and_descendants();
 #if defined(_WIN32)
     test_subprocess_handle_stability();

@@ -79,8 +79,10 @@ class PipeSignalGuard {
         if (!pending_before_) {
             sigset_t pending{};
             if (sigpending(&pending) == 0 && sigismember(&pending, SIGPIPE) == 1) {
-                timespec zero{};
-                (void)sigtimedwait(&set_, nullptr, &zero);
+                // This thread generated the newly pending signal while it was
+                // blocked, so sigwait returns immediately and is portable to macOS.
+                int signal_number = 0;
+                (void)sigwait(&set_, &signal_number);
             }
         }
         (void)pthread_sigmask(SIG_SETMASK, &previous_, nullptr);
