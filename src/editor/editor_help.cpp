@@ -104,8 +104,12 @@ std::vector<std::string> editor_help_search_paths() {
     else if (!home.empty())
         paths.push_back(home + "/.local/share/ainiux/editor_help.md");
     const std::string executable = platform::executable_directory();
-    if (!executable.empty())
-        paths.push_back(executable + "/share/ainiux/editor_help.md");
+    if (!executable.empty()) {
+        const std::filesystem::path exe = std::filesystem::u8path(executable);
+        paths.push_back(
+            (exe / ".." / "share" / "ainiux" / "editor_help.md").lexically_normal().u8string());
+        paths.push_back((exe / "share" / "ainiux" / "editor_help.md").u8string());
+    }
     paths.emplace_back("/usr/local/share/ainiux/editor_help.md");
     paths.emplace_back("/usr/share/ainiux/editor_help.md");
     paths.emplace_back("docs/editor_help.md");

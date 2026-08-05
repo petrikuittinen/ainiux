@@ -808,6 +808,8 @@ std::string environment_value(const char* name) {
 
 // Installed share lookup for make install PREFIX and scripts/install.sh --user.
 // Order: $XDG_DATA_HOME/ainiux, else ~/.local/share/ainiux, then /usr/local and /usr.
+// User config still lives under ~/.config/ainiux (or $XDG_CONFIG_HOME); these paths
+// are only the installed/share data layer, not a second system config root.
 void append_installed_share_paths(std::vector<std::string>& paths, const char* filename) {
     const std::string xdg_data = environment_value("XDG_DATA_HOME");
     if (absolute_path(xdg_data)) {
@@ -824,12 +826,16 @@ void append_installed_share_paths(std::vector<std::string>& paths, const char* f
     paths.emplace_back(std::string("/usr/share/ainiux/") + filename);
 }
 
+// Prefer PREFIX/share next to bin/ (FHS / Windows package layout). Also try a
+// side-by-side share/ directory used by some staged package trees.
 void append_executable_share_path(std::vector<std::string>& paths, const char* filename) {
     const std::string executable_dir = platform::executable_directory();
-    if (!executable_dir.empty()) {
-        paths.emplace_back((std::filesystem::u8path(executable_dir) / "share" / "ainiux" /
-                            filename).u8string());
+    if (executable_dir.empty()) {
+        return;
     }
+    const std::filesystem::path exe = std::filesystem::u8path(executable_dir);
+    paths.emplace_back((exe / ".." / "share" / "ainiux" / filename).lexically_normal().u8string());
+    paths.emplace_back((exe / "share" / "ainiux" / filename).u8string());
 }
 
 std::string trim_config_ascii(std::string text) {

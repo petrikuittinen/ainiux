@@ -772,6 +772,21 @@ void test_config_reads_models_template() {
     check(deepseek_v4 != nullptr &&
               deepseek_v4->context_window_tokens == 1000000,
           "DeepSeek V4 catalog record supplies its documented 1M context fallback");
+    const ainiux::ModelCapability* deepseek_v4_dated =
+        ainiux::config::resolve_model_capability(
+            options.model_catalog, "openrouter", "chat",
+            "deepseek/deepseek-v4-flash-0731");
+    check(deepseek_v4_dated != nullptr && deepseek_v4_dated->id == "deepseek-v4" &&
+              !deepseek_v4_dated->reasoning_options.empty(),
+          "DeepSeek V4 family rule covers dated OpenRouter-style flash revisions");
+    ainiux::ReasoningSelection deepseek_next;
+    check(ainiux::config::next_reasoning_selection(
+              options.model_catalog, "openrouter", "chat",
+              "deepseek/deepseek-v4-flash-0731",
+              ainiux::ReasoningSelection::automatic(),
+              deepseek_next) &&
+              deepseek_next == ainiux::ReasoningSelection::named("none"),
+          "Ctrl+T / next_reasoning_selection works for dated DeepSeek V4 flash ids");
 
     const std::string valid_warning = ainiux::config::reasoning_catalog_warning(
         options.model_catalog,

@@ -817,7 +817,7 @@ void test_model_context_window_tokens() {
     ainiux::ModelCapability deepseek_v4;
     deepseek_v4.id = "deepseek-v4";
     deepseek_v4.api = "chat";
-    deepseek_v4.model_regex = "^deepseek-v4-(?:pro|flash)$";
+    deepseek_v4.model_regex = "^deepseek-v4-(?:pro|flash)(?:[-.][a-z0-9]+)*$";
     deepseek_v4.context_window_tokens = 1000000;
     context.profile.name = "deepseek";
     context.options.model = "deepseek/deepseek-v4-pro";

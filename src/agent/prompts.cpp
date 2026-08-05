@@ -101,9 +101,11 @@ Error load_trusted_prompts(const std::string& override_directory, TrustedPrompts
 
     std::vector<fs::path> installed;
     const std::string executable_directory = platform::executable_directory();
-    if (!executable_directory.empty())
-        installed.push_back(fs::u8path(executable_directory) / "share" / "ainiux" /
-                            "prompts");
+    if (!executable_directory.empty()) {
+        const fs::path exe = fs::u8path(executable_directory);
+        installed.push_back((exe / ".." / "share" / "ainiux" / "prompts").lexically_normal());
+        installed.push_back(exe / "share" / "ainiux" / "prompts");
+    }
     installed.push_back(fs::path("/usr/local/share/ainiux/prompts"));
     installed.push_back(fs::path("/usr/share/ainiux/prompts"));
     for (const fs::path& directory : installed) {
