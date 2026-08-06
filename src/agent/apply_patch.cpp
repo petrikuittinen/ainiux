@@ -313,6 +313,144 @@ Error parse_apply_patch(const std::string& patch_text, ParsedPatch& out) {
     return ok_error();
 }
 
+namespace {
+
+// Byte offset of the first byte of 1-based line `line` (clamped to size).
+std::size_t offset_of_line(const std::string& text, std::size_t line) {
+    if (line <= 1) return 0;
+    std::size_t current = 1;
+    for (std::size_t i = 0; i < text.size(); ++i) {
+        if (text[i] == '\n') {
+            ++current;
+            if (current == line) return i + 1;
+        }
+    }
+    return text.size();
+}
+
+// Parse unified-diff style anchors from a hunk header: "-120,5 +120,8" or "-120".
+// Returns true when an old-file start line was found.
+bool parse_hunk_line_anchor(const std::string& header,
+                            std::size_t& old_start,
+                            std::size_t& old_count) {
+    old_start = 0;
+    old_count = 0;
+    // Skip leading spaces; accept optional function label after the ranges.
+    std::size_t i = 0;
+    while (i < header.size() && (header[i] == ' ' || header[i] == '\t')) ++i;
+    if (i >= header.size() || header[i] != '-') return false;
+    ++i;
+    if (i >= header.size() || header[i] < '0' || header[i] > '9') return false;
+    std::size_t start = 0;
+    while (i < header.size() && header[i] >= '0' && header[i] <= '9') {
+        start = start * 10U + static_cast<std::size_t>(header[i] - '0');
+        ++i;
+    }
+    std::size_t count = 1;
+    if (i < header.size() && header[i] == ',') {
+        ++i;
+        count = 0;
+        if (i >= header.size() || header[i] < '0' || header[i] > '9') return false;
+        while (i < header.size() && header[i] >= '0' && header[i] <= '9') {
+            count = count * 10U + static_cast<std::size_t>(header[i] - '0');
+            ++i;
+        }
+    }
+    if (start == 0) return false;
+    old_start = start;
+    old_count = count == 0 ? 1 : count;
+    return true;
+}
+
+std::string preview_snippet(const std::string& text, std::size_t max_bytes) {
+    std::string preview = text;
+    if (preview.size() > max_bytes) {
+        preview.resize(max_bytes);
+        preview += "…";
+    }
+    for (char& ch : preview) {
+        if (ch == '\n' || ch == '\r' || ch == '\t') ch = ' ';
+    }
+    return preview;
+}
+
+std::string format_match_lines(const std::vector<TextSpan>& matches, std::size_t limit) {
+    std::ostringstream out;
+    const std::size_t n = std::min(limit, matches.size());
+    for (std::size_t i = 0; i < n; ++i) {
+        if (i) out << ',';
+        out << matches[i].start_line;
+    }
+    if (matches.size() > limit) out << ",…";
+    return out.str();
+}
+
+// Collect matches for old_text, trying with and without a trailing newline.
+// Returns the needle that was used (possibly with trailing \n) via matched_needle.
+TextMatchResult find_hunk_matches(const std::string& haystack,
+                                  const std::string& old_text,
+                                  bool allow_fuzzy,
+                                  std::size_t region_start,
+                                  std::size_t region_end,
+                                  std::string& matched_needle) {
+    matched_needle = old_text;
+    TextMatchResult found =
+        find_text_matches(haystack, old_text, allow_fuzzy, region_start, region_end);
+    if (!found.matches.empty()) return found;
+    if (!old_text.empty() && old_text.back() != '\n') {
+        matched_needle = old_text + "\n";
+        found = find_text_matches(haystack, matched_needle, allow_fuzzy, region_start, region_end);
+    }
+    return found;
+}
+
+std::vector<TextSpan> filter_matches_from(const std::vector<TextSpan>& matches,
+                                          std::size_t min_offset) {
+    std::vector<TextSpan> out;
+    for (const TextSpan& span : matches) {
+        if (span.offset >= min_offset) out.push_back(span);
+    }
+    return out;
+}
+
+Error ambiguous_hunk_error(std::size_t hunk_index,
+                           const std::string& old_text,
+                           const std::vector<TextSpan>& matches) {
+    return {ErrorCode::FileWrite,
+            "apply_patch hunk " + std::to_string(hunk_index) +
+                " context matches " + std::to_string(matches.size()) +
+                " places (lines " + format_match_lines(matches, 10) +
+                "); old_text=\"" + preview_snippet(old_text, 80) +
+                "\". Make the context unique, add a @@ -line,count header, "
+                "or use str_replace/edit_file with line_range_hint."};
+}
+
+Error not_found_hunk_error(std::size_t hunk_index, const std::string& old_text) {
+    return {ErrorCode::FileWrite,
+            "apply_patch hunk " + std::to_string(hunk_index) +
+                " context not found in file (old text did not match); old_text=\"" +
+                preview_snippet(old_text, 80) +
+                "\". Re-read the file and refresh the hunk context."};
+}
+
+// Count how many remaining hunks (from index inclusive) share the same old_text.
+// Used to apply identical multi-site one-line fixes left-to-right.
+std::size_t count_same_old_text_hunks(const std::vector<PatchHunk>& hunks,
+                                      std::size_t from_index,
+                                      const std::string& old_text) {
+    std::size_t count = 0;
+    for (std::size_t i = from_index; i < hunks.size(); ++i) {
+        std::string other_old;
+        std::string other_new;
+        if (!hunk_old_new_text(hunks[i], other_old, other_new).ok()) break;
+        if (other_old != old_text) break;
+        ++count;
+    }
+    return count;
+}
+
+}  // namespace
+
 Error apply_patch_hunks(const std::string& original,
                         const std::vector<PatchHunk>& hunks,
                         bool allow_fuzzy,
@@ -322,7 +460,15 @@ Error apply_patch_hunks(const std::string& original,
     match_modes.clear();
     if (hunks.empty()) return {ErrorCode::BadArgs, "no hunks to apply"};
 
-    for (const PatchHunk& hunk : hunks) {
+    // Sequential cursor: after each successful hunk, later hunks prefer the first
+    // match at or after this offset (Codex-style left-to-right application). This
+    // fixes multi-site identical one-line fixes and pure insertions after a prior
+    // unique edit in the same file. Bare first-hunk weak context still errors.
+    std::size_t search_from = 0;
+
+    for (std::size_t hunk_index = 0; hunk_index < hunks.size(); ++hunk_index) {
+        const PatchHunk& hunk = hunks[hunk_index];
+        const std::size_t display_index = hunk_index + 1;
         std::string old_text;
         std::string new_text;
         Error error = hunk_old_new_text(hunk, old_text, new_text);
@@ -342,43 +488,120 @@ Error apply_patch_hunks(const std::string& original,
                 return {ErrorCode::FileWrite,
                         "hunk has empty old text but is not a pure insertion"};
             if (!result.empty() && result.back() != '\n') result.push_back('\n');
+            const std::size_t insert_at = result.size();
             result += new_text;
             if (!new_text.empty() && new_text.back() != '\n') result.push_back('\n');
+            search_from = result.size();
+            (void)insert_at;
             match_modes.push_back("eof_insert");
             continue;
         }
 
-        // Prefer matching old_text as a contiguous region. When the original uses
-        // trailing newlines between lines, rebuild with \n between logical lines.
-        // old_text from hunk_old_new_text uses \n separators without a final \n
-        // unless the last body line was empty — also try with trailing \n.
-        const TextMatchResult found =
-            find_text_matches(result, old_text, allow_fuzzy, 0, std::string::npos);
-        TextMatchResult found_nl;
-        bool use_nl = false;
-        if (found.matches.empty() && !old_text.empty() && old_text.back() != '\n') {
-            found_nl = find_text_matches(result, old_text + "\n", allow_fuzzy, 0, std::string::npos);
-            use_nl = !found_nl.matches.empty();
+        std::size_t anchor_start = 0;
+        std::size_t anchor_count = 0;
+        const bool has_line_anchor =
+            parse_hunk_line_anchor(hunk.header, anchor_start, anchor_count);
+
+        std::string matched_needle;
+        TextMatchResult chosen;
+        std::string mode_suffix;
+        bool selected = false;
+
+        // 1) Unique match inside @@ line window (with slack for nearby drift).
+        if (has_line_anchor) {
+            const std::size_t window_line =
+                anchor_start > 2 ? anchor_start - 2 : 1;
+            const std::size_t window_end_line = anchor_start + anchor_count + 8;
+            const std::size_t region_start = offset_of_line(result, window_line);
+            const std::size_t region_end = offset_of_line(result, window_end_line + 1);
+            chosen = find_hunk_matches(result, old_text, allow_fuzzy, region_start,
+                                       region_end, matched_needle);
+            if (chosen.matches.size() == 1) {
+                selected = true;
+                mode_suffix = "_line_anchor";
+            } else if (chosen.matches.size() > 1) {
+                // Prefer the first match still at/after the sequential cursor.
+                std::vector<TextSpan> after = filter_matches_from(chosen.matches, search_from);
+                if (after.size() == 1) {
+                    chosen.matches = std::move(after);
+                    selected = true;
+                    mode_suffix = "_line_anchor_sequential";
+                } else if (!after.empty()) {
+                    chosen.matches.assign(1, after.front());
+                    selected = true;
+                    mode_suffix = "_line_anchor_first";
+                } else {
+                    // All window matches are before the cursor; take first in window.
+                    chosen.matches.resize(1);
+                    selected = true;
+                    mode_suffix = "_line_anchor_first";
+                }
+            }
         }
-        const TextMatchResult& chosen = use_nl ? found_nl : found;
-        const std::string matched_old = use_nl ? old_text + "\n" : old_text;
+
+        // 2) Full-file search with sequential disambiguation.
+        if (!selected) {
+            chosen = find_hunk_matches(result, old_text, allow_fuzzy, 0, std::string::npos,
+                                       matched_needle);
+            if (chosen.matches.empty()) return not_found_hunk_error(display_index, old_text);
+
+            if (chosen.matches.size() == 1) {
+                selected = true;
+            } else {
+                std::vector<TextSpan> after =
+                    filter_matches_from(chosen.matches, search_from);
+                if (after.empty()) {
+                    return ambiguous_hunk_error(display_index, old_text, chosen.matches);
+                }
+                if (after.size() == 1) {
+                    chosen.matches = std::move(after);
+                    selected = true;
+                    mode_suffix = "_sequential";
+                } else if (search_from > 0) {
+                    // Prior hunk advanced the cursor: take the next site (identical
+                    // multi-site edits; pure insert after a nearby unique edit).
+                    chosen.matches.assign(1, after.front());
+                    selected = true;
+                    mode_suffix = "_sequential_first";
+                } else {
+                    // First ambiguous site: only auto-pick when a run of remaining
+                    // hunks share this old_text and there are enough match sites
+                    // (e.g. two identical body_len=23 fixes).
+                    const std::size_t same_run =
+                        count_same_old_text_hunks(hunks, hunk_index, old_text);
+                    if (same_run >= 2 && after.size() >= same_run) {
+                        chosen.matches.assign(1, after.front());
+                        selected = true;
+                        mode_suffix = "_multisite_first";
+                    } else {
+                        return ambiguous_hunk_error(display_index, old_text, after);
+                    }
+                }
+            }
+        }
+
+        if (!selected || chosen.matches.empty())
+            return not_found_hunk_error(display_index, old_text);
+
         std::string replacement = new_text;
+        const bool use_nl =
+            matched_needle.size() == old_text.size() + 1 && !matched_needle.empty() &&
+            matched_needle.back() == '\n';
         if (use_nl && !replacement.empty() && replacement.back() != '\n') replacement.push_back('\n');
         if (use_nl && replacement.empty()) replacement = "\n";  // pure delete of a line
 
-        if (chosen.matches.empty())
-            return {ErrorCode::FileWrite,
-                    "apply_patch hunk context not found in file (old text did not match)"};
-        if (chosen.matches.size() > 1)
-            return {ErrorCode::FileWrite,
-                    "apply_patch hunk context matches " + std::to_string(chosen.matches.size()) +
-                        " places; make the context unique or split the patch"};
-
+        const TextSpan span = chosen.matches.front();
         std::size_t replacements = 0;
-        result = apply_text_replacements(result, chosen.matches, replacement, false, replacements);
+        std::vector<TextSpan> one = {span};
+        result = apply_text_replacements(result, one, replacement, false, replacements);
         if (replacements != 1)
             return {ErrorCode::Internal, "apply_patch expected exactly one hunk replacement"};
-        match_modes.push_back(chosen.mode.empty() ? "exact" : chosen.mode);
+
+        // Advance cursor to just after the replacement.
+        search_from = span.offset + replacement.size();
+        std::string mode = chosen.mode.empty() ? "exact" : chosen.mode;
+        mode += mode_suffix;
+        match_modes.push_back(std::move(mode));
     }
     return ok_error();
 }

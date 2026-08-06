@@ -26,7 +26,8 @@ namespace ainiux::agent {
 enum class PatchOpKind { AddFile, UpdateFile, DeleteFile };
 
 struct PatchHunk {
-    // Optional text after "@@" (unused for matching; kept for diagnostics).
+    // Optional text after "@@". May include unified-diff line anchors such as
+    // "-120,5 +120,8" (used as a match window) plus an optional function label.
     std::string header;
     // Raw body lines including the leading ' ', '-', or '+' (no trailing \n).
     std::vector<std::string> lines;

@@ -2543,34 +2543,143 @@ std::string preserve_range_newline(const std::string& previous_range,
     return replacement;
 }
 
+// GPT-5.x / some OpenRouter tool encoders materialize every nested op object with
+// default empty fields (symbol_id=1, empty strings, line=1). Treat those shells as
+// absent so a real nested op (or top-level type) can still win.
+bool nested_edit_op_is_empty_shell(const json::Value& nested) {
+    if (!nested.is_object()) return true;
+    auto non_empty_string = [&](const char* key) -> bool {
+        const json::Value* value = nested.get(key);
+        return value != nullptr && value->is_string() && !value->string.empty();
+    };
+    if (non_empty_string("new_text") || non_empty_string("replacement") ||
+        non_empty_string("text") || non_empty_string("old_text") ||
+        non_empty_string("path") || non_empty_string("expected_hash"))
+        return false;
+
+    auto number_at = [&](const char* key, double& out) -> bool {
+        const json::Value* value = nested.get(key);
+        if (value == nullptr || value->type != json::Value::Type::Number) return false;
+        out = value->number;
+        return true;
+    };
+    double start = 0, end = 0, line = 0, symbol = 0;
+    const bool has_start = number_at("start_line", start);
+    const bool has_end = number_at("end_line", end);
+    const bool has_line = number_at("line", line);
+    const bool has_symbol = number_at("symbol_id", symbol);
+
+    // Full default template from schema-filling models (~10+ keys, all defaults).
+    const bool looks_like_filler_template =
+        nested.object.size() >= 8 && has_start && has_end && has_line && has_symbol &&
+        start == 1.0 && end == 1.0 && line == 1.0 && symbol == 1.0 &&
+        !non_empty_string("new_text") && !non_empty_string("old_text") &&
+        !non_empty_string("replacement") && !non_empty_string("text");
+    if (looks_like_filler_template) return true;
+
+    // Compact real payloads: delete_range/replace_range line spans, insert line,
+    // or replace_symbol id.
+    if (has_start && has_end && end >= start && start >= 1.0) return false;
+    if (has_line && line >= 1.0) return false;
+    if (has_symbol && symbol >= 1.0) return false;
+    return true;
+}
+
 // Some models (e.g. DeepSeek via OpenRouter) nest the operation:
 //   {"replace_range":{"start_line":1,"end_line":1,"new_text":"..."}}
 // or split text outside the nested object:
 //   {"replace_range":{"start_line":1,"end_line":1},"text":"..."}
+// GPT-5.x often fills ALL nested op keys with empty defaults plus a real top-level
+// type/fields — drop empty shells and flatten the remaining payload.
 // Flatten that into the flat schema before type inference / parsing.
 json::Value normalize_edit_op_shape(const json::Value& op) {
     if (!op.is_object()) return op;
     static const char* kNestedTypes[] = {"replace_range", "insert_at", "delete_range",
                                          "replace_text",  "replace_symbol", "create_file"};
+
+    // Explicit type/op wins: ignore nested shells entirely (GPT-5 pollution).
+    const json::Value* type_value = op.get("type");
+    if (type_value == nullptr) type_value = op.get("op");
+    const bool has_explicit_type =
+        type_value != nullptr && type_value->is_string() && !type_value->string.empty();
+
     const json::Value* nested = nullptr;
     std::string nested_type;
+    int payload_count = 0;
     for (const char* name : kNestedTypes) {
         const json::Value* candidate = op.get(name);
-        if (candidate != nullptr && candidate->is_object()) {
-            // Prefer the first nested op-type key; ignore if multiple (ambiguous).
-            if (nested != nullptr) return op;
+        if (candidate == nullptr || !candidate->is_object()) continue;
+        if (nested_edit_op_is_empty_shell(*candidate)) continue;
+        ++payload_count;
+        if (nested == nullptr) {
             nested = candidate;
             nested_type = name;
         }
     }
+
+    // When the model set type/op, keep flat fields and drop nested noise.
+    if (has_explicit_type) {
+        json::Value flat = object_value();
+        for (const auto& entry : op.object) {
+            bool is_nested_type = false;
+            for (const char* name : kNestedTypes) {
+                if (entry.first == name) {
+                    is_nested_type = true;
+                    break;
+                }
+            }
+            if (is_nested_type) continue;
+            flat.object[entry.first] = entry.second;
+        }
+        // If top-level lacks text fields but the matching nested type had payload,
+        // merge that nested payload (models put replacement only under nested key).
+        if (nested != nullptr && payload_count == 1 &&
+            (type_value->string == nested_type || type_value->string.empty())) {
+            for (const auto& entry : nested->object) {
+                if (flat.object.find(entry.first) == flat.object.end())
+                    flat.object[entry.first] = entry.second;
+                else {
+                    // Prefer non-empty nested strings over empty top-level defaults.
+                    const json::Value* existing = flat.get(entry.first);
+                    if (existing != nullptr && existing->is_string() && existing->string.empty() &&
+                        entry.second.is_string() && !entry.second.string.empty())
+                        flat.object[entry.first] = entry.second;
+                }
+            }
+        } else if (nested != nullptr && type_value->string == nested_type) {
+            for (const auto& entry : nested->object) {
+                const json::Value* existing = flat.get(entry.first);
+                if (existing == nullptr)
+                    flat.object[entry.first] = entry.second;
+                else if (existing->is_string() && existing->string.empty() &&
+                         entry.second.is_string() && !entry.second.string.empty())
+                    flat.object[entry.first] = entry.second;
+            }
+        }
+        if (flat.get("new_text") == nullptr && flat.get("replacement") == nullptr) {
+            const json::Value* text = flat.get("text");
+            if (text != nullptr && text->is_string()) flat.object["new_text"] = *text;
+        }
+        return flat;
+    }
+
     if (nested == nullptr) return op;
+    // Multiple real nested payloads without type → leave unchanged (ambiguous).
+    if (payload_count > 1) return op;
 
     json::Value flat = object_value();
     flat.object["type"] = string_value(nested_type);
     for (const auto& entry : nested->object) flat.object[entry.first] = entry.second;
     // Preserve top-level siblings (text, expected_hash, replace_all, …).
     for (const auto& entry : op.object) {
-        if (entry.first == nested_type) continue;
+        bool is_nested_type = false;
+        for (const char* name : kNestedTypes) {
+            if (entry.first == name) {
+                is_nested_type = true;
+                break;
+            }
+        }
+        if (is_nested_type) continue;
         if (flat.object.find(entry.first) == flat.object.end())
             flat.object[entry.first] = entry.second;
     }
@@ -3074,24 +3183,28 @@ std::vector<provider::FunctionDefinition> ReadToolRegistry::definitions() const 
         (indexing_enabled_
              ? std::string(",\"symbol_id\":{\"type\":\"integer\",\"minimum\":1}")
              : std::string());
-    const std::string edit_nested_object =
-        "{\"type\":\"object\",\"properties\":{" + edit_line_fields + "}}";
+    // Flat op schema only. Nested op objects (replace_range:{...}) are still
+    // accepted on the wire via normalize_edit_op_shape, but advertising them in
+    // the tool schema causes GPT-5.x / OpenRouter to fill every nested key with
+    // empty defaults (symbol_id=1, blank strings), which breaks type inference.
+    // Enumerate op names (including replace_symbol when indexing) so enablement
+    // tests and models still see the capability without nested shells.
+    const std::string edit_type_enum =
+        indexing_enabled_
+            ? "\"enum\":[\"insert_at\",\"replace_range\",\"delete_range\","
+              "\"replace_text\",\"replace_symbol\",\"create_file\"]"
+            : "\"enum\":[\"insert_at\",\"replace_range\",\"delete_range\","
+              "\"replace_text\",\"create_file\"]";
     const std::string edit_op_item =
         "{\"type\":\"object\",\"properties\":{"
-        "\"type\":{\"type\":\"string\"},"
-        "\"op\":{\"type\":\"string\"}," +
-        edit_line_fields +
+        "\"type\":{\"type\":\"string\"," +
+        edit_type_enum +
+        "},"
+        "\"op\":{\"type\":\"string\"," +
+        edit_type_enum + "}," + edit_line_fields +
         ",\"line_range_hint\":{\"type\":\"object\",\"properties\":{"
         "\"start_line\":{\"type\":\"integer\",\"minimum\":1},"
-        "\"end_line\":{\"type\":\"integer\",\"minimum\":1}}},"
-        "\"replace_range\":" +
-        edit_nested_object +
-        ",\"insert_at\":" + edit_nested_object + ",\"delete_range\":" + edit_nested_object +
-        ",\"replace_text\":" + edit_nested_object +
-        (indexing_enabled_
-             ? ",\"replace_symbol\":" + edit_nested_object
-             : std::string()) +
-        ",\"create_file\":" + edit_nested_object +
+        "\"end_line\":{\"type\":\"integer\",\"minimum\":1}}}"
         "}}";
     const std::string search_fields =
         "\"query\":{\"type\":\"string\"},"
@@ -3270,13 +3383,16 @@ std::vector<provider::FunctionDefinition> ReadToolRegistry::definitions() const 
     if (allow_mutations()) {
         tools.push_back(
             {"edit_file",
-             "Preferred in-file edit (not for deleting whole files—use remove). Ops: "
+             "Preferred in-file edit (not for deleting whole files—use remove). Flat ops "
+             "only—set type/op and fields on the op object (do not nest empty "
+             "replace_range/create_file/… shells). Ops: "
              "insert_at (add before a 1-based line; e.g. "
              "{\"type\":\"insert_at\",\"line\":2,\"new_text\":\"...\"}), "
              "replace_range (rewrite line spans; include full old text in "
              "replacement when substituting), delete_range, replace_text (exact then fuzzy), "
              + std::string(indexing_enabled_ ? "replace_symbol, " : "") +
-             "create_file (alone). Line ops apply bottom-to-top.",
+             "create_file (alone). Omit expected_hash unless taken from a fresh read_file "
+             "range_hash. Line ops apply bottom-to-top.",
              schema(path + ",\"expected_file_hash\":{\"type\":\"string\"},"
                            "\"create_dirs\":{\"type\":\"boolean\"},"
                            "\"ops\":{\"type\":\"array\",\"minItems\":1,\"maxItems\":100,"
@@ -3336,8 +3452,11 @@ std::vector<provider::FunctionDefinition> ReadToolRegistry::definitions() const 
                     "\"path\"")});
         tools.push_back(
             {"apply_patch",
-             "Apply an OpenAI/Codex-style multi-file patch. Prefer edit_file for simple "
-             "single-file edits. Preferred form:\n"
+             "Apply an OpenAI/Codex-style multi-file patch. Prefer edit_file or str_replace "
+             "for simple single-file edits. Hunk context must match the file; use unique "
+             "surrounding lines (not only a bare '}' or 'return 0;'). Optional "
+             "@@ -line,count headers disambiguate. Multi-hunk patches apply top-to-bottom "
+             "with sequential anchoring. Preferred form (patch or diff or input):\n"
              "*** Begin Patch\n"
              "*** Update File: path\n"
              "@@\n"
@@ -3346,7 +3465,7 @@ std::vector<provider::FunctionDefinition> ReadToolRegistry::definitions() const 
              "+new\n"
              "*** End Patch\n"
              "Also accepts bare *** Update/Add/Delete File sections without Begin/End "
-             "(common with local models). patch/input/diff aliases; fuzzy=true default.",
+             "(common with local models). fuzzy=true default.",
              schema("\"patch\":{\"type\":\"string\"},"
                     "\"input\":{\"type\":\"string\"},"
                     "\"diff\":{\"type\":\"string\"},"

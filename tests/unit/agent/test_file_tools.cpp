@@ -847,6 +847,49 @@ void test_edit_file_ops() {
     check(read_text(fs::path(workspace) / "src" / "nested_path.py") == "# first\n# second line\nprint(1)\n",
           "nested-path edit inserted second comment line");
 
+    // GPT-5.x / OpenRouter fills every nested op type with empty defaults while also
+    // setting top-level type + old_text/new_text (session B edit_file failure shape).
+    write_text(fs::path(workspace) / "src" / "gpt5.cpp",
+               "#define MAX_BODY 1\n#define OUTPUT_CHUNK 2\n");
+    tools = make_registry(workspace, true);
+    const std::string gpt5_polluted = tools.execute(
+        "edit_file",
+        R"JSON({
+          "path":"src/gpt5.cpp",
+          "ops":[{
+            "type":"replace_text",
+            "op":"replace_range",
+            "old_text":"#define MAX_BODY 1\n#define OUTPUT_CHUNK 2",
+            "new_text":"#define MAX_BODY 1\n#define MAX_HTTP1 3\n#define OUTPUT_CHUNK 2",
+            "create_file":{"end_line":1,"expected_hash":"","fuzzy":false,"line":1,"new_text":"","old_text":"","replace_all":false,"replacement":"","start_line":1,"symbol_id":1,"text":""},
+            "delete_range":{"end_line":1,"expected_hash":"","fuzzy":false,"line":1,"new_text":"","old_text":"","replace_all":false,"replacement":"","start_line":1,"symbol_id":1,"text":""},
+            "insert_at":{"end_line":1,"expected_hash":"","fuzzy":false,"line":1,"new_text":"","old_text":"","replace_all":false,"replacement":"","start_line":1,"symbol_id":1,"text":""},
+            "replace_range":{"end_line":1,"expected_hash":"","fuzzy":false,"line":1,"new_text":"","old_text":"","replace_all":false,"replacement":"","start_line":1,"symbol_id":1,"text":""},
+            "replace_text":{"end_line":1,"expected_hash":"","fuzzy":false,"line":1,"new_text":"","old_text":"","replace_all":false,"replacement":"","start_line":1,"symbol_id":1,"text":""},
+            "replace_symbol":{"end_line":1,"expected_hash":"","fuzzy":false,"line":1,"new_text":"","old_text":"","replace_all":false,"replacement":"","start_line":1,"symbol_id":1,"text":""},
+            "start_line":1,"end_line":2,"line":1,"symbol_id":1,"replacement":"","text":""
+          }]
+        })JSON");
+    check(json_ok(gpt5_polluted),
+          "edit_file tolerates GPT-5 nested shell pollution: " + gpt5_polluted);
+    check(read_text(fs::path(workspace) / "src" / "gpt5.cpp").find("MAX_HTTP1") !=
+              std::string::npos,
+          "polluted replace_text applied: " +
+              read_text(fs::path(workspace) / "src" / "gpt5.cpp"));
+
+    // Schema must not advertise nested op objects (they trigger GPT-5 filling).
+    bool schema_is_flat = false;
+    for (const provider::FunctionDefinition& definition : tools.definitions()) {
+        if (definition.name == "edit_file") {
+            schema_is_flat =
+                definition.parameters_json.find("\"replace_range\":{\"type\":\"object\"") ==
+                    std::string::npos &&
+                definition.parameters_json.find("\"create_file\":{\"type\":\"object\"") ==
+                    std::string::npos;
+        }
+    }
+    check(schema_is_flat, "edit_file schema stays flat (no nested op object properties)");
+
     std::error_code ec;
     fs::remove_all(workspace, ec);
 }
