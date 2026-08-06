@@ -512,6 +512,58 @@ void test_tool_diff_alias_and_return_zero_context() {
     fs::remove_all(workspace, ec);
 }
 
+void test_multiple_update_sections_same_path_coalesce() {
+    // Kimi often emits several "*** Update File: same/path" sections. Each must
+    // chain onto the prior in-memory result; writing each against the original
+    // disk content overwrites earlier hunks while still reporting ok.
+    const std::string workspace = temp_workspace("coalesce");
+    write_text(fs::path(workspace) / "src" / "a.cpp",
+               "int one() { return 1; }\n"
+               "int two() { return 2; }\n"
+               "int three() { return 3; }\n");
+    agent::ReadToolRegistry tools = make_registry(workspace, true);
+    const std::string patch =
+        "*** Begin Patch\n"
+        "*** Update File: src/a.cpp\n"
+        "@@\n"
+        "-int one() { return 1; }\n"
+        "+int one() { return 10; }\n"
+        "*** Update File: src/a.cpp\n"
+        "@@\n"
+        "-int two() { return 2; }\n"
+        "+int two() { return 20; }\n"
+        "*** Update File: src/a.cpp\n"
+        "@@\n"
+        "-int three() { return 3; }\n"
+        "+int three() { return 30; }\n"
+        "*** End Patch\n";
+    std::string escaped;
+    for (char ch : patch) {
+        if (ch == '\\' || ch == '"') escaped.push_back('\\');
+        if (ch == '\n') {
+            escaped += "\\n";
+            continue;
+        }
+        escaped.push_back(ch);
+    }
+    const std::string result =
+        tools.execute("apply_patch", std::string("{\"patch\":\"") + escaped + "\"}");
+    check(json_ok(result), "coalesced multi Update File applies: " + result);
+    const std::string content = read_text(fs::path(workspace) / "src" / "a.cpp");
+    check(content.find("return 10") != std::string::npos &&
+              content.find("return 20") != std::string::npos &&
+              content.find("return 30") != std::string::npos,
+          "all three same-path sections land: " + content);
+    check(content.find("return 1;") == std::string::npos &&
+              content.find("return 2;") == std::string::npos &&
+              content.find("return 3;") == std::string::npos,
+          "no overwritten original returns remain: " + content);
+    // files_changed should list the path once after coalesce.
+    check(result.find("\"src/a.cpp\"") != std::string::npos, "reports changed path");
+    std::error_code ec;
+    fs::remove_all(workspace, ec);
+}
+
 void run_all() {
     test_parse_and_hunks();
     test_apply_patch_tool();
@@ -522,6 +574,7 @@ void run_all() {
     test_sequential_after_unique_then_weak_brace();
     test_line_anchor_disambiguates_brace();
     test_tool_diff_alias_and_return_zero_context();
+    test_multiple_update_sections_same_path_coalesce();
 }
 
 }  // namespace ainiux::test::agent_apply_patch

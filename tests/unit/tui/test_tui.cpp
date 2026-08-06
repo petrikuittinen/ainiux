@@ -1411,6 +1411,58 @@ void test_tui_agent_history_chrome() {
     }
     check(saw_history_animation, "agent mode shows streaming animation in history");
     check(!repeated_model, "agent history animation does not repeat the model from agent chrome");
+
+    // Agent role colors reuse existing theme roles (no new palette keys).
+    session.messages.clear();
+    ainiux::provider::Message color_user{"user", "fix attempts"};
+    ainiux::provider::Message color_think{"thinking", "Thinking: inspect the server entrypoint"};
+    ainiux::provider::Message color_tool_ok{
+        "tool", "1: read_file(\"src/server.c\") → ok in 12 ms"};
+    ainiux::provider::Message color_tool_err{
+        "tool", "2: apply_patch(patch=\"...\") → error: not found in 4 ms"};
+    session.messages.push_back(std::move(color_user));
+    session.messages.push_back(std::move(color_think));
+    session.messages.push_back(std::move(color_tool_ok));
+    session.messages.push_back(std::move(color_tool_err));
+    agent_lines = ainiux::tui::detail::history_lines_for_session(
+        session, 120, false, ainiux::tui::ActivityKind::None, 0, false, true);
+    bool saw_user_color = false;
+    bool saw_thinking_color = false;
+    bool saw_tool_call_color = false;
+    bool saw_tool_ok_color = false;
+    bool saw_tool_error_color = false;
+    for (const auto& line : agent_lines) {
+        for (const auto& segment : line.segments) {
+            if (segment.text.find("fix attempts") != std::string::npos)
+                saw_user_color =
+                    saw_user_color || segment.role == ainiux::tui::StyleRole::UserLabel;
+            if (segment.text.find("Thinking:") != std::string::npos)
+                saw_thinking_color =
+                    saw_thinking_color ||
+                    segment.role == ainiux::tui::StyleRole::ThinkingTrace;
+            if (segment.text.find("read_file") != std::string::npos ||
+                segment.text.find("apply_patch") != std::string::npos)
+                saw_tool_call_color =
+                    saw_tool_call_color ||
+                    segment.role == ainiux::tui::StyleRole::ThinkingActivity;
+            if (segment.text == "ok" ||
+                (segment.text.find("ok") != std::string::npos &&
+                 segment.text.find("error") == std::string::npos &&
+                 segment.role == ainiux::tui::StyleRole::AssistantLabel))
+                saw_tool_ok_color =
+                    saw_tool_ok_color ||
+                    segment.role == ainiux::tui::StyleRole::AssistantLabel;
+            if (segment.text.find("error") != std::string::npos)
+                saw_tool_error_color =
+                    saw_tool_error_color ||
+                    segment.role == ainiux::tui::StyleRole::Error;
+        }
+    }
+    check(saw_user_color, "agent user prompt uses user_label color");
+    check(saw_thinking_color, "agent thinking row uses thinking_trace color");
+    check(saw_tool_call_color, "agent tool call uses thinking_activity color");
+    check(saw_tool_ok_color, "agent tool ok status uses assistant_label (green) color");
+    check(saw_tool_error_color, "agent tool error status uses error (red) color");
 }
 
 void test_agent_shell_notice_preserves_listing_newlines() {

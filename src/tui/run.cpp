@@ -967,9 +967,11 @@ app::TuiRunResult run(provider::RequestContext context,
     };
 
     auto refresh_credit_balance = [&]() {
-        credit_balance_label.clear();
         // Chat and agent both show credits on chrome when the provider supports it.
+        // Keep the previous label visible until a fresh fetch completes so the
+        // balance does not flicker/lag to empty after every turn.
         if (!provider::credit_balance_available(context)) {
+            credit_balance_label.clear();
             credit_jobs.cancel_all();
             return;
         }
@@ -3093,6 +3095,8 @@ app::TuiRunResult run(provider::RequestContext context,
                             }
                         }
                     }
+                    // Task ended (cancel/error); still refresh credits after billed usage.
+                    refresh_credit_balance();
                     break;
                 }
                 case TuiEventType::SaveDone:

@@ -1302,8 +1302,8 @@ void test_agent_input_height_config() {
         check(!error.ok() && error.message.find("10 through 80") != std::string::npos,
               "agent input height rejects values outside 10 through 80 actionably");
     }
-    check(options.agent_thinking_preview_max_chars == 100,
-          "agent thinking preview defaults to 100 characters");
+    check(options.agent_thinking_preview_max_chars == 120,
+          "agent thinking preview defaults to 120 characters");
     for (int value : {0, 1000}) {
         ainiux::config::ParseResult parsed = ainiux::config::parse(
             "[tui]\nagent_thinking_preview_max_chars = " +

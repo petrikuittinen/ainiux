@@ -2379,6 +2379,20 @@ Error ReadToolRegistry::apply_workspace_patch(const std::string& patch_text,
     std::vector<Planned> plan;
     plan.reserve(parsed.ops.size());
 
+    // Models (notably Kimi / GPT-5.x) often emit multiple "*** Update File: path"
+    // sections for the same path. Planning each against the original disk content
+    // and writing them in order makes later sections overwrite earlier ones while
+    // still reporting applied=true. Coalesce same-path updates in memory.
+    auto find_open_plan = [&](const std::string& path) -> Planned* {
+        for (std::size_t i = plan.size(); i > 0; --i) {
+            Planned& candidate = plan[i - 1];
+            if (candidate.path != path) continue;
+            if (candidate.kind == PatchOpKind::DeleteFile) return nullptr;
+            return &candidate;
+        }
+        return nullptr;
+    };
+
     for (const PatchFileOp& op : parsed.ops) {
         Planned item;
         item.kind = op.kind;
@@ -2403,6 +2417,9 @@ Error ReadToolRegistry::apply_workspace_patch(const std::string& patch_text,
             return {ErrorCode::FileWrite, "apply_patch path is a directory: " + item.path};
 
         if (op.kind == PatchOpKind::AddFile) {
+            if (find_open_plan(item.path) != nullptr)
+                return {ErrorCode::FileWrite,
+                        "Add File after prior patch ops on the same path: " + item.path};
             if (exists)
                 return {ErrorCode::FileWrite,
                         "Add File target already exists (use Update File): " + item.path};
@@ -2419,6 +2436,31 @@ Error ReadToolRegistry::apply_workspace_patch(const std::string& patch_text,
         }
 
         if (op.kind == PatchOpKind::DeleteFile) {
+            Planned* open = find_open_plan(item.path);
+            if (open != nullptr) {
+                // Drop the pending add/update; delete the path if it existed on disk
+                // before this patch, or cancel a pure in-patch add.
+                if (!open->existed) {
+                    // Added then deleted in the same patch: no filesystem change.
+                    for (auto it = plan.begin(); it != plan.end(); ++it) {
+                        if (&*it == open) {
+                            plan.erase(it);
+                            break;
+                        }
+                    }
+                    continue;
+                }
+                item.existed = true;
+                item.previous = open->previous;
+                for (auto it = plan.begin(); it != plan.end(); ++it) {
+                    if (&*it == open) {
+                        plan.erase(it);
+                        break;
+                    }
+                }
+                plan.push_back(std::move(item));
+                continue;
+            }
             if (!exists)
                 return {ErrorCode::FileRead, "Delete File target does not exist: " + item.path};
             item.existed = true;
@@ -2428,7 +2470,27 @@ Error ReadToolRegistry::apply_workspace_patch(const std::string& patch_text,
             continue;
         }
 
-        // UpdateFile
+        // UpdateFile — chain onto any in-plan content for this path.
+        Planned* open = find_open_plan(item.path);
+        if (open != nullptr) {
+            std::string chained;
+            std::vector<std::string> modes;
+            error = apply_patch_hunks(open->next, op.hunks, allow_fuzzy, chained, modes);
+            if (!error.ok()) {
+                error.message = item.path + ": " + error.message;
+                return error;
+            }
+            if (chained.size() > index_options_.max_source_code_file_size)
+                return {ErrorCode::BadArgs,
+                        "Update File result exceeds max_source_code_file_size for " + item.path};
+            if (!html::is_valid_utf8(chained))
+                return {ErrorCode::FileWrite,
+                        "Update File result is not valid UTF-8 for " + item.path};
+            open->next = std::move(chained);
+            open->match_modes.insert(open->match_modes.end(), modes.begin(), modes.end());
+            continue;
+        }
+
         if (!exists)
             return {ErrorCode::FileRead, "Update File target does not exist: " + item.path};
         item.existed = true;

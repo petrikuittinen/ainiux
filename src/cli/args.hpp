@@ -127,7 +127,7 @@ struct Options {
     std::string tui_theme = "dark";
     tui::ThemeRegistry tui_themes = tui::default_theme_registry();
     int agent_input_max_height_percent = 25;
-    int agent_thinking_preview_max_chars = 100;
+    int agent_thinking_preview_max_chars = 120;
     bool has_agent_thinking_preview_max_chars = false;
     std::string benchmark_dataset = "builtin";
     std::string grade_input;

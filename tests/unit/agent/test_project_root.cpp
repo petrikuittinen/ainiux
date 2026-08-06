@@ -674,6 +674,32 @@ void test_reasoning_preview_unicode_redaction_and_limits() {
         agent::format_reasoning_preview(u8"😀😀😀😀", 13, {});
     check(clipped == u8"Thinking: 😀😀…",
           "reasoning preview clips by grapheme with ellipsis inside limit");
+
+    // Glue spaced punctuation tokens without gluing English words (Kimi).
+    const std::string kimi = agent::format_reasoning_preview(
+        "So the current state of server .c is inconsistent. The user is asking "
+        "about blocking vs non-blocking. Let me look at parse _http and "
+        "End -to -end HTTP / 1 . 1. h\nunk across newline.",
+        400, {});
+    check(kimi.find("server.c") != std::string::npos, "joins server .c → server.c: " + kimi);
+    check(kimi.find("parse_http") != std::string::npos, "joins parse _http: " + kimi);
+    check(kimi.find("End-to-end") != std::string::npos, "joins End -to -end: " + kimi);
+    check(kimi.find("HTTP/1.1") != std::string::npos, "joins HTTP / 1 . 1: " + kimi);
+    check(kimi.find("the current") != std::string::npos &&
+              kimi.find("user is") != std::string::npos &&
+              kimi.find("blocking vs") != std::string::npos &&
+              kimi.find("Let me") != std::string::npos &&
+              kimi.find("look at") != std::string::npos,
+          "keeps normal English word spaces: " + kimi);
+    check(kimi.find("useris") == std::string::npos &&
+              kimi.find("Letme") == std::string::npos &&
+              kimi.find("lookat") == std::string::npos &&
+              kimi.find("blockingvs") == std::string::npos,
+          "does not glue multi-letter English words: " + kimi);
+    check(kimi.find("hunk") != std::string::npos,
+          "joins single-letter fragment across newline (h\\nunk): " + kimi);
+    check(kimi.find("inconsistent. The") != std::string::npos,
+          "keeps space after sentence period: " + kimi);
 }
 
 }  // namespace

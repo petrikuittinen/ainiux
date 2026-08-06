@@ -196,6 +196,61 @@ StyleRole label_role_for_message(const std::string& role) {
     return StyleRole::Muted;
 }
 
+// Recolor every segment that still uses the default body text role.
+void recolor_text_segments(std::vector<StyledSegment>& segments, StyleRole role) {
+    for (StyledSegment& segment : segments) {
+        if (segment.role == StyleRole::Text) segment.role = role;
+    }
+}
+
+// Compact tool lines: "1: read_file(\"x\") → ok in 150 ms"
+// or "2: edit_file(...) → error: not found in 3 ms".
+// Uses existing theme roles only (no new palette keys).
+std::vector<StyledSegment> agent_tool_line_segments(const std::string& content) {
+    std::vector<StyledSegment> segments;
+    if (content.empty()) {
+        segments.push_back({"", StyleRole::ThinkingActivity});
+        return segments;
+    }
+    const std::string arrow = " → ";
+    const std::size_t arrow_pos = content.find(arrow);
+    if (arrow_pos == std::string::npos) {
+        // In-flight or non-standard tool chrome: treat the whole row as the call.
+        append_segment(segments, content, StyleRole::ThinkingActivity);
+        return segments;
+    }
+
+    append_segment(segments, content.substr(0, arrow_pos), StyleRole::ThinkingActivity);
+    append_segment(segments, arrow, StyleRole::Muted);
+
+    std::string rest = content.substr(arrow_pos + arrow.size());
+    std::string timing;
+    const std::size_t timing_pos = rest.rfind(" in ");
+    if (timing_pos != std::string::npos) {
+        // Keep " in N ms" muted; only the status token is success/error colored.
+        const std::string maybe_timing = rest.substr(timing_pos);
+        bool looks_like_timing = maybe_timing.size() > 4;
+        for (std::size_t i = 4; looks_like_timing && i < maybe_timing.size(); ++i) {
+            const char ch = maybe_timing[i];
+            if (ch == ' ' || ch == 'm' || ch == 's' || (ch >= '0' && ch <= '9')) continue;
+            looks_like_timing = false;
+        }
+        if (looks_like_timing) {
+            timing = maybe_timing;
+            rest = rest.substr(0, timing_pos);
+        }
+    }
+
+    // Success is green (assistant_label / streaming greens in themes); errors use error.
+    const bool is_error = starts_with(rest, "error");
+    const StyleRole status_role =
+        is_error ? StyleRole::Error : StyleRole::AssistantLabel;
+    append_segment(segments, rest, status_role);
+    if (!timing.empty()) append_segment(segments, timing, StyleRole::Muted);
+    if (segments.empty()) segments.push_back({"", StyleRole::ThinkingActivity});
+    return segments;
+}
+
 }  // namespace
 
 TuiSize terminal_size() {
@@ -501,13 +556,25 @@ std::vector<StyledLine> history_lines_for_session(const chat::Session& session,
             }
             // Preformatted agent/shell output: keep monospace-ish plain text so
             // highlight rules do not restyle path names mid-listing.
-            content_segments =
-                (markdown_highlight && !preformatted) ? markdown_segments(content)
-                                                      : plain_text_segments(content);
+            if (agent_mode && message.role == "tool") {
+                content_segments = agent_tool_line_segments(content);
+            } else {
+                content_segments =
+                    (markdown_highlight && !preformatted) ? markdown_segments(content)
+                                                          : plain_text_segments(content);
+            }
             if (message.role == "assistant" && show_thinking_traces) {
                 content_segments = visible_thinking_trace_segments(content);
                 if (markdown_highlight) {
                     content_segments = markdown_outside_thinking_segments(content_segments);
+                }
+            }
+            // Agent history: distinct existing theme colors per row kind.
+            if (agent_mode) {
+                if (message.role == "user") {
+                    recolor_text_segments(content_segments, StyleRole::UserLabel);
+                } else if (message.role == "thinking") {
+                    recolor_text_segments(content_segments, StyleRole::ThinkingTrace);
                 }
             }
             if (show_streaming_indicator) {
