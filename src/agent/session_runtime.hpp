@@ -284,6 +284,14 @@ class AgentSessionRuntime {
                         const std::function<bool()>& interrupted) const;
     // Worker-only: recompute from conversation_ and publish for UI chrome.
     void publish_request_token_estimate();
+    // Fixed per-request overhead always present after seed: system prompt,
+    // optional AGENTS.md, Act/Plan control, and native tool schemas.
+    long long estimate_seed_overhead_tokens() const;
+    // Compaction "before" size: live conversation when seeded; otherwise seed
+    // overhead + full durable model-projection transcript (not the bounded
+    // reopen prior block used by idle chrome).
+    long long estimate_compact_tokens_before(
+        const std::vector<AgentMessageRecord>& stored) const;
     void rebuild_compacted_conversation(const CompactionPartition& partition,
                                         const std::string& checkpoint);
     SessionCompactionResult compact_impl(

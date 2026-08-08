@@ -7,6 +7,7 @@
 #include <string>
 #include <vector>
 
+#include "agent/compact.hpp"
 #include "agent/session_runtime.hpp"
 #include "app/app.hpp"
 #include "cli/args.hpp"
@@ -919,6 +920,102 @@ void test_display_notices_dedupe_consecutive_duplicates() {
     fs::remove_all(workspace, ec);
 }
 
+void test_prepare_idle_chrome_matches_next_request_not_full_history() {
+    // Idle chrome after prepare must estimate the *next* model request (system
+    // prompt, mode control, bounded prior-session seed, tool schemas) — not the
+    // full durable transcript of every tool/assistant row.
+    const std::string workspace = temp_workspace("idle-chrome-tokens");
+    {
+        agent::AgentSessionStore store;
+        check(store.open(workspace).ok(), "chrome seed open");
+        agent::AgentProjectRecord project;
+        project.workspace = workspace;
+        project.status = "idle";
+        check(store.open_project(project).ok(), "chrome seed project");
+        // Large history: many fat assistant rows that must not all enter chrome.
+        for (int index = 0; index < 120; ++index) {
+            const std::string role = index % 3 == 0 ? "user"
+                                    : index % 3 == 1 ? "assistant"
+                                                     : "tool";
+            const std::string content =
+                "history bulk " + std::to_string(index) + " " + std::string(800, 'z');
+            check(store.append_message(role, content, role == "tool" ? "read_file" : "",
+                                       true)
+                      .ok(),
+                  "chrome seed bulk message");
+        }
+        // Display-only rows must never affect the estimate.
+        check(store.append_message("thinking", "Thinking: " + std::string(2000, 't')).ok(),
+              "chrome seed thinking");
+        check(store.append_message("notice", "display only " + std::string(2000, 'n')).ok(),
+              "chrome seed notice");
+        check(store.append_message("summary",
+                                   "## Active Task\ncompact checkpoint " +
+                                       std::string(500, 's'))
+                  .ok(),
+              "chrome seed summary");
+    }
+
+    std::vector<agent::AgentMessageRecord> rows;
+    {
+        agent::AgentSessionStore store;
+        check(store.open(workspace).ok() && store.load_messages(rows).ok(),
+              "reload chrome seed rows");
+    }
+    const long long full_transcript =
+        agent::estimate_transcript_tokens(rows);
+    const std::string prior = agent::build_prior_session_context(rows);
+    check(!prior.empty(), "prior-session seed is non-empty for bulky history");
+    const long long prior_tokens =
+        agent::estimate_tokens_from_text("user") +
+        agent::estimate_tokens_from_text(prior) + 4;
+    // Prior seed is capped (~24k body chars); full transcript of 120×800+ rows is much larger.
+    check(full_transcript > prior_tokens * 2,
+          "fixture full transcript is materially larger than prior seed");
+    check(full_transcript > 20000,
+          "fixture full transcript is large enough to expose the old chrome bug");
+
+    agent::AgentSessionRuntime runtime;
+    agent::SessionRuntimeOptions options;
+    options.workspace = workspace;
+    options.task_mode = agent::AgentTaskMode::Act;
+    options.interactive = true;
+    options.enable_session_db = true;
+    options.enable_agent_log = false;
+    options.index_mode = agent::SessionRuntimeOptions::IndexMode::Disabled;
+    provider::RequestContext context = offline_context(workspace);
+    Error error = runtime.prepare(context, {}, {}, options);
+    check(error.ok() && runtime.prepared(),
+          "prepare idle chrome runtime: " + error.message);
+
+    const long long chrome = runtime.estimated_request_tokens();
+    check(chrome > 0, "idle chrome is non-zero (system prompt at minimum)");
+    // Must not claim the full durable history as request context.
+    check(chrome < full_transcript,
+          "idle chrome is below full durable transcript estimate");
+    // Must still account for the prior-session block that the first turn injects.
+    check(chrome >= prior_tokens,
+          "idle chrome includes the bounded prior-session seed");
+    // Headroom for system prompt + mode control + optional tool schemas, not history.
+    check(chrome < prior_tokens + 20000,
+          "idle chrome stays near next-request seed overhead, not full history");
+
+    // Headless --run does not inject prior context; chrome must drop that term.
+    runtime.reset();
+    options.interactive = false;
+    check(runtime.prepare(context, {}, {}, options).ok(),
+          "prepare headless chrome runtime");
+    const long long headless = runtime.estimated_request_tokens();
+    check(headless > 0 && headless < chrome,
+          "headless idle chrome omits prior-session injection");
+    check(headless < prior_tokens,
+          "headless chrome is system/tools only, not prior seed");
+
+    runtime.reset();
+    std::error_code ec;
+    fs::remove_all(workspace, ec);
+}
+
 void test_session_goal_set_pause_resume_complete_and_persist() {
     const std::string workspace = temp_workspace("session-goal");
     agent::AgentSessionRuntime runtime;
@@ -987,6 +1084,7 @@ void run_all() {
     test_project_replacement_resets_exact_state_and_switches_workspace();
     test_project_replacement_failure_reopens_prior_project();
     test_display_notices_dedupe_consecutive_duplicates();
+    test_prepare_idle_chrome_matches_next_request_not_full_history();
     test_session_goal_set_pause_resume_complete_and_persist();
 }
 

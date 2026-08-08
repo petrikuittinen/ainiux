@@ -455,27 +455,32 @@ Assume **W = 8_000**, same defaults:
 
 | Surface | What is counted |
 | --- | --- |
-| Auto-compact / success metrics | Live `conversation_.messages` (+ continuation JSON items) via `publish_request_token_estimate` |
+| Live chrome / post-seed metrics | Live `conversation_.messages` (+ continuation JSON items) + native tool schemas via `publish_request_token_estimate` |
+| Idle chrome after `prepare` (not yet seeded) | Next-request seed only: system prompt (`agent_prompt.md` + protocol appendix), optional `AGENTS.md`, Act/Plan mode control, interactive `build_prior_session_context` block, native tool schemas. **Does not** sum the full durable SQLite transcript. |
+| Compaction `tokens_before` | Live estimate when conversation is seeded; otherwise seed overhead + full durable model-projection transcript (`estimate_compact_tokens_before`). Intentionally **not** the smaller idle reopen seed, so reduction checks stay meaningful. |
 | Timeline / partition | Logical items: role + content + tool_name (+4) |
-| Transcript helper | `estimate_transcript_tokens` over stored messages with model-projection roles |
+| Transcript helper | `estimate_transcript_tokens` over stored messages with model-projection roles (compaction math / unseeded compact baseline; not idle chrome) |
 
-These can disagree slightly because live conversation includes seed
-prompts and the checkpoint wrapper, while the timeline is built from
-stored rows + tool events.
+Idle chrome and live chrome can still disagree slightly because the first
+user turn also appends the new goal text, and mid-session compact rebuilds
+`conversation_` from the checkpoint + retained head/tail rather than the
+prior-session reopen block.
 
 ---
 
 ## 8. Related but not `/compact`
 
-`build_prior_session_context` (session reopen seed):
+`build_prior_session_context` (session reopen seed + idle chrome prior term):
 
 | Cap | Value |
 | --- | --- |
 | Messages scanned from end | last **80** |
 | Per-message content | **1500** chars (truncated with `...`) |
 | Total body | **24_000** chars default `max_chars` |
+| Roles included | model-projection only (`user` / `assistant` / `tool` / `summary`); skips `notice`, `thinking`, `index` |
 
-Not part of the three-strategy compact path.
+Interactive agent reopen injects this block as one user message. Headless
+`run` / `plan` do not. Not part of the three-strategy compact path.
 
 ---
 

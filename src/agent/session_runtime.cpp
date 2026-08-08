@@ -252,6 +252,47 @@ Error AgentSessionRuntime::update_project_settings(
     return session_store_.update_project_meta(project);
 }
 
+long long AgentSessionRuntime::estimate_seed_overhead_tokens() const {
+    long long total = 0;
+    // system prompt (agent_prompt.md + protocol appendix)
+    total += estimate_tokens_from_text("system");
+    total += estimate_tokens_from_text(prompts_.agent_system_prompt(state_.protocol));
+    total += 4;
+    // optional AGENTS.md (user-role, untrusted project data)
+    if (!agents_md_.injection_text.empty()) {
+        total += estimate_tokens_from_text("user");
+        total += estimate_tokens_from_text(agents_md_.injection_text);
+        total += 4;
+    }
+    // Act/Plan mode control (user-role)
+    {
+        const std::string mode_control = agent_task_mode_control(task_mode_);
+        total += estimate_tokens_from_text("user");
+        total += estimate_tokens_from_text(mode_control);
+        total += 4;
+    }
+    // Native tool schemas are part of every tool request (not XML protocol).
+    if (state_.protocol != ToolProtocol::Xml) {
+        for (const provider::FunctionDefinition& definition : tools_.definitions()) {
+            total += estimate_tokens_from_text(definition.name);
+            total += estimate_tokens_from_text(definition.description);
+            total += estimate_tokens_from_text(definition.parameters_json);
+            total += 8;
+        }
+    }
+    return total;
+}
+
+long long AgentSessionRuntime::estimate_compact_tokens_before(
+    const std::vector<AgentMessageRecord>& stored) const {
+    if (conversation_seeded_)
+        return estimated_request_tokens();
+    // Unseeded: compare compact projection against seed overhead plus the full
+    // durable model-projection transcript. Idle chrome uses a smaller bounded
+    // prior-session seed and must not drive this reduction check.
+    return estimate_seed_overhead_tokens() + estimate_transcript_tokens(stored);
+}
+
 void AgentSessionRuntime::publish_request_token_estimate() {
     // Must only run on the agent worker (or while no concurrent turn is active).
     long long total = 0;
@@ -344,7 +385,7 @@ SessionCompactionResult AgentSessionRuntime::compact_impl(
                                  ? static_cast<long long>(
                                        context.options.context_tokens)
                                  : 0LL;
-    result.tokens_before = estimated_request_tokens();
+    result.tokens_before = estimate_compact_tokens_before(stored);
     const long long newest_seq =
         stored.empty() ? 0 : stored.back().seq;
     auto failed_result = [&]() {
@@ -1188,27 +1229,24 @@ Error AgentSessionRuntime::prepare(const provider::RequestContext& context,
 
     prepared_ = true;
     // Do not seed conversation_ here: the first user turn still owns full seed
-    // (including prior-transcript injection). Publish a chrome baseline from the
-    // system/tool schemas plus any durable model-visible SQLite rows so idle
-    // agent mode is not stuck at "0 tok" after prepare/resume.
+    // (including prior-transcript injection). Idle chrome must estimate what the
+    // *next* model request will carry — not the full durable SQLite history.
+    // Match seed_agent_conversation + interactive build_prior_session_context +
+    // native tool schemas so the status line is not inflated by old tool rows.
     {
-        long long baseline = 0;
-        baseline += estimate_tokens_from_text(
-            prompts_.agent_system_prompt(state_.protocol));
-        baseline += estimate_tokens_from_text(agents_md_.injection_text);
-        baseline += estimate_tokens_from_text(agent_task_mode_control(task_mode_));
-        if (state_.protocol != ToolProtocol::Xml) {
-            for (const provider::FunctionDefinition& definition : tools_.definitions()) {
-                baseline += estimate_tokens_from_text(definition.name);
-                baseline += estimate_tokens_from_text(definition.description);
-                baseline += estimate_tokens_from_text(definition.parameters_json);
-                baseline += 8;
-            }
-        }
-        if (session_store_.is_open()) {
+        long long baseline = estimate_seed_overhead_tokens();
+        // Interactive reopen injects a bounded prior-session block, not the full
+        // transcript. Headless --run/--plan starts with a fresh model conversation.
+        if (options_.interactive && session_store_.is_open()) {
             std::vector<AgentMessageRecord> rows;
-            if (session_store_.load_messages(rows).ok())
-                baseline += estimate_transcript_tokens(rows);
+            if (session_store_.load_messages(rows).ok()) {
+                const std::string prior = build_prior_session_context(rows);
+                if (!prior.empty()) {
+                    baseline += estimate_tokens_from_text("user");
+                    baseline += estimate_tokens_from_text(prior);
+                    baseline += 4;
+                }
+            }
         }
         cached_request_tokens_.store(baseline, std::memory_order_relaxed);
         if (baseline > 0)
