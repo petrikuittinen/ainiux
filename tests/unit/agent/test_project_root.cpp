@@ -597,6 +597,13 @@ void test_elapsed_seconds_format() {
     check(agent::format_task_complete(21340) == "Task complete in 21.34 seconds.",
           "task complete 21.34s");
     check(agent::format_task_complete(0) == "Task complete in 0.00 seconds.", "task complete zero");
+    check(agent::format_task_complete(60000) == "Task complete in 1 minute.",
+          "task complete exact minute has no zero-second tail");
+    check(agent::format_task_complete(61000) == "Task complete in 1 minute and 1 second.",
+          "task complete one minute and one second");
+    check(agent::format_task_complete(1084130) ==
+              "Task complete in 18 minutes and 4 seconds.",
+          "task complete long runs use minutes and seconds");
     check(agent::format_elapsed_seconds(6540) == "6.54 seconds elapsed", "legacy seconds format");
     check(agent::normalize_timestamp_ms(1700000000) == 1700000000000LL, "seconds promote to ms");
     check(agent::normalize_timestamp_ms(1700000000123LL) == 1700000000123LL, "ms unchanged");

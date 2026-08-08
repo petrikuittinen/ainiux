@@ -218,6 +218,10 @@ long long AgentSessionRuntime::estimated_request_tokens() const {
     return cached_request_tokens_.load(std::memory_order_relaxed);
 }
 
+long long AgentSessionRuntime::last_nonzero_request_tokens() const {
+    return last_nonzero_request_tokens_.load(std::memory_order_relaxed);
+}
+
 Error AgentSessionRuntime::update_project_settings(
     const provider::RequestContext& context) {
     if (!prepared_) return {ErrorCode::Internal, "agent runtime is not prepared"};
@@ -266,7 +270,19 @@ void AgentSessionRuntime::publish_request_token_estimate() {
         total += estimate_tokens_from_text(item);
         total += 2;
     }
+    // Tool schemas are part of every native tool request; include a coarse
+    // estimate so idle chrome is not "system prompt only".
+    if (state_.protocol != ToolProtocol::Xml) {
+        for (const provider::FunctionDefinition& definition : tools_.definitions()) {
+            total += estimate_tokens_from_text(definition.name);
+            total += estimate_tokens_from_text(definition.description);
+            total += estimate_tokens_from_text(definition.parameters_json);
+            total += 8;
+        }
+    }
     cached_request_tokens_.store(total, std::memory_order_relaxed);
+    if (total > 0)
+        last_nonzero_request_tokens_.store(total, std::memory_order_relaxed);
 }
 
 void AgentSessionRuntime::rebuild_compacted_conversation(
@@ -631,10 +647,14 @@ SessionCompactionResult AgentSessionRuntime::compact_impl(
                            CompactionStrategy candidate_strategy,
                            bool enforce_summary_fit) -> bool {
         const provider::ToolConversation old_conversation = conversation_;
+        const long long old_tokens =
+            cached_request_tokens_.load(std::memory_order_relaxed);
         rebuild_compacted_conversation(partition, candidate_checkpoint);
         result.tokens_after = estimated_request_tokens();
+        // Restore the live conversation without republishing a dry-run estimate
+        // that would thrash the TUI chrome during projection.
         conversation_ = old_conversation;
-        publish_request_token_estimate();
+        cached_request_tokens_.store(old_tokens, std::memory_order_relaxed);
         if (result.tokens_before > 0 &&
             result.tokens_after >= result.tokens_before)
             return false;
@@ -885,6 +905,7 @@ void AgentSessionRuntime::reset() {
     permission_mode_ = PermissionMode::Smart;
     goal_ = SessionGoal{};
     cached_request_tokens_.store(0, std::memory_order_relaxed);
+    last_nonzero_request_tokens_.store(0, std::memory_order_relaxed);
     guard_approval_wait_ms_.store(0, std::memory_order_relaxed);
     operation_active_.store(false, std::memory_order_relaxed);
 }
@@ -1166,7 +1187,33 @@ Error AgentSessionRuntime::prepare(const provider::RequestContext& context,
                         phase_started);
 
     prepared_ = true;
-    publish_request_token_estimate();
+    // Do not seed conversation_ here: the first user turn still owns full seed
+    // (including prior-transcript injection). Publish a chrome baseline from the
+    // system/tool schemas plus any durable model-visible SQLite rows so idle
+    // agent mode is not stuck at "0 tok" after prepare/resume.
+    {
+        long long baseline = 0;
+        baseline += estimate_tokens_from_text(
+            prompts_.agent_system_prompt(state_.protocol));
+        baseline += estimate_tokens_from_text(agents_md_.injection_text);
+        baseline += estimate_tokens_from_text(agent_task_mode_control(task_mode_));
+        if (state_.protocol != ToolProtocol::Xml) {
+            for (const provider::FunctionDefinition& definition : tools_.definitions()) {
+                baseline += estimate_tokens_from_text(definition.name);
+                baseline += estimate_tokens_from_text(definition.description);
+                baseline += estimate_tokens_from_text(definition.parameters_json);
+                baseline += 8;
+            }
+        }
+        if (session_store_.is_open()) {
+            std::vector<AgentMessageRecord> rows;
+            if (session_store_.load_messages(rows).ok())
+                baseline += estimate_transcript_tokens(rows);
+        }
+        cached_request_tokens_.store(baseline, std::memory_order_relaxed);
+        if (baseline > 0)
+            last_nonzero_request_tokens_.store(baseline, std::memory_order_relaxed);
+    }
     return ok_error();
 }
 

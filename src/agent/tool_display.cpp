@@ -98,9 +98,24 @@ long long execution_only_elapsed_ms(long long wall_elapsed_ms,
 
 std::string format_task_complete(long long elapsed_ms) {
     if (elapsed_ms < 0) elapsed_ms = 0;
-    const double seconds = static_cast<double>(elapsed_ms) / 1000.0;
+    // Under one minute keep fractional seconds for short turns.
+    if (elapsed_ms < 60000) {
+        const double seconds = static_cast<double>(elapsed_ms) / 1000.0;
+        std::ostringstream out;
+        out << "Task complete in " << std::fixed << std::setprecision(2) << seconds
+            << " seconds.";
+        return out.str();
+    }
+    // Longer runs: "N minutes and M seconds" is easier to scan than 1084.13 seconds.
+    const long long total_seconds = elapsed_ms / 1000;
+    const long long minutes = total_seconds / 60;
+    const long long seconds = total_seconds % 60;
     std::ostringstream out;
-    out << "Task complete in " << std::fixed << std::setprecision(2) << seconds << " seconds.";
+    out << "Task complete in " << minutes << (minutes == 1 ? " minute" : " minutes");
+    if (seconds > 0) {
+        out << " and " << seconds << (seconds == 1 ? " second" : " seconds");
+    }
+    out << ".";
     return out.str();
 }
 

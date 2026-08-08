@@ -288,13 +288,20 @@ app::TuiRunResult run(provider::RequestContext context,
         chrome.reasoning = config::reasoning_selection_value(context.options.reasoning);
         long long used = 0;
         if (context.options.agent && agent_runtime && agent_runtime->prepared()) {
-            // Prefer the worker-published atomic estimate (never walks conversation_
-            // here — that raced with run_user_turn and segfaulted during streaming).
+            // Prefer the worker-published atomic estimate of the model-visible
+            // request (never walks conversation_ here — that raced with
+            // run_user_turn and segfaulted during streaming). Do not inflate
+            // with TUI session.messages: those include display-only thinking,
+            // tool lines, and notices that survive compact and would otherwise
+            // disagree with "tokens in remaining context" after compaction.
             used = agent_runtime->estimated_request_tokens();
-        }
-        const long long display_used = context::estimated_text_tokens(session.messages);
-        if (display_used > used) {
-            used = display_used;
+            // After prepare / brief races the live cache can read 0 even though
+            // a non-empty request was just published (e.g. post-compact). Prefer
+            // the last non-zero worker estimate over an empty chrome reading.
+            if (used <= 0)
+                used = agent_runtime->last_nonzero_request_tokens();
+        } else {
+            used = context::estimated_text_tokens(session.messages);
         }
         chrome.used_tokens = used;
         chrome.window_tokens = context.options.context_tokens;
